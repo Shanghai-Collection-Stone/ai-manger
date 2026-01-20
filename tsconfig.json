@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    /* 模块系统 */
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    /* 语言特性 */
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    /* NestJS/TypeORM 需要 */
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+
+    /* 类型检查 */
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "exactOptionalPropertyTypes": false,
+    "strictFunctionTypes": false,
+
+    /* 额外优化 */
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "sourceMap": true,
+    "incremental": true,
+    "skipLibCheck": true,
+
+    /* 输出目录 */
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "paths": {
+      "@/*": ["src/*"],
+      "@core/*": ["src/core/*"],
+      "@plugin/*": ["plugins/*"]
+    },
+
+    /* 类型支持 */
+    "types": ["node", "jest"]
+  },
+  "ts-node": {
+    "require": ["tsconfig-paths/register"]
+  },
+  "include": ["src/**/*", "test/**/*.ts", "plugins/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

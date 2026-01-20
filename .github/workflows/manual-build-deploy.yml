@@ -1,0 +1,136 @@
+name: manual-build-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_path:
+        description: 服务器Runner部署目录（包含或挂载docker专用配置）
+        type: string
+        required: true
+        default: "/www/ace.c/ai-manger"
+      env_file_path:
+        description: 服务器Runner上的环境文件（可选）
+        type: string
+        required: false
+        default: "/www/ace.c/ai-manger/.env"
+      app_port:
+        description: 对外端口映射到容器 3011
+        type: string
+        required: false
+        default: "3011"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Install pnpm globally
+        run: |
+          npm i -g pnpm@9
+          echo "$(npm bin -g)" >> $GITHUB_PATH
+          pnpm -v
+
+      - name: Compute pnpm store path
+        run: echo "PNPM_STORE_PATH=$(pnpm store path)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build NestJS
+        run: pnpm run build
+        env:
+          NODE_ENV: production
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-mvp-dist
+          path: |
+            dist
+            package.json
+            pnpm-lock.yaml
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-mvp-dist
+          path: ./artifact
+
+      - name: Prepare target directory
+        run: |
+          DP="${{ inputs.deploy_path }}"
+          mkdir -p "$DP"
+          rm -rf "$DP/dist"
+          cp -r ./artifact/dist "$DP/"
+          cp ./artifact/package.json "$DP/"
+          cp ./artifact/pnpm-lock.yaml "$DP/"
+
+      - name: Optional env file copy
+        run: |
+          SRC="${{ inputs.env_file_path }}"; DST="${{ inputs.deploy_path }}/.env"
+          if [ -n "$SRC" ] && [ -f "$SRC" ] && [ "$SRC" != "$DST" ]; then
+            cp -f "$SRC" "$DST"; fi
+
+      - name: Place server docker yml
+        run: |
+          DP="${{ inputs.deploy_path }}"
+          cp -f server/docker-compose.yml "$DP/docker-compose.yml"
+
+      - name: Verify files before docker run
+        run: |
+          DP="${{ inputs.deploy_path }}"
+          ls -la "$DP" | head -50
+          test -f "$DP/package.json" && echo "✓ package.json" || (echo "✗ package.json missing" && exit 1)
+          test -f "$DP/pnpm-lock.yaml" && echo "✓ pnpm-lock.yaml" || echo "! pnpm-lock.yaml missing"
+          test -f "$DP/dist/main.js" && echo "✓ dist/main.js" || (echo "✗ dist/main.js missing" && exit 1)
+
+      - name: Rebuild and Redeploy Docker app
+        run: |
+          SERVICE="ai-mvp-app"
+          DP="${{ inputs.deploy_path }}"
+          APP_PORT="${{ inputs.app_port }}"; [ -z "$APP_PORT" ] && APP_PORT=3011
+          export APP_PORT
+          ENV_FILE="${{ inputs.env_file_path }}"
+          if [ -f "$DP/docker-compose.yml" ]; then
+            echo "=== Using docker-compose in deploy_path ==="
+            docker compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
+          else
+            echo "=== Using docker run ==="
+            docker rm -f "$SERVICE" >/dev/null 2>&1 || true
+            if [ -f "$DP/.env" ]; then ENV_OPT=(--env-file "$DP/.env"); else ENV_OPT=(); fi
+            docker run "${ENV_OPT[@]}" -d --name "$SERVICE" -p "$APP_PORT":3011 \
+              -e PORT=3011 -e NODE_ENV=production \
+              -v "$DP":/app \
+              node:20-alpine sh -lc "npm i -g pnpm && pnpm install --prod --frozen-lockfile && node dist/main.js"
+            sleep 3
+            docker logs "$SERVICE" 2>&1 | tail -80 || true
+          fi
+
+      - name: Health check
+        run: |
+          PORT_VAL="${{ inputs.app_port }}"; [ -z "$PORT_VAL" ] && PORT_VAL=3011
+          for i in $(seq 1 30); do
+            if curl -fsS "http://localhost:${PORT_VAL}/" >/dev/null 2>&1; then exit 0; fi
+            sleep 2;
+          done;
+          echo "App not healthy"; exit 1

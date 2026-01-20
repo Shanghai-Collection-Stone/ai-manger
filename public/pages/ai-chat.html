@@ -1,0 +1,2453 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 智能助手 (React 单文件版)</title>
+
+    <!-- 1. 核心依赖 (React, ReactDOM, Babel) -->
+    <!-- 使用 UMD 版本以支持浏览器直接运行 -->
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.development.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+    ></script>
+    <!-- Babel 用于在浏览器端实时编译 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 2. UI 样式库 (Tailwind CSS) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: [
+                'Inter',
+                '-apple-system',
+                'BlinkMacSystemFont',
+                'Segoe UI',
+                'Roboto',
+                'sans-serif',
+              ],
+            },
+            colors: {
+              // 定义主色调
+              primary: '#000000',
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.5s ease-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+            },
+          },
+        },
+      };
+    </script>
+
+    <!-- 3. 第三方工具库 -->
+    <!-- Marked: Markdown 解析 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- DOMPurify: 防止 XSS 攻击 -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+    <!-- Github Markdown CSS: 渲染 Markdown 样式 -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css"
+    />
+    <!-- Animate.css: 动画库 -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"
+    />
+    <!-- html2canvas: 截图功能 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <style>
+      /* 全局滚动条美化 */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #e5e7eb;
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #d1d5db;
+      }
+
+      /* Markdown 样式微调，使其更符合 Chat UI */
+      .markdown-body {
+        font-family: inherit;
+        font-size: 0.925rem;
+        line-height: 1.6;
+        background-color: transparent !important;
+      }
+      .markdown-body p {
+        margin-bottom: 0.75em;
+      }
+      /* 代码块样式 */
+      .markdown-body pre {
+        background-color: #f6f8fa;
+        border-radius: 8px;
+        padding: 12px;
+        border: 1px solid #e5e7eb;
+        overflow-x: auto;
+        max-width: 100%;
+      }
+
+      /* 黑色气泡(用户)中的 Markdown 样式适配 */
+      .bg-black .markdown-body {
+        color: white !important;
+      }
+      .bg-black .markdown-body code {
+        background-color: rgba(255, 255, 255, 0.2);
+        color: white;
+      }
+      .bg-black .markdown-body pre {
+        background-color: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+      .bg-black .markdown-body a {
+        color: #60a5fa; /* 链接显示为浅蓝色 */
+      }
+    </style>
+  </head>
+  <body>
+    <!-- React 应用挂载点 -->
+    <div id="root"></div>
+
+    <!-- React 应用逻辑 -->
+    <script type="text/babel">
+      const { useState, useEffect, useRef, useMemo } = React;
+      const { createRoot } = ReactDOM;
+
+      // --- 配置 ---
+      const API_BASE = 'http://localhost:3000'; // 假设后端运行在本地 3000 端口
+
+      // --- 图标组件 ---
+      const IconBase = ({ children, size = 24, className = '' }) => (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={className}
+        >
+          {children}
+        </svg>
+      );
+      const MessageSquare = (p) => (
+        <IconBase {...p}>
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </IconBase>
+      );
+      const Plus = (p) => (
+        <IconBase {...p}>
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </IconBase>
+      );
+      const Layers = (p) => (
+        <IconBase {...p}>
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </IconBase>
+      );
+      const Send = (p) => (
+        <IconBase {...p}>
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </IconBase>
+      );
+      const User = (p) => (
+        <IconBase {...p}>
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </IconBase>
+      );
+      const Bot = (p) => (
+        <IconBase {...p}>
+          <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+          <circle cx="12" cy="5" r="2"></circle>
+          <path d="M12 7v4"></path>
+          <line x1="8" y1="16" x2="8" y2="16"></line>
+          <line x1="16" y1="16" x2="16" y2="16"></line>
+        </IconBase>
+      );
+      const FileText = (p) => (
+        <IconBase {...p}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </IconBase>
+      );
+      const CheckCircle = (p) => (
+        <IconBase {...p}>
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+          <polyline points="22 4 12 14.01 9 11.01"></polyline>
+        </IconBase>
+      );
+      const XCircle = (p) => (
+        <IconBase {...p}>
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="15" y1="9" x2="9" y2="15"></line>
+          <line x1="9" y1="9" x2="15" y2="15"></line>
+        </IconBase>
+      );
+      const Loader2 = (p) => (
+        <IconBase {...p}>
+          <line x1="12" y1="2" x2="12" y2="6"></line>
+          <line x1="12" y1="18" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+          <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="6" y2="12"></line>
+          <line x1="18" y1="12" x2="22" y2="12"></line>
+          <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+          <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+        </IconBase>
+      );
+      const Hash = (p) => (
+        <IconBase {...p}>
+          <line x1="4" y1="9" x2="20" y2="9"></line>
+          <line x1="4" y1="15" x2="20" y2="15"></line>
+          <line x1="10" y1="3" x2="8" y2="21"></line>
+          <line x1="16" y1="3" x2="14" y2="21"></line>
+        </IconBase>
+      );
+      const MoreHorizontal = (p) => (
+        <IconBase {...p}>
+          <circle cx="12" cy="12" r="1"></circle>
+          <circle cx="19" cy="12" r="1"></circle>
+          <circle cx="5" cy="12" r="1"></circle>
+        </IconBase>
+      );
+      const Copy = (p) => (
+        <IconBase {...p}>
+          <rect x="9" y="9" width="13" height="13" rx="2"></rect>
+          <rect x="3" y="3" width="13" height="13" rx="2"></rect>
+        </IconBase>
+      );
+      const Camera = (p) => (
+        <IconBase {...p}>
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+          <circle cx="12" cy="13" r="4"></circle>
+        </IconBase>
+      );
+
+      // --- API 服务 ---
+      const api = {
+        async listSessions() {
+          try {
+            const res = await fetch(`${API_BASE}/context/list`);
+            if (!res.ok) return [];
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return [];
+          }
+        },
+        async fetchHistory(sessionId) {
+          try {
+            const res = await fetch(
+              `${API_BASE}/context/${sessionId}?limit=50`,
+            );
+            if (!res.ok) return [];
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return [];
+          }
+        },
+        async createSession() {
+          try {
+            const res = await fetch(`${API_BASE}/chat/session`, {
+              method: 'POST',
+            });
+            return await res.json();
+          } catch (e) {
+            console.error('Session creation failed', e);
+            // Fallback for demo if backend not ready
+            return { sessionId: 'local-' + Date.now() };
+          }
+        },
+        async fetchContext(sessionId, keywords) {
+          try {
+            const params = new URLSearchParams({
+              keywords: keywords || '',
+              windowSize: 3,
+              max: 20,
+            });
+            const res = await fetch(
+              `${API_BASE}/context/retrieval/${sessionId}?${params}`,
+            );
+            if (!res.ok) throw new Error('Context fetch failed');
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return [];
+          }
+        },
+        getStreamUrl(sessionId, input, opts) {
+          let url = `${API_BASE}/chat/stream?sessionId=${sessionId}&input=${encodeURIComponent(input)}`;
+          if (opts && typeof opts.recursionLimit === 'number') {
+            url += `&recursionLimit=${opts.recursionLimit}`;
+          }
+          return url;
+        },
+        async listFrontendJobs(sessionId) {
+          try {
+            const res = await fetch(
+              `${API_BASE}/fc/frontend/jobs/${sessionId}`,
+            );
+            if (!res.ok) return [];
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return [];
+          }
+        },
+        async getJob(hash) {
+          try {
+            const res = await fetch(`${API_BASE}/fc/frontend/job/${hash}`);
+            if (!res.ok) return null;
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return null;
+          }
+        },
+      };
+
+      // --- 工具函数 ---
+      const extractKeywords = (text) => {
+        if (!text) return '';
+        const set = new Set();
+        const lower = text.toLowerCase();
+
+        // English words (length > 2)
+        const english = lower.match(/[a-z][a-z0-9-]{1,}/g) || [];
+        const stopWords = new Set([
+          'the',
+          'and',
+          'for',
+          'with',
+          'that',
+          'this',
+          'have',
+          'has',
+          'are',
+          'was',
+          'were',
+          'is',
+          'of',
+          'to',
+          'in',
+          'on',
+          'at',
+          'by',
+          'it',
+          'but',
+        ]);
+        english.forEach((w) => {
+          if (w.length > 2 && !stopWords.has(w)) set.add(w);
+        });
+
+        // Chinese words (2 chars or more)
+        const chinese = text.match(/[\u4e00-\u9fa5]{2,}/g) || [];
+        chinese.forEach((w) => set.add(w));
+
+        return Array.from(set).join(',');
+      };
+
+      // --- 主应用组件 ---
+      function App() {
+        const [sessions, setSessions] = useState([]);
+        const [sessionId, setSessionId] = useState(null);
+        const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'resources'
+
+        const [messages, setMessages] = useState([
+          {
+            id: 'welcome',
+            role: 'ai',
+            content: '你好！我是你的 AI 助手。',
+            timestamp: Date.now(),
+          },
+        ]);
+        const [input, setInput] = useState('');
+        const [isTyping, setIsTyping] = useState(false);
+        // Remove selectedMessageId
+
+        // 资源状态
+        const [resources, setResources] = useState([]);
+        const [loadingResources, setLoadingResources] = useState(false);
+
+        const [showHashtagMenu, setShowHashtagMenu] = useState(false);
+        const [hashtagQuery, setHashtagQuery] = useState('');
+        const [hashtagIndex, setHashtagIndex] = useState(0);
+        const [hashtagSuggestions, setHashtagSuggestions] = useState([]);
+        const inputRef = useRef(null);
+        const [autoScroll, setAutoScroll] = useState(true);
+
+        // 初始化会话
+        useEffect(() => {
+          loadSessions();
+        }, []);
+
+        const loadSessions = async () => {
+          const list = await api.listSessions();
+          setSessions(list);
+          // If no session selected, try to select first one
+          if (!sessionId && list.length > 0) {
+            handleSelectSession(list[0].sessionId);
+          } else if (!sessionId && list.length === 0) {
+            handleNewChat();
+          }
+        };
+
+        const handleNewChat = async () => {
+          // 只重置前端状态，不立即创建后端会话
+          setSessionId(null);
+          setMessages([
+            {
+              id: 'welcome',
+              role: 'ai',
+              content: '你好！我是你的 AI 助手。',
+              timestamp: Date.now(),
+            },
+          ]);
+        };
+
+        const handleSelectSession = async (sid) => {
+          setSessionId(sid);
+          const history = await api.fetchHistory(sid);
+          const msgs = history.map((h, idx) => {
+            const segs = [];
+            const trs = Array.isArray(h.tool_results) ? h.tool_results : [];
+            const tsum = Array.isArray(h.tool_summary) ? h.tool_summary : [];
+            trs.forEach((tr, tIdx) => {
+              const name = tr && tr.name ? tr.name : 'tool';
+              const raw = tr && tr.output ? tr.output : null;
+              let obj = raw && typeof raw === 'object' ? raw : null;
+              if (!obj && typeof raw === 'string') {
+                try {
+                  obj = JSON.parse(raw);
+                } catch (e) {}
+              }
+              if (obj && obj.url) {
+                segs.push({
+                  kind: 'external',
+                  url: obj.url,
+                  hash: obj.hash,
+                  status: obj.status || 'pending',
+                  title: '外链页面',
+                });
+              }
+              segs.push({
+                kind: 'tool',
+                tool: {
+                  id: name,
+                  name,
+                  input: tr && tr.input ? tr.input : null,
+                  output: raw,
+                  status: 'completed',
+                },
+              });
+            });
+            if (h.content) {
+              segs.push({ kind: 'text', content: h.content });
+            }
+            return {
+              id: `hist-${idx}-${Date.now()}`,
+              role: h.role === 'assistant' ? 'ai' : 'user',
+              content: h.content,
+              segments: segs,
+              tool_results: trs.length > 0 ? trs : undefined,
+              tool_summary: tsum.length > 0 ? tsum : undefined,
+              keywords: h.keywords,
+              timestamp: new Date(h.timestamp).getTime(),
+            };
+          });
+          if (msgs.length === 0) {
+            setMessages([
+              {
+                id: 'welcome',
+                role: 'ai',
+                content: '你好！我是你的 AI 助手。',
+                timestamp: Date.now(),
+              },
+            ]);
+          } else {
+            setMessages(msgs);
+          }
+        };
+
+        // 关闭自动滚动：不在每次内容更新后滚动到底部
+        const messagesEndRef = useRef(null);
+        const scrollToBottom = () => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        };
+        useEffect(() => {
+          if (autoScroll) scrollToBottom();
+        }, [messages, isTyping, autoScroll]);
+
+        // 发送消息
+        const handleSend = async (overrideInput, opts) => {
+          const text = overrideInput || input;
+          if (!text.trim() || isTyping) return; // Allow if sessionId is null
+
+          let currentSessionId = sessionId;
+          // Lazy creation: Create session on first message if needed
+          if (!currentSessionId) {
+            const data = await api.createSession();
+            currentSessionId = data.sessionId;
+            setSessionId(currentSessionId);
+            try {
+              const provisional = String(text || '')
+                .trim()
+                .slice(0, 24);
+              setSessions((prev) => {
+                const exists = (Array.isArray(prev) ? prev : []).some(
+                  (s) => s && s.sessionId === currentSessionId,
+                );
+                const item = {
+                  sessionId: currentSessionId,
+                  title: provisional.length > 0 ? provisional : '新会话',
+                  updatedAt: new Date().toISOString(),
+                };
+                return exists
+                  ? prev.map((s) =>
+                      s.sessionId === currentSessionId ? { ...s, ...item } : s,
+                    )
+                  : [item, ...(Array.isArray(prev) ? prev : [])];
+              });
+            } catch {}
+
+            // Polling for title
+            const pollTitle = async (retries = 0) => {
+              if (retries > 20) return;
+              const list = await api.listSessions();
+              setSessions(list);
+
+              const session = list.find(
+                (s) => s.sessionId === currentSessionId,
+              );
+              // If session exists but has no title, keep polling
+              if (session && !session.title) {
+                setTimeout(() => pollTitle(retries + 1), 600);
+              }
+            };
+            setTimeout(() => pollTitle(), 500);
+          }
+
+          const userMsg = {
+            id: `msg-${Date.now()}`,
+            role: 'user',
+            content: text,
+            timestamp: Date.now(),
+          };
+
+          setMessages((prev) => [...prev, userMsg]);
+          if (!overrideInput) setInput('');
+          setIsTyping(true);
+
+          // 模拟 Plan 触发 (Frontend heuristic for demo)
+          if (text.includes('计划') || text.includes('plan')) {
+            setTimeout(() => {
+              const planMsg = {
+                id: `plan-${Date.now()}`,
+                role: 'ai',
+                type: 'plan',
+                content: '我制定了以下计划，请审批：',
+                planDetails: ['分析需求', '检索上下文', '生成代码', '验证测试'],
+                status: 'pending',
+              };
+              setMessages((prev) => [...prev, planMsg]);
+              setIsTyping(false);
+            }, 500);
+            return;
+          }
+
+          // SSE 流式请求
+          const responseId = `ai-${Date.now()}`;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: responseId,
+              role: 'ai',
+              content: '',
+              isStreaming: true,
+              tools: [],
+              segments: [],
+              lastUserInput: text,
+              usedRecursionLimit:
+                opts && typeof opts.recursionLimit === 'number'
+                  ? opts.recursionLimit
+                  : undefined,
+            },
+          ]);
+
+          const eventSource = new EventSource(
+            api.getStreamUrl(currentSessionId, text, opts || {}),
+          );
+          let fullText = '';
+          let currentTools = [];
+          const appendDelta = (prev, next) => {
+            const p = typeof prev === 'string' ? prev : '';
+            const n = typeof next === 'string' ? next : '';
+            if (!n) return p;
+            if (n.startsWith(p)) return n;
+            let i = 0;
+            const m = Math.min(p.length, n.length);
+            while (i < m && p[i] === n[i]) i++;
+            return p + n.slice(i);
+          };
+
+          eventSource.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+
+              if (data.type === 'error') {
+                const ed = data.data || {};
+                const code = ed.code;
+                const emsg = ed.message || '';
+                const canContinue = !!ed.can_continue;
+                setMessages((prev) =>
+                  prev.map((msg) => {
+                    if (msg.id !== responseId) return msg;
+                    const segs = Array.isArray(msg.segments)
+                      ? [...msg.segments]
+                      : [];
+                    segs.push({
+                      kind: 'error',
+                      code,
+                      message: emsg,
+                      can_continue: canContinue,
+                    });
+                    return { ...msg, segments: segs, isStreaming: false };
+                  }),
+                );
+                setIsTyping(false);
+                eventSource.close();
+                return;
+              }
+
+              if (data.type === 'token') {
+                const text = data.data?.text || '';
+                fullText = appendDelta(fullText, text);
+                setMessages((prev) =>
+                  prev.map((msg) => {
+                    if (msg.id !== responseId) return msg;
+                    const segs = Array.isArray(msg.segments)
+                      ? [...msg.segments]
+                      : [];
+                    const last = segs[segs.length - 1];
+                    if (last && last.kind === 'text') {
+                      const merged = appendDelta(last.content || '', text);
+                      segs[segs.length - 1] = {
+                        kind: 'text',
+                        content: merged,
+                      };
+                    } else {
+                      segs.push({ kind: 'text', content: text });
+                    }
+                    return {
+                      ...msg,
+                      segments: segs,
+                    };
+                  }),
+                );
+              } else if (data.type === 'tool_start') {
+                // { type: 'tool_start', data: { name: '...', input: ... } }
+                const toolId = data.data.id;
+                // 防止重复添加
+                const exists =
+                  toolId && currentTools.some((t) => t.id === toolId);
+
+                if (!exists) {
+                  currentTools.push({
+                    id: toolId || `tool-${Date.now()}`,
+                    name: data.data.name,
+                    input: data.data.input ?? null,
+                    argsBuffer: '',
+                    status: 'running',
+                  });
+                  const newTool = currentTools[currentTools.length - 1];
+                  setMessages((prev) =>
+                    prev.map((msg) =>
+                      msg.id === responseId
+                        ? {
+                            ...msg,
+                            segments: [
+                              ...(Array.isArray(msg.segments)
+                                ? msg.segments
+                                : []),
+                              { kind: 'tool', tool: newTool },
+                            ],
+                          }
+                        : msg,
+                    ),
+                  );
+                }
+              } else if (data.type === 'tool_chunk') {
+                const { id, name, args, index } = data.data;
+                let idx = -1;
+
+                // 1. Try match by ID
+                if (id) {
+                  idx = currentTools.findIndex((t) => t.id === id);
+                }
+
+                // 2. If no ID match or no ID, try match by name if provided and running
+                if (idx === -1 && name) {
+                  idx = currentTools.findIndex(
+                    (t) => t.name === name && t.status === 'running',
+                  );
+                }
+
+                // 3. If still not found, assume it's the last running tool
+                if (idx === -1) {
+                  idx = currentTools
+                    .map((t) => t.status)
+                    .lastIndexOf('running');
+                }
+
+                if (idx === -1) {
+                  // New tool call detected via chunk
+                  currentTools.push({
+                    id: id || `tool-${Date.now()}-${index}`,
+                    name: name || 'unknown',
+                    input: null,
+                    argsBuffer: args || '',
+                    status: 'running',
+                  });
+                  const newTool = currentTools[currentTools.length - 1];
+                  setMessages((prev) =>
+                    prev.map((msg) =>
+                      msg.id === responseId
+                        ? {
+                            ...msg,
+                            segments: [
+                              ...(Array.isArray(msg.segments)
+                                ? msg.segments
+                                : []),
+                              { kind: 'tool', tool: newTool },
+                            ],
+                          }
+                        : msg,
+                    ),
+                  );
+                } else {
+                  // Update existing
+                  const tool = currentTools[idx];
+                  const newArgs = appendDelta(
+                    tool.argsBuffer || '',
+                    args || '',
+                  );
+                  let newInput = tool.input;
+                  try {
+                    newInput = JSON.parse(newArgs);
+                  } catch (e) {
+                    // ignore partial json
+                  }
+                  currentTools[idx] = {
+                    ...tool,
+                    argsBuffer: newArgs,
+                    input: newInput,
+                    // Update name/id if we missed it initially
+                    name: tool.name === 'unknown' && name ? name : tool.name,
+                    id:
+                      (!tool.id || tool.id.startsWith('tool-')) && id
+                        ? id
+                        : tool.id,
+                  };
+                  setMessages((prev) =>
+                    prev.map((msg) => {
+                      if (msg.id !== responseId) return msg;
+                      const segs = Array.isArray(msg.segments)
+                        ? [...msg.segments]
+                        : [];
+                      const sidx = segs
+                        .map((s) =>
+                          s.kind === 'tool' ? s.tool?.id : undefined,
+                        )
+                        .lastIndexOf(currentTools[idx].id);
+                      if (sidx !== -1) {
+                        const seg = segs[sidx];
+                        segs[sidx] = { ...seg, tool: { ...currentTools[idx] } };
+                      }
+                      return { ...msg, segments: segs };
+                    }),
+                  );
+                }
+              } else if (data.type === 'tool_end') {
+                // { type: 'tool_end', data: { name: '...', output: ... } }
+                const { id, name, output } = data.data;
+                let idx = -1;
+                if (id) {
+                  idx = currentTools.findIndex((t) => t.id === id);
+                }
+                if (idx === -1) {
+                  // Fallback: find last running tool with same name
+                  idx = currentTools
+                    .slice()
+                    .reverse()
+                    .findIndex(
+                      (t) => t.name === name && t.status === 'running',
+                    );
+                  if (idx !== -1) idx = currentTools.length - 1 - idx;
+                }
+
+                if (idx !== -1) {
+                  currentTools[idx] = {
+                    ...currentTools[idx],
+                    output: output,
+                    status: 'completed',
+                  };
+                  setMessages((prev) =>
+                    prev.map((msg) => {
+                      if (msg.id !== responseId) return msg;
+                      const segs = Array.isArray(msg.segments)
+                        ? [...msg.segments]
+                        : [];
+                      let sidx = segs
+                        .map((s) =>
+                          s.kind === 'tool' ? s.tool?.id : undefined,
+                        )
+                        .lastIndexOf(currentTools[idx].id);
+                      if (sidx === -1) {
+                        const name = currentTools[idx].name;
+                        sidx = segs
+                          .map((s) =>
+                            s.kind === 'tool' ? s.tool?.name : undefined,
+                          )
+                          .lastIndexOf(name);
+                      }
+                      if (sidx !== -1) {
+                        const seg = segs[sidx];
+                        const newToolObj = { ...currentTools[idx] };
+                        segs[sidx] = { ...seg, tool: newToolObj };
+                      }
+                      // External link card injection when tool returns URL
+                      try {
+                        const rawOut = currentTools[idx].output;
+                        let obj =
+                          rawOut && typeof rawOut === 'object'
+                            ? rawOut
+                            : undefined;
+                        if (!obj && typeof rawOut === 'string') {
+                          try {
+                            obj = JSON.parse(rawOut);
+                          } catch {}
+                        }
+                        if (obj && obj.url) {
+                          const preface =
+                            '好的，我们已经为您生成了一个图表界面。';
+                          // Add friendly text
+                          const last = segs[segs.length - 1];
+                          if (last && last.kind === 'text') {
+                            const merged = appendDelta(
+                              last.content || '',
+                              `\n\n${preface}\n`,
+                            );
+                            segs[segs.length - 1] = {
+                              kind: 'text',
+                              content: merged,
+                            };
+                          } else {
+                            segs.push({ kind: 'text', content: preface });
+                          }
+                          // Add external card segment
+                          segs.push({
+                            kind: 'external',
+                            url: obj.url,
+                            hash: obj.hash,
+                            status: obj.status || 'pending',
+                            title: '外链页面',
+                          });
+                        }
+                      } catch {}
+                      return { ...msg, segments: segs };
+                    }),
+                  );
+                }
+              } else if (data.type === 'custom') {
+                // { type: 'custom', data: { type: 'tool_thought', id?: string, text: string } | string }
+                const dd = data.data;
+                const isObj = dd && typeof dd === 'object';
+                const ttype = isObj ? dd.type : undefined;
+                const text = isObj ? dd.text : typeof dd === 'string' ? dd : '';
+                if (ttype === 'tool_thought' && text) {
+                  const isAnswerLike =
+                    (text && text.length >= 150) ||
+                    /(^#|\n#|\n##|\n\*\*)/.test(text) ||
+                    /报告|分析|结论|结果/.test(text);
+                  if (isAnswerLike) {
+                    fullText = appendDelta(fullText, text);
+                    setMessages((prev) =>
+                      prev.map((msg) => {
+                        if (msg.id !== responseId) return msg;
+                        const segs = Array.isArray(msg.segments)
+                          ? [...msg.segments]
+                          : [];
+                        const last = segs[segs.length - 1];
+                        if (last && last.kind === 'text') {
+                          const merged = appendDelta(last.content || '', text);
+                          segs[segs.length - 1] = {
+                            kind: 'text',
+                            content: merged,
+                          };
+                        } else {
+                          segs.push({ kind: 'text', content: text });
+                        }
+                        return { ...msg, segments: segs };
+                      }),
+                    );
+                  } else {
+                    const tid = isObj ? dd.id : undefined;
+                    let idx = -1;
+                    if (typeof tid === 'string' && tid.length > 0) {
+                      idx = currentTools.findIndex((t) => t.id === tid);
+                    }
+                    if (idx === -1) {
+                      const lastRunningByNameIndex = (() => {
+                        const lastName = currentTools
+                          .filter((t) => t.status === 'running')
+                          .map((t) => t.name)
+                          .pop();
+                        if (!lastName) return -1;
+                        return currentTools.findIndex(
+                          (t) => t.name === lastName && t.status === 'running',
+                        );
+                      })();
+                      idx = lastRunningByNameIndex;
+                    }
+                    if (idx !== -1) {
+                      const tool = currentTools[idx];
+                      currentTools[idx] = {
+                        ...tool,
+                        streamingContent: appendDelta(
+                          tool.streamingContent || '',
+                          text,
+                        ),
+                      };
+                      setMessages((prev) =>
+                        prev.map((msg) => {
+                          if (msg.id !== responseId) return msg;
+                          const segs = Array.isArray(msg.segments)
+                            ? [...msg.segments]
+                            : [];
+                          let sidx = segs
+                            .map((s) =>
+                              s.kind === 'tool' ? s.tool?.id : undefined,
+                            )
+                            .lastIndexOf(currentTools[idx].id);
+                          if (sidx === -1) {
+                            const name = currentTools[idx].name;
+                            sidx = segs
+                              .map((s) =>
+                                s.kind === 'tool' ? s.tool?.name : undefined,
+                              )
+                              .lastIndexOf(name);
+                          }
+                          if (sidx !== -1) {
+                            const seg = segs[sidx];
+                            segs[sidx] = {
+                              ...seg,
+                              tool: { ...currentTools[idx] },
+                            };
+                          }
+                          return { ...msg, segments: segs };
+                        }),
+                      );
+                    }
+                  }
+                } else if (text) {
+                  setMessages((prev) =>
+                    prev.map((msg) => {
+                      if (msg.id !== responseId) return msg;
+                      const segs = Array.isArray(msg.segments)
+                        ? [...msg.segments]
+                        : [];
+                      segs.push({ kind: 'log', content: text });
+                      return { ...msg, segments: segs };
+                    }),
+                  );
+                }
+              } else if (data.type === 'reasoning') {
+                const text = data.data?.text || '';
+                if (text) {
+                  setMessages((prev) =>
+                    prev.map((msg) => {
+                      if (msg.id !== responseId) return msg;
+                      const segs = Array.isArray(msg.segments)
+                        ? [...msg.segments]
+                        : [];
+                      segs.push({ kind: 'reasoning', content: text });
+                      return { ...msg, segments: segs };
+                    }),
+                  );
+                }
+              } else if (data.type === 'end') {
+                const payload = data.data || {};
+                const t = typeof payload.text === 'string' ? payload.text : '';
+                if (t && t.trim().length > 0) {
+                  fullText = t;
+                }
+                const toolResults = Array.isArray(payload.tool_results)
+                  ? payload.tool_results
+                  : [];
+                const toolSummary = Array.isArray(payload.tool_summary)
+                  ? payload.tool_summary
+                  : [];
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === responseId
+                      ? {
+                          ...msg,
+                          content: fullText,
+                          tools: [...currentTools],
+                          tool_results: toolResults,
+                          tool_summary: toolSummary,
+                          isStreaming: false,
+                        }
+                      : msg,
+                  ),
+                );
+                try {
+                  eventSource.close();
+                } catch {}
+                setIsTyping(false);
+              } else {
+                // Fallback / Legacy / End event
+                // Check if it is the end event structure: { data: { text: '' } } (no type)
+                if (
+                  data.data &&
+                  typeof data.data === 'object' &&
+                  'text' in data.data
+                ) {
+                  const text = data.data.text || '';
+                  fullText = appendDelta(fullText, text);
+                } else {
+                  // Legacy fallback
+                  const token =
+                    data.text ||
+                    data.token ||
+                    (typeof data.data === 'string' ? data.data : '') ||
+                    '';
+                  fullText = appendDelta(fullText, token);
+                }
+              }
+
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === responseId
+                    ? {
+                        ...msg,
+                        content: fullText,
+                        tools: [...currentTools],
+                      }
+                    : msg,
+                ),
+              );
+            } catch (e) {
+              fullText = appendDelta(fullText, event.data);
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === responseId ? { ...msg, content: fullText } : msg,
+                ),
+              );
+            }
+          };
+
+          eventSource.onerror = () => {
+            eventSource.close();
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === responseId ? { ...msg, isStreaming: false } : msg,
+              ),
+            );
+            setIsTyping(false);
+          };
+
+          // 如果后端发送特定结束信号
+          eventSource.addEventListener('end', () => {
+            eventSource.close();
+            setIsTyping(false);
+          });
+        };
+
+        // HITL 审批
+        const handlePlanAction = (msgId, action, payload) => {
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === msgId) return { ...msg, status: action };
+              return msg;
+            }),
+          );
+          let feedback = '';
+          if (action === 'approved' && payload && typeof payload === 'object') {
+            const ui = payload.uiFramework || 'antd';
+            const lib = payload.chartLibrary || 'echarts';
+            const layout = payload.layout || 'dashboard';
+            const obj = {
+              contentType: 'chart',
+              uiFramework: ui,
+              chartLibrary: lib,
+              layout,
+            };
+            feedback = `系统通知: 用户已选择图表生成参数。UI框架=${ui}; 图表库=${lib}; 布局=${layout}。请基于此生成图表，严格遵循参数，不自行预测缺失。\n参数: ${JSON.stringify(obj)}`;
+          } else {
+            feedback =
+              action === 'approved'
+                ? '系统通知: 用户已批准计划，请继续执行。'
+                : '系统通知: 用户拒绝了计划，请重新思考。';
+          }
+          handleSend(feedback);
+        };
+
+        // 递归重试
+        const handleRetryRecursion = (msgId, limit) => {
+          const msg = messages.find((m) => m.id === msgId);
+          const inputText = msg && msg.lastUserInput ? msg.lastUserInput : '';
+          if (!inputText) return;
+          const baseLimit =
+            (msg && typeof msg.usedRecursionLimit === 'number'
+              ? msg.usedRecursionLimit
+              : 25) || 25;
+          const next = typeof limit === 'number' ? limit : baseLimit * 2;
+          handleSend(inputText, { recursionLimit: next });
+        };
+
+        // 资源加载 (Conversation Context & Artifacts)
+        useEffect(() => {
+          if (activeTab === 'resources' && sessionId) {
+            setLoadingResources(true);
+
+            // 1. Extract Artifacts from Messages (Code blocks)
+            const artifacts = [];
+            messages.forEach((msg, mIdx) => {
+              if (msg.role !== 'ai' || !msg.content) return;
+
+              // Regex to find code blocks: ```lang ... ```
+              const codeBlockRegex = /```(\w+)?\s*([\s\S]*?)```/g;
+              let match;
+              let bIdx = 0;
+              while ((match = codeBlockRegex.exec(msg.content)) !== null) {
+                const lang = match[1] || 'text';
+                const content = match[2];
+                // Only consider "resource-like" blocks (html, markdown, json, csv, or specific output)
+                if (
+                  [
+                    'html',
+                    'markdown',
+                    'md',
+                    'json',
+                    'csv',
+                    'xml',
+                    'svg',
+                  ].includes(lang.toLowerCase())
+                ) {
+                  artifacts.push({
+                    id: `art-${msg.id}-${bIdx}`,
+                    title: `生成资源 (${lang})`,
+                    type: 'artifact',
+                    lang: lang,
+                    content: content,
+                    sourceId: msg.id,
+                    score: 'Generated',
+                  });
+                  bIdx++;
+                }
+              }
+            });
+
+            // 2. Fetch Frontend Jobs (external pages)
+            const jobsPromise = api
+              .listFrontendJobs(sessionId)
+              .then((jobs) => {
+                const items = (Array.isArray(jobs) ? jobs : []).map(
+                  (job, idx) => ({
+                    id: job.hash || `job-${idx}`,
+                    title: `外链页面 #${idx + 1}`,
+                    type: 'external',
+                    status: job.status || 'pending',
+                    content: job.url || '',
+                    extra: job,
+                  }),
+                );
+                return items;
+              })
+              .catch(() => []);
+
+            // 3. Fetch Retrieval Context (Session level)
+            const ctxPromise = api
+              .fetchContext(sessionId, '')
+              .then((data) =>
+                data.map((item, idx) => ({
+                  id: item.id || `ctx-${idx}`,
+                  title: `参考上下文 #${idx + 1}`,
+                  type: 'context',
+                  status: 'completed',
+                  content: item.content,
+                  score: `Ref: ${item.score?.toFixed(2) || 'N/A'}`,
+                })),
+              )
+              .catch(() => []);
+
+            Promise.all([jobsPromise, ctxPromise])
+              .then(([jobs]) => setResources([...jobs]))
+              .finally(() => setLoadingResources(false));
+          }
+        }, [activeTab, sessionId, messages]);
+
+        // 输入处理
+        const handleInputChange = (e) => {
+          const val = e.target.value;
+          setInput(val);
+          try {
+            const caret = e.target.selectionStart;
+            const before =
+              typeof caret === 'number' ? val.slice(0, caret) : val;
+            const m = before.match(/#([A-Za-z0-9_-]*)$/);
+            if (m) {
+              const q = m[1] || '';
+              setShowHashtagMenu(true);
+              setHashtagQuery(q);
+              const externals = (
+                Array.isArray(resources) ? resources : []
+              ).filter(
+                (r) =>
+                  r && r.type === 'external' && typeof r.content === 'string',
+              );
+              const items = externals.filter((r) => {
+                const title = r.title || '';
+                return (
+                  q.length === 0 ||
+                  String(title).toLowerCase().includes(q.toLowerCase())
+                );
+              });
+              setHashtagSuggestions(items.slice(0, 8));
+              setHashtagIndex(0);
+            } else {
+              setShowHashtagMenu(false);
+            }
+          } catch (err) {
+            setShowHashtagMenu(false);
+          }
+        };
+
+        const insertHashtag = (item) => {
+          if (!item) return;
+          const el = inputRef.current;
+          const token = String(item.id || '').trim();
+          const val = input;
+          const caret =
+            el && typeof el.selectionStart === 'number'
+              ? el.selectionStart
+              : val.length;
+          const before = val.slice(0, caret);
+          const after = val.slice(caret);
+          const replacedBefore = before.replace(
+            /#([A-Za-z0-9_-]*)$/,
+            `#${token}`,
+          );
+          const next = replacedBefore + after;
+          setInput(next);
+          setShowHashtagMenu(false);
+          setHashtagQuery('');
+        };
+
+        const reloadResources = async () => {
+          if (!sessionId) return;
+          setLoadingResources(true);
+          try {
+            const jobs = await api.listFrontendJobs(sessionId);
+            const items = (Array.isArray(jobs) ? jobs : []).map((job, idx) => ({
+              id: job.hash || `job-${idx}`,
+              title: `外链页面 #${idx + 1}`,
+              type: 'external',
+              status: job.status || 'pending',
+              content: job.url || '',
+              extra: job,
+            }));
+            setResources(items);
+          } finally {
+            setLoadingResources(false);
+          }
+        };
+
+        const [hitl, setHitl] = useState({
+          open: false,
+          msgId: null,
+          uiFramework: 'antd',
+          chartLibrary: 'echarts',
+          layout: 'dashboard',
+        });
+        const openHitl = (msgId) => {
+          setHitl({
+            open: true,
+            msgId,
+            uiFramework: 'antd',
+            chartLibrary: 'echarts',
+            layout: 'dashboard',
+          });
+        };
+        const closeHitl = () => setHitl((h) => ({ ...h, open: false }));
+        const confirmHitl = () => {
+          const payload = {
+            uiFramework: hitl.uiFramework,
+            chartLibrary: hitl.chartLibrary,
+            layout: hitl.layout,
+          };
+          handlePlanAction(hitl.msgId, 'approved', payload);
+          closeHitl();
+        };
+
+        const handleScreenshot = async () => {
+          const element = document.querySelector('main');
+          if (!element) return;
+          try {
+            const canvas = await html2canvas(element, {
+              useCORS: true,
+              logging: false,
+              ignoreElements: (el) => {
+                // Ignore elements if needed, e.g., the input box if we want only chat
+                // For now, let's keep everything
+                return false;
+              },
+            });
+            const link = document.createElement('a');
+            link.download = `chat-screenshot-${Date.now()}.png`;
+            link.href = canvas.toDataURL();
+            link.click();
+          } catch (err) {
+            console.error('Screenshot failed', err);
+          }
+        };
+
+        return (
+          <div className="flex h-screen bg-white text-gray-900 font-sans overflow-hidden">
+            {/* 侧边栏 */}
+            <aside className="hidden md:flex w-64 shrink-0 bg-gray-50 border-r border-gray-200 flex-col h-full">
+              <div className="p-4 border-b border-gray-200">
+                <button
+                  onClick={handleNewChat}
+                  className="w-full flex items-center justify-center gap-2 bg-black text-white py-2 px-4 rounded hover:bg-gray-800 transition-colors"
+                >
+                  <Plus size={16} />
+                  <span>新会话</span>
+                </button>
+              </div>
+              <div className="flex-1 p-2 overflow-y-auto">
+                {sessions.map((s) => (
+                  <div
+                    key={s.sessionId}
+                    onClick={() => handleSelectSession(s.sessionId)}
+                    className={`p-3 mb-2 rounded cursor-pointer transition-colors ${
+                      sessionId === s.sessionId
+                        ? 'bg-gray-200'
+                        : 'hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="text-sm font-medium truncate">
+                      {s.title ? (
+                        s.title
+                      ) : (
+                        <span className="text-gray-400 italic flex items-center gap-1">
+                          <Loader2 size={12} className="animate-spin" />
+                          生成标题中...
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {new Date(s.updatedAt || Date.now()).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))}
+                {sessions.length === 0 && (
+                  <div className="text-xs text-center text-gray-400 mt-4">
+                    暂无历史记录
+                  </div>
+                )}
+              </div>
+            </aside>
+
+            {/* 主区域 */}
+            <main className="flex-1 flex flex-col h-full relative bg-white">
+              {/* Tab Header */}
+              <header className="relative h-16 border-b border-gray-100 flex items-center justify-center shrink-0 bg-white z-10">
+                <div className="flex p-1 bg-gray-100 rounded-full w-64 shadow-inner">
+                  <button
+                    onClick={() => setActiveTab('chat')}
+                    className={`flex-1 py-1.5 px-4 text-sm font-medium rounded-full transition-all ${
+                      activeTab === 'chat'
+                        ? 'bg-white text-black shadow-sm'
+                        : 'text-gray-500'
+                    }`}
+                  >
+                    对话
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('resources')}
+                    className={`flex-1 py-1.5 px-4 text-sm font-medium rounded-full transition-all ${
+                      activeTab === 'resources'
+                        ? 'bg-white text-black shadow-sm'
+                        : 'text-gray-500'
+                    }`}
+                  >
+                    资源预览
+                  </button>
+                </div>
+                <button
+                  onClick={handleScreenshot}
+                  className="absolute right-4 p-2 text-gray-500 hover:text-black transition-colors rounded-full hover:bg-gray-100"
+                  title="截图"
+                >
+                  <Camera size={20} />
+                </button>
+              </header>
+
+              <div className="flex-1 overflow-hidden relative">
+                {/* Chat View */}
+                {activeTab === 'chat' && (
+                  <div className="h-full flex flex-col animate__animated animate__fadeIn">
+                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                      {messages.map((msg) => (
+                        <MessageBubble
+                          key={msg.id}
+                          message={msg}
+                          onAction={handlePlanAction}
+                          onRetry={handleRetryRecursion}
+                          onHitl={openHitl}
+                          resources={resources}
+                          onRefreshResources={reloadResources}
+                        />
+                      ))}
+
+                      {isTyping && !messages.some((m) => m.isStreaming) && (
+                        <div className="flex items-center gap-2 text-gray-400 text-sm ml-2">
+                          <Loader2 size={16} className="animate-spin" />{' '}
+                          思考中...
+                        </div>
+                      )}
+                      <div ref={messagesEndRef} />
+                    </div>
+
+                    <div className="p-4 bg-white/80 backdrop-blur-sm z-20">
+                      <div className="relative max-w-4xl mx-auto">
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-2 pl-3">
+                          <button
+                            onClick={() => setAutoScroll((v) => !v)}
+                            className={`h-8 px-3 flex items-center gap-2 rounded-full border transition-all ${
+                              autoScroll
+                                ? 'bg-black text-white border-black'
+                                : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
+                            } shadow-sm`}
+                          >
+                            <span className="text-xs">跟随置底</span>
+                            <span
+                              className={`inline-block w-1.5 h-1.5 rounded-full ${
+                                autoScroll ? 'bg-white' : 'bg-gray-400'
+                              }`}
+                            ></span>
+                          </button>
+                        </div>
+                        <textarea
+                          value={input}
+                          onChange={handleInputChange}
+                          onKeyDown={(e) => {
+                            if (showHashtagMenu) {
+                              if (e.key === 'ArrowDown') {
+                                e.preventDefault();
+                                setHashtagIndex((i) =>
+                                  Math.min(
+                                    i + 1,
+                                    hashtagSuggestions.length - 1,
+                                  ),
+                                );
+                                return;
+                              } else if (e.key === 'ArrowUp') {
+                                e.preventDefault();
+                                setHashtagIndex((i) => Math.max(i - 1, 0));
+                                return;
+                              } else if (e.key === 'Enter') {
+                                e.preventDefault();
+                                insertHashtag(hashtagSuggestions[hashtagIndex]);
+                                return;
+                              } else if (e.key === 'Escape') {
+                                setShowHashtagMenu(false);
+                                return;
+                              }
+                            }
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSend();
+                            }
+                          }}
+                          placeholder="输入消息... (输入 '计划' 体验审批流程)"
+                          className="w-full bg-white border-0 ring-1 ring-gray-200 rounded-3xl pl-32 pr-16 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-black/5 resize-none shadow-lg transition-shadow"
+                          rows={1}
+                          disabled={isTyping}
+                          ref={inputRef}
+                        />
+                        <button
+                          onClick={() => handleSend()}
+                          disabled={!input.trim() || isTyping}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 h-9 w-9 flex items-center justify-center rounded-full bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:scale-105 transition-transform"
+                        >
+                          {isTyping ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            <Send size={16} />
+                          )}
+                        </button>
+                        {showHashtagMenu && (
+                          <div className="absolute left-0 -top-28 w-96 bg-white border border-gray-200 rounded-xl shadow-xl p-2 animate__animated animate__fadeInUp">
+                            <div className="text-xs text-gray-500 mb-1 px-2">
+                              选择外链资源以插入到 # 后
+                            </div>
+                            <ul>
+                              {hashtagSuggestions.map((item, idx) => (
+                                <li
+                                  key={item.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    insertHashtag(item);
+                                  }}
+                                  className={`px-2 py-1 text-sm cursor-pointer rounded ${idx === hashtagIndex ? 'bg-gray-100' : ''}`}
+                                >
+                                  <span className="font-medium">
+                                    {item.title || '外链页面'}
+                                  </span>
+                                  <span className="ml-2 text-xs text-gray-500">
+                                    {item.status || 'pending'}
+                                  </span>
+                                </li>
+                              ))}
+                              {hashtagSuggestions.length === 0 && (
+                                <li className="px-2 py-1 text-sm text-gray-400">
+                                  无匹配资源
+                                </li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Resources View */}
+                {activeTab === 'resources' && (
+                  <div className="h-full p-6 overflow-y-auto animate__animated animate__fadeIn">
+                    <div className="max-w-4xl mx-auto">
+                      <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-xl font-bold flex items-center gap-2">
+                          <Layers className="text-black" /> 会话外链资源
+                        </h2>
+                        {loadingResources && (
+                          <Loader2 className="animate-spin text-gray-400" />
+                        )}
+                      </div>
+
+                      {!loadingResources && resources.length === 0 && (
+                        <div className="text-center text-gray-400 py-10 border-2 border-dashed border-gray-100 rounded-xl">
+                          暂无资源 (请进行更多对话)
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 gap-4">
+                        {resources.map((res) => (
+                          <div
+                            key={res.id}
+                            className="bg-white border border-gray-100 rounded-xl p-4 hover:shadow-md transition-shadow"
+                          >
+                            <div className="flex items-start gap-4">
+                              <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0 bg-blue-50 text-blue-600">
+                                <FileText size={20} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-gray-900 truncate">
+                                  {res.title || '外链页面'}
+                                </div>
+                                <div className="mt-1 text-sm">
+                                  <a
+                                    href={res.content}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 underline break-words"
+                                  >
+                                    {res.content}
+                                  </a>
+                                </div>
+                                <div className="text-xs text-gray-500 mt-1">
+                                  状态: {res.status || 'pending'}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </main>
+            {hitl.open && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+                <div className="bg-white w-[480px] rounded-xl shadow-lg border border-gray-200 p-4">
+                  <div className="text-lg font-bold">选择图表生成参数</div>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <div className="text-sm text-gray-600 mb-1">UI 框架</div>
+                      <select
+                        value={hitl.uiFramework}
+                        onChange={(e) =>
+                          setHitl((h) => ({
+                            ...h,
+                            uiFramework: e.target.value,
+                          }))
+                        }
+                        className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-gray-50"
+                      >
+                        <option value="antd">antd</option>
+                        <option value="element-ui">element ui</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-600 mb-1">图表库</div>
+                      <select
+                        value={hitl.chartLibrary}
+                        onChange={(e) =>
+                          setHitl((h) => ({
+                            ...h,
+                            chartLibrary: e.target.value,
+                          }))
+                        }
+                        className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-gray-50"
+                      >
+                        <option value="echarts">echarts</option>
+                        <option value="acharts">acharts</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-600 mb-1">布局</div>
+                      <select
+                        value={hitl.layout}
+                        onChange={(e) =>
+                          setHitl((h) => ({ ...h, layout: e.target.value }))
+                        }
+                        className="w-full border border-gray-200 rounded px-2 py-1 text-sm bg-gray-50"
+                      >
+                        <option value="dashboard">dashboard 布局</option>
+                        <option value="grid">宫格布局</option>
+                        <option value="masonry">瀑布流布局</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex justify-end gap-2">
+                    <button
+                      onClick={closeHitl}
+                      className="px-3 py-1.5 border rounded text-sm"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={confirmHitl}
+                      className="px-3 py-1.5 bg-black text-white rounded text-sm"
+                    >
+                      确定
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // --- 消息组件 ---
+      function CopyButton({ message }) {
+        const [copied, setCopied] = React.useState(false);
+        const getText = () => {
+          let t = '';
+          if (Array.isArray(message?.segments)) {
+            t = message.segments
+              .filter((s) => s && s.kind === 'text')
+              .map((s) => s.content || '')
+              .join('\n\n');
+          }
+          if (!t && typeof message?.content === 'string') t = message.content;
+          return t || '';
+        };
+        const onCopy = async () => {
+          const text = getText();
+          if (!text) return;
+          try {
+            await navigator.clipboard.writeText(text);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          } catch {}
+        };
+        return (
+          <button
+            onClick={onCopy}
+            className="ml-auto px-2 py-0.5 border rounded text-xs text-gray-600 hover:bg-gray-100 flex items-center gap-1"
+          >
+            <Copy size={12} />
+            {copied ? '已复制' : '复制'}
+          </button>
+        );
+      }
+      const MessageBubble = ({
+        message,
+        onAction,
+        onRetry,
+        onHitl,
+        resources = [],
+        onRefreshResources,
+      }) => {
+        const isUser = message.role === 'user';
+        const linkifyHashtags = (content) => {
+          const externals = (Array.isArray(resources) ? resources : []).filter(
+            (r) =>
+              r &&
+              r.type === 'external' &&
+              typeof r.content === 'string' &&
+              r.content.startsWith('http'),
+          );
+          const byId = new Map(externals.map((r) => [String(r.id), r]));
+          const replaceOne = (token) => {
+            let res = null;
+            if (/^\d+$/.test(token)) {
+              const idx = Number(token) - 1;
+              res = externals[idx];
+            } else {
+              res = byId.get(token);
+            }
+            if (res && res.content) {
+              const text = res.title || res.content;
+              const url = res.content;
+              return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline">${text}</a>`;
+            }
+            return `#${token}`;
+          };
+          return String(content || '').replace(
+            /(^|\s)#([A-Za-z0-9_-]+)/g,
+            (m, pre, token) => {
+              return `${pre}${replaceOne(token)}`;
+            },
+          );
+        };
+        const rawMarkup = (content) => ({
+          __html: DOMPurify.sanitize(
+            marked.parse(linkifyHashtags(content || '')),
+          ),
+        });
+        const [collapsedMap, setCollapsedMap] = React.useState({});
+        const [uiFrameworkSel, setUiFrameworkSel] = React.useState('antd');
+        const [chartLibrarySel, setChartLibrarySel] = React.useState('echarts');
+        const [layoutSel, setLayoutSel] = React.useState('dashboard');
+        const isCollapsed = (toolId) => {
+          if (!toolId) return true;
+          const v = collapsedMap[toolId];
+          return typeof v === 'boolean' ? v : true;
+        };
+        const toggleCollapsed = (toolId) => {
+          if (!toolId) return;
+          setCollapsedMap((prev) => {
+            const cur = typeof prev[toolId] === 'boolean' ? prev[toolId] : true;
+            return { ...prev, [toolId]: !cur };
+          });
+        };
+
+        return (
+          <div
+            className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'} animate__animated animate__fadeInUp animate__faster`}
+          >
+            <div
+              className={`
+                flex max-w-[95%] md:max-w-[90%] gap-3 p-2 rounded-xl transition-all
+                ${isUser ? 'flex-row-reverse' : 'flex-row'}
+                hover:bg-gray-50
+            `}
+            >
+              <div
+                className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center border ${isUser ? 'bg-black text-white' : 'bg-white border-gray-200'}`}
+              >
+                {isUser ? <User size={14} /> : <Bot size={16} />}
+              </div>
+
+              <div className="flex flex-col gap-1 min-w-0">
+                <div className="flex items-baseline gap-2 px-1">
+                  <span className="text-xs font-bold text-gray-900">
+                    {isUser ? 'You' : 'AI'}
+                  </span>
+                  {!isUser && <CopyButton message={message} />}
+                </div>
+
+                {message.type === 'plan' ? (
+                  <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm w-full md:min-w-[300px]">
+                    <div className="flex items-center gap-2 mb-2 font-semibold text-sm">
+                      <Layers size={14} className="text-blue-600" /> 计划审批
+                    </div>
+                    <div className="text-sm text-gray-600 mb-3">
+                      {message.content}
+                    </div>
+                    <ul className="space-y-1 mb-3">
+                      {message.planDetails?.map((step, i) => (
+                        <li
+                          key={i}
+                          className="text-xs bg-gray-50 p-1.5 rounded text-gray-700"
+                        >
+                          {i + 1}. {step}
+                        </li>
+                      ))}
+                    </ul>
+                    {message.status === 'pending' ? (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAction(message.id, 'rejected');
+                          }}
+                          className="flex-1 py-1.5 border rounded text-xs hover:bg-red-50 text-red-600"
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAction(message.id, 'approved');
+                          }}
+                          className="flex-1 py-1.5 bg-black text-white rounded text-xs hover:opacity-90"
+                        >
+                          批准
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        className={`text-xs p-2 rounded ${message.status === 'approved' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}
+                      >
+                        已{message.status === 'approved' ? '批准' : '拒绝'}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div
+                    className={`py-3 px-4 rounded-2xl shadow-sm text-sm overflow-hidden break-words max-w-[95ch] md:max-w-[90ch] lg:max-w-[105ch] sm:max-w-[95%] ${isUser ? 'bg-black text-white' : 'bg-white border border-gray-100'}`}
+                  >
+                    {Array.isArray(message.segments) &&
+                    message.segments.length > 0 ? (
+                      <div className="flex flex-col gap-2">
+                        {message.segments.map((seg, i) =>
+                          seg.kind === 'text' ? (
+                            <div
+                              key={`text-${i}`}
+                              className={`markdown-body ${isUser ? '!text-white' : ''} overflow-x-auto`}
+                              style={{
+                                overflowWrap: 'break-word',
+                                wordBreak: 'break-word',
+                              }}
+                              dangerouslySetInnerHTML={rawMarkup(
+                                seg.content || '',
+                              )}
+                            />
+                          ) : seg.kind === 'error' ? (
+                            <div
+                              key={`err-${i}`}
+                              className="text-xs bg-red-50 border border-red-200 rounded p-2 overflow-hidden"
+                            >
+                              <div className="font-semibold text-red-700">
+                                错误: {seg.code || 'UNKNOWN'}
+                              </div>
+                              <div className="mt-1 text-red-600 break-words">
+                                {seg.message || ''}
+                              </div>
+                              {seg.can_continue &&
+                                !isUser &&
+                                typeof onRetry === 'function' && (
+                                  <div className="mt-2">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const nextLimit =
+                                          (message.usedRecursionLimit ?? 25) *
+                                          2;
+                                        onRetry(message.id, nextLimit);
+                                      }}
+                                      className="py-1.5 px-2 bg-black text-white rounded text-xs hover:opacity-90"
+                                    >
+                                      继续
+                                    </button>
+                                  </div>
+                                )}
+                            </div>
+                          ) : seg.kind === 'log' ? (
+                            <div
+                              key={`log-${i}`}
+                              className="text-xs bg-gray-50 border border-gray-200 rounded p-2 overflow-hidden text-gray-600"
+                            >
+                              {seg.content}
+                            </div>
+                          ) : seg.kind === 'external' ? (
+                            <div
+                              key={`ext-${i}`}
+                              className="text-xs bg-blue-50 border border-blue-200 rounded p-2 overflow-hidden"
+                            >
+                              <div className="font-semibold text-blue-700">
+                                外链页面
+                              </div>
+                              <div className="mt-1 text-blue-600 break-words">
+                                <a
+                                  href={seg.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline"
+                                >
+                                  {seg.url}
+                                </a>
+                              </div>
+                              <div className="mt-1 text-blue-600">
+                                状态: {seg.status || 'pending'}
+                              </div>
+                              <div className="mt-1">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (
+                                      typeof onRefreshResources === 'function'
+                                    )
+                                      onRefreshResources();
+                                  }}
+                                  className="px-2 py-1 border rounded text-xs text-blue-700 hover:bg-blue-50"
+                                >
+                                  刷新
+                                </button>
+                              </div>
+                              <div className="mt-1 text-gray-600">
+                                您可以打开外链查看生成进度与最终图表界面。
+                              </div>
+                            </div>
+                          ) : (
+                            <div
+                              key={`tool-${i}`}
+                              className="text-xs bg-gray-50 border border-gray-200 rounded p-2 overflow-hidden"
+                            >
+                              <div className="font-semibold text-gray-700 flex items-center gap-2">
+                                <Hash size={12} /> 调用工具: {seg.tool?.name}
+                                {seg.tool?.status === 'running' && (
+                                  <Loader2 size={12} className="animate-spin" />
+                                )}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleCollapsed(
+                                      seg.tool?.id || seg.tool?.name,
+                                    );
+                                  }}
+                                  className="ml-auto px-2 py-0.5 border rounded text-xs text-gray-600 hover:bg-gray-100"
+                                >
+                                  {isCollapsed(seg.tool?.id || seg.tool?.name)
+                                    ? '展开'
+                                    : '收起'}
+                                </button>
+                              </div>
+                              <div
+                                data-tool-id={seg.tool?.id || seg.tool?.name}
+                              >
+                                <div
+                                  data-tool-body
+                                  style={{
+                                    display: isCollapsed(
+                                      seg.tool?.id || seg.tool?.name,
+                                    )
+                                      ? 'none'
+                                      : '',
+                                  }}
+                                >
+                                  <div className="mt-1 text-gray-500 font-mono break-all whitespace-pre-wrap max-h-24 overflow-y-auto">
+                                    Input:{' '}
+                                    {seg.tool?.input
+                                      ? JSON.stringify(seg.tool.input)
+                                      : seg.tool?.argsBuffer || ''}
+                                  </div>
+                                  {seg.tool?.streamingContent && (
+                                    <div className="mt-1 text-blue-600 font-mono break-all whitespace-pre-wrap max-h-48 overflow-y-auto">
+                                      Stream: {seg.tool.streamingContent}
+                                    </div>
+                                  )}
+                                  {seg.tool?.output && (
+                                    <div className="mt-1 text-green-600 font-mono break-all whitespace-pre-wrap max-h-48 overflow-y-auto">
+                                      Output:{' '}
+                                      {typeof seg.tool.output === 'string'
+                                        ? seg.tool.output
+                                        : JSON.stringify(seg.tool.output)}
+                                    </div>
+                                  )}
+                                  {(() => {
+                                    const out = seg.tool?.output;
+                                    const obj =
+                                      out && typeof out === 'object'
+                                        ? out
+                                        : undefined;
+                                    const hitl =
+                                      obj &&
+                                      (obj.requires_human === true ||
+                                        obj.hitl_required === true);
+                                    if (hitl && !isUser) {
+                                      return (
+                                        <div className="mt-2 border border-gray-200 rounded p-2 bg-white">
+                                          <div className="text-xs text-gray-600 mb-2">
+                                            图表生成需要人工选择以下参数：
+                                          </div>
+                                          <div className="grid grid-cols-3 gap-2">
+                                            <div>
+                                              <div className="text-xs text-gray-600 mb-1">
+                                                UI 框架
+                                              </div>
+                                              <select
+                                                value={uiFrameworkSel}
+                                                onChange={(e) =>
+                                                  setUiFrameworkSel(
+                                                    e.target.value,
+                                                  )
+                                                }
+                                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                              >
+                                                <option value="antd">
+                                                  antd
+                                                </option>
+                                                <option value="element-ui">
+                                                  element ui
+                                                </option>
+                                              </select>
+                                            </div>
+                                            <div>
+                                              <div className="text-xs text-gray-600 mb-1">
+                                                图表库
+                                              </div>
+                                              <select
+                                                value={chartLibrarySel}
+                                                onChange={(e) =>
+                                                  setChartLibrarySel(
+                                                    e.target.value,
+                                                  )
+                                                }
+                                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                              >
+                                                <option value="echarts">
+                                                  echarts
+                                                </option>
+                                                <option value="acharts">
+                                                  acharts
+                                                </option>
+                                              </select>
+                                            </div>
+                                            <div>
+                                              <div className="text-xs text-gray-600 mb-1">
+                                                布局
+                                              </div>
+                                              <select
+                                                value={layoutSel}
+                                                onChange={(e) =>
+                                                  setLayoutSel(e.target.value)
+                                                }
+                                                className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                              >
+                                                <option value="dashboard">
+                                                  dashboard
+                                                </option>
+                                                <option value="grid">
+                                                  宫格
+                                                </option>
+                                                <option value="masonry">
+                                                  瀑布流
+                                                </option>
+                                              </select>
+                                            </div>
+                                          </div>
+                                          <div className="mt-2 flex gap-2">
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                onAction &&
+                                                  onAction(
+                                                    message.id,
+                                                    'rejected',
+                                                  );
+                                              }}
+                                              className="py-1 px-2 border rounded text-xs hover:bg-red-50 text-red-600"
+                                            >
+                                              拒绝
+                                            </button>
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                const payload = {
+                                                  uiFramework: uiFrameworkSel,
+                                                  chartLibrary: chartLibrarySel,
+                                                  layout: layoutSel,
+                                                };
+                                                onAction &&
+                                                  onAction(
+                                                    message.id,
+                                                    'approved',
+                                                    payload,
+                                                  );
+                                              }}
+                                              className="py-1 px-2 bg-black text-white rounded text-xs hover:opacity-90"
+                                            >
+                                              确定
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  })()}
+                                </div>
+                              </div>
+                            </div>
+                          ),
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        {Array.isArray(message.tool_results) &&
+                          message.tool_results.length > 0 && (
+                            <div className="mb-2 space-y-2">
+                              {message.tool_results.map((tr, i) => {
+                                const name =
+                                  tr && typeof tr === 'object'
+                                    ? tr.name
+                                    : undefined;
+                                const output =
+                                  tr && typeof tr === 'object'
+                                    ? tr.output
+                                    : undefined;
+                                return (
+                                  <div
+                                    key={`toolres-${i}`}
+                                    className="text-xs bg-gray-50 border border-gray-200 rounded p-2 overflow-hidden"
+                                  >
+                                    <div className="font-semibold text-gray-700 flex items-center gap-1">
+                                      <Hash size={12} /> 工具输出:{' '}
+                                      {typeof name === 'string' ? name : 'tool'}
+                                    </div>
+                                    <div className="mt-1 text-green-600 font-mono break-all whitespace-pre-wrap max-h-48 overflow-y-auto">
+                                      {typeof output === 'string'
+                                        ? output
+                                        : JSON.stringify(output)}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                              {(() => {
+                                const arr = message.tool_results;
+                                const hitl = Array.isArray(arr)
+                                  ? arr.some((tr) => {
+                                      const out =
+                                        tr && typeof tr === 'object'
+                                          ? tr.output
+                                          : undefined;
+                                      const obj =
+                                        out && typeof out === 'object'
+                                          ? out
+                                          : undefined;
+                                      return (
+                                        obj &&
+                                        (obj.requires_human === true ||
+                                          obj.hitl_required === true) &&
+                                        Array.isArray(obj.missing)
+                                      );
+                                    })
+                                  : false;
+                                if (hitl && !isUser) {
+                                  return (
+                                    <div className="mt-2 border border-gray-200 rounded p-2 bg-white">
+                                      <div className="text-xs text-gray-600 mb-2">
+                                        图表生成需要人工选择以下参数：
+                                      </div>
+                                      <div className="grid grid-cols-3 gap-2">
+                                        <div>
+                                          <div className="text-xs text-gray-600 mb-1">
+                                            UI 框架
+                                          </div>
+                                          <select
+                                            value={uiFrameworkSel}
+                                            onChange={(e) =>
+                                              setUiFrameworkSel(e.target.value)
+                                            }
+                                            className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                          >
+                                            <option value="antd">antd</option>
+                                            <option value="element-ui">
+                                              element ui
+                                            </option>
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <div className="text-xs text-gray-600 mb-1">
+                                            图表库
+                                          </div>
+                                          <select
+                                            value={chartLibrarySel}
+                                            onChange={(e) =>
+                                              setChartLibrarySel(e.target.value)
+                                            }
+                                            className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                          >
+                                            <option value="echarts">
+                                              echarts
+                                            </option>
+                                            <option value="acharts">
+                                              acharts
+                                            </option>
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <div className="text-xs text-gray-600 mb-1">
+                                            布局
+                                          </div>
+                                          <select
+                                            value={layoutSel}
+                                            onChange={(e) =>
+                                              setLayoutSel(e.target.value)
+                                            }
+                                            className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                          >
+                                            <option value="dashboard">
+                                              dashboard
+                                            </option>
+                                            <option value="grid">宫格</option>
+                                            <option value="masonry">
+                                              瀑布流
+                                            </option>
+                                          </select>
+                                        </div>
+                                      </div>
+                                      <div className="mt-2 flex gap-2">
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            onAction &&
+                                              onAction(message.id, 'rejected');
+                                          }}
+                                          className="py-1 px-2 border rounded text-xs hover:bg-red-50 text-red-600"
+                                        >
+                                          拒绝
+                                        </button>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            const payload = {
+                                              uiFramework: uiFrameworkSel,
+                                              chartLibrary: chartLibrarySel,
+                                              layout: layoutSel,
+                                            };
+                                            onAction &&
+                                              onAction(
+                                                message.id,
+                                                'approved',
+                                                payload,
+                                              );
+                                          }}
+                                          className="py-1 px-2 bg-black text-white rounded text-xs hover:opacity-90"
+                                        >
+                                          确定
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
+                            </div>
+                          )}
+                        {Array.isArray(message.tool_summary) &&
+                          message.tool_summary.length > 0 && (
+                            <div className="mb-2 space-y-2">
+                              {message.tool_summary.map((ts, i) => {
+                                const nm = ts && ts.name ? ts.name : ts?.id;
+                                const st =
+                                  ts && ts.status ? ts.status : 'pending';
+                                const du =
+                                  ts && typeof ts.duration === 'number'
+                                    ? ts.duration
+                                    : undefined;
+                                const args =
+                                  ts && ts.args ? ts.args : undefined;
+                                return (
+                                  <div
+                                    key={`toolsum-${i}`}
+                                    className="text-xs bg-gray-50 border border-gray-200 rounded p-2 overflow-hidden"
+                                  >
+                                    <div className="font-semibold text-gray-700 flex items-center gap-1">
+                                      <Hash size={12} /> 执行摘要:{' '}
+                                      {String(nm || '')}
+                                    </div>
+                                    <div className="mt-1 text-gray-600">
+                                      状态: {String(st)}
+                                      {du !== undefined
+                                        ? ` · 用时: ${Math.round(du)} ms`
+                                        : ''}
+                                    </div>
+                                    {args !== undefined && (
+                                      <div className="mt-1 text-gray-600 break-all whitespace-pre-wrap">
+                                        {typeof args === 'string'
+                                          ? args
+                                          : JSON.stringify(args)}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        {(() => {
+                          const isPh =
+                            typeof message.content === 'string' &&
+                            message.content.includes(
+                              '##HITL_REQUIRED_FRONTEND##',
+                            );
+                          if (isPh && !isUser) {
+                            return (
+                              <div className="mt-2 border border-gray-200 rounded p-2 bg-white">
+                                <div className="text-xs text-gray-600 mb-2">
+                                  图表生成需要人工选择以下参数：
+                                </div>
+                                <div className="grid grid-cols-3 gap-2">
+                                  <div>
+                                    <div className="text-xs text-gray-600 mb-1">
+                                      UI 框架
+                                    </div>
+                                    <select
+                                      value={uiFrameworkSel}
+                                      onChange={(e) =>
+                                        setUiFrameworkSel(e.target.value)
+                                      }
+                                      className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                    >
+                                      <option value="antd">antd</option>
+                                      <option value="element-ui">
+                                        element ui
+                                      </option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs text-gray-600 mb-1">
+                                      图表库
+                                    </div>
+                                    <select
+                                      value={chartLibrarySel}
+                                      onChange={(e) =>
+                                        setChartLibrarySel(e.target.value)
+                                      }
+                                      className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                    >
+                                      <option value="echarts">echarts</option>
+                                      <option value="acharts">acharts</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <div className="text-xs text-gray-600 mb-1">
+                                      布局
+                                    </div>
+                                    <select
+                                      value={layoutSel}
+                                      onChange={(e) =>
+                                        setLayoutSel(e.target.value)
+                                      }
+                                      className="w-full border border-gray-200 rounded px-2 py-1 text-xs bg-gray-50"
+                                    >
+                                      <option value="dashboard">
+                                        dashboard
+                                      </option>
+                                      <option value="grid">宫格</option>
+                                      <option value="masonry">瀑布流</option>
+                                    </select>
+                                  </div>
+                                </div>
+                                <div className="mt-2 flex gap-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onAction &&
+                                        onAction(message.id, 'rejected');
+                                    }}
+                                    className="py-1 px-2 border rounded text-xs hover:bg-red-50 text-red-600"
+                                  >
+                                    拒绝
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const payload = {
+                                        uiFramework: uiFrameworkSel,
+                                        chartLibrary: chartLibrarySel,
+                                        layout: layoutSel,
+                                      };
+                                      onAction &&
+                                        onAction(
+                                          message.id,
+                                          'approved',
+                                          payload,
+                                        );
+                                    }}
+                                    className="py-1 px-2 bg-black text-white rounded text-xs hover:opacity-90"
+                                  >
+                                    确定
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+                          return (
+                            <div
+                              className={`markdown-body ${isUser ? '!text-white' : ''} overflow-x-auto`}
+                              style={{
+                                overflowWrap: 'break-word',
+                                wordBreak: 'break-word',
+                              }}
+                              dangerouslySetInnerHTML={rawMarkup(
+                                message.content,
+                              )}
+                            />
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const root = createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: ai_system_mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ai_root
+      MONGO_INITDB_ROOT_PASSWORD: ai_rootpass
+      MONGO_INITDB_DATABASE: ai_system
+    volumes:
+      - ./.docker/mongo/data:/data/db
+      - ./.docker/mongo/init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
