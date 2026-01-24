@@ -31,6 +31,8 @@ export interface AgentConfig {
   recursionLimit?: number;
   nonStreaming?: boolean;
   noPostHook?: boolean;
+  systemPrompt?: string;
+  context?: Record<string, string>;
 }
 
 /**

@@ -3,21 +3,62 @@ import { tool, CreateAgentParams, BaseMessage } from 'langchain';
 import * as z from 'zod';
 import { AgentService } from '../../../ai-agent/services/agent.service.js';
 import { SchemaFunctionCallService } from '../../schema/services/schema.service.js';
-import { MongoFunctionCallService } from '../../mongo/services/mongo.service.js';
+import { DataSourceSearchToolsService } from '../../../data-source/tools/data-source-search.tools.js';
+import { SuperPartySourceToolsService } from '../../../data-source/sources/super-party/super-party-source.tools.js';
+import { FeishuBitableSourceToolsService } from '../../../data-source/sources/feishu-bitable/feishu-bitable-source.tools.js';
+import { SkillThoughtToolsService } from '../../../skill-thought/tools/skill-thought.tools.js';
 
 /**
  * @title 数据分析函数服务 Data Analysis Function Service
- * @description 结合上下文与Schema推断最小查询，并在Mongo执行返回结果。
- * @keywords-cn 数据分析, 最小查询, Schema, Mongo
- * @keywords-en data analysis, minimal query, schema, mongo
+ * @description 集中管理所有数据源的分析工具，集成思维链学习。
+ * @keywords-cn 数据分析, 最小查询, Schema, 数据源, 思维链
+ * @keywords-en data analysis, minimal query, schema, data source, skill thought
  */
 @Injectable()
 export class AnalysisFunctionCallService {
   constructor(
     private readonly agent: AgentService,
     private readonly schemaTools: SchemaFunctionCallService,
-    private readonly mongoTools: MongoFunctionCallService,
+    private readonly dataSourceTools: DataSourceSearchToolsService,
+    private readonly superPartyTools: SuperPartySourceToolsService,
+    private readonly feishuBitableTools: FeishuBitableSourceToolsService,
+    private readonly skillThoughtTools: SkillThoughtToolsService,
   ) {}
+
+  /**
+   * @title 获取所有数据源工具 Get All Data Source Tools
+   * @description 返回所有数据源相关的工具列表（含思维链工具），用于 Agent 调用。
+   */
+  getAllDataSourceTools(): CreateAgentParams['tools'] {
+    const tools: CreateAgentParams['tools'] = [
+      ...(this.skillThoughtTools.getHandle() ?? []),
+      // Schema 搜索工具
+      ...(this.schemaTools.getHandle() ?? []),
+      // 各数据源查询工具
+      ...(this.dataSourceTools.getHandle() ?? []),
+      ...(this.superPartyTools.getHandle() ?? []),
+      ...(this.feishuBitableTools.getTools() ?? []),
+    ];
+
+    const selfGuard = tool(
+      () => {
+        return JSON.stringify({
+          error: 'NESTED_DATA_ANALYSIS_NOT_ALLOWED',
+          message:
+            '当前已经在 data_analysis 工具内部，禁止再次调用 data_analysis。请直接使用 schema_search、data_source_query、super_party_query、feishu_bitable_* 或已有思维链内容完成本次分析。',
+        });
+      },
+      {
+        name: 'data_analysis',
+        description:
+          'Guard tool used inside data_analysis to prevent recursive calls to data_analysis itself.',
+        schema: z.object({}),
+      },
+    );
+
+    tools.push(selfGuard);
+    return tools;
+  }
 
   /**
    * @title 获取函数句柄 Get Handle
@@ -28,10 +69,26 @@ export class AnalysisFunctionCallService {
    */
   getHandle(streamWriter?: (msg: string) => void): CreateAgentParams['tools'] {
     const dataAnalysis = tool(
-      async ({ question, provider, model }, config) => {
+      async ({ question, provider, model, ip, now }, config) => {
         if (streamWriter) streamWriter(`Analyzing request: ${question}`);
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        const context = config.context?.currentContext as BaseMessage[];
+        let context: BaseMessage[] | undefined;
+        if (config && typeof config === 'object') {
+          const cfgObj = config as Record<string, unknown>;
+          const ctxObj = cfgObj['context'];
+          if (ctxObj && typeof ctxObj === 'object') {
+            const cur = (ctxObj as Record<string, unknown>)['currentContext'];
+            if (Array.isArray(cur)) {
+              context = cur as BaseMessage[];
+            }
+          }
+        }
+
+        const resolvedNow =
+          typeof now === 'string' && now.trim().length > 0
+            ? now
+            : new Date().toISOString();
+        const resolvedIp =
+          typeof ip === 'string' && ip.trim().length > 0 ? ip : 'unknown';
 
         const jsonSchema = {
           type: 'object',
@@ -55,62 +112,113 @@ export class AnalysisFunctionCallService {
         const sys = [
           '你是一名严谨、务实的数据分析 Agent。',
           '目标：以最小推理成本与最少工具调用，在单次流程内一次性获取所需数据并返回最终答案。',
-          '核心流程（单次流程）：',
-          '1. 基于用户问题精准识别所需数据实体、集合和关键字段。',
-          '2. 调用 `schema_search` 时需使用多组关键词，一次性检索多个相关 schema，获取集合名称与字段定义。',
-          '3. 【关键要求】使用 `mongo_search` 时：严格依据 schema 字段构建查询，不得编造字段、不得产生幻觉；筛选条件仅可使用真实字段；filter、projection、sort、limit 必须完全基于 schema 结果。',
-          '4. 基于查询输出直接回答问题；若为统计类需求，优先使用 Count、Aggregate、MapReduce，而非获取完整记录。',
-          '约束与阈值：',
-          '1. 禁止输出任何思维过程或链式解释，必须只返回最终 JSON。',
-          '2. 默认 limit = 50；最大 limit = 200；若用户未明确要求更多，不得超过 100。',
-          '3. 避免不必要的多轮工具调用；一次查询应覆盖需求。',
-          '4. 必须严格使用 schema_search 返回的字段名与集合名；禁止臆测字段。',
-          `5. 当前用户偏好 limit: 50条 - 100条，默认50条。`,
-          '错误自愈机制：',
-          '- 当 `mongo_search` 返回 INVALID_FILTER_FIELDS（包含 invalid_fields 和 suggestions）时：不得终止；需根据语义使用得分最高、最贴近的字段替换错误字段。',
-          '- 替换时必须保留原筛选结构（如 $and/$or/$gte/$eq 等）及其值，仅替换字段名；替换后立即重试 `mongo_search`。',
-          '- 若无高匹配候选或替换后仍失败，则重新执行 `schema_search` 以确认字段，并据此重建 filter。',
-          '- 示例：create_time → created_at；保持原语义不变。',
-          '- 若返回 SCHEMA_REQUIRED，则必须先执行 `schema_search` 获取字段，再构建查询。',
-          'schema 字段说明：',
-          '- schema 包含集合名称、字段名、类型、是否必填、描述等信息。',
-          '- 查询字段必须严格基于 schema 字段，禁止编造。',
-          '- 可一次性构造多组关键词，以减少 schema_search 调用次数。',
-          '数据获取策略：',
-          '- 数据分析优先使用 Count、Aggregate、MapReduce 等方式；Find 有 limit 限制，应减少使用。',
-          '- Find 仅在必须获取真实列表或实体数据时使用，如排行榜等。',
-          '- 用户明确要求更多数据时，limit 可提升至 100；否则保持默认策略。',
-          '- 若无需返回具体记录，优先使用计数或聚合以提升效率。',
-          '输出要求：',
-          'You must output JSON in the following format:',
+          '所有数据纬度都以给人理解为准,比如标识用户的就不用ID,用username等来考虑,理解为用户更方便记忆和操作。',
+          '在进行任何复杂数据查询前，必须优先调用 search_thought 搜索相似的历史经验，而不是直接进行 schema_search 或数据查询。',
+          '[重要] search_thought 得到历史经验后,要分析是否有本次查询需要的表结构,从而达成快速搜索的目的',
+          '如果本次调用中已经通过 search_thought 找到了可复用的思维链（返回结果非空），则本次流程中严禁再调用 generate_thought，只能基于已有思维链内容进行查询与回答。',
+          '如果存在多数据源的情况,以 JSON 返回内容 { question:xx },告诉用户要确定的数据源',
+          '',
+          '【核心流程】遵循以下顺序执行：',
+          '',
+          '1. 【搜索历史经验】先调用 search_thought 搜索相似的历史查询经验：',
+          '   - 若找到匹配 需要强结合历史经验,不要在过度搜索Schema, 通过相关经验的工具调用链路和表结构,来获取你需要的数据即可',
+          '   - 若无匹配，继续下一步',
+          '',
+          '2. 【推断数据源】调用 schema_search 搜索相关表/资源：',
+          '   - 返回结果包含 sourceCode 字段，标识数据来源',
+          '   - 不同数据源返回不同资源标识（见下方映射表）',
+          '',
+          '3. 【根据 sourceCode 选择工具】：',
+          '   | sourceCode      | 资源标识字段   | 查询工具                    |',
+          '   |-----------------|---------------|----------------------------|',
+          '   | main-mongo      | collectionName | data_source_query          |',
+          '   | super-party     | collectionName | super_party_query          |',
+          '   | feishu-bitable  | tableId        | feishu_bitable_list_records|',
+          '',
+          '4. 【多数据源确认】若 schema_search 返回多个不同 sourceCode 的结果，',
+          '   请与用户确认使用哪个数据源，不要自行选择。',
+          '',
+          '5. 【构建查询】严格依据 schema 字段构建查询，不得编造字段。',
+          '   - 飞书日期字段：使用 YYYY-MM-DD 字符串格式，系统自动转换',
+          '   - 飞书日期操作符：仅支持 is/isNot/isGreater/isLess/isEmpty/isNotEmpty',
+          '',
+          '6. 【保存经验】仅在本次未通过 search_thought 找到可复用思维链时，才调用 generate_thought 保存本次 schema 经验：',
+          '   - 请先检查最近一次 search_thought 的返回字段 shouldGenerateThought：仅当其为 true 时，才允许调用 generate_thought。',
+          '   - 调用 generate_thought 时，必须显式传入 allowGenerate=true；若 shouldGenerateThought 为 false，则不得调用该工具。',
+          '   - content: 重点记录“查询所依赖的 schema 信息”，而不是详细的查询步骤：',
+          '     · 使用的数据源及 sourceCode（例如 main-mongo / super-party / feishu-bitable）',
+          '     · 具体使用的表/集合/多维表格（schema 名称、collectionName 或 tableId）',
+          '     · 关键字段及其含义（用于过滤、分组、排序、聚合的字段），用自然语言解释清楚',
+          '     · 与本次问题强相关的典型查询条件（where/filter 的核心条件），以及这些条件对应的自然语言含义',
+          '     · 不需要描述具体“如何调用工具”或“查询执行步骤”，只需让下次看这条思维链的人可以立刻知道应该用哪个 schema、哪些字段、配合哪些条件来完成类似问题',
+          '   - 建议将上述信息组织为结构化 JSON 对象字符串，字段示例：dataSource、sourceCode、schemaName、collectionName/tableId、fields、filters、toolsUsed、category 等。',
+          '   - toolsUsed: 使用的工具名列表（例如 schema_search、data_source_query、super_party_query、feishu_bitable_list_records 等）',
+          '   - category: 建议使用 "schema-knowledge" 或其他能表达该思维链适用场景的分类标签',
+          '   - 如果当前调用中 search_thought 返回了结果，则不得调用 generate_thought，只需在回答中引用该历史思维链内容',
+          '',
+          '【约束】',
+          '- 默认 limit = 50，最大 200',
+          '- 避免不必要的多轮工具调用',
+          '',
+          `当前请求时间(ISO): ${resolvedNow}`,
+          `客户端IP: ${resolvedIp}`,
+          '',
+          '【输出格式】',
           JSON.stringify(jsonSchema, null, 2),
-        ].join('\\n');
+        ].join('\n');
 
         const messages: BaseMessage[] = [
-          ...this.agent.toMessages([{ role: 'system', content: sys }]),
           ...(context ?? []),
           ...this.agent.toMessages([{ role: 'user', content: question }]),
         ];
 
-        const tools = [
-          ...(this.schemaTools.getHandle() ?? []),
-          ...(this.mongoTools.getHandle() ?? []),
-        ];
+        // 使用所有数据源工具
+        const tools = this.getAllDataSourceTools();
 
         const cfg = {
           provider: provider ?? 'deepseek',
           model: model ?? 'deepseek-chat',
           noPostHook: true,
-          temperature: 0.1, // Lower temperature for precision
+          temperature: 0.1,
           tools,
+          system: sys,
         };
 
         let finalContent = '';
         try {
           if (streamWriter) streamWriter('Searching related schemas...');
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+          let threadId: string = config.context['threadId'] ?? 'analysis';
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+          let checkpointId: string = config.context['checkpointId'] ?? 'root';
+          if (config && typeof config === 'object') {
+            const cfgObj = config as Record<string, unknown>;
+            const configurable = cfgObj['configurable'];
+            if (configurable && typeof configurable === 'object') {
+              const t = (configurable as Record<string, unknown>)['thread_id'];
+              const c = (configurable as Record<string, unknown>)[
+                'checkpoint_id'
+              ];
+              if (typeof t === 'string') threadId = t;
+              if (typeof c === 'string') checkpointId = c;
+            }
+            const t2 = cfgObj['thread_id'];
+            if (typeof t2 === 'string') threadId = t2;
+          }
           const ai = await this.agent.runWithMessages({
-            config: cfg,
+            config: {
+              ...cfg,
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+              context: config.context,
+            },
             messages,
+            callOption: {
+              configurable: {
+                thread_id: threadId,
+                checkpoint_ns: 'analysis',
+                checkpoint_id: checkpointId,
+              },
+            },
           });
           const content = (ai as unknown as { content: unknown }).content;
           finalContent =
@@ -128,7 +236,7 @@ export class AnalysisFunctionCallService {
       {
         name: 'data_analysis',
         description:
-          'Data Analysis & Retrieval Tool. Call this tool whenever the user asks for data, statistics, specific records, or database information. It AUTOMATICALLY infers schemas and executes MongoDB queries. DO NOT ask the user for collection names.',
+          'Data Analysis & Retrieval Tool. Call this tool whenever the user asks for data, statistics, specific records, or database information. Supports multiple data sources: main database (AI system) and super-party (mini program). It AUTOMATICALLY infers schemas and executes queries.',
         schema: z.object({
           question: z.string().describe('Analysis question'),
           context: z
@@ -143,9 +251,11 @@ export class AnalysisFunctionCallService {
           limit: z
             .number()
             .optional()
-            .describe('Preferred max rows (default 20, max 20)'),
+            .describe('Preferred max rows (default 50, max 200)'),
           provider: z.enum(['gemini', 'deepseek']).optional(),
           model: z.string().optional(),
+          ip: z.string().optional().describe('Client IP address'),
+          now: z.string().optional().describe('Current time in ISO string'),
         }),
       },
     );

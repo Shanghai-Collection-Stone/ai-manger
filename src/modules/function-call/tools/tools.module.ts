@@ -2,17 +2,21 @@ import { Module } from '@nestjs/common';
 import { ToolsService } from './services/tools.service.js';
 import { FrontendFunctionCallModule } from '../frontend/frontend.module.js';
 import { AnalysisFunctionCallModule } from '../analysis/analysis.module.js';
-import { MongoFunctionCallModule } from '../mongo/mongo.module.js';
-import { SchemaFunctionCallModule } from '../schema/schema.module.js';
 import { TitleFunctionCallModule } from '../title/title.module.js';
+import { SkillThoughtModule } from '../../skill-thought/skill-thought.module.js';
+import { McpFunctionCallModule } from '../mcp/mcp.module.js';
 
+/**
+ * @title 工具模块 Tools Module
+ * @description 所有数据源工具已集中到 AnalysisFunctionCallModule。
+ */
 @Module({
   imports: [
     FrontendFunctionCallModule,
     AnalysisFunctionCallModule,
-    MongoFunctionCallModule,
-    SchemaFunctionCallModule,
     TitleFunctionCallModule,
+    SkillThoughtModule,
+    McpFunctionCallModule,
   ],
   providers: [ToolsService],
   exports: [ToolsService],

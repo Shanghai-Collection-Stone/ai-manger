@@ -1,0 +1,49 @@
+[
+  {
+    "appToken": "BFkPbpgTtaVOZlsgvZdcaxvfnlg",
+    "sourceCode": "feishu-bitable",
+    "tables": [
+      {
+        "tableId": "tbl8gGo7QwYfNTbC",
+        "tableName": "需求进入工作流",
+        "nameCn": "需求进入工作流"
+      },
+      {
+        "tableId": "tblz1A10mzaLM2pQ",
+        "tableName": "日台账",
+        "nameCn": "日台账"
+      },
+      {
+        "tableId": "tblmqxg0F6ieLAoc",
+        "tableName": "供应商订购表",
+        "nameCn": "供应商订购表"
+      },
+      {
+        "tableId": "tblDxSPwNpi51DPe",
+        "tableName": "商城业绩",
+        "nameCn": "商城业绩"
+      },
+      {
+        "tableId": "tblUCryPNZ295aXb",
+        "tableName": "魔方密室",
+        "nameCn": "魔方密室"
+      },
+      {
+        "tableId": "tblhYF9KTfKUkcWu",
+        "tableName": "冰淇淋对账",
+        "nameCn": "冰淇淋对账"
+      }
+    ]
+  },
+  {
+    "appToken":"KDXfbqdC7ai0QosusT4cAsYfnzb",
+    "sourceCode":"feishu-bitable-task",
+    "tables":[
+      {
+        "tableId": "tblWRy3c94tf9WEq",
+        "tableName": "任务管理表",
+        "nameCn": "任务管理表"
+      }
+    ]
+  }
+]

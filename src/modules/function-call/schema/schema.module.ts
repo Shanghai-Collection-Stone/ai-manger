@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { SchemaFunctionCallService } from './services/schema.service.js';
-import { SchemaModule } from '../../schema/schema.module.js';
+import { DataSourceModule } from '../../data-source/data-source.module.js';
 
 @Module({
-  imports: [SchemaModule],
+  imports: [DataSourceModule],
   providers: [SchemaFunctionCallService],
   exports: [SchemaFunctionCallService],
 })

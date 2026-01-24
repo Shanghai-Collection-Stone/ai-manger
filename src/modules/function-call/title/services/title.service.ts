@@ -46,6 +46,15 @@ export class TitleFunctionCallService {
             temperature: 0.3,
           },
           messages,
+          callOption: {
+            configurable: {
+              thread_id: sessionId,
+              checkpoint_ns: 'title',
+              checkpoint_id:
+                (await this.ctx.getConversation(sessionId))?.lastCheckpointId ??
+                'root',
+            },
+          },
         });
         const content = (ai as unknown as { content: unknown }).content;
         const raw =
@@ -106,6 +115,15 @@ export class TitleFunctionCallService {
         temperature: 0.3,
       },
       messages,
+      callOption: {
+        configurable: {
+          thread_id: sessionId,
+          checkpoint_ns: 'title',
+          checkpoint_id:
+            (await this.ctx.getConversation(sessionId))?.lastCheckpointId ??
+            'root',
+        },
+      },
     });
     const content = (ai as unknown as { content: unknown }).content;
     const raw = typeof content === 'string' ? content : JSON.stringify(content);

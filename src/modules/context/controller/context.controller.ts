@@ -1,6 +1,7 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
 import { ContextService } from '../services/context.service';
 import { ContextMessage } from '../types/context.types';
+import { ContextRole } from '../enums/context.enums';
 
 /**
  * @title 会话上下文控制器 Context Controller
@@ -35,9 +36,18 @@ export class ContextController {
   async getMessages(
     @Param('sessionId') sessionId: string,
     @Query('limit') limit?: string,
+    @Query('includeSystem') includeSystem?: string,
   ): Promise<ContextMessage[]> {
     const n = limit ? Number(limit) : undefined;
-    const messages = await this.context.getMessages(sessionId, n);
+    const inc = String(includeSystem ?? '')
+      .trim()
+      .toLowerCase();
+    const shouldIncludeSystem = inc === '1' || inc === 'true' || inc === 'yes';
+    const messages = await this.context.getMessages(
+      sessionId,
+      n,
+      shouldIncludeSystem ? undefined : { excludeRoles: [ContextRole.System] },
+    );
     return messages;
   }
 

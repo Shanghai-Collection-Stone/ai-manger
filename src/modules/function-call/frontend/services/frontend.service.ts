@@ -14,7 +14,7 @@ import { AgentConfig } from '@/modules/ai-agent/types/agent.types.js';
 export class FrontendFunctionCallService {
   constructor(
     private readonly agent: AgentService,
-    @Inject('FC_MONGO_DB') private readonly db: Db,
+    @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly schemaTools: SchemaFunctionCallService,
   ) {}
 
@@ -327,8 +327,9 @@ export class FrontendFunctionCallService {
             callbacks: [],
             runId: randomBytes(16).toString('hex'),
             configurable: {
-              // 强制清空父级 Run ID
-              parent_run_id: undefined,
+              thread_id: `frontend:${params.hash}`,
+              checkpoint_ns: 'frontend',
+              checkpoint_id: 'root',
             },
           },
         );

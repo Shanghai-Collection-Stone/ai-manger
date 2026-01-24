@@ -9,7 +9,7 @@ import { Db } from 'mongodb';
  */
 @Controller('fc/frontend')
 export class FrontendJobsController {
-  constructor(@Inject('FC_MONGO_DB') private readonly db: Db) {}
+  constructor(@Inject('DS_MONGO_DB') private readonly db: Db) {}
 
   /**
    * @title 获取会话任务 List Jobs by Session

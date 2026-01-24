@@ -14,6 +14,8 @@ export interface ChatRequest {
   temperature?: number;
   recursionLimit?: number;
   keepTools?: string[];
+  ip?: string;
+  now?: string;
 }
 
 /**

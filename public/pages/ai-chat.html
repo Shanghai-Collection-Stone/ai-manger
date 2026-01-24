@@ -134,7 +134,7 @@
       const { createRoot } = ReactDOM;
 
       // --- 配置 ---
-      const API_BASE = 'http://localhost:3000'; // 假设后端运行在本地 3000 端口
+      const API_BASE = window.location.origin;
 
       // --- 图标组件 ---
       const IconBase = ({ children, size = 24, className = '' }) => (
@@ -444,38 +444,82 @@
             const segs = [];
             const trs = Array.isArray(h.tool_results) ? h.tool_results : [];
             const tsum = Array.isArray(h.tool_summary) ? h.tool_summary : [];
-            trs.forEach((tr, tIdx) => {
-              const name = tr && tr.name ? tr.name : 'tool';
-              const raw = tr && tr.output ? tr.output : null;
-              let obj = raw && typeof raw === 'object' ? raw : null;
-              if (!obj && typeof raw === 'string') {
-                try {
-                  obj = JSON.parse(raw);
-                } catch (e) {}
-              }
-              if (obj && obj.url) {
-                segs.push({
-                  kind: 'external',
-                  url: obj.url,
-                  hash: obj.hash,
-                  status: obj.status || 'pending',
-                  title: '外链页面',
-                });
-              }
-              segs.push({
-                kind: 'tool',
-                tool: {
-                  id: name,
-                  name,
-                  input: tr && tr.input ? tr.input : null,
-                  output: raw,
-                  status: 'completed',
-                },
+
+            // 优先使用 parts 数组（如果存在），以保持正确的顺序
+            if (Array.isArray(h.parts) && h.parts.length > 0) {
+              h.parts.forEach((part) => {
+                if (part.type === 'text' && part.content) {
+                  segs.push({ kind: 'text', content: part.content });
+                } else if (part.type === 'tool_call') {
+                  // 查找对应的 tool_result
+                  const tr = trs.find((r) => r.id === part.id);
+                  const raw = tr && tr.output ? tr.output : null;
+                  let obj = raw && typeof raw === 'object' ? raw : null;
+                  if (!obj && typeof raw === 'string') {
+                    try {
+                      obj = JSON.parse(raw);
+                    } catch (e) {}
+                  }
+                  if (obj && obj.url) {
+                    segs.push({
+                      kind: 'external',
+                      url: obj.url,
+                      hash: obj.hash,
+                      status: obj.status || 'pending',
+                      title: '外链页面',
+                    });
+                  }
+                  segs.push({
+                    kind: 'tool',
+                    tool: {
+                      id: part.id,
+                      name: part.name || 'tool',
+                      input: part.input || null,
+                      output: raw,
+                      status: 'completed',
+                    },
+                  });
+                } else if (part.type === 'tool_result') {
+                  // tool_result 已经在 tool_call 处理时添加了 output，这里跳过
+                  // 或者如果需要单独显示，可以添加逻辑
+                }
               });
-            });
-            if (h.content) {
-              segs.push({ kind: 'text', content: h.content });
+            } else {
+              // 兼容旧的数据结构：先工具后文本
+              trs.forEach((tr, tIdx) => {
+                const name = tr && tr.name ? tr.name : 'tool';
+                const raw = tr && tr.output ? tr.output : null;
+                let obj = raw && typeof raw === 'object' ? raw : null;
+                if (!obj && typeof raw === 'string') {
+                  try {
+                    obj = JSON.parse(raw);
+                  } catch (e) {}
+                }
+                if (obj && obj.url) {
+                  segs.push({
+                    kind: 'external',
+                    url: obj.url,
+                    hash: obj.hash,
+                    status: obj.status || 'pending',
+                    title: '外链页面',
+                  });
+                }
+                segs.push({
+                  kind: 'tool',
+                  tool: {
+                    id: name,
+                    name,
+                    input: tr && tr.input ? tr.input : null,
+                    output: raw,
+                    status: 'completed',
+                  },
+                });
+              });
+              if (h.content) {
+                segs.push({ kind: 'text', content: h.content });
+              }
             }
+
             return {
               id: `hist-${idx}-${Date.now()}`,
               role: h.role === 'assistant' ? 'ai' : 'user',

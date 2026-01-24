@@ -16,6 +16,7 @@ export interface MessageEntity {
   tool_calls?: any[];
   tool_results?: any[];
   tool_summary?: any[];
+  parts?: any[];
   keywords?: string[];
   timestamp: Date;
 }

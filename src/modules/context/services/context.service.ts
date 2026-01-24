@@ -3,7 +3,11 @@ import { Db, Collection, ObjectId } from 'mongodb';
 import type { CheckpointTuple } from '@langchain/langgraph-checkpoint';
 import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
 import { randomUUID } from 'crypto';
-import { ContextMessage, ContextMemory } from '../types/context.types';
+import {
+  ContextMessage,
+  ContextMemory,
+  MessagePart,
+} from '../types/context.types';
 import { MessageEntity } from '../entities/message.entity';
 import { ConversationEntity } from '../entities/conversation.entity';
 import { ContextRole } from '../enums/context.enums';
@@ -79,6 +83,7 @@ export class ContextService {
       tool_calls: message.tool_calls,
       tool_results: message.tool_results,
       tool_summary: message.tool_summary,
+      parts: message.parts,
       timestamp: now,
     });
     await this.conversations.updateOne(
@@ -99,6 +104,7 @@ export class ContextService {
   async getMessages(
     sessionId: string,
     limit?: number,
+    opts?: { excludeRoles?: ContextRole[] },
   ): Promise<ContextMessage[]> {
     const tuple: CheckpointTuple | undefined = await this.saver.getTuple({
       configurable: { thread_id: sessionId },
@@ -110,11 +116,15 @@ export class ContextService {
       ? (stateMessages as unknown[])
       : [];
     const msgs: ContextMessage[] = [];
-    const toolResultBuffer = new Map<string, { id: string; output: unknown }>();
+    const toolResultBuffer = new Map<
+      string,
+      { id: string; name?: string; output: unknown }
+    >();
 
     type SavedMessage = {
       type?: string;
       content?: unknown;
+      name?: string;
       tool_calls?: Array<{
         id?: string;
         tool_call_id?: string;
@@ -159,7 +169,11 @@ export class ContextService {
         for (const c of tool_calls) {
           const tr = toolResultBuffer.get(c.id);
           if (tr) {
-            tool_results.push({ id: tr.id, output: tr.output });
+            tool_results.push({
+              id: tr.id,
+              name: tr.name ?? c.name,
+              output: tr.output,
+            });
             toolResultBuffer.delete(c.id);
           }
         }
@@ -178,21 +192,268 @@ export class ContextService {
             : typeof v.id === 'string'
               ? v.id
               : '';
+        const nameRaw = typeof v.name === 'string' ? v.name : undefined;
         if (idRaw) {
           toolResultBuffer.set(idRaw, {
             id: idRaw,
+            name: nameRaw,
             output: content,
           });
         }
-        msgs.push({
-          role: ContextRole.Assistant,
-          content,
-          timestamp: ts,
-        });
       }
     }
 
-    const ordered = msgs.sort(
+    for (const m of msgs) {
+      if (m.role !== ContextRole.Assistant) continue;
+      const calls: Array<{ id: string; name?: string; input?: unknown }> =
+        Array.isArray(m.tool_calls)
+          ? (
+              m.tool_calls as Array<{
+                id?: unknown;
+                name?: unknown;
+                input?: unknown;
+              }>
+            ).map((tc) => ({
+              id: typeof tc.id === 'string' ? tc.id : '',
+              name: typeof tc.name === 'string' ? tc.name : undefined,
+              input: tc.input,
+            }))
+          : [];
+      if (calls.length === 0) continue;
+      const results: Array<{ id: string; name?: string; output: unknown }> = [];
+      for (const c of calls) {
+        const tr = c.id ? toolResultBuffer.get(c.id) : undefined;
+        if (tr) {
+          results.push({
+            id: tr.id,
+            name: tr.name ?? c.name,
+            output: tr.output,
+          });
+          toolResultBuffer.delete(c.id);
+        }
+      }
+      if (results.length > 0) {
+        const existing: Array<{ id: string; name?: string; output: unknown }> =
+          Array.isArray(m.tool_results)
+            ? m.tool_results
+                .map((it) => {
+                  const obj = it as {
+                    id?: unknown;
+                    name?: unknown;
+                    output?: unknown;
+                  };
+                  const id = typeof obj.id === 'string' ? obj.id : '';
+                  const name =
+                    typeof obj.name === 'string' ? obj.name : undefined;
+                  return { id, name, output: obj.output };
+                })
+                .filter((r) => r.id.length > 0)
+            : [];
+        m.tool_results = [...existing, ...results];
+      }
+    }
+
+    const merged: ContextMessage[] = [];
+    for (let i = 0; i < msgs.length; i++) {
+      const cur = msgs[i];
+      if (cur.role !== ContextRole.Assistant) {
+        merged.push(cur);
+        continue;
+      }
+      const batch: ContextMessage[] = [cur];
+      let j = i + 1;
+      while (j < msgs.length && msgs[j].role === ContextRole.Assistant) {
+        batch.push(msgs[j]);
+        j++;
+      }
+      i = j - 1;
+
+      // 生成 parts 数组，保留顺序
+      const parts: import('../types/context.types').MessagePart[] = [];
+      const tcMap = new Map<
+        string,
+        { id: string; name?: string; input?: unknown }
+      >();
+      const trMap = new Map<
+        string,
+        { id: string; name?: string; output: unknown }
+      >();
+
+      for (const b of batch) {
+        // 1. 先添加文本内容
+        const c = b.content;
+        if (typeof c === 'string' && c.trim().length > 0) {
+          parts.push({ type: 'text', content: c });
+        }
+
+        // 2. 然后添加 tool_calls
+        const tcs: Array<{ id?: unknown; name?: unknown; input?: unknown }> =
+          Array.isArray(b.tool_calls)
+            ? (b.tool_calls as Array<{
+                id?: unknown;
+                name?: unknown;
+                input?: unknown;
+              }>)
+            : [];
+        for (const t of tcs) {
+          const id = typeof t.id === 'string' ? t.id : '';
+          if (!id) continue;
+          const name = typeof t.name === 'string' ? t.name : '';
+          const input = t.input;
+          if (!tcMap.has(id)) {
+            tcMap.set(id, { id, name, input });
+            parts.push({ type: 'tool_call', id, name, input });
+          }
+        }
+
+        // 3. 然后添加 tool_results
+        const trs: Array<{ id?: unknown; name?: unknown; output?: unknown }> =
+          Array.isArray(b.tool_results)
+            ? (b.tool_results as Array<{
+                id?: unknown;
+                name?: unknown;
+                output?: unknown;
+              }>)
+            : [];
+        for (const r of trs) {
+          const id = typeof r.id === 'string' ? r.id : '';
+          if (!id) continue;
+          const name = typeof r.name === 'string' ? r.name : undefined;
+          const output = r.output;
+          if (!trMap.has(id)) {
+            trMap.set(id, { id, name, output: output });
+            parts.push({
+              type: 'tool_result',
+              id,
+              name,
+              output: output,
+            });
+          }
+        }
+      }
+
+      // 合并所有非空内容用于 content 字段（保持兼容性）
+      const contentParts: string[] = [];
+      for (let k = 0; k < batch.length; k++) {
+        const c = batch[k].content;
+        if (typeof c === 'string' && c.trim().length > 0) {
+          contentParts.push(c);
+        }
+      }
+      const content =
+        contentParts.length === 1 ? contentParts[0] : contentParts.join('\n\n');
+
+      const ts = batch[batch.length - 1].timestamp;
+      const mergedItem: ContextMessage = {
+        role: ContextRole.Assistant,
+        content,
+        tool_calls: tcMap.size > 0 ? Array.from(tcMap.values()) : undefined,
+        tool_results: trMap.size > 0 ? Array.from(trMap.values()) : undefined,
+        parts: parts.length > 0 ? parts : undefined,
+        timestamp: ts,
+      };
+      merged.push(mergedItem);
+    }
+
+    // 从 messages 集合补充 tool_results（包含子 tool 调用）
+    const storedMessages = await this.messages
+      .find({ sessionId })
+      .sort({ timestamp: 1 })
+      .toArray();
+
+    for (const m of merged) {
+      if (m.role !== ContextRole.Assistant) continue;
+      // 查找对应的存储消息（通过时间戳 matching, 允许 5s 误差）
+      const stored = storedMessages.find(
+        (s) =>
+          s.role === ContextRole.Assistant &&
+          Math.abs(
+            new Date(s.timestamp).getTime() - (m.timestamp?.getTime() ?? 0),
+          ) < 5000,
+      );
+
+      // 1. 优先使用存储的 parts (包含完美的 SSE 顺序)
+      if (stored && Array.isArray(stored.parts) && stored.parts.length > 0) {
+        m.parts = stored.parts as MessagePart[];
+        // 同步完整列表
+        if (Array.isArray(stored.tool_calls)) m.tool_calls = stored.tool_calls;
+        if (Array.isArray(stored.tool_results))
+          m.tool_results = stored.tool_results;
+        continue;
+      }
+
+      // 2. Fallback: 使用之前的逻辑 - 补充 checkpoint 中没有的 tool_results / tool_calls
+      if (stored && Array.isArray(stored.tool_results)) {
+        // 补充 checkpoint 中没有的 tool_results
+        const existingIds = new Set(
+          ((m.tool_results as Array<{ id?: string }>) || []).map((tr) => tr.id),
+        );
+        const additional = (
+          stored.tool_results as Array<{
+            id?: string;
+            name?: string;
+            output?: unknown;
+          }>
+        ).filter((tr) => tr.id && !existingIds.has(tr.id));
+        if (additional.length > 0) {
+          const existing = (m.tool_results ?? []) as Array<{
+            id?: string;
+            name?: string;
+            output?: unknown;
+          }>;
+          m.tool_results = [...existing, ...additional];
+          // 同时更新 parts 数组 (追加在最后)
+          if (Array.isArray(m.parts)) {
+            for (const tr of additional) {
+              m.parts.push({
+                type: 'tool_result',
+                id: tr.id || '',
+                name: tr.name,
+                output: tr.output,
+              });
+            }
+          }
+        }
+      }
+      // 同时补充 tool_calls
+      if (stored && Array.isArray(stored.tool_calls)) {
+        const existingCallIds = new Set(
+          ((m.tool_calls as Array<{ id?: string }>) || []).map((tc) => tc.id),
+        );
+        const additionalCalls = (
+          stored.tool_calls as Array<{
+            id?: string;
+            name?: string;
+            input?: unknown;
+          }>
+        ).filter((tc) => tc.id && !existingCallIds.has(tc.id));
+        if (additionalCalls.length > 0) {
+          const existingCalls = (m.tool_calls ?? []) as Array<{
+            id?: string;
+            name?: string;
+            input?: unknown;
+          }>;
+          m.tool_calls = [...existingCalls, ...additionalCalls];
+          // 同时更新 parts 数组 (追加在最后)
+          if (Array.isArray(m.parts)) {
+            for (const tc of additionalCalls) {
+              m.parts.push({
+                type: 'tool_call',
+                id: tc.id || '',
+                name: tc.name || '',
+                input: tc.input,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const filtered =
+      opts && Array.isArray(opts.excludeRoles) && opts.excludeRoles.length > 0
+        ? merged.filter((m) => !opts.excludeRoles!.includes(m.role))
+        : merged;
+    const ordered = filtered.sort(
       (a, b) => (a.timestamp?.getTime() ?? 0) - (b.timestamp?.getTime() ?? 0),
     );
     const limited =
@@ -293,6 +554,7 @@ export class ContextService {
           _id: 0,
           sessionId: 1,
           title: 1,
+          lastCheckpointId: 1,
           createdAt: 1,
           updatedAt: 1,
         },
@@ -337,6 +599,15 @@ export class ContextService {
       { $set: { lastCheckpointId: checkpointId, updatedAt: now } },
       { upsert: true },
     );
+  }
+
+  async getLatestCheckpointId(sessionId: string): Promise<string | undefined> {
+    const tuple: CheckpointTuple | undefined = await this.saver.getTuple({
+      configurable: { thread_id: sessionId },
+    });
+
+    const id = (tuple?.checkpoint as unknown as { id?: string })?.id;
+    return typeof id === 'string' && id.length > 0 ? id : undefined;
   }
 
   private async ensureIndexes(): Promise<void> {

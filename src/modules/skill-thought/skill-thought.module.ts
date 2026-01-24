@@ -1,16 +1,17 @@
 import { Module, Provider } from '@nestjs/common';
-import { MongoFunctionCallService } from './services/mongo.service.js';
-import { MongoClient, Db } from 'mongodb';
 import { ConfigService } from '@nestjs/config';
-import { MongoSearchController } from './controller/search.controller.js';
-import { AiAgentModule } from '../../ai-agent/ai-agent.module.js';
+import { MongoClient, Db } from 'mongodb';
+import { SkillThoughtService } from './services/skill-thought.service.js';
+import { SkillThoughtToolsService } from './tools/skill-thought.tools.js';
+import { EmbeddingModule } from '../shared/embedding/embedding.module.js';
+import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 
-const FC_MONGO_CLIENT = 'FC_MONGO_CLIENT';
-const FC_MONGO_DB = 'FC_MONGO_DB';
+const ST_MONGO_CLIENT = 'ST_MONGO_CLIENT';
+const ST_MONGO_DB = 'ST_MONGO_DB';
 
 const mongoProviders: Provider[] = [
   {
-    provide: FC_MONGO_CLIENT,
+    provide: ST_MONGO_CLIENT,
     useFactory: async (config: ConfigService): Promise<MongoClient> => {
       const env = (config.get<string>('NODE_ENV') ?? '').toLowerCase();
       const isDev = env === 'development' || env === 'dev';
@@ -42,7 +43,7 @@ const mongoProviders: Provider[] = [
     inject: [ConfigService],
   },
   {
-    provide: FC_MONGO_DB,
+    provide: ST_MONGO_DB,
     useFactory: (client: MongoClient, config: ConfigService): Db => {
       const env = (config.get<string>('NODE_ENV') ?? '').toLowerCase();
       const isDev = env === 'development' || env === 'dev';
@@ -50,14 +51,19 @@ const mongoProviders: Provider[] = [
       if (isDev) dbName = config.get<string>('DEV_MONGODB_DB') ?? dbName;
       return client.db(dbName);
     },
-    inject: [FC_MONGO_CLIENT, ConfigService],
+    inject: [ST_MONGO_CLIENT, ConfigService],
   },
 ];
 
+/**
+ * @title 思维链模块 Skill Thought Module
+ * @description 管理思维链的存储、检索和智能合并。
+ * @keywords-cn 思维链模块, 存储, 检索
+ * @keywords-en skill thought module, storage, retrieval
+ */
 @Module({
-  imports: [AiAgentModule],
-  controllers: [MongoSearchController],
-  providers: [...mongoProviders, MongoFunctionCallService],
-  exports: [MongoFunctionCallService, ...mongoProviders],
+  imports: [EmbeddingModule, AiAgentModule],
+  providers: [...mongoProviders, SkillThoughtService, SkillThoughtToolsService],
+  exports: [SkillThoughtService, SkillThoughtToolsService, ...mongoProviders],
 })
-export class MongoFunctionCallModule {}
+export class SkillThoughtModule {}

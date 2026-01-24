@@ -170,6 +170,7 @@ export class AgentService {
 
     return createAgent({
       model,
+      systemPrompt: config.system,
       tools: config.tools,
       contextSchema: config.contextSchema,
       checkpointer: this.checkpointer,
@@ -186,7 +187,6 @@ export class AgentService {
   async run(input: AgentRunInput): Promise<AIMessage> {
     const agent = this.buildChatModel(input.config);
     const messages: BaseMessage[] = [];
-    messages.push(new SystemMessage(input.config.system ?? ''));
     for (let i = 0; i < input.history.length; i++) {
       messages.push(input.history[i]);
     }
@@ -229,7 +229,7 @@ export class AgentService {
       },
     ];
     const state = await agent.invoke(
-      { messages },
+      { messages, systemPrompt: input.config.system },
       input.config.nonStreaming ? undefined : { callbacks: callback },
     );
     for (let i = state.messages.length - 1; i >= 0; i--) {
@@ -250,10 +250,21 @@ export class AgentService {
         handleLLMEnd() {},
       },
     ];
+    // 确保 configurable 字段始终存在
+    const defaultConfigurable = {
+      thread_id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      checkpoint_ns: 'default',
+      checkpoint_id: 'root',
+    };
     const preOption: () => AgentRunMessagesInput['callOption'] = () => {
       const option: any = {
         ...input.callOption,
       };
+      // 将 configurable 与默认值合并
+      const existingConfigurable =
+        (input.callOption as Record<string, unknown>)?.configurable ?? {};
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      option.configurable = { ...defaultConfigurable, ...existingConfigurable };
 
       if (input.config.nonStreaming) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -264,6 +275,12 @@ export class AgentService {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         option.tags = ['subagent'];
       }
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      option.systemPrompt = input.config.system;
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      option.context = input.config.context;
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return
       return option;
     };
@@ -288,16 +305,32 @@ export class AgentService {
    */
   async *stream(input: AgentRunMessagesInput): AsyncIterable<AgentStreamEvent> {
     const agent = this.buildChatModel(input.config);
+    // 确保 configurable 字段始终存在
+    const defaultConfigurable = {
+      thread_id: `stream_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      checkpoint_ns: 'default',
+      checkpoint_id: 'root',
+    };
+    const existingConfigurable =
+      (input.callOption as Record<string, unknown>)?.configurable ?? {};
+    const mergedConfigurable = {
+      ...defaultConfigurable,
+      ...existingConfigurable,
+    };
+    console.log('context', input.config.context);
     const stream = agent.streamEvents(
       { messages: input.messages },
       {
         ...input.callOption,
+        configurable: mergedConfigurable,
         recursionLimit: input.config.recursionLimit,
+        context: input.config.context,
       },
     );
 
     let finalOutput: any = null;
     const runIdHaxToolid = new Map<string, string>();
+    const runIdToToolName = new Map<string, string>();
     for await (const event of stream) {
       const data = event.data as {
         chunk?: AIMessageChunk;
@@ -342,10 +375,16 @@ export class AgentService {
             for (const tc of chunk.tool_call_chunks) {
               if (tc.id) {
                 runIdHaxToolid.set(tc.id, event.run_id);
+                if (typeof tc.name === 'string') {
+                  runIdToToolName.set(event.run_id, tc.name);
+                }
                 yield {
                   type: 'tool_start',
                   data: {
-                    name: tc?.name || '',
+                    name:
+                      (typeof tc.name === 'string'
+                        ? tc.name
+                        : runIdToToolName.get(event.run_id)) || '',
                     input: data.input,
                     id: event.run_id,
                   },
@@ -371,7 +410,7 @@ export class AgentService {
           yield {
             type: 'tool_end',
             data: {
-              name: event.name,
+              name: runIdToToolName.get(event.run_id) ?? event.name,
               // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
               output: data.output?.content,
               // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument

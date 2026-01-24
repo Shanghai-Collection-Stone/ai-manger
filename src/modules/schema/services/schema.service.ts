@@ -6,14 +6,14 @@ import {
   MongoSchemaCache,
   TableMeta,
   FieldMeta,
-} from '../../function-call/mongo/types/mongo.types.js';
+} from '../../data-source/types/data-source.types.js';
 import {
   ZOverrides,
   Overrides,
   ZOverridesAlt,
   ZOverridesKeyedAlt,
 } from '../types/schema.types.js';
-import { readMongoSchemaCache } from '../../function-call/mongo/cache/mongo.cache.js';
+import { readMongoSchemaCache } from '../../data-source/cache/mongo.cache.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { TextFormatService } from '../../format/services/format.service.js';
 import { CreateAgentParams } from 'langchain';

@@ -7,11 +7,13 @@ import {
   Get,
   Param,
   Delete,
+  Req,
 } from '@nestjs/common';
 import { ChatMainService } from '../services/chat.service.js';
 import type { ChatRequest, ChatResponse } from '../types/chat.types.js';
 import type { ContextMessage } from '../../context/types/context.types.js';
 import { Observable } from 'rxjs';
+import type { Request } from 'express';
 
 /**
  * @title 主对话控制器 Chat-Main Controller
@@ -32,10 +34,20 @@ export class ChatMainController {
    * @param body `ChatRequest` 请求体，包含 `sessionId`, `input`, `provider`, `model`, `temperature`
    * @returns `ChatResponse`，包含最终文本与 `messages` 历史
    */
-  async send(@Body() body: ChatRequest): Promise<ChatResponse> {
+  async send(
+    @Body() body: ChatRequest,
+    @Req() req: Request,
+  ): Promise<ChatResponse> {
     // 设置默认模型为 deepseek-chat
     if (!body.provider) body.provider = 'deepseek';
     if (!body.model) body.model = 'deepseek-chat';
+    if (!body.ip) {
+      const remote = req.ip || req.socket?.remoteAddress || '';
+      body.ip = remote || undefined;
+    }
+    if (!body.now) {
+      body.now = new Date().toISOString();
+    }
     return this.chat.send(body);
   }
 
@@ -59,11 +71,14 @@ export class ChatMainController {
     @Query('model') model?: string,
     @Query('temperature') temperature?: number,
     @Query('recursionLimit') recursionLimit?: string,
+    @Req() req?: Request,
   ): Observable<MessageEvent> {
     // 设置默认模型为 deepseek-chat
     const finalProvider = provider ?? 'deepseek';
     const finalModel = model ?? 'deepseek-chat';
     const rl = recursionLimit ? Number(recursionLimit) : undefined;
+    const remoteIp = req ? req.ip || req.socket?.remoteAddress || '' : '';
+    const now = new Date().toISOString();
     return this.chat.stream({
       sessionId,
       input,
@@ -71,6 +86,8 @@ export class ChatMainController {
       model: finalModel,
       temperature,
       recursionLimit: rl,
+      ip: remoteIp || undefined,
+      now,
     });
   }
 

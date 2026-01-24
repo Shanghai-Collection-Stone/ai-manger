@@ -11,6 +11,7 @@ import {
   SystemMessage,
 } from 'langchain';
 import { ContextRole } from '../../context/enums/context.enums';
+import { MessagePart } from '../../context/types/context.types';
 import { ToolsService } from '../../function-call/tools/services/tools.service.js';
 import { TitleFunctionCallService } from '../../function-call/title/services/title.service.js';
 import { RetrievalService } from '../../ai-context/services/retrieval.service.js';
@@ -58,32 +59,42 @@ export class ChatMainService {
       void e;
     }
 
-    const keep = this.ensureStringArray(request.keepTools);
-    const { messages: historyMessages } = await this.getSmartContext(
-      sid,
-      request.input,
-      keep,
-    );
+    const now = request.now ?? new Date().toISOString();
+    const ip = request.ip ?? '';
+    const sysContent = [
+      `SESSION_ID:${sid}`,
+      `REQUEST_TIME_ISO:${now}`,
+      ip ? `CLIENT_IP:${ip}` : 'CLIENT_IP:unknown',
+      this.getDataAnalysisPromptCN(),
+    ].join('\n');
 
-    const sysContent = `SESSION_ID:${sid}\n${this.getDataAnalysisPromptCN()}`;
+    console.log(sysContent);
 
-    const messages: BaseMessage[] = [...historyMessages];
-    messages.unshift(
-      this.agent.toMessages([{ role: 'system', content: sysContent }])[0],
-    );
-    messages.push(new HumanMessage(request.input));
+    // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
+    const messages: BaseMessage[] = [new HumanMessage(request.input)];
     const tools = this.getToolsForInput(request.input);
+    const checkpoint_id =
+      (await this.ctx.getConversation(sid))?.lastCheckpointId ?? 'root';
     const ai = await this.agent.runWithMessages({
       config: {
         provider: request.provider ?? 'deepseek',
         model: request.model ?? 'deepseek-chat',
         temperature: request.temperature ?? 0.5,
         tools,
+        system: sysContent,
         recursionLimit: 1000,
+        context: {
+          threadId: sid,
+          checkpointId: checkpoint_id,
+        },
       },
       messages,
       callOption: {
-        configurable: { thread_id: sid },
+        configurable: {
+          thread_id: sid,
+          checkpoint_ns: 'default',
+          checkpoint_id: checkpoint_id,
+        },
       },
     });
     const rawText = this.extractText(ai);
@@ -166,6 +177,11 @@ export class ChatMainService {
     this.titleTools.ensureFirstTurnTitle(sid).catch(() => {});
     // 异步补充关键词
     this.retrieval.reindexSession(sid).catch((e) => console.error(e));
+    // 更新最新checkpoint id
+    this.ctx
+      .getLatestCheckpointId(sid)
+      .then((cid) => (cid ? this.ctx.setLastCheckpointId(sid, cid) : undefined))
+      .catch(() => {});
     return { text, messages };
   }
 
@@ -202,46 +218,45 @@ export class ChatMainService {
             void e;
           }
 
-          const keep = this.ensureStringArray(request.keepTools);
-          const { messages: historyMessages } = await this.getSmartContext(
-            sid,
-            request.input,
-            keep,
-          );
+          const now = request.now ?? new Date().toISOString();
+          const ip = request.ip ?? '';
+          const sysContent = [
+            `SESSION_ID:${sid}`,
+            `REQUEST_TIME_ISO:${now}`,
+            ip ? `CLIENT_IP:${ip}` : 'CLIENT_IP:unknown',
+            this.getDataAnalysisPromptCN(),
+          ].join('\n');
 
-          const sysContent = `SESSION_ID:${sid}\n${this.getDataAnalysisPromptCN()}`;
-
-          const messages: BaseMessage[] = [...historyMessages];
-          messages.unshift(
-            this.agent.toMessages([{ role: 'system', content: sysContent }])[0],
-          );
-          messages.push(new HumanMessage(request.input));
+          // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
+          const messages: BaseMessage[] = [new HumanMessage(request.input)];
 
           const streamWriter = (msg: string) => {
             safeNext({ type: 'log', data: msg } as MessageEvent);
           };
 
           const tools = this.getToolsForInput(request.input, streamWriter);
+          const checkpoint_id =
+            (await this.ctx.getConversation(sid))?.lastCheckpointId ?? 'root';
           const iterable = this.agent.stream({
             config: {
               provider: request.provider ?? 'deepseek',
               model: request.model ?? 'deepseek-chat',
               temperature: request.temperature ?? 0.1,
               tools,
-              recursionLimit:
-                typeof request.recursionLimit === 'number'
-                  ? request.recursionLimit
-                  : this.getDefaultRecursionLimit(
-                      request.input,
-                      tools?.length ?? 0,
-                    ),
+              system: sysContent,
+              recursionLimit: 1000,
+              context: {
+                threadId: sid,
+                checkpointId: checkpoint_id,
+              },
             },
             messages,
             callOption: {
-              context: {
-                currentContext: historyMessages,
+              configurable: {
+                thread_id: sid,
+                checkpoint_ns: 'default',
+                checkpoint_id: checkpoint_id,
               },
-              configurable: { thread_id: sid },
             },
           });
 
@@ -255,19 +270,32 @@ export class ChatMainService {
             { id: string; name?: string; output: unknown }
           >();
           const argsBuffer = new Map<string, string>();
+          const parts: MessagePart[] = [];
 
           for await (const e of iterable) {
-            // Forward all events to SSE
-            safeNext({ data: e } as MessageEvent);
+            // Forward all events to SSE, include thread_id for correlation
+            safeNext({
+              data: { ...(e as any), thread_id: sid },
+            } as MessageEvent);
 
             switch (e.type) {
-              case 'token':
-                fullContent += e.data.text;
+              case 'token': {
+                const text = e.data.text;
+                fullContent += text;
+                // 更新或添加 text part
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && lastPart.type === 'text') {
+                  lastPart.content += text;
+                } else {
+                  parts.push({ type: 'text', content: text });
+                }
                 break;
+              }
               case 'tool_start': {
                 const { id, name, input } = e.data;
                 if (id) {
                   toolCallMap.set(id, { id, name, input });
+                  parts.push({ type: 'tool_call', id, name, input });
                 }
                 break;
               }
@@ -276,6 +304,11 @@ export class ChatMainService {
                 if (id && args) {
                   const current = argsBuffer.get(id) || '';
                   argsBuffer.set(id, current + args);
+
+                  // 更新对应的 tool_call part
+                  // 注意：tool_chunk 可能在 tool_start 之后
+                  // 但 parts 里的 tool_call 已经添加了
+                  // 这里暂不更新 parts 里的 input，因为 args 是流式的 JSON 字符串
                 }
                 break;
               }
@@ -283,26 +316,50 @@ export class ChatMainService {
                 const { id, name, output } = e.data;
                 if (id) {
                   toolResultMap.set(id, { id, name, output });
+                  parts.push({ type: 'tool_result', id, name, output });
                 }
                 break;
               }
               case 'end': {
                 const { text } = e.data;
-                if (text && text.trim().length > 0) {
+                // 只在 fullContent 为空时才使用 end 事件的 text，避免覆盖流式累积的内容
+                if (
+                  fullContent.trim().length === 0 &&
+                  text &&
+                  text.trim().length > 0
+                ) {
                   fullContent = text;
+                  // 更新 parts
+                  if (parts.length === 0) {
+                    parts.push({ type: 'text', content: text });
+                  } else {
+                    const lastPart = parts[parts.length - 1];
+                    if (lastPart.type === 'text') {
+                      lastPart.content = text;
+                    } else {
+                      parts.push({ type: 'text', content: text });
+                    }
+                  }
                 }
                 break;
               }
             }
           }
 
-          // Merge buffered args into toolCallMap
+          // Merge buffered args into toolCallMap AND parts
           for (const [id, jsonStr] of argsBuffer) {
             const call = toolCallMap.get(id);
             if (call) {
               try {
                 const parsed = JSON.parse(jsonStr) as unknown;
                 call.input = parsed;
+                // 更新 parts 中的 input
+                const part = parts.find(
+                  (p) => p.type === 'tool_call' && p.id === id,
+                );
+                if (part && part.type === 'tool_call') {
+                  part.input = parsed;
+                }
               } catch {
                 // Ignore parse error, keep original input or partial
               }
@@ -327,6 +384,7 @@ export class ChatMainService {
             });
             if (hitl) {
               fullContent = this.HITL_PLACEHOLDER;
+              // 更新 parts？ HITL 可能意味着 content 改变
             }
           } catch {
             void 0;
@@ -338,7 +396,7 @@ export class ChatMainService {
               const call = toolCallMap.get(tr.id);
               return {
                 id: tr.id,
-                name: tr.name || call?.name,
+                name: call?.name ?? tr.name,
                 input: call?.input,
                 output: tr.output,
               };
@@ -348,6 +406,7 @@ export class ChatMainService {
           await this.ctx.appendMessage(sid, {
             role: ContextRole.Assistant,
             content: this.sanitizeFinalText(fullContent),
+            parts: parts.length > 0 ? parts : undefined,
             tool_calls:
               toolCallMap.size > 0
                 ? Array.from(toolCallMap.values())
@@ -358,6 +417,12 @@ export class ChatMainService {
 
           this.titleTools.ensureFirstTurnTitle(sid).catch(() => {});
           this.retrieval.reindexSession(sid).catch((e) => console.error(e));
+          this.ctx
+            .getLatestCheckpointId(sid)
+            .then((cid) =>
+              cid ? this.ctx.setLastCheckpointId(sid, cid) : undefined,
+            )
+            .catch(() => {});
 
           if (!subscriber.closed) subscriber.complete();
         } catch (err: unknown) {
@@ -386,53 +451,12 @@ export class ChatMainService {
    * @keywords-cn 智能上下文, 检索, 过滤
    * @keywords-en smart context, retrieval, filtering
    */
-  private async getSmartContext(
-    sid: string,
-    input: string,
-    keepTools: string[] = ['data_analysis'],
-  ): Promise<{ messages: BaseMessage[]; isLongContext: boolean }> {
-    const history = await this.ctx.getMessages(sid);
-    const isLongContext = history.length > 30;
-
-    let contextMessages = history;
-
-    if (isLongContext) {
-      // 1. Get last 20 messages (Recent)
-      const recent = history.slice(-20);
-
-      const keywords = this.extractKeywordsFast(input);
-
-      // 3. Get retrieved context (max 5) from the REST
-      // Use sliding context but we want to filter out recent ones
-      const retrieved = await this.retrieval.getSlidingContext(sid, {
-        keywords,
-        maxMessages: 20,
-        windowSize: 2,
-        matchAll: false,
-      });
-
-      // 4. Merge and Deduplicate
-      // Use timestamp for deduplication
-      const recentTimestamps = new Set(
-        recent.map((m) => m.timestamp?.getTime() ?? 0),
-      );
-
-      // Filter retrieved messages that are already in recent
-      const uniqueRetrieved = retrieved.filter(
-        (m) => !recentTimestamps.has(m.timestamp?.getTime() ?? 0),
-      );
-
-      // Combine: Retrieved + Recent
-      // Sort by timestamp to maintain order
-      contextMessages = [...uniqueRetrieved, ...recent].sort(
-        (a, b) => (a.timestamp?.getTime() ?? 0) - (b.timestamp?.getTime() ?? 0),
-      );
-    } else {
-      contextMessages = history.slice(-20);
-    }
-
+  private toCheckpointMessages(
+    contextMessages: import('../../context/types/context.types').ContextMessage[],
+  ): BaseMessage[] {
+    const recent = contextMessages.slice(-20);
     const messages: BaseMessage[] = [];
-    for (const m of contextMessages) {
+    for (const m of recent) {
       if (m.role === ContextRole.System) {
         messages.push(new SystemMessage(m.content));
       } else if (m.role === ContextRole.User) {
@@ -448,24 +472,12 @@ export class ChatMainService {
           args: tc.input as Record<string, unknown>,
         }));
 
-        // 策略：保留所有指定工具(keepTools)调用，限制其他工具调用数量（每条消息最多保留最近的 5 个）
-        // Strategy: Keep all specified tool calls (keepTools), limit other tool calls (keep last 5 per message)
-        const keepSet = new Set(keepTools);
-        const nonKeepCalls = rawToolCalls.filter((tc) => !keepSet.has(tc.name));
-        const keptNonKeepIds = new Set(
-          nonKeepCalls.slice(-5).map((tc) => tc.id),
-        );
-
-        const toolCalls = rawToolCalls.filter(
-          (tc) => keepSet.has(tc.name) || keptNonKeepIds.has(tc.id),
-        );
-
         const allowedToolNames = new Set(
           (this.getTools() ?? []).map(
             (t) => (t as unknown as { name?: string }).name ?? '',
           ),
         );
-        const filteredToolCalls = toolCalls.filter((c) =>
+        const filteredToolCalls = rawToolCalls.filter((c) =>
           allowedToolNames.has(c.name),
         );
 
@@ -479,15 +491,16 @@ export class ChatMainService {
             | undefined) || [];
         const resultMap = new Map(results.map((r) => [r.id, r]));
 
-        if (filteredToolCalls.length === 0) {
+        const matchedCalls = filteredToolCalls.filter((c) =>
+          resultMap.has(c.id),
+        );
+        if (matchedCalls.length === 0) {
           messages.push(new AIMessage({ content: m.content }));
         } else {
-          // Batch tool calls in groups of 5
-          for (let i = 0; i < filteredToolCalls.length; i += 5) {
-            const batchCalls = filteredToolCalls.slice(i, i + 5);
+          for (let i = 0; i < matchedCalls.length; i += 5) {
+            const batchCalls = matchedCalls.slice(i, i + 5);
             messages.push(
               new AIMessage({
-                // Attach content only to the first batch
                 content: i === 0 ? m.content : '',
                 tool_calls: batchCalls.map((c) => ({
                   id: c.id,
@@ -496,27 +509,23 @@ export class ChatMainService {
                 })),
               }),
             );
-
             for (const call of batchCalls) {
-              const tr = resultMap.get(call.id);
-              if (tr) {
-                messages.push(
-                  new ToolMessage({
-                    tool_call_id: tr.id,
-                    content:
-                      typeof tr.output === 'string'
-                        ? tr.output
-                        : JSON.stringify(tr.output),
-                  }),
-                );
-              }
+              const tr = resultMap.get(call.id)!;
+              messages.push(
+                new ToolMessage({
+                  tool_call_id: tr.id,
+                  content:
+                    typeof tr.output === 'string'
+                      ? tr.output
+                      : JSON.stringify(tr.output),
+                }),
+              );
             }
           }
         }
       }
     }
-
-    return { messages, isLongContext };
+    return messages;
   }
 
   /**
@@ -644,13 +653,13 @@ export class ChatMainService {
     return [
       '你是一名务实的中文数据分析与页面生成助理。',
       '以“满足用户当前需求”为准则执行，不要进行不必要的数据获取或分析。',
-      '所有数据纬度都以给人理解为准,比如标识用户的就不用ID,用username等来考虑,理解为用户更方便记忆和操作。',
       '仅当用户明确提出需要数据、统计、具体记录或数据库信息时，调用 data_analysis；仅当用户明确提出需要生成页面、图表或可视化时，调用 frontend_plan 或 frontend_finalize。',
-      '准备调用工具时，不要输出任何过渡文本，直接调用。',
+      '[重要]只有用户提出生成报表等类似字眼,才生成页面,否则不要随意生成报表页面',
       'data_analysis 返回 JSON 以辅助回答；若已能直接回答问题，请用现有数据简洁回答。',
+      '[重要]data_analysis 有时候会有问题返回,格式一般为 { question:xx }, 把对应的内容返回给用户,让用户确定一下吧。',
       '若 frontend_finalize 产生外链，请不要在回答中返回任何代码或说明文字。',
       '若工具返回失败或为空，请直接告知并询问是否继续。',
-      'UI 框架(uiFramework) 与 布局(layout) 必须由用户明确提供，不得由 AI 猜测；缺失时直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
+      '[重要] UI 框架(uiFramework) 与 布局(layout) 必须由用户明确提供，不得由 AI 猜测；缺失时直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '当 frontend_plan 或 frontend_finalize 返回 requires_human=true 或 missing 非空时，不继续生成页面，直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '避免在工具间反复循环；完成一次工具调用后直接输出答案或结果。',
     ].join('\n');

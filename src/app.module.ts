@@ -8,6 +8,9 @@ import { SchemaModule } from './modules/schema/schema.module';
 import { AiAgentModule } from './modules/ai-agent/ai-agent.module';
 import { FormatModule } from './modules/format/format.module';
 import { ChatMainModule } from './modules/chat-main/chat-main.module';
+import { EmbeddingModule } from './modules/shared/embedding/embedding.module';
+import { DataSourceModule } from './modules/data-source/data-source.module';
+import { SkillThoughtModule } from './modules/skill-thought/skill-thought.module';
 
 @Module({
   imports: [
@@ -15,12 +18,15 @@ import { ChatMainModule } from './modules/chat-main/chat-main.module';
       isGlobal: true,
       envFilePath: ['.env', '.env.development', '.env.local'],
     }),
+    EmbeddingModule,
     ContextModule,
     AiContextModule,
     SchemaModule,
     AiAgentModule,
     FormatModule,
     ChatMainModule,
+    DataSourceModule,
+    SkillThoughtModule,
   ],
   controllers: [AppController],
   providers: [AppService],
