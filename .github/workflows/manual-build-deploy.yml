@@ -7,12 +7,12 @@ on:
         description: 服务器Runner部署目录（包含或挂载docker专用配置）
         type: string
         required: true
-        default: "/www/ace.c/ai-manger"
+        default: "/www/ace.root/ai-manger"
       env_file_path:
         description: 服务器Runner上的环境文件（可选）
         type: string
         required: false
-        default: "/www/ace.c/ai-manger/.env"
+        default: "/www/ace.root/ai-manger/.env"
       app_port:
         description: 对外端口映射到容器 3011
         type: string
@@ -76,6 +76,9 @@ jobs:
           name: ai-mvp-dist
           path: ./artifact
 
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Prepare target directory
         run: |
           DP="${{ inputs.deploy_path }}"
@@ -84,6 +87,11 @@ jobs:
           cp -r ./artifact/dist "$DP/"
           cp ./artifact/package.json "$DP/"
           cp ./artifact/pnpm-lock.yaml "$DP/"
+
+          HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
+          echo "=== Path mapping ==="
+          echo "Runner container path: $DP"
+          echo "Host machine path: $HOST_PATH"
 
       - name: Optional env file copy
         run: |
@@ -94,7 +102,9 @@ jobs:
       - name: Place server docker yml
         run: |
           DP="${{ inputs.deploy_path }}"
+          HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
           cp -f server/docker-compose.yml "$DP/docker-compose.yml"
+          sed -i "s#/www/ace.c/ai-manger#$HOST_PATH#g" "$DP/docker-compose.yml" || true
 
       - name: Verify files before docker run
         run: |
@@ -108,23 +118,75 @@ jobs:
         run: |
           SERVICE="ai-mvp-app"
           DP="${{ inputs.deploy_path }}"
+
           APP_PORT="${{ inputs.app_port }}"; [ -z "$APP_PORT" ] && APP_PORT=3011
           export APP_PORT
-          ENV_FILE="${{ inputs.env_file_path }}"
-          if [ -f "$DP/docker-compose.yml" ]; then
-            echo "=== Using docker-compose in deploy_path ==="
-            docker compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
+
+          HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
+
+          echo "=== Path mapping ==="
+          echo "Runner container path: $DP"
+          echo "Host machine path: $HOST_PATH"
+          echo ""
+
+          echo "=== Verify host path exists ==="
+          if [ -d "$HOST_PATH" ]; then
+            echo "✓ Host path exists: $HOST_PATH"
+            ls -la "$HOST_PATH" | head -10
           else
-            echo "=== Using docker run ==="
-            docker rm -f "$SERVICE" >/dev/null 2>&1 || true
-            if [ -f "$DP/.env" ]; then ENV_OPT=(--env-file "$DP/.env"); else ENV_OPT=(); fi
-            docker run "${ENV_OPT[@]}" -d --name "$SERVICE" -p "$APP_PORT":3011 \
-              -e PORT=3011 -e NODE_ENV=production \
-              -v "$DP":/app \
-              node:20-alpine sh -lc "npm i -g pnpm && pnpm install --prod --frozen-lockfile && node dist/main.js"
-            sleep 3
-            docker logs "$SERVICE" 2>&1 | tail -80 || true
+            echo "✗ Host path does NOT exist: $HOST_PATH"
           fi
+
+          ENV_INPUT="${{ inputs.env_file_path }}"
+          ENV_TARGET="$DP/.env"
+
+          if [ -n "$ENV_INPUT" ] && [ -f "$ENV_INPUT" ]; then
+            ENV_FILE="$ENV_INPUT"
+          elif [ -f "$ENV_TARGET" ]; then
+            ENV_FILE="$ENV_TARGET"
+          else
+            ENV_FILE=""
+          fi
+
+          if [ -n "$ENV_FILE" ]; then
+            ENV_OPT=(--env-file "$ENV_FILE")
+          else
+            ENV_OPT=()
+          fi
+
+          if command -v docker >/dev/null 2>&1; then
+            if [ -f "$DP/docker-compose.yml" ]; then
+              echo "=== Using docker-compose ==="
+              if docker compose version >/dev/null 2>&1; then
+                docker compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
+              elif command -v docker-compose >/dev/null 2>&1; then
+                docker-compose -f "$DP/docker-compose.yml" up -d --build --force-recreate --remove-orphans
+              else
+                echo "docker compose not available"
+                exit 1
+              fi
+            else
+              echo "=== Using docker run ==="
+              echo "Removing old container..."
+              docker rm -f "$SERVICE" >/dev/null 2>&1 || true
+
+              echo "Starting new container with volume: $HOST_PATH:/app"
+              docker run "${ENV_OPT[@]}" -d --name "$SERVICE" -p "$APP_PORT":3011 \
+                -e PORT=3011 -e NODE_ENV=production \
+                -v "$HOST_PATH":/app \
+                node:20-alpine sh -lc "npm i -g pnpm@9 && pnpm install --prod --frozen-lockfile && node dist/main.js"
+            fi
+          else
+            echo "docker not found"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== Waiting for container to start ==="
+          sleep 3
+
+          echo "=== Container logs ==="
+          docker logs "$SERVICE" 2>&1 | tail -80 || true
 
       - name: Health check
         run: |
