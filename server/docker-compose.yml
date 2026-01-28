@@ -10,6 +10,8 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3011}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /www/ace.c/ai-manger:/app
     ports:
