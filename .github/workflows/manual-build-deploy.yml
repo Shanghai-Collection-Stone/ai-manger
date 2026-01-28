@@ -1,5 +1,9 @@
 name: manual-build-deploy
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -84,19 +88,15 @@ jobs:
           DP="${{ inputs.deploy_path }}"
           mkdir -p "$DP"
           rm -rf "$DP/dist"
-          ARTIFACT_DIR="./artifact"
-          if [ -d "./artifact/ai-mvp-dist" ]; then
-            ARTIFACT_DIR="./artifact/ai-mvp-dist"
-          fi
           echo "=== Artifact directory ==="
-          echo "$ARTIFACT_DIR"
-          ls -la "$ARTIFACT_DIR" | head -20
-
-          cp -r "$ARTIFACT_DIR/dist" "$DP/"
-          cp "$ARTIFACT_DIR/package.json" "$DP/"
-          if [ -f "$ARTIFACT_DIR/pnpm-lock.yaml" ]; then
-            cp "$ARTIFACT_DIR/pnpm-lock.yaml" "$DP/"
+          if [ ! -d "./artifact" ]; then
+            echo "✗ ./artifact not found"; pwd; ls -la | head -50; exit 1
           fi
+          ls -la ./artifact | head -50
+
+          cp -r ./artifact/dist "$DP/"
+          cp ./artifact/package.json "$DP/"
+          if [ -f ./artifact/pnpm-lock.yaml ]; then cp ./artifact/pnpm-lock.yaml "$DP/"; fi
 
           HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
           echo "=== Path mapping ==="
