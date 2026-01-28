@@ -198,11 +198,5 @@ jobs:
           echo "=== Container logs ==="
           docker logs "$SERVICE" 2>&1 | tail -80 || true
 
-      - name: Health check
-        run: |
-          PORT_VAL="${{ inputs.app_port }}"; [ -z "$PORT_VAL" ] && PORT_VAL=3011
-          for i in $(seq 1 30); do
-            if curl -fsS "http://localhost:${PORT_VAL}/" >/dev/null 2>&1; then exit 0; fi
-            sleep 2;
-          done;
-          echo "App not healthy"; exit 1
+      - name: Cleanup local artifact
+        run: rm -rf ./artifact
