@@ -184,7 +184,7 @@ jobs:
               docker run "${ENV_OPT[@]}" -d --name "$SERVICE" -p "$APP_PORT":3011 \
                 -e PORT=3011 -e NODE_ENV=production \
                 -v "$HOST_PATH":/app \
-                node:20-alpine sh -lc "npm i -g pnpm@9 && pnpm install --prod --frozen-lockfile && node dist/main.js"
+                node:20-alpine sh -lc "echo '=== Container started ===' && ls -la /app && echo '' && echo '=== Checking key files ===' && ls -la /app/package.json && cd /app && (npm i -g pnpm@9 && pnpm install --prod) || (npm_config_production=true npm install); node dist/main.js"
             fi
           else
             echo "docker not found"
