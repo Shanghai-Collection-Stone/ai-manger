@@ -555,9 +555,56 @@ export class ChatMainService {
   async getMessages(
     sessionId: string,
     limit?: number,
-  ): Promise<import('../../context/types/context.types').ContextMessage[]> {
+  ): Promise<
+    Array<
+      import('../../context/types/context.types').ContextMessage & {
+        fingerprint: string;
+      }
+    >
+  > {
     const history = await this.ctx.getMessages(sessionId, limit);
-    return history;
+    const deleted = await this.ctx.getDeletedFingerprints(sessionId);
+    const enriched = (history ?? []).map((m, idx) => {
+      const fingerprint = this.ctx.fingerprintMessage(sessionId, m, idx);
+      return { ...m, fingerprint };
+    });
+    return enriched.filter((m) =>
+      m.fingerprint ? !deleted.has(m.fingerprint) : true,
+    );
+  }
+
+  async deleteMessages(
+    sessionId: string,
+    params?: { fingerprints?: string[]; indexes?: number[] },
+  ): Promise<{ deleted: number }> {
+    const fingerprints = Array.isArray(params?.fingerprints)
+      ? (params?.fingerprints ?? [])
+          .filter((s) => typeof s === 'string')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : [];
+
+    const idxs = Array.isArray(params?.indexes)
+      ? (params?.indexes ?? []).filter(
+          (n) => typeof n === 'number' && Number.isFinite(n),
+        )
+      : [];
+
+    if (fingerprints.length === 0 && idxs.length > 0) {
+      const visible = await this.getMessages(sessionId);
+      const uniq = Array.from(new Set(idxs.map((n) => Math.trunc(n))));
+      for (const i of uniq) {
+        if (i < 0 || i >= visible.length) continue;
+        const fp = visible[i].fingerprint;
+        if (fp) fingerprints.push(fp);
+      }
+    }
+
+    const uniqueFps = Array.from(new Set(fingerprints));
+    if (uniqueFps.length > 0) {
+      await this.ctx.markDeletedFingerprints(sessionId, uniqueFps);
+    }
+    return { deleted: uniqueFps.length };
   }
 
   async clearSession(sessionId: string): Promise<void> {

@@ -2,7 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { Db, Collection, ObjectId } from 'mongodb';
 import type { CheckpointTuple } from '@langchain/langgraph-checkpoint';
 import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import {
   ContextMessage,
   ContextMemory,
@@ -22,6 +22,12 @@ import { ContextRole } from '../enums/context.enums';
 export class ContextService {
   private readonly conversations: Collection<ConversationEntity>;
   private readonly messages: Collection<MessageEntity>;
+  private readonly deleted: Collection<{
+    _id: ObjectId;
+    sessionId: string;
+    fp: string;
+    timestamp: Date;
+  }>;
   private readonly saver: MongoDBSaver;
 
   constructor(
@@ -32,8 +38,20 @@ export class ContextService {
       db.collection<ConversationEntity>('conversations');
     const msgCol: Collection<MessageEntity> =
       db.collection<MessageEntity>('messages');
+    const delCol: Collection<{
+      _id: ObjectId;
+      sessionId: string;
+      fp: string;
+      timestamp: Date;
+    }> = db.collection<{
+      _id: ObjectId;
+      sessionId: string;
+      fp: string;
+      timestamp: Date;
+    }>('deleted_messages');
     this.conversations = convCol;
     this.messages = msgCol;
+    this.deleted = delCol;
     this.saver = saver;
     void this.ensureIndexes();
   }
@@ -542,6 +560,103 @@ export class ContextService {
     return { sessionId, system: sys, messages };
   }
 
+  async getDeletedFingerprints(sessionId: string): Promise<Set<string>> {
+    const docs = await this.deleted
+      .find({ sessionId }, { projection: { _id: 0, fp: 1 } })
+      .toArray();
+    return new Set(docs.map((d) => d.fp));
+  }
+
+  async markDeletedFingerprints(
+    sessionId: string,
+    fps: string[],
+  ): Promise<void> {
+    const now = new Date();
+    const ops = (fps || [])
+      .filter((s) => typeof s === 'string' && s.length > 0)
+      .map((fp) => ({
+        updateOne: {
+          filter: { sessionId, fp },
+          update: { $set: { sessionId, fp, timestamp: now } },
+          upsert: true,
+        },
+      }));
+    if (ops.length > 0) await this.deleted.bulkWrite(ops);
+  }
+
+  fingerprintMessage(
+    sessionId: string,
+    m: ContextMessage,
+    position?: number,
+  ): string {
+    const normalizeCalls = (
+      arr: unknown,
+    ): Array<{ id?: string; name?: string; input?: unknown }> => {
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map((it) => {
+          const rec = it as { id?: unknown; name?: unknown; input?: unknown };
+          const id = typeof rec.id === 'string' ? rec.id : undefined;
+          const name = typeof rec.name === 'string' ? rec.name : undefined;
+          const input = rec.input;
+          return { id, name, input };
+        })
+        .filter((x) => (x.id ?? x.name ?? '') !== '');
+    };
+    const normalizeResults = (
+      arr: unknown,
+    ): Array<{ id?: string; name?: string; output?: unknown }> => {
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map((it) => {
+          const rec = it as { id?: unknown; name?: unknown; output?: unknown };
+          const id = typeof rec.id === 'string' ? rec.id : undefined;
+          const name = typeof rec.name === 'string' ? rec.name : undefined;
+          const output = rec.output;
+          return { id, name, output };
+        })
+        .filter((x) => (x.id ?? x.name ?? '') !== '');
+    };
+    const normalizeParts = (
+      arr: unknown,
+    ): Array<{
+      type: string;
+      id?: string;
+      name?: string;
+      content?: string;
+    }> => {
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map((it) => {
+          const rec = it as Record<string, unknown>;
+          const type = typeof rec['type'] === 'string' ? rec['type'] : '';
+          const id = typeof rec['id'] === 'string' ? rec['id'] : undefined;
+          const name =
+            typeof rec['name'] === 'string' ? rec['name'] : undefined;
+          const content =
+            typeof rec['content'] === 'string' ? rec['content'] : undefined;
+          return { type, id, name, content };
+        })
+        .filter((p) => p.type.length > 0);
+    };
+    const payload = {
+      sessionId,
+      role: m.role,
+      content: m.content,
+      tool_calls: normalizeCalls(m.tool_calls),
+      tool_results: normalizeResults(m.tool_results),
+      parts: normalizeParts(m.parts),
+      ts: m.timestamp ? Math.floor(m.timestamp.getTime() / 1000) : undefined,
+      pos: typeof position === 'number' ? position : undefined,
+    };
+    try {
+      const text = JSON.stringify(payload);
+      return createHash('sha256').update(text).digest('hex');
+    } catch {
+      return `${sessionId}:${m.role}:${m.content?.slice(0, 40) ?? ''}`;
+    }
+  }
+
   /**
    * @title 获取会话元信息 Get Conversation Meta
    * @description 返回会话的元信息（包含标题）。
@@ -616,6 +731,7 @@ export class ContextService {
       await this.conversations.createIndex({ updatedAt: -1 });
       await this.messages.createIndex({ sessionId: 1, timestamp: 1 });
       await this.messages.createIndex({ keywords: 1 });
+      await this.deleted.createIndex({ sessionId: 1, fp: 1 }, { unique: true });
     } catch {
       // ignore
     }

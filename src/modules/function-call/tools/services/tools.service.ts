@@ -6,6 +6,7 @@ import { TitleFunctionCallService } from '../../title/services/title.service.js'
 import { SkillThoughtToolsService } from '../../../skill-thought/tools/skill-thought.tools.js';
 import { McpFunctionCallService } from '../../mcp/services/mcp.service.js';
 import { McpAdaptersService } from '../../mcp/services/mcp-adapter.service.js';
+import { TodoFunctionCallService } from '../../todo/services/todo.service.js';
 
 /**
  * @title 工具服务 Tools Service
@@ -22,6 +23,7 @@ export class ToolsService {
     private readonly skillThought: SkillThoughtToolsService,
     private readonly mcp: McpFunctionCallService,
     private readonly mcpAdapters: McpAdaptersService,
+    private readonly todo: TodoFunctionCallService,
   ) {}
 
   getHandle(streamWriter?: (msg: string) => void): CreateAgentParams['tools'] {
@@ -36,6 +38,7 @@ export class ToolsService {
     });
     const tMcp = this.mcp.getHandle(streamWriter) ?? [];
     const tMcpAdapters = this.mcpAdapters.getTools() ?? [];
+    const tTodo = this.todo.getHandle() ?? [];
     // 所有数据源工具（schema_search, data_source_query, super_party_*, feishu_bitable_*）
     // 仅在 data_analysis 内部使用，不直接暴露给对话层
     // Chat层只能调用 data_analysis，数据分析由 analysis 层统一管理
@@ -46,6 +49,7 @@ export class ToolsService {
       ...tSkillThoughtFiltered,
       ...tMcp,
       ...tMcpAdapters,
+      ...tTodo,
     );
     return tools;
   }

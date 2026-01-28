@@ -253,6 +253,15 @@
           <circle cx="12" cy="13" r="4"></circle>
         </IconBase>
       );
+      const Trash2 = (p) => (
+        <IconBase {...p}>
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+          <path d="M10 11v6"></path>
+          <path d="M14 11v6"></path>
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+        </IconBase>
+      );
 
       // --- API 服务 ---
       const api = {
@@ -264,6 +273,18 @@
           } catch (e) {
             console.error(e);
             return [];
+          }
+        },
+        async deleteSession(sessionId) {
+          try {
+            const res = await fetch(`${API_BASE}/chat/session/${sessionId}`, {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+            });
+            return res.ok;
+          } catch (e) {
+            console.error(e);
+            return false;
           }
         },
         async fetchHistory(sessionId) {
@@ -336,6 +357,61 @@
             return null;
           }
         },
+        async listTodos(userId) {
+          try {
+            const params = new URLSearchParams();
+            if (userId) params.set('userId', userId);
+            const qs = params.toString();
+            const res = await fetch(`${API_BASE}/todo${qs ? `?${qs}` : ''}`);
+            if (!res.ok) return { todos: [] };
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return { todos: [] };
+          }
+        },
+        async createTodo(input) {
+          try {
+            const res = await fetch(`${API_BASE}/todo`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(input || {}),
+            });
+            if (!res.ok) return null;
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return null;
+          }
+        },
+        async updateTodo(id, input) {
+          try {
+            const res = await fetch(`${API_BASE}/todo/${id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(input || {}),
+            });
+            if (!res.ok) return null;
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return null;
+          }
+        },
+        async deleteTodo(id) {
+          try {
+            const res = await fetch(`${API_BASE}/todo/${id}`, {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+            });
+            if (!res.ok) return false;
+            const data = await res.json();
+            return !!data?.ok;
+          } catch (e) {
+            console.error(e);
+            return false;
+          }
+        },
       };
 
       // --- 工具函数 ---
@@ -400,6 +476,17 @@
         // 资源状态
         const [resources, setResources] = useState([]);
         const [loadingResources, setLoadingResources] = useState(false);
+
+        const [todoUserId, setTodoUserId] = useState('default');
+        const [todos, setTodos] = useState([]);
+        const [todoLoading, setTodoLoading] = useState(false);
+        const [todoDraft, setTodoDraft] = useState({
+          title: '',
+          description: '',
+          aiConsideration: '',
+          decisionReason: '',
+          aiPlan: '',
+        });
 
         const [showHashtagMenu, setShowHashtagMenu] = useState(false);
         const [hashtagQuery, setHashtagQuery] = useState('');
@@ -544,6 +631,103 @@
             setMessages(msgs);
           }
         };
+
+        const handleDeleteSession = async (sid) => {
+          const targetSessionId = String(sid || '');
+          if (!targetSessionId) return;
+          const confirmed = window.confirm(
+            '确认删除该会话记录？此操作会清空会话历史。',
+          );
+          if (!confirmed) return;
+
+          const wasActive = sessionId === targetSessionId;
+          if (wasActive) {
+            setSessionId(null);
+            setActiveTab('chat');
+            setMessages([
+              {
+                id: 'welcome',
+                role: 'ai',
+                content: '你好！我是你的 AI 助手。',
+                timestamp: Date.now(),
+              },
+            ]);
+          }
+
+          await api.deleteSession(targetSessionId);
+          const list = await api.listSessions();
+          setSessions(list);
+          if (wasActive) {
+            if (list.length > 0) {
+              handleSelectSession(list[0].sessionId);
+            } else {
+              handleNewChat();
+            }
+          }
+        };
+
+        const loadTodos = async (userId) => {
+          setTodoLoading(true);
+          try {
+            const data = await api.listTodos(userId);
+            const rows = Array.isArray(data?.todos) ? data.todos : [];
+            setTodos(rows);
+          } finally {
+            setTodoLoading(false);
+          }
+        };
+
+        const handleCreateTodo = async () => {
+          const title = String(todoDraft.title || '').trim();
+          if (!title) return;
+          const description = String(todoDraft.description || '').trim();
+          const uid = String(todoUserId || '').trim() || 'default';
+          const aiConsideration = String(todoDraft.aiConsideration || '').trim();
+          const decisionReason = String(todoDraft.decisionReason || '').trim();
+          const aiPlan = String(todoDraft.aiPlan || '').trim();
+          const payload = {
+            userId: uid,
+            title,
+            description: description || undefined,
+            aiConsideration:
+              aiConsideration || `基于标题“${title}”形成的待办事项。`,
+            decisionReason:
+              decisionReason || '由用户在待办池中手动创建。',
+            aiPlan: aiPlan || `建议按步骤执行：拆分任务、设定截止时间、逐步完成。`,
+          };
+          const res = await api.createTodo(payload);
+          if (res) {
+            setTodoDraft({
+              title: '',
+              description: '',
+              aiConsideration: '',
+              decisionReason: '',
+              aiPlan: '',
+            });
+            await loadTodos(uid);
+          }
+        };
+
+        const handleTodoStatus = async (id, status) => {
+          const tid = Number(id);
+          if (!Number.isFinite(tid)) return;
+          await api.updateTodo(tid, { status });
+          await loadTodos(todoUserId);
+        };
+
+        const handleDeleteTodo = async (id) => {
+          const tid = Number(id);
+          if (!Number.isFinite(tid)) return;
+          const confirmed = window.confirm('确认删除该待办？');
+          if (!confirmed) return;
+          await api.deleteTodo(tid);
+          await loadTodos(todoUserId);
+        };
+
+        useEffect(() => {
+          if (activeTab !== 'todo') return;
+          loadTodos(todoUserId);
+        }, [activeTab, todoUserId]);
 
         // 关闭自动滚动：不在每次内容更新后滚动到底部
         const messagesEndRef = useRef(null);
@@ -1393,7 +1577,7 @@
           <div className="flex h-screen bg-white text-gray-900 font-sans overflow-hidden">
             {/* 侧边栏 */}
             <aside className="hidden md:flex w-64 shrink-0 bg-gray-50 border-r border-gray-200 flex-col h-full">
-              <div className="p-4 border-b border-gray-200">
+              <div className="p-4 border-b border-gray-200 flex flex-col gap-2">
                 <button
                   onClick={handleNewChat}
                   className="w-full flex items-center justify-center gap-2 bg-black text-white py-2 px-4 rounded hover:bg-gray-800 transition-colors"
@@ -1401,31 +1585,58 @@
                   <Plus size={16} />
                   <span>新会话</span>
                 </button>
+                <button
+                  onClick={() => setActiveTab('todo')}
+                  className="w-full flex items-center justify-center gap-2 bg-white text-gray-800 py-2 px-4 rounded border border-gray-200 hover:bg-gray-100 transition-colors"
+                >
+                  <CheckCircle size={16} />
+                  <span>待办池</span>
+                </button>
               </div>
               <div className="flex-1 p-2 overflow-y-auto">
                 {sessions.map((s) => (
                   <div
                     key={s.sessionId}
                     onClick={() => handleSelectSession(s.sessionId)}
-                    className={`p-3 mb-2 rounded cursor-pointer transition-colors ${
+                    className={`group p-3 mb-2 rounded cursor-pointer transition-colors flex items-start gap-2 ${
                       sessionId === s.sessionId
                         ? 'bg-gray-200'
                         : 'hover:bg-gray-100'
                     }`}
                   >
-                    <div className="text-sm font-medium truncate">
-                      {s.title ? (
-                        s.title
-                      ) : (
-                        <span className="text-gray-400 italic flex items-center gap-1">
-                          <Loader2 size={12} className="animate-spin" />
-                          生成标题中...
-                        </span>
-                      )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {s.title ? (
+                          s.title
+                        ) : (
+                          <span className="text-gray-400 italic flex items-center gap-1">
+                            <Loader2 size={12} className="animate-spin" />
+                            生成标题中...
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {new Date(
+                          s.updatedAt || Date.now(),
+                        ).toLocaleDateString()}
+                      </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {new Date(s.updatedAt || Date.now()).toLocaleDateString()}
-                    </div>
+                    <button
+                      type="button"
+                      disabled={isTyping && sessionId === s.sessionId}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteSession(s.sessionId);
+                      }}
+                      className={`shrink-0 mt-0.5 h-7 w-7 rounded flex items-center justify-center border border-transparent transition-all ${
+                        isTyping && sessionId === s.sessionId
+                          ? 'opacity-30 cursor-not-allowed'
+                          : 'opacity-0 group-hover:opacity-100 hover:bg-white hover:border-gray-200'
+                      }`}
+                      title="删除会话"
+                    >
+                      <Trash2 size={14} className="text-gray-500" />
+                    </button>
                   </div>
                 ))}
                 {sessions.length === 0 && (
@@ -1649,6 +1860,192 @@
                                 </div>
                               </div>
                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'todo' && (
+                  <div className="h-full p-6 overflow-y-auto animate__animated animate__fadeIn">
+                    <div className="max-w-4xl mx-auto">
+                      <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-xl font-bold flex items-center gap-2">
+                          <CheckCircle className="text-black" /> 待办池
+                        </h2>
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={todoUserId}
+                            onChange={(e) => setTodoUserId(e.target.value)}
+                            className="h-9 px-3 border border-gray-200 rounded text-sm bg-white"
+                            placeholder="userId"
+                          />
+                          <button
+                            onClick={() => loadTodos(todoUserId)}
+                            className="h-9 px-3 border border-gray-200 rounded text-sm bg-white hover:bg-gray-50"
+                            disabled={todoLoading}
+                          >
+                            刷新
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-white border border-gray-100 rounded-xl p-4 mb-6">
+                        <div className="grid grid-cols-1 gap-3">
+                          <input
+                            value={todoDraft.title}
+                            onChange={(e) =>
+                              setTodoDraft((d) => ({
+                                ...d,
+                                title: e.target.value,
+                              }))
+                            }
+                            className="h-10 px-3 border border-gray-200 rounded text-sm"
+                            placeholder="待办标题"
+                          />
+                          <textarea
+                            value={todoDraft.description}
+                            onChange={(e) =>
+                              setTodoDraft((d) => ({
+                                ...d,
+                                description: e.target.value,
+                              }))
+                            }
+                            className="px-3 py-2 border border-gray-200 rounded text-sm"
+                            rows={2}
+                            placeholder="描述（可选）"
+                          />
+                          <textarea
+                            value={todoDraft.aiConsideration}
+                            onChange={(e) =>
+                              setTodoDraft((d) => ({
+                                ...d,
+                                aiConsideration: e.target.value,
+                              }))
+                            }
+                            className="px-3 py-2 border border-gray-200 rounded text-sm"
+                            rows={2}
+                            placeholder="AI 考量（可留空自动生成）"
+                          />
+                          <textarea
+                            value={todoDraft.decisionReason}
+                            onChange={(e) =>
+                              setTodoDraft((d) => ({
+                                ...d,
+                                decisionReason: e.target.value,
+                              }))
+                            }
+                            className="px-3 py-2 border border-gray-200 rounded text-sm"
+                            rows={2}
+                            placeholder="决策过程（可留空自动生成）"
+                          />
+                          <textarea
+                            value={todoDraft.aiPlan}
+                            onChange={(e) =>
+                              setTodoDraft((d) => ({
+                                ...d,
+                                aiPlan: e.target.value,
+                              }))
+                            }
+                            className="px-3 py-2 border border-gray-200 rounded text-sm"
+                            rows={2}
+                            placeholder="AI 计划（可留空自动生成）"
+                          />
+                          <div className="flex justify-end">
+                            <button
+                              onClick={handleCreateTodo}
+                              className="h-9 px-4 bg-black text-white rounded text-sm hover:bg-gray-800"
+                              disabled={!String(todoDraft.title || '').trim()}
+                            >
+                              新增待办
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {!todoLoading && todos.length === 0 && (
+                        <div className="text-center text-gray-400 py-10 border-2 border-dashed border-gray-100 rounded-xl">
+                          暂无待办
+                        </div>
+                      )}
+
+                      <div className="space-y-3">
+                        {todos.map((t) => (
+                          <div
+                            key={t.id}
+                            className="bg-white border border-gray-100 rounded-xl p-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="font-medium text-gray-900 truncate">
+                                  #{t.id} {t.title}
+                                </div>
+                                {t.description && (
+                                  <div className="text-sm text-gray-600 mt-1 whitespace-pre-wrap">
+                                    {t.description}
+                                  </div>
+                                )}
+                                <div className="text-xs text-gray-500 mt-2">
+                                  状态: {t.status}
+                                </div>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-2">
+                                <select
+                                  value={t.status}
+                                  onChange={(e) =>
+                                    handleTodoStatus(t.id, e.target.value)
+                                  }
+                                  className="h-8 px-2 border border-gray-200 rounded text-sm bg-white"
+                                >
+                                  <option value="pending">pending</option>
+                                  <option value="in_progress">in_progress</option>
+                                  <option value="done">done</option>
+                                  <option value="cancelled">cancelled</option>
+                                </select>
+                                <button
+                                  onClick={() => handleDeleteTodo(t.id)}
+                                  className="h-8 w-8 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-50"
+                                  title="删除"
+                                >
+                                  <Trash2 size={14} className="text-gray-600" />
+                                </button>
+                              </div>
+                            </div>
+                            {(t.aiConsideration || t.decisionReason || t.aiPlan) && (
+                              <div className="mt-3 space-y-2">
+                                {t.aiConsideration && (
+                                  <div className="text-sm text-gray-700">
+                                    <div className="text-xs font-semibold text-gray-500 mb-0.5">
+                                      AI 考量
+                                    </div>
+                                    <div className="whitespace-pre-wrap">
+                                      {t.aiConsideration}
+                                    </div>
+                                  </div>
+                                )}
+                                {t.decisionReason && (
+                                  <div className="text-sm text-gray-700">
+                                    <div className="text-xs font-semibold text-gray-500 mb-0.5">
+                                      决策过程
+                                    </div>
+                                    <div className="whitespace-pre-wrap">
+                                      {t.decisionReason}
+                                    </div>
+                                  </div>
+                                )}
+                                {t.aiPlan && (
+                                  <div className="text-sm text-gray-700">
+                                    <div className="text-xs font-semibold text-gray-500 mb-0.5">
+                                      AI 计划
+                                    </div>
+                                    <div className="whitespace-pre-wrap">
+                                      {t.aiPlan}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

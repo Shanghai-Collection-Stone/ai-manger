@@ -5,6 +5,7 @@ import { AnalysisFunctionCallModule } from '../analysis/analysis.module.js';
 import { TitleFunctionCallModule } from '../title/title.module.js';
 import { SkillThoughtModule } from '../../skill-thought/skill-thought.module.js';
 import { McpFunctionCallModule } from '../mcp/mcp.module.js';
+import { TodoFunctionCallModule } from '../todo/todo.module.js';
 
 /**
  * @title 工具模块 Tools Module
@@ -17,6 +18,7 @@ import { McpFunctionCallModule } from '../mcp/mcp.module.js';
     TitleFunctionCallModule,
     SkillThoughtModule,
     McpFunctionCallModule,
+    TodoFunctionCallModule,
   ],
   providers: [ToolsService],
   exports: [ToolsService],

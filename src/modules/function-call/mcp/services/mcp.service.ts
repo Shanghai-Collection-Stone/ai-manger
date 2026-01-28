@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { tool, CreateAgentParams } from 'langchain';
 import * as z from 'zod';
 import { McpStorageService } from './mcp-storage.service.js';
-import { McpProcessService } from './mcp-process.service.js';
+import { McpAdaptersService } from './mcp-adapter.service.js';
 
 /**
  * @description 提供 MCP 相关的函数调用工具：资源列表、读取与专用文件录入。
@@ -13,7 +13,7 @@ import { McpProcessService } from './mcp-process.service.js';
 export class McpFunctionCallService {
   constructor(
     private readonly storage: McpStorageService,
-    private readonly proc: McpProcessService,
+    private readonly adapters: McpAdaptersService,
   ) {}
 
   /**
@@ -85,43 +85,60 @@ export class McpFunctionCallService {
       },
     );
 
-    const mcpRunNpx = tool(
-      async ({ pkg, args, input, timeoutMs, env, cwd }) => {
-        const result = await this.proc.runNpx({
-          package: pkg,
-          args: Array.isArray(args) ? args : undefined,
-          input,
-          timeoutMs,
-          env: (env as Record<string, string>) ?? undefined,
-          cwd: typeof cwd === 'string' ? cwd : undefined,
-        });
-        if (streamWriter)
-          streamWriter(
-            `[MCP] npx ${pkg} exited with ${result.exitCode}, ${result.stdout.length}B stdout`,
-          );
-        return JSON.stringify(result);
+    const mcpListMcpTools = tool(
+      () => {
+        const tools = this.adapters.getTools() ?? [];
+        const names = tools
+          .map((t) => (t as unknown as { name?: string }).name)
+          .filter((n): n is string => typeof n === 'string');
+        return JSON.stringify({ tools: names });
       },
       {
-        name: 'mcp_run_npx',
+        name: 'mcp_list_mcp_tools',
         description:
-          'Run external MCP connector via npx. Pass package name and args; optional stdin input and timeoutMs.',
+          'List tool names currently loaded from MCP servers configured in config/mcp.servers.json.',
+        schema: z.object({}),
+      },
+    );
+
+    const mcpListMcpResources = tool(
+      async ({ serverName, uris }) => {
+        try {
+          const res = await this.adapters.listMcpResources(serverName, {
+            uris,
+          });
+          if (streamWriter)
+            streamWriter(
+              `[MCP] Listed ${res.length} resources from ${serverName ?? 'all servers'}`,
+            );
+          return JSON.stringify({ resources: res });
+        } catch (error) {
+          const msg =
+            error instanceof Error
+              ? error.message
+              : typeof error === 'string'
+                ? error
+                : JSON.stringify(error);
+          return JSON.stringify({ error: msg });
+        }
+      },
+      {
+        name: 'mcp_list_mcp_resources',
+        description:
+          'List resources exposed by MCP servers via @langchain/mcp-adapters. Optionally filter by server name or URIs.',
         schema: z.object({
-          pkg: z.string().describe('npx package or command name'),
-          args: z.array(z.string()).optional().describe('arguments array'),
-          input: z.string().optional().describe('stdin content'),
-          timeoutMs: z
-            .number()
+          serverName: z
+            .string()
             .optional()
-            .describe('timeout in milliseconds (default 60000)'),
-          env: z
-            .record(z.string())
+            .describe('Server name as defined in config/mcp.servers.json'),
+          uris: z
+            .union([z.string(), z.array(z.string())])
             .optional()
-            .describe('extra environment variables'),
-          cwd: z.string().optional().describe('working directory'),
+            .describe('Specific resource URI or list of URIs to load'),
         }),
       },
     );
 
-    return [mcpList, mcpRead, mcpIngest, mcpRunNpx];
+    return [mcpList, mcpRead, mcpIngest, mcpListMcpTools, mcpListMcpResources];
   }
 }

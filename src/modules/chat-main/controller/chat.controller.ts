@@ -118,9 +118,18 @@ export class ChatMainController {
    */
   async getMessages(
     @Param('sessionId') sessionId: string,
-  ): Promise<{ messages: ContextMessage[] }> {
+  ): Promise<{ messages: Array<ContextMessage & { fingerprint: string }> }> {
     const msgs = await this.chat.getMessages(sessionId);
     return { messages: msgs };
+  }
+
+  @Delete('messages/:sessionId')
+  async deleteMessages(
+    @Param('sessionId') sessionId: string,
+    @Body() body: { fingerprints?: string[]; indexes?: number[] },
+  ): Promise<{ ok: boolean; deleted: number }> {
+    const res = await this.chat.deleteMessages(sessionId, body);
+    return { ok: true, deleted: res.deleted };
   }
 
   @Delete('session/:sessionId')
