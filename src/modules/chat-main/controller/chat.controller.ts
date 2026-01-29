@@ -8,12 +8,21 @@ import {
   Param,
   Delete,
   Req,
+  Res,
+  UseInterceptors,
+  UploadedFiles,
+  BadRequestException,
 } from '@nestjs/common';
 import { ChatMainService } from '../services/chat.service.js';
 import type { ChatRequest, ChatResponse } from '../types/chat.types.js';
 import type { ContextMessage } from '../../context/types/context.types.js';
 import { Observable } from 'rxjs';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import multer from 'multer';
+import { extname, join } from 'path';
+import { mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
 
 /**
  * @title 主对话控制器 Chat-Main Controller
@@ -24,6 +33,64 @@ import type { Request } from 'express';
 @Controller('chat')
 export class ChatMainController {
   constructor(private readonly chat: ChatMainService) {}
+
+  @Post('upload-images')
+  @UseInterceptors(
+    FilesInterceptor('files', 12, {
+      storage: multer.diskStorage({
+        destination: (
+          _req: Request,
+          _file: Express.Multer.File,
+          cb: (error: Error | null, destination: string) => void,
+        ) => {
+          const dir = join(process.cwd(), 'public', 'uploads');
+          mkdirSync(dir, { recursive: true });
+          cb(null, dir);
+        },
+        filename: (
+          _req: Request,
+          file: Express.Multer.File,
+          cb: (error: Error | null, filename: string) => void,
+        ) => {
+          const rawExt = extname(String(file.originalname || '')).toLowerCase();
+          const ext = rawExt && rawExt.length <= 12 ? rawExt : '';
+          cb(null, `${Date.now()}-${randomUUID()}${ext}`);
+        },
+      }),
+      fileFilter: (
+        _req: Request,
+        file: Express.Multer.File,
+        cb: (error: Error | null, acceptFile: boolean) => void,
+      ) => {
+        const mt = String(file.mimetype || '').toLowerCase();
+        cb(null, mt.startsWith('image/'));
+      },
+      limits: {
+        files: 12,
+        fileSize: 12 * 1024 * 1024,
+      },
+    }),
+  )
+  uploadImages(@UploadedFiles() files: Express.Multer.File[]): {
+    files: Array<{
+      originalName: string;
+      fileName: string;
+      absPath: string;
+      url: string;
+    }>;
+  } {
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new BadRequestException('No image files uploaded');
+    }
+    return {
+      files: files.map((f) => ({
+        originalName: String(f.originalname || ''),
+        fileName: String(f.filename || ''),
+        absPath: String(f.path || ''),
+        url: `/static/uploads/${String(f.filename || '')}`,
+      })),
+    };
+  }
 
   @Post('send')
   /**
@@ -88,6 +155,59 @@ export class ChatMainController {
       recursionLimit: rl,
       ip: remoteIp || undefined,
       now,
+    });
+  }
+
+  @Post('stream')
+  streamPost(
+    @Body() body: ChatRequest,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): void {
+    if (!body.provider) body.provider = 'deepseek';
+    if (!body.model) body.model = 'deepseek-chat';
+    if (!body.ip) {
+      const remoteFromReq = typeof req.ip === 'string' ? req.ip : '';
+      const remoteFromSocket =
+        typeof req.socket?.remoteAddress === 'string'
+          ? req.socket.remoteAddress
+          : '';
+      const remote = remoteFromReq || remoteFromSocket;
+      body.ip = remote || undefined;
+    }
+    if (!body.now) body.now = new Date().toISOString();
+
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const subscription = this.chat.stream(body).subscribe({
+      next: (evt) => {
+        if (res.writableEnded) return;
+        res.write(`data: ${JSON.stringify(evt.data)}\n\n`);
+      },
+      error: (err: unknown) => {
+        if (res.writableEnded) return;
+        const e = err instanceof Error ? err : new Error(String(err));
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'error',
+            data: { code: 'STREAM_ERROR', message: e.message },
+          })}\n\n`,
+        );
+        res.end();
+      },
+      complete: () => {
+        if (!res.writableEnded) res.end();
+      },
+    });
+
+    req.on('close', () => {
+      subscription.unsubscribe();
+      if (!res.writableEnded) res.end();
     });
   }
 

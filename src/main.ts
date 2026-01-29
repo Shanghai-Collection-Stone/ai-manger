@@ -4,6 +4,7 @@ import * as express from 'express';
 import { join } from 'path';
 import { enableProxyFromEnv } from './shared/network/proxy';
 import { ConfigService } from '@nestjs/config';
+import { existsSync } from 'fs';
 
 async function runMigrations() {
   const configService = new ConfigService();
@@ -76,6 +77,19 @@ async function bootstrap() {
   await runMigrations();
 
   const app = await NestFactory.create(AppModule);
+
+  const publicPages = join(process.cwd(), 'public', 'pages');
+  const distPages = join(process.cwd(), 'dist', 'pages');
+  const pagesRoot = existsSync(publicPages)
+    ? publicPages
+    : existsSync(distPages)
+      ? distPages
+      : undefined;
+
+  if (pagesRoot) {
+    app.use('/pages', express.static(pagesRoot));
+  }
+
   app.use('/static', express.static(join(process.cwd(), 'public')));
   await app.listen(process.env.PORT ?? 3011);
   console.log(`Application is running on: ${await app.getUrl()}`);

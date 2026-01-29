@@ -7,7 +7,15 @@ import { createHash } from 'crypto';
  * @keywords-en chat main, streaming, non-streaming, context CRUD
  */
 export const moduleTip = {
-  keywordsCn: ['主对话', '流式', '非流式', '上下文', '控制器', '服务'],
+  keywordsCn: [
+    '主对话',
+    '流式',
+    '非流式',
+    '上下文',
+    '控制器',
+    '服务',
+    '图片上传',
+  ],
   keywordsEn: [
     'chat main',
     'streaming',
@@ -15,6 +23,7 @@ export const moduleTip = {
     'context',
     'controller',
     'service',
+    'image upload',
   ],
   files: {
     '控制器/Controller': 'src/modules/chat-main/controller/chat.controller.ts',

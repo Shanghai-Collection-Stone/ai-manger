@@ -68,8 +68,6 @@ export class ChatMainService {
       this.getDataAnalysisPromptCN(),
     ].join('\n');
 
-    console.log(sysContent);
-
     // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
     const messages: BaseMessage[] = [new HumanMessage(request.input)];
     const tools = this.getToolsForInput(request.input);
@@ -706,6 +704,8 @@ export class ChatMainService {
       '[重要]data_analysis 有时候会有问题返回,格式一般为 { question:xx }, 把对应的内容返回给用户,让用户确定一下吧。',
       '若 frontend_finalize 产生外链，请不要在回答中返回任何代码或说明文字。',
       '若工具返回失败或为空，请直接告知并询问是否继续。',
+      '若用户要进行“小红书发布/发布到小红书/MCP发布”等操作，必须先拿到参考图的绝对路径或可访问URL数组；若用户未提供，请先要求用户上传参考图（不要臆测图片）。',
+      '若用户要求Ai配图那就用ai现有数据配张网络图片吧,不强制一定要绝对路径的图片',
       '[重要] UI 框架(uiFramework) 与 布局(layout) 必须由用户明确提供，不得由 AI 猜测；缺失时直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '当 frontend_plan 或 frontend_finalize 返回 requires_human=true 或 missing 非空时，不继续生成页面，直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '避免在工具间反复循环；完成一次工具调用后直接输出答案或结果。',

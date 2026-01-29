@@ -154,10 +154,22 @@ export class ContextService {
       id?: string;
     };
 
+    const rawCheckpointTs = (tuple.checkpoint as unknown as { ts?: unknown })
+      ?.ts;
+    const baseMs =
+      typeof rawCheckpointTs === 'number'
+        ? rawCheckpointTs
+        : typeof rawCheckpointTs === 'string' &&
+            rawCheckpointTs.trim().length > 0
+          ? Number(rawCheckpointTs)
+          : Date.now();
+    let seq = 0;
+
     for (const item of arr) {
       const v: SavedMessage = (item ?? {}) as SavedMessage;
       const t = typeof v.type === 'string' ? v.type : undefined;
-      const ts = new Date(tuple.checkpoint?.ts ?? Date.now());
+      const ts = new Date(baseMs + seq);
+      seq += 1;
       if (t === 'human') {
         const content = this.extractText(v.content);
         msgs.push({ role: ContextRole.User, content, timestamp: ts });
@@ -379,16 +391,15 @@ export class ContextService {
       .sort({ timestamp: 1 })
       .toArray();
 
+    const storedAssistants = storedMessages.filter(
+      (s) => s.role === ContextRole.Assistant,
+    );
+    let assistantIndex = 0;
+
     for (const m of merged) {
       if (m.role !== ContextRole.Assistant) continue;
-      // 查找对应的存储消息（通过时间戳 matching, 允许 5s 误差）
-      const stored = storedMessages.find(
-        (s) =>
-          s.role === ContextRole.Assistant &&
-          Math.abs(
-            new Date(s.timestamp).getTime() - (m.timestamp?.getTime() ?? 0),
-          ) < 5000,
-      );
+      const stored = storedAssistants[assistantIndex];
+      assistantIndex += 1;
 
       // 1. 优先使用存储的 parts (包含完美的 SSE 顺序)
       if (stored && Array.isArray(stored.parts) && stored.parts.length > 0) {

@@ -318,6 +318,23 @@
             return { sessionId: 'local-' + Date.now() };
           }
         },
+        async uploadImages(files) {
+          try {
+            const fd = new FormData();
+            (Array.isArray(files) ? files : []).forEach((f) =>
+              fd.append('files', f),
+            );
+            const res = await fetch(`${API_BASE}/chat/upload-images`, {
+              method: 'POST',
+              body: fd,
+            });
+            if (!res.ok) return { files: [] };
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return { files: [] };
+          }
+        },
         async fetchContext(sessionId, keywords) {
           try {
             const params = new URLSearchParams({
@@ -341,6 +358,42 @@
             url += `&recursionLimit=${opts.recursionLimit}`;
           }
           return url;
+        },
+        async streamChatPost(sessionId, input, opts) {
+          const payload = {
+            sessionId,
+            input,
+          };
+          if (opts && typeof opts.recursionLimit === 'number') {
+            payload.recursionLimit = opts.recursionLimit;
+          }
+          const res = await fetch(`${API_BASE}/chat/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          return res;
+        },
+        async sendChat(sessionId, input, opts) {
+          try {
+            const payload = {
+              sessionId,
+              input,
+            };
+            if (opts && typeof opts.recursionLimit === 'number') {
+              payload.recursionLimit = opts.recursionLimit;
+            }
+            const res = await fetch(`${API_BASE}/chat/send`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) return null;
+            return await res.json();
+          } catch (e) {
+            console.error(e);
+            return null;
+          }
         },
         async listFrontendJobs(sessionId) {
           try {
@@ -502,6 +555,82 @@
         const [hashtagSuggestions, setHashtagSuggestions] = useState([]);
         const inputRef = useRef(null);
         const [autoScroll, setAutoScroll] = useState(true);
+        const fileInputRef = useRef(null);
+        const [imageItems, setImageItems] = useState([]);
+        const [isUploadingImages, setIsUploadingImages] = useState(false);
+
+        const clearImages = () => {
+          setImageItems((prev) => {
+            (Array.isArray(prev) ? prev : []).forEach((it) => {
+              if (it && it.preview) {
+                try {
+                  URL.revokeObjectURL(it.preview);
+                } catch (e) {}
+              }
+            });
+            return [];
+          });
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        };
+
+        const handlePickImages = () => {
+          if (fileInputRef.current) fileInputRef.current.click();
+        };
+
+        const handleImageFiles = (e) => {
+          const files = Array.from((e && e.target && e.target.files) || []);
+          if (!files || files.length === 0) return;
+          const next = files.map((f) => ({
+            id: `img-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            file: f,
+            preview: URL.createObjectURL(f),
+          }));
+          setImageItems((prev) => [
+            ...(Array.isArray(prev) ? prev : []),
+            ...next,
+          ]);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        };
+
+        const handlePaste = (e) => {
+          const items = (e.clipboardData || e.originalEvent.clipboardData)
+            .items;
+          const files = [];
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.kind === 'file' && item.type.startsWith('image/')) {
+              const blob = item.getAsFile();
+              if (blob) files.push(blob);
+            }
+          }
+          if (files.length > 0) {
+            e.preventDefault();
+            const next = files.map((f) => ({
+              id: `img-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              file: f,
+              preview: URL.createObjectURL(f),
+            }));
+            setImageItems((prev) => [
+              ...(Array.isArray(prev) ? prev : []),
+              ...next,
+            ]);
+          }
+        };
+
+        const removeImage = (id) => {
+          const rid = String(id || '');
+          if (!rid) return;
+          setImageItems((prev) => {
+            const arr = Array.isArray(prev) ? prev : [];
+            const found = arr.find((it) => it && it.id === rid);
+            if (found && found.preview) {
+              try {
+                URL.revokeObjectURL(found.preview);
+              } catch (e) {}
+            }
+            return arr.filter((it) => it && it.id !== rid);
+          });
+        };
 
         // 初始化会话
         useEffect(() => {
@@ -523,6 +652,7 @@
           // 只重置前端状态，不立即创建后端会话
           setSessionId(null);
           setIsSidebarOpen(false);
+          clearImages();
           setMessages([
             {
               id: 'welcome',
@@ -536,6 +666,7 @@
         const handleSelectSession = async (sid) => {
           setSessionId(sid);
           setIsSidebarOpen(false);
+          clearImages();
           const history = await api.fetchHistory(sid);
           const msgs = history.map((h, idx) => {
             const segs = [];
@@ -753,7 +884,9 @@
         // 发送消息
         const handleSend = async (overrideInput, opts) => {
           const text = overrideInput || input;
-          if (!text.trim() || isTyping) return; // Allow if sessionId is null
+          const hasImages = Array.isArray(imageItems) && imageItems.length > 0;
+          if ((!text.trim() && !hasImages) || isTyping || isUploadingImages)
+            return; // Allow if sessionId is null
 
           let currentSessionId = sessionId;
           // Lazy creation: Create session on first message if needed
@@ -762,7 +895,7 @@
             currentSessionId = data.sessionId;
             setSessionId(currentSessionId);
             try {
-              const provisional = String(text || '')
+              const provisional = String(text || (hasImages ? '图片会话' : ''))
                 .trim()
                 .slice(0, 24);
               setSessions((prev) => {
@@ -799,15 +932,46 @@
             setTimeout(() => pollTitle(), 500);
           }
 
+          let uploadedImages = [];
+          let imageRefs = [];
+          if (hasImages) {
+            try {
+              setIsUploadingImages(true);
+              const pendingFiles = (Array.isArray(imageItems) ? imageItems : [])
+                .map((it) => it && it.file)
+                .filter(Boolean);
+              const res = await api.uploadImages(pendingFiles);
+              const files = Array.isArray(res?.files) ? res.files : [];
+              uploadedImages = files;
+              imageRefs = files
+                .map((f) => f.absPath || f.url)
+                .filter((s) => typeof s === 'string' && s.length > 0);
+            } finally {
+              setIsUploadingImages(false);
+            }
+          }
+
+          const payloadText =
+            imageRefs.length > 0
+              ? text.trim().length > 0
+                ? `${JSON.stringify(imageRefs)}\n${text}`
+                : `${JSON.stringify(imageRefs)}`
+              : text;
+
           const userMsg = {
             id: `msg-${Date.now()}`,
             role: 'user',
-            content: text,
+            content:
+              text.trim().length > 0
+                ? text
+                : `已上传 ${imageRefs.length} 张图片`,
+            images: uploadedImages,
             timestamp: Date.now(),
           };
 
           setMessages((prev) => [...prev, userMsg]);
           if (!overrideInput) setInput('');
+          clearImages();
           setIsTyping(true);
 
           // 模拟 Plan 触发 (Frontend heuristic for demo)
@@ -846,9 +1010,7 @@
             },
           ]);
 
-          const eventSource = new EventSource(
-            api.getStreamUrl(currentSessionId, text, opts || {}),
-          );
+          let eventSource = null;
           let fullText = '';
           let currentTools = [];
           const appendDelta = (prev, next) => {
@@ -862,9 +1024,9 @@
             return p + n.slice(i);
           };
 
-          eventSource.onmessage = (event) => {
+          const handleSseData = (raw) => {
             try {
-              const data = JSON.parse(event.data);
+              const data = JSON.parse(raw);
 
               if (data.type === 'error') {
                 const ed = data.data || {};
@@ -887,7 +1049,9 @@
                   }),
                 );
                 setIsTyping(false);
-                eventSource.close();
+                try {
+                  eventSource && eventSource.close();
+                } catch {}
                 return;
               }
 
@@ -1274,7 +1438,7 @@
                   ),
                 );
                 try {
-                  eventSource.close();
+                  eventSource && eventSource.close();
                 } catch {}
                 setIsTyping(false);
               } else {
@@ -1310,7 +1474,7 @@
                 ),
               );
             } catch (e) {
-              fullText = appendDelta(fullText, event.data);
+              fullText = appendDelta(fullText, raw);
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === responseId ? { ...msg, content: fullText } : msg,
@@ -1319,8 +1483,73 @@
             }
           };
 
+          const consumeFetchSse = async (response) => {
+            if (!response || !response.body) throw new Error('NO_STREAM_BODY');
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              buffer = buffer.replace(/\r\n/g, '\n');
+              let idx;
+              while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                const chunk = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 2);
+                const lines = chunk.split('\n');
+                const dataLines = lines
+                  .filter((l) => l.startsWith('data:'))
+                  .map((l) => l.slice(5).trimStart());
+                const payload = dataLines.join('\n');
+                if (payload) handleSseData(payload);
+              }
+            }
+          };
+
+          const usePostStream =
+            imageRefs.length > 0 || payloadText.length > 1500;
+
+          if (usePostStream) {
+            try {
+              const res = await api.streamChatPost(
+                currentSessionId,
+                payloadText,
+                opts || {},
+              );
+              if (!res.ok) throw new Error(`HTTP_${res.status}`);
+              await consumeFetchSse(res);
+            } catch (e) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === responseId ? { ...msg, isStreaming: false } : msg,
+                ),
+              );
+            } finally {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === responseId && msg.isStreaming
+                    ? { ...msg, isStreaming: false }
+                    : msg,
+                ),
+              );
+              setIsTyping(false);
+            }
+            return;
+          }
+
+          eventSource = new EventSource(
+            api.getStreamUrl(currentSessionId, payloadText, opts || {}),
+          );
+
+          eventSource.onmessage = (event) => {
+            handleSseData(event.data);
+          };
+
           eventSource.onerror = () => {
-            eventSource.close();
+            try {
+              eventSource && eventSource.close();
+            } catch {}
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === responseId ? { ...msg, isStreaming: false } : msg,
@@ -1329,9 +1558,10 @@
             setIsTyping(false);
           };
 
-          // 如果后端发送特定结束信号
           eventSource.addEventListener('end', () => {
-            eventSource.close();
+            try {
+              eventSource && eventSource.close();
+            } catch {}
             setIsTyping(false);
           });
         };
@@ -1740,106 +1970,191 @@
                     </div>
 
                     <div className="p-4 bg-white/80 backdrop-blur-sm z-20">
-                      <div className="relative max-w-4xl mx-auto">
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-2 pl-3">
-                          <button
-                            onClick={() => setAutoScroll((v) => !v)}
-                            className={`h-8 px-2 md:px-3 flex items-center gap-2 rounded-full border transition-all ${
-                              autoScroll
-                                ? 'bg-black text-white border-black'
-                                : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
-                            } shadow-sm`}
-                          >
-                            <span className="text-xs hidden md:inline">
-                              跟随置底
-                            </span>
-                            <span
-                              className={`inline-block w-1.5 h-1.5 rounded-full ${
-                                autoScroll ? 'bg-white' : 'bg-gray-400'
-                              }`}
-                            ></span>
-                          </button>
-                        </div>
-                        <textarea
-                          value={input}
-                          onChange={handleInputChange}
-                          onKeyDown={(e) => {
-                            if (showHashtagMenu) {
-                              if (e.key === 'ArrowDown') {
-                                e.preventDefault();
-                                setHashtagIndex((i) =>
-                                  Math.min(
-                                    i + 1,
-                                    hashtagSuggestions.length - 1,
-                                  ),
-                                );
-                                return;
-                              } else if (e.key === 'ArrowUp') {
-                                e.preventDefault();
-                                setHashtagIndex((i) => Math.max(i - 1, 0));
-                                return;
-                              } else if (e.key === 'Enter') {
-                                e.preventDefault();
-                                insertHashtag(hashtagSuggestions[hashtagIndex]);
-                                return;
-                              } else if (e.key === 'Escape') {
-                                setShowHashtagMenu(false);
-                                return;
-                              }
-                            }
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              handleSend();
-                            }
-                          }}
-                          placeholder="输入消息... (输入 '计划' 体验审批流程)"
-                          className="w-full bg-white border-0 ring-1 ring-gray-200 rounded-3xl pl-14 md:pl-32 pr-16 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-black/5 resize-none shadow-lg transition-shadow"
-                          rows={1}
-                          disabled={isTyping}
-                          ref={inputRef}
-                        />
-                        <button
-                          onClick={() => handleSend()}
-                          disabled={!input.trim() || isTyping}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 h-9 w-9 flex items-center justify-center rounded-full bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:scale-105 transition-transform"
-                        >
-                          {isTyping ? (
-                            <Loader2 size={16} className="animate-spin" />
-                          ) : (
-                            <Send size={16} />
-                          )}
-                        </button>
-                        {showHashtagMenu && (
-                          <div className="absolute left-0 -top-28 w-96 bg-white border border-gray-200 rounded-xl shadow-xl p-2 animate__animated animate__fadeInUp">
-                            <div className="text-xs text-gray-500 mb-1 px-2">
-                              选择外链资源以插入到 # 后
-                            </div>
-                            <ul>
-                              {hashtagSuggestions.map((item, idx) => (
-                                <li
-                                  key={item.id}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    insertHashtag(item);
-                                  }}
-                                  className={`px-2 py-1 text-sm cursor-pointer rounded ${idx === hashtagIndex ? 'bg-gray-100' : ''}`}
+                      <div className="max-w-4xl mx-auto">
+                        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-black/5 transition-all relative">
+                          {/* Image Previews */}
+                          {Array.isArray(imageItems) &&
+                            imageItems.length > 0 && (
+                              <div className="px-4 pt-4 flex flex-wrap gap-2">
+                                {imageItems.map((it) => (
+                                  <div key={it.id} className="relative group">
+                                    <img
+                                      src={it.preview}
+                                      className="h-16 w-16 rounded-lg object-cover ring-1 ring-gray-200"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeImage(it.id)}
+                                      className="absolute -top-2 -right-2 h-5 w-5 rounded-full bg-black text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ))}
+                                <button
+                                  type="button"
+                                  onClick={clearImages}
+                                  className="h-16 px-3 rounded-lg border border-dashed border-gray-300 text-xs text-gray-500 hover:border-gray-400 hover:text-gray-700 bg-gray-50 flex items-center justify-center"
                                 >
-                                  <span className="font-medium">
-                                    {item.title || '外链页面'}
-                                  </span>
-                                  <span className="ml-2 text-xs text-gray-500">
-                                    {item.status || 'pending'}
-                                  </span>
-                                </li>
-                              ))}
-                              {hashtagSuggestions.length === 0 && (
-                                <li className="px-2 py-1 text-sm text-gray-400">
-                                  无匹配资源
-                                </li>
+                                  清空
+                                </button>
+                              </div>
+                            )}
+
+                          {/* Textarea */}
+                          <textarea
+                            value={input}
+                            onPaste={handlePaste}
+                            onChange={(e) => {
+                              handleInputChange(e);
+                              e.target.style.height = 'auto';
+                              e.target.style.height =
+                                e.target.scrollHeight + 'px';
+                            }}
+                            onKeyDown={(e) => {
+                              if (showHashtagMenu) {
+                                if (e.key === 'ArrowDown') {
+                                  e.preventDefault();
+                                  setHashtagIndex((i) =>
+                                    Math.min(
+                                      i + 1,
+                                      hashtagSuggestions.length - 1,
+                                    ),
+                                  );
+                                  return;
+                                } else if (e.key === 'ArrowUp') {
+                                  e.preventDefault();
+                                  setHashtagIndex((i) => Math.max(i - 1, 0));
+                                  return;
+                                } else if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  insertHashtag(
+                                    hashtagSuggestions[hashtagIndex],
+                                  );
+                                  return;
+                                } else if (e.key === 'Escape') {
+                                  setShowHashtagMenu(false);
+                                  return;
+                                }
+                              }
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSend();
+                              }
+                            }}
+                            placeholder="输入消息...（可上传参考图；回车发送，Shift+Enter 换行）"
+                            className="w-full bg-transparent border-0 px-4 py-3 text-sm focus:outline-none resize-none max-h-60 min-h-[56px]"
+                            rows={1}
+                            disabled={isTyping || isUploadingImages}
+                            ref={inputRef}
+                          />
+
+                          {/* Toolbar */}
+                          <div className="flex items-center justify-between px-3 pb-3 pt-1">
+                            <div className="flex items-center gap-2">
+                              {/* Upload Button */}
+                              <button
+                                type="button"
+                                onClick={handlePickImages}
+                                disabled={isTyping || isUploadingImages}
+                                className={`h-8 w-8 flex items-center justify-center rounded-lg transition-colors ${
+                                  isTyping || isUploadingImages
+                                    ? 'opacity-40 cursor-not-allowed text-gray-300'
+                                    : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
+                                }`}
+                                title="上传图片"
+                              >
+                                <FileText size={18} />
+                              </button>
+                              <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="hidden"
+                                onChange={handleImageFiles}
+                              />
+
+                              {/* Follow Button */}
+                              <button
+                                onClick={() => setAutoScroll((v) => !v)}
+                                className={`h-8 px-2 flex items-center gap-1.5 rounded-lg text-xs transition-colors ${
+                                  autoScroll
+                                    ? 'bg-gray-100 text-gray-900 font-medium'
+                                    : 'text-gray-500 hover:bg-gray-50'
+                                }`}
+                                title="自动滚动"
+                              >
+                                <span>置底</span>
+                                <span
+                                  className={`block w-1.5 h-1.5 rounded-full ${
+                                    autoScroll ? 'bg-green-500' : 'bg-gray-300'
+                                  }`}
+                                ></span>
+                              </button>
+                            </div>
+
+                            {/* Send Button */}
+                            <button
+                              onClick={() => handleSend()}
+                              disabled={
+                                (!input.trim() &&
+                                  (!Array.isArray(imageItems) ||
+                                    imageItems.length === 0)) ||
+                                isTyping ||
+                                isUploadingImages
+                              }
+                              className="h-8 px-3 flex items-center gap-2 rounded-lg bg-black text-white text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-800 transition-colors"
+                            >
+                              {isTyping || isUploadingImages ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <>
+                                  <span>发送</span>
+                                  <Send size={14} />
+                                </>
                               )}
-                            </ul>
+                            </button>
                           </div>
-                        )}
+
+                          {/* Hashtag Menu */}
+                          {showHashtagMenu && (
+                            <div className="absolute left-0 bottom-full mb-2 w-72 bg-white border border-gray-200 rounded-xl shadow-xl p-2 animate__animated animate__fadeInUp z-50">
+                              <div className="text-xs text-gray-500 mb-1 px-2">
+                                选择外链资源以插入到 # 后
+                              </div>
+                              <ul>
+                                {hashtagSuggestions.map((item, idx) => (
+                                  <li
+                                    key={item.id}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      insertHashtag(item);
+                                    }}
+                                    className={`px-2 py-1 text-sm cursor-pointer rounded ${idx === hashtagIndex ? 'bg-gray-100' : ''}`}
+                                  >
+                                    <span className="font-medium">
+                                      {item.title || '外链页面'}
+                                    </span>
+                                    <span className="ml-2 text-xs text-gray-500">
+                                      {item.status || 'pending'}
+                                    </span>
+                                  </li>
+                                ))}
+                                {hashtagSuggestions.length === 0 && (
+                                  <li className="px-2 py-1 text-sm text-gray-400">
+                                    无匹配资源
+                                  </li>
+                                )}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-center mt-2">
+                          <span className="text-xs text-gray-400">
+                            AI 内容仅供参考
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2265,18 +2580,18 @@
           >
             <div
               className={`
-                flex max-w-[95%] md:max-w-[90%] gap-3 p-2 rounded-xl transition-all
+                flex w-full md:w-auto md:max-w-[90%] gap-3 p-2 rounded-xl transition-all
                 ${isUser ? 'flex-row-reverse' : 'flex-row'}
                 hover:bg-gray-50
             `}
             >
               <div
-                className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center border ${isUser ? 'bg-black text-white' : 'bg-white border-gray-200'}`}
+                className={`hidden md:flex w-8 h-8 rounded-full flex-shrink-0 items-center justify-center border ${isUser ? 'bg-black text-white' : 'bg-white border-gray-200'}`}
               >
                 {isUser ? <User size={14} /> : <Bot size={16} />}
               </div>
 
-              <div className="flex flex-col gap-1 min-w-0">
+              <div className="flex flex-col gap-1 min-w-0 flex-1">
                 <div className="flex items-baseline gap-2 px-1">
                   <span className="text-xs font-bold text-gray-900">
                     {isUser ? 'You' : 'AI'}
@@ -2333,7 +2648,7 @@
                   </div>
                 ) : (
                   <div
-                    className={`py-3 px-4 rounded-2xl shadow-sm text-sm overflow-hidden break-words max-w-[95ch] md:max-w-[90ch] lg:max-w-[105ch] sm:max-w-[95%] ${isUser ? 'bg-black text-white' : 'bg-white border border-gray-100'}`}
+                    className={`py-3 px-4 rounded-2xl shadow-sm text-sm overflow-hidden break-words w-full md:w-auto max-w-full md:max-w-[90ch] lg:max-w-[105ch] ${isUser ? 'bg-black text-white' : 'bg-white border border-gray-100'}`}
                   >
                     {Array.isArray(message.segments) &&
                     message.segments.length > 0 ? (
