@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import type { CreateAgentParams } from 'langchain';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -10,7 +10,7 @@ type StdioServer = {
 };
 
 type HttpServer = {
-  transport: 'http';
+  transport: 'http' | 'sse' | 'streamable_http';
   url: string;
   headers?: Record<string, string>;
 };
@@ -24,6 +24,7 @@ type ServerConfig = Record<string, StdioServer | HttpServer>;
  */
 @Injectable()
 export class McpAdaptersService implements OnModuleInit {
+  private readonly logger = new Logger(McpAdaptersService.name);
   private client: {
     getTools: () => Promise<CreateAgentParams['tools']>;
     getResources?: (
@@ -49,8 +50,16 @@ export class McpAdaptersService implements OnModuleInit {
     if (!cfg || Object.keys(cfg).length === 0) {
       this.client = null;
       this.toolsCache = [];
+      this.serverConfig = null;
+      if (!raw) {
+        this.logger.log('[MCP] No servers configured (missing config file)');
+      } else {
+        this.logger.log('[MCP] No valid servers configured after sanitization');
+      }
       return;
     }
+
+    this.logger.log(`[MCP] Loading servers: ${formatServerList(cfg)}`);
     try {
       const pkg = (await import('@langchain/mcp-adapters')) as {
         MultiServerMCPClient: new (cfg: Record<string, unknown>) => {
@@ -64,17 +73,28 @@ export class McpAdaptersService implements OnModuleInit {
         };
       };
       const ClientCtor = pkg.MultiServerMCPClient;
-      this.client = new ClientCtor(cfg);
+      this.client = new ClientCtor({
+        onConnectionError: 'ignore',
+        mcpServers: cfg,
+      });
       this.serverConfig = cfg;
     } catch {
       this.client = null;
       this.toolsCache = [];
+      this.serverConfig = null;
+      this.logger.error('[MCP] Failed to initialize MCP client');
       return;
     }
     try {
       this.toolsCache = (await this.client.getTools()) ?? [];
-    } catch {
+      this.logger.log(`[MCP] Loaded tools: ${this.toolsCache.length}`);
+    } catch (e) {
       this.toolsCache = [];
+      const err = e instanceof Error ? e : new Error(String(e));
+      this.logger.warn(
+        `[MCP] Tool discovery failed; MCP tools set to empty. ${err.message}`,
+      );
+      if (err.stack) this.logger.debug(err.stack);
     }
   }
 
@@ -185,6 +205,8 @@ export class McpAdaptersService implements OnModuleInit {
       const transport = (entry['transport'] ?? entry['type']) as
         | 'stdio'
         | 'http'
+        | 'sse'
+        | 'streamable_http'
         | undefined;
       if (transport === 'stdio') {
         const cmd = (entry['command'] as string) ?? 'node';
@@ -201,14 +223,59 @@ export class McpAdaptersService implements OnModuleInit {
         out[name] = { transport: 'stdio', command: cmd, args } as StdioServer;
         continue;
       }
-      if (transport === 'http') {
+      if (
+        transport === 'http' ||
+        transport === 'sse' ||
+        transport === 'streamable_http'
+      ) {
         const url = entry['url'] as string;
         const headers = entry['headers'] as Record<string, string> | undefined;
         if (typeof url === 'string' && url.startsWith('http')) {
-          out[name] = { transport: 'http', url, headers } as HttpServer;
+          out[name] = { transport, url, headers } as HttpServer;
         }
       }
     }
     return Object.keys(out).length > 0 ? out : null;
+  }
+}
+
+function formatServerList(cfg: ServerConfig): string {
+  const parts: string[] = [];
+  for (const [name, server] of Object.entries(cfg)) {
+    if (!server || typeof server !== 'object') continue;
+    if (server.transport === 'http') {
+      const rawUrl = server.url;
+      const safeUrl = sanitizeUrlForLog(rawUrl);
+      parts.push(`${name}(http:${safeUrl})`);
+      continue;
+    }
+    if (server.transport === 'sse') {
+      const rawUrl = server.url;
+      const safeUrl = sanitizeUrlForLog(rawUrl);
+      parts.push(`${name}(sse:${safeUrl})`);
+      continue;
+    }
+    if (server.transport === 'streamable_http') {
+      const rawUrl = server.url;
+      const safeUrl = sanitizeUrlForLog(rawUrl);
+      parts.push(`${name}(streamable_http:${safeUrl})`);
+      continue;
+    }
+    if (server.transport === 'stdio') {
+      const cmd = server.command;
+      parts.push(`${name}(stdio:${cmd})`);
+    }
+  }
+  return parts.join(', ');
+}
+
+function sanitizeUrlForLog(input: string): string {
+  try {
+    const u = new URL(input);
+    const host = u.host;
+    const pathname = u.pathname || '/';
+    return `${u.protocol}//${host}${pathname}`;
+  } catch {
+    return String(input || '').slice(0, 160);
   }
 }

@@ -253,6 +253,13 @@
           <circle cx="12" cy="13" r="4"></circle>
         </IconBase>
       );
+      const Menu = (p) => (
+        <IconBase {...p}>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </IconBase>
+      );
       const Trash2 = (p) => (
         <IconBase {...p}>
           <polyline points="3 6 5 6 21 6"></polyline>
@@ -460,6 +467,7 @@
         const [sessions, setSessions] = useState([]);
         const [sessionId, setSessionId] = useState(null);
         const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'resources'
+        const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
         const [messages, setMessages] = useState([
           {
@@ -514,6 +522,7 @@
         const handleNewChat = async () => {
           // 只重置前端状态，不立即创建后端会话
           setSessionId(null);
+          setIsSidebarOpen(false);
           setMessages([
             {
               id: 'welcome',
@@ -526,6 +535,7 @@
 
         const handleSelectSession = async (sid) => {
           setSessionId(sid);
+          setIsSidebarOpen(false);
           const history = await api.fetchHistory(sid);
           const msgs = history.map((h, idx) => {
             const segs = [];
@@ -682,7 +692,9 @@
           if (!title) return;
           const description = String(todoDraft.description || '').trim();
           const uid = String(todoUserId || '').trim() || 'default';
-          const aiConsideration = String(todoDraft.aiConsideration || '').trim();
+          const aiConsideration = String(
+            todoDraft.aiConsideration || '',
+          ).trim();
           const decisionReason = String(todoDraft.decisionReason || '').trim();
           const aiPlan = String(todoDraft.aiPlan || '').trim();
           const payload = {
@@ -691,9 +703,9 @@
             description: description || undefined,
             aiConsideration:
               aiConsideration || `基于标题“${title}”形成的待办事项。`,
-            decisionReason:
-              decisionReason || '由用户在待办池中手动创建。',
-            aiPlan: aiPlan || `建议按步骤执行：拆分任务、设定截止时间、逐步完成。`,
+            decisionReason: decisionReason || '由用户在待办池中手动创建。',
+            aiPlan:
+              aiPlan || `建议按步骤执行：拆分任务、设定截止时间、逐步完成。`,
           };
           const res = await api.createTodo(payload);
           if (res) {
@@ -1575,8 +1587,20 @@
 
         return (
           <div className="flex h-screen bg-white text-gray-900 font-sans overflow-hidden">
+            {/* 移动端侧边栏遮罩 */}
+            {isSidebarOpen && (
+              <div
+                className="fixed inset-0 z-40 bg-black/20 md:hidden"
+                onClick={() => setIsSidebarOpen(false)}
+              />
+            )}
+
             {/* 侧边栏 */}
-            <aside className="hidden md:flex w-64 shrink-0 bg-gray-50 border-r border-gray-200 flex-col h-full">
+            <aside
+              className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-50 border-r border-gray-200 flex flex-col h-full transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0 ${
+                isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+              }`}
+            >
               <div className="p-4 border-b border-gray-200 flex flex-col gap-2">
                 <button
                   onClick={handleNewChat}
@@ -1648,9 +1672,16 @@
             </aside>
 
             {/* 主区域 */}
-            <main className="flex-1 flex flex-col h-full relative bg-white">
+            <main className="flex-1 flex flex-col h-full relative bg-white w-full">
               {/* Tab Header */}
               <header className="relative h-16 border-b border-gray-100 flex items-center justify-center shrink-0 bg-white z-10">
+                <button
+                  onClick={() => setIsSidebarOpen(true)}
+                  className="absolute left-4 p-2 text-gray-500 hover:text-black transition-colors rounded-full hover:bg-gray-100 md:hidden"
+                  title="菜单"
+                >
+                  <Menu size={20} />
+                </button>
                 <div className="flex p-1 bg-gray-100 rounded-full w-64 shadow-inner">
                   <button
                     onClick={() => setActiveTab('chat')}
@@ -1713,13 +1744,15 @@
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-2 pl-3">
                           <button
                             onClick={() => setAutoScroll((v) => !v)}
-                            className={`h-8 px-3 flex items-center gap-2 rounded-full border transition-all ${
+                            className={`h-8 px-2 md:px-3 flex items-center gap-2 rounded-full border transition-all ${
                               autoScroll
                                 ? 'bg-black text-white border-black'
                                 : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
                             } shadow-sm`}
                           >
-                            <span className="text-xs">跟随置底</span>
+                            <span className="text-xs hidden md:inline">
+                              跟随置底
+                            </span>
                             <span
                               className={`inline-block w-1.5 h-1.5 rounded-full ${
                                 autoScroll ? 'bg-white' : 'bg-gray-400'
@@ -1760,7 +1793,7 @@
                             }
                           }}
                           placeholder="输入消息... (输入 '计划' 体验审批流程)"
-                          className="w-full bg-white border-0 ring-1 ring-gray-200 rounded-3xl pl-32 pr-16 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-black/5 resize-none shadow-lg transition-shadow"
+                          className="w-full bg-white border-0 ring-1 ring-gray-200 rounded-3xl pl-14 md:pl-32 pr-16 py-3.5 text-sm focus:outline-none focus:ring-2 focus:ring-black/5 resize-none shadow-lg transition-shadow"
                           rows={1}
                           disabled={isTyping}
                           ref={inputRef}
@@ -1999,7 +2032,9 @@
                                   className="h-8 px-2 border border-gray-200 rounded text-sm bg-white"
                                 >
                                   <option value="pending">pending</option>
-                                  <option value="in_progress">in_progress</option>
+                                  <option value="in_progress">
+                                    in_progress
+                                  </option>
                                   <option value="done">done</option>
                                   <option value="cancelled">cancelled</option>
                                 </select>
@@ -2012,7 +2047,9 @@
                                 </button>
                               </div>
                             </div>
-                            {(t.aiConsideration || t.decisionReason || t.aiPlan) && (
+                            {(t.aiConsideration ||
+                              t.decisionReason ||
+                              t.aiPlan) && (
                               <div className="mt-3 space-y-2">
                                 {t.aiConsideration && (
                                   <div className="text-sm text-gray-700">
