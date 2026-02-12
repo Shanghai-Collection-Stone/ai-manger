@@ -105,9 +105,8 @@ export class ChatMainController {
     @Body() body: ChatRequest,
     @Req() req: Request,
   ): Promise<ChatResponse> {
-    // 设置默认模型为 deepseek-chat
-    if (!body.provider) body.provider = 'deepseek';
-    if (!body.model) body.model = 'deepseek-chat';
+    if (!body.provider) body.provider = 'nvidia';
+    if (!body.model) body.model = 'deepseek-ai/deepseek-v3.1-terminus';
     if (!body.ip) {
       const remote = req.ip || req.socket?.remoteAddress || '';
       body.ip = remote || undefined;
@@ -134,15 +133,15 @@ export class ChatMainController {
   stream(
     @Query('sessionId') sessionId: string,
     @Query('input') input: string,
-    @Query('provider') provider?: 'gemini' | 'deepseek',
+    @Query('provider') provider?: 'gemini' | 'deepseek' | 'nvidia',
     @Query('model') model?: string,
     @Query('temperature') temperature?: number,
     @Query('recursionLimit') recursionLimit?: string,
     @Req() req?: Request,
   ): Observable<MessageEvent> {
-    // 设置默认模型为 deepseek-chat
-    const finalProvider = provider ?? 'deepseek';
-    const finalModel = model ?? 'deepseek-chat';
+    // 设置默认模型为 kimi-k2-instruct
+    const finalProvider = provider ?? 'nvidia';
+    const finalModel = model ?? 'deepseek-ai/deepseek-v3.1-terminus';
     const rl = recursionLimit ? Number(recursionLimit) : undefined;
     const remoteIp = req ? req.ip || req.socket?.remoteAddress || '' : '';
     const now = new Date().toISOString();
@@ -164,8 +163,8 @@ export class ChatMainController {
     @Req() req: Request,
     @Res() res: Response,
   ): void {
-    if (!body.provider) body.provider = 'deepseek';
-    if (!body.model) body.model = 'deepseek-chat';
+    if (!body.provider) body.provider = 'nvidia';
+    if (!body.model) body.model = 'deepseek-ai/deepseek-v3.1-terminus';
     if (!body.ip) {
       const remoteFromReq = typeof req.ip === 'string' ? req.ip : '';
       const remoteFromSocket =

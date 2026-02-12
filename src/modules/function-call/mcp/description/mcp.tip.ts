@@ -7,7 +7,7 @@ export const moduleTip = {
   moduleName: 'MCP-Function-Call',
   purpose: '为 AI Agent 提供 MCP 资源检索/读取与专用文件录入能力',
   description:
-    '该模块实现一组与 MCP 兼容的工具：列出资源、读取资源以及将文本/二进制文件录入到专用目录中。AI Agent 可直接调用这些工具以访问或管理上下文资源。',
+    '该模块实现 MCP 资源工具与原生 MCP 工具加载能力：列出资源、读取资源、文件录入，并将 MCP 服务端暴露的工具提供给 Agent 使用，以访问或管理上下文资源。',
   keywords: [
     'mcp',
     'adapters',
@@ -15,6 +15,7 @@ export const moduleTip = {
     'ingest',
     'tool',
     'function-call',
+    'batch-task',
     'servers',
     'mcp-resources',
   ],
@@ -26,7 +27,7 @@ export const moduleTip = {
     'node:fs',
     'node:path',
   ],
-  lastUpdated: '2026-01-27',
+  lastUpdated: '2026-02-05',
   files: {
     '服务/Service': 'src/modules/function-call/mcp/services/mcp.service.ts',
     '存储/Storage':

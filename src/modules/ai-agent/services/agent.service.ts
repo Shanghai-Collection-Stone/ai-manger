@@ -12,6 +12,7 @@ import {
   HumanMessage,
   SystemMessage,
   AIMessageChunk,
+  ToolMessage,
 } from '@langchain/core/messages';
 import {
   createAgent,
@@ -123,6 +124,18 @@ export class AgentService {
         },
         modelKwargs: {
           response_format: config.responseFormat,
+        },
+      });
+    }
+    if (config.provider === 'nvidia') {
+      const apiKey = process.env.NVIDIA_API_KEY ?? '';
+      console.log('nvidia model', apiKey, config.model);
+      model = new ChatOpenAI({
+        model: config.model || 'deepseek-ai/deepseek-v3.1-terminus',
+        temperature: config.temperature,
+        apiKey,
+        configuration: {
+          baseURL: 'https://integrate.api.nvidia.com/v1',
         },
       });
     }
@@ -288,9 +301,65 @@ export class AgentService {
       { messages: input.messages },
       { ...preOption() },
     );
+
+    const idToName = new Map<string, string>();
+    const toolResults: { name?: unknown; output?: unknown }[] = [];
+    let lastToolCalls: unknown[] | undefined;
+    for (const m of state.messages) {
+      if (m instanceof AIMessage) {
+        const tcs = (m as unknown as { tool_calls?: unknown }).tool_calls;
+        if (Array.isArray(tcs) && tcs.length > 0) {
+          lastToolCalls = tcs as unknown[];
+          for (const tc of tcs) {
+            const rec =
+              tc && typeof tc === 'object'
+                ? (tc as Record<string, unknown>)
+                : undefined;
+            const idVal = rec?.['id'];
+            const nameVal = rec?.['name'];
+            const id = typeof idVal === 'string' ? idVal : undefined;
+            const name = typeof nameVal === 'string' ? nameVal : undefined;
+            if (id && name) idToName.set(id, name);
+          }
+        }
+      }
+      if (m instanceof ToolMessage) {
+        const rec = m as unknown as Record<string, unknown>;
+        const nameVal = rec['name'];
+        const toolCallIdVal = rec['tool_call_id'] ?? rec['toolCallId'];
+        const additionalKw =
+          rec['additional_kwargs'] &&
+          typeof rec['additional_kwargs'] === 'object'
+            ? (rec['additional_kwargs'] as Record<string, unknown>)
+            : undefined;
+        const additionalToolCallIdVal = additionalKw?.['tool_call_id'];
+
+        const toolCallId =
+          typeof toolCallIdVal === 'string'
+            ? toolCallIdVal
+            : typeof additionalToolCallIdVal === 'string'
+              ? additionalToolCallIdVal
+              : undefined;
+
+        const toolName =
+          typeof nameVal === 'string'
+            ? nameVal
+            : toolCallId
+              ? idToName.get(toolCallId)
+              : undefined;
+        const content = (m as unknown as { content?: unknown }).content;
+        toolResults.push({ name: toolName, output: content });
+      }
+    }
+
     for (let i = state.messages.length - 1; i >= 0; i--) {
       const msg = state.messages[i];
       if (msg instanceof AIMessage || msg instanceof AIMessageChunk) {
+        const out = msg as unknown as Record<string, unknown>;
+        if (toolResults.length > 0) out['tool_results'] = toolResults;
+        if (!Array.isArray(out['tool_calls']) && Array.isArray(lastToolCalls)) {
+          out['tool_calls'] = lastToolCalls;
+        }
         return msg;
       }
     }
@@ -329,8 +398,18 @@ export class AgentService {
     );
 
     let finalOutput: any = null;
-    const runIdHaxToolid = new Map<string, string>();
-    const runIdToToolName = new Map<string, string>();
+    const toolDebug =
+      process.env.TOOL_DEBUG === '1'
+        ? true
+        : process.env.TOOL_DEBUG === '0'
+          ? false
+          : process.env.NODE_ENV !== 'production';
+    const toolCallIdToToolName = new Map<string, string>();
+    const startedToolCallIds = new Set<string>();
+    const toolInputEmittedIds = new Set<string>();
+    const pendingInputToolIdsByName = new Map<string, string[]>();
+    const toolChunkCount = new Map<string, number>();
+    const debugToolNames = new Set<string>(['xhs_batch_publish']);
     for await (const event of stream) {
       const data = event.data as {
         chunk?: AIMessageChunk;
@@ -373,51 +452,228 @@ export class AgentService {
           // 处理工具调用流
           if (chunk.tool_call_chunks?.length) {
             for (const tc of chunk.tool_call_chunks) {
-              if (tc.id) {
-                runIdHaxToolid.set(tc.id, event.run_id);
-                if (typeof tc.name === 'string') {
-                  runIdToToolName.set(event.run_id, tc.name);
+              const toolCallId = typeof tc.id === 'string' ? tc.id : undefined;
+              if (toolCallId && typeof tc.name === 'string') {
+                toolCallIdToToolName.set(toolCallId, tc.name);
+              }
+
+              if (toolCallId && !startedToolCallIds.has(toolCallId)) {
+                startedToolCallIds.add(toolCallId);
+                let initialArgs: unknown = undefined;
+                if (typeof tc.args === 'string' && tc.args.trim().length > 0) {
+                  try {
+                    initialArgs = JSON.parse(tc.args) as unknown;
+                  } catch {
+                    initialArgs = tc.args;
+                  }
+                } else if (
+                  typeof tc.args !== 'undefined' &&
+                  typeof tc.args !== 'string'
+                ) {
+                  initialArgs = tc.args;
+                }
+
+                if (typeof initialArgs !== 'undefined') {
+                  toolInputEmittedIds.add(toolCallId);
+                } else {
+                  const toolName =
+                    (typeof tc.name === 'string' ? tc.name : undefined) ??
+                    toolCallIdToToolName.get(toolCallId) ??
+                    '';
+                  if (toolName) {
+                    const list = pendingInputToolIdsByName.get(toolName) ?? [];
+                    if (!list.includes(toolCallId)) {
+                      list.push(toolCallId);
+                      pendingInputToolIdsByName.set(toolName, list);
+                    }
+                  }
+                }
+                if (toolDebug && debugToolNames.has(String(tc.name ?? ''))) {
+                  console.log('[Agent.stream] tool_start', {
+                    id: toolCallId,
+                    name: tc.name,
+                    inputType: typeof initialArgs,
+                  });
                 }
                 yield {
                   type: 'tool_start',
                   data: {
+                    id: toolCallId,
                     name:
                       (typeof tc.name === 'string'
                         ? tc.name
-                        : runIdToToolName.get(event.run_id)) || '',
-                    input: data.input,
-                    id: event.run_id,
+                        : toolCallIdToToolName.get(toolCallId)) || '',
+                    input: initialArgs,
                   },
                 };
-                break;
               }
-              yield {
-                type: 'tool_chunk',
-                data: {
-                  id: event.run_id,
-                  name: tc.name,
-                  args: tc.args,
-                  index: tc.index,
-                },
-              };
+
+              if (toolCallId && typeof tc.args === 'string' && tc.args.length) {
+                const nextCount = (toolChunkCount.get(toolCallId) ?? 0) + 1;
+                toolChunkCount.set(toolCallId, nextCount);
+                if (
+                  toolDebug &&
+                  nextCount <= 3 &&
+                  debugToolNames.has(String(tc.name ?? ''))
+                ) {
+                  console.log('[Agent.stream] tool_chunk', {
+                    id: toolCallId,
+                    chunk: nextCount,
+                    argsLen: tc.args.length,
+                  });
+                }
+                yield {
+                  type: 'tool_chunk',
+                  data: {
+                    id: toolCallId,
+                    name: tc.name,
+                    args: tc.args,
+                    index: tc.index,
+                  },
+                };
+              }
+
+              if (
+                toolCallId &&
+                tc.args &&
+                typeof tc.args !== 'string' &&
+                typeof tc.args !== 'undefined'
+              ) {
+                let rawArgs = '';
+                try {
+                  rawArgs = JSON.stringify(tc.args);
+                } catch {
+                  rawArgs = String(tc.args);
+                }
+                if (rawArgs.length > 0) {
+                  const nextCount = (toolChunkCount.get(toolCallId) ?? 0) + 1;
+                  toolChunkCount.set(toolCallId, nextCount);
+                  if (
+                    toolDebug &&
+                    nextCount <= 3 &&
+                    debugToolNames.has(String(tc.name ?? ''))
+                  ) {
+                    console.log('[Agent.stream] tool_chunk', {
+                      id: toolCallId,
+                      chunk: nextCount,
+                      argsLen: rawArgs.length,
+                    });
+                  }
+                  yield {
+                    type: 'tool_chunk',
+                    data: {
+                      id: toolCallId,
+                      name: tc.name,
+                      args: rawArgs,
+                      index: tc.index,
+                    },
+                  };
+                }
+              }
             }
           }
           break;
         }
-        case 'on_tool_start':
+        case 'on_tool_start': {
+          const dataRec = data as unknown as Record<string, unknown>;
+          const toolCall = dataRec['tool_call'];
+          const toolCallId =
+            dataRec['tool_call_id'] ??
+            (toolCall && typeof toolCall === 'object'
+              ? (toolCall as Record<string, unknown>)['id']
+              : undefined);
+          let toolCallIdStr =
+            typeof toolCallId === 'string' && toolCallId.trim().length > 0
+              ? toolCallId
+              : undefined;
+
+          const toolName = typeof event.name === 'string' ? event.name : '';
+          if (!toolCallIdStr && toolName) {
+            const list = pendingInputToolIdsByName.get(toolName);
+            const candidate = Array.isArray(list) ? list[0] : undefined;
+            if (typeof candidate === 'string' && candidate.length > 0) {
+              toolCallIdStr = candidate;
+            }
+          }
+
+          const inputVal = dataRec['input'];
+          if (
+            toolCallIdStr &&
+            typeof inputVal !== 'undefined' &&
+            !toolInputEmittedIds.has(toolCallIdStr)
+          ) {
+            const id = toolCallIdStr;
+            startedToolCallIds.add(id);
+            toolInputEmittedIds.add(id);
+            if (toolName) {
+              const list = pendingInputToolIdsByName.get(toolName);
+              if (Array.isArray(list)) {
+                pendingInputToolIdsByName.set(
+                  toolName,
+                  list.filter((x) => x !== id),
+                );
+              }
+            }
+            yield {
+              type: 'tool_start',
+              data: {
+                id,
+                name: toolCallIdToToolName.get(id) ?? event.name ?? '',
+                input: inputVal,
+              },
+            };
+          }
           break;
-        case 'on_tool_end':
+        }
+        case 'on_tool_end': {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          const toolCallId = data.output?.tool_call_id as unknown;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          const toolCallIdAlt = data.output?.toolCallId as unknown;
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          const additionalKwRaw = data.output?.additional_kwargs as unknown;
+          const additionalKw =
+            additionalKwRaw && typeof additionalKwRaw === 'object'
+              ? (additionalKwRaw as Record<string, unknown>)
+              : undefined;
+          const toolCallIdAlt2 = additionalKw?.['tool_call_id'];
+          const toolCallIdStr =
+            typeof toolCallId === 'string'
+              ? toolCallId
+              : typeof toolCallIdAlt === 'string'
+                ? toolCallIdAlt
+                : typeof toolCallIdAlt2 === 'string'
+                  ? toolCallIdAlt2
+                  : undefined;
+          if (
+            toolDebug &&
+            toolCallIdStr &&
+            debugToolNames.has(toolCallIdToToolName.get(toolCallIdStr) ?? '')
+          ) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            const outContent = data.output?.content as unknown;
+            console.log('[Agent.stream] tool_end', {
+              id: toolCallIdStr,
+              name: toolCallIdStr
+                ? toolCallIdToToolName.get(toolCallIdStr)
+                : undefined,
+              outputType: typeof outContent,
+            });
+          }
+
           yield {
             type: 'tool_end',
             data: {
-              name: runIdToToolName.get(event.run_id) ?? event.name,
+              name:
+                (toolCallIdStr && toolCallIdToToolName.get(toolCallIdStr)) ??
+                event.name,
               // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
               output: data.output?.content,
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
-              id: runIdHaxToolid.get(event.data.output?.tool_call_id),
+              id: toolCallIdStr,
             },
           };
           break;
+        }
         case 'on_chain_end':
           // 记录最终输出，用于生成end事件（如果是根链结束）
           if (event.name === 'AgentExecutor' || !event.name) {

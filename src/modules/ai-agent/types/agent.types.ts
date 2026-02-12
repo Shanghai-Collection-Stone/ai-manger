@@ -11,7 +11,7 @@ import {
  * @keywords-cn 提供方, 模型, 枚举
  * @keywords-en provider, model, enum
  */
-export type AgentProvider = 'gemini' | 'deepseek';
+export type AgentProvider = 'gemini' | 'deepseek' | 'nvidia';
 
 /**
  * @title Agent配置 Agent Config

@@ -90,6 +90,10 @@ async function bootstrap() {
     app.use('/pages', express.static(pagesRoot));
   }
 
+  app.use('/favicon.ico', (_req: express.Request, res: express.Response) => {
+    res.status(204).end();
+  });
+
   app.use('/static', express.static(join(process.cwd(), 'public')));
   await app.listen(process.env.PORT ?? 3011);
   console.log(`Application is running on: ${await app.getUrl()}`);

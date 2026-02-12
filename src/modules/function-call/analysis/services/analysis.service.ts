@@ -71,17 +71,6 @@ export class AnalysisFunctionCallService {
     const dataAnalysis = tool(
       async ({ question, provider, model, ip, now }, config) => {
         if (streamWriter) streamWriter(`Analyzing request: ${question}`);
-        let context: BaseMessage[] | undefined;
-        if (config && typeof config === 'object') {
-          const cfgObj = config as Record<string, unknown>;
-          const ctxObj = cfgObj['context'];
-          if (ctxObj && typeof ctxObj === 'object') {
-            const cur = (ctxObj as Record<string, unknown>)['currentContext'];
-            if (Array.isArray(cur)) {
-              context = cur as BaseMessage[];
-            }
-          }
-        }
 
         const resolvedNow =
           typeof now === 'string' && now.trim().length > 0
@@ -112,6 +101,7 @@ export class AnalysisFunctionCallService {
         const sys = [
           '你是一名严谨、务实的数据分析 Agent。',
           '目标：以最小推理成本与最少工具调用，在单次流程内一次性获取所需数据并返回最终答案。',
+          '为了检索速度,你可以并发返回Tool call,我将并发执行返回结果',
           '所有数据纬度都以给人理解为准,比如标识用户的就不用ID,用username等来考虑,理解为用户更方便记忆和操作。',
           '在进行任何复杂数据查询前，必须优先调用 search_thought 搜索相似的历史经验，而不是直接进行 schema_search 或数据查询。',
           '[重要] search_thought 得到历史经验后,要分析是否有本次查询需要的表结构,从而达成快速搜索的目的',
@@ -167,17 +157,16 @@ export class AnalysisFunctionCallService {
           JSON.stringify(jsonSchema, null, 2),
         ].join('\n');
 
-        const messages: BaseMessage[] = [
-          ...(context ?? []),
-          ...this.agent.toMessages([{ role: 'user', content: question }]),
-        ];
+        const messages: BaseMessage[] = this.agent.toMessages([
+          { role: 'user', content: question },
+        ]);
 
         // 使用所有数据源工具
         const tools = this.getAllDataSourceTools();
 
         const cfg = {
-          provider: provider ?? 'deepseek',
-          model: model ?? 'deepseek-chat',
+          provider: provider ?? 'nvidia',
+          model: model ?? 'deepseek-ai/deepseek-v3.1-terminus',
           noPostHook: true,
           temperature: 0.1,
           tools,
@@ -187,12 +176,19 @@ export class AnalysisFunctionCallService {
         let finalContent = '';
         try {
           if (streamWriter) streamWriter('Searching related schemas...');
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-          let threadId: string = config.context['threadId'] ?? 'analysis';
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
-          let checkpointId: string = config.context['checkpointId'] ?? 'root';
+          let threadId = 'analysis';
+          let checkpointId = 'root';
           if (config && typeof config === 'object') {
             const cfgObj = config as Record<string, unknown>;
+
+            const ctxObj = cfgObj['context'];
+            if (ctxObj && typeof ctxObj === 'object') {
+              const t1 = (ctxObj as Record<string, unknown>)['threadId'];
+              const c1 = (ctxObj as Record<string, unknown>)['checkpointId'];
+              if (typeof t1 === 'string') threadId = t1;
+              if (typeof c1 === 'string') checkpointId = c1;
+            }
+
             const configurable = cfgObj['configurable'];
             if (configurable && typeof configurable === 'object') {
               const t = (configurable as Record<string, unknown>)['thread_id'];
@@ -208,13 +204,15 @@ export class AnalysisFunctionCallService {
           const ai = await this.agent.runWithMessages({
             config: {
               ...cfg,
-              // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-              context: config.context,
+              context: {
+                threadId: `sub_${threadId}`,
+                checkpointId,
+              },
             },
             messages,
             callOption: {
               configurable: {
-                thread_id: threadId,
+                thread_id: 'sub_' + threadId,
                 checkpoint_ns: 'analysis',
                 checkpoint_id: checkpointId,
               },
@@ -239,20 +237,11 @@ export class AnalysisFunctionCallService {
           'Data Analysis & Retrieval Tool. Call this tool whenever the user asks for data, statistics, specific records, or database information. Supports multiple data sources: main database (AI system) and super-party (mini program). It AUTOMATICALLY infers schemas and executes queries.',
         schema: z.object({
           question: z.string().describe('Analysis question'),
-          context: z
-            .array(
-              z.object({
-                role: z.enum(['system', 'user', 'assistant']),
-                content: z.string(),
-              }),
-            )
-            .optional()
-            .describe('Conversation context'),
           limit: z
             .number()
             .optional()
             .describe('Preferred max rows (default 50, max 200)'),
-          provider: z.enum(['gemini', 'deepseek']).optional(),
+          provider: z.enum(['gemini', 'deepseek', 'nvidia']).optional(),
           model: z.string().optional(),
           ip: z.string().optional().describe('Client IP address'),
           now: z.string().optional().describe('Current time in ISO string'),

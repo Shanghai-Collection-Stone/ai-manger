@@ -105,7 +105,62 @@ export class McpAdaptersService implements OnModuleInit {
    * @since 2026-01-24
    */
   getTools(): CreateAgentParams['tools'] {
-    return this.toolsCache;
+    return this.toolsCache ?? [];
+  }
+
+  async invokeTool(toolName: string, input: unknown): Promise<unknown> {
+    const tools = this.toolsCache ?? [];
+    const t = tools.find((x) => (x as { name?: string }).name === toolName);
+    if (!t) throw new Error(`MCP_TOOL_NOT_FOUND:${toolName}`);
+
+    console.log(
+      `[invokeTool] Tool: ${toolName}, Input:`,
+      JSON.stringify(input),
+    );
+
+    const anyT = t as {
+      invoke?: (i: unknown) => Promise<unknown>;
+      call?: (i: unknown) => Promise<unknown>;
+      _call?: (i: unknown) => Promise<unknown>;
+    };
+
+    let rawResult: unknown;
+    if (typeof anyT.invoke === 'function') {
+      rawResult = await anyT.invoke(input);
+    } else if (typeof anyT.call === 'function') {
+      rawResult = await anyT.call(input);
+    } else if (typeof anyT._call === 'function') {
+      rawResult = await anyT._call(input);
+    } else {
+      throw new Error(`MCP_TOOL_NOT_INVOKABLE:${toolName}`);
+    }
+
+    console.log(`[invokeTool] Raw result type:`, typeof rawResult);
+
+    // 如果返回的是字符串，尝试解析为 JSON
+    if (typeof rawResult === 'string') {
+      try {
+        const parsed = JSON.parse(rawResult) as unknown;
+        console.log(`[invokeTool] Parsed JSON result:`, parsed);
+        return parsed;
+      } catch {
+        // 不是有效 JSON，返回原始字符串
+        return rawResult;
+      }
+    }
+
+    return rawResult;
+  }
+
+  /**
+   * @description 调用 MCP 工具并返回解析后的对象
+   */
+  async invokeToolParsed<T = Record<string, unknown>>(
+    toolName: string,
+    input: unknown,
+  ): Promise<T> {
+    const result = await this.invokeTool(toolName, input);
+    return result as T;
   }
 
   /**

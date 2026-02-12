@@ -9,7 +9,7 @@ import { BaseMessage } from 'langchain';
 export interface ChatRequest {
   sessionId: string;
   input: string;
-  provider?: 'gemini' | 'deepseek';
+  provider?: 'gemini' | 'deepseek' | 'nvidia';
   model?: string;
   temperature?: number;
   recursionLimit?: number;

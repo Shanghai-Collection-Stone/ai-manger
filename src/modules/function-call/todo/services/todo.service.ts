@@ -70,7 +70,7 @@ export class TodoFunctionCallService {
           decisionReason: z.string().optional().describe('Decision reasoning'),
           aiPlan: z.string().optional().describe('AI plan for the user'),
           status: z
-            .enum(['pending', 'in_progress', 'done', 'cancelled'])
+            .enum(['pending', 'in_progress', 'done', 'failed', 'cancelled'])
             .optional()
             .describe('Todo status'),
         }),

@@ -11,6 +11,10 @@ import { ChatMainModule } from './modules/chat-main/chat-main.module';
 import { EmbeddingModule } from './modules/shared/embedding/embedding.module';
 import { DataSourceModule } from './modules/data-source/data-source.module';
 import { SkillThoughtModule } from './modules/skill-thought/skill-thought.module';
+import { BatchTaskModule } from './modules/batch-task/batch-task.module';
+import { GalleryModule } from './modules/gallery/gallery.module';
+import { CanvasModule } from './modules/canvas/canvas.module';
+import { GraphModule } from './modules/graph/graph.module';
 
 @Module({
   imports: [
@@ -27,6 +31,10 @@ import { SkillThoughtModule } from './modules/skill-thought/skill-thought.module
     ChatMainModule,
     DataSourceModule,
     SkillThoughtModule,
+    BatchTaskModule,
+    GalleryModule,
+    CanvasModule,
+    GraphModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -10,12 +10,13 @@ import { GoogleGenerativeAIEmbeddings } from '@langchain/google-genai';
 @Injectable()
 export class EmbeddingService {
   private readonly embeddings: GoogleGenerativeAIEmbeddings;
+  private readonly dim = 768;
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY ?? '';
     this.embeddings = new GoogleGenerativeAIEmbeddings({
       apiKey,
-      model: 'text-embedding-004',
+      model: 'gemini-embedding-001',
     });
   }
 
@@ -29,14 +30,14 @@ export class EmbeddingService {
    */
   async embedText(text: string): Promise<number[]> {
     if (!text || text.trim().length === 0) {
-      return new Array<number>(768).fill(0);
+      return new Array<number>(this.dim).fill(0);
     }
     try {
       const vector = await this.embeddings.embedQuery(text);
       return vector;
     } catch (error) {
       console.error('Embedding failed:', error);
-      return new Array<number>(768).fill(0);
+      return new Array<number>(this.dim).fill(0);
     }
   }
 
@@ -57,7 +58,7 @@ export class EmbeddingService {
       return vectors;
     } catch (error) {
       console.error('Batch embedding failed:', error);
-      return texts.map(() => new Array<number>(768).fill(0));
+      return texts.map(() => new Array<number>(this.dim).fill(0));
     }
   }
 

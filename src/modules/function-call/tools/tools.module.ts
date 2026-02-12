@@ -6,6 +6,10 @@ import { TitleFunctionCallModule } from '../title/title.module.js';
 import { SkillThoughtModule } from '../../skill-thought/skill-thought.module.js';
 import { McpFunctionCallModule } from '../mcp/mcp.module.js';
 import { TodoFunctionCallModule } from '../todo/todo.module.js';
+import { GraphModule } from '../../graph/graph.module.js';
+import { GraphWorkflowFunctionCallService } from './services/graph-workflow.service.js';
+import { CanvasModule } from '../../canvas/canvas.module.js';
+import { GalleryModule } from '../../gallery/gallery.module.js';
 
 /**
  * @title 工具模块 Tools Module
@@ -19,8 +23,11 @@ import { TodoFunctionCallModule } from '../todo/todo.module.js';
     SkillThoughtModule,
     McpFunctionCallModule,
     TodoFunctionCallModule,
+    GraphModule,
+    CanvasModule,
+    GalleryModule,
   ],
-  providers: [ToolsService],
+  providers: [ToolsService, GraphWorkflowFunctionCallService],
   exports: [ToolsService],
 })
 export class FunctionCallToolsModule {}

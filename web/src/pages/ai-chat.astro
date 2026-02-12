@@ -1,0 +1,75 @@
+---
+import AiChatApp from '../ui/AiChatApp.jsx';
+import '../styles/global.css';
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 智能助手</title>
+
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"
+    />
+
+    <style>
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #e5e7eb;
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #d1d5db;
+      }
+
+      .markdown-body {
+        font-family: inherit;
+        font-size: 0.925rem;
+        line-height: 1.6;
+        background-color: transparent !important;
+      }
+      .markdown-body p {
+        margin-bottom: 0.75em;
+      }
+      .markdown-body pre {
+        background-color: #f6f8fa;
+        border-radius: 8px;
+        padding: 12px;
+        border: 1px solid #e5e7eb;
+        overflow-x: auto;
+        max-width: 100%;
+      }
+
+      .bg-black .markdown-body {
+        color: white !important;
+      }
+      .bg-black .markdown-body code {
+        background-color: rgba(255, 255, 255, 0.2);
+        color: white;
+      }
+      .bg-black .markdown-body pre {
+        background-color: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+      .bg-black .markdown-body a {
+        color: #60a5fa;
+      }
+    </style>
+  </head>
+  <body>
+    <AiChatApp client:only="react" />
+  </body>
+</html>

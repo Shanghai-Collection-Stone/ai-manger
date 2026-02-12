@@ -15,6 +15,11 @@ export const moduleTip = {
     '控制器',
     '服务',
     '图片上传',
+    '工具调用',
+    '超时控制',
+    'topic_orchestrate',
+    'task-it',
+    'xhs_batch_publish',
   ],
   keywordsEn: [
     'chat main',
@@ -24,6 +29,11 @@ export const moduleTip = {
     'controller',
     'service',
     'image upload',
+    'tool call',
+    'timeout',
+    'topic_orchestrate',
+    'task-it',
+    'xhs_batch_publish',
   ],
   files: {
     '控制器/Controller': 'src/modules/chat-main/controller/chat.controller.ts',
@@ -69,7 +79,8 @@ export const moduleTip = {
     },
   },
   description:
-    '主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力。',
+    '主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。',
+  lastUpdated: '2026-02-05',
 };
 
 function sha(text: string): string {

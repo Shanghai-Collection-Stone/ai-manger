@@ -29,7 +29,7 @@ export interface DataSourceEntity {
    */
   description: string;
   /**
-   * 向量字段（768维，Google Embeddings text-embedding-004）
+   * 向量字段（768维，Google Embeddings gemini-embedding-001）
    */
   embedding: number[];
   /**

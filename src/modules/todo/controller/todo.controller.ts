@@ -13,6 +13,10 @@ import type {
   TodoCreateInput,
   TodoUpdateInput,
 } from '../entities/todo.entity.js';
+import type {
+  TodoItemCreateInput,
+  TodoItemUpdateInput,
+} from '../entities/todo-item.entity.js';
 
 /**
  * @description 待办控制器，提供REST接口
@@ -22,6 +26,47 @@ import type {
 @Controller('todo')
 export class TodoController {
   constructor(private readonly todo: TodoService) {}
+
+  @Post(':todoId/items')
+  async createItem(
+    @Param('todoId') todoId: string,
+    @Body() input: Omit<TodoItemCreateInput, 'todoId'>,
+  ): Promise<Record<string, unknown>> {
+    const doc = await this.todo.createItem({
+      ...input,
+      todoId: Number(todoId),
+    });
+    return { item: { ...doc, _id: undefined } };
+  }
+
+  @Get(':todoId/items')
+  async listItems(
+    @Param('todoId') todoId: string,
+  ): Promise<Record<string, unknown>> {
+    const rows = await this.todo.listItems(Number(todoId));
+    return { items: rows };
+  }
+
+  @Get('items/:id')
+  async getItem(@Param('id') id: string): Promise<Record<string, unknown>> {
+    const doc = await this.todo.getItem(Number(id));
+    return { item: doc };
+  }
+
+  @Patch('items/:id')
+  async updateItem(
+    @Param('id') id: string,
+    @Body() input: Omit<TodoItemUpdateInput, 'id'>,
+  ): Promise<Record<string, unknown>> {
+    const doc = await this.todo.updateItem({ ...input, id: Number(id) });
+    return { item: doc };
+  }
+
+  @Delete('items/:id')
+  async removeItem(@Param('id') id: string): Promise<Record<string, unknown>> {
+    const ok = await this.todo.deleteItem(Number(id));
+    return { ok };
+  }
 
   /**
    * @description 创建待办

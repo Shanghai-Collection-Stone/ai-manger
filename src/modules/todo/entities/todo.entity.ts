@@ -15,7 +15,7 @@ export interface TodoEntity {
   aiConsideration: string;
   decisionReason: string;
   aiPlan: string;
-  status: 'pending' | 'in_progress' | 'done' | 'cancelled';
+  status: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -57,5 +57,5 @@ export interface TodoUpdateInput {
   aiConsideration?: string;
   decisionReason?: string;
   aiPlan?: string;
-  status?: 'pending' | 'in_progress' | 'done' | 'cancelled';
+  status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
 }

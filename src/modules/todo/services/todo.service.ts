@@ -5,6 +5,11 @@ import {
   TodoCreateInput,
   TodoUpdateInput,
 } from '../entities/todo.entity.js';
+import type {
+  TodoItemCreateInput,
+  TodoItemEntity,
+  TodoItemUpdateInput,
+} from '../entities/todo-item.entity.js';
 
 /**
  * @description 待办服务，提供序号ID的CRUD，并保证AI字段完整
@@ -16,10 +21,12 @@ import {
 @Injectable()
 export class TodoService {
   private readonly todos: Collection<TodoEntity>;
+  private readonly todoItems: Collection<TodoItemEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
 
   constructor(@Inject('DS_MONGO_DB') db: Db) {
     this.todos = db.collection<TodoEntity>('todos');
+    this.todoItems = db.collection<TodoItemEntity>('todo_items');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     void this.ensureIndexes();
   }
@@ -34,8 +41,16 @@ export class TodoService {
     await this.todos.createIndex({ id: 1 }, { unique: true });
     await this.todos.createIndex({ userId: 1 });
     await this.todos.createIndex({ status: 1 });
+    await this.todoItems.createIndex({ id: 1 }, { unique: true });
+    await this.todoItems.createIndex({ todoId: 1 });
+    await this.todoItems.createIndex({ userId: 1 });
+    await this.todoItems.createIndex({ status: 1 });
+    await this.todoItems.createIndex({ plannedAt: 1 });
     const exists = await this.counters.findOne({ _id: 'todos' });
     if (!exists) await this.counters.insertOne({ _id: 'todos', seq: 0 });
+    const existsItems = await this.counters.findOne({ _id: 'todo_items' });
+    if (!existsItems)
+      await this.counters.insertOne({ _id: 'todo_items', seq: 0 });
   }
 
   /**
@@ -47,6 +62,16 @@ export class TodoService {
   private async nextId(): Promise<number> {
     const res = await this.counters.findOneAndUpdate(
       { _id: 'todos' },
+      { $inc: { seq: 1 } },
+      { returnDocument: 'after', upsert: true, includeResultMetadata: true },
+    );
+    const seq = res.value?.seq;
+    return typeof seq === 'number' ? seq : 1;
+  }
+
+  private async nextItemId(): Promise<number> {
+    const res = await this.counters.findOneAndUpdate(
+      { _id: 'todo_items' },
       { $inc: { seq: 1 } },
       { returnDocument: 'after', upsert: true, includeResultMetadata: true },
     );
@@ -142,6 +167,61 @@ export class TodoService {
     return this.todos
       .find(filter, { projection: { _id: 0 } })
       .sort({ updatedAt: -1 })
+      .toArray();
+  }
+
+  async createItem(input: TodoItemCreateInput): Promise<TodoItemEntity> {
+    const parent = await this.todos.findOne({ id: input.todoId });
+    if (!parent) throw new Error('TODO_NOT_FOUND');
+
+    const now = new Date();
+    const id = await this.nextItemId();
+    const doc: TodoItemEntity = {
+      _id: new ObjectId(),
+      id,
+      todoId: input.todoId,
+      userId: parent.userId,
+      title: input.title,
+      description: input.description,
+      plannedAt: input.plannedAt,
+      status: input.status ?? 'pending',
+      stage: input.stage,
+      doneNote: input.doneNote,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.todoItems.insertOne(doc);
+    return doc;
+  }
+
+  async updateItem(input: TodoItemUpdateInput): Promise<TodoItemEntity | null> {
+    const now = new Date();
+    const upd: Record<string, unknown> = { updatedAt: now };
+    for (const [k, v] of Object.entries(input)) {
+      if (k === 'id') continue;
+      if (typeof v !== 'undefined') upd[k] = v;
+    }
+    const res = await this.todoItems.findOneAndUpdate(
+      { id: input.id },
+      { $set: upd },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
+  }
+
+  async deleteItem(id: number): Promise<boolean> {
+    const res = await this.todoItems.deleteOne({ id });
+    return res.deletedCount === 1;
+  }
+
+  async getItem(id: number): Promise<TodoItemEntity | null> {
+    return (await this.todoItems.findOne({ id })) ?? null;
+  }
+
+  async listItems(todoId: number): Promise<TodoItemEntity[]> {
+    return this.todoItems
+      .find({ todoId }, { projection: { _id: 0 } })
+      .sort({ plannedAt: 1, id: 1 })
       .toArray();
   }
 }

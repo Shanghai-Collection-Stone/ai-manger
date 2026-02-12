@@ -3,6 +3,18 @@
  * 用于 MongoDB 数据库迁移管理
  */
 
+const fs = require('fs');
+
+function loadEnvFile(filePath, override) {
+  if (!fs.existsSync(filePath)) return;
+  const dotenv = require('dotenv');
+  dotenv.config({ path: filePath, override: Boolean(override) });
+}
+
+loadEnvFile('.env', false);
+loadEnvFile('.env.development', true);
+loadEnvFile('.env.local', true);
+
 // 从环境变量读取配置
 const env = (process.env.NODE_ENV ?? '').toLowerCase();
 const isDev = env === 'development' || env === 'dev';
@@ -38,10 +50,6 @@ const config = {
   mongodb: {
     url: buildMongoUri(),
     databaseName: getDbName(),
-    options: {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    },
   },
   migrationsDir: 'migrations',
   changelogCollectionName: 'changelog',
