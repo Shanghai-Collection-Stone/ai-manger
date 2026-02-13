@@ -11,13 +11,16 @@ function loadEnvFile(filePath, override) {
   dotenv.config({ path: filePath, override: Boolean(override) });
 }
 
-loadEnvFile('.env', false);
-loadEnvFile('.env.development', true);
-loadEnvFile('.env.local', true);
+const baseEnv = (process.env.NODE_ENV ?? '').toLowerCase();
 
-// 从环境变量读取配置
-const env = (process.env.NODE_ENV ?? '').toLowerCase();
+loadEnvFile('.env', false);
+const env = (process.env.NODE_ENV ?? baseEnv).toLowerCase();
 const isDev = env === 'development' || env === 'dev';
+
+if (isDev) {
+  loadEnvFile('.env.development', false);
+  loadEnvFile('.env.local', true);
+}
 
 // 构建 MongoDB URI
 function buildMongoUri() {
