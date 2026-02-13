@@ -47,6 +47,34 @@ function guessMimeType(fileName) {
   return undefined;
 }
 
+function escapeRegex(s) {
+  return String(s || '').replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+function normalizePathKey(p) {
+  return String(p || '').replace(/\\/g, '/');
+}
+
+function buildLocalImageRelPath(fileName) {
+  return `public/uploads/local-image/${encodeURIComponent(String(fileName || ''))}`
+    .replace(/%2F/g, '/')
+    .replace(/%5C/gi, '/');
+}
+
+function canonicalLocalAbsPathToRel({ localDirAbs, absPath }) {
+  const p = normalizePathKey(absPath);
+  const absPrefix = `${normalizePathKey(localDirAbs)}/`;
+  if (p.startsWith(absPrefix)) {
+    const rawName = p.slice(absPrefix.length);
+    return buildLocalImageRelPath(rawName);
+  }
+  if (p.startsWith('public/uploads/local-image/')) {
+    const rawName = p.slice('public/uploads/local-image/'.length);
+    return buildLocalImageRelPath(rawName);
+  }
+  return p;
+}
+
 async function createImageThumbnail({ sourcePath, outputPath, maxWidth, maxHeight, quality }) {
   const src = String(sourcePath || '');
   const out = String(outputPath || '');
@@ -178,9 +206,10 @@ async function ensureGalleryIndexes({ images, groups }) {
 module.exports = {
   async up(db) {
     const userId = 'default';
-    const localDir = join(process.cwd(), 'public', 'uploads', 'local-image');
-    if (!fs.existsSync(localDir)) {
-      console.log(`[Migration] local image dir not found: ${localDir}`);
+    const localDirRel = join('public', 'uploads', 'local-image');
+    const localDirAbs = join(process.cwd(), localDirRel);
+    if (!fs.existsSync(localDirAbs)) {
+      console.log(`[Migration] local image dir not found: ${localDirAbs}`);
       return;
     }
 
@@ -217,7 +246,7 @@ module.exports = {
     }
 
     const fileNames = fs
-      .readdirSync(localDir, { withFileTypes: true })
+      .readdirSync(localDirAbs, { withFileTypes: true })
       .filter((d) => d && d.isFile && d.isFile())
       .map((d) => d.name)
       .filter(isImageFile);
@@ -227,23 +256,40 @@ module.exports = {
       return;
     }
 
-    const absPrefix = `^${localDir.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`;
+    const absPrefix = `^${escapeRegex(localDirAbs)}`;
+    const relPrefix = '^public/uploads/local-image/';
     const existing = await images
-      .find({ absPath: { $regex: absPrefix } }, { projection: { absPath: 1, thumbUrl: 1 } })
+      .find(
+        { $or: [{ absPath: { $regex: absPrefix } }, { absPath: { $regex: relPrefix } }] },
+        { projection: { _id: 1, absPath: 1, thumbUrl: 1 } },
+      )
       .toArray();
-    const existingAbs = new Set((existing || []).map((x) => String(x && x.absPath ? x.absPath : '')).filter(Boolean));
-    const missingThumbAbs = new Set(
+
+    const existingRel = new Set(
       (existing || [])
-        .filter((x) => x && typeof x.absPath === 'string' && (!x.thumbUrl || String(x.thumbUrl).trim().length === 0))
-        .map((x) => x.absPath),
+        .map((x) => canonicalLocalAbsPathToRel({ localDirAbs, absPath: x && x.absPath }))
+        .filter(Boolean),
+    );
+
+    const missingThumbByRel = new Map(
+      (existing || [])
+        .filter((x) => x && (!x.thumbUrl || String(x.thumbUrl).trim().length === 0))
+        .map((x) => [canonicalLocalAbsPathToRel({ localDirAbs, absPath: x.absPath }), x._id])
+        .filter((x) => x && x[0] && x[1]),
     );
 
     const localFiles = fileNames.map((fileName) => ({
       fileName,
-      absPath: join(localDir, fileName),
+      relPath: buildLocalImageRelPath(fileName),
+      fsPath: join(localDirAbs, fileName),
     }));
-    const toImport = localFiles.filter((x) => !existingAbs.has(x.absPath));
-    const toBackfillThumb = localFiles.filter((x) => missingThumbAbs.has(x.absPath));
+    const toImport = localFiles.filter((x) => !existingRel.has(x.relPath));
+    const toBackfillThumb = localFiles
+      .map((x) => {
+        const id = missingThumbByRel.get(x.relPath);
+        return id ? { ...x, _id: id } : null;
+      })
+      .filter(Boolean);
 
     if (toImport.length === 0 && toBackfillThumb.length === 0) {
       console.log('[Migration] all local-image files already imported and thumb-ready, skipping');
@@ -264,16 +310,16 @@ module.exports = {
     if (thumbCandidates.length > 0) {
       const concurrency = 2;
       await mapLimit(thumbCandidates, concurrency, async (x) => {
-        const t = await ensureThumbForLocalFile({ absPath: x.absPath, fileName: x.fileName });
+        const t = await ensureThumbForLocalFile({ absPath: x.fsPath, fileName: x.fileName });
         if (!t) return;
-        thumbMap.set(x.absPath, t);
+        thumbMap.set(x.relPath, t);
       });
     }
 
     const docs = toImport.map((x, idx) => {
-      const st = fs.statSync(x.absPath);
+      const st = fs.statSync(x.fsPath);
       const urlPath = `/static/uploads/local-image/${encodeURIComponent(x.fileName)}`;
-      const thumb = thumbMap.get(x.absPath);
+      const thumb = thumbMap.get(x.relPath);
       return {
         _id: new ObjectId(),
         id: start + idx,
@@ -283,7 +329,7 @@ module.exports = {
         fileName: x.fileName,
         url: urlPath,
         ...(thumb ? { thumbFileName: thumb.thumbFileName, thumbUrl: thumb.thumbUrl } : {}),
-        absPath: x.absPath,
+        absPath: x.relPath,
         mimeType: guessMimeType(x.fileName),
         size: typeof st.size === 'number' ? st.size : undefined,
         tags: ['local-image'],
@@ -303,16 +349,16 @@ module.exports = {
     if (toBackfillThumb.length > 0) {
       const updates = toBackfillThumb
         .map((x) => {
-          const t = thumbMap.get(x.absPath);
+          const t = thumbMap.get(x.relPath);
           if (!t) return null;
-          return { absPath: x.absPath, ...t };
+          return { _id: x._id, ...t };
         })
         .filter(Boolean);
 
       if (updates.length > 0) {
         await mapLimit(updates, 4, async (u) => {
           await images.updateOne(
-            { absPath: u.absPath, userId },
+            { _id: u._id, userId },
             {
               $set: {
                 thumbFileName: u.thumbFileName,
@@ -332,7 +378,8 @@ module.exports = {
 
   async down(db) {
     const userId = 'default';
-    const localDir = join(process.cwd(), 'public', 'uploads', 'local-image');
+    const localDirRel = join('public', 'uploads', 'local-image');
+    const localDirAbs = join(process.cwd(), localDirRel);
     const groupName = 'local-image';
     const groupMarker = 'migration:import-local-image-20260204';
 
@@ -341,7 +388,10 @@ module.exports = {
 
     await images.deleteMany({
       userId,
-      absPath: { $regex: `^${localDir.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}` },
+      $or: [
+        { absPath: { $regex: `^${escapeRegex(localDirAbs)}` } },
+        { absPath: { $regex: '^public/uploads/local-image/' } },
+      ],
       description: groupMarker,
     });
     await groups.deleteOne({ userId, name: groupName, description: groupMarker });

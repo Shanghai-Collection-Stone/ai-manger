@@ -123,34 +123,56 @@ async function ensureThumbForLocalFile({ absPath, fileName }) {
   };
 }
 
+function escapeRegex(s) {
+  return String(s || '').replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+}
+
+function normalizePathKey(p) {
+  return String(p || '').replace(/\\/g, '/');
+}
+
+function resolveLocalImageFsPath({ localDirAbs, storedAbsPath, fileName }) {
+  const p = normalizePathKey(storedAbsPath);
+  if (p.startsWith(normalizePathKey(localDirAbs))) return p;
+  if (p.startsWith('public/uploads/local-image/')) {
+    const rawName = p.slice('public/uploads/local-image/'.length);
+    return join(localDirAbs, rawName);
+  }
+  return join(localDirAbs, String(fileName || ''));
+}
+
 module.exports = {
   async up(db) {
     const userId = 'default';
-    const localDir = join(process.cwd(), 'public', 'uploads', 'local-image');
-    if (!fs.existsSync(localDir)) {
-      console.log(`[Migration] local image dir not found: ${localDir}`);
+    const localDirRel = join('public', 'uploads', 'local-image');
+    const localDirAbs = join(process.cwd(), localDirRel);
+    if (!fs.existsSync(localDirAbs)) {
+      console.log(`[Migration] local image dir not found: ${localDirAbs}`);
       return;
     }
 
-    const absPrefix = `^${localDir.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`;
+    const absPrefix = `^${escapeRegex(localDirAbs)}`;
+    const relPrefix = '^public/uploads/local-image/';
     const images = db.collection('gallery_images');
     const rows = await images
       .find(
         {
           userId,
-          absPath: { $regex: absPrefix },
+          $or: [{ absPath: { $regex: absPrefix } }, { absPath: { $regex: relPrefix } }],
           $or: [{ thumbUrl: { $exists: false } }, { thumbUrl: null }, { thumbUrl: '' }],
         },
-        { projection: { _id: 0, absPath: 1, fileName: 1, url: 1 } },
+        { projection: { _id: 1, absPath: 1, fileName: 1, url: 1 } },
       )
       .toArray();
 
     const targets = (Array.isArray(rows) ? rows : [])
       .map((r) => ({
-        absPath: String(r && r.absPath ? r.absPath : ''),
+        _id: r && r._id,
+        storedAbsPath: String(r && r.absPath ? r.absPath : ''),
         fileName: String(r && r.fileName ? r.fileName : ''),
+        fsPath: resolveLocalImageFsPath({ localDirAbs, storedAbsPath: r && r.absPath, fileName: r && r.fileName }),
       }))
-      .filter((x) => x.absPath && x.fileName);
+      .filter((x) => x._id && x.fileName && x.fsPath);
 
     if (targets.length === 0) {
       console.log('[Migration] no local-image rows need thumb backfill');
@@ -160,10 +182,10 @@ module.exports = {
     let okCount = 0;
     const concurrency = 2;
     await mapLimit(targets, concurrency, async (x) => {
-      const t = await ensureThumbForLocalFile(x);
+      const t = await ensureThumbForLocalFile({ absPath: x.fsPath, fileName: x.fileName });
       if (!t) return;
       await images.updateOne(
-        { userId, absPath: x.absPath },
+        { userId, _id: x._id },
         {
           $set: {
             thumbFileName: t.thumbFileName,
@@ -180,13 +202,17 @@ module.exports = {
 
   async down(db) {
     const userId = 'default';
-    const localDir = join(process.cwd(), 'public', 'uploads', 'local-image');
-    const absPrefix = `^${localDir.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}`;
+    const localDirRel = join('public', 'uploads', 'local-image');
+    const localDirAbs = join(process.cwd(), localDirRel);
+    const absPrefix = `^${escapeRegex(localDirAbs)}`;
+    const relPrefix = '^public/uploads/local-image/';
     const images = db.collection('gallery_images');
     await images.updateMany(
-      { userId, absPath: { $regex: absPrefix } },
+      {
+        userId,
+        $or: [{ absPath: { $regex: absPrefix } }, { absPath: { $regex: relPrefix } }],
+      },
       { $unset: { thumbFileName: '', thumbUrl: '' }, $set: { updatedAt: new Date() } },
     );
   },
 };
-
