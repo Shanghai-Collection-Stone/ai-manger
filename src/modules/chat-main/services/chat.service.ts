@@ -1035,20 +1035,22 @@ export class ChatMainService {
       '当你通过工具获得 Canvas 信息（例如 canvasId）时，你必须在回复中输出一个 ```canvas-it 代码块；代码块内容必须是 JSON，至少包含 canvasId。',
       '不要在主对话中回显工具的原始 JSON 输出（尤其不要展示 articles/markdown 等长文本）；只需用一句话总结，并输出一个规范的 ```canvas-it JSON 代码块。',
       '如果回复中已经包含 ```canvas-it 代码块，不要重复输出第二个。',
-      '除非用户明确说“开始批量发布/批量发布”，否则不要触发发布流程。',
-      '当用户明确表示“开始批量发布小红书”且提供了 canvasId 时：直接调用 xhs_batch_publish；不要反复询问开始时间/间隔/登录状态等前置问题。若用户未指定，则 plannedAtStart 不传、intervalMinutes 默认为 0。',
-      '发布到小红书时优先走 xhs_batch_publish（由后端编排并异步执行发布流）。',
-      '配图规则：优先使用图库工具自动配图。先调用 gallery_list_tags 获取可用标签；再基于文章主题/关键词选择 1-3 个标签调用 gallery_search_images 获取图片（url/thumbUrl/absPath）；将 absPath 写入 xhs_batch_publish 的 payload（会合并到每条任务的 payload）。',
-      '当用户表达想做“小红书批量内容/批量软文/系列文章/示例文章”等需求时，先确认主题（topic）与发布平台；然后先调用 topic_orchestrate 生成示例文章 Canvas 供用户查看与修改，用户确认后再进入发布/执行。',
-      '当你调用 topic_orchestrate、gallery_list_tags、gallery_search_images、xhs_batch_publish 或 MCP 原生批量发布工具时，如果用户没有明确给出 userId，默认使用 userId="default"。',
+      '小红书工作流采用“两阶段”：默认先生成“示例文章 Canvas”，用户确认后再发布。',
+      '当用户表达想做“小红书批量内容/系列文章/示例文章/批量软文”等需求但未明确要立即发布时：优先调用 topic_orchestrate 生成示例文章 Canvas 供用户查看与修改。',
+      '当用户明确表达“发布/执行/开始批量发布/直接发布/马上发布/开始跑批”等，或用户输入为“执行 canvas <id>”：进入小红书发布阶段。',
+      '进入发布阶段前必须确认两个参数：要发多少篇（count）与怎么发（strategy）。若缺失必须先提问确认：默认 strategy=顺序一号一发（单账号串行）；如需多账号/并发必须由用户明确指定。',
+      '发布阶段必须先检查登录：优先调用 check_login_status（多账号用 check_login_status_batch）；未登录则调用 get_login_qrcode 并提示用户扫码登录；需要重置登录可调用 delete_cookies 后再登录。',
+      '默认发布模式优先使用 publish_content_batch；仅当用户明确需要“排程/回调URL/随机延迟区间/批量任务ID追踪”时，使用 batch_task_open → batch_task_add_post → batch_task_run 或 batch_task_run_sync（无回调时用 run_sync）。',
+      '任何发布动作必须基于 Canvas：从 canvasId 对应文章中取内容，按 count 选择前 count 篇（不足则要求用户先补充或重新生成）。',
+      '当你调用 topic_orchestrate、check_login_status、check_login_status_batch、get_login_qrcode、delete_cookies、publish_content、publish_content_batch、publish_with_video、batch_task_open、batch_task_add_post、batch_task_run、batch_task_run_sync 时，如果用户没有明确给出 userId，默认使用 userId="default"。',
       '仅当用户明确提出需要数据、统计、具体记录或数据库信息时，调用 data_analysis；仅当用户明确提出需要生成页面、图表或可视化时，调用 frontend_plan 或 frontend_finalize。',
       '[重要]只有用户提出生成报表等类似字眼,才生成页面,否则不要随意生成报表页面',
       'data_analysis 返回 JSON 以辅助回答；若已能直接回答问题，请用现有数据简洁回答。',
       '[重要]data_analysis 有时候会有问题返回,格式一般为 { question:xx }, 把对应的内容返回给用户,让用户确定一下吧。',
       '若 frontend_finalize 产生外链，请不要在回答中返回任何代码或说明文字。',
       '若工具返回失败或为空，请直接告知并询问是否继续。',
-      '仅当用户明确要求“发布/执行/开始批量发布”时，才进入发布流程；发布到小红书时若用户未提供图片，先尝试通过 gallery_list_tags + gallery_search_images 从图库获取；若图库无可用图片再要求用户上传或提供可访问URL。',
-      '编排阶段不强制要求图片路径；若用户要求 AI 配图，优先使用现有图库，其次使用可访问网络图片。',
+      '进入发布阶段时，如果用户未提供必须的发布素材（图片/视频/链接等），先要求用户补齐或说明素材来源；不要自行猜测或编造素材。',
+      '只有当用户明确要求“自动配图/从图库选图”时，才使用图库相关工具进行辅助。',
       '[重要] UI 框架(uiFramework) 与 布局(layout) 必须由用户明确提供，不得由 AI 猜测；缺失时直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '当 frontend_plan 或 frontend_finalize 返回 requires_human=true 或 missing 非空时，不继续生成页面，直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '避免在工具间反复循环；完成一次工具调用后直接输出答案或结果。',
@@ -1088,9 +1090,12 @@ export class ChatMainService {
       /开始批量发布|立即发布|马上发布|直接发布|执行批量发布|开始跑批|开始执行批量/.test(
         s,
       );
+    const isExecuteCanvas = /执行\s*canvas\s*\d+/i.test(s);
     const hasCanvasId = /canvas\s*\d+/i.test(s) || /```canvas-it/i.test(s);
     const mentionsBatchPublish = /批量发布/.test(s);
-    return wantsStart || (mentionsBatchPublish && hasCanvasId);
+    return (
+      wantsStart || isExecuteCanvas || (mentionsBatchPublish && hasCanvasId)
+    );
   }
 
   private isTopicOrchestrateIntent(input: string): boolean {
