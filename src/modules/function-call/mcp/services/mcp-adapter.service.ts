@@ -102,20 +102,143 @@ export class McpAdaptersService implements OnModuleInit {
    * @description 返回已缓存的 MCP 工具集合；若未配置或初始化失败，返回空数组。
    * @returns {CreateAgentParams['tools']}
    * @keyword mcp, tools, cache
+   * @keyword-en mcp, tools, cache
    * @since 2026-01-24
    */
   getTools(): CreateAgentParams['tools'] {
     return this.toolsCache ?? [];
   }
 
+  /**
+   * @description 将 camelCase 字符串转换为 snake_case。
+   * @param {string} s - 输入字符串。
+   * @returns {string} snake_case 字符串。
+   * @keyword-en camelCase, snake_case, transform
+   */
+  private camelToSnake(s: string): string {
+    return String(s ?? '')
+      .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+      .replace(/__/g, '_')
+      .toLowerCase();
+  }
+
+  /**
+   * @description 将 snake_case 字符串转换为 camelCase。
+   * @param {string} s - 输入字符串。
+   * @returns {string} camelCase 字符串。
+   * @keyword-en snake_case, camelCase, transform
+   */
+  private snakeToCamel(s: string): string {
+    return String(s ?? '').replace(/_([a-z0-9])/g, (_m, ch) =>
+      String(ch).toUpperCase(),
+    );
+  }
+
+  /**
+   * @description 尝试从 ZodObject schema 中提取顶层字段名列表，用于做入参裁剪。
+   * @param {unknown} schema - Tool schema。
+   * @returns {string[] | null} 允许字段名列表，无法提取时返回 null。
+   * @keyword-en zod, schema, keys
+   */
+  private getSchemaKeys(schema: unknown): string[] | null {
+    const anySchema = schema as { _def?: unknown; shape?: unknown };
+    const def = (anySchema as { _def?: { shape?: unknown } })._def as
+      | { shape?: unknown }
+      | undefined;
+
+    const shapeFn = def?.shape;
+    if (typeof shapeFn === 'function') {
+      try {
+        const shape = (shapeFn as () => Record<string, unknown>)();
+        return Object.keys(shape ?? {});
+      } catch {
+        return null;
+      }
+    }
+    const shapeObj = (anySchema as { shape?: unknown }).shape;
+    if (shapeObj && typeof shapeObj === 'object') {
+      try {
+        return Object.keys(shapeObj as Record<string, unknown>);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * @description 根据 tool 的 schema 过滤并映射入参字段，减少 schema mismatch。
+   * @param {unknown} tool - MCP tool 实例。
+   * @param {unknown} input - 原始入参。
+   * @returns {unknown} 规范化后的入参。
+   * @keyword-en mcp, tool, input, normalize
+   */
+  private normalizeToolInput(tool: unknown, input: unknown): unknown {
+    const anyTool = tool as { schema?: unknown };
+    const schemaKeys = this.getSchemaKeys(anyTool?.schema);
+    if (!schemaKeys || schemaKeys.length === 0) return input;
+
+    const src =
+      input && typeof input === 'object'
+        ? (input as Record<string, unknown>)
+        : {};
+    const out: Record<string, unknown> = {};
+
+    for (const k of schemaKeys) {
+      if (Object.prototype.hasOwnProperty.call(src, k)) {
+        out[k] = src[k];
+        continue;
+      }
+      if (k.includes('_')) {
+        const camel = this.snakeToCamel(k);
+        if (Object.prototype.hasOwnProperty.call(src, camel)) {
+          out[k] = src[camel];
+          continue;
+        }
+      } else {
+        const snake = this.camelToSnake(k);
+        if (Object.prototype.hasOwnProperty.call(src, snake)) {
+          out[k] = src[snake];
+          continue;
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * @description 从 LangChain/Zod 抛出的错误中提取 issues，用于打印定位信息。
+   * @param {unknown} err - 捕获到的异常。
+   * @returns {unknown[] | undefined} Zod issues 数组。
+   * @keyword-en zod, issues, parse
+   */
+  private extractZodIssues(err: unknown): unknown[] | undefined {
+    const any = err as Record<string, unknown>;
+    const cause = any?.['cause'] as Record<string, unknown> | undefined;
+    const zodErr = (cause?.['error'] as Record<string, unknown>) ?? cause;
+    const issues = zodErr?.['issues'];
+    return Array.isArray(issues) ? (issues as unknown[]) : undefined;
+  }
+
+  /**
+   * @description 调用指定 MCP 工具，并在调用前按 schema 过滤/映射字段以降低入参错误。
+   * @param {string} toolName - MCP 工具名。
+   * @param {unknown} input - 工具入参。
+   * @returns {Promise<unknown>} 工具返回值（若为 JSON 字符串会尝试解析）。
+   * @throws {Error} 当工具不存在、不可调用或入参 schema 校验失败时抛出。
+   * @keyword-en mcp, tool, invoke, schema
+   */
   async invokeTool(toolName: string, input: unknown): Promise<unknown> {
     const tools = this.toolsCache ?? [];
     const t = tools.find((x) => (x as { name?: string }).name === toolName);
     if (!t) throw new Error(`MCP_TOOL_NOT_FOUND:${toolName}`);
 
+    const normalizedInput = this.normalizeToolInput(t, input);
+    const finalInput = this.preprocessToolInput(toolName, normalizedInput);
     console.log(
       `[invokeTool] Tool: ${toolName}, Input:`,
-      JSON.stringify(input),
+      JSON.stringify(finalInput),
     );
 
     const anyT = t as {
@@ -125,14 +248,35 @@ export class McpAdaptersService implements OnModuleInit {
     };
 
     let rawResult: unknown;
-    if (typeof anyT.invoke === 'function') {
-      rawResult = await anyT.invoke(input);
-    } else if (typeof anyT.call === 'function') {
-      rawResult = await anyT.call(input);
-    } else if (typeof anyT._call === 'function') {
-      rawResult = await anyT._call(input);
-    } else {
-      throw new Error(`MCP_TOOL_NOT_INVOKABLE:${toolName}`);
+    try {
+      const timeoutMs = this.pickToolTimeoutMs(toolName);
+      if (typeof anyT.invoke === 'function') {
+        rawResult = await this.withTimeout(
+          anyT.invoke(finalInput),
+          timeoutMs,
+          toolName,
+        );
+      } else if (typeof anyT.call === 'function') {
+        rawResult = await this.withTimeout(
+          anyT.call(finalInput),
+          timeoutMs,
+          toolName,
+        );
+      } else if (typeof anyT._call === 'function') {
+        rawResult = await this.withTimeout(
+          anyT._call(finalInput),
+          timeoutMs,
+          toolName,
+        );
+      } else {
+        throw new Error(`MCP_TOOL_NOT_INVOKABLE:${toolName}`);
+      }
+    } catch (e) {
+      const issues = this.extractZodIssues(e);
+      if (issues && issues.length > 0) {
+        console.error('[invokeTool] Schema issues:', JSON.stringify(issues));
+      }
+      throw e;
     }
 
     console.log(`[invokeTool] Raw result type:`, typeof rawResult);
@@ -150,6 +294,105 @@ export class McpAdaptersService implements OnModuleInit {
     }
 
     return rawResult;
+  }
+
+  /**
+   * @description 对部分工具的入参做轻量预处理（例如把 /static/... 转为绝对 URL）。
+   * @param {string} toolName - 工具名。
+   * @param {unknown} input - 已规范化的入参。
+   * @returns {unknown} 预处理后的入参。
+   * @keyword-en mcp, preprocess, input, static url
+   */
+  private preprocessToolInput(toolName: string, input: unknown): unknown {
+    if (toolName !== 'batch_task_add_post') return input;
+    if (!input || typeof input !== 'object') return input;
+    const rec = input as Record<string, unknown>;
+    const post = rec['post'];
+    if (!post || typeof post !== 'object') return input;
+    const p = post as Record<string, unknown>;
+    const imagesRaw = p['images'];
+    if (!Array.isArray(imagesRaw)) return input;
+    const images = (imagesRaw as unknown[])
+      .map((x) => (typeof x === 'string' ? this.resolveStaticUrl(x) : ''))
+      .filter((x) => x.length > 0);
+    return { ...rec, post: { ...p, images } };
+  }
+
+  /**
+   * @description 将 /static/... 这类相对路径转换为可被 MCP 服务访问的绝对 URL。
+   * @param {string} input - 原始路径或 URL。
+   * @returns {string} 绝对 URL 或原值。
+   * @keyword-en static, url, resolve
+   */
+  private resolveStaticUrl(input: string): string {
+    const s = String(input ?? '').trim();
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (!s.startsWith('/')) return s;
+
+    const baseCandidates = [
+      process.env.APP_PUBLIC_URL,
+      process.env.PUBLIC_BASE_URL,
+      process.env.APP_URL,
+      process.env.BASE_URL,
+    ]
+      .map((x) => String(x ?? '').trim())
+      .filter((x) => x.length > 0);
+
+    const portRaw = String(process.env.PORT ?? '').trim();
+    const portNum = portRaw.length > 0 ? Number(portRaw) : undefined;
+    const port =
+      typeof portNum === 'number' && Number.isFinite(portNum) && portNum > 0
+        ? portNum
+        : 3011;
+
+    const base = baseCandidates[0] ?? `http://localhost:${port}`;
+    const b = base.endsWith('/') ? base.slice(0, -1) : base;
+    return `${b}${s}`;
+  }
+
+  /**
+   * @description 为 MCP 工具调用增加超时保护，避免调用方无限等待。
+   * @template T
+   * @param {Promise<T>} p - 原始 Promise。
+   * @param {number} timeoutMs - 超时时间（毫秒）。
+   * @param {string} toolName - 工具名，用于错误信息。
+   * @returns {Promise<T>} 超时前返回原结果，超时则抛错。
+   * @throws {Error} 超时抛出 MCP_TOOL_TIMEOUT:* 错误。
+   * @keyword-en mcp, timeout, promise, safeguard
+   */
+  private async withTimeout<T>(
+    p: Promise<T>,
+    timeoutMs: number,
+    toolName: string,
+  ): Promise<T> {
+    const ms = Math.max(0, Math.floor(timeoutMs || 0));
+    if (ms <= 0) return await p;
+    return await Promise.race([
+      p,
+      new Promise<T>((_resolve, reject) => {
+        setTimeout(() => reject(new Error(`MCP_TOOL_TIMEOUT:${toolName}`)), ms);
+      }),
+    ]);
+  }
+
+  /**
+   * @description 选择不同 MCP 工具的默认超时，避免 batch_task_add_post 等卡死。
+   * @param {string} toolName - 工具名。
+   * @param {unknown} _input - 入参（预留扩展）。
+   * @returns {number} 超时毫秒数（<=0 表示不超时）。
+   * @keyword-en mcp, timeout, tool, policy
+   */
+  private pickToolTimeoutMs(toolName: string): number {
+    const raw = process.env.MCP_TOOL_TIMEOUT_MS;
+    const base =
+      typeof raw === 'string' && raw.trim().length > 0 ? Number(raw) : 60_000;
+    const fallback = Number.isFinite(base) ? base : 60_000;
+
+    if (toolName === 'batch_task_run_sync') return 15 * 60_000;
+    if (toolName === 'batch_task_run') return Math.max(fallback, 2 * 60_000);
+    if (toolName === 'batch_task_add_post') return Math.max(fallback, 60_000);
+    return fallback;
   }
 
   /**

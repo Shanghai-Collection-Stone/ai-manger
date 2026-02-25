@@ -37,10 +37,11 @@ export class ToolsService {
   private filterMcpAdapterTools(
     tools?: CreateAgentParams['tools'],
   ): NonNullable<CreateAgentParams['tools']> {
+    const blockedPrefixes = [/^batch_task_/i];
     return (tools ?? []).filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       if (!name) return true;
-      return true;
+      return !blockedPrefixes.some((re) => re.test(name));
     });
   }
 
@@ -66,9 +67,10 @@ export class ToolsService {
     );
     const tTodo = this.todo.getHandle() ?? [];
     const tGraphWorkflowAll = this.graphWorkflow.getHandle(streamWriter) ?? [];
-    const tGraphWorkflow = tGraphWorkflowAll.filter(
-      (t) => (t as { name?: string }).name === 'topic_orchestrate',
-    );
+    const tGraphWorkflow = tGraphWorkflowAll.filter((t) => {
+      const name = (t as { name?: string }).name ?? '';
+      return name === 'topic_orchestrate' || name === 'xhs_batch_publish';
+    });
     // 所有数据源工具（schema_search, data_source_query, super_party_*, feishu_bitable_*）
     // 仅在 data_analysis 内部使用，不直接暴露给对话层
     // Chat层只能调用 data_analysis，数据分析由 analysis 层统一管理

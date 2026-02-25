@@ -27,6 +27,127 @@ export class BatchTaskService {
   }
 
   /**
+   * @description 截断标题到 MCP 侧限制（最多 20 个字符单位，按 code point 处理）。
+   * @param {string} title - 原始标题。
+   * @returns {string} 截断后的标题。
+   * @keyword-en title, truncate, xhs
+   */
+  private normalizeMcpTitle(title: string): string {
+    const s = String(title ?? '').trim();
+    if (!s) return s;
+    return Array.from(s).slice(0, 20).join('');
+  }
+
+  /**
+   * @description 将本地静态资源相对路径转换为可访问的绝对 URL（用于 MCP 拉取图片）。
+   * @param {string} input - 图片路径或 URL。
+   * @returns {string} 绝对 URL 或原值。
+   * @keyword-en static, url, resolve, assets
+   */
+  private resolvePublicAssetUrl(input: string): string {
+    const s = String(input ?? '').trim();
+    if (!s) return '';
+    if (/^https?:\/\//i.test(s)) return s;
+    if (!s.startsWith('/')) return s;
+
+    const baseCandidates = [
+      process.env.APP_PUBLIC_URL,
+      process.env.PUBLIC_BASE_URL,
+      process.env.APP_URL,
+      process.env.BASE_URL,
+    ]
+      .map((x) => String(x ?? '').trim())
+      .filter((x) => x.length > 0);
+
+    const portRaw = String(process.env.PORT ?? '').trim();
+    const portNum = portRaw.length > 0 ? Number(portRaw) : undefined;
+    const port =
+      typeof portNum === 'number' && Number.isFinite(portNum) && portNum > 0
+        ? portNum
+        : 3011;
+
+    const base = baseCandidates[0] ?? `http://localhost:${port}`;
+    const b = base.endsWith('/') ? base.slice(0, -1) : base;
+    return `${b}${s}`;
+  }
+
+  /**
+   * @description 从本地 payload 组装 MCP 的 BatchPost（参考 open-md/mcp.md）。
+   * @param {object} input - 组装输入。
+   * @param {string} input.title - 标题。
+   * @param {string} [input.scheduleAt] - RFC3339/ISO8601 定时发布时间。
+   * @param {Record<string, unknown>} [input.payload] - 生成阶段产生的 payload。
+   * @returns {Record<string, unknown>} MCP post 对象（title/content/images/tags/location/schedule_at）。
+   * @throws {Error} 当缺少 content/images 等必填字段时抛出。
+   * @keyword-en mcp, batch post, build, validate
+   */
+  private buildMcpPost(input: {
+    title: string;
+    scheduleAt?: string;
+    payload?: Record<string, unknown>;
+  }): Record<string, unknown> {
+    const payload =
+      input.payload && typeof input.payload === 'object' ? input.payload : {};
+
+    const contentRaw = payload['content'];
+    const content =
+      typeof contentRaw === 'string'
+        ? contentRaw.trim()
+        : contentRaw && typeof contentRaw === 'object'
+          ? JSON.stringify(contentRaw)
+          : '';
+    if (!content) throw new Error('MCP_POST_MISSING_CONTENT');
+
+    const imagesRaw =
+      payload['images'] ?? payload['imageUrls'] ?? payload['image_urls'];
+    const images = Array.isArray(imagesRaw)
+      ? (imagesRaw as unknown[])
+          .map((x) =>
+            typeof x === 'string' ? this.resolvePublicAssetUrl(x.trim()) : '',
+          )
+          .filter((x) => x.length > 0)
+          .slice(0, 18)
+      : [];
+    if (images.length === 0) throw new Error('MCP_POST_MISSING_IMAGES');
+
+    const tagsRaw = payload['tags'];
+    const tags = Array.isArray(tagsRaw)
+      ? (tagsRaw as unknown[])
+          .map((x) => (typeof x === 'string' ? x.trim() : ''))
+          .filter((x) => x.length > 0)
+          .slice(0, 20)
+      : undefined;
+
+    const locationRaw = payload['location'];
+    const location =
+      typeof locationRaw === 'string' && locationRaw.trim().length > 0
+        ? locationRaw.trim()
+        : undefined;
+
+    let scheduleAt =
+      typeof input.scheduleAt === 'string' && input.scheduleAt.trim().length > 0
+        ? input.scheduleAt.trim()
+        : undefined;
+    if (typeof scheduleAt === 'string') {
+      const ms = new Date(scheduleAt).getTime();
+      const now = Date.now();
+      if (!Number.isFinite(ms)) scheduleAt = undefined;
+      else if (ms < now + 60 * 60_000) scheduleAt = undefined;
+      else if (ms > now + 14 * 24 * 60 * 60_000) scheduleAt = undefined;
+    }
+
+    const post: Record<string, unknown> = {
+      title: this.normalizeMcpTitle(input.title),
+      content,
+      images,
+    };
+    if (Array.isArray(tags) && tags.length > 0) post['tags'] = tags;
+    if (typeof location === 'string') post['location'] = location;
+    if (typeof scheduleAt === 'string') post['schedule_at'] = scheduleAt;
+    return post;
+  }
+
+  /**
    * @description 创建 batch_tasks 所需索引，并初始化自增计数器。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。
@@ -182,6 +303,7 @@ export class BatchTaskService {
    * @returns {Promise<BatchTaskEntity | null>} 更新后的任务实体，不存在时返回 null。
    * @throws {Error} 当 MCP 调用或数据库写入失败时抛出。
    * @keyword batch-task, mcp, open
+   * @keyword-en batch-task, mcp, open
    * @since 2026-02-04
    */
   async openMcpTask(id: number): Promise<BatchTaskEntity | null> {
@@ -238,6 +360,7 @@ export class BatchTaskService {
    * @returns {Promise<BatchTaskEntity | null>} 更新后的任务实体，不存在时返回 null。
    * @throws {Error} 当任务未绑定 todoId 或未打开 MCP 任务时抛出。
    * @keyword batch-task, parallel, todo-items
+   * @keyword-en batch-task, parallel, todo-items
    * @example
    * // 并行入队 10 条发布，最大并发 6
    * await batchTaskService.addPostsParallel(1, {
@@ -316,12 +439,17 @@ export class BatchTaskService {
       concurrency,
       async (p): Promise<{ postId: number; res: unknown }> => {
         const res = await this.retry(async () => {
-          return await this.mcp.invokeTool('batch_task_add_post', {
-            taskId: doc.mcpTaskId,
-            postId: p.id,
+          const scheduleAt = p.plannedAt
+            ? p.plannedAt.toISOString()
+            : undefined;
+          const post = this.buildMcpPost({
             title: p.title,
-            plannedAt: p.plannedAt?.toISOString(),
-            ...(p.payload ?? {}),
+            scheduleAt,
+            payload: p.payload ?? {},
+          });
+          return await this.mcp.invokeTool('batch_task_add_post', {
+            task_id: doc.mcpTaskId,
+            post,
           });
         });
         return { postId: p.id, res };
@@ -354,6 +482,19 @@ export class BatchTaskService {
         (x): x is { ok: true; value: { postId: number; res: unknown } } => x.ok,
       )
       .map((x) => x.value);
+
+    if (addResults.length === 0) {
+      await this.tasks.updateOne(
+        { id },
+        { $set: { status: 'failed', updatedAt: new Date() } },
+      );
+      await this.updateTodoSummary({
+        batchTaskId: id,
+        status: 'failed',
+        description: 'NO_MCP_POSTS_ENQUEUED',
+      });
+      throw new Error('BATCH_TASK_HAS_NO_POSTS');
+    }
 
     for (const r of addResults) {
       const any = (r.res as Record<string, unknown>) ?? {};
@@ -489,6 +630,51 @@ export class BatchTaskService {
     );
   }
 
+  /**
+   * @description 更新单条发布的计划时间，并同步待办条目的 plannedAt。
+   * @param {object} input - 输入参数。
+   * @param {number} input.batchTaskId - 本地批量任务ID。
+   * @param {number} input.postId - 本地条目ID。
+   * @param {string} input.plannedAt - ISO8601/RFC3339 时间字符串。
+   * @returns {Promise<void>} 无返回值。
+   * @keyword-en batch-task, plannedAt, schedule, todo
+   */
+  async updatePostPlannedAt(input: {
+    batchTaskId: number;
+    postId: number;
+    plannedAt: string;
+  }): Promise<void> {
+    const d = new Date(input.plannedAt);
+    const ms = d.getTime();
+    if (!Number.isFinite(ms)) return;
+
+    const task = await this.tasks.findOne({ id: input.batchTaskId });
+    if (!task) throw new Error('BATCH_TASK_NOT_FOUND');
+    const post = (task.posts ?? []).find((p) => p.id === input.postId);
+    if (!post) throw new Error('BATCH_TASK_POST_NOT_FOUND');
+
+    if (typeof post.todoItemId === 'number') {
+      await this.todo.updateItem({ id: post.todoItemId, plannedAt: d });
+    }
+
+    await this.tasks.updateOne(
+      { id: input.batchTaskId, 'posts.id': input.postId },
+      { $set: { 'posts.$.plannedAt': d, updatedAt: new Date() } },
+    );
+  }
+
+  /**
+   * @description 将单条内容组装为 MCP post 并入队到 batch_task_add_post。
+   * @param {object} input - 入队参数。
+   * @param {number} input.batchTaskId - 本地批量任务ID。
+   * @param {number} input.postId - 本地条目ID。
+   * @param {string} [input.title] - 覆盖标题。
+   * @param {string} [input.plannedAt] - RFC3339/ISO8601 定时发布时间。
+   * @param {Record<string, unknown>} [input.payload] - 内容与图片等 payload。
+   * @param {(e: unknown) => Promise<void>} [onError] - 失败回调。
+   * @returns {Promise<{ ok: boolean; mcpPostId?: string; raw?: unknown }>} 入队结果。
+   * @keyword-en batch-task, enqueue, mcp, batch_task_add_post
+   */
   async enqueuePost(
     input: {
       batchTaskId: number;
@@ -519,12 +705,14 @@ export class BatchTaskService {
 
     try {
       const res = await this.retry(async () => {
-        return await this.mcp.invokeTool('batch_task_add_post', {
-          taskId: task.mcpTaskId,
-          postId: input.postId,
+        const postObj = this.buildMcpPost({
           title,
-          plannedAt,
-          ...(input.payload ?? {}),
+          scheduleAt: plannedAt,
+          payload: input.payload ?? post.payload ?? {},
+        });
+        return await this.mcp.invokeTool('batch_task_add_post', {
+          task_id: task.mcpTaskId,
+          post: postObj,
         });
       });
 
@@ -590,12 +778,32 @@ export class BatchTaskService {
   }
 
   /**
-   * @description 触发 MCP 批量任务运行，并将本地状态标记为 in_progress。
+   * @description 将批量任务标记为失败，并同步待办总览状态。
+   * @param {number} batchTaskId - 本地批量任务ID。
+   * @param {string} reason - 失败原因（短码/简述）。
+   * @returns {Promise<void>} 无返回值。
+   * @keyword-en batch-task, fail, status
+   */
+  async markFailed(batchTaskId: number, reason: string): Promise<void> {
+    await this.tasks.updateOne(
+      { id: batchTaskId },
+      { $set: { status: 'failed', updatedAt: new Date() } },
+    );
+    await this.updateTodoSummary({
+      batchTaskId,
+      status: 'failed',
+      description: reason,
+    });
+  }
+
+  /**
+   * @description 触发 MCP 批量任务运行（异步），并将本地状态标记为 in_progress。
    * @param {number} id - 批量任务ID。
    * @param {BatchTaskRunInput} input - 运行参数（callbackUrl 与 payload）。
    * @returns {Promise<BatchTaskEntity | null>} 更新后的任务实体，不存在时返回 null。
    * @throws {Error} 当任务未打开 MCP 任务时抛出。
    * @keyword batch-task, run, mcp
+   * @keyword-en batch-task, run, mcp
    * @since 2026-02-04
    */
   async run(
@@ -606,18 +814,58 @@ export class BatchTaskService {
     if (!doc) return null;
     if (!doc.mcpTaskId) throw new Error('BATCH_TASK_MCP_NOT_OPENED');
 
-    const payload: Record<string, unknown> = {
-      taskId: doc.mcpTaskId,
-      callbackUrl: input.callbackUrl,
-      ...(input.payload ?? {}),
+    const callbackUrl =
+      typeof input.callbackUrl === 'string' &&
+      input.callbackUrl.trim().length > 0
+        ? input.callbackUrl.trim()
+        : undefined;
+    const toolName = 'batch_task_run';
+
+    const cfg = input.payload ?? {};
+
+    const pickInt = (k1: string, k2?: string) => {
+      const v =
+        (k1 in cfg ? cfg[k1] : undefined) ??
+        (k2 && k2 in cfg ? cfg[k2] : undefined);
+      return typeof v === 'number' && Number.isFinite(v)
+        ? Math.floor(v)
+        : undefined;
     };
 
-    await this.mcp.invokeTool('batch_task_run', payload);
+    const minDelayMs = pickInt('min_delay_ms', 'minDelayMs');
+    const maxDelayMs = pickInt('max_delay_ms', 'maxDelayMs');
+    const maxAccounts = pickInt('max_accounts', 'maxAccounts');
+    const itemTimeoutMs = pickInt('item_timeout_ms', 'itemTimeoutMs');
+
+    const toolInput: Record<string, unknown> = { task_id: doc.mcpTaskId };
+    if (typeof callbackUrl === 'string')
+      toolInput['callback_url'] = callbackUrl;
+    if (typeof minDelayMs === 'number')
+      toolInput['min_delay_ms'] = Math.max(0, minDelayMs);
+    if (typeof maxDelayMs === 'number')
+      toolInput['max_delay_ms'] = Math.max(0, maxDelayMs);
+    if (typeof maxAccounts === 'number')
+      toolInput['max_accounts'] = Math.max(1, maxAccounts);
+    if (typeof itemTimeoutMs === 'number')
+      toolInput['item_timeout_ms'] = Math.max(0, itemTimeoutMs);
+
+    try {
+      await this.mcp.invokeTool(toolName, toolInput);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await this.tasks.updateOne(
+        { id },
+        { $set: { status: 'failed', updatedAt: new Date() } },
+      );
+      await this.updateTodoSummary({ batchTaskId: id, status: 'failed' });
+      throw new Error(`BATCH_TASK_RUN_FAILED:${msg}`);
+    }
 
     await this.tasks.updateOne(
       { id },
       { $set: { status: 'in_progress', updatedAt: new Date() } },
     );
+    await this.updateTodoSummary({ batchTaskId: id, status: 'in_progress' });
     return await this.get(id);
   }
 

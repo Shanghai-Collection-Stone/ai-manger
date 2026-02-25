@@ -40,6 +40,51 @@ export class BatchTaskGraphService {
     private readonly format: TextFormatService,
   ) {}
 
+  /**
+   * @description 生成指定区间的随机整数（包含两端）。
+   * @param {number} min - 最小值。
+   * @param {number} max - 最大值。
+   * @returns {number} 随机整数。
+   * @keyword-en random, int, range
+   */
+  private randomInt(min: number, max: number): number {
+    const a = Math.floor(Number(min));
+    const b = Math.floor(Number(max));
+    const lo = Number.isFinite(a) ? a : 0;
+    const hi = Number.isFinite(b) ? b : lo;
+    if (hi <= lo) return lo;
+    return lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  /**
+   * @description 清理小红书正文尾部的 hashtag 块，避免把 tags 写进正文。
+   * @param {string} input - 原始正文。
+   * @returns {string} 清理后的正文。
+   * @keyword-en xhs, content, sanitize, hashtag
+   */
+  private sanitizeXhsContent(input: string): string {
+    const s = String(input ?? '');
+    const lines = s.split(/\r?\n/);
+    let i = lines.length - 1;
+    while (i >= 0) {
+      const line = String(lines[i] ?? '').trim();
+      if (!line) {
+        i -= 1;
+        continue;
+      }
+      if (/^#[^\s#]+/.test(line)) {
+        i -= 1;
+        continue;
+      }
+      break;
+    }
+    const trimmed = lines
+      .slice(0, i + 1)
+      .join('\n')
+      .trim();
+    return trimmed;
+  }
+
   private async pickGalleryTags(input: {
     provider: 'gemini' | 'deepseek';
     model: string;
@@ -528,15 +573,21 @@ export class BatchTaskGraphService {
         typeof startMs === 'number'
           ? new Date(startMs + idx * intervalMinutes * 60_000).toISOString()
           : undefined;
+      const contentJson = a.contentJson;
+      const markdown =
+        contentJson && typeof contentJson === 'object'
+          ? (contentJson as { markdown?: unknown }).markdown
+          : undefined;
+      const content = typeof markdown === 'string' ? markdown : a.contentJson;
       const payload: Record<string, unknown> = {
+        ...(input.payload ?? {}),
         canvasId: c.id,
         articleId: a.id,
         title: a.title,
+        content,
         tags: a.tags,
-        content: a.contentJson,
         imageUrls: a.imageUrls,
         imageIds: a.imageIds,
-        ...(input.payload ?? {}),
       };
       return { title: a.title, plannedAt, payload };
     });
@@ -739,30 +790,42 @@ export class BatchTaskGraphService {
         ? Math.max(0, Math.floor(input.intervalMinutes))
         : 0;
 
-    const postsInit = Array.from({ length: taskCountRaw }).map((_, idx) => {
+    const baseMs = typeof startMs === 'number' ? startMs : Date.now();
+    let cursorMs = baseMs;
+    const postsInit: Array<{
+      title: string;
+      plannedAt?: string;
+      payload: Record<string, unknown>;
+    }> = [];
+    for (let idx = 0; idx < taskCountRaw; idx++) {
       const refIndex = idx % allArticles.length;
       const refArticle = allArticles[refIndex];
       const refTitleRaw =
         typeof refArticle?.title === 'string' ? refArticle.title.trim() : '';
       const title =
         refTitleRaw.length > 0 ? refTitleRaw : `小红书图文任务 #${idx + 1}`;
-      const plannedAt =
-        typeof startMs === 'number'
-          ? new Date(startMs + idx * intervalMinutes * 60_000).toISOString()
-          : undefined;
-      return {
+
+      if (idx === 0) cursorMs = baseMs;
+      else {
+        const stepMinutes =
+          intervalMinutes > 0 ? intervalMinutes : this.randomInt(1, 5);
+        cursorMs += stepMinutes * 60_000;
+      }
+      const plannedAt = new Date(cursorMs).toISOString();
+
+      postsInit.push({
         title,
         plannedAt,
         payload: {
+          ...(input.payload ?? {}),
           canvasId: c.id,
           refArticleId:
             typeof refArticle?.id === 'number' ? refArticle.id : undefined,
           refIndex,
           refTitle: refTitleRaw.length > 0 ? refTitleRaw : undefined,
-          ...(input.payload ?? {}),
         },
-      };
-    });
+      });
+    }
 
     console.log(
       '[openAndStartXhsFromCanvas] Initializing posts:',
@@ -822,12 +885,34 @@ export class BatchTaskGraphService {
         provider: input.provider,
         model: input.model,
         temperature: input.temperature,
+      }).catch((e) => {
+        const err = e instanceof Error ? e : new Error(String(e));
+        console.error('[runXhsPublishLangGraph] FAILED', err.message);
+        if (err.stack) console.error(err.stack);
       });
     }, 10);
 
     return { ok: true, result: summary };
   }
 
+  /**
+   * @description 小红书批量发布工作流：逐条生成内容、选图入队，最后触发 MCP 批量任务运行。
+   * @param {object} input - 运行参数。
+   * @param {string} input.userId - 用户ID。
+   * @param {number} input.canvasId - 画布ID。
+   * @param {number} input.batchTaskId - 本地批量任务ID。
+   * @param {string} input.mcpTaskId - MCP 任务ID（已打开）。
+   * @param {string} input.galleryUserId - 素材库用户ID。
+   * @param {number} [input.galleryGroupId] - 素材库分组ID。
+   * @param {number} [input.minImageScore] - 相似度阈值。
+   * @param {string} [input.callbackUrl] - MCP 回调地址。
+   * @param {Record<string, unknown>} [input.payload] - 额外工作流透传参数。
+   * @param {'gemini' | 'deepseek'} [input.provider] - 生成模型提供方。
+   * @param {string} [input.model] - 生成模型名。
+   * @param {number} [input.temperature] - 生成温度。
+   * @returns {Promise<void>} 无返回值。
+   * @keyword-en xhs, batch publish, workflow, langgraph
+   */
   private async runXhsPublishLangGraph(input: {
     userId: string;
     canvasId: number;
@@ -904,6 +989,10 @@ export class BatchTaskGraphService {
         reducer: (_a, b) => b,
       }),
       idx: Annotation<number>({ default: () => 0, reducer: (_a, b) => b }),
+      enqueuedCount: Annotation<number>({
+        default: () => 0,
+        reducer: (_a, b) => b,
+      }),
       usedImageKeys: Annotation<string[]>({
         default: () => [],
         reducer: (a, b) => [...a, ...b],
@@ -948,6 +1037,40 @@ export class BatchTaskGraphService {
             refTitle,
           };
         });
+
+        const nowMs = Date.now();
+        let cursorMs = nowMs;
+        for (let i = 0; i < posts.length; i++) {
+          const p = posts[i];
+          const prevPlanned =
+            typeof p?.plannedAt === 'string' ? p.plannedAt : '';
+          const prevMs = prevPlanned ? new Date(prevPlanned).getTime() : NaN;
+
+          if (i === 0) cursorMs = nowMs;
+          else cursorMs += this.randomInt(1, 5) * 60_000;
+
+          let plannedMs = cursorMs;
+          if (Number.isFinite(prevMs) && prevMs > plannedMs) plannedMs = prevMs;
+          if (i > 0) {
+            const prevOut = posts[i - 1]?.plannedAt;
+            const prevOutMs = prevOut ? new Date(prevOut).getTime() : NaN;
+            if (Number.isFinite(prevOutMs) && plannedMs - prevOutMs < 60_000) {
+              plannedMs = prevOutMs + this.randomInt(1, 5) * 60_000;
+            }
+          }
+
+          const nextPlanned = new Date(plannedMs).toISOString();
+          posts[i] = { ...p, plannedAt: nextPlanned };
+          cursorMs = plannedMs;
+
+          if (prevPlanned !== nextPlanned) {
+            await this.batch.updatePostPlannedAt({
+              batchTaskId: state.batchTaskId,
+              postId: p.postId,
+              plannedAt: nextPlanned,
+            });
+          }
+        }
 
         const tags =
           typeof state.galleryGroupId === 'number'
@@ -1014,7 +1137,8 @@ export class BatchTaskGraphService {
         const sys = [
           '你是“小红书图文文案生成器”。你必须只输出 JSON 对象，不要输出任何多余字符。',
           '输出 schema：{ "title": string, "content": string, "tags"?: string[], "imageQuery"?: string }。',
-          'content 必须是可直接发布的小红书正文风格：短句短段、真实分享口吻、适量清单化表达、结尾带 3-6 个 #话题。',
+          'content 必须是可直接发布的小红书正文风格：短句短段、真实分享口吻、适量清单化表达。',
+          '不要在 content 里输出任何 #话题/#标签；话题标签必须通过 tags 字段返回。',
           '你必须参考 referenceMarkdown 的信息密度与写法，但必须改写为新的表达，避免逐句复刻。',
           'tags 若提供，必须从 availableTags 里选择 0-6 个；不确定就给空数组。',
         ].join('\n');
@@ -1104,38 +1228,25 @@ export class BatchTaskGraphService {
         }
 
         const chosenTagsRaw = Array.isArray(parsed.tags) ? parsed.tags : [];
-        const chosenTags = chosenTagsRaw
+        const chosenTagsFromDraft = chosenTagsRaw
           .map((x) => String(x ?? '').trim())
           .filter((x) => x.length > 0 && state.availableTags.includes(x))
           .slice(0, 6);
+        const chosenTags =
+          chosenTagsFromDraft.length > 0
+            ? chosenTagsFromDraft
+            : refTags
+                .map((x) => String(x ?? '').trim())
+                .filter((x) => x.length > 0 && state.availableTags.includes(x))
+                .slice(0, 6);
+
+        const cleanedContent = this.sanitizeXhsContent(parsed.content);
 
         const usedSet = new Set<string>(state.usedImageKeys ?? []);
         const pickImages = async (): Promise<{
           imageUrls: string[];
           imageIds: number[];
         }> => {
-          const query =
-            typeof parsed?.imageQuery === 'string' &&
-            parsed.imageQuery.trim().length > 0
-              ? parsed.imageQuery.trim()
-              : refImageQuery;
-
-          const byQuery = query
-            ? await this.gallery.searchSimilar(
-                query,
-                state.galleryUserId,
-                24,
-                state.minImageScore,
-              )
-            : [];
-
-          const byQueryFiltered =
-            typeof state.galleryGroupId === 'number'
-              ? byQuery
-                  .map((r) => r.image)
-                  .filter((img) => img.groupId === state.galleryGroupId)
-              : byQuery.map((r) => r.image);
-
           const byTags =
             chosenTags.length > 0
               ? await this.gallery.searchByTags({
@@ -1146,13 +1257,16 @@ export class BatchTaskGraphService {
                 })
               : [];
 
-          const randomList = await this.gallery.sampleRandom({
-            userId: state.galleryUserId,
-            groupId: state.galleryGroupId,
-            limit: 48,
-          });
+          const randomList =
+            byTags.length > 0
+              ? []
+              : await this.gallery.sampleRandom({
+                  userId: state.galleryUserId,
+                  groupId: state.galleryGroupId,
+                  limit: 48,
+                });
 
-          const pool = [...byQueryFiltered, ...byTags, ...randomList]
+          const pool = [...byTags, ...randomList]
             .map((it) => {
               const id = typeof it.id === 'number' ? it.id : undefined;
               const url =
@@ -1180,6 +1294,20 @@ export class BatchTaskGraphService {
         };
 
         const images = await pickImages();
+        if (images.imageUrls.length === 0) {
+          const fallbackUrls = Array.isArray(article?.imageUrls)
+            ? article.imageUrls
+                .map((x) => String(x ?? '').trim())
+                .filter((x) => x.length > 0)
+            : [];
+          for (const url of fallbackUrls) {
+            if (images.imageUrls.length >= 3) break;
+            const keyUrl = `url:${url}`;
+            if (usedSet.has(keyUrl)) continue;
+            images.imageUrls.push(url);
+            usedSet.add(keyUrl);
+          }
+        }
 
         if (typeof current.refArticleId === 'number') {
           await this.canvas.updateArticleImages(
@@ -1195,37 +1323,60 @@ export class BatchTaskGraphService {
         }
 
         const enqueuePayload: Record<string, unknown> = {
+          ...(state.payload ?? {}),
           platform: 'xhs',
-          content: parsed.content,
-          tags: chosenTags,
-          imageUrls: images.imageUrls,
-          imageIds: images.imageIds,
           canvasId: state.canvasId,
           refArticleId: current.refArticleId,
           refIndex: current.refIndex,
           refTitle: current.refTitle,
-          ...(state.payload ?? {}),
+          content: cleanedContent,
+          tags: chosenTags,
+          imageUrls: images.imageUrls,
+          imageIds: images.imageIds,
         };
 
-        await this.batch.enqueuePost({
+        const enq = await this.batch.enqueuePost({
           batchTaskId: state.batchTaskId,
           postId: current.postId,
           title: parsed.title,
-          plannedAt: current.plannedAt,
+          plannedAt: state.idx === 0 ? undefined : current.plannedAt,
           payload: enqueuePayload,
         });
 
         return {
           idx: state.idx + 1,
           usedImageKeys: Array.from(usedSet),
+          enqueuedCount: state.enqueuedCount + (enq.ok ? 1 : 0),
         };
       })
       .addNode('run_task', async (state) => {
+        if (!state.enqueuedCount || state.enqueuedCount <= 0) {
+          await this.batch.markFailed(
+            state.batchTaskId,
+            'MCP_TASK_HAS_NO_POSTS',
+          );
+          return {};
+        }
+        const cfg = state.payload ?? {};
+        const minDelayRaw = cfg['min_delay_ms'] ?? cfg['minDelayMs'];
+        const maxDelayRaw = cfg['max_delay_ms'] ?? cfg['maxDelayMs'];
+        const minDelayMs =
+          typeof minDelayRaw === 'number' && Number.isFinite(minDelayRaw)
+            ? Math.max(0, Math.floor(minDelayRaw))
+            : 60_000;
+        const maxDelayMs0 =
+          typeof maxDelayRaw === 'number' && Number.isFinite(maxDelayRaw)
+            ? Math.max(0, Math.floor(maxDelayRaw))
+            : 300_000;
+        const maxDelayMs = Math.max(minDelayMs, maxDelayMs0);
+
         await this.batch.run(state.batchTaskId, {
           callbackUrl: state.callbackUrl,
           payload: {
-            canvasId: state.canvasId,
             ...(state.payload ?? {}),
+            canvasId: state.canvasId,
+            min_delay_ms: minDelayMs,
+            max_delay_ms: maxDelayMs,
           },
         });
         return {};
@@ -1267,6 +1418,7 @@ export class BatchTaskGraphService {
         Number.isFinite(input.temperature)
           ? input.temperature
           : 0.2,
+      enqueuedCount: 0,
     });
   }
 }
