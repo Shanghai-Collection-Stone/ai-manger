@@ -7,6 +7,7 @@ import type {
   BatchTaskCallbackInput,
   BatchTaskCreateInput,
   BatchTaskEntity,
+  BatchTaskGraphJobInputXhs,
   BatchTaskPostEntity,
   BatchTaskRunInput,
 } from '../entities/batch-task.entity.js';
@@ -160,6 +161,8 @@ export class BatchTaskService {
     await this.tasks.createIndex({ status: 1 });
     await this.tasks.createIndex({ mcpTaskId: 1 });
     await this.tasks.createIndex({ userId: 1, canvasId: 1, updatedAt: -1 });
+    await this.tasks.createIndex({ 'graphJob.status': 1, updatedAt: -1 });
+    await this.tasks.createIndex({ 'graphJob.input.kind': 1, updatedAt: -1 });
     const exists = await this.counters.findOne({ _id: 'batch_tasks' });
     if (!exists) await this.counters.insertOne({ _id: 'batch_tasks', seq: 0 });
   }
@@ -796,6 +799,81 @@ export class BatchTaskService {
     });
   }
 
+  async enqueueGraphJob(batchTaskId: number, input: BatchTaskGraphJobInputXhs) {
+    const now = new Date();
+    await this.tasks.updateOne(
+      { id: batchTaskId },
+      {
+        $set: {
+          graphJob: {
+            status: 'queued',
+            input,
+            attempts: 0,
+            enqueuedAt: now,
+          },
+          updatedAt: now,
+        },
+      },
+    );
+  }
+
+  async claimNextGraphJob(
+    kind: BatchTaskGraphJobInputXhs['kind'],
+  ): Promise<BatchTaskEntity | null> {
+    const now = new Date();
+    const res = await this.tasks.findOneAndUpdate(
+      {
+        'graphJob.status': 'queued',
+        'graphJob.input.kind': kind,
+      },
+      {
+        $set: {
+          'graphJob.status': 'running',
+          'graphJob.startedAt': now,
+          'graphJob.error': undefined,
+          updatedAt: now,
+        },
+        $inc: { 'graphJob.attempts': 1 },
+      },
+      {
+        sort: { 'graphJob.enqueuedAt': 1, updatedAt: 1 },
+        returnDocument: 'after',
+        includeResultMetadata: true,
+        projection: { _id: 0 },
+      },
+    );
+    return (res.value as BatchTaskEntity | null) ?? null;
+  }
+
+  async markGraphJobDone(batchTaskId: number): Promise<void> {
+    const now = new Date();
+    await this.tasks.updateOne(
+      { id: batchTaskId },
+      {
+        $set: {
+          'graphJob.status': 'done',
+          'graphJob.finishedAt': now,
+          updatedAt: now,
+        },
+      },
+    );
+  }
+
+  async markGraphJobFailed(batchTaskId: number, error: string): Promise<void> {
+    const now = new Date();
+    await this.tasks.updateOne(
+      { id: batchTaskId },
+      {
+        $set: {
+          'graphJob.status': 'failed',
+          'graphJob.error': String(error ?? ''),
+          'graphJob.finishedAt': now,
+          updatedAt: now,
+        },
+      },
+    );
+  }
+
   /**
    * @description 触发 MCP 批量任务运行（异步），并将本地状态标记为 in_progress。
    * @param {number} id - 批量任务ID。
@@ -866,6 +944,75 @@ export class BatchTaskService {
       { $set: { status: 'in_progress', updatedAt: new Date() } },
     );
     await this.updateTodoSummary({ batchTaskId: id, status: 'in_progress' });
+    return await this.get(id);
+  }
+
+  async runSync(
+    id: number,
+    input: BatchTaskRunInput,
+  ): Promise<BatchTaskEntity | null> {
+    const doc = await this.tasks.findOne({ id });
+    if (!doc) return null;
+    if (!doc.mcpTaskId) throw new Error('BATCH_TASK_MCP_NOT_OPENED');
+
+    const callbackUrl =
+      typeof input.callbackUrl === 'string' &&
+      input.callbackUrl.trim().length > 0
+        ? input.callbackUrl.trim()
+        : undefined;
+    const toolName = 'batch_task_run_sync';
+
+    const cfg = input.payload ?? {};
+
+    const pickInt = (k1: string, k2?: string) => {
+      const v =
+        (k1 in cfg ? cfg[k1] : undefined) ??
+        (k2 && k2 in cfg ? cfg[k2] : undefined);
+      return typeof v === 'number' && Number.isFinite(v)
+        ? Math.floor(v)
+        : undefined;
+    };
+
+    const minDelayMs = pickInt('min_delay_ms', 'minDelayMs');
+    const maxDelayMs = pickInt('max_delay_ms', 'maxDelayMs');
+    const maxAccounts = pickInt('max_accounts', 'maxAccounts');
+    const itemTimeoutMs = pickInt('item_timeout_ms', 'itemTimeoutMs');
+
+    const toolInput: Record<string, unknown> = { task_id: doc.mcpTaskId };
+    if (typeof callbackUrl === 'string')
+      toolInput['callback_url'] = callbackUrl;
+    if (typeof minDelayMs === 'number')
+      toolInput['min_delay_ms'] = Math.max(0, minDelayMs);
+    if (typeof maxDelayMs === 'number')
+      toolInput['max_delay_ms'] = Math.max(0, maxDelayMs);
+    if (typeof maxAccounts === 'number')
+      toolInput['max_accounts'] = Math.max(1, maxAccounts);
+    if (typeof itemTimeoutMs === 'number')
+      toolInput['item_timeout_ms'] = Math.max(0, itemTimeoutMs);
+
+    await this.tasks.updateOne(
+      { id },
+      { $set: { status: 'in_progress', updatedAt: new Date() } },
+    );
+    await this.updateTodoSummary({ batchTaskId: id, status: 'in_progress' });
+
+    try {
+      await this.mcp.invokeTool(toolName, toolInput);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await this.tasks.updateOne(
+        { id },
+        { $set: { status: 'failed', updatedAt: new Date() } },
+      );
+      await this.updateTodoSummary({ batchTaskId: id, status: 'failed' });
+      throw new Error(`BATCH_TASK_RUN_SYNC_FAILED:${msg}`);
+    }
+
+    await this.tasks.updateOne(
+      { id },
+      { $set: { status: 'done', updatedAt: new Date() } },
+    );
+    await this.updateTodoSummary({ batchTaskId: id, status: 'done' });
     return await this.get(id);
   }
 

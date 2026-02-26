@@ -14,6 +14,36 @@ export type BatchTaskPostStatus =
   | 'failed'
   | 'cancelled';
 
+export type BatchTaskGraphJobStatus =
+  | 'queued'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'cancelled';
+
+export interface BatchTaskGraphJobInputXhs {
+  kind: 'xhs_batch_publish';
+  canvasId: number;
+  galleryUserId?: string;
+  galleryGroupId?: number;
+  minImageScore?: number;
+  callbackUrl?: string;
+  payload?: Record<string, unknown>;
+  provider?: 'gemini' | 'deepseek';
+  model?: string;
+  temperature?: number;
+}
+
+export interface BatchTaskGraphJobEntity {
+  status: BatchTaskGraphJobStatus;
+  input: BatchTaskGraphJobInputXhs;
+  attempts?: number;
+  enqueuedAt?: Date;
+  startedAt?: Date;
+  finishedAt?: Date;
+  error?: string;
+}
+
 export interface BatchTaskPostEntity {
   id: number;
   title: string;
@@ -37,6 +67,7 @@ export interface BatchTaskEntity {
   mcpTaskId?: string;
   todoId?: number;
   status: BatchTaskStatus;
+  graphJob?: BatchTaskGraphJobEntity;
   posts: BatchTaskPostEntity[];
   createdAt: Date;
   updatedAt: Date;

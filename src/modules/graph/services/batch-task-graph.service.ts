@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import * as z from 'zod';
 import {
   BaseMessage,
@@ -31,7 +36,10 @@ const ZXhsDraft = z.object({
 });
 
 @Injectable()
-export class BatchTaskGraphService {
+export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
+  private graphJobTimer: ReturnType<typeof setInterval> | null = null;
+  private graphJobBusy = false;
+
   constructor(
     private readonly canvas: CanvasService,
     private readonly batch: BatchTaskService,
@@ -39,6 +47,67 @@ export class BatchTaskGraphService {
     private readonly agent: AgentService,
     private readonly format: TextFormatService,
   ) {}
+
+  onModuleInit() {
+    if (this.graphJobTimer) return;
+    this.graphJobTimer = setInterval(() => {
+      void this.tickGraphJobWorker();
+    }, 1000);
+  }
+
+  onModuleDestroy() {
+    if (this.graphJobTimer) clearInterval(this.graphJobTimer);
+    this.graphJobTimer = null;
+  }
+
+  private async tickGraphJobWorker(): Promise<void> {
+    if (this.graphJobBusy) return;
+    this.graphJobBusy = true;
+    let claimedId: number | null = null;
+    try {
+      const task = await this.batch.claimNextGraphJob('xhs_batch_publish');
+      if (!task) return;
+      claimedId = task.id;
+      const input = task.graphJob?.input;
+      if (!input || input.kind !== 'xhs_batch_publish') {
+        await this.batch.markGraphJobFailed(task.id, 'GRAPH_JOB_INPUT_INVALID');
+        await this.batch.markFailed(task.id, 'GRAPH_JOB_INPUT_INVALID');
+        return;
+      }
+      const mcpTaskId = task.mcpTaskId ? String(task.mcpTaskId) : '';
+      if (!mcpTaskId) {
+        await this.batch.markGraphJobFailed(task.id, 'MCP_TASK_NOT_OPENED');
+        await this.batch.markFailed(task.id, 'MCP_TASK_NOT_OPENED');
+        return;
+      }
+
+      await this.runXhsPublishLangGraph({
+        userId: task.userId,
+        canvasId: input.canvasId,
+        batchTaskId: task.id,
+        mcpTaskId,
+        galleryUserId: input.galleryUserId ?? task.userId,
+        galleryGroupId: input.galleryGroupId,
+        minImageScore: input.minImageScore,
+        callbackUrl: input.callbackUrl,
+        payload: input.payload,
+        provider: input.provider,
+        model: input.model,
+        temperature: input.temperature,
+      });
+      await this.batch.markGraphJobDone(task.id);
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      if (typeof claimedId === 'number') {
+        await this.batch.markGraphJobFailed(claimedId, err.message);
+        await this.batch.markFailed(claimedId, err.message);
+      }
+      console.error('[BatchTaskGraph.graphJobWorker] FAILED', err.message);
+      if (err.stack) console.error(err.stack);
+    } finally {
+      this.graphJobBusy = false;
+    }
+  }
 
   /**
    * @description 生成指定区间的随机整数（包含两端）。
@@ -619,7 +688,7 @@ export class BatchTaskGraphService {
       });
     }
 
-    await this.batch.run(task.id, {
+    await this.batch.runSync(task.id, {
       callbackUrl: input.callbackUrl,
       payload: {
         canvasId: c.id,
@@ -871,26 +940,19 @@ export class BatchTaskGraphService {
       });
     }
 
-    setTimeout(() => {
-      void this.runXhsPublishLangGraph({
-        userId: input.userId,
-        canvasId: c.id,
-        batchTaskId: task.id,
-        mcpTaskId: String(opened?.mcpTaskId ?? ''),
-        galleryUserId: input.galleryUserId ?? input.userId,
-        galleryGroupId: input.galleryGroupId,
-        minImageScore: input.minImageScore,
-        callbackUrl: input.callbackUrl,
-        payload: input.payload,
-        provider: input.provider,
-        model: input.model,
-        temperature: input.temperature,
-      }).catch((e) => {
-        const err = e instanceof Error ? e : new Error(String(e));
-        console.error('[runXhsPublishLangGraph] FAILED', err.message);
-        if (err.stack) console.error(err.stack);
-      });
-    }, 10);
+    await this.batch.enqueueGraphJob(task.id, {
+      kind: 'xhs_batch_publish',
+      canvasId: c.id,
+      galleryUserId: input.galleryUserId ?? input.userId,
+      galleryGroupId: input.galleryGroupId,
+      minImageScore: input.minImageScore,
+      callbackUrl: input.callbackUrl,
+      payload: input.payload,
+      provider: input.provider,
+      model: input.model,
+      temperature: input.temperature,
+    });
+    summary['graphQueued'] = true;
 
     return { ok: true, result: summary };
   }
@@ -1370,7 +1432,7 @@ export class BatchTaskGraphService {
             : 300_000;
         const maxDelayMs = Math.max(minDelayMs, maxDelayMs0);
 
-        await this.batch.run(state.batchTaskId, {
+        await this.batch.runSync(state.batchTaskId, {
           callbackUrl: state.callbackUrl,
           payload: {
             ...(state.payload ?? {}),

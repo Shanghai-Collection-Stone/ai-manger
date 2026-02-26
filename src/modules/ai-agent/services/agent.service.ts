@@ -118,6 +118,7 @@ export class AgentService {
       model = new ChatOpenAI({
         model: config.model,
         temperature: config.temperature,
+        streaming: true,
         apiKey,
         configuration: {
           baseURL: 'https://api.deepseek.com',
@@ -129,10 +130,10 @@ export class AgentService {
     }
     if (config.provider === 'nvidia') {
       const apiKey = process.env.NVIDIA_API_KEY ?? '';
-      console.log('nvidia model', apiKey, config.model);
       model = new ChatOpenAI({
         model: config.model || 'deepseek-ai/deepseek-v3.1-terminus',
         temperature: config.temperature,
+        streaming: true,
         apiKey,
         configuration: {
           baseURL: 'https://integrate.api.nvidia.com/v1',

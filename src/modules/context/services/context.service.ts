@@ -138,6 +138,9 @@ export class ContextService {
       string,
       { id: string; name?: string; output: unknown }
     >();
+    // Build id→name map from AIMessage.tool_calls to recover correct names
+    // for ToolMessages (checkpoint often stores name as 'tool' instead of the real function name)
+    const toolCallIdToName = new Map<string, string>();
 
     type SavedMessage = {
       type?: string;
@@ -193,6 +196,10 @@ export class ContextService {
             (c.args as Record<string, unknown>) ??
             (c.input as Record<string, unknown>) ??
             undefined;
+          // Populate the id→name map for later ToolMessage name recovery
+          if (idVal && nameVal && nameVal !== 'tool') {
+            toolCallIdToName.set(idVal, nameVal);
+          }
           return { id: idVal, name: nameVal, input: inputVal };
         });
         const tool_results: any[] = [];
@@ -222,7 +229,15 @@ export class ContextService {
             : typeof v.id === 'string'
               ? v.id
               : '';
-        const nameRaw = typeof v.name === 'string' ? v.name : undefined;
+        let nameRaw = typeof v.name === 'string' ? v.name : undefined;
+        // Recover correct tool name: checkpoint often stores 'tool' as the name
+        if (
+          (!nameRaw || nameRaw === 'tool') &&
+          idRaw &&
+          toolCallIdToName.has(idRaw)
+        ) {
+          nameRaw = toolCallIdToName.get(idRaw);
+        }
         if (idRaw) {
           toolResultBuffer.set(idRaw, {
             id: idRaw,
@@ -394,12 +409,88 @@ export class ContextService {
     const storedAssistants = storedMessages.filter(
       (s) => s.role === ContextRole.Assistant,
     );
-    let assistantIndex = 0;
+
+    // Match stored messages to merged messages by content similarity
+    // rather than fragile sequential index
+    const usedStoredIndexes = new Set<number>();
+
+    const findBestStoredMatch = (
+      m: ContextMessage,
+    ): (typeof storedAssistants)[number] | undefined => {
+      const mContent = (m.content ?? '').trim();
+      const mToolCallIds = new Set(
+        ((m.tool_calls ?? []) as Array<{ id?: string }>)
+          .map((tc) => tc.id)
+          .filter(Boolean),
+      );
+
+      let bestIdx = -1;
+      let bestScore = -1;
+
+      for (let i = 0; i < storedAssistants.length; i++) {
+        if (usedStoredIndexes.has(i)) continue;
+        const s = storedAssistants[i];
+        let score = 0;
+
+        // Score by content match
+        const sContent = (
+          typeof s.content === 'string' ? s.content : ''
+        ).trim();
+        if (mContent.length > 0 && sContent.length > 0) {
+          if (mContent === sContent) {
+            score += 10;
+          } else if (
+            mContent.includes(sContent.slice(0, 50)) ||
+            sContent.includes(mContent.slice(0, 50))
+          ) {
+            score += 5;
+          }
+        }
+
+        // Score by tool call overlap (stored uses runId, checkpoint uses call_id,
+        // so match by parts/tool_results content instead)
+        if (
+          Array.isArray(s.parts) &&
+          s.parts.length > 0 &&
+          Array.isArray(m.parts)
+        ) {
+          // Both have parts → likely a match if tool count is similar
+          const sToolCount = (s.parts as Array<{ type?: string }>).filter(
+            (p) => p.type === 'tool_call' || p.type === 'tool_result',
+          ).length;
+          const mToolCount = m.parts.filter(
+            (p) => p.type === 'tool_call' || p.type === 'tool_result',
+          ).length;
+          if (sToolCount > 0 && mToolCount > 0) {
+            score += Math.min(sToolCount, mToolCount) * 2;
+          }
+        }
+
+        // Prefer sequential order as tiebreaker
+        if (score > bestScore) {
+          bestScore = score;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx >= 0 && bestScore > 0) {
+        usedStoredIndexes.add(bestIdx);
+        return storedAssistants[bestIdx];
+      }
+
+      // Fallback: use first unused stored message (sequential)
+      for (let i = 0; i < storedAssistants.length; i++) {
+        if (!usedStoredIndexes.has(i)) {
+          usedStoredIndexes.add(i);
+          return storedAssistants[i];
+        }
+      }
+      return undefined;
+    };
 
     for (const m of merged) {
       if (m.role !== ContextRole.Assistant) continue;
-      const stored = storedAssistants[assistantIndex];
-      assistantIndex += 1;
+      const stored = findBestStoredMatch(m);
 
       // 1. 优先使用存储的 parts (包含完美的 SSE 顺序)
       if (stored && Array.isArray(stored.parts) && stored.parts.length > 0) {
@@ -487,6 +578,7 @@ export class ContextService {
     );
     const limited =
       typeof limit === 'number' && limit > 0 ? ordered.slice(-limit) : ordered;
+
     return limited;
   }
 

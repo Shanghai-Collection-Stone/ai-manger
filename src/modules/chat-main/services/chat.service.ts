@@ -297,6 +297,7 @@ export class ChatMainService {
           let fullContent = '';
           const injectedCanvasIds = new Set<number>();
           const injectedTodoIds = new Set<number>();
+          const hiddenStreamToolNames = new Set<string>([]);
           const toolCallMap = new Map<
             string,
             { id: string; name: string; input: unknown }
@@ -310,18 +311,69 @@ export class ChatMainService {
           const debugToolNames = new Set<string>([]);
           const parts: MessagePart[] = [];
 
+          const jsonSafe = (v: unknown): unknown => {
+            const seen = new WeakSet<object>();
+            const walk = (x: unknown): unknown => {
+              if (x === null) return null;
+              switch (typeof x) {
+                case 'string':
+                case 'number':
+                case 'boolean':
+                  return x;
+                case 'undefined':
+                  return undefined;
+                case 'bigint':
+                  return x.toString();
+                case 'function':
+                case 'symbol':
+                  return undefined;
+                case 'object': {
+                  if (x instanceof Error) {
+                    return { name: x.name, message: x.message, stack: x.stack };
+                  }
+                  if (Array.isArray(x)) return x.map((i) => walk(i));
+                  const obj = x as Record<string, unknown>;
+                  if (seen.has(obj)) return '[Circular]';
+                  seen.add(obj);
+                  const out: Record<string, unknown> = {};
+                  for (const [k, v2] of Object.entries(obj)) {
+                    const vv = walk(v2);
+                    if (typeof vv !== 'undefined') out[k] = vv;
+                  }
+                  return out;
+                }
+              }
+            };
+            return walk(v);
+          };
+
           const safeNextStreamEvent = (payload: {
             type: string;
             data: Record<string, unknown>;
           }) => {
+            const safeDataRaw = jsonSafe(payload.data);
+            const safeData =
+              safeDataRaw &&
+              typeof safeDataRaw === 'object' &&
+              !Array.isArray(safeDataRaw)
+                ? (safeDataRaw as Record<string, unknown>)
+                : { value: safeDataRaw };
             safeNext({
               data: {
                 type: payload.type,
-                data: { ...payload.data },
+                data: safeData,
                 thread_id: sid,
               },
             } as MessageEvent);
           };
+
+          const heartbeatMs = 15_000;
+          const heartbeat = setInterval(() => {
+            safeNextStreamEvent({
+              type: 'ping',
+              data: { ts: Date.now() },
+            });
+          }, heartbeatMs);
 
           const emitToolStart = (input: {
             id?: string;
@@ -329,9 +381,19 @@ export class ChatMainService {
             input?: unknown;
           }) => {
             if (!input.id) return;
+            if (
+              typeof input.name === 'string' &&
+              hiddenStreamToolNames.has(input.name)
+            ) {
+              return;
+            }
             safeNextStreamEvent({
               type: 'tool_start',
-              data: { id: input.id, name: input.name, input: input.input },
+              data: {
+                id: input.id,
+                name: input.name,
+                input: jsonSafe(input.input),
+              },
             });
           };
 
@@ -342,13 +404,19 @@ export class ChatMainService {
             output?: unknown;
           }) => {
             if (!input.id) return;
+            if (
+              typeof input.name === 'string' &&
+              hiddenStreamToolNames.has(input.name)
+            ) {
+              return;
+            }
             safeNextStreamEvent({
               type: 'tool_end',
               data: {
                 id: input.id,
                 name: input.name,
-                input: input.input,
-                output: input.output,
+                input: jsonSafe(input.input),
+                output: jsonSafe(input.output),
               },
             });
           };
@@ -469,13 +537,6 @@ export class ChatMainService {
                       }
                     }
                   }
-                  if (toolDebug && debugToolNames.has(String(name ?? ''))) {
-                    console.log('[Chat.stream] tool_start', {
-                      id,
-                      name,
-                      inputType: typeof input,
-                    });
-                  }
                   emitToolStart({ id, name, input });
                   break;
                 }
@@ -508,19 +569,6 @@ export class ChatMainService {
                     argsBuffer.set(id, current + args);
                     const nextCount = (toolChunkCount.get(id) ?? 0) + 1;
                     toolChunkCount.set(id, nextCount);
-                    const toolName = toolCallMap.get(id)?.name;
-                    if (
-                      toolDebug &&
-                      nextCount <= 3 &&
-                      debugToolNames.has(String(toolName ?? ''))
-                    ) {
-                      console.log('[Chat.stream] tool_chunk', {
-                        id,
-                        chunk: nextCount,
-                        argsLen: String(args).length,
-                        totalLen: (current + args).length,
-                      });
-                    }
                   }
                   break;
                 }
@@ -542,9 +590,36 @@ export class ChatMainService {
                     emitToolStart({ id, name: toolName, input: undefined });
                   }
                   if (id) {
-                    toolResultMap.set(id, { id, name, output });
-                    parts.push({ type: 'tool_result', id, name, output });
+                    const resolvedName =
+                      typeof name === 'string' && name.length > 0
+                        ? name
+                        : (toolCallMap.get(id)?.name ?? '');
+                    toolResultMap.set(id, { id, name: resolvedName, output });
+                    parts.push({
+                      type: 'tool_result',
+                      id,
+                      name: resolvedName,
+                      output,
+                    });
                     markToolDone(id);
+
+                    // Backfill: if tool_call entry has empty name, fix it now
+                    if (resolvedName && resolvedName.length > 0) {
+                      const call = toolCallMap.get(id);
+                      if (call && (!call.name || call.name.length === 0)) {
+                        call.name = resolvedName;
+                      }
+                      const callPart = parts.find(
+                        (p) => p.type === 'tool_call' && p.id === id,
+                      );
+                      if (
+                        callPart &&
+                        callPart.type === 'tool_call' &&
+                        (!callPart.name || callPart.name.length === 0)
+                      ) {
+                        callPart.name = resolvedName;
+                      }
+                    }
                   }
 
                   let parsedInput: unknown = undefined;
@@ -562,18 +637,6 @@ export class ChatMainService {
                   }
 
                   emitToolEnd({ id, name, input: parsedInput, output });
-
-                  if (toolDebug && debugToolNames.has(String(name ?? ''))) {
-                    const rawArgs = id ? argsBuffer.get(id) : undefined;
-                    console.log('[Chat.stream] tool_end', {
-                      id,
-                      name,
-                      parsedInputType: typeof parsedInput,
-                      rawArgsLen:
-                        typeof rawArgs === 'string' ? rawArgs.length : 0,
-                      outputType: typeof output,
-                    });
-                  }
 
                   const items = this.extractCanvasItItems(output);
                   for (const it of items) {
@@ -608,27 +671,25 @@ export class ChatMainService {
                 }
                 case 'end': {
                   const { text } = e.data;
+
+                  // Safety net: if end event has text that wasn't streamed as tokens,
+                  // emit it as a token so the frontend still shows it.
+                  if (
+                    text &&
+                    text.trim().length > 0 &&
+                    fullContent.trim().length === 0
+                  ) {
+                    safeNextStreamEvent({
+                      type: 'token',
+                      data: { text },
+                    });
+                    appendAssistantText(text);
+                  }
+
                   safeNextStreamEvent({
                     type: 'end',
                     data: { text },
                   });
-                  if (
-                    fullContent.trim().length === 0 &&
-                    text &&
-                    text.trim().length > 0
-                  ) {
-                    fullContent = text;
-                    if (parts.length === 0) {
-                      parts.push({ type: 'text', content: text });
-                    } else {
-                      const lastPart = parts[parts.length - 1];
-                      if (lastPart.type === 'text') {
-                        lastPart.content = text;
-                      } else {
-                        parts.push({ type: 'text', content: text });
-                      }
-                    }
-                  }
                   break;
                 }
               }
@@ -649,6 +710,7 @@ export class ChatMainService {
               },
             });
           } finally {
+            clearInterval(heartbeat);
             for (const h of toolTimers.values()) clearTimeout(h);
             toolTimers.clear();
             pendingToolIds.clear();
@@ -670,6 +732,20 @@ export class ChatMainService {
                 }
               } catch {
                 // Ignore parse error, keep original input or partial
+              }
+            }
+          }
+
+          // Backfill empty tool names in parts from toolCallMap
+          for (const p of parts) {
+            if (
+              (p.type === 'tool_call' || p.type === 'tool_result') &&
+              p.id &&
+              (!p.name || p.name.length === 0)
+            ) {
+              const resolved = toolCallMap.get(p.id)?.name;
+              if (resolved && resolved.length > 0) {
+                p.name = resolved;
               }
             }
           }
@@ -835,6 +911,7 @@ export class ChatMainService {
               messages.push(
                 new ToolMessage({
                   tool_call_id: tr.id,
+                  name: call.name,
                   content:
                     typeof tr.output === 'string'
                       ? tr.output
@@ -994,8 +1071,7 @@ export class ChatMainService {
       // 内容清洗策略：
       // - 如果 JSON 被识别为工具数据，则剥离 JSON 头部，仅保留其后的正文。
       // - 若其后没有正文（rest 为空），为了避免 message.content 丢失，保留原文 s。
-      if (isToolJson || isCanvasWorkflowJson)
-        return rest.length > 0 ? rest : '';
+      if (isToolJson || isCanvasWorkflowJson) return rest.length > 0 ? rest : s;
       return s;
     } catch {
       return s;

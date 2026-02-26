@@ -274,7 +274,6 @@ export class GraphWorkflowFunctionCallService {
           return JSON.stringify({ ok: false, error: 'CANVAS_ID_INVALID' });
         }
 
-        if (streamWriter) streamWriter('[Graph] Starting XHS batch publish');
         console.log('[xhs_batch_publish] payload', {
           userId,
           canvasId: canvasIdNum,
@@ -326,7 +325,7 @@ export class GraphWorkflowFunctionCallService {
       {
         name: 'xhs_batch_publish',
         description:
-          'XHS Batch Publish Tool. Opens an MCP batch task, creates a tracking todo with todo items for each post, then asynchronously executes the publishing workflow. IMPORTANT: Provide taskCount; Canvas articles are only references for generation.',
+          'XHS Batch Publish Tool. Creates an async queue job, then runs the publish graph in the background. IMPORTANT: Provide taskCount; Canvas articles are only references for generation.',
         schema: z.object({
           userId: z.string().describe('Target user id'),
           canvasId: z.union([z.number(), z.string()]).describe('Canvas id'),
