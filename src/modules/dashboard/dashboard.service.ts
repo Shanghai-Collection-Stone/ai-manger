@@ -8,53 +8,88 @@ const TABLE_MALL = 'tblDxSPwNpi51DPe'; // 商城业绩
 
 /* ─── 工具函数 ─── */
 
-/** 解析 timeRange 字符串 → { start, end } 毫秒时间戳 */
-function parseTimeRange(timeRange: string): { start: number; end: number } {
+/**
+ * 获取当前北京时间的年月日（无论服务器时区如何）
+ * 返回 { year, month(0-based), day, todayMs(UTC ms of 00:00 Beijing time) }
+ */
+function getBeijingDate() {
+  const OFFSET_MS = 8 * 3600 * 1000; // UTC+8
   const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayMs = today.getTime();
+  const utcMs = now.getTime();
+  // 北京时区的当前时间
+  const bjMs = utcMs + OFFSET_MS;
+  const bjDate = new Date(bjMs);
+  const year = bjDate.getUTCFullYear();
+  const month = bjDate.getUTCMonth();
+  const day = bjDate.getUTCDate();
+  const dow = bjDate.getUTCDay() || 7; // 周一=1, 周日=7
+  // 今天0点在 UTC 的毫秒数 = 北京0点 对应的UTC时间
+  const todayMs = Date.UTC(year, month, day) - OFFSET_MS;
+  return { year, month, day, dow, todayMs };
+}
+
+/** 解析 timeRange 字符串 → { start, end } 毫秒时间戳 (始终使用北京时间) */
+function parseTimeRange(timeRange: string): { start: number; end: number } {
+  const { year, month, day, dow, todayMs } = getBeijingDate();
   const dayMs = 86400000;
+
+  let range: { start: number; end: number };
 
   switch (timeRange) {
     case '今天':
-      return { start: todayMs, end: todayMs + dayMs - 1 };
+      range = { start: todayMs, end: todayMs + dayMs - 1 };
+      break;
     case '明天':
-      return { start: todayMs + dayMs, end: todayMs + 2 * dayMs - 1 };
+      range = { start: todayMs + dayMs, end: todayMs + 2 * dayMs - 1 };
+      break;
     case '昨天':
-      return { start: todayMs - dayMs, end: todayMs - 1 };
+      range = { start: todayMs - dayMs, end: todayMs - 1 };
+      break;
     case '过去7天内':
-      return { start: todayMs - 7 * dayMs, end: todayMs + dayMs - 1 };
+      range = { start: todayMs - 7 * dayMs, end: todayMs + dayMs - 1 };
+      break;
     case '未来7天内':
-      return { start: todayMs, end: todayMs + 7 * dayMs - 1 };
+      range = { start: todayMs, end: todayMs + 7 * dayMs - 1 };
+      break;
     case '过去30天内':
-      return { start: todayMs - 30 * dayMs, end: todayMs + dayMs - 1 };
+      range = { start: todayMs - 30 * dayMs, end: todayMs + dayMs - 1 };
+      break;
     case '未来30天内':
-      return { start: todayMs, end: todayMs + 30 * dayMs - 1 };
+      range = { start: todayMs, end: todayMs + 30 * dayMs - 1 };
+      break;
     case '本周': {
-      const dow = now.getDay() || 7; // 周一=1 … 周日=7
       const monday = todayMs - (dow - 1) * dayMs;
-      return { start: monday, end: monday + 7 * dayMs - 1 };
+      range = { start: monday, end: monday + 7 * dayMs - 1 };
+      break;
     }
     case '上周': {
-      const dow = now.getDay() || 7;
       const thisMonday = todayMs - (dow - 1) * dayMs;
-      return { start: thisMonday - 7 * dayMs, end: thisMonday - 1 };
+      range = { start: thisMonday - 7 * dayMs, end: thisMonday - 1 };
+      break;
     }
     case '上月': {
-      const firstThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const firstLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      return {
-        start: firstLastMonth.getTime(),
-        end: firstThisMonth.getTime() - 1,
-      };
+      const OFFSET_MS = 8 * 3600 * 1000;
+      const firstThisMonth = Date.UTC(year, month, 1) - OFFSET_MS;
+      const firstLastMonth = Date.UTC(year, month - 1, 1) - OFFSET_MS;
+      range = { start: firstLastMonth, end: firstThisMonth - 1 };
+      break;
     }
     case '本月':
     default: {
-      const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const firstOfNext = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      return { start: firstOfMonth.getTime(), end: firstOfNext.getTime() - 1 };
+      const OFFSET_MS = 8 * 3600 * 1000;
+      const firstOfMonth = Date.UTC(year, month, 1) - OFFSET_MS;
+      const firstOfNext = Date.UTC(year, month + 1, 1) - OFFSET_MS;
+      range = { start: firstOfMonth, end: firstOfNext - 1 };
+      break;
     }
   }
+
+  console.log(
+    `[Dashboard] parseTimeRange("${timeRange}") → ` +
+      `start=${new Date(range.start).toISOString()} ` +
+      `end=${new Date(range.end).toISOString()}`,
+  );
+  return range;
 }
 
 /** 安全提取数值 —— 处理飞书数字/公式/货币字段的各种返回格式 */
@@ -126,6 +161,7 @@ async function fetchAll(
     hasMore = res.hasMore;
     pageToken = res.pageToken;
   }
+  console.log(`[Dashboard] fetchAll(${tableId}) → ${all.length} records`);
   return all;
 }
 
