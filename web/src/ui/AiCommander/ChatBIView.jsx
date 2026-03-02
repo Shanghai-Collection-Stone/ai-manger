@@ -1,13 +1,112 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Sparkles, Zap, History, Plus, MessageSquare, X
+  Sparkles, Zap, History, Plus, MessageSquare, X, 
+  AlertCircle, Loader2, BrainCircuit
 } from 'lucide-react';
 import { chatService } from './chatService';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+/* ─── SSE Line Parser ─── */
 
 /**
- * @description AI中枢对话视图组件，提供自然语言交互
+ * Parse raw SSE text buffer into individual JSON event payloads.
+ * Returns { events: parsed[], remainder: unparsed tail }
+ */
+function parseSSEChunk(buffer) {
+  const events = [];
+  const parts = buffer.split('\n\n');
+  const remainder = parts.pop() || '';
+  for (const part of parts) {
+    for (const line of part.split('\n')) {
+      const prefix = line.startsWith('data: ') ? 6 : line.startsWith('data:') ? 5 : 0;
+      if (prefix) {
+        try { events.push(JSON.parse(line.slice(prefix))); } catch { /* skip */ }
+      }
+    }
+  }
+  return { events, remainder };
+}
+
+/* ─── Thinking Indicator (replaces tool call cards) ─── */
+
+const ThinkingBubble = ({ toolCount }) => (
+  <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-sm mb-1 animate-pulse">
+    <BrainCircuit size={16} className="text-indigo-500" />
+    <span className="text-xs text-indigo-600 font-medium">
+      思考中{toolCount > 0 ? `（已调用 ${toolCount} 个工具）` : '...'}
+    </span>
+    <Loader2 size={12} className="animate-spin text-indigo-400" />
+  </div>
+);
+
+/* ─── AI Message Component ─── */
+
+const AIMessage = ({ msg }) => {
+  // Parse markdown securely
+  const htmlContent = React.useMemo(() => {
+    if (!msg.content) return { __html: '' };
+    let rawMarkup = marked.parse(msg.content);
+    // Wrap each <table> in a scrollable container so only the table scrolls, not the bubble
+    rawMarkup = rawMarkup.replace(/<table/g, '<div class="ai-table-scroll"><table');
+    rawMarkup = rawMarkup.replace(/<\/table>/g, '</table></div>');
+    return { __html: DOMPurify.sanitize(rawMarkup) };
+  }, [msg.content]);
+
+  return (
+    <div className="flex flex-col space-y-1 max-w-[90%]">
+      {/* Thinking indicator — show when streaming and tools are being called */}
+      {msg.isStreaming && msg.toolCount > 0 && (
+        <ThinkingBubble toolCount={msg.toolCount} />
+      )}
+
+      {/* Text content */}
+      {(msg.content || msg.isStreaming) && (
+        <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
+          {msg.content ? (
+            <div 
+              className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed 
+                         prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5
+                         [&_.ai-table-scroll]:overflow-x-auto [&_.ai-table-scroll]:rounded-lg [&_.ai-table-scroll]:my-2
+                         [&_table]:w-max [&_table]:min-w-full
+                         [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap
+                         [&_table]:border-collapse [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5
+                         [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5"
+              dangerouslySetInnerHTML={htmlContent} 
+            />
+          ) : (
+            msg.isStreaming && (
+              <span className="animate-pulse flex items-center text-slate-400 text-sm font-medium">
+                <Sparkles size={14} className="mr-1" /> 思考中...
+              </span>
+            )
+          )}
+        </div>
+      )}
+
+    {/* Show empty placeholder while loading, no content yet, no error */}
+    {!msg.content && !msg.isStreaming && !msg.errorText && (
+      <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
+        <span className="text-sm text-slate-400">（无内容）</span>
+      </div>
+    )}
+
+    {/* Error message */}
+    {msg.errorText && (
+      <div className="bg-red-50 border border-red-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
+        <div className="text-xs text-red-600 font-medium flex items-center gap-1.5">
+          <AlertCircle size={14} />
+          <span>{msg.errorText}</span>
+        </div>
+      </div>
+    )}
+  </div>
+  );
+};
+
+/**
+ * @description AI中枢对话视图组件，支持SSE流式解析，工具调用隐藏在思考状态中
  * @keyword-en ChatBIView
- * @returns {JSX.Element} ChatBIView component
  */
 const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
   const [messages, setMessages] = useState([]);
@@ -18,19 +117,32 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    // 初始化会话列表
     const init = async () => {
       const loadedSessions = await chatService.getSessions();
       setSessions(loadedSessions);
+      
+      const savedSessionId = localStorage.getItem('ai_commander_session_id');
+      
+      if (savedSessionId && savedSessionId.startsWith('local-')) {
+        // Just empty local session
+        setSessionId(savedSessionId);
+      } else if (savedSessionId && loadedSessions.some(s => s.sessionId === savedSessionId)) {
+        // Load the saved remote session
+        handleSwitchSession({ sessionId: savedSessionId }, loadedSessions);
+      } else if (loadedSessions.length > 0) {
+        // Auto-load first session
+        handleSwitchSession(loadedSessions[0], loadedSessions);
+      } else {
+        // Start fresh
+        const newLocalId = 'local-' + Date.now();
+        setSessionId(newLocalId);
+        localStorage.setItem('ai_commander_session_id', newLocalId);
+      }
     };
     init();
-
-    // 初始化当前会话 ID (使用本地临时 ID，发送消息时再创建真实会话)
-    setSessionId('local-' + Date.now());
   }, []);
 
   useEffect(() => {
-    // 滚动到底部
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -38,34 +150,28 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
     const newId = 'local-' + Date.now();
     setSessionId(newId);
     setMessages([]);
+    localStorage.setItem('ai_commander_session_id', newId);
     if (onDrawerToggle) onDrawerToggle(false);
   };
 
-  const handleSwitchSession = async (sess) => {
+  // added a loadedSessions parameter for the initial load case where state might not be updated yet
+  const handleSwitchSession = async (sess, currentSessions = sessions) => {
     if (sess.sessionId === sessionId) {
       if (onDrawerToggle) onDrawerToggle(false);
       return;
     }
-    
     setIsLoading(true);
     setSessionId(sess.sessionId);
+    localStorage.setItem('ai_commander_session_id', sess.sessionId);
     if (onDrawerToggle) onDrawerToggle(false);
-    
     try {
-      // 获取历史记录
       const history = await chatService.fetchHistory(sess.sessionId);
-      // 转换格式适配 UI (假设后端返回格式需要适配，这里简单处理)
-      // 如果后端返回的就是标准格式则直接使用
-      // 这里模拟适配：假设 history 是 { messages: [] } 或 []
       const msgs = Array.isArray(history) ? history : (history.messages || []);
-      
-      // 如果历史记录为空，且是本地存储的会话，可能需要从本地恢复（如果做了本地存储消息的话）
-      // 目前 chatService 只有 fetchHistory 从后端取。
-      // MVP 阶段：如果后端没取到，就置空
       setMessages(msgs.map(m => ({
         ...m,
         id: m.id || Date.now() + Math.random(),
-        type: 'text' // 确保有 type
+        role: m.role === 'assistant' ? 'ai' : m.role,
+        toolCount: 0,
       })));
     } catch (e) {
       console.error(e);
@@ -75,13 +181,14 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
     }
   };
 
+  /* ─── Send message with SSE streaming ─── */
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return;
 
     const userText = inputValue.trim();
     setInputValue('');
-    
-    // 如果是本地会话，先创建远程会话
+
+    // 1. Ensure remote session exists
     let currentSessionId = sessionId;
     if (currentSessionId.startsWith('local-')) {
       try {
@@ -94,48 +201,102 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       }
     }
 
-    // 添加用户消息
-    const userMsg = { id: Date.now(), role: 'user', content: userText, type: 'text' };
-    setMessages(prev => [...prev, userMsg]);
-    setIsLoading(true);
+    // 2. Add user message
+    const userMsg = { id: Date.now(), role: 'user', content: userText };
+
+    // 3. Immediately create an empty AI placeholder (early-refresh protection)
+    //    Content is empty = shows "思考中..." placeholder
+    //    This msg is "on-record" so even if user refreshes, it exists
+    const aiMsgId = Date.now() + 1;
+    const aiMsg = {
+      id: aiMsgId,
+      role: 'ai',
+      content: '',
+      toolCount: 0,
+      isStreaming: true,
+      errorText: null,
+    };
+
+    setMessages(prev => [...prev, userMsg, aiMsg]);
+    setIsLoading(true);  // Blocks input field
 
     try {
-      // 添加 AI 占位消息
-      const aiMsgId = Date.now() + 1;
-      setMessages(prev => [...prev, { id: aiMsgId, role: 'ai', content: '', type: 'text', isStreaming: true }]);
-
       const response = await chatService.streamChatPost(currentSessionId, userText);
-      
       if (!response.body) throw new Error('No response body');
-      
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let aiContent = '';
+      let sseBuffer = '';
+      let textContent = '';
+      let toolCount = 0;
+
+      const updateAiMsg = (overrides) => {
+        setMessages(prev => prev.map(msg =>
+          msg.id === aiMsgId
+            ? { ...msg, content: textContent, toolCount, ...overrides }
+            : msg
+        ));
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        aiContent += chunk;
-        
-        // 更新 AI 消息内容
-        setMessages(prev => prev.map(msg => 
-          msg.id === aiMsgId ? { ...msg, content: aiContent } : msg
-        ));
-      }
-      
-      // 完成流式传输
-      setMessages(prev => prev.map(msg => 
-        msg.id === aiMsgId ? { ...msg, isStreaming: false } : msg
-      ));
 
-      // 刷新会话列表 (如果之前是新会话)
+        sseBuffer += decoder.decode(value, { stream: true });
+        const { events, remainder } = parseSSEChunk(sseBuffer);
+        sseBuffer = remainder;
+
+        for (const evt of events) {
+          switch (evt.type) {
+            case 'token': {
+              const text = evt.data?.text ?? '';
+              if (text) {
+                textContent += text;
+                updateAiMsg();
+              }
+              break;
+            }
+            case 'tool_start': {
+              toolCount++;
+              updateAiMsg();
+              break;
+            }
+            case 'tool_end':
+            case 'tool_chunk':
+            case 'reasoning':
+            case 'log':
+            case 'ping':
+              // All hidden — tool calls go into the thinking indicator count
+              break;
+            case 'error': {
+              const errMsg = evt.data?.message || '未知错误';
+              updateAiMsg({ errorText: errMsg, isStreaming: false });
+              break;
+            }
+            case 'end':
+              // Stream complete
+              break;
+            default:
+              break;
+          }
+        }
+      }
+
+      // Finalize
+      updateAiMsg({ isStreaming: false });
+
+      // Refresh session list
       const updatedSessions = await chatService.getSessions();
       setSessions(updatedSessions);
 
     } catch (error) {
       console.error('Chat error:', error);
-      setMessages(prev => [...prev, { id: Date.now(), role: 'ai', content: '抱歉，我现在无法回答。请稍后再试。', type: 'error' }]);
+      // Record error in the already-created AI message (not a new one)
+      setMessages(prev => prev.map(msg =>
+        msg.id === aiMsgId
+          ? { ...msg, errorText: '抱歉，我现在无法回答。请稍后再试。', isStreaming: false }
+          : msg
+      ));
     } finally {
       setIsLoading(false);
     }
@@ -150,12 +311,12 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
 
   return (
     <div className="flex flex-col h-[calc(100vh-220px)] animate-fade-in relative overflow-hidden">
-      
+
       {/* 历史会话 Drawer */}
-      <div 
+      <div
         className={`absolute top-0 right-0 h-full w-64 bg-white z-30 transform transition-all duration-300 ease-in-out border-l border-slate-100 flex flex-col ${
-          isDrawerOpen 
-            ? 'translate-x-0 opacity-100 pointer-events-auto shadow-xl' 
+          isDrawerOpen
+            ? 'translate-x-0 opacity-100 pointer-events-auto shadow-xl'
             : 'translate-x-full opacity-0 pointer-events-none shadow-none'
         }`}
       >
@@ -165,9 +326,9 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
             <X size={18} />
           </button>
         </div>
-        
+
         <div className="p-3">
-          <button 
+          <button
             onClick={handleNewSession}
             className="w-full flex items-center justify-center space-x-2 bg-indigo-50 text-indigo-600 py-2 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors border border-indigo-100"
           >
@@ -178,15 +339,15 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
 
         <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
           {sessions.length === 0 ? (
-             <div className="text-center text-xs text-slate-400 py-8">暂无历史会话</div>
+            <div className="text-center text-xs text-slate-400 py-8">暂无历史会话</div>
           ) : (
             sessions.map(sess => (
               <button
                 key={sess.sessionId}
                 onClick={() => handleSwitchSession(sess)}
                 className={`w-full text-left p-3 rounded-lg text-xs transition-all border ${
-                  sessionId === sess.sessionId 
-                    ? 'bg-slate-900 text-white border-slate-900 shadow-md' 
+                  sessionId === sess.sessionId
+                    ? 'bg-slate-900 text-white border-slate-900 shadow-md'
                     : 'bg-white text-slate-600 border-slate-100 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
@@ -205,7 +366,7 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
 
       {/* 遮罩层 */}
       {isDrawerOpen && (
-        <div 
+        <div
           className="absolute inset-0 bg-black/20 z-10 backdrop-blur-[1px]"
           onClick={() => onDrawerToggle && onDrawerToggle(false)}
         />
@@ -214,25 +375,23 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       {/* 消息列表区域 */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-24 pt-4">
         {messages.length === 0 ? (
-          // 空状态 - 仅在无消息时显示
           <div className="h-full flex flex-col items-center justify-center pb-20 opacity-80 animate-fade-in-up">
             <div className="w-20 h-20 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-full flex items-center justify-center mb-6 shadow-sm border border-white ring-4 ring-indigo-50/50">
               <Sparkles size={32} className="text-indigo-600" />
             </div>
             <h2 className="text-xl font-bold text-slate-900 mb-2">AI 主脑中枢</h2>
             <p className="text-sm text-slate-500 max-w-xs text-center leading-relaxed">
-              我是您的智能业务助手。<br/>
+              我是您的智能业务助手。<br />
               您可以问我关于营收、客流的分析，或者下达运营指令。
             </p>
-            
             <div className="mt-8 grid grid-cols-2 gap-3 w-full max-w-md px-4">
-              <button 
+              <button
                 onClick={() => setInputValue('本月客流趋势如何？')}
                 className="text-xs bg-white border border-slate-200 p-3 rounded-xl text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all text-left"
               >
                 📈 本月客流趋势如何？
               </button>
-              <button 
+              <button
                 onClick={() => setInputValue('分析一下Top5商铺的销售额')}
                 className="text-xs bg-white border border-slate-200 p-3 rounded-xl text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all text-left"
               >
@@ -241,58 +400,49 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
             </div>
           </div>
         ) : (
-          // 消息列表
           <>
-            {messages.map((msg) => (
+            {messages.map(msg => (
               <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
                 {msg.role === 'user' ? (
                   <div className="bg-slate-900 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] text-sm shadow-sm font-medium leading-relaxed">
                     {msg.content}
                   </div>
                 ) : (
-                  <div className="flex flex-col space-y-1 max-w-[90%]">
-                     <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
-                      <div className="text-sm text-slate-700 font-medium whitespace-pre-wrap leading-relaxed">
-                        {msg.content || (msg.isStreaming ? <span className="animate-pulse flex items-center text-slate-400"><Sparkles size={14} className="mr-1"/> 思考中...</span> : '')}
-                      </div>
-                    </div>
-                  </div>
+                  <AIMessage msg={msg} />
                 )}
               </div>
             ))}
-            
-            {isLoading && messages[messages.length - 1]?.role === 'user' && (
-               <div className="flex justify-start items-center space-x-2 text-xs text-slate-400 font-medium pl-2 mb-4">
-                 <Sparkles size={14} className="animate-pulse text-indigo-500" />
-                 <span>主脑正在思考...</span>
-               </div>
-            )}
-            
             <div ref={messagesEndRef} />
           </>
         )}
       </div>
 
-      {/* 底部输入框区域 - 调整 padding */}
+      {/* 底部输入框区域 */}
       <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#F7F9FC] via-[#F7F9FC] to-transparent pt-6 pb-4 px-4">
-        <div className="flex items-center bg-white border border-slate-200 shadow-lg shadow-slate-200/50 rounded-full p-1.5 px-4 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all max-w-2xl mx-auto">
-          <input 
-            type="text" 
+        <div className={`flex items-center bg-white border shadow-lg shadow-slate-200/50 rounded-full p-1.5 px-4 transition-all max-w-2xl mx-auto ${
+          isLoading 
+            ? 'border-indigo-200 bg-indigo-50/30' 
+            : 'border-slate-200 focus-within:ring-2 focus-within:ring-indigo-500/20'
+        }`}>
+          <input
+            type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="问问数据，或者下达指令..." 
-            className="flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder-slate-400 py-2.5 font-medium"
+            placeholder={isLoading ? 'AI 正在回复中，请稍候...' : '问问数据，或者下达指令...'}
+            className="flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder-slate-400 py-2.5 font-medium disabled:cursor-not-allowed disabled:opacity-50"
             disabled={isLoading}
           />
-          <button 
+          <button
             onClick={handleSend}
             disabled={isLoading || !inputValue.trim()}
             className={`w-9 h-9 rounded-full flex items-center justify-center transition shadow-sm ${
-              inputValue.trim() && !isLoading ? 'bg-slate-900 text-white hover:bg-slate-800 scale-100' : 'bg-slate-100 text-slate-300 cursor-not-allowed scale-95'
+              inputValue.trim() && !isLoading
+                ? 'bg-slate-900 text-white hover:bg-slate-800 scale-100'
+                : 'bg-slate-100 text-slate-300 cursor-not-allowed scale-95'
             }`}
           >
-            <Zap size={16} />
+            {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
           </button>
         </div>
       </div>

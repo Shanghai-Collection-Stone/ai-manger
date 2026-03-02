@@ -66,3 +66,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 /public/pages
 /public/uploads
 /public/uploads_thumbs
+
+open-md

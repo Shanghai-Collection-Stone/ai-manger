@@ -1,5 +1,8 @@
 
-const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
+// Auto-detect: Astro dev (4322) → NestJS (3011), production → same origin
+const API_BASE = typeof window !== 'undefined' && window.location.port === '4322'
+  ? 'http://localhost:3011'
+  : (typeof window !== 'undefined' ? window.location.origin : '');
 
 /**
  * @description Chat Service for AiCommander

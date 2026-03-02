@@ -63,8 +63,8 @@ export class KeywordService {
 
       const aiResult = await this.agent.runWithMessages({
         config: {
-          provider: 'deepseek',
-          model: 'deepseek-chat',
+          provider: 'nvidia',
+          model: 'deepseek-ai/deepseek-v3.1-terminus',
           temperature: 0.1,
         },
         messages: this.agent.toMessages([
