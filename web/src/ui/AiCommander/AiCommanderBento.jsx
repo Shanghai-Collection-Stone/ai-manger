@@ -101,7 +101,7 @@ const AiCommanderBento = () => {
           )}
         </div>
         <div className="flex items-center text-sm font-medium text-slate-500 cursor-pointer">
-          <MapPin size={14} className="mr-1" /> 济南集合石项目 <ChevronRight size={14} className="ml-0.5" />
+          <MapPin size={14} className="mr-1" /> 上海月亮湾集合石 <ChevronRight size={14} className="ml-0.5" />
         </div>
       </div>
 
