@@ -77,6 +77,7 @@ async function bootstrap() {
   await runMigrations();
 
   const app = await NestFactory.create(AppModule);
+  app.enableCors();
 
   const publicPages = join(process.cwd(), 'public', 'pages');
   const distPages = join(process.cwd(), 'dist', 'pages');

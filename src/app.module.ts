@@ -15,6 +15,7 @@ import { BatchTaskModule } from './modules/batch-task/batch-task.module';
 import { GalleryModule } from './modules/gallery/gallery.module';
 import { CanvasModule } from './modules/canvas/canvas.module';
 import { GraphModule } from './modules/graph/graph.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { GraphModule } from './modules/graph/graph.module';
     GalleryModule,
     CanvasModule,
     GraphModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],
