@@ -85,10 +85,6 @@ export class TodoController {
 
   /**
    * @description 列出待办，支持按用户过滤
-   * @param {string} [userId] - 指定用户
-   * @returns {Promise<Record<string, unknown>>} 列表
-   * @keyword todo, list, user
-   * @since 2026-01-27
    */
   @Get()
   async list(
@@ -96,6 +92,27 @@ export class TodoController {
   ): Promise<Record<string, unknown>> {
     const rows = await this.todo.list(userId);
     return { todos: rows };
+  }
+
+  /**
+   * @description 获取历史接单人名称列表
+   */
+  @Get('assignees')
+  async listAssignees(): Promise<Record<string, unknown>> {
+    const assignees = await this.todo.listAssignees();
+    return { assignees };
+  }
+
+  /**
+   * @description 接单
+   */
+  @Post(':id/accept')
+  async accept(
+    @Param('id') id: string,
+    @Body() body: { assignee: string },
+  ): Promise<Record<string, unknown>> {
+    const doc = await this.todo.acceptTask(Number(id), body.assignee);
+    return { todo: doc ? { ...doc, _id: undefined } : null };
   }
 
   /**

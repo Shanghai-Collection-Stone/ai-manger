@@ -41,6 +41,8 @@ export class TodoService {
     await this.todos.createIndex({ id: 1 }, { unique: true });
     await this.todos.createIndex({ userId: 1 });
     await this.todos.createIndex({ status: 1 });
+    await this.todos.createIndex({ type: 1 });
+    await this.todos.createIndex({ assignee: 1 });
     await this.todoItems.createIndex({ id: 1 }, { unique: true });
     await this.todoItems.createIndex({ todoId: 1 });
     await this.todoItems.createIndex({ userId: 1 });
@@ -98,6 +100,8 @@ export class TodoService {
       userId: input.userId,
       title: input.title,
       description: input.description,
+      type: input.type,
+      assignee: input.assignee,
       aiConsideration: input.aiConsideration,
       decisionReason: input.decisionReason,
       aiPlan: input.aiPlan,
@@ -223,5 +227,28 @@ export class TodoService {
       .find({ todoId }, { projection: { _id: 0 } })
       .sort({ plannedAt: 1, id: 1 })
       .toArray();
+  }
+
+  /**
+   * @description 返回历史接单人名称列表（去重）
+   */
+  async listAssignees(): Promise<string[]> {
+    const values = await this.todos.distinct('assignee');
+    return values.filter(
+      (v): v is string => typeof v === 'string' && v.trim().length > 0,
+    );
+  }
+
+  /**
+   * @description 接单：设置 assignee 并将状态改为 in_progress
+   */
+  async acceptTask(id: number, assignee: string): Promise<TodoEntity | null> {
+    const now = new Date();
+    const res = await this.todos.findOneAndUpdate(
+      { id },
+      { $set: { assignee, status: 'in_progress' as const, updatedAt: now } },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
   }
 }

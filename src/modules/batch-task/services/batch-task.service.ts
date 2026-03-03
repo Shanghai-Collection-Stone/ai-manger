@@ -211,6 +211,7 @@ export class BatchTaskService {
       userId: input.userId,
       title: todoTitle,
       description: todoDescription,
+      type: 'auto_execute',
       aiConsideration: 'Auto created by batch task linkage',
       decisionReason: 'Create overview todo for batch publishing tracking',
       aiPlan: 'Track each release as a todo item with status and done note',

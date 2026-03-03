@@ -7,6 +7,25 @@ import { chatService } from './chatService';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
+// Configure marked to handle AI output better
+marked.setOptions({ breaks: true, gfm: true });
+const renderer = new marked.Renderer();
+// Override code block rendering: if it looks like plain text (no language specified
+// and no code-like patterns), render as a styled paragraph instead of <pre><code>
+const _origCode = renderer.code.bind(renderer);
+renderer.code = function({ text, lang }) {
+  if (lang) return _origCode({ text, lang });
+  // Heuristic: if text has no typical code patterns, treat as plain text
+  const looksLikeCode = /[{}[\];=<>]|function |const |let |var |import |class |=>|\.map\(|console\.|return /.test(text);
+  if (!looksLikeCode) {
+    // Render as normal text paragraph, preserving line breaks
+    const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<p style="white-space:pre-wrap">${escaped}</p>`;
+  }
+  return _origCode({ text, lang });
+};
+marked.use({ renderer });
+
 /* ─── SSE Line Parser ─── */
 
 /**
@@ -67,7 +86,9 @@ const AIMessage = ({ msg }) => {
             <div 
               className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words
                          prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5
-                         [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:break-all
+                         [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:bg-slate-50 [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:text-xs [&_pre]:my-2
+                         [&_code]:break-all [&_code]:text-xs
+                         [&_p]:[overflow-wrap:anywhere]
                          [&_.ai-table-scroll]:overflow-x-auto [&_.ai-table-scroll]:rounded-lg [&_.ai-table-scroll]:my-2
                          [&_table]:w-max [&_table]:min-w-full
                          [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap

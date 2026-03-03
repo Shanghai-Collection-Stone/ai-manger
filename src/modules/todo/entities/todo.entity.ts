@@ -12,6 +12,9 @@ export interface TodoEntity {
   userId: string;
   title: string;
   description?: string;
+  type?: string;
+  assignee?: string;
+  abnormalReason?: string;
   aiConsideration: string;
   decisionReason: string;
   aiPlan: string;
@@ -22,21 +25,13 @@ export interface TodoEntity {
 
 /**
  * @description 待办创建输入
- * @param {string} userId - 指定用户ID
- * @param {string} title - 标题
- * @param {string} [description] - 描述
- * @param {string} aiConsideration - AI的考量
- * @param {string} decisionReason - 决策产生过程
- * @param {string} aiPlan - AI打算让你怎么做
- * @returns {void}
- * @throws {Error} 参数缺失
- * @keyword todo, create, input
- * @since 2026-01-27
  */
 export interface TodoCreateInput {
   userId: string;
   title: string;
   description?: string;
+  type?: string;
+  assignee?: string;
   aiConsideration: string;
   decisionReason: string;
   aiPlan: string;
@@ -44,16 +39,15 @@ export interface TodoCreateInput {
 
 /**
  * @description 待办更新输入
- * @param {number} id - 序号ID
- * @returns {void}
- * @keyword todo, update, input
- * @since 2026-01-27
  */
 export interface TodoUpdateInput {
   id: number;
   userId?: string;
   title?: string;
   description?: string;
+  type?: string;
+  assignee?: string;
+  abnormalReason?: string;
   aiConsideration?: string;
   decisionReason?: string;
   aiPlan?: string;

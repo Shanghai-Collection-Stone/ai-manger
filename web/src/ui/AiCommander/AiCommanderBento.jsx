@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { 
-  LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList
+  LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList, Plus
 } from 'lucide-react';
 
 import DashboardView from './DashboardView';
@@ -9,7 +9,7 @@ import DecisionFeedView from './DecisionFeedView';
 import ChatBIView from './ChatBIView';
 import TaskCenterView from './TaskCenterView';
 import NavItem from './NavItem';
-import { $activeTab, $decisionCount } from './store';
+import { $activeTab, $decisionCount, $createTaskOpen } from './store';
 
 /**
  * @description AI 指挥官 Bento 风格主界面组件
@@ -42,11 +42,22 @@ const AiCommanderBento = () => {
   return (
     <div className="flex flex-col min-h-screen bg-[#F7F9FC] font-sans text-slate-800 overflow-x-hidden">
       {/* 顶部控制台 */}
-      <div className="pt-4 pb-4 px-5 bg-white shadow-[0_4px_20px_rgba(0,0,0,0.02)] z-10 relative">
+      <div className="pt-4 pb-3 px-5 bg-white shadow-[0_4px_20px_rgba(0,0,0,0.02)] z-10 relative">
         <div className="flex justify-between items-center mb-1">
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">
-            AI 指挥官
-          </h1>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">
+              {activeTab === 'dashboard' && 'AI 指挥官'}
+              {activeTab === 'tasks' && '待办管理'}
+              {activeTab === 'decisions' && '待办决策'}
+              {activeTab === 'chat' && 'AI 助理'}
+            </h1>
+            {activeTab === 'tasks' && (
+              <p className="text-[11px] text-slate-400 mt-0.5">对接现有工单系统</p>
+            )}
+            {activeTab === 'decisions' && (
+              <p className="text-[11px] text-slate-400 mt-0.5">AI 驱动的智能决策推荐</p>
+            )}
+          </div>
           
           {/* Header Actions */}
           {activeTab === 'chat' ? (
@@ -58,6 +69,16 @@ const AiCommanderBento = () => {
               <History size={16} />
               <span className="text-xs font-medium">历史会话</span>
             </button>
+          ) : activeTab === 'tasks' ? (
+            <button 
+              onClick={() => $createTaskOpen.set(true)}
+              className="flex items-center space-x-1 bg-slate-900 text-white px-3 py-1.5 rounded-full text-xs font-medium shadow-lg shadow-slate-200 hover:bg-slate-800 transition"
+            >
+              <Plus size={14} />
+              <span>新建派单</span>
+            </button>
+          ) : activeTab === 'decisions' ? (
+            <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">{decisionCount} 项</span>
           ) : (
             <div className="flex items-center space-x-2">
               {activeTab === 'dashboard' ? (
@@ -71,7 +92,7 @@ const AiCommanderBento = () => {
                     <span className="px-2 py-0.5 rounded-xl bg-white/10">{timeRange}</span>
                   </button>
                   {trOpen && (
-                    <div className="absolute right-0 mt-2 w-44 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 animate-fade-in">
+                    <div className="absolute right-0 mt-2 w-44 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 animate-fade-in z-50">
                       <div className="grid grid-cols-1 gap-1">
                         {timeRanges.map((tr) => (
                           <button
@@ -94,9 +115,6 @@ const AiCommanderBento = () => {
                   )}
                 </div>
               ) : null}
-              <div className="bg-slate-100 p-2 rounded-full cursor-pointer hover:bg-slate-200 transition hidden">
-                <Search size={18} className="text-slate-600" />
-              </div>
             </div>
           )}
         </div>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStore } from '@nanostores/react';
 import { 
-  Zap, Clock, CheckCircle2, XCircle
+  Zap, Clock, CheckCircle2, XCircle, Target
 } from 'lucide-react';
 import { $decisionCount } from './store';
 
@@ -15,11 +15,6 @@ const DecisionFeedView = () => {
 
   return (
     <div className="space-y-4 animate-fade-in" id="decisions-view">
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-lg font-bold text-slate-900">待办决策</h2>
-        <span className="text-xs font-medium text-slate-500 bg-slate-200 px-2 py-1 rounded-full">{count} 项</span>
-      </div>
-
       {/* 空状态 */}
       <div className="flex flex-col items-center justify-center py-12 text-slate-400">
         <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-3">
