@@ -25,6 +25,40 @@ export class DataSourceSearchToolsService {
    * @title 获取工具句柄 Get Handle
    * @description 返回数据源搜索相关的工具列表。
    */
+  /**
+   * @description 截断过大的工具输出，防止超出 LLM 上下文长度限制。
+   */
+  private safeTruncate(json: string, maxChars = 60000): string {
+    if (json.length <= maxChars) return json;
+    // Try to parse and reduce array length
+    try {
+      const parsed = JSON.parse(json);
+      if (Array.isArray(parsed) && parsed.length > 1) {
+        const totalLen = json.length;
+        const avgPerItem = totalLen / parsed.length;
+        const keepCount = Math.max(
+          1,
+          Math.floor((maxChars * 0.9) / avgPerItem),
+        );
+        const truncated = parsed.slice(0, keepCount);
+        return JSON.stringify({
+          _truncated: true,
+          _message: `结果过多（共 ${parsed.length} 条），仅返回前 ${keepCount} 条以避免超出上下文长度。请缩小查询范围或使用 projection 减少字段。`,
+          totalCount: parsed.length,
+          returnedCount: keepCount,
+          data: truncated,
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    // Fallback: hard truncate
+    return (
+      json.slice(0, maxChars) +
+      '\n... [OUTPUT TRUNCATED - too large for context window. Use projection or smaller limit]'
+    );
+  }
+
   getHandle(): CreateAgentParams['tools'] {
     const dataSourceQuery = tool(
       async ({
@@ -111,7 +145,7 @@ export class DataSourceSearchToolsService {
             throw new Error('Key is required for distinct operation');
           }
           const values = await col.distinct(key, finalFilter);
-          return JSON.stringify(values);
+          return this.safeTruncate(JSON.stringify(values));
         }
 
         if (
@@ -152,7 +186,7 @@ export class DataSourceSearchToolsService {
           );
           const finalPipeline = [...normalized, { $limit: safeLimit }];
           const docs = await col.aggregate(finalPipeline).toArray();
-          return JSON.stringify(docs);
+          return this.safeTruncate(JSON.stringify(docs));
         }
 
         // 默认 find 操作
@@ -161,7 +195,7 @@ export class DataSourceSearchToolsService {
         cursor = cursor.limit(safeLimit);
 
         const docs = await cursor.toArray();
-        return JSON.stringify(docs);
+        return this.safeTruncate(JSON.stringify(docs));
       },
       {
         name: 'data_source_query',

@@ -40,7 +40,7 @@ const AiCommanderBento = () => {
   }, [trOpen]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#F7F9FC] font-sans text-slate-800">
+    <div className="flex flex-col min-h-screen bg-[#F7F9FC] font-sans text-slate-800 overflow-x-hidden">
       {/* 顶部控制台 */}
       <div className="pt-4 pb-4 px-5 bg-white shadow-[0_4px_20px_rgba(0,0,0,0.02)] z-10 relative">
         <div className="flex justify-between items-center mb-1">

@@ -462,12 +462,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     temperature?: number;
   }): Promise<string> {
     const sys =
-      '你是“待办总览描述生成器”。只输出 JSON 对象，schema：{ "description": string }。description 必须是中文，包含任务数、平台、canvasId、taskId、todoId 与任务概览。';
+      '你是"待办摘要生成器"。根据提供的批量发布任务信息，生成一段简洁、易读的中文摘要描述（1~2句话）。' +
+      '描述应包含：发布平台、内容主题/方向、任务数量。' +
+      '不要包含任何ID、编号或技术字段。语气自然，像是写给运营同事看的任务简介。' +
+      '只输出 JSON 对象，schema：{ "description": string }。';
     const payload = {
       platform: input.platform,
-      canvasId: input.canvasId,
-      taskId: input.taskId,
-      todoId: input.todoId,
       taskCount: input.taskCount,
       tasksPreview: input.tasksPreview.slice(0, 10),
     };
@@ -503,11 +503,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     } catch {
       void 0;
     }
-    const preview = input.tasksPreview.slice(0, 10).join('、');
-    const base =
-      `批量发布任务（${input.platform}），任务数 ${input.taskCount}。` +
-      `canvasId=${input.canvasId}，taskId=${input.taskId}，todoId=${input.todoId}。`;
-    return preview.length > 0 ? `${base} 示例任务：${preview}` : base;
+    const preview = input.tasksPreview.slice(0, 5).join('、');
+    const base = `${input.platform}批量发布，共 ${input.taskCount} 条内容。`;
+    return preview.length > 0 ? `${base}包含：${preview}` : base;
   }
 
   async runFromCanvas(input: {

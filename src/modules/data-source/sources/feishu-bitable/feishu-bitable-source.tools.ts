@@ -182,16 +182,28 @@ class FeishuBitableListRecordsTool extends StructuredTool {
         sort: input.sort,
       });
 
-      return JSON.stringify(
-        {
+      const raw = JSON.stringify({
+        success: true,
+        total: result.total,
+        hasMore: result.hasMore,
+        records: result.records,
+      });
+      // Truncate if too large for LLM context
+      if (raw.length > 60000) {
+        const keep = Math.max(
+          1,
+          Math.floor((result.records.length * 54000) / raw.length),
+        );
+        return JSON.stringify({
+          _truncated: true,
+          _message: `结果过多（共 ${result.total} 条，本页 ${result.records.length} 条），仅返回前 ${keep} 条以避免超出上下文。请缩小筛选范围或减少 pageSize。`,
           success: true,
           total: result.total,
-          hasMore: result.hasMore,
-          records: result.records,
-        },
-        null,
-        2,
-      );
+          returnedCount: keep,
+          records: result.records.slice(0, keep),
+        });
+      }
+      return raw;
     } catch (error) {
       return JSON.stringify({
         success: false,

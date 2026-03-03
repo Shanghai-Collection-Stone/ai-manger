@@ -225,6 +225,15 @@ export class AnalysisFunctionCallService {
         } catch (error: any) {
           console.error('Data analysis failed:', error);
           if (streamWriter) streamWriter(`[DataAnalysis] Error: ${error}`);
+          const errMsg =
+            typeof error?.message === 'string' ? error.message : String(error);
+          if (/context.?length|too.?long|token.+limit/i.test(errMsg)) {
+            return JSON.stringify({
+              answer:
+                '查询返回的数据量过大，超出了模型的上下文处理能力。请尝试：1) 缩小查询的时间范围 2) 使用 projection 只选取需要的字段 3) 减少 limit 数量 4) 使用聚合（count/sum/avg）代替返回原始数据。',
+              error: 'CONTEXT_LENGTH_EXCEEDED',
+            });
+          }
           return 'Data analysis failed due to an internal error.';
         }
 

@@ -54,7 +54,7 @@ const AIMessage = ({ msg }) => {
   }, [msg.content]);
 
   return (
-    <div className="flex flex-col space-y-1 max-w-[90%]">
+    <div className="flex flex-col space-y-1 max-w-[90%] overflow-hidden">
       {/* Thinking indicator — show when streaming and tools are being called */}
       {msg.isStreaming && msg.toolCount > 0 && (
         <ThinkingBubble toolCount={msg.toolCount} />
@@ -62,11 +62,12 @@ const AIMessage = ({ msg }) => {
 
       {/* Text content */}
       {(msg.content || msg.isStreaming) && (
-        <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
+        <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-hidden">
           {msg.content ? (
             <div 
-              className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed 
+              className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words
                          prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5
+                         [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:break-all
                          [&_.ai-table-scroll]:overflow-x-auto [&_.ai-table-scroll]:rounded-lg [&_.ai-table-scroll]:my-2
                          [&_table]:w-max [&_table]:min-w-full
                          [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap
@@ -129,9 +130,6 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       } else if (savedSessionId && loadedSessions.some(s => s.sessionId === savedSessionId)) {
         // Load the saved remote session
         handleSwitchSession({ sessionId: savedSessionId }, loadedSessions);
-      } else if (loadedSessions.length > 0) {
-        // Auto-load first session
-        handleSwitchSession(loadedSessions[0], loadedSessions);
       } else {
         // Start fresh
         const newLocalId = 'local-' + Date.now();
@@ -404,7 +402,7 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
             {messages.map(msg => (
               <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
                 {msg.role === 'user' ? (
-                  <div className="bg-slate-900 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] text-sm shadow-sm font-medium leading-relaxed">
+                  <div className="bg-slate-900 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] text-sm shadow-sm font-medium leading-relaxed break-words overflow-hidden">
                     {msg.content}
                   </div>
                 ) : (

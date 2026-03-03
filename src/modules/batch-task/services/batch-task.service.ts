@@ -201,15 +201,11 @@ export class BatchTaskService {
       input.topic ? input.topic : undefined,
     ].filter((x): x is string => typeof x === 'string' && x.length > 0);
     const todoTitle = titleParts.join('/');
-    const todoDescription = JSON.stringify(
-      {
-        batchTaskId: id,
-        canvasId: input.canvasId,
-        mcpTaskId: input.mcpTaskId,
-      },
-      null,
-      2,
-    );
+    const descParts: string[] = [`${todoTitle}，任务编号 #${id}。`];
+    if (input.canvasId) descParts.push(`画布：${input.canvasId}`);
+    if (input.topic) descParts.push(`主题：${input.topic}`);
+    descParts.push('状态：等待执行');
+    const todoDescription = descParts.join('  ');
 
     const todo = await this.todo.create({
       userId: input.userId,

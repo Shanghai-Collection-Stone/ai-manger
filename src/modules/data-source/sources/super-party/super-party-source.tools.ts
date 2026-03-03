@@ -16,6 +16,36 @@ export class SuperPartySourceToolsService {
   /**
    * @title 获取工具句柄 Get Handle
    */
+  private safeTruncate(json: string, maxChars = 60000): string {
+    if (json.length <= maxChars) return json;
+    try {
+      const parsed = JSON.parse(json);
+      const data = Array.isArray(parsed?.data)
+        ? parsed.data
+        : Array.isArray(parsed)
+          ? parsed
+          : null;
+      if (data && data.length > 1) {
+        const totalLen = json.length;
+        const avgPerItem = totalLen / data.length;
+        const keepCount = Math.max(
+          1,
+          Math.floor((maxChars * 0.9) / avgPerItem),
+        );
+        return JSON.stringify({
+          _truncated: true,
+          _message: `结果过多（共 ${data.length} 条），仅返回前 ${keepCount} 条。请缩小查询范围或使用 projection 减少字段。`,
+          totalCount: data.length,
+          returnedCount: keepCount,
+          data: data.slice(0, keepCount),
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+    return json.slice(0, maxChars) + '\n... [TRUNCATED]';
+  }
+
   getHandle(): CreateAgentParams['tools'] {
     const superPartyQuery = tool(
       async ({ collection, filter, projection, sort, limit, skip }) => {
@@ -36,11 +66,12 @@ export class SuperPartySourceToolsService {
             limit,
             skip,
           });
-          return JSON.stringify({
+          const raw = JSON.stringify({
             success: true,
             count: results.length,
             data: results,
           });
+          return this.safeTruncate(raw);
         } catch (error) {
           return JSON.stringify({
             success: false,
@@ -74,11 +105,12 @@ export class SuperPartySourceToolsService {
             collection,
             parsedPipeline,
           );
-          return JSON.stringify({
+          const raw = JSON.stringify({
             success: true,
             count: results.length,
             data: results,
           });
+          return this.safeTruncate(raw);
         } catch (error) {
           return JSON.stringify({
             success: false,
