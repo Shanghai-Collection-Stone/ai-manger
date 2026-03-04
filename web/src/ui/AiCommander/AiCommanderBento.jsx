@@ -1,15 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { 
-  LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList, Plus
+  LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList, Plus, LayoutGrid
 } from 'lucide-react';
 
 import DashboardView from './DashboardView';
 import DecisionFeedView from './DecisionFeedView';
 import ChatBIView from './ChatBIView';
 import TaskCenterView from './TaskCenterView';
+import ToolsView from './ToolsView';
 import NavItem from './NavItem';
-import { $activeTab, $decisionCount, $createTaskOpen } from './store';
+import { $activeTab, $decisionCount, $taskCount, $createTaskOpen } from './store';
+import { useSwipe } from './useSwipe';
 
 /**
  * @description AI 指挥官 Bento 风格主界面组件
@@ -19,16 +21,38 @@ import { $activeTab, $decisionCount, $createTaskOpen } from './store';
 const AiCommanderBento = () => {
   const activeTab = useStore($activeTab);
   const decisionCount = useStore($decisionCount);
+  const taskCount = useStore($taskCount);
   const [isChatDrawerOpen, setIsChatDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState('本月');
   const [trOpen, setTrOpen] = useState(false);
   const trRef = useRef(null);
+  const [slideDir, setSlideDir] = useState('none');
   const timeRanges = [
     '今天','明天','昨天',
     '过去7天内','未来7天内',
     '过去30天内','未来30天内',
     '本周','上周','上月','本月'
   ];
+
+  const mainTabs = ['dashboard', 'decisions', 'chat', 'tasks', 'tools'];
+
+  const onSwipeLeft = () => {
+    const idx = mainTabs.indexOf(activeTab);
+    if (idx < mainTabs.length - 1) {
+      setSlideDir('right');
+      $activeTab.set(mainTabs[idx + 1]);
+    }
+  };
+
+  const onSwipeRight = () => {
+    const idx = mainTabs.indexOf(activeTab);
+    if (idx > 0) {
+      setSlideDir('left');
+      $activeTab.set(mainTabs[idx - 1]);
+    }
+  };
+
+  const swipeHandlers = useSwipe({ onSwipeLeft, onSwipeRight });
 
   useEffect(() => {
     const onClick = (e) => {
@@ -40,22 +64,38 @@ const AiCommanderBento = () => {
   }, [trOpen]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#F7F9FC] font-sans text-slate-800 overflow-x-hidden">
+    <div className="flex flex-col h-[100dvh] bg-[#F7F9FC] font-sans text-slate-800 overflow-hidden">
+      <style>{`
+        @keyframes slideInRight {
+          from { transform: translateX(20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideInLeft {
+          from { transform: translateX(-20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        .animate-slide-in-right { animation: slideInRight 0.3s ease-out forwards; }
+        .animate-slide-in-left { animation: slideInLeft 0.3s ease-out forwards; }
+      `}</style>
       {/* 顶部控制台 */}
-      <div className="pt-4 pb-3 px-5 bg-white shadow-[0_4px_20px_rgba(0,0,0,0.02)] z-10 relative">
+      <div className="pt-4 pb-3 px-5 bg-white shadow-[0_4px_20px_rgba(0,0,0,0.02)] z-10 relative shrink-0">
         <div className="flex justify-between items-center mb-1">
           <div>
             <h1 className="text-xl font-bold tracking-tight text-slate-900">
               {activeTab === 'dashboard' && 'AI 指挥官'}
               {activeTab === 'tasks' && '待办管理'}
               {activeTab === 'decisions' && '待办决策'}
-              {activeTab === 'chat' && 'AI 助理'}
+              {activeTab === 'chat' && 'AI 指挥官'}
+              {activeTab === 'tools' && '效能工具'}
             </h1>
             {activeTab === 'tasks' && (
               <p className="text-[11px] text-slate-400 mt-0.5">对接现有工单系统</p>
             )}
             {activeTab === 'decisions' && (
               <p className="text-[11px] text-slate-400 mt-0.5">AI 驱动的智能决策推荐</p>
+            )}
+            {activeTab === 'tools' && (
+              <p className="text-[11px] text-slate-400 mt-0.5">AI 驱动的生产力工具集</p>
             )}
           </div>
           
@@ -124,40 +164,70 @@ const AiCommanderBento = () => {
       </div>
 
       {/* 核心内容区 (可滚动) */}
-      <div className="flex-1 overflow-y-auto pb-24 px-4 pt-4 custom-scrollbar">
-        {activeTab === 'dashboard' && <DashboardView timeRange={timeRange} />}
-        {activeTab === 'decisions' && <DecisionFeedView />}
-        {activeTab === 'tasks' && <TaskCenterView />}
-        {activeTab === 'chat' && (
+      <div 
+        className={`flex-1 overflow-y-auto pb-24 px-4 pt-4 custom-scrollbar ${
+          slideDir === 'right' ? 'animate-slide-in-right' : 
+          slideDir === 'left' ? 'animate-slide-in-left' : ''
+        }`}
+        {...swipeHandlers}
+      >
+        <div style={{ display: activeTab === 'dashboard' ? 'block' : 'none', height: '100%' }}>
+          <DashboardView timeRange={timeRange} />
+        </div>
+        <div style={{ display: activeTab === 'decisions' ? 'block' : 'none', height: '100%' }}>
+          <DecisionFeedView />
+        </div>
+        <div style={{ display: activeTab === 'tasks' ? 'block' : 'none', height: '100%' }}>
+          <TaskCenterView />
+        </div>
+        <div style={{ display: activeTab === 'tools' ? 'block' : 'none', height: '100%' }}>
+          <ToolsView />
+        </div>
+        <div style={{ display: activeTab === 'chat' ? 'block' : 'none', height: '100%' }}>
           <ChatBIView 
             isDrawerOpen={isChatDrawerOpen} 
             onDrawerToggle={setIsChatDrawerOpen} 
           />
-        )}
+        </div>
       </div>
 
-      {/* 悬浮的 AI Chat 唤醒按钮 (如果不在Chat页面) */}
-      {activeTab !== 'chat' && (
-        <button 
-          onClick={() => $activeTab.set('chat')}
-          className="fixed bottom-24 right-5 w-14 h-14 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl shadow-[0_8px_20px_rgba(79,70,229,0.3)] flex items-center justify-center z-40 transition-transform hover:scale-105"
-        >
-          <Sparkles size={24} className="text-white" />
-        </button>
-      )}
-
       {/* 极简毛玻璃底部导航 */}
-      <div className="fixed bottom-0 w-full h-20 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex justify-around items-center px-6 pb-4 z-40">
-        <NavItem icon={<LayoutDashboard size={22} />} label="看板" isActive={activeTab === 'dashboard'} onClick={() => $activeTab.set('dashboard')} />
-        <NavItem 
-          icon={<Target size={22} />} 
-          label="决策流" 
-          isActive={activeTab === 'decisions'} 
-          onClick={() => $activeTab.set('decisions')} 
-          badge={decisionCount > 0 ? decisionCount.toString() : null}
-        />
-        <NavItem icon={<ClipboardList size={22} />} label="任务" isActive={activeTab === 'tasks'} onClick={() => $activeTab.set('tasks')} />
-        <NavItem icon={<MessageSquare size={22} />} label="AI助理" isActive={activeTab === 'chat'} onClick={() => $activeTab.set('chat')} />
+      <div className="fixed bottom-0 w-full h-20 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex items-center px-2 pb-4 z-40">
+        <div className="flex-1 flex justify-around">
+          <NavItem icon={<LayoutDashboard size={22} />} label="看板" isActive={activeTab === 'dashboard'} onClick={() => $activeTab.set('dashboard')} />
+          <NavItem 
+            icon={<Target size={22} />} 
+            label="决策流" 
+            isActive={activeTab === 'decisions'} 
+            onClick={() => $activeTab.set('decisions')} 
+            badge={decisionCount > 0 ? decisionCount.toString() : null}
+          />
+        </div>
+
+        <div className="relative -top-6">
+          <button
+            onClick={() => $activeTab.set('chat')}
+            className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105 ${
+              activeTab === 'chat' 
+              ? 'bg-slate-900 text-white shadow-slate-400/50' 
+              : 'bg-white text-slate-900 border border-slate-100 shadow-slate-200/50'
+            }`}
+          >
+            <Sparkles size={24} />
+          </button>
+          <div className={`text-[10px] text-center font-bold mt-1 ${activeTab === 'chat' ? 'text-slate-900' : 'text-slate-500 font-medium'}`}>AI 指挥官</div>
+        </div>
+
+        <div className="flex-1 flex justify-around">
+          <NavItem 
+            icon={<ClipboardList size={22} />} 
+            label="任务" 
+            isActive={activeTab === 'tasks'} 
+            onClick={() => $activeTab.set('tasks')} 
+            badge={taskCount > 0 ? taskCount.toString() : null}
+          />
+          <NavItem icon={<LayoutGrid size={22} />} label="工具" isActive={activeTab === 'tools'} onClick={() => $activeTab.set('tools')} />
+        </div>
       </div>
     </div>
   );

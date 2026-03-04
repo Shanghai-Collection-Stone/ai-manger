@@ -2,7 +2,7 @@
 
 ## 模块描述
 
-该模块实现了 AI 指挥官的移动端 Bento UI 风格界面，包含仪表盘、决策流和 AI 助理对话功能。
+该模块实现了 AI 指挥官的移动端 Bento UI 风格界面，包含仪表盘、决策流、AI 助理对话、任务中心及工具箱功能。
 文件路径: `web/src/ui/AiCommander`
 
 ## 功能描述及关键词
@@ -10,14 +10,17 @@
 ### AiCommanderBento.jsx
 
 AI 指挥官主界面容器，管理底部导航和视图切换。
+底部菜单采用 "中间圆图标 + 左右两格" 布局，集成 AI 助理快捷入口。
+支持左右滑动切换主标签页。
 
-- **关键词**: AiCommanderBento, MainContainer, TabSwitch
+- **关键词**: AiCommanderBento, MainContainer, TabSwitch, BottomNavigation, SwipeNavigation
 
 ### DashboardView.jsx
 
 仪表盘视图，支持多类型看板切换（总览、客流、销售、物业），展示核心营收指标、客流趋势和 AI 异常洞察。
+支持左右滑动切换看板子标签。
 
-- **关键词**: DashboardView, KPI, BentoGrid, AIInsight, TabNavigation
+- **关键词**: DashboardView, KPI, BentoGrid, AIInsight, TabNavigation, SwipeNavigation
 
 ### DecisionFeedView.jsx
 
@@ -40,6 +43,13 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。已集�
 
 - **关键词**: TaskCenterView, TaskManagement, WorkOrder, QuickActions, TabFilter, CreateTaskModal, CategoryFilter
 
+### ToolsView.jsx
+
+工具箱视图，集成 AI 图库及其他实用工具。
+包含完整的 AI 图库管理功能：分组管理、图片上传、无限滚动加载、图片预览等。
+
+- **关键词**: ToolsView, AIGallery, ImageManagement, ToolBox, InfiniteScroll, FileUpload
+
 ### NavItem.jsx
 
 底部导航栏按钮组件。
@@ -57,3 +67,9 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。已集�
 AI Commander 全局状态管理，基于 nanostores 和 persistentAtom 实现状态持久化。
 
 - **关键词**: store, nanostores, persistentAtom, GlobalState
+
+### useSwipe.js
+
+用于检测触摸滑动事件的 React Hook，支持左右滑动检测及防抖处理，优先响应水平滑动。
+
+- **关键词**: useSwipe, TouchEvents, GestureDetection, Hook

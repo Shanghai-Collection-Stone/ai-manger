@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { TrendingUp, Calendar, Loader2 } from 'lucide-react';
+import { TrendingUp, Calendar, Loader2, Users, Share2 } from 'lucide-react';
 import * as api from './dashboardApi.js';
+import { useSwipe } from './useSwipe.js';
 
 /* ━━━ 通用 hook：按 timeRange 加载数据 ━━━ */
 function useDashboard(fetcher, timeRange) {
@@ -33,6 +34,7 @@ const ErrorBox = ({ msg }) => (
 /* ━━━ 主组件 ━━━ */
 const DashboardView = ({ timeRange = '本月' }) => {
   const [activeTab, setActiveTab] = useState('overview');
+  const [slideDir, setSlideDir] = useState('none');
 
   const tabs = [
     { id: 'overview', label: '总览' },
@@ -43,13 +45,56 @@ const DashboardView = ({ timeRange = '本月' }) => {
     { id: 'sales', label: '销售与客户' },
   ];
 
+  const tabsOrder = tabs.map(t => t.id);
+
+  const onSwipeLeft = () => {
+    const idx = tabsOrder.indexOf(activeTab);
+    if (idx < tabsOrder.length - 1) {
+      setSlideDir('right');
+      setActiveTab(tabsOrder[idx + 1]);
+    }
+  };
+
+  const onSwipeRight = () => {
+    const idx = tabsOrder.indexOf(activeTab);
+    if (idx > 0) {
+      setSlideDir('left');
+      setActiveTab(tabsOrder[idx - 1]);
+    }
+  };
+
+  const swipeHandlers = useSwipe({ onSwipeLeft, onSwipeRight });
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex space-x-6 overflow-x-auto pb-2 mb-2 no-scrollbar">
+      <style>{`
+        @keyframes slideInRight {
+          from { transform: translateX(20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideInLeft {
+          from { transform: translateX(-20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        .animate-slide-in-right { animation: slideInRight 0.3s ease-out forwards; }
+        .animate-slide-in-left { animation: slideInLeft 0.3s ease-out forwards; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
+      <div 
+        className="flex space-x-6 overflow-x-auto pb-2 mb-2 no-scrollbar shrink-0"
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
+      >
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              const newIdx = tabsOrder.indexOf(tab.id);
+              const oldIdx = tabsOrder.indexOf(activeTab);
+              setSlideDir(newIdx > oldIdx ? 'right' : 'left');
+              setActiveTab(tab.id);
+            }}
             className={`text-sm font-bold whitespace-nowrap transition-colors relative ${
               activeTab === tab.id ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600'
             }`}
@@ -62,13 +107,29 @@ const DashboardView = ({ timeRange = '本月' }) => {
         ))}
       </div>
 
-      <div key={`${activeTab}-${timeRange}`} className="space-y-4 animate-fade-in flex-1">
-        {activeTab === 'overview' && <OverviewDashboard timeRange={timeRange} />}
-        {activeTab === 'rev' && <RevenueOrders timeRange={timeRange} />}
-        {activeTab === 'people' && <PeopleMetrics timeRange={timeRange} />}
-        {activeTab === 'demand' && <DemandMetrics timeRange={timeRange} />}
-        {activeTab === 'events' && <EventsMetrics timeRange={timeRange} />}
-        {activeTab === 'sales' && <SalesCustomer timeRange={timeRange} />}
+      <div 
+        key={timeRange} 
+        className={`space-y-4 flex-1 pb-24 ${slideDir === 'right' ? 'animate-slide-in-right' : slideDir === 'left' ? 'animate-slide-in-left' : 'animate-fade-in'}`}
+        {...swipeHandlers}
+      >
+        <div style={{ display: activeTab === 'overview' ? 'block' : 'none' }}>
+          <OverviewDashboard timeRange={timeRange} />
+        </div>
+        <div style={{ display: activeTab === 'rev' ? 'block' : 'none' }}>
+          <RevenueOrders timeRange={timeRange} />
+        </div>
+        <div style={{ display: activeTab === 'people' ? 'block' : 'none' }}>
+          <PeopleMetrics timeRange={timeRange} />
+        </div>
+        <div style={{ display: activeTab === 'demand' ? 'block' : 'none' }}>
+          <DemandMetrics timeRange={timeRange} />
+        </div>
+        <div style={{ display: activeTab === 'events' ? 'block' : 'none' }}>
+          <EventsMetrics timeRange={timeRange} />
+        </div>
+        <div style={{ display: activeTab === 'sales' ? 'block' : 'none' }}>
+          <SalesCustomer timeRange={timeRange} />
+        </div>
       </div>
     </div>
   );
@@ -118,50 +179,70 @@ const OverviewDashboard = ({ timeRange }) => {
         </div>
       </div>
 
-      {/* 人数分析 + 渠道 */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-          <div className="text-xs text-slate-500 mb-2">人数分析</div>
-          <div className="flex items-center gap-3">
-            {ppl.data ? (
-              <>
-                <EChart
-                  height={140}
-                  option={pieOption(ppl.data.categories, ['#6366f1','#60a5fa','#34d399','#cbd5f5'])}
-                />
-                <div className="space-y-1 text-[11px] text-slate-600">
-                  {ppl.data.categories.map((c, i) => (
-                    <div key={c.name} className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full" style={{ background: ['#6366f1','#60a5fa','#34d399','#cbd5f5'][i] }}></span>
-                      {c.name} {c.value}
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : <LoadingBox height={100} />}
-          </div>
+      {/* 人数分析 (优化布局：独占一行，增加高度) */}
+      <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+        <div className="text-xs text-slate-500 mb-3 font-medium flex items-center gap-2">
+          <Users size={14} className="text-indigo-500" />
+          人数分析
         </div>
-        <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-          <div className="text-xs text-slate-500 mb-2">各渠道进入数量</div>
-          <div className="flex items-center gap-3">
-            {demand.data ? (
-              <>
-                <EChart
-                  height={140}
-                  option={pieOption(demand.data.channels.slice(0,5), ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6'])}
-                />
-                <div className="space-y-1 text-[11px] text-slate-600">
-                  {demand.data.channels.slice(0,5).map((c, i) => (
-                    <div key={c.name} className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full" style={{ background: ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6'][i] }}></span>
-                      {c.name} {c.value}
-                    </div>
-                  ))}
+        {ppl.data ? (
+          <div className="flex items-center justify-between px-2">
+            <div className="flex-1 h-[160px] flex items-center justify-center relative">
+               {/* 增加图表容器高度，防止截断 */}
+              <EChart
+                height={160}
+                option={pieOption(ppl.data.categories, ['#6366f1','#818cf8','#a5b4fc','#c7d2fe'])}
+              />
+               {/* 中间总数显示 (可选) */}
+               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                  <span className="text-xs text-slate-400">总计</span>
+                  <span className="text-lg font-bold text-slate-700">
+                    {ppl.data.categories.reduce((a, b) => a + b.value, 0)}
+                  </span>
+               </div>
+            </div>
+            <div className="w-1/2 pl-4 space-y-2">
+              {ppl.data.categories.map((c, i) => (
+                <div key={c.name} className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: ['#6366f1','#818cf8','#a5b4fc','#c7d2fe'][i] }}></span>
+                    <span className="text-slate-600 font-medium">{c.name}</span>
+                  </div>
+                  <span className="font-bold text-slate-800">{c.value}</span>
                 </div>
-              </>
-            ) : <LoadingBox height={100} />}
+              ))}
+            </div>
           </div>
+        ) : <LoadingBox height={160} />}
+      </div>
+
+      {/* 各渠道进入数量 (优化布局：独占一行) */}
+      <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+        <div className="text-xs text-slate-500 mb-3 font-medium flex items-center gap-2">
+          <Share2 size={14} className="text-blue-500" />
+          各渠道进入数量
         </div>
+        {demand.data ? (
+          <div className="flex items-center justify-between px-2">
+            <div className="flex-1 h-[160px] flex items-center justify-center relative">
+               <EChart
+                height={160}
+                option={pieOption(demand.data.channels.slice(0,5), ['#3b82f6','#60a5fa','#93c5fd','#bfdbfe','#dbeafe'])}
+              />
+            </div>
+            <div className="w-1/2 pl-4 space-y-2">
+              {demand.data.channels.slice(0,5).map((c, i) => (
+                <div key={c.name} className="flex items-center justify-between text-xs">
+                   <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: ['#3b82f6','#60a5fa','#93c5fd','#bfdbfe','#dbeafe'][i] }}></span>
+                    <span className="text-slate-600 font-medium">{c.name}</span>
+                  </div>
+                  <span className="font-bold text-slate-800">{c.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : <LoadingBox height={160} />}
       </div>
 
       {/* 日营收趋势 */}
@@ -268,21 +349,38 @@ const PeopleMetrics = ({ timeRange }) => {
       <div className="space-y-3">
         <div className="text-xs font-bold text-slate-600 px-1">客群与人数</div>
         <div className="grid grid-cols-2 gap-4">
-          <StatCard label="总计人数" value={`${ppl.data.total}人`} />
-          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-            <div className="text-xs text-slate-500 mb-2">人数分析</div>
-            <div className="flex items-center gap-3">
-              <EChart height={140} option={pieOption(ppl.data.categories, ['#6366f1','#60a5fa','#34d399','#cbd5f5'])} />
-              <div className="space-y-1 text-[11px] text-slate-600">
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
+            <div className="text-xs text-slate-500 mb-1">总计人数</div>
+            <div className="text-2xl font-bold text-slate-900">{ppl.data.total}人</div>
+          </div>
+          
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
+            <div className="text-xs text-slate-500 mb-3 font-medium flex items-center gap-2">
+              <Users size={14} className="text-indigo-500" />
+              人数分析
+            </div>
+            <div className="flex items-center justify-between px-2">
+              <div className="flex-1 h-[160px] flex items-center justify-center relative">
+                <EChart height={160} option={pieOption(ppl.data.categories, ['#6366f1','#818cf8','#a5b4fc','#c7d2fe'])} />
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                   <span className="text-xs text-slate-400">总计</span>
+                   <span className="text-lg font-bold text-slate-700">{ppl.data.total}</span>
+                </div>
+              </div>
+              <div className="w-1/2 pl-4 space-y-2">
                 {ppl.data.categories.map((c, i) => (
-                  <div key={c.name} className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full" style={{ background: ['#6366f1','#60a5fa','#34d399','#cbd5f5'][i] }}></span>
-                    {c.name} {c.value}
+                  <div key={c.name} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: ['#6366f1','#818cf8','#a5b4fc','#c7d2fe'][i] }}></span>
+                      <span className="text-slate-600 font-medium">{c.name}</span>
+                    </div>
+                    <span className="font-bold text-slate-800">{c.value}</span>
                   </div>
                 ))}
               </div>
             </div>
           </div>
+
           {daily.data && (
             <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
               <div className="flex items-center justify-between">
@@ -324,33 +422,45 @@ const DemandMetrics = ({ timeRange }) => {
         <div className="grid grid-cols-2 gap-4">
           <StatCard label="需求进入总量" value={`${d.total}`} />
           <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+            <div className="text-xs text-slate-500 mb-2">需求进入转化比</div>
+            <div className="text-2xl font-bold text-slate-900 mb-2">{d.conversionRate}<span className="text-sm text-slate-500">%</span></div>
+            <ProgressBar value={d.conversionRate} />
+          </div>
+
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
             <div className="text-xs text-slate-500 mb-2">各渠道进入数量</div>
-            <div className="flex items-center gap-3">
-              <EChart height={140} option={pieOption(d.channels.slice(0,5), ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6'])} />
-              <div className="space-y-1 text-[11px] text-slate-600">
+            <div className="flex items-center justify-between px-2">
+              <div className="flex-1 h-[140px] flex items-center justify-center">
+                <EChart height={140} option={pieOption(d.channels.slice(0,5), ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6'])} />
+              </div>
+              <div className="w-1/2 pl-4 space-y-1.5">
                 {d.channels.slice(0,5).map((c, i) => (
-                  <div key={c.name} className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full" style={{ background: ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6'][i] }}></span>
-                    {c.name} {c.value}
+                  <div key={c.name} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6'][i] }}></span>
+                      <span className="text-slate-600 font-medium truncate">{c.name}</span>
+                    </div>
+                    <span className="font-bold text-slate-800 ml-2">{c.value}</span>
                   </div>
                 ))}
               </div>
             </div>
           </div>
-          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
-            <div className="text-xs text-slate-500 mb-2">需求进入转化比</div>
-            <div className="text-2xl font-bold text-slate-900 mb-2">{d.conversionRate}<span className="text-sm text-slate-500">%</span></div>
-            <ProgressBar value={d.conversionRate} />
-          </div>
-          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+          
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
             <div className="text-xs text-slate-500 mb-2">需求类型</div>
-            <div className="flex items-center gap-3">
-              <EChart height={140} option={pieOption(d.demandTypes.slice(0,4), ['#0ea5e9','#a5b4fc','#6366f1','#fbbf24'])} />
-              <div className="space-y-1 text-[11px] text-slate-600">
+            <div className="flex items-center justify-between px-2">
+              <div className="flex-1 h-[140px] flex items-center justify-center">
+                <EChart height={140} option={pieOption(d.demandTypes.slice(0,4), ['#0ea5e9','#a5b4fc','#6366f1','#fbbf24'])} />
+              </div>
+              <div className="w-1/2 pl-4 space-y-1.5">
                 {d.demandTypes.slice(0,4).map((c, i) => (
-                  <div key={c.name} className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full" style={{ background: ['#0ea5e9','#a5b4fc','#6366f1','#fbbf24'][i] }}></span>
-                    {c.name} {c.value}
+                  <div key={c.name} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: ['#0ea5e9','#a5b4fc','#6366f1','#fbbf24'][i] }}></span>
+                      <span className="text-slate-600 font-medium truncate">{c.name}</span>
+                    </div>
+                    <span className="font-bold text-slate-800 ml-2">{c.value}</span>
                   </div>
                 ))}
               </div>
@@ -420,25 +530,66 @@ const EventsMetrics = ({ timeRange }) => {
           </div>
 
           {/* 主题活动占比 */}
-          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
             <div className="text-xs text-slate-500 mb-2">主题活动场次占比</div>
-            <EChart
-              height={140}
-              option={pieOption(
-                [{ name: '主题', value: d.themeRatio }, { name: '其他', value: 100 - d.themeRatio }],
-                ['#6366f1', '#e2e8f0']
-              )}
-            />
+            <div className="flex items-center justify-between px-2">
+              <div className="flex-1 h-[140px] flex items-center justify-center">
+                <EChart
+                  height={140}
+                  option={pieOption(
+                    [{ name: '主题', value: d.themeRatio }, { name: '其他', value: 100 - d.themeRatio }],
+                    ['#6366f1', '#e2e8f0']
+                  )}
+                />
+              </div>
+              <div className="w-1/2 pl-4 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: '#6366f1' }}></span>
+                    <span className="text-slate-600 font-medium">主题</span>
+                  </div>
+                  <span className="font-bold text-slate-800">{d.themeRatio}%</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: '#e2e8f0' }}></span>
+                    <span className="text-slate-600 font-medium">其他</span>
+                  </div>
+                  <span className="font-bold text-slate-800">{100 - d.themeRatio}%</span>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
             <div className="text-xs text-slate-500 mb-2">包厢场次占比</div>
-            <EChart
-              height={140}
-              option={pieOption(
-                [{ name: '包厢', value: d.roomRatio }, { name: '其他', value: 100 - d.roomRatio }],
-                ['#6b7280', '#e5e7eb']
-              )}
-            />
+             <div className="flex items-center justify-between px-2">
+              <div className="flex-1 h-[140px] flex items-center justify-center">
+                <EChart
+                  height={140}
+                  option={pieOption(
+                    [{ name: '包厢', value: d.roomRatio }, { name: '其他', value: 100 - d.roomRatio }],
+                    ['#6b7280', '#e5e7eb']
+                  )}
+                />
+              </div>
+              <div className="w-1/2 pl-4 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: '#6b7280' }}></span>
+                    <span className="text-slate-600 font-medium">包厢</span>
+                  </div>
+                  <span className="font-bold text-slate-800">{d.roomRatio}%</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: '#e5e7eb' }}></span>
+                    <span className="text-slate-600 font-medium">其他</span>
+                  </div>
+                  <span className="font-bold text-slate-800">{100 - d.roomRatio}%</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* 主题活动收入 */}
@@ -515,7 +666,7 @@ const SalesCustomer = ({ timeRange }) => {
           </div>
 
           {/* 客户TAG 词云 */}
-          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+          <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)] col-span-2">
             <div className="text-xs text-slate-500 mb-2">客户TAG</div>
             <div className="rounded-2xl overflow-hidden bg-white">
               <EChart
@@ -605,23 +756,31 @@ const StatCard = ({ label, value }) => (
   </div>
 );
 
-/* ━━━ 工具：按数组生成 ECharts pie option ━━━ */
-function pieOption(items, colors) {
-  return {
-    tooltip: { trigger: 'item' },
-    legend: { show: false },
-    series: [{
+/* ━━━━━━━━━━━━ 图表配置 ━━━━━━━━━━━━ */
+const pieOption = (data, colors) => ({
+  color: colors,
+  tooltip: { trigger: 'item' },
+  series: [
+    {
       type: 'pie',
-      radius: ['60%', '80%'],
-      label: { show: false },
-      data: items.map((c, i) => ({
-        value: c.value,
-        name: c.name,
-        itemStyle: { color: colors[i % colors.length] },
-      })),
-    }],
-  };
-}
+      radius: ['55%', '75%'], // 调整圆环粗细和大小，防止过大被切断
+      avoidLabelOverlap: false,
+      itemStyle: {
+        borderRadius: 5,
+        borderColor: '#fff',
+        borderWidth: 2
+      },
+      label: { show: false, position: 'center' },
+      emphasis: {
+        label: { show: true, fontSize: '14', fontWeight: 'bold' },
+        scale: true,
+        scaleSize: 5
+      },
+      labelLine: { show: false },
+      data: data
+    }
+  ]
+});
 
 /* ━━━ EChart 组件 (上一轮已修复的版本) ━━━ */
 let __echartsScriptPromise;

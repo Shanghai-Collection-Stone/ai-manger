@@ -329,10 +329,12 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-220px)] animate-fade-in relative overflow-hidden">
+    <div className="flex flex-col h-full animate-fade-in relative overflow-hidden">
 
       {/* 历史会话 Drawer */}
       <div
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
         className={`absolute top-0 right-0 h-full w-64 bg-white z-30 transform transition-all duration-300 ease-in-out border-l border-slate-100 flex flex-col ${
           isDrawerOpen
             ? 'translate-x-0 opacity-100 pointer-events-auto shadow-xl'
@@ -392,7 +394,22 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       )}
 
       {/* 消息列表区域 */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-24 pt-4">
+      <div 
+        className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-24 pt-4"
+        onTouchStart={(e) => {
+          // 如果点击的是代码块、表格或任何可能横向滚动的容器，阻止冒泡
+          const isScrollable = e.target.closest('pre, table, .ai-table-scroll, .overflow-x-auto');
+          if (isScrollable) {
+            e.stopPropagation();
+          }
+        }}
+        onTouchEnd={(e) => {
+          const isScrollable = e.target.closest('pre, table, .ai-table-scroll, .overflow-x-auto');
+          if (isScrollable) {
+            e.stopPropagation();
+          }
+        }}
+      >
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center pb-20 opacity-80 animate-fade-in-up">
             <div className="w-20 h-20 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-full flex items-center justify-center mb-6 shadow-sm border border-white ring-4 ring-indigo-50/50">

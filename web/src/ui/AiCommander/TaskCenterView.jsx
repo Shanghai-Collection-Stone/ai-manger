@@ -3,7 +3,7 @@ import { useStore } from '@nanostores/react';
 import { 
   Brush, Shield, Wrench, Megaphone, Plus, Clock, User, X, ClipboardList, Zap, UserCheck, AlertTriangle, CheckCircle2
 } from 'lucide-react';
-import { $createTaskOpen } from './store';
+import { $createTaskOpen, $taskCount } from './store';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -72,7 +72,7 @@ const TaskCenterView = () => {
   const loadTodos = async () => {
     setIsFetching(true);
     try {
-      const res = await fetch(`${API_BASE}/todo`);
+      const res = await fetch(`${API_BASE}/todo?limit=100`);
       if (!res.ok) {
         setTasks([]);
         return;
@@ -109,6 +109,9 @@ const TaskCenterView = () => {
         };
       });
       setTasks(mapped);
+      // 更新全局未处理任务数量 (仅待接单)
+      const pending = mapped.filter(t => t.status === 'pending').length;
+      $taskCount.set(pending);
     } catch {
       setTasks([]);
     } finally {
@@ -220,7 +223,11 @@ const TaskCenterView = () => {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+      <div 
+        className="flex items-center gap-2 overflow-x-auto pb-1"
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
+      >
         {quickActions.map((action) => (
           <button 
             key={action.id} 

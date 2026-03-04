@@ -13,5 +13,8 @@ export const $activeTab = persistentAtom('ai_commander_active_tab', 'dashboard')
 // 决策流待办数量状态
 export const $decisionCount = persistentAtom('ai_commander_decision_count', 0);
 
+// 任务中心待办数量状态 (未接单 + 进行中)
+export const $taskCount = persistentAtom('ai_commander_task_count', 0);
+
 // 任务中心: 新建派单弹窗开关
 export const $createTaskOpen = atom(false);
