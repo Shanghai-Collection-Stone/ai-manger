@@ -4,18 +4,19 @@ import {
   Controller,
   Post,
   Req,
+  UnauthorizedException,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
 import { createDecipheriv } from 'crypto';
 import type { Request } from 'express';
 import { SassService } from '../services/sass.service.js';
+import type { SassTenantRequest } from '../types/sass-request.types.js';
 import { SyncOrdersDto, SyncRefundsDto, SyncUsagesDto } from './sass.dto.js';
 
 const DEFAULT_ORDER_SCHEMA_ID = '69a940530bb6fa16ce15e5bf';
 const DEFAULT_REFUND_SCHEMA_ID = '69a940890bb6fa16ce15e5c0';
 const DEFAULT_USAGE_SCHEMA_ID = '69a940e30bb6fa16ce15e5c1';
-const SPECIAL_SYNC_TENANT_ID = 'special_sync';
 const FIXED_PHONE_AES_KEY = 'PR87ARAGbZjBqHifNhT2ve96lC2R38XC';
 const FIXED_PHONE_AES_IV = 'u0GF47E3KSsnkJK8';
 
@@ -47,6 +48,8 @@ export class SassSyncController {
     const headerContext = this.readSyncHeaders(req, body.timestamp);
     this.assertDataType(body.dataType, 'order');
     this.assertNonEmptyArray(body.orders, 'EMPTY_ORDERS');
+    const tenantId = this.readTenantId(req);
+    const keyId = this.readKeyId(req);
     const rows = body.orders.map((item) => ({
       ...item,
       phone: this.decryptPhone(item.phone),
@@ -56,8 +59,8 @@ export class SassSyncController {
         process.env.SASS_SYNC_ORDER_SCHEMA_ID,
         DEFAULT_ORDER_SCHEMA_ID,
       ),
-      SPECIAL_SYNC_TENANT_ID,
-      undefined,
+      tenantId,
+      keyId,
       rows,
     );
     return this.toSyncResponse(result.totalCount, headerContext);
@@ -75,13 +78,15 @@ export class SassSyncController {
     const headerContext = this.readSyncHeaders(req, body.timestamp);
     this.assertDataType(body.dataType, 'usage');
     this.assertNonEmptyArray(body.usages, 'EMPTY_USAGES');
+    const tenantId = this.readTenantId(req);
+    const keyId = this.readKeyId(req);
     const result = await this.sass.syncUsagesToSchema(
       this.resolveSchemaId(
         process.env.SASS_SYNC_USAGE_SCHEMA_ID,
         DEFAULT_USAGE_SCHEMA_ID,
       ),
-      SPECIAL_SYNC_TENANT_ID,
-      undefined,
+      tenantId,
+      keyId,
       body.usages,
     );
     return this.toSyncResponse(result.totalCount, headerContext);
@@ -99,16 +104,39 @@ export class SassSyncController {
     const headerContext = this.readSyncHeaders(req, body.timestamp);
     this.assertDataType(body.dataType, 'refund');
     this.assertNonEmptyArray(body.refunds, 'EMPTY_REFUNDS');
+    const tenantId = this.readTenantId(req);
+    const keyId = this.readKeyId(req);
     const result = await this.sass.syncRefundsToSchema(
       this.resolveSchemaId(
         process.env.SASS_SYNC_REFUND_SCHEMA_ID,
         DEFAULT_REFUND_SCHEMA_ID,
       ),
-      SPECIAL_SYNC_TENANT_ID,
-      undefined,
+      tenantId,
+      keyId,
       body.refunds,
     );
     return this.toSyncResponse(result.totalCount, headerContext);
+  }
+
+  /**
+   * @description 读取中间件注入的tenantId
+   * @keyword-en read tenant id from sync middleware
+   */
+  private readTenantId(req: Request): string {
+    const tenantId = (req as SassTenantRequest).sassTenantId;
+    if (typeof tenantId !== 'string' || !tenantId) {
+      throw new UnauthorizedException('TENANT_CONTEXT_MISSING');
+    }
+    return tenantId;
+  }
+
+  /**
+   * @description 读取中间件注入的keyId
+   * @keyword-en read key id from sync middleware
+   */
+  private readKeyId(req: Request): string | undefined {
+    const keyId = (req as SassTenantRequest).sassKeyId;
+    return typeof keyId === 'string' && keyId ? keyId : undefined;
   }
 
   /**

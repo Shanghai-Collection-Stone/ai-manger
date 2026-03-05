@@ -30,12 +30,14 @@ Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统�
   - `deleteOneData`: 删除单条/delete one data
 
 ### sass-sync.controller.ts
-Sass对接同步控制器，提供订单、订单使用、订单退单的兼容接收接口并转换为SaaS入库格式，订单接口支持手机号AES解密（特供固定密钥配置），特供接口无需API Key仅校验请求头。
-- **关键词**: sync, order, usage, refund, payload transform, phone decrypt, aes, fixed key, request-id, controller
+Sass对接同步控制器，提供订单、订单使用、订单退单的兼容接收接口并转换为SaaS入库格式，订单接口支持手机号AES解密（特供固定密钥配置），并复用租户鉴权上下文入库。
+- **关键词**: sync, order, usage, refund, payload transform, phone decrypt, aes, fixed key, request-id, tenant context, controller
 - **函数**:
   - `syncOrders`: 同步订单/sync orders
   - `syncUsages`: 同步订单使用/sync usages
   - `syncRefunds`: 同步订单退单/sync refunds
+  - `readTenantId`: 读取租户上下文/read tenant context
+  - `readKeyId`: 读取密钥上下文/read key context
   - `assertDataType`: 校验数据类型/assert data type
   - `assertNonEmptyArray`: 校验非空数组/assert non-empty array
   - `resolveSchemaId`: 解析schemaId/resolve schema id
@@ -83,8 +85,8 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `syncRefundsToSchema`: 同步订单退单入库/sync refunds to schema
 
 ### sass-tenant-auth.middleware.ts
-Sass租户鉴权中间件，在sass schema与data路由生效。
-- **关键词**: middleware, api-key, tenant-id, header, auth
+Sass租户鉴权中间件，在sass schema、data与sync路由生效，支持通过 `X-Request-ID` 或传统API Key头解析密钥。
+- **关键词**: middleware, api-key, request-id, tenant-id, header, auth
 - **函数**:
   - `use`: 校验API Key并注入tenantId/verify api key and inject tenant id
 

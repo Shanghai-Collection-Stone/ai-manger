@@ -22,8 +22,8 @@ import { SassService } from './services/sass.service.js';
 })
 export class SassModule implements NestModule {
   /**
-   * @description 配置中间件，作用于sass schema与data路由
-   * @keyword-en configure middleware for sass schema and data routes
+   * @description 配置中间件，作用于sass schema、data与sync路由
+   * @keyword-en configure middleware for sass schema data and sync routes
    */
   configure(consumer: MiddlewareConsumer): void {
     consumer
@@ -37,6 +37,9 @@ export class SassModule implements NestModule {
         { path: 'sass/data/find-one', method: RequestMethod.ALL },
         { path: 'sass/data/update-one', method: RequestMethod.ALL },
         { path: 'sass/data/delete-one', method: RequestMethod.ALL },
+        { path: 'api/sync/orders', method: RequestMethod.ALL },
+        { path: 'api/sync/usages', method: RequestMethod.ALL },
+        { path: 'api/sync/refunds', method: RequestMethod.ALL },
       );
   }
 }

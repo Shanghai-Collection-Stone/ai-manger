@@ -14,6 +14,10 @@ import type { SassTenantRequest } from '../types/sass-request.types.js';
  * @keyword-en parse api key header
  */
 function parseApiKey(req: Request): string | null {
+  const requestIdValue = req.header('x-request-id');
+  if (typeof requestIdValue === 'string' && requestIdValue.trim()) {
+    return requestIdValue.trim();
+  }
   const directValue = req.header('x-api-key');
   if (typeof directValue === 'string' && directValue.trim()) {
     return directValue.trim();
