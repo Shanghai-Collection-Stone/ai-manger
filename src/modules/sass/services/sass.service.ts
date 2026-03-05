@@ -63,6 +63,27 @@ type SassInsertInput = {
   data: Record<string, unknown> | Record<string, unknown>[];
 };
 
+type SassOrderSyncRowInput = {
+  orderNo: string;
+  orderTime: string;
+  channelName: string;
+  productName: string;
+  productQuantity: number;
+  phone: string;
+};
+
+type SassUsageSyncRowInput = {
+  orderNo: string;
+  usageTime: string;
+  usageQuantity: number;
+};
+
+type SassRefundSyncRowInput = {
+  orderNo: string;
+  refundTime: string;
+  refundQuantity: number;
+};
+
 type SassTenantDataRow = Record<string, unknown>;
 
 /**
@@ -1137,5 +1158,89 @@ export class SassService {
       result,
     });
     return result;
+  }
+
+  /**
+   * @description 同步订单数据到指定schema
+   * @keyword-en sync orders to schema
+   */
+  async syncOrdersToSchema(
+    schemaId: string,
+    tenantId: string,
+    keyId: string | undefined,
+    rows: SassOrderSyncRowInput[],
+  ): Promise<{
+    totalCount: number;
+    insertedCount: number;
+    skippedDuplicateCount: number;
+    insertedIds: string[];
+    skippedDuplicateValues: unknown[];
+  }> {
+    if (rows.length === 0) {
+      throw new BadRequestException('EMPTY_SYNC_ORDERS');
+    }
+    const data = rows.map((item) => ({
+      orderNo: item.orderNo,
+      orderTime: item.orderTime,
+      channelName: item.channelName,
+      productName: item.productName,
+      productQuantity: item.productQuantity,
+      phone: item.phone,
+    }));
+    return this.insertData(schemaId, tenantId, keyId, { data });
+  }
+
+  /**
+   * @description 同步订单使用数据到指定schema
+   * @keyword-en sync usages to schema
+   */
+  async syncUsagesToSchema(
+    schemaId: string,
+    tenantId: string,
+    keyId: string | undefined,
+    rows: SassUsageSyncRowInput[],
+  ): Promise<{
+    totalCount: number;
+    insertedCount: number;
+    skippedDuplicateCount: number;
+    insertedIds: string[];
+    skippedDuplicateValues: unknown[];
+  }> {
+    if (rows.length === 0) {
+      throw new BadRequestException('EMPTY_SYNC_USAGES');
+    }
+    const data = rows.map((item) => ({
+      orderNo: item.orderNo,
+      usageTime: item.usageTime,
+      usageQuantity: item.usageQuantity,
+    }));
+    return this.insertData(schemaId, tenantId, keyId, { data });
+  }
+
+  /**
+   * @description 同步订单退单数据到指定schema
+   * @keyword-en sync refunds to schema
+   */
+  async syncRefundsToSchema(
+    schemaId: string,
+    tenantId: string,
+    keyId: string | undefined,
+    rows: SassRefundSyncRowInput[],
+  ): Promise<{
+    totalCount: number;
+    insertedCount: number;
+    skippedDuplicateCount: number;
+    insertedIds: string[];
+    skippedDuplicateValues: unknown[];
+  }> {
+    if (rows.length === 0) {
+      throw new BadRequestException('EMPTY_SYNC_REFUNDS');
+    }
+    const data = rows.map((item) => ({
+      orderNo: item.orderNo,
+      refundTime: item.refundTime,
+      refundQuantity: item.refundQuantity,
+    }));
+    return this.insertData(schemaId, tenantId, keyId, { data });
   }
 }

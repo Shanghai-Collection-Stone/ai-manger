@@ -1,5 +1,9 @@
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
+  IsDateString,
   IsInt,
   IsMongoId,
   IsNotEmpty,
@@ -74,7 +78,8 @@ export class IsInsertDataPayloadConstraint
     if (!Array.isArray(value)) return false;
     if (value.length === 0 || value.length > 1000) return false;
     for (const item of value) {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+      if (!item || typeof item !== 'object' || Array.isArray(item))
+        return false;
     }
     return true;
   }
@@ -291,4 +296,136 @@ export class DeleteOneDataDto {
   @IsOptional()
   @IsObject()
   where?: Record<string, unknown>;
+}
+
+/**
+ * @description 对接订单记录请求项
+ * @keyword-en sync order item dto
+ */
+export class SyncOrderItemDto {
+  @IsString()
+  @IsNotEmpty()
+  orderNo!: string;
+
+  @IsDateString()
+  orderTime!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  channelName!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  productName!: string;
+
+  @IsInt()
+  @Min(1)
+  productQuantity!: number;
+
+  @IsString()
+  @IsNotEmpty()
+  phone!: string;
+}
+
+/**
+ * @description 对接订单同步请求体
+ * @keyword-en sync orders dto
+ */
+export class SyncOrdersDto {
+  @IsString()
+  @IsNotEmpty()
+  dataType!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  batchId!: string;
+
+  @IsDateString()
+  timestamp!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @Validate(IsPlainObjectConstraint, { each: true })
+  orders!: SyncOrderItemDto[];
+}
+
+/**
+ * @description 对接订单使用记录请求项
+ * @keyword-en sync usage item dto
+ */
+export class SyncUsageItemDto {
+  @IsString()
+  @IsNotEmpty()
+  orderNo!: string;
+
+  @IsDateString()
+  usageTime!: string;
+
+  @IsInt()
+  @Min(1)
+  usageQuantity!: number;
+}
+
+/**
+ * @description 对接订单使用同步请求体
+ * @keyword-en sync usages dto
+ */
+export class SyncUsagesDto {
+  @IsString()
+  @IsNotEmpty()
+  dataType!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  batchId!: string;
+
+  @IsDateString()
+  timestamp!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @Validate(IsPlainObjectConstraint, { each: true })
+  usages!: SyncUsageItemDto[];
+}
+
+/**
+ * @description 对接订单退单记录请求项
+ * @keyword-en sync refund item dto
+ */
+export class SyncRefundItemDto {
+  @IsString()
+  @IsNotEmpty()
+  orderNo!: string;
+
+  @IsDateString()
+  refundTime!: string;
+
+  @IsInt()
+  @Min(1)
+  refundQuantity!: number;
+}
+
+/**
+ * @description 对接订单退单同步请求体
+ * @keyword-en sync refunds dto
+ */
+export class SyncRefundsDto {
+  @IsString()
+  @IsNotEmpty()
+  dataType!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  batchId!: string;
+
+  @IsDateString()
+  timestamp!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1000)
+  @Validate(IsPlainObjectConstraint, { each: true })
+  refunds!: SyncRefundItemDto[];
 }

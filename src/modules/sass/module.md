@@ -1,7 +1,7 @@
 # Sass Module
 
 ## 模块描述
-该模块提供SaaS数据源接入能力，包含Schema定义管理、租户与API Key管理、基于API Key租户识别的数据隔离CRUD接口。
+该模块提供SaaS数据源接入能力，包含Schema定义管理、租户与API Key管理、基于API Key租户识别的数据隔离CRUD接口，并提供非租户对接payload到SaaS payload的同步入库接口。
 文件路径: `src/modules/sass`
 标识策略: 统一使用 MongoDB `_id`（ObjectId 字符串），不再维护自增数字 id。
 
@@ -28,6 +28,22 @@ Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统�
   - `findOneData`: 查询单条/find one data
   - `updateOneData`: 更新单条/update one data
   - `deleteOneData`: 删除单条/delete one data
+
+### sass-sync.controller.ts
+Sass对接同步控制器，提供订单、订单使用、订单退单的兼容接收接口并转换为SaaS入库格式，订单接口支持手机号AES解密（特供固定密钥配置）。
+- **关键词**: sync, order, usage, refund, api-key, payload transform, phone decrypt, aes, fixed key, controller
+- **函数**:
+  - `syncOrders`: 同步订单/sync orders
+  - `syncUsages`: 同步订单使用/sync usages
+  - `syncRefunds`: 同步订单退单/sync refunds
+  - `readTenantId`: 读取租户上下文/read tenant context
+  - `readKeyId`: 读取密钥上下文/read key context
+  - `assertDataType`: 校验数据类型/assert data type
+  - `assertNonEmptyArray`: 校验非空数组/assert non-empty array
+  - `resolveSchemaId`: 解析schemaId/resolve schema id
+  - `toSyncResponse`: 构建响应/build sync response
+  - `readPhoneAesConfig`: 读取解密密钥配置/read phone aes config
+  - `decryptPhone`: 解密手机号/decrypt phone
 
 ### sass.service.ts
 Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持批量插入、去重、过滤DSL与数据日志，并统一ObjectId校验与历史索引清理。
@@ -60,6 +76,9 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `findOneData`: 查询单条/find one data
   - `updateOneData`: 更新单条/update one data
   - `deleteOneData`: 删除单条/delete one data
+  - `syncOrdersToSchema`: 同步订单入库/sync orders to schema
+  - `syncUsagesToSchema`: 同步订单使用入库/sync usages to schema
+  - `syncRefundsToSchema`: 同步订单退单入库/sync refunds to schema
 
 ### sass-tenant-auth.middleware.ts
 Sass租户鉴权中间件，在sass schema与data路由生效。
@@ -72,8 +91,8 @@ Sass模块定义。
 - **关键词**: module, nest, middleware
 
 ### sass.dto.ts
-Sass请求体DTO与校验约束定义。
-- **关键词**: dto, class-validator, validation
+Sass请求体DTO与校验约束定义，包含租户CRUD与外部同步payload结构。
+- **关键词**: dto, class-validator, validation, sync payload
 - **函数**:
   - `validate`: DTO约束校验入口/validate dto fields
 
