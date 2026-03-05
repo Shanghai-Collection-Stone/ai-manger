@@ -16,6 +16,7 @@ import { GalleryModule } from './modules/gallery/gallery.module';
 import { CanvasModule } from './modules/canvas/canvas.module';
 import { GraphModule } from './modules/graph/graph.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { SassModule } from './modules/sass/sass.module.js';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     CanvasModule,
     GraphModule,
     DashboardModule,
+    SassModule,
   ],
   controllers: [AppController],
   providers: [AppService],
