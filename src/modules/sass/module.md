@@ -30,18 +30,20 @@ Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统�
   - `deleteOneData`: 删除单条/delete one data
 
 ### sass-sync.controller.ts
-Sass对接同步控制器，提供订单、订单使用、订单退单的兼容接收接口并转换为SaaS入库格式，订单接口支持手机号AES解密（特供固定密钥配置）。
-- **关键词**: sync, order, usage, refund, api-key, payload transform, phone decrypt, aes, fixed key, controller
+Sass对接同步控制器，提供订单、订单使用、订单退单的兼容接收接口并转换为SaaS入库格式，订单接口支持手机号AES解密（特供固定密钥配置），特供接口无需API Key仅校验请求头。
+- **关键词**: sync, order, usage, refund, payload transform, phone decrypt, aes, fixed key, request-id, controller
 - **函数**:
   - `syncOrders`: 同步订单/sync orders
   - `syncUsages`: 同步订单使用/sync usages
   - `syncRefunds`: 同步订单退单/sync refunds
-  - `readTenantId`: 读取租户上下文/read tenant context
-  - `readKeyId`: 读取密钥上下文/read key context
   - `assertDataType`: 校验数据类型/assert data type
   - `assertNonEmptyArray`: 校验非空数组/assert non-empty array
   - `resolveSchemaId`: 解析schemaId/resolve schema id
   - `toSyncResponse`: 构建响应/build sync response
+  - `readSyncHeaders`: 读取并标准化请求头/read and normalize sync headers
+  - `assertContentType`: 校验请求类型/assert content type
+  - `readRequestId`: 读取并强制校验请求标识/read and require request id
+  - `readHeaderTimestamp`: 读取请求时间戳/read header timestamp
   - `readPhoneAesConfig`: 读取解密密钥配置/read phone aes config
   - `decryptPhone`: 解密手机号/decrypt phone
 
