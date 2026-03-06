@@ -12,6 +12,7 @@ import ToolsView from './ToolsView';
 import NavItem from './NavItem';
 import { $activeTab, $decisionCount, $taskCount, $createTaskOpen } from './store';
 import { useSwipe } from './useSwipe';
+import { adminApi, getAdminToken, resolveAdminPageHref } from '../Admin/adminApi';
 
 /**
  * @description AI 指挥官 Bento 风格主界面组件
@@ -27,6 +28,8 @@ const AiCommanderBento = () => {
   const [trOpen, setTrOpen] = useState(false);
   const trRef = useRef(null);
   const [slideDir, setSlideDir] = useState('none');
+  const [authChecking, setAuthChecking] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
   const timeRanges = [
     '今天','明天','昨天',
     '过去7天内','未来7天内',
@@ -62,6 +65,38 @@ const AiCommanderBento = () => {
     if (trOpen) document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
   }, [trOpen]);
+
+  /**
+   * @description AI 指挥官页面登录鉴权
+   * @keyword-en ai commander auth guard
+   * @returns {Promise<void>}
+   */
+  const ensureAuthorized = async () => {
+    const token = getAdminToken();
+    if (!token) {
+      window.location.href = resolveAdminPageHref('login');
+      return;
+    }
+    try {
+      const user = await adminApi.me();
+      setCurrentUser(user);
+      setAuthChecking(false);
+    } catch {
+      window.location.href = resolveAdminPageHref('login');
+    }
+  };
+
+  useEffect(() => {
+    void ensureAuthorized();
+  }, []);
+
+  if (authChecking) {
+    return (
+      <div className="h-[100dvh] flex items-center justify-center text-slate-500 bg-slate-50">
+        登录校验中...
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[100dvh] bg-[#F7F9FC] font-sans text-slate-800 overflow-hidden">
@@ -178,7 +213,7 @@ const AiCommanderBento = () => {
           <DecisionFeedView />
         </div>
         <div style={{ display: activeTab === 'tasks' ? 'block' : 'none', height: '100%' }}>
-          <TaskCenterView />
+          <TaskCenterView currentUser={currentUser} />
         </div>
         <div style={{ display: activeTab === 'tools' ? 'block' : 'none', height: '100%' }}>
           <ToolsView />

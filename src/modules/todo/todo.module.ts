@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminModule } from '../admin/admin.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { TodoService } from './services/todo.service.js';
 import { TodoController } from './controller/todo.controller.js';
@@ -9,7 +10,7 @@ import { TodoController } from './controller/todo.controller.js';
  * @since 2026-01-27
  */
 @Module({
-  imports: [DataSourceModule],
+  imports: [DataSourceModule, AdminModule],
   controllers: [TodoController],
   providers: [TodoService],
   exports: [TodoService],

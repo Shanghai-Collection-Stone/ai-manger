@@ -4,6 +4,7 @@ import {
   Brush, Shield, Wrench, Megaphone, Plus, Clock, User, X, ClipboardList, Zap, UserCheck, AlertTriangle, CheckCircle2
 } from 'lucide-react';
 import { $createTaskOpen, $taskCount } from './store';
+import { getAdminToken } from '../Admin/adminApi';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -12,7 +13,7 @@ const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
  * @keyword-en TaskCenterView
  * @returns {JSX.Element} TaskCenterView component
  */
-const TaskCenterView = () => {
+const TaskCenterView = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState('inprogress');
   const [activeCategory, setActiveCategory] = useState('all');
   const isCreateModalOpen = useStore($createTaskOpen);
@@ -38,6 +39,9 @@ const TaskCenterView = () => {
   const [abnormalReasonText, setAbnormalReasonText] = useState('');
   const [showReworkInput, setShowReworkInput] = useState(false);
   const [reworkAssignee, setReworkAssignee] = useState('');
+  const [authUserName, setAuthUserName] = useState('');
+  const [authDisplayName, setAuthDisplayName] = useState('');
+  const [roleScope, setRoleScope] = useState('self');
 
   const quickActions = [
     { id: 'all', icon: <ClipboardList size={16} className="text-slate-600" />, label: '全部' },
@@ -69,17 +73,65 @@ const TaskCenterView = () => {
   const abnormalCount = tasks.filter(t => t.status === 'abnormal').length;
   const totalCount = tasks.length;
 
+  /**
+   * @description 生成带鉴权头的请求头
+   * @keyword-en build auth headers
+   * @returns {Record<string, string>}
+   */
+  const buildAuthHeaders = () => {
+    const token = getAdminToken();
+    if (!token) return {};
+    return { Authorization: `Bearer ${token}` };
+  };
+
+  /**
+   * @description 计算任务可见权限
+   * @keyword-en resolve task visibility permission
+   * @returns {void}
+   */
+  const resolveTaskPermission = () => {
+    const role = currentUser?.role;
+    const scopeByRole = {
+      super_admin: 'all',
+      tenant_admin: 'all',
+      operator: 'self',
+    };
+    setRoleScope(scopeByRole[role] || 'self');
+    setAuthUserName(currentUser?.username || '');
+    setAuthDisplayName(currentUser?.displayName || '');
+  };
+
   const loadTodos = async () => {
     setIsFetching(true);
     try {
-      const res = await fetch(`${API_BASE}/todo?limit=100`);
+      const canViewAllTasks = roleScope === 'all';
+      const query = canViewAllTasks
+        ? `${API_BASE}/todo?limit=100`
+        : `${API_BASE}/todo?limit=100&userId=${encodeURIComponent(authUserName)}`;
+      const res = await fetch(query, {
+        headers: {
+          ...buildAuthHeaders(),
+        },
+      });
       if (!res.ok) {
         setTasks([]);
         return;
       }
       const data = await res.json();
       const rows = Array.isArray(data.todos) ? data.todos : [];
-      const mapped = rows.map(todo => {
+      const mapped = rows
+        .filter((todo) => {
+          if (canViewAllTasks) return true;
+          const owner = todo.userId || '';
+          const assignee = todo.assignee || '';
+          return (
+            owner === authUserName ||
+            owner === authDisplayName ||
+            assignee === authUserName ||
+            assignee === authDisplayName
+          );
+        })
+        .map(todo => {
         const type = todo.type || 'inspection';
         const statusInfo = todo.status === 'pending'
           ? { status: 'pending', statusText: '待接单' }
@@ -120,15 +172,24 @@ const TaskCenterView = () => {
   };
 
   useEffect(() => {
+    resolveTaskPermission();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!authUserName && !authDisplayName) return;
     loadTodos();
     // Load historical assignees
-    fetch(`${API_BASE}/todo/assignees`)
+    fetch(`${API_BASE}/todo/assignees`, {
+      headers: {
+        ...buildAuthHeaders(),
+      },
+    })
       .then(r => r.json())
       .then(d => {
         if (Array.isArray(d.assignees)) setAssignees(d.assignees);
       })
       .catch(() => {});
-  }, []);
+  }, [authUserName, authDisplayName, roleScope]);
 
   const handleCreateTask = async () => {
     if (!newTask.title) return;
@@ -136,18 +197,20 @@ const TaskCenterView = () => {
     setIsCreating(true);
     try {
       const payload = {
-        userId: newTask.assignee || 'system',
+        userId: authUserName || authDisplayName || newTask.assignee || 'system',
         title: newTask.title,
         description: newTask.desc || '手动创建的任务工单',
         type: newTask.type,
-        assignee: newTask.assignee || undefined,
+        assignee: roleScope === 'all'
+          ? newTask.assignee || undefined
+          : authDisplayName || authUserName || undefined,
         aiConsideration: '人工创建待办任务',
         decisionReason: '来自待办管理系统创建',
         aiPlan: '等待负责人处理并反馈结果'
       };
       const res = await fetch(`${API_BASE}/todo`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
         body: JSON.stringify(payload)
       });
       if (!res.ok) return;
@@ -507,7 +570,7 @@ const TaskCenterView = () => {
                       try {
                         const res = await fetch(`${API_BASE}/todo/${selectedTask.id}/accept`, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
                           body: JSON.stringify({ assignee: acceptName.trim() })
                         });
                         if (res.ok) {
@@ -564,7 +627,7 @@ const TaskCenterView = () => {
                           try {
                             const res = await fetch(`${API_BASE}/todo/${selectedTask.id}`, {
                               method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
+                              headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
                               body: JSON.stringify({ status: 'failed', abnormalReason: abnormalReasonText.trim() })
                             });
                             if (res.ok) {
@@ -591,7 +654,7 @@ const TaskCenterView = () => {
                         try {
                           const res = await fetch(`${API_BASE}/todo/${selectedTask.id}`, {
                             method: 'PATCH',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
                             body: JSON.stringify({ status: 'done' })
                           });
                           if (res.ok) {
@@ -668,7 +731,7 @@ const TaskCenterView = () => {
                           try {
                             const res = await fetch(`${API_BASE}/todo/${selectedTask.id}`, {
                               method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
+                              headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
                               body: JSON.stringify({ status: 'in_progress', abnormalReason: '', assignee: reworkAssignee.trim() })
                             });
                             if (res.ok) {

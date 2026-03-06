@@ -87,6 +87,29 @@ async function bootstrap() {
       ? distPages
       : undefined;
 
+  app.use(
+    '/',
+    (
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      if (req.path === '/') {
+        res.redirect('/pages/ai-commander.html');
+        return;
+      }
+      if (req.path === '/admin' || req.path === '/admin/') {
+        res.redirect('/pages/admin.html');
+        return;
+      }
+      if (req.path === '/login' || req.path === '/login/') {
+        res.redirect('/pages/login.html');
+        return;
+      }
+      next();
+    },
+  );
+
   if (pagesRoot) {
     app.use('/pages', express.static(pagesRoot));
   }

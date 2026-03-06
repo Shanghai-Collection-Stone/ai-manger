@@ -174,6 +174,33 @@ export class TodoService {
       .toArray();
   }
 
+  /**
+   * @description 按角色权限列出任务
+   * @keyword-en list todos by scope
+   */
+  async listByScope(input: {
+    canViewAll: boolean;
+    userId?: string;
+    assignee?: string;
+  }): Promise<TodoEntity[]> {
+    if (input.canViewAll) {
+      return this.list(input.userId);
+    }
+    const filter: Record<string, unknown> = {
+      $or: [],
+    };
+    const orList = filter.$or as Record<string, unknown>[];
+    if (input.userId) orList.push({ userId: input.userId });
+    if (input.assignee) orList.push({ assignee: input.assignee });
+    if (orList.length === 0) {
+      return [];
+    }
+    return this.todos
+      .find(filter, { projection: { _id: 0 } })
+      .sort({ updatedAt: -1 })
+      .toArray();
+  }
+
   async createItem(input: TodoItemCreateInput): Promise<TodoItemEntity> {
     const parent = await this.todos.findOne({ id: input.todoId });
     if (!parent) throw new Error('TODO_NOT_FOUND');

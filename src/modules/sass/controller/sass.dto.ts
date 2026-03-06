@@ -323,7 +323,6 @@ export class SyncOrderItemDto {
   productQuantity!: number;
 
   @IsString()
-  @IsNotEmpty()
   phone!: string;
 }
 

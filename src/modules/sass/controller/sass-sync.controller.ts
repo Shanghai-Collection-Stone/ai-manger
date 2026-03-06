@@ -267,7 +267,7 @@ export class SassSyncController {
   private decryptPhone(value: string): string {
     const encrypted = value.trim();
     if (!encrypted) {
-      throw new BadRequestException('PHONE_VALUE_EMPTY');
+      return '';
     }
     try {
       const { key, iv } = this.readPhoneAesConfig();
@@ -279,10 +279,7 @@ export class SassSyncController {
     } catch (error) {
       if (error instanceof BadRequestException) {
         const message = this.readBadRequestMessage(error);
-        if (
-          message === 'PHONE_VALUE_EMPTY' ||
-          message === 'PHONE_AES_CONFIG_INVALID'
-        ) {
+        if (message === 'PHONE_AES_CONFIG_INVALID') {
           throw error;
         }
         return encrypted;

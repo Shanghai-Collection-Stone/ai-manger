@@ -17,6 +17,7 @@ import { CanvasModule } from './modules/canvas/canvas.module';
 import { GraphModule } from './modules/graph/graph.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SassModule } from './modules/sass/sass.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { SassModule } from './modules/sass/sass.module.js';
     GraphModule,
     DashboardModule,
     SassModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

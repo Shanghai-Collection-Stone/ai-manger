@@ -7,7 +7,10 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { AdminService } from '../../admin/services/admin.service.js';
 import { TodoService } from '../services/todo.service.js';
 import type {
   TodoCreateInput,
@@ -25,7 +28,10 @@ import type {
  */
 @Controller('todo')
 export class TodoController {
-  constructor(private readonly todo: TodoService) {}
+  constructor(
+    private readonly todo: TodoService,
+    private readonly adminService: AdminService,
+  ) {}
 
   @Post(':todoId/items')
   async createItem(
@@ -88,9 +94,16 @@ export class TodoController {
    */
   @Get()
   async list(
+    @Req() req: Request,
     @Query('userId') userId?: string,
   ): Promise<Record<string, unknown>> {
-    const rows = await this.todo.list(userId);
+    const authUser = await this.resolveAuthUser(req);
+    const canViewAll = this.canViewAllTasks(authUser?.role);
+    const rows = await this.todo.listByScope({
+      canViewAll,
+      userId: canViewAll ? userId : authUser?.username,
+      assignee: canViewAll ? undefined : authUser?.displayName,
+    });
     return { todos: rows };
   }
 
@@ -156,5 +169,27 @@ export class TodoController {
   async remove(@Param('id') id: string): Promise<Record<string, unknown>> {
     const ok = await this.todo.delete(Number(id));
     return { ok };
+  }
+
+  /**
+   * @description 解析请求中的后台登录用户
+   * @keyword-en resolve admin user from authorization
+   */
+  private async resolveAuthUser(req: Request) {
+    const auth = req.headers.authorization;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+      return null;
+    }
+    const token = auth.slice(7).trim();
+    if (!token) return null;
+    return this.adminService.getUserByToken(token);
+  }
+
+  /**
+   * @description 判断是否拥有查看全部任务权限
+   * @keyword-en check task full visibility role
+   */
+  private canViewAllTasks(role?: string): boolean {
+    return role === 'super_admin' || role === 'tenant_admin';
   }
 }
