@@ -9,6 +9,39 @@ import { ObjectId } from 'mongodb';
 export type DataSourceStatus = 'active' | 'inactive';
 
 /**
+ * @title 数据源可见范围 Data Source Scope
+ * @description 标识数据源属于平台还是租户私有。
+ * @keyword-en data source scope
+ */
+export type DataSourceScope = 'platform' | 'tenant';
+
+/**
+ * @title Mongo 连接模式 Mongo Connection Mode
+ * @description 标识Mongo数据源的连接方式。
+ * @keyword-en mongo connection mode
+ */
+export type MongoConnectionMode = 'main' | 'local' | 'external';
+
+/**
+ * @title Mongo 连接配置 Mongo Connection Config
+ * @description Mongo数据源连接参数，支持主库、本地库前缀、外部库。
+ * @keyword-en mongo connection config
+ */
+export interface MongoConnectionConfig {
+  mode: MongoConnectionMode;
+  uri?: string;
+  dbName?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  password?: string;
+  authSource?: string;
+  params?: Record<string, string>;
+  localCollectionPrefix?: string;
+  collectionMap?: Record<string, string>;
+}
+
+/**
  * @title 数据源实体 Data Source Entity
  * @description 表示一个数据源的元信息，用于动态路由到对应的 source 模块。
  * @keywords-cn 数据源, 实体, 向量搜索
@@ -36,6 +69,10 @@ export interface DataSourceEntity {
    * 对应的 source 模块路径，如 'sources/mongo'
    */
   moduleRef: string;
+  sourceType?: 'mongo' | 'api';
+  scope?: DataSourceScope;
+  tenantId?: string;
+  connection?: MongoConnectionConfig;
   /**
    * 数据源状态
    */
@@ -59,6 +96,10 @@ export interface DataSourceCreateInput {
   name: string;
   description: string;
   moduleRef: string;
+  sourceType?: 'mongo' | 'api';
+  scope?: DataSourceScope;
+  tenantId?: string;
+  connection?: MongoConnectionConfig;
   status?: DataSourceStatus;
 }
 

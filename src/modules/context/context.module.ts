@@ -1,5 +1,6 @@
-import { Module, Provider } from '@nestjs/common';
+import { Module, Provider, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AdminModule } from '../admin/admin.module.js';
 import { ContextController } from './controller/context.controller';
 import { ContextService } from './services/context.service';
 import { MongoClient, Db } from 'mongodb';
@@ -67,6 +68,7 @@ const mongoProviders: Provider[] = [
 ];
 
 @Module({
+  imports: [forwardRef(() => AdminModule)],
   controllers: [ContextController],
   providers: [...mongoProviders, ContextService],
   exports: [ContextService, ...mongoProviders],

@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { Db } from 'mongodb';
+import { Db, MongoClient, Collection } from 'mongodb';
 import { tool, CreateAgentParams } from 'langchain';
 import * as z from 'zod';
 import {
@@ -7,6 +7,8 @@ import {
   MAIN_DATA_SOURCE,
 } from '../services/data-source-schema.service.js';
 import type { FieldMeta } from '../types/data-source.types.js';
+import { DataSourceService } from '../services/data-source.service.js';
+import type { DataSourceEntity } from '../entities/data-source.entity.js';
 
 /**
  * @title 数据源搜索工具 Data Source Search Tool
@@ -16,9 +18,12 @@ import type { FieldMeta } from '../types/data-source.types.js';
  */
 @Injectable()
 export class DataSourceSearchToolsService {
+  private readonly externalClientCache = new Map<string, MongoClient>();
+
   constructor(
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly schemaService: DataSourceSchemaService,
+    private readonly dataSourceService: DataSourceService,
   ) {}
 
   /**
@@ -32,7 +37,7 @@ export class DataSourceSearchToolsService {
     if (json.length <= maxChars) return json;
     // Try to parse and reduce array length
     try {
-      const parsed = JSON.parse(json);
+      const parsed: unknown = JSON.parse(json);
       if (Array.isArray(parsed) && parsed.length > 1) {
         const totalLen = json.length;
         const avgPerItem = totalLen / parsed.length;
@@ -59,9 +64,18 @@ export class DataSourceSearchToolsService {
     );
   }
 
-  getHandle(): CreateAgentParams['tools'] {
+  /**
+   * @description 返回数据源查询工具集合
+   * @keyword-en get data source tools handle
+   */
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
     const dataSourceQuery = tool(
       async ({
+        sourceCode,
+        tenantId,
         collection,
         filter,
         projection,
@@ -71,7 +85,11 @@ export class DataSourceSearchToolsService {
         pipeline,
         key,
       }) => {
+        const finalTenantId = this.resolveTenantId(tenantId, scope);
+        const finalSourceCode = sourceCode?.trim() || MAIN_DATA_SOURCE.code;
         console.log('[data_source_query]', {
+          sourceCode: finalSourceCode,
+          tenantId: finalTenantId,
           collection,
           filter,
           projection,
@@ -82,18 +100,27 @@ export class DataSourceSearchToolsService {
           key,
         });
 
-        const col = this.db.collection(collection);
+        const { source, col, logicalCollectionName } =
+          await this.resolveTargetCollection(
+            finalSourceCode,
+            collection,
+            finalTenantId,
+          );
         const safeLimit = Math.min(
           typeof limit === 'number' && limit > 0 ? limit : 20,
           100,
         );
 
         // 获取 schema 用于字段验证
-        const schemaResults = await this.schemaService.searchSchema(
-          collection,
-          MAIN_DATA_SOURCE.code,
+        const schemaResultsByLogical = await this.schemaService.searchSchema(
+          logicalCollectionName,
+          source.code,
           1,
         );
+        const schemaResults =
+          schemaResultsByLogical.length > 0
+            ? schemaResultsByLogical
+            : await this.schemaService.searchSchema(collection, source.code, 1);
         const schemaMap =
           schemaResults.length > 0
             ? this.buildSchemaMap(schemaResults[0].schema.fields)
@@ -105,6 +132,7 @@ export class DataSourceSearchToolsService {
             message:
               'No schema found for collection. Please call schema_search first to get valid fields.',
             collection,
+            sourceCode: source.code,
             operation: type ?? 'find',
           });
         }
@@ -122,6 +150,7 @@ export class DataSourceSearchToolsService {
             message:
               'Filter contains fields not present in schema. Use schema_search to get valid fields.',
             collection,
+            sourceCode: source.code,
             operation: type ?? 'find',
             invalid_fields: invalid,
             schema_fields: Array.from(schemaFields),
@@ -202,6 +231,13 @@ export class DataSourceSearchToolsService {
         description:
           '在数据源上执行查询操作。支持 find、count、aggregate、distinct、min、max、sum、avg 等操作。需要先使用 schema_search 获取集合的字段信息。',
         schema: z.object({
+          sourceCode: z
+            .string()
+            .describe('Data source code, such as main-mongo'),
+          tenantId: z
+            .string()
+            .optional()
+            .describe('Tenant id, omit for platform scope'),
           type: z
             .enum([
               'find',
@@ -218,11 +254,11 @@ export class DataSourceSearchToolsService {
             .describe('Operation type'),
           collection: z.string().describe('Collection name to query'),
           filter: z
-            .record(z.unknown())
+            .record(z.string(), z.unknown())
             .optional()
             .describe('Query filter for find/count/distinct'),
           projection: z
-            .record(z.union([z.literal(0), z.literal(1)]))
+            .record(z.string(), z.union([z.literal(0), z.literal(1)]))
             .optional()
             .describe('Projection for find'),
           limit: z
@@ -230,11 +266,11 @@ export class DataSourceSearchToolsService {
             .optional()
             .describe('Max results (default 20, max 100)'),
           sort: z
-            .record(z.union([z.literal(1), z.literal(-1)]))
+            .record(z.string(), z.union([z.literal(1), z.literal(-1)]))
             .optional()
             .describe('Sort order for find'),
           pipeline: z
-            .array(z.record(z.unknown()))
+            .array(z.record(z.string(), z.unknown()))
             .optional()
             .describe('Pipeline stages for aggregate'),
           key: z
@@ -378,5 +414,124 @@ export class DataSourceSearchToolsService {
       out.push(stage);
     }
     return out;
+  }
+
+  /**
+   * @description 解析目标查询集合与连接
+   * @keyword-en resolve target query collection
+   */
+  private async resolveTargetCollection(
+    sourceCode: string,
+    collectionName: string,
+    tenantId?: string,
+  ): Promise<{
+    source: DataSourceEntity;
+    col: Collection<Record<string, unknown>>;
+    logicalCollectionName: string;
+  }> {
+    const source = await this.dataSourceService.findAccessibleSource(
+      sourceCode,
+      tenantId,
+    );
+    if (!source) {
+      throw new Error('SOURCE_NOT_ACCESSIBLE');
+    }
+    const conn = this.dataSourceService.resolveMongoConnection(source);
+    const logicalCollectionName = collectionName.trim();
+    const mappedByMap = conn.collectionMap?.[logicalCollectionName];
+    const prefix = conn.localCollectionPrefix?.trim() || '';
+    const physicalCollectionName =
+      mappedByMap ||
+      (prefix ? `${prefix}${logicalCollectionName}` : logicalCollectionName);
+    if (conn.mode === 'main' || conn.mode === 'local') {
+      return {
+        source,
+        col: this.db.collection<Record<string, unknown>>(
+          physicalCollectionName,
+        ),
+        logicalCollectionName,
+      };
+    }
+    const client = await this.getExternalClient(sourceCode, conn);
+    const dbName = conn.dbName?.trim();
+    if (!dbName) {
+      throw new Error('EXTERNAL_DB_NAME_REQUIRED');
+    }
+    const db = client.db(dbName);
+    return {
+      source,
+      col: db.collection<Record<string, unknown>>(physicalCollectionName),
+      logicalCollectionName,
+    };
+  }
+
+  /**
+   * @description 获取外部Mongo客户端
+   * @keyword-en get external mongo client
+   */
+  private async getExternalClient(
+    sourceCode: string,
+    connection: {
+      mode: 'main' | 'local' | 'external';
+      uri?: string;
+      host?: string;
+      port?: number;
+      user?: string;
+      password?: string;
+      authSource?: string;
+      params?: Record<string, string>;
+    },
+  ): Promise<MongoClient> {
+    const cached = this.externalClientCache.get(sourceCode);
+    if (cached) return cached;
+    const uri = this.buildExternalMongoUri(connection);
+    const client = new MongoClient(uri, { serverSelectionTimeoutMS: 5000 });
+    await client.connect();
+    this.externalClientCache.set(sourceCode, client);
+    return client;
+  }
+
+  /**
+   * @description 构建外部Mongo连接串
+   * @keyword-en build external mongo uri
+   */
+  private buildExternalMongoUri(connection: {
+    uri?: string;
+    host?: string;
+    port?: number;
+    user?: string;
+    password?: string;
+    authSource?: string;
+    params?: Record<string, string>;
+  }): string {
+    if (connection.uri?.trim()) return connection.uri.trim();
+    const host = connection.host?.trim();
+    if (!host) throw new Error('EXTERNAL_MONGO_HOST_REQUIRED');
+    const port = connection.port ?? 27017;
+    const query = new URLSearchParams(connection.params ?? {});
+    if (connection.authSource?.trim() && !query.get('authSource')) {
+      query.set('authSource', connection.authSource.trim());
+    }
+    const user = connection.user?.trim();
+    const pass = connection.password?.trim();
+    const authPrefix =
+      user && pass
+        ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@`
+        : '';
+    const queryString = query.toString();
+    return `mongodb://${authPrefix}${host}:${port}/${queryString ? `?${queryString}` : ''}`;
+  }
+
+  /**
+   * @description 解析租户ID优先级
+   * @keyword-en resolve tenant id
+   */
+  private resolveTenantId(
+    tenantId?: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): string | undefined {
+    const value = tenantId?.trim();
+    if (value) return value;
+    return scope?.tenantId;
   }
 }

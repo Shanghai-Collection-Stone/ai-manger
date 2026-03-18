@@ -5,6 +5,7 @@ import {
   DataSourceEntity,
   DataSourceCreateInput,
   DataSourceSearchResult,
+  MongoConnectionConfig,
 } from '../entities/data-source.entity.js';
 
 /**
@@ -54,6 +55,10 @@ export class DataSourceService {
       description: input.description,
       embedding,
       moduleRef: input.moduleRef,
+      sourceType: input.sourceType ?? 'mongo',
+      scope: input.scope ?? 'platform',
+      tenantId: input.tenantId,
+      connection: this.normalizeConnection(input.connection),
       status: input.status ?? 'active',
       createdAt: now,
       updatedAt: now,
@@ -71,6 +76,50 @@ export class DataSourceService {
    */
   async findByCode(code: string): Promise<DataSourceEntity | null> {
     return this.collection.findOne({ code });
+  }
+
+  /**
+   * @description 查找租户可访问数据源
+   * @keyword-en find accessible source by tenant scope
+   */
+  async findAccessibleSource(
+    code: string,
+    tenantId?: string,
+  ): Promise<DataSourceEntity | null> {
+    const source = await this.collection.findOne({ code, status: 'active' });
+    if (!source) return null;
+    const scope = source.scope ?? 'platform';
+    if (scope === 'platform') return source;
+    const currentTenantId = tenantId?.trim();
+    if (!currentTenantId) return null;
+    if ((source.tenantId ?? '').trim() !== currentTenantId) return null;
+    return source;
+  }
+
+  /**
+   * @description 列出租户可访问数据源
+   * @keyword-en list accessible sources by tenant scope
+   */
+  async listAccessibleSources(tenantId?: string): Promise<DataSourceEntity[]> {
+    const currentTenantId = tenantId?.trim();
+    if (!currentTenantId) {
+      return this.collection
+        .find({
+          status: 'active',
+          $or: [{ scope: 'platform' }, { scope: { $exists: false } }],
+        })
+        .toArray();
+    }
+    return this.collection
+      .find({
+        status: 'active',
+        $or: [
+          { scope: 'platform' },
+          { scope: { $exists: false } },
+          { scope: 'tenant', tenantId: currentTenantId },
+        ],
+      })
+      .toArray();
   }
 
   /**
@@ -229,6 +278,36 @@ export class DataSourceService {
   }
 
   /**
+   * @description 解析数据源Mongo连接配置
+   * @keyword-en resolve source mongo connection
+   */
+  resolveMongoConnection(source: DataSourceEntity): MongoConnectionConfig {
+    const mode = source.connection?.mode ?? 'main';
+    return {
+      ...source.connection,
+      mode,
+      collectionMap: source.connection?.collectionMap ?? {},
+      params: source.connection?.params ?? {},
+    };
+  }
+
+  /**
+   * @description 标准化连接配置
+   * @keyword-en normalize connection config
+   */
+  private normalizeConnection(
+    connection?: MongoConnectionConfig,
+  ): MongoConnectionConfig {
+    const mode = connection?.mode ?? 'main';
+    return {
+      ...connection,
+      mode,
+      collectionMap: connection?.collectionMap ?? {},
+      params: connection?.params ?? {},
+    };
+  }
+
+  /**
    * @title 确保索引 Ensure Indexes
    * @description 创建必要的数据库索引。
    */
@@ -236,6 +315,8 @@ export class DataSourceService {
     try {
       await this.collection.createIndex({ code: 1 }, { unique: true });
       await this.collection.createIndex({ status: 1 });
+      await this.collection.createIndex({ scope: 1, tenantId: 1, status: 1 });
+      await this.collection.createIndex({ sourceType: 1, status: 1 });
       await this.collection.createIndex({ moduleRef: 1 });
     } catch {
       // ignore

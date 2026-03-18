@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminModule } from '../admin/admin.module.js';
+import { AutoTaskRobotModule } from '../auto-task-robot/auto-task-robot.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { TodoService } from './services/todo.service.js';
 import { TodoController } from './controller/todo.controller.js';
@@ -10,7 +11,7 @@ import { TodoController } from './controller/todo.controller.js';
  * @since 2026-01-27
  */
 @Module({
-  imports: [DataSourceModule, AdminModule],
+  imports: [DataSourceModule, AdminModule, AutoTaskRobotModule],
   controllers: [TodoController],
   providers: [TodoService],
   exports: [TodoService],

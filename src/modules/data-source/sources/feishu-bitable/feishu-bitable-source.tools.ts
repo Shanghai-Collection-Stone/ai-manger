@@ -54,6 +54,8 @@ class FeishuBitableListRecordsTool extends StructuredTool {
                 ),
             }),
           )
+          .optional()
+          .default([])
           .describe('条件数组'),
       })
       .optional()

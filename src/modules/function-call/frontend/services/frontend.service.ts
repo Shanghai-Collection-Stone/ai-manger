@@ -1,5 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { tool, CreateAgentParams } from 'langchain';
+import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
 import * as z from 'zod';
 import { AgentService } from '../../../ai-agent/services/agent.service.js';
 import { SchemaFunctionCallService } from '../../schema/services/schema.service.js';
@@ -9,7 +10,12 @@ import { randomBytes } from 'crypto';
 import { AsyncResource } from 'async_hooks';
 import { Db } from 'mongodb';
 import { AgentConfig } from '@/modules/ai-agent/types/agent.types.js';
+import type { DeepAgentSubAgent } from '../../../ai-agent/types/agent.types.js';
 
+/**
+ * @description 前端生成函数调用服务
+ * @keyword-en frontend function-call service
+ */
 @Injectable()
 export class FrontendFunctionCallService {
   constructor(
@@ -18,6 +24,17 @@ export class FrontendFunctionCallService {
     private readonly schemaTools: SchemaFunctionCallService,
   ) {}
 
+  private normalizeSubagentTools(
+    tools: CreateAgentParams['tools'],
+  ): StructuredTool[] {
+    if (!Array.isArray(tools)) return [];
+    return tools.filter((t): t is StructuredTool => isStructuredTool(t));
+  }
+
+  /**
+   * @description 获取工具句柄集合
+   * @keyword-en get handle
+   */
   getHandle(): CreateAgentParams['tools'] {
     const plan = tool(
       ({ input, contentType, uiFramework, layout }) => {
@@ -295,26 +312,41 @@ export class FrontendFunctionCallService {
         return;
       }
 
+      const tools = this.normalizeSubagentTools(this.schemaTools.getHandle());
+      const subagent: DeepAgentSubAgent = {
+        name: 'frontend_subagent',
+        description: '前端页面生成子代理',
+        systemPrompt: params.sys,
+        tools,
+      };
+      const mainSystem = [
+        '你是前端页面生成协调者。',
+        '必须使用 task 工具委托给 frontend_subagent。',
+        '仅返回子代理最终 HTML 内容。',
+      ].join('\n');
       const config: AgentConfig = {
         provider: 'deepseek',
         model: 'deepseek-chat',
         temperature: params.temperature ?? 0.3,
-        system: params.sys,
+        system: mainSystem,
         nonStreaming: true,
-        tools: this.schemaTools.getHandle(),
+        tools,
+        subagents: [subagent],
       };
       const baseReq = `${params.input}\n类型:${params.contentType ?? 'chart'} 框架:${params.uiFramework ?? 'antd'} 布局:${params.layout ?? 'dashboard'}`;
       const userContent = params.prevHtml
         ? `现有HTML如下（请基于此进行修改并返回完整HTML）：\n${params.prevHtml}\n\n修改需求：\n${baseReq}`
         : baseReq;
       const messages = this.agent.toMessages([
-        { role: 'system', content: params.sys },
-        { role: 'user', content: userContent },
+        {
+          role: 'user',
+          content: `请使用 task 工具委托给 frontend_subagent，任务：${userContent}`,
+        },
       ]);
       console.log('加载表格html中');
 
       // 直接构建模型并运行，显式传递空回调和新信号以彻底脱离父上下文
-      const agentRun = this.agent.buildChatModel(config);
+      const agentRun = await this.agent.buildChatModel(config);
       // 使用 AsyncResource 在全新的异步上下文中执行，彻底切断与 SSE/Parent Request 的联系
       const state = await new AsyncResource(
         'detached-agent-run',
@@ -337,9 +369,10 @@ export class FrontendFunctionCallService {
 
       // 手动提取 AI 消息
       let ai: any = { content: '' };
-      if (state && state.messages && Array.isArray(state.messages)) {
-        for (let i = state.messages.length - 1; i >= 0; i--) {
-          const msg = state.messages[i];
+      const stateRec = state as { messages?: unknown[] } | null | undefined;
+      if (stateRec && Array.isArray(stateRec.messages)) {
+        for (let i = stateRec.messages.length - 1; i >= 0; i--) {
+          const msg = stateRec.messages[i];
           // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
           if ((msg as any)._getType() === 'ai') {
             ai = msg;
@@ -377,6 +410,10 @@ export class FrontendFunctionCallService {
   }
 }
 
+/**
+ * @description 清理模型输出并提取HTML内容
+ * @keyword-en sanitize html output
+ */
 function sanitizeHtmlOutput(raw: string): string {
   const trimmed = raw.trim();
   const fenceHtml = trimmed.match(/^```html\s*([\s\S]*?)\s*```$/i);
@@ -391,10 +428,18 @@ function sanitizeHtmlOutput(raw: string): string {
   return minimalHtml();
 }
 
+/**
+ * @description 返回最小占位HTML
+ * @keyword-en minimal html
+ */
 function minimalHtml(): string {
   return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>内容生成中</title><style>body{background:#f7f7f7;padding:24px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;}#ph{background:#fff;border:1px solid #f0f0f0;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,0.03);padding:16px;text-align:center}</style></head><body><div id="ph">内容生成中，请稍后刷新。</div><button id="refresh-btn" style="margin-top:12px">刷新</button><script>document.getElementById("refresh-btn").addEventListener("click",function(){location.reload()})</script></body></html>';
 }
 
+/**
+ * @description 构建默认占位模板
+ * @keyword-en default template
+ */
 function getDefaultTemplate(
   ui: string,
   lib: string,

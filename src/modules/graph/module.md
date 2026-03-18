@@ -13,6 +13,19 @@ Graph控制器。
 ### article-graph.service.ts
 文章编排服务。
 - **关键词**: articles, canvas, gallery, service
+- **函数**:
+  - `generateToCanvas`: 生成Canvas示例文章/generate canvas articles
+  - `generateToCanvasBySubAgent`: 子代理生成并逐篇写入/subagent canvas generation
+  - `collectArticleDataBySubAgent`: 子代理采集数据/collect data by subagent
+  - `planBlueprintsBySubAgent`: 子代理规划蓝图/plan blueprints by subagent
+  - `appendOneArticleToCanvas`: 单篇写入Canvas/append one article
+  - `generateOneArticleFromBlueprint`: 单篇文章生成/generate one article
+  - `assignImagesForCanvasBySubAgent`: 子代理配图/assign images by subagent
+  - `normalizeBlueprints`: 蓝图去机械化/normalize blueprints
+  - `buildFallbackBlueprints`: 动态蓝图兜底/build fallback blueprints
+  - `evaluateArticleQuality`: 文章质量分层校验/evaluate article quality
+  - `polishArticleMarkdown`: 文章自动润色/polish markdown
+  - `buildFallbackStandaloneMarkdown`: 独立软文兜底/build standalone fallback markdown
 
 ### batch-task-graph.service.ts
 批量发布图服务。

@@ -28,11 +28,27 @@ AI 指挥官主界面容器，管理底部导航和视图切换。
 
 - **关键词**: DecisionFeedView, ActionCards, TaskList, EmptyState
 
+### CanvasFeedView.jsx
+
+Canvas 文章看板视图，支持按 canvasId 加载文章列表与详情，提供小红书风格文章卡片阅读体验。
+
+- **关键词**: CanvasFeedView, canvas, article, xiaohongshu, detail, modal
+
 ### ChatBIView.jsx
 
-AI 助理对话视图，提供自然语言数据查询和指令交互。已集成真实 AI 对话服务，支持多会话管理和历史记录切换。
+AI 助理对话视图，提供自然语言数据查询和指令交互。支持按 `sessionType` 运行普通会话或思维链路会话。
+支持在输入框上方显示“会话历史”按钮，并通过弹窗切换历史会话。
 
-- **关键词**: ChatBIView, AIChat, DataQuery, RealtimeInteraction, SessionManagement, DrawerUI
+- **关键词**: ChatBIView, AIChat, DataQuery, RealtimeInteraction, SessionManagement, DrawerUI, thought-session, session-picker
+
+### ThoughtRouteView.jsx
+
+思维链路工具页，包含「对话」和「思维链表格管理」双Tab。
+对话模式仅用于Schema理解和思维链生成，表格管理支持思维链增删改查。
+页面头部使用轻量布局，不显示大标题区，仅保留返回操作与Tab切换。
+表格管理在移动端改为卡片列表展示，在桌面端保留表格展示。
+
+- **关键词**: ThoughtRouteView, thought-route, tab, schema, skill-thought, crud
 
 ### TaskCenterView.jsx
 
@@ -45,10 +61,10 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。已集�
 
 ### ToolsView.jsx
 
-工具箱视图，集成 AI 图库及其他实用工具。
+工具箱视图，集成 AI 图库与思维链路工具入口。
 包含完整的 AI 图库管理功能：分组管理、图片上传、无限滚动加载、图片预览等。
 
-- **关键词**: ToolsView, AIGallery, ImageManagement, ToolBox, InfiniteScroll, FileUpload
+- **关键词**: ToolsView, AIGallery, ThoughtRoute, ImageManagement, ToolBox, InfiniteScroll, FileUpload
 
 ### NavItem.jsx
 
@@ -58,9 +74,9 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。已集�
 
 ### chatService.js
 
-封装 AI 聊天相关的 API 调用逻辑，包括会话创建、消息发送、历史记录获取以及远程会话列表管理。
+封装 AI 聊天相关的 API 调用逻辑，包括会话创建、消息发送、历史记录获取以及远程会话列表管理，支持 `sessionType` 传递。
 
-- **关键词**: ChatService, APIService, StreamChat, RemoteSessionManagement
+- **关键词**: ChatService, APIService, StreamChat, RemoteSessionManagement, sessionType
 
 ### store.js
 

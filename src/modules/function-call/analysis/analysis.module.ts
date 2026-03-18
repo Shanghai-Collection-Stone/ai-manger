@@ -6,6 +6,7 @@ import { DataSourceModule } from '../../data-source/data-source.module.js';
 import { SuperPartySourceModule } from '../../data-source/sources/super-party/super-party-source.module.js';
 import { FeishuBitableSourceModule } from '../../data-source/sources/feishu-bitable/feishu-bitable-source.module.js';
 import { SkillThoughtModule } from '../../skill-thought/skill-thought.module.js';
+import { DecisionCardModule } from '../../decision-card/decision-card.module.js';
 
 /**
  * @title 数据分析函数调用模块 Analysis Function Call Module
@@ -21,6 +22,7 @@ import { SkillThoughtModule } from '../../skill-thought/skill-thought.module.js'
     SuperPartySourceModule,
     FeishuBitableSourceModule,
     SkillThoughtModule,
+    DecisionCardModule,
   ],
   providers: [AnalysisFunctionCallService],
   exports: [AnalysisFunctionCallService],

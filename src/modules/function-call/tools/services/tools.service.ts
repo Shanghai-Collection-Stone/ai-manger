@@ -8,6 +8,9 @@ import { McpFunctionCallService } from '../../mcp/services/mcp.service.js';
 import { McpAdaptersService } from '../../mcp/services/mcp-adapter.service.js';
 import { TodoFunctionCallService } from '../../todo/services/todo.service.js';
 import { GraphWorkflowFunctionCallService } from './graph-workflow.service.js';
+import { RobotRegistryService } from '../../../auto-task-robot/services/robot-registry.service.js';
+import { tool } from 'langchain';
+import * as z from 'zod';
 
 /**
  * @title 工具服务 Tools Service
@@ -26,6 +29,7 @@ export class ToolsService {
     private readonly mcpAdapters: McpAdaptersService,
     private readonly todo: TodoFunctionCallService,
     private readonly graphWorkflow: GraphWorkflowFunctionCallService,
+    private readonly robots: RobotRegistryService,
   ) {}
 
   /**
@@ -51,12 +55,20 @@ export class ToolsService {
    * @returns {CreateAgentParams['tools']} 工具集合。
    * @keyword-en tools, handle, aggregate
    */
-  getHandle(streamWriter?: (msg: string) => void): CreateAgentParams['tools'] {
+  getHandle(
+    streamWriter?: (msg: string) => void,
+    scope?: { tenantId?: string; userId?: string },
+    options?: { mode?: 'default' | 'thought' },
+  ): CreateAgentParams['tools'] {
+    const mode = options?.mode ?? 'default';
+    if (mode === 'thought') {
+      return this.getThoughtRouteTools(scope);
+    }
     const tools: CreateAgentParams['tools'] = [];
     const tFrontend = this.frontend.getHandle() ?? [];
-    const tAnalysis = this.analysis.getHandle(streamWriter) ?? [];
+    const tAnalysis = this.analysis.getHandle() ?? [];
     const tTitle = this.title.getHandle() ?? [];
-    const tSkillThought = this.skillThought.getHandle() ?? [];
+    const tSkillThought = this.skillThought.getHandle(scope) ?? [];
     const tSkillThoughtFiltered = tSkillThought.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       return name !== 'search_thought';
@@ -65,15 +77,30 @@ export class ToolsService {
     const tMcpAdapters = this.filterMcpAdapterTools(
       this.mcpAdapters.getTools(),
     );
-    const tTodo = this.todo.getHandle() ?? [];
+    const tDecision = this.getDecisionTools(scope) ?? [];
     const tGraphWorkflowAll = this.graphWorkflow.getHandle(streamWriter) ?? [];
     const tGraphWorkflow = tGraphWorkflowAll.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
-      return name === 'topic_orchestrate' || name === 'xhs_batch_publish';
+      return name === 'topic_orchestrate';
     });
+    const tTodo = this.todo.getHandle(scope) ?? [];
+    const tRobots: CreateAgentParams['tools'] = [
+      tool(
+        () => {
+          return JSON.stringify({ robots: this.robots.listRobots() });
+        },
+        {
+          name: 'robot_list',
+          description:
+            'List all available auto-task robots that can be assigned via Todo assignee=robot:<code>.',
+          schema: z.object({}),
+        },
+      ),
+    ];
     // 所有数据源工具（schema_search, data_source_query, super_party_*, feishu_bitable_*）
     // 仅在 data_analysis 内部使用，不直接暴露给对话层
     // Chat层只能调用 data_analysis，数据分析由 analysis 层统一管理
+    // todo/robot 工具用于把决策转为可执行任务与指派自动机器人
     const disabled = new Set<string>([]);
     tools.push(
       ...tFrontend,
@@ -82,12 +109,51 @@ export class ToolsService {
       ...tSkillThoughtFiltered,
       ...tMcp,
       ...tMcpAdapters,
-      ...tTodo,
+      ...tDecision,
       ...tGraphWorkflow,
+      ...tTodo,
+      ...tRobots,
     );
     return tools.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       return !disabled.has(name);
+    });
+  }
+
+  /**
+   * @description 获取思维链路专用工具集
+   * @keyword-en get thought route tools
+   */
+  private getThoughtRouteTools(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
+    const raw = this.analysis.getAllDataSourceTools(scope) ?? [];
+    const allow = new Set([
+      'schema_search',
+      'data_source_query',
+      'search_thought',
+      'generate_thought',
+      'get_thought_detail',
+    ]);
+    return raw.filter((t) => {
+      const name = (t as { name?: string }).name ?? '';
+      return allow.has(name);
+    });
+  }
+
+  /**
+   * @description 获取对话层可直接调用的决策工具
+   * @keyword-en decision tools
+   */
+  private getDecisionTools(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): NonNullable<CreateAgentParams['tools']> {
+    const raw = this.analysis.getAllDataSourceTools(scope) ?? [];
+    return raw.filter((t) => {
+      const name = (t as { name?: string }).name ?? '';
+      return name === 'decision_card_generate';
     });
   }
 }

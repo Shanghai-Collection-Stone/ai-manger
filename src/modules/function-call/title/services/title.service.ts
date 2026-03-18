@@ -29,32 +29,24 @@ export class TitleFunctionCallService {
       async ({ sessionId, question, answer, language }) => {
         const sys = [
           '你是一个会话标题生成器。根据第一轮问答内容生成简短而准确的会话标题。',
-          '要求：不超过24个字符；避免冗长；避免标点结尾；突出主题。',
+          '要求：不超过24个字符；避免冗长；避免标点结尾；突出主题。只返回标题文本，不要包含额外符号。',
           'language=en 时使用英文，否则使用中文。',
         ].join('\n');
 
         const prompt = `Q: ${question}\nA: ${answer ?? ''}\nlanguage: ${language ?? 'zh'}`;
         const messages: BaseMessage[] = this.agent.toMessages([
-          { role: 'system', content: sys },
-          { role: 'user', content: prompt },
+          {
+            role: 'user',
+            content: prompt,
+          },
         ]);
 
         const ai = await this.agent.runWithMessages({
           config: {
-            provider: 'deepseek',
-            model: 'deepseek-chat',
             temperature: 0.3,
+            system: sys,
           },
           messages,
-          callOption: {
-            configurable: {
-              thread_id: sessionId,
-              checkpoint_ns: 'title',
-              checkpoint_id:
-                (await this.ctx.getConversation(sessionId))?.lastCheckpointId ??
-                'root',
-            },
-          },
         });
         const content = (ai as unknown as { content: unknown }).content;
         const raw =
@@ -100,30 +92,22 @@ export class TitleFunctionCallService {
 
     const sys = [
       '你是一个会话标题生成器。根据第一轮问答内容生成简短而准确的会话标题。',
-      '要求：不超过24个字符；避免冗长；避免标点结尾；突出主题。',
+      '要求：不超过24个字符；避免冗长；避免标点结尾；突出主题。只直接输出标题。',
       '默认使用中文。',
     ].join('\n');
 
     const messages: BaseMessage[] = this.agent.toMessages([
-      { role: 'system', content: sys },
-      { role: 'user', content: `Q: ${q}\nA: ${a}` },
+      {
+        role: 'user',
+        content: `任务：Q: ${q}\nA: ${a}`,
+      },
     ]);
     const ai = await this.agent.runWithMessages({
       config: {
-        provider: 'deepseek',
-        model: 'deepseek-chat',
         temperature: 0.3,
+        system: sys,
       },
       messages,
-      callOption: {
-        configurable: {
-          thread_id: sessionId,
-          checkpoint_ns: 'title',
-          checkpoint_id:
-            (await this.ctx.getConversation(sessionId))?.lastCheckpointId ??
-            'root',
-        },
-      },
     });
     const content = (ai as unknown as { content: unknown }).content;
     const raw = typeof content === 'string' ? content : JSON.stringify(content);

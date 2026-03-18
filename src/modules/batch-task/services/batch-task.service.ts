@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { McpAdaptersService } from '../../function-call/mcp/services/mcp-adapter.service.js';
 import { TodoService } from '../../todo/services/todo.service.js';
@@ -207,15 +207,29 @@ export class BatchTaskService {
     descParts.push('状态：等待执行');
     const todoDescription = descParts.join('  ');
 
-    const todo = await this.todo.create({
-      userId: input.userId,
-      title: todoTitle,
-      description: todoDescription,
-      type: 'auto_execute',
-      aiConsideration: 'Auto created by batch task linkage',
-      decisionReason: 'Create overview todo for batch publishing tracking',
-      aiPlan: 'Track each release as a todo item with status and done note',
-    });
+    const providedTodoIdRaw = input.todoId;
+    const providedTodoId =
+      typeof providedTodoIdRaw === 'number' &&
+      Number.isFinite(providedTodoIdRaw)
+        ? Math.floor(providedTodoIdRaw)
+        : undefined;
+    let todoId: number | undefined;
+    if (typeof providedTodoId === 'number' && providedTodoId > 0) {
+      const existed = await this.todo.get(providedTodoId);
+      if (!existed) throw new BadRequestException('TODO_NOT_FOUND');
+      todoId = providedTodoId;
+    } else {
+      const todo = await this.todo.create({
+        userId: input.userId,
+        title: todoTitle,
+        description: todoDescription,
+        type: 'auto_execute',
+        aiConsideration: 'Auto created by batch task linkage',
+        decisionReason: 'Create overview todo for batch publishing tracking',
+        aiPlan: 'Track each release as a todo item with status and done note',
+      });
+      todoId = todo.id;
+    }
 
     const doc: BatchTaskEntity = {
       _id: new ObjectId(),
@@ -225,7 +239,7 @@ export class BatchTaskService {
       topic: input.topic,
       canvasId: input.canvasId,
       mcpTaskId: input.mcpTaskId,
-      todoId: todo.id,
+      todoId,
       status: 'pending',
       posts: [],
       createdAt: now,

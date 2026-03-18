@@ -7,6 +7,8 @@ import { SchemaModule } from '../schema/schema.module';
 import { FunctionCallToolsModule } from '../function-call/tools/tools.module';
 import { TitleFunctionCallModule } from '../function-call/title/title.module';
 import { AiContextModule } from '../ai-context/ai-context.module';
+import { AdminModule } from '../admin/admin.module.js';
+import { AnalysisFunctionCallModule } from '../function-call/analysis/analysis.module.js';
 
 /**
  * @title 主对话模块 Chat-Main Module
@@ -22,6 +24,8 @@ import { AiContextModule } from '../ai-context/ai-context.module';
     FunctionCallToolsModule,
     TitleFunctionCallModule,
     AiContextModule,
+    AdminModule,
+    AnalysisFunctionCallModule,
   ],
   controllers: [ChatMainController],
   providers: [ChatMainService],

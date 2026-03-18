@@ -9,6 +9,7 @@ import { ObjectId } from 'mongodb';
 export interface TodoEntity {
   _id: ObjectId;
   id: number;
+  tenantId?: string;
   userId: string;
   title: string;
   description?: string;
@@ -27,6 +28,7 @@ export interface TodoEntity {
  * @description 待办创建输入
  */
 export interface TodoCreateInput {
+  tenantId?: string;
   userId: string;
   title: string;
   description?: string;
@@ -42,6 +44,7 @@ export interface TodoCreateInput {
  */
 export interface TodoUpdateInput {
   id: number;
+  tenantId?: string;
   userId?: string;
   title?: string;
   description?: string;

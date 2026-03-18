@@ -21,7 +21,15 @@ import { BatchTaskGraphService } from './services/batch-task-graph.service.js';
     McpFunctionCallModule,
   ],
   controllers: [GraphController],
-  providers: [ArticleGraphService, BatchTaskGraphService],
-  exports: [ArticleGraphService, BatchTaskGraphService],
+  providers: [
+    ArticleGraphService,
+    BatchTaskGraphService,
+    { provide: 'ARTICLE_GRAPH_SERVICE', useExisting: ArticleGraphService },
+  ],
+  exports: [
+    ArticleGraphService,
+    BatchTaskGraphService,
+    'ARTICLE_GRAPH_SERVICE',
+  ],
 })
 export class GraphModule {}

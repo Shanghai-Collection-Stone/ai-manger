@@ -9,7 +9,10 @@ import {
   MessagePart,
 } from '../types/context.types';
 import { MessageEntity } from '../entities/message.entity';
-import { ConversationEntity } from '../entities/conversation.entity';
+import {
+  ConversationEntity,
+  ConversationSessionType,
+} from '../entities/conversation.entity';
 import { ContextRole } from '../enums/context.enums';
 
 /**
@@ -25,6 +28,8 @@ export class ContextService {
   private readonly deleted: Collection<{
     _id: ObjectId;
     sessionId: string;
+    tenantId?: string;
+    userId?: string;
     fp: string;
     timestamp: Date;
   }>;
@@ -41,11 +46,15 @@ export class ContextService {
     const delCol: Collection<{
       _id: ObjectId;
       sessionId: string;
+      tenantId?: string;
+      userId?: string;
       fp: string;
       timestamp: Date;
     }> = db.collection<{
       _id: ObjectId;
       sessionId: string;
+      tenantId?: string;
+      userId?: string;
       fp: string;
       timestamp: Date;
     }>('deleted_messages');
@@ -64,18 +73,66 @@ export class ContextService {
    * @param sessionId 可选指定会话ID
    */
   async createSession(sessionId?: string): Promise<string> {
-    const sid = sessionId ?? cryptoRandomId();
+    return this.createSessionWithScope(sessionId);
+  }
+
+  /**
+   * @title 创建租户会话 Create Session With Scope
+   * @description 创建或返回租户用户范围内会话ID。
+   * @keywords-cn 创建会话, 租户
+   * @keywords-en create session, tenant scope
+   */
+  async createSessionWithScope(
+    sessionId?: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<string> {
+    const requestedSessionId = sessionId?.trim();
+    let sid = requestedSessionId || cryptoRandomId();
     const now = new Date();
-    const existing = await this.conversations.findOne({ sessionId: sid });
+    const existing = await this.conversations.findOne(
+      this.buildConversationFilter(sid, scope),
+    );
     if (existing) return sid;
-    await this.conversations.insertOne({
-      _id: new ObjectId(),
-      sessionId: sid,
-      title: undefined,
-      lastCheckpointId: undefined,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      await this.conversations.insertOne({
+        _id: new ObjectId(),
+        sessionId: sid,
+        sessionType: this.normalizeSessionType(scope?.sessionType),
+        tenantId: scope?.tenantId,
+        userId: scope?.userId,
+        title: undefined,
+        lastCheckpointId: undefined,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (error) {
+      if (this.isDuplicateKeyError(error)) {
+        const raw = await this.conversations.findOne({ sessionId: sid });
+        if (raw && this.isConversationInScope(raw, scope)) {
+          return sid;
+        }
+        if (!requestedSessionId) {
+          sid = cryptoRandomId();
+          await this.conversations.insertOne({
+            _id: new ObjectId(),
+            sessionId: sid,
+            sessionType: this.normalizeSessionType(scope?.sessionType),
+            tenantId: scope?.tenantId,
+            userId: scope?.userId,
+            title: undefined,
+            lastCheckpointId: undefined,
+            createdAt: now,
+            updatedAt: now,
+          });
+          return sid;
+        }
+      }
+      throw error;
+    }
     return sid;
   }
 
@@ -90,11 +147,20 @@ export class ContextService {
   async appendMessage(
     sessionId: string,
     message: ContextMessage,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<void> {
+    await this.assertSessionScope(sessionId, scope);
     const now = new Date();
+    const scopeSet = this.buildConversationScopeSet(scope);
     await this.messages.insertOne({
       _id: new ObjectId(),
       sessionId,
+      tenantId: scope?.tenantId,
+      userId: scope?.userId,
       role: message.role,
       content: message.content,
       name: message.name,
@@ -105,9 +171,13 @@ export class ContextService {
       timestamp: now,
     });
     await this.conversations.updateOne(
-      { sessionId },
-      { $set: { updatedAt: now } },
-      { upsert: true },
+      this.buildConversationFilter(sessionId, scope),
+      {
+        $set: {
+          updatedAt: now,
+          ...scopeSet,
+        },
+      },
     );
   }
 
@@ -123,11 +193,46 @@ export class ContextService {
     sessionId: string,
     limit?: number,
     opts?: { excludeRoles?: ContextRole[] },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<ContextMessage[]> {
+    await this.assertSessionScope(sessionId, scope);
+    const storedMessages = await this.messages
+      .find({ sessionId, ...this.buildScopeFilter(scope) })
+      .sort({ timestamp: 1 })
+      .toArray();
     const tuple: CheckpointTuple | undefined = await this.saver.getTuple({
       configurable: { thread_id: sessionId },
     });
-    if (!tuple) return [];
+    if (!tuple) {
+      const fallback = storedMessages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : '',
+        name: typeof m.name === 'string' ? m.name : undefined,
+        tool_calls: Array.isArray(m.tool_calls) ? m.tool_calls : undefined,
+        tool_results: Array.isArray(m.tool_results)
+          ? m.tool_results
+          : undefined,
+        tool_summary: Array.isArray(m.tool_summary)
+          ? m.tool_summary
+          : undefined,
+        parts: Array.isArray(m.parts) ? (m.parts as MessagePart[]) : undefined,
+        timestamp: m.timestamp,
+      }));
+      const filtered =
+        opts && Array.isArray(opts.excludeRoles) && opts.excludeRoles.length > 0
+          ? fallback.filter((m) => !opts.excludeRoles!.includes(m.role))
+          : fallback;
+      const ordered = filtered.sort(
+        (a, b) => (a.timestamp?.getTime() ?? 0) - (b.timestamp?.getTime() ?? 0),
+      );
+      return typeof limit === 'number' && limit > 0
+        ? ordered.slice(-limit)
+        : ordered;
+    }
     const channelValues = tuple.checkpoint?.channel_values ?? {};
     const stateMessages = channelValues['messages'];
     const arr = Array.isArray(stateMessages)
@@ -401,11 +506,6 @@ export class ContextService {
     }
 
     // 从 messages 集合补充 tool_results（包含子 tool 调用）
-    const storedMessages = await this.messages
-      .find({ sessionId })
-      .sort({ timestamp: 1 })
-      .toArray();
-
     const storedAssistants = storedMessages.filter(
       (s) => s.role === ContextRole.Assistant,
     );
@@ -418,12 +518,6 @@ export class ContextService {
       m: ContextMessage,
     ): (typeof storedAssistants)[number] | undefined => {
       const mContent = (m.content ?? '').trim();
-      const mToolCallIds = new Set(
-        ((m.tool_calls ?? []) as Array<{ id?: string }>)
-          .map((tc) => tc.id)
-          .filter(Boolean),
-      );
-
       let bestIdx = -1;
       let bestScore = -1;
 
@@ -615,19 +709,31 @@ export class ContextService {
    * @keywords-en list conversations, list
    */
   async getAllConversations(): Promise<ConversationEntity[]> {
+    return this.getScopedConversations();
+  }
+
+  /**
+   * @title 获取租户会话列表 List Scoped Conversations
+   * @description 返回范围内会话列表，按更新时间倒序。
+   * @keywords-cn 获取会话, 租户
+   * @keywords-en list conversations, tenant scope
+   */
+  async getScopedConversations(scope?: {
+    tenantId?: string;
+    userId?: string;
+    sessionType?: ConversationSessionType;
+  }): Promise<ConversationEntity[]> {
     const docs = await this.conversations
-      .find(
-        {},
-        {
-          projection: {
-            _id: 0,
-            sessionId: 1,
-            title: 1,
-            createdAt: 1,
-            updatedAt: 1,
-          },
+      .find(this.buildConversationsListReadFilter(scope), {
+        projection: {
+          _id: 0,
+          sessionId: 1,
+          sessionType: 1,
+          title: 1,
+          createdAt: 1,
+          updatedAt: 1,
         },
-      )
+      })
       .sort({ updatedAt: -1 })
       .toArray();
     return docs;
@@ -641,8 +747,27 @@ export class ContextService {
    * @param sessionId 会话ID
    */
   async clearSession(sessionId: string): Promise<void> {
-    await this.messages.deleteMany({ sessionId });
-    await this.conversations.deleteOne({ sessionId });
+    await this.clearSessionWithScope(sessionId);
+  }
+
+  /**
+   * @title 清空范围会话 Clear Session With Scope
+   * @description 删除租户用户范围内会话和消息。
+   * @keywords-cn 清空会话, 租户
+   * @keywords-en clear session, tenant scope
+   */
+  async clearSessionWithScope(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    await this.assertSessionScope(sessionId, scope);
+    const filter = this.buildConversationFilter(sessionId, scope);
+    await this.messages.deleteMany(filter);
+    await this.conversations.deleteOne(filter);
   }
 
   /**
@@ -656,16 +781,37 @@ export class ContextService {
   async buildMemory(
     sessionId: string,
     system: string[] = [],
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<ContextMemory> {
-    const messages = await this.getMessages(sessionId);
+    const messages = await this.getMessages(
+      sessionId,
+      undefined,
+      undefined,
+      scope,
+    );
     const hasSystem = messages.some((m) => m.role === ContextRole.System);
     const sys = hasSystem ? system : system;
     return { sessionId, system: sys, messages };
   }
 
-  async getDeletedFingerprints(sessionId: string): Promise<Set<string>> {
+  async getDeletedFingerprints(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<Set<string>> {
+    await this.assertSessionScope(sessionId, scope);
     const docs = await this.deleted
-      .find({ sessionId }, { projection: { _id: 0, fp: 1 } })
+      .find(
+        { sessionId, ...this.buildScopeFilter(scope) },
+        { projection: { _id: 0, fp: 1 } },
+      )
       .toArray();
     return new Set(docs.map((d) => d.fp));
   }
@@ -673,14 +819,28 @@ export class ContextService {
   async markDeletedFingerprints(
     sessionId: string,
     fps: string[],
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<void> {
+    await this.assertSessionScope(sessionId, scope);
     const now = new Date();
     const ops = (fps || [])
       .filter((s) => typeof s === 'string' && s.length > 0)
       .map((fp) => ({
         updateOne: {
-          filter: { sessionId, fp },
-          update: { $set: { sessionId, fp, timestamp: now } },
+          filter: { sessionId, fp, ...this.buildScopeFilter(scope) },
+          update: {
+            $set: {
+              sessionId,
+              fp,
+              timestamp: now,
+              tenantId: scope?.tenantId,
+              userId: scope?.userId,
+            },
+          },
           upsert: true,
         },
       }));
@@ -764,13 +924,21 @@ export class ContextService {
    * @title 获取会话元信息 Get Conversation Meta
    * @description 返回会话的元信息（包含标题）。
    */
-  async getConversation(sessionId: string): Promise<ConversationEntity | null> {
+  async getConversation(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<ConversationEntity | null> {
     const doc = await this.conversations.findOne(
-      { sessionId },
+      this.buildConversationReadFilter(sessionId, scope),
       {
         projection: {
           _id: 0,
           sessionId: 1,
+          sessionType: 1,
           title: 1,
           lastCheckpointId: 1,
           createdAt: 1,
@@ -786,11 +954,35 @@ export class ContextService {
    * @description 持久化会话标题。
    */
   async setTitle(sessionId: string, title: string): Promise<void> {
+    await this.setTitleWithScope(sessionId, title);
+  }
+
+  /**
+   * @title 设置范围标题 Set Title With Scope
+   * @description 更新范围内会话标题。
+   * @keywords-cn 标题, 租户
+   * @keywords-en title, tenant scope
+   */
+  async setTitleWithScope(
+    sessionId: string,
+    title: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    await this.assertSessionScope(sessionId, scope);
     const now = new Date();
+    const $set: Record<string, unknown> = { title, updatedAt: now };
+    if (scope?.sessionType) {
+      $set['sessionType'] = this.normalizeSessionType(scope.sessionType);
+    }
+    if (scope?.tenantId) $set['tenantId'] = scope.tenantId;
+    if (scope?.userId) $set['userId'] = scope.userId;
     await this.conversations.updateOne(
-      { sessionId },
-      { $set: { title, updatedAt: now } },
-      { upsert: true },
+      this.buildConversationFilter(sessionId, scope),
+      { $set },
     );
   }
 
@@ -798,24 +990,51 @@ export class ContextService {
    * @title 设置会话关键词 Set Conversation Keywords
    * @description 更新会话的关键词。
    */
-  async setKeywords(sessionId: string, keywords: string[]): Promise<void> {
+  async setKeywords(
+    sessionId: string,
+    keywords: string[],
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    await this.assertSessionScope(sessionId, scope);
     const now = new Date();
+    const scopeSet = this.buildConversationScopeSet(scope);
     await this.conversations.updateOne(
-      { sessionId },
-      { $set: { keywords, updatedAt: now } },
-      { upsert: true },
+      this.buildConversationFilter(sessionId, scope),
+      {
+        $set: {
+          keywords,
+          updatedAt: now,
+          ...scopeSet,
+        },
+      },
     );
   }
 
   async setLastCheckpointId(
     sessionId: string,
     checkpointId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<void> {
+    await this.assertSessionScope(sessionId, scope);
     const now = new Date();
+    const scopeSet = this.buildConversationScopeSet(scope);
     await this.conversations.updateOne(
-      { sessionId },
-      { $set: { lastCheckpointId: checkpointId, updatedAt: now } },
-      { upsert: true },
+      this.buildConversationFilter(sessionId, scope),
+      {
+        $set: {
+          lastCheckpointId: checkpointId,
+          updatedAt: now,
+          ...scopeSet,
+        },
+      },
     );
   }
 
@@ -831,13 +1050,264 @@ export class ContextService {
   private async ensureIndexes(): Promise<void> {
     try {
       await this.conversations.createIndex({ sessionId: 1 }, { unique: true });
+      await this.conversations.createIndex({ sessionType: 1, updatedAt: -1 });
+      await this.conversations.createIndex({
+        tenantId: 1,
+        userId: 1,
+        updatedAt: -1,
+      });
       await this.conversations.createIndex({ updatedAt: -1 });
+      await this.messages.createIndex({
+        tenantId: 1,
+        userId: 1,
+        timestamp: -1,
+      });
       await this.messages.createIndex({ sessionId: 1, timestamp: 1 });
       await this.messages.createIndex({ keywords: 1 });
-      await this.deleted.createIndex({ sessionId: 1, fp: 1 }, { unique: true });
+      await this.deleted.createIndex(
+        { sessionId: 1, tenantId: 1, userId: 1, fp: 1 },
+        { unique: true },
+      );
     } catch {
       // ignore
     }
+  }
+
+  /**
+   * @title 构建范围过滤 Build Scope Filter
+   * @description 统一构建 tenantId 和 userId 的查询过滤。
+   * @keywords-cn 过滤, 租户
+   * @keywords-en filter, tenant scope
+   */
+  private buildScopeFilter(scope?: { tenantId?: string; userId?: string }): {
+    tenantId?: string | Record<string, any>;
+    userId?: string;
+  } {
+    const filter: {
+      tenantId?: string | Record<string, any>;
+      userId?: string;
+    } = {};
+    if (scope && 'tenantId' in scope) {
+      const tenantId = scope.tenantId?.trim();
+      filter.tenantId = tenantId ? tenantId : { $in: [null] };
+    }
+    if (scope?.userId?.trim()) {
+      filter.userId = scope.userId.trim();
+    }
+    return filter;
+  }
+
+  /**
+   * @description 构建会话可回写的范围字段，仅在显式传入时写入
+   * @keyword-en build conversation scope set patch
+   */
+  private buildConversationScopeSet(scope?: {
+    tenantId?: string;
+    userId?: string;
+    sessionType?: ConversationSessionType;
+  }): Record<string, unknown> {
+    const patch: Record<string, unknown> = {};
+    if (!scope) return patch;
+    if ('sessionType' in scope && scope.sessionType) {
+      patch.sessionType = this.normalizeSessionType(scope.sessionType);
+    }
+    if ('tenantId' in scope && scope.tenantId !== undefined) {
+      const tenantId = scope.tenantId?.trim();
+      patch.tenantId = tenantId ? tenantId : null;
+    }
+    if (scope.userId?.trim()) {
+      patch.userId = scope.userId.trim();
+    }
+    return patch;
+  }
+
+  /**
+   * @description 会话类型标准化
+   * @keyword-en normalize session type
+   */
+  private normalizeSessionType(
+    sessionType?: ConversationSessionType,
+  ): ConversationSessionType {
+    return sessionType === 'thought' ? 'thought' : 'default';
+  }
+
+  /**
+   * @description 构建会话列表过滤
+   * @keyword-en build conversations list filter
+   */
+  private buildConversationsListFilter(scope?: {
+    tenantId?: string;
+    userId?: string;
+    sessionType?: ConversationSessionType;
+  }): Record<string, unknown> {
+    const filter: Record<string, unknown> = {
+      ...this.buildScopeFilter(scope),
+    };
+    const type = this.normalizeSessionType(scope?.sessionType);
+    if (type === 'thought') {
+      filter.sessionType = 'thought';
+      return filter;
+    }
+    filter.$or = [
+      { sessionType: 'default' },
+      { sessionType: { $exists: false } },
+    ];
+    return filter;
+  }
+
+  /**
+   * @description 构建会话列表读取过滤
+   * @keyword-en build conversations list read filter
+   */
+  private buildConversationsListReadFilter(scope?: {
+    tenantId?: string;
+    userId?: string;
+    sessionType?: ConversationSessionType;
+  }): Record<string, unknown> {
+    const filter = this.buildConversationsListFilter(scope);
+    const scopeOr = this.buildScopeReadOr(scope);
+    if (!scopeOr) return filter;
+    const rest = { ...filter };
+    delete rest['tenantId'];
+    delete rest['userId'];
+    return { ...rest, $and: [{ $or: scopeOr }] };
+  }
+
+  /**
+   * @description 构建会话精确过滤
+   * @keyword-en build conversation exact filter
+   */
+  private buildConversationFilter(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Record<string, unknown> {
+    const base: Record<string, unknown> = {
+      sessionId,
+      ...this.buildScopeFilter(scope),
+    };
+    const type = this.normalizeSessionType(scope?.sessionType);
+    if (type === 'thought') {
+      base.sessionType = 'thought';
+      return base;
+    }
+    base.$or = [
+      { sessionType: 'default' },
+      { sessionType: { $exists: false } },
+    ];
+    return base;
+  }
+
+  /**
+   * @description 构建会话读取过滤
+   * @keyword-en build conversation read filter
+   */
+  private buildConversationReadFilter(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Record<string, unknown> {
+    const filter = this.buildConversationFilter(sessionId, scope);
+    const scopeOr = this.buildScopeReadOr(scope);
+    if (!scopeOr) return filter;
+    const rest = { ...filter };
+    delete rest['tenantId'];
+    delete rest['userId'];
+    return { ...rest, $and: [{ $or: scopeOr }] };
+  }
+
+  /**
+   * @description 构建读取范围兼容or条件
+   * @keyword-en build read scope or condition
+   */
+  private buildScopeReadOr(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): Array<Record<string, unknown>> | null {
+    const tenantId = scope?.tenantId?.trim();
+    const userId = scope?.userId?.trim();
+    if (!tenantId && !userId) return null;
+    if (tenantId && userId) {
+      return [
+        { tenantId, userId },
+        { tenantId, userId: { $exists: false } },
+        { tenantId: { $exists: false }, userId },
+        { tenantId: { $exists: false }, userId: { $exists: false } },
+      ];
+    }
+    if (tenantId) {
+      return [{ tenantId }, { tenantId: { $exists: false } }];
+    }
+    return [{ userId }, { userId: { $exists: false } }];
+  }
+
+  /**
+   * @title 校验会话范围 Assert Session Scope
+   * @description 当传入 scope 时，确保会话归属匹配。
+   * @keywords-cn 会话校验, 租户
+   * @keywords-en assert session scope, tenant
+   */
+  private async assertSessionScope(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    if (!scope || (!('tenantId' in scope) && !scope.userId)) return;
+    const row = await this.conversations.findOne({ sessionId });
+    if (!row) {
+      throw new Error('SESSION_SCOPE_FORBIDDEN');
+    }
+    if (!this.isConversationInScope(row, scope)) {
+      throw new Error('SESSION_SCOPE_FORBIDDEN');
+    }
+  }
+
+  /**
+   * @description 判断是否为Mongo重复键错误
+   * @keyword-en detect mongo duplicate key error
+   */
+  private isDuplicateKeyError(error: unknown): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === 11000
+    );
+  }
+
+  /**
+   * @description 校验会话是否在请求范围内
+   * @keyword-en validate conversation scope compatibility
+   */
+  private isConversationInScope(
+    row: ConversationEntity,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): boolean {
+    if (!scope) return true;
+    const scopeTenantId = scope.tenantId?.trim();
+    const scopeUserId = scope.userId?.trim();
+    const scopeType = this.normalizeSessionType(scope.sessionType);
+    const rowTenantId = row.tenantId?.trim();
+    const rowUserId = row.userId?.trim();
+    const rowType = this.normalizeSessionType(row.sessionType);
+    const tenantMatch =
+      !scopeTenantId || !rowTenantId || rowTenantId === scopeTenantId;
+    const userMatch = !scopeUserId || !rowUserId || rowUserId === scopeUserId;
+    const typeMatch = rowType === scopeType;
+    return tenantMatch && userMatch && typeMatch;
   }
 }
 

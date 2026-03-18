@@ -10,6 +10,7 @@ import { GraphModule } from '../../graph/graph.module.js';
 import { GraphWorkflowFunctionCallService } from './services/graph-workflow.service.js';
 import { CanvasModule } from '../../canvas/canvas.module.js';
 import { GalleryModule } from '../../gallery/gallery.module.js';
+import { AutoTaskRobotModule } from '../../auto-task-robot/auto-task-robot.module.js';
 
 /**
  * @title 工具模块 Tools Module
@@ -26,6 +27,7 @@ import { GalleryModule } from '../../gallery/gallery.module.js';
     GraphModule,
     CanvasModule,
     GalleryModule,
+    AutoTaskRobotModule,
   ],
   providers: [ToolsService, GraphWorkflowFunctionCallService],
   exports: [ToolsService],

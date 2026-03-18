@@ -10,6 +10,8 @@ import { ContextRole } from '../enums/context.enums';
 export interface MessageEntity {
   _id: ObjectId;
   sessionId: string;
+  tenantId?: string;
+  userId?: string;
   role: ContextRole;
   content: string;
   name?: string;

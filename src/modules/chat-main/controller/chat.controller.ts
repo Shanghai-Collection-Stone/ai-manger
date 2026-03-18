@@ -12,7 +12,9 @@ import {
   UseInterceptors,
   UploadedFiles,
   BadRequestException,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { AdminService } from '../../admin/services/admin.service.js';
 import { ChatMainService } from '../services/chat.service.js';
 import type { ChatRequest, ChatResponse } from '../types/chat.types.js';
 import type { ContextMessage } from '../../context/types/context.types.js';
@@ -32,7 +34,10 @@ import { randomUUID } from 'crypto';
  */
 @Controller('chat')
 export class ChatMainController {
-  constructor(private readonly chat: ChatMainService) {}
+  constructor(
+    private readonly chat: ChatMainService,
+    private readonly adminService: AdminService,
+  ) {}
 
   @Post('upload-images')
   @UseInterceptors(
@@ -114,6 +119,9 @@ export class ChatMainController {
     if (!body.now) {
       body.now = new Date().toISOString();
     }
+    const auth = await this.requireAuthContext(req);
+    body.userId = auth.userId;
+    body.tenantId = auth.tenantId;
     return this.chat.send(body);
   }
 
@@ -137,6 +145,7 @@ export class ChatMainController {
     @Query('model') model?: string,
     @Query('temperature') temperature?: number,
     @Query('recursionLimit') recursionLimit?: string,
+    @Query('sessionType') sessionType?: 'default' | 'thought',
     @Req() req?: Request,
   ): Observable<MessageEvent> {
     // 设置默认模型为 kimi-k2-instruct
@@ -145,15 +154,32 @@ export class ChatMainController {
     const rl = recursionLimit ? Number(recursionLimit) : undefined;
     const remoteIp = req ? req.ip || req.socket?.remoteAddress || '' : '';
     const now = new Date().toISOString();
-    return this.chat.stream({
-      sessionId,
-      input,
-      provider: finalProvider,
-      model: finalModel,
-      temperature,
-      recursionLimit: rl,
-      ip: remoteIp || undefined,
-      now,
+    return new Observable<MessageEvent>((subscriber) => {
+      void this.requireAuthContext(req)
+        .then((auth) => {
+          const stream$ = this.chat.stream({
+            sessionId,
+            input,
+            provider: finalProvider,
+            model: finalModel,
+            temperature,
+            recursionLimit: rl,
+            sessionType,
+            ip: remoteIp || undefined,
+            now,
+            userId: auth.userId,
+            tenantId: auth.tenantId,
+          });
+          const inner = stream$.subscribe({
+            next: (event) => subscriber.next(event),
+            error: (err) => subscriber.error(err),
+            complete: () => subscriber.complete(),
+          });
+          return inner;
+        })
+        .catch((err: unknown) => {
+          subscriber.error(err);
+        });
     });
   }
 
@@ -183,29 +209,50 @@ export class ChatMainController {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
 
-    const subscription = this.chat.stream(body).subscribe({
-      next: (evt) => {
-        if (res.writableEnded) return;
-        res.write(`data: ${JSON.stringify(evt.data)}\n\n`);
-      },
-      error: (err: unknown) => {
-        if (res.writableEnded) return;
+    const startStream = async () => {
+      const auth = await this.requireAuthContext(req);
+      body.userId = auth.userId;
+      body.tenantId = auth.tenantId;
+      return this.chat.stream(body);
+    };
+    let subscription: ReturnType<Observable<MessageEvent>['subscribe']> | null =
+      null;
+    void startStream()
+      .then((stream$) => {
+        subscription = stream$.subscribe({
+          next: (evt) => {
+            if (res.writableEnded) return;
+            res.write(`data: ${JSON.stringify(evt.data)}\n\n`);
+          },
+          error: (err: unknown) => {
+            if (res.writableEnded) return;
+            const e = err instanceof Error ? err : new Error(String(err));
+            res.write(
+              `data: ${JSON.stringify({
+                type: 'error',
+                data: { code: 'STREAM_ERROR', message: e.message },
+              })}\n\n`,
+            );
+            res.end();
+          },
+          complete: () => {
+            if (!res.writableEnded) res.end();
+          },
+        });
+      })
+      .catch((err: unknown) => {
         const e = err instanceof Error ? err : new Error(String(err));
         res.write(
           `data: ${JSON.stringify({
             type: 'error',
-            data: { code: 'STREAM_ERROR', message: e.message },
+            data: { code: 'STREAM_INIT_ERROR', message: e.message },
           })}\n\n`,
         );
         res.end();
-      },
-      complete: () => {
-        if (!res.writableEnded) res.end();
-      },
-    });
+      });
 
     req.on('close', () => {
-      subscription.unsubscribe();
+      subscription?.unsubscribe();
       if (!res.writableEnded) res.end();
     });
   }
@@ -220,9 +267,15 @@ export class ChatMainController {
    * @returns `{ sessionId: string }`
    */
   async createSession(
-    @Body('sessionId') sessionId?: string,
+    @Body() body?: { sessionId?: string; sessionType?: 'default' | 'thought' },
+    @Req() req?: Request,
   ): Promise<{ sessionId: string }> {
-    const sid = await this.chat.createSession(sessionId);
+    const auth = await this.requireAuthContext(req);
+    const sid = await this.chat.createSession(body?.sessionId, {
+      tenantId: auth.tenantId,
+      userId: auth.userId,
+      sessionType: body?.sessionType,
+    });
     return { sessionId: sid };
   }
 
@@ -237,8 +290,15 @@ export class ChatMainController {
    */
   async getMessages(
     @Param('sessionId') sessionId: string,
+    @Req() req: Request,
+    @Query('sessionType') sessionType?: 'default' | 'thought',
   ): Promise<{ messages: Array<ContextMessage & { fingerprint: string }> }> {
-    const msgs = await this.chat.getMessages(sessionId);
+    const auth = await this.requireAuthContext(req);
+    const msgs = await this.chat.getMessages(sessionId, undefined, {
+      tenantId: auth.tenantId,
+      userId: auth.userId,
+      sessionType,
+    });
     return { messages: msgs };
   }
 
@@ -246,8 +306,15 @@ export class ChatMainController {
   async deleteMessages(
     @Param('sessionId') sessionId: string,
     @Body() body: { fingerprints?: string[]; indexes?: number[] },
+    @Req() req: Request,
+    @Query('sessionType') sessionType?: 'default' | 'thought',
   ): Promise<{ ok: boolean; deleted: number }> {
-    const res = await this.chat.deleteMessages(sessionId, body);
+    const auth = await this.requireAuthContext(req);
+    const res = await this.chat.deleteMessages(sessionId, body, {
+      tenantId: auth.tenantId,
+      userId: auth.userId,
+      sessionType,
+    });
     return { ok: true, deleted: res.deleted };
   }
 
@@ -262,9 +329,47 @@ export class ChatMainController {
    */
   async clearSession(
     @Param('sessionId') sessionId: string,
+    @Req() req: Request,
+    @Query('sessionType') sessionType?: 'default' | 'thought',
   ): Promise<{ ok: boolean }> {
-    await this.chat.clearSession(sessionId);
+    const auth = await this.requireAuthContext(req);
+    await this.chat.clearSession(sessionId, {
+      tenantId: auth.tenantId,
+      userId: auth.userId,
+      sessionType,
+    });
     return { ok: true };
+  }
+
+  private async requireAuthContext(req?: Request): Promise<{
+    tenantId?: string;
+    userId: string;
+  }> {
+    const auth = await this.resolveAuthContext(req);
+    if (!auth.userId) throw new UnauthorizedException('AUTH_REQUIRED');
+    return { tenantId: auth.tenantId, userId: auth.userId };
+  }
+
+  /**
+   * @description 解析请求中的登录范围信息
+   * @keyword-en resolve auth scope from request
+   */
+  private async resolveAuthContext(req?: Request): Promise<{
+    tenantId?: string;
+    userId?: string;
+  }> {
+    const auth = req?.headers.authorization;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+      return {};
+    }
+    const token = auth.slice(7).trim();
+    if (!token) return {};
+    const user = await this.adminService.getUserByToken(token);
+    if (!user) return {};
+    return {
+      tenantId: user.tenantId,
+      userId: user.username,
+    };
   }
 }
 

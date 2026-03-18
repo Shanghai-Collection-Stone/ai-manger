@@ -1,4 +1,6 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, Req } from '@nestjs/common';
+import type { Request } from 'express';
+import { AdminService } from '../../admin/services/admin.service.js';
 import { ContextService } from '../services/context.service';
 import { ContextMessage } from '../types/context.types';
 import { ContextRole } from '../enums/context.enums';
@@ -11,7 +13,10 @@ import { ContextRole } from '../enums/context.enums';
  */
 @Controller('context')
 export class ContextController {
-  constructor(private readonly context: ContextService) {}
+  constructor(
+    private readonly context: ContextService,
+    private readonly adminService: AdminService,
+  ) {}
 
   /**
    * @title 获取所有会话列表 List All Sessions
@@ -20,8 +25,15 @@ export class ContextController {
    * @keywords-en list sessions
    */
   @Get('list')
-  async listConversations() {
-    return this.context.getAllConversations();
+  async listConversations(
+    @Req() req: Request,
+    @Query('sessionType') sessionType?: 'default' | 'thought',
+  ) {
+    const scope = await this.resolveAuthScope(req);
+    return this.context.getScopedConversations({
+      ...scope,
+      sessionType,
+    });
   }
 
   /**
@@ -37,16 +49,19 @@ export class ContextController {
     @Param('sessionId') sessionId: string,
     @Query('limit') limit?: string,
     @Query('includeSystem') includeSystem?: string,
+    @Req() req?: Request,
   ): Promise<ContextMessage[]> {
     const n = limit ? Number(limit) : undefined;
     const inc = String(includeSystem ?? '')
       .trim()
       .toLowerCase();
     const shouldIncludeSystem = inc === '1' || inc === 'true' || inc === 'yes';
+    const scope = await this.resolveAuthScope(req);
     const messages = await this.context.getMessages(
       sessionId,
       n,
       shouldIncludeSystem ? undefined : { excludeRoles: [ContextRole.System] },
+      scope,
     );
     return messages;
   }
@@ -59,19 +74,43 @@ export class ContextController {
    * @param sessionId 会话ID
    */
   @Get('meta/:sessionId')
-  async getConversation(@Param('sessionId') sessionId: string): Promise<{
+  async getConversation(
+    @Param('sessionId') sessionId: string,
+    @Req() req: Request,
+  ): Promise<{
     sessionId: string;
     title?: string;
     createdAt: Date;
     updatedAt: Date;
   } | null> {
-    const meta = await this.context.getConversation(sessionId);
+    const scope = await this.resolveAuthScope(req);
+    const meta = await this.context.getConversation(sessionId, scope);
     if (!meta) return null;
     return {
       sessionId: meta.sessionId,
       title: meta.title,
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
+    };
+  }
+
+  /**
+   * @description 解析请求鉴权范围
+   * @keyword-en resolve request auth scope
+   */
+  private async resolveAuthScope(req?: Request): Promise<{
+    tenantId?: string;
+    userId?: string;
+  }> {
+    const auth = req?.headers.authorization;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) return {};
+    const token = auth.slice(7).trim();
+    if (!token) return {};
+    const user = await this.adminService.getUserByToken(token);
+    if (!user) return {};
+    return {
+      tenantId: user.tenantId,
+      userId: user.username,
     };
   }
 }

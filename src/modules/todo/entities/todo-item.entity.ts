@@ -11,6 +11,7 @@ export interface TodoItemEntity {
   _id: ObjectId;
   id: number;
   todoId: number;
+  tenantId?: string;
   userId: string;
   title: string;
   description?: string;
@@ -24,6 +25,7 @@ export interface TodoItemEntity {
 
 export interface TodoItemCreateInput {
   todoId: number;
+  tenantId?: string;
   title: string;
   description?: string;
   plannedAt?: Date;
@@ -34,6 +36,7 @@ export interface TodoItemCreateInput {
 
 export interface TodoItemUpdateInput {
   id: number;
+  tenantId?: string;
   title?: string;
   description?: string;
   plannedAt?: Date;

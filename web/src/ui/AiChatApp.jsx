@@ -2,6 +2,7 @@ import React from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import html2canvas from 'html2canvas';
+import { $currentSessionId } from './AiCommander/store';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
@@ -378,6 +379,27 @@ const api = {
       return !!data?.ok;
     } catch {
       return false;
+    }
+  },
+  async listDecisionCards(sessionId) {
+    try {
+      const res = await fetch(`${API_BASE}/decision-cards/session/${sessionId}`);
+      if (!res.ok) return { cards: [] };
+      return await res.json();
+    } catch {
+      return { cards: [] };
+    }
+  },
+  async applyDecision(cardId) {
+    try {
+      const res = await fetch(`${API_BASE}/decision-cards/${cardId}/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return { success: false };
+      return await res.json();
+    } catch {
+      return { success: false };
     }
   },
   async listGalleryGroups({ userId, tag, limit } = {}) {
@@ -2335,6 +2357,8 @@ const MessageBubble = ({
   onExecuteCanvas,
   onOpenCanvas,
   resources = [],
+  decisionCards = [],
+  onApplyDecision,
   onRefreshResources,
 }) => {
   const isUser = message.role === 'user';
@@ -2377,6 +2401,27 @@ const MessageBubble = ({
   const [uiFrameworkSel, setUiFrameworkSel] = useState('antd');
   const [chartLibrarySel, setChartLibrarySel] = useState('echarts');
   const [layoutSel, setLayoutSel] = useState('dashboard');
+  const [expandedCanvas, setExpandedCanvas] = useState(null);
+  const [expandedCanvasDoc, setExpandedCanvasDoc] = useState(null);
+  const [expandedCanvasLoading, setExpandedCanvasLoading] = useState(false);
+
+  const loadCanvasPreview = async (canvasId) => {
+    if (expandedCanvas === canvasId && expandedCanvasDoc) return;
+    setExpandedCanvas(canvasId);
+    setExpandedCanvasLoading(true);
+    try {
+      const cid = Number(canvasId);
+      if (!Number.isFinite(cid)) return;
+      const res = await fetch(`${API_BASE}/canvas/${cid}`);
+      if (!res.ok) return;
+      const doc = await res.json();
+      setExpandedCanvasDoc(doc);
+    } catch {
+      setExpandedCanvasDoc(null);
+    } finally {
+      setExpandedCanvasLoading(false);
+    }
+  };
   const isCollapsed = (toolId) => {
     if (!toolId) return true;
     const v = collapsedMap[toolId];
@@ -2649,7 +2694,40 @@ const MessageBubble = ({
                             >
                               执行
                             </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                loadCanvasPreview(seg.canvasId);
+                              }}
+                              className="px-2 py-1 border rounded text-xs text-gray-700 hover:bg-gray-100"
+                            >
+                              {expandedCanvas === seg.canvasId ? '收起' : '查看文章'}
+                            </button>
                           </div>
+                          {expandedCanvas === seg.canvasId && (
+                            <div className="mt-2 pt-2 border-t border-gray-200">
+                              {expandedCanvasLoading ? (
+                                <div className="text-xs text-gray-500">加载中...</div>
+                              ) : expandedCanvasDoc ? (
+                                <div className="space-y-2">
+                                  {Array.isArray(expandedCanvasDoc.articles) && expandedCanvasDoc.articles.length > 0 ? (
+                                    expandedCanvasDoc.articles.map((article, idx) => (
+                                      <div key={idx} className="text-xs bg-white rounded p-2 border border-gray-100">
+                                        <div className="font-medium text-gray-700">{article.title || `文章 ${idx + 1}`}</div>
+                                        {article.content && (
+                                          <div className="mt-1 text-gray-600 line-clamp-3">{article.content}</div>
+                                        )}
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="text-xs text-gray-500">暂无文章</div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-500">无法加载内容</div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ) : seg.kind === 'external' ? (
                         <div
@@ -2804,6 +2882,54 @@ const MessageBubble = ({
                         </div>
                       ),
                     )}
+
+                    {decisionCards.length > 0 && !isUser && (
+                      <div className="mt-3 space-y-2">
+                        {decisionCards.map((card) => (
+                          <div key={card._id} className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-semibold text-amber-800">决策建议</span>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                card.status === 'generated' 
+                                  ? 'bg-amber-100 text-amber-700' 
+                                  : 'bg-green-100 text-green-700'
+                              }`}>
+                                {card.status === 'generated' ? '待执行' : '已应用'}
+                              </span>
+                            </div>
+                            {card.title && (
+                              <div className="text-sm font-medium text-amber-900 mb-1">{card.title}</div>
+                            )}
+                            {card.summary && (
+                              <div className="text-xs text-amber-700 mb-2">{card.summary}</div>
+                            )}
+                            {card.recommendation && (
+                              <div className="text-xs text-amber-600 mb-2 bg-amber-100/50 rounded p-2">
+                                {card.recommendation}
+                              </div>
+                            )}
+                            {card.actions && card.actions.length > 0 && (
+                              <div className="text-xs text-amber-700 mb-2">
+                                <div className="font-medium mb-1">行动计划：</div>
+                                <ul className="list-disc list-inside space-y-0.5">
+                                  {card.actions.map((action, idx) => (
+                                    <li key={idx}>{action}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {card.status === 'generated' && typeof onApplyDecision === 'function' && (
+                              <button
+                                onClick={() => onApplyDecision(card._id)}
+                                className="w-full mt-2 py-1.5 bg-amber-600 text-white rounded text-xs font-medium hover:bg-amber-700 transition"
+                              >
+                                执行决策
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -2868,6 +2994,7 @@ export default function AiChatApp() {
 
   const [resources, setResources] = useState([]);
   const [loadingResources, setLoadingResources] = useState(false);
+  const [decisionCards, setDecisionCards] = useState([]);
 
   const [todoUserId, setTodoUserId] = useState('default');
   const [todos, setTodos] = useState([]);
@@ -3198,8 +3325,10 @@ export default function AiChatApp() {
 
   const handleNewChat = async () => {
     setSessionId(null);
+    $currentSessionId.set(null);
     setIsSidebarOpen(false);
     clearImages();
+    setDecisionCards([]);
     setMessages([
       {
         id: 'welcome',
@@ -3212,8 +3341,10 @@ export default function AiChatApp() {
 
   const handleSelectSession = async (sid) => {
     setSessionId(sid);
+    $currentSessionId.set(sid);
     setIsSidebarOpen(false);
     clearImages();
+    loadDecisionCards(sid);
     const history = await api.fetchHistory(sid);
     const msgs = history.map((h, idx) => {
       const segs = [];
@@ -3330,6 +3461,8 @@ export default function AiChatApp() {
     const wasActive = sessionId === targetSessionId;
     if (wasActive) {
       setSessionId(null);
+      $currentSessionId.set(null);
+      setDecisionCards([]);
       setActiveTab('chat');
       setMessages([
         {
@@ -3447,6 +3580,26 @@ export default function AiChatApp() {
     }
   };
 
+  const loadDecisionCards = async (sid) => {
+    if (!sid) return;
+    try {
+      const res = await api.listDecisionCards(sid);
+      setDecisionCards(res.cards || []);
+    } catch {
+      setDecisionCards([]);
+    }
+  };
+
+  const handleApplyDecision = async (cardId) => {
+    const res = await api.applyDecision(cardId);
+    if (res.success) {
+      setDecisionCards((prev) =>
+        prev.map((c) => (c._id === cardId ? { ...c, status: 'applied' } : c))
+      );
+    }
+    return res;
+  };
+
   const sendMessage = async ({ text, imageItems: sendImageItems }) => {
     const safeText = String(text || '').trim();
     const hasImages = Array.isArray(sendImageItems) && sendImageItems.length > 0;
@@ -3460,6 +3613,7 @@ export default function AiChatApp() {
       const created = await api.createSession();
       sid = created?.sessionId;
       setSessionId(sid);
+      $currentSessionId.set(sid);
       const provisional = String(safeText || (hasImages ? '图片会话' : '')).slice(0, 30);
       setSessions((prev) => {
         const exists = (Array.isArray(prev) ? prev : []).some((x) => x.sessionId === sid);
@@ -3474,6 +3628,7 @@ export default function AiChatApp() {
         ];
       });
       void api.listSessions().then((list) => setSessions(list));
+      loadDecisionCards(sid);
     }
 
     const userMsgId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -4252,6 +4407,8 @@ export default function AiChatApp() {
                     key={msg.id}
                     message={msg}
                     resources={resources}
+                    decisionCards={msg.role === 'ai' ? decisionCards : []}
+                    onApplyDecision={handleApplyDecision}
                     onExecuteCanvas={handleExecuteCanvas}
                     onOpenCanvas={openCanvasDrawer}
                     onRefreshResources={reloadResources}

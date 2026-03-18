@@ -14,12 +14,72 @@ import { GalleryService } from '../../../gallery/services/gallery.service.js';
  */
 @Injectable()
 export class GraphWorkflowFunctionCallService {
+  private readonly orchestrateInFlight = new Map<string, Promise<string>>();
+  private readonly orchestrateRecent = new Map<
+    string,
+    { at: number; result: string }
+  >();
+  private readonly orchestrateTtlMs = 120000;
+
   constructor(
     private readonly articles: ArticleGraphService,
     private readonly batch: BatchTaskGraphService,
     private readonly canvas: CanvasService,
     private readonly gallery: GalleryService,
   ) {}
+
+  private normalizeKeyString(v: unknown): string {
+    if (typeof v === 'string') return v.trim().toLowerCase();
+    if (typeof v === 'number' || typeof v === 'boolean') {
+      return String(v).trim().toLowerCase();
+    }
+    return '';
+  }
+
+  private stableStringify(v: unknown): string {
+    if (v === null || v === undefined) return '';
+    if (typeof v !== 'object') return JSON.stringify(v);
+    if (Array.isArray(v)) {
+      return `[${v.map((x) => this.stableStringify(x)).join(',')}]`;
+    }
+    const rec = v as Record<string, unknown>;
+    const keys = Object.keys(rec).sort((a, b) => a.localeCompare(b));
+    return `{${keys
+      .map((k) => `${JSON.stringify(k)}:${this.stableStringify(rec[k])}`)
+      .join(',')}}`;
+  }
+
+  private buildTopicOrchestrateDedupKey(input: {
+    userId: string;
+    platform?: string;
+    topic?: string;
+    outline?: Record<string, unknown>;
+    style?: Record<string, unknown>;
+    count?: number;
+    galleryUserId?: string;
+    galleryGroupId?: number;
+    minImageScore?: number;
+  }): string {
+    return [
+      this.normalizeKeyString(input.userId),
+      this.normalizeKeyString(input.platform),
+      this.normalizeKeyString(input.topic),
+      Number.isFinite(Number(input.count)) ? String(Number(input.count)) : '',
+      this.normalizeKeyString(input.galleryUserId),
+      Number.isFinite(Number(input.galleryGroupId))
+        ? String(Number(input.galleryGroupId))
+        : '',
+      Number.isFinite(Number(input.minImageScore))
+        ? String(Number(input.minImageScore))
+        : '',
+    ].join('|');
+  }
+
+  private clearExpiredOrchestrateCache(now: number): void {
+    for (const [k, v] of this.orchestrateRecent.entries()) {
+      if (now - v.at > this.orchestrateTtlMs) this.orchestrateRecent.delete(k);
+    }
+  }
 
   /**
    * @description 返回 Graph 工作流相关的工具句柄集合（topic_orchestrate）。
@@ -40,26 +100,46 @@ export class GraphWorkflowFunctionCallService {
         galleryUserId,
         galleryGroupId,
         minImageScore,
-        provider,
-        model,
-        temperature,
       }) => {
         if (streamWriter) streamWriter('[Graph] Orchestrating topic workflow');
 
-        try {
+        const dedupKey = this.buildTopicOrchestrateDedupKey({
+          userId,
+          platform,
+          topic,
+          outline,
+          style,
+          count,
+          galleryUserId,
+          galleryGroupId,
+          minImageScore,
+        });
+        const now = Date.now();
+        this.clearExpiredOrchestrateCache(now);
+        const recent = this.orchestrateRecent.get(dedupKey);
+        if (recent && now - recent.at <= this.orchestrateTtlMs) {
+          if (streamWriter) {
+            streamWriter('[Graph] Reusing recent topic_orchestrate result');
+          }
+          return recent.result;
+        }
+        const inflight = this.orchestrateInFlight.get(dedupKey);
+        if (inflight) {
+          if (streamWriter) {
+            streamWriter('[Graph] Waiting existing topic_orchestrate run');
+          }
+          return await inflight;
+        }
+
+        const runPromise = (async () => {
           const gen = await this.articles.generateToCanvas({
             userId,
             platform,
             topic,
-            outline,
-            style,
             count,
             galleryUserId,
             galleryGroupId,
             minImageScore,
-            provider,
-            model,
-            temperature,
           });
 
           const genObj: Record<string, unknown> =
@@ -101,35 +181,36 @@ export class GraphWorkflowFunctionCallService {
           };
 
           return JSON.stringify(base);
-        } catch (err: unknown) {
-          const e = err instanceof Error ? err : new Error(String(err));
-          return JSON.stringify({
-            ok: false,
-            error: 'TOPIC_ORCHESTRATE_FAILED',
-            message: e.message,
-          });
+        })();
+        this.orchestrateInFlight.set(dedupKey, runPromise);
+        try {
+          const result = await runPromise;
+          this.orchestrateRecent.set(dedupKey, { at: Date.now(), result });
+          return result;
+        } finally {
+          this.orchestrateInFlight.delete(dedupKey);
         }
       },
       {
         name: 'topic_orchestrate',
         description:
-          'Topic Orchestration Tool. Generates a sample-article Canvas from topic/outline/style.',
+          'Topic Orchestration Tool. Generates up to 5 sample articles with images in Canvas based on user requirements and provided data.',
         schema: z.object({
           userId: z.string().describe('Target user id'),
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
           outline: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Outline object (optional; auto-generated if omitted)'),
           style: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Style object (optional; auto-generated if omitted)'),
           count: z
             .number()
             .optional()
-            .describe('Article count (3-5 recommended)'),
+            .describe('Article count (max 5, default 3)'),
           galleryUserId: z
             .string()
             .optional()
@@ -142,9 +223,6 @@ export class GraphWorkflowFunctionCallService {
             .number()
             .optional()
             .describe('Min similarity score for image matching'),
-          provider: z.enum(['gemini', 'deepseek']).optional(),
-          model: z.string().optional(),
-          temperature: z.number().optional(),
         }),
       },
     );
@@ -244,7 +322,7 @@ export class GraphWorkflowFunctionCallService {
             .optional()
             .describe('Callback URL for MCP task status updates'),
           payload: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Extra payload merged into each post and run request'),
         }),
@@ -359,7 +437,7 @@ export class GraphWorkflowFunctionCallService {
             .optional()
             .describe('Callback URL for MCP task status updates'),
           payload: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Extra payload merged into each post and run request'),
           forceNew: z
@@ -381,15 +459,10 @@ export class GraphWorkflowFunctionCallService {
         canvasId,
         platform,
         topic,
-        outline,
-        style,
         count,
         galleryUserId,
         galleryGroupId,
         minImageScore,
-        provider,
-        model,
-        temperature,
         plannedAtStart,
         intervalMinutes,
         concurrency,
@@ -409,15 +482,10 @@ export class GraphWorkflowFunctionCallService {
             userId,
             platform,
             topic,
-            outline,
-            style,
             count,
             galleryUserId,
             galleryGroupId,
             minImageScore,
-            provider,
-            model,
-            temperature,
           });
 
           const genObj: Record<string, unknown> =
@@ -491,17 +559,17 @@ export class GraphWorkflowFunctionCallService {
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
           outline: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Outline object (optional; auto-generated if omitted)'),
           style: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Style object (optional; auto-generated if omitted)'),
           count: z
             .number()
             .optional()
-            .describe('Article count (3-5 recommended)'),
+            .describe('Article count (max 5, default 3)'),
           galleryUserId: z
             .string()
             .optional()
@@ -514,9 +582,6 @@ export class GraphWorkflowFunctionCallService {
             .number()
             .optional()
             .describe('Min similarity score for image matching'),
-          provider: z.enum(['gemini', 'deepseek']).optional(),
-          model: z.string().optional(),
-          temperature: z.number().optional(),
           plannedAtStart: z
             .string()
             .optional()
@@ -534,7 +599,7 @@ export class GraphWorkflowFunctionCallService {
             .optional()
             .describe('Callback URL for MCP task status updates'),
           payload: z
-            .record(z.any())
+            .record(z.string(), z.any())
             .optional()
             .describe('Extra payload merged into each post and run request'),
         }),
@@ -543,6 +608,63 @@ export class GraphWorkflowFunctionCallService {
 
     void canvasExecute;
     void batchPublish;
+
+    const canvasAppendArticle = tool(
+      async ({ canvasId, title, tags, markdown, imageQuery, meta }) => {
+        const canvasIdNum = Number(canvasId);
+        if (!Number.isFinite(canvasIdNum)) {
+          return JSON.stringify({ ok: false, error: 'CANVAS_ID_INVALID' });
+        }
+        const next = await this.canvas.addArticles(canvasIdNum, {
+          articles: [
+            {
+              title: String(title || '').trim() || '示例文章',
+              tags: Array.isArray(tags)
+                ? tags
+                    .map((x) => String(x ?? '').trim())
+                    .filter((x) => x.length > 0)
+                : [],
+              contentJson: {
+                markdown: String(markdown || '').trim(),
+                imageQuery:
+                  typeof imageQuery === 'string' && imageQuery.trim().length > 0
+                    ? imageQuery.trim()
+                    : undefined,
+                meta: meta && typeof meta === 'object' ? meta : {},
+              },
+            },
+          ],
+        });
+        if (!next)
+          return JSON.stringify({ ok: false, error: 'CANVAS_NOT_FOUND' });
+        const articles = Array.isArray(next.articles) ? next.articles : [];
+        const last =
+          articles.length > 0 ? articles[articles.length - 1] : undefined;
+        return JSON.stringify({
+          ok: true,
+          canvasId: canvasIdNum,
+          articleId: last?.id,
+          articleCount: articles.length,
+          status: next.status,
+        });
+      },
+      {
+        name: 'canvas_append_article',
+        description:
+          'Canvas Append Article Tool. Writes exactly one article into a canvas each call.',
+        schema: z.object({
+          canvasId: z.union([z.number(), z.string()]).describe('Canvas id'),
+          title: z.string().describe('Article title'),
+          tags: z.array(z.string()).optional().describe('Article tags'),
+          markdown: z.string().describe('Article markdown content'),
+          imageQuery: z.string().optional().describe('Image retrieval query'),
+          meta: z
+            .record(z.string(), z.any())
+            .optional()
+            .describe('Article generation metadata'),
+        }),
+      },
+    );
 
     // 新增：获取 canvas 详情工具，让 LLM 能查看实际数据
     const getCanvasDetail = tool(
@@ -718,6 +840,7 @@ export class GraphWorkflowFunctionCallService {
 
     return [
       topicOrchestrate,
+      canvasAppendArticle,
       getCanvasDetail,
       galleryListTags,
       gallerySearchImages,

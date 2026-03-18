@@ -79,6 +79,7 @@ export interface BatchTaskCreateInput {
   topic?: string;
   canvasId?: string;
   mcpTaskId?: string;
+  todoId?: number;
 }
 
 export interface BatchTaskAddPostsInput {

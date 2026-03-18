@@ -1,9 +1,11 @@
 import {
   AIMessage,
   BaseMessage,
-  CreateAgentParams,
-  ReactAgent,
-} from 'langchain';
+  BaseMessageLike,
+} from '@langchain/core/messages';
+import type { RunnableConfig } from '@langchain/core/runnables';
+import { CreateAgentParams } from 'langchain';
+import type { SubAgent, SupportedResponseFormat } from 'deepagents';
 
 /**
  * @title Agent提供方 Agent Provider
@@ -11,7 +13,7 @@ import {
  * @keywords-cn 提供方, 模型, 枚举
  * @keywords-en provider, model, enum
  */
-export type AgentProvider = 'gemini' | 'deepseek' | 'nvidia';
+export type AgentProvider = string;
 
 /**
  * @title Agent配置 Agent Config
@@ -20,19 +22,24 @@ export type AgentProvider = 'gemini' | 'deepseek' | 'nvidia';
  * @keywords-en config, model, prompt
  */
 export interface AgentConfig {
-  provider: AgentProvider;
-  model: string;
+  provider?: AgentProvider;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
   temperature?: number;
   system?: string;
   tools?: CreateAgentParams['tools'];
-  contextSchema?: CreateAgentParams['contextSchema'];
-  responseFormat?: CreateAgentParams['responseFormat'] | Record<string, any>;
+  contextSchema?: unknown;
+  responseFormat?: SupportedResponseFormat;
   streamWriter?: (message: string) => void;
   recursionLimit?: number;
   nonStreaming?: boolean;
   noPostHook?: boolean;
   systemPrompt?: string;
   context?: Record<string, string>;
+  subagents?: DeepAgentSubAgent[];
+  streamMode?: 'updates' | 'messages';
+  streamSubgraphs?: boolean;
 }
 
 /**
@@ -49,10 +56,14 @@ export interface AgentRunInput {
 
 export interface AgentRunMessagesInput {
   config: AgentConfig;
-  messages: BaseMessage[];
-  callOption?:
-    | Omit<Parameters<ReactAgent['stream']>[1], 'streamMode'>
-    | Omit<Parameters<ReactAgent['invoke']>[1], 'streamMode'>;
+  messages: BaseMessageLike[] | BaseMessageLike;
+  callOption?: AgentInvokeOption;
+}
+
+export interface AgentRunStreamInput {
+  config: AgentConfig;
+  messages: BaseMessageLike[] | BaseMessageLike;
+  callOption?: AgentStreamOption;
 }
 
 /**
@@ -90,6 +101,37 @@ export interface AgentInstance {
 }
 
 /**
+ * @title Agent调用配置 Agent Call Option
+ * @description 统一Agent运行与流式的配置类型。
+ * @keywords-cn 调用配置, 运行, 流式
+ * @keywords-en call option, invoke, stream
+ */
+export interface AgentInvokeOption
+  extends RunnableConfig<Record<string, unknown>> {
+  context?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+/**
+ * @title Agent流式配置 Agent Stream Option
+ * @description Agent流式运行的配置类型。
+ * @keywords-cn 流式配置, 运行
+ * @keywords-en stream option, run
+ */
+export interface AgentStreamOption extends AgentInvokeOption {
+  streamMode?: 'updates' | 'messages' | string[];
+  subgraphs?: boolean;
+}
+
+/**
+ * @title DeepAgent子代理配置 DeepAgent SubAgent
+ * @description DeepAgent子代理的基础结构定义。
+ * @keywords-cn 子代理, 深度代理
+ * @keywords-en subagent, deep agent
+ */
+export type DeepAgentSubAgent = SubAgent;
+
+/**
  * @title 流式事件 Agent Stream Event
  * @description Agent在流式传输中的事件类型定义。
  * @keywords-cn 流式, 事件, 令牌
@@ -102,6 +144,10 @@ export type AgentStreamEvent =
     }
   | {
       type: 'token';
+      data: { text: string };
+    }
+  | {
+      type: 'tool_narration';
       data: { text: string };
     }
   | {
@@ -126,6 +172,10 @@ export type AgentStreamEvent =
       data: { id?: string; name: string; output: unknown };
     }
   | {
+      type: 'subagent';
+      data: { namespace: string[]; event: unknown };
+    }
+  | {
       type: 'end';
       data: {
         text: string;
@@ -144,7 +194,7 @@ export type AgentStreamEvent =
     }
   | {
       type: 'error';
-      data: { error: Error };
+      data: { error: Error & { code?: string } };
     }
   | {
       type: 'custom';

@@ -4,6 +4,8 @@ import {
   AlertCircle, Loader2, BrainCircuit
 } from 'lucide-react';
 import { chatService } from './chatService';
+import { $currentSessionId } from './store';
+import CanvasFeedView from './CanvasFeedView';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -14,6 +16,80 @@ const renderer = new marked.Renderer();
 // and no code-like patterns), render as a styled paragraph instead of <pre><code>
 const _origCode = renderer.code.bind(renderer);
 renderer.code = function({ text, lang }) {
+  if (lang === 'canvas-it') {
+    try {
+      const parsed = JSON.parse(text);
+      const canvasId = Number(parsed?.canvasId);
+      const status = typeof parsed?.status === 'string' ? parsed.status : '';
+      const platform = typeof parsed?.platform === 'string' ? parsed.platform : '';
+      const topic = typeof parsed?.topic === 'string' ? parsed.topic : '';
+      const articleCount = Number(parsed?.articleCount);
+      const needFields = Array.isArray(parsed?.needFields)
+        ? parsed.needFields.filter((x) => typeof x === 'string').slice(0, 6)
+        : [];
+      const esc = (v) =>
+        String(v ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      const lines = [
+        Number.isFinite(canvasId) ? `Canvas#${canvasId}` : 'Canvas',
+        platform ? `平台：${platform}` : '',
+        Number.isFinite(articleCount) ? `篇数：${articleCount}` : '',
+        status ? `状态：${status}` : '',
+      ].filter((x) => x.length > 0);
+      const needFieldsHtml =
+        needFields.length > 0
+          ? `<p class="text-[11px] text-amber-600 mt-2">待补充：${needFields.map((x) => esc(x)).join('、')}</p>`
+          : '';
+      return `<section class="my-3 rounded-xl border border-sky-100 bg-sky-50/50 p-3">
+<div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-sky-200 text-sky-600 bg-white">内容看板</div>
+<h4 class="mt-2 mb-1 text-sm font-semibold text-slate-800">${esc(lines.join(' | '))}</h4>
+${topic ? `<p class="text-xs text-slate-600">${esc(topic)}</p>` : ''}
+<p class="text-xs text-slate-500 mt-1">先在 Canvas 看板确认与修改内容，再决定是否发布。</p>
+${Number.isFinite(canvasId) ? `<button type="button" data-canvas-id="${encodeURIComponent(String(canvasId))}" class="js-open-canvas-card mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-sky-600 text-white hover:bg-sky-700">查看文章详情</button>` : ''}
+${needFieldsHtml}
+</section>`;
+    } catch {
+      return _origCode({ text, lang });
+    }
+  }
+  if (lang === 'decision-it') {
+    try {
+      const parsed = JSON.parse(text);
+      const cardId = typeof parsed?.cardId === 'string' ? parsed.cardId : '';
+      const title = typeof parsed?.title === 'string' ? parsed.title : '决策卡';
+      const summary = typeof parsed?.summary === 'string' ? parsed.summary : '';
+      const recommendation =
+        typeof parsed?.recommendation === 'string' ? parsed.recommendation : '';
+      const actions = Array.isArray(parsed?.actions)
+        ? parsed.actions.filter((x) => typeof x === 'string').slice(0, 6)
+        : [];
+      const risks = Array.isArray(parsed?.risks)
+        ? parsed.risks.filter((x) => typeof x === 'string').slice(0, 4)
+        : [];
+      const status = typeof parsed?.status === 'string' ? parsed.status : 'generated';
+      const esc = (v) =>
+        String(v ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      const actionsHtml = actions.map((x) => `<li>${esc(x)}</li>`).join('');
+      const risksHtml = risks.map((x) => `<li>${esc(x)}</li>`).join('');
+      return `<section class="my-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+<div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-indigo-200 text-indigo-600 bg-white">${esc(status)}</div>
+<h4 class="mt-2 mb-1 text-sm font-semibold text-slate-800">${esc(title)}</h4>
+${summary ? `<p class="text-xs text-slate-600 mb-2">${esc(summary)}</p>` : ''}
+${recommendation ? `<p class="text-xs text-indigo-700 mb-2"><strong>建议：</strong>${esc(recommendation)}</p>` : ''}
+${actions.length > 0 ? `<div class="mb-2"><div class="text-[11px] text-slate-500 mb-1">执行动作</div><ul class="text-xs text-slate-700 list-disc pl-4">${actionsHtml}</ul></div>` : ''}
+${risks.length > 0 ? `<div><div class="text-[11px] text-slate-500 mb-1">风险提示</div><ul class="text-xs text-slate-700 list-disc pl-4">${risksHtml}</ul></div>` : ''}
+${cardId ? `<button type="button" data-decision-card-id="${encodeURIComponent(cardId)}" class="js-open-decision-card mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-indigo-600 text-white hover:bg-indigo-700">查看决策详情</button>` : ''}
+${cardId ? `<div class="mt-2 text-[10px] text-slate-400">cardId: ${esc(cardId)}</div>` : ''}
+</section>`;
+    } catch {
+      return _origCode({ text, lang });
+    }
+  }
   if (lang) return _origCode({ text, lang });
   // Heuristic: if text has no typical code patterns, treat as plain text
   const looksLikeCode = /[{}[\];=<>]|function |const |let |var |import |class |=>|\.map\(|console\.|return /.test(text);
@@ -47,21 +123,94 @@ function parseSSEChunk(buffer) {
   return { events, remainder };
 }
 
+function appendCanvasItIfNeeded(text, toolResults) {
+  const inputText = typeof text === 'string' ? text : '';
+  if (inputText.includes('```canvas-it')) return inputText;
+  if (!Array.isArray(toolResults)) return inputText;
+  for (const tr of toolResults) {
+    const out = tr && typeof tr === 'object' ? tr.output : undefined;
+    const obj = out && typeof out === 'object' ? out : undefined;
+    const canvasIdRaw = obj?.canvasId;
+    const canvasId =
+      typeof canvasIdRaw === 'number'
+        ? canvasIdRaw
+        : typeof canvasIdRaw === 'string'
+          ? Number(canvasIdRaw)
+          : NaN;
+    if (!Number.isFinite(canvasId)) continue;
+    const payload = {
+      canvasId: Number(canvasId),
+      status: typeof obj?.status === 'string' ? obj.status : undefined,
+      articleCount:
+        typeof obj?.articleCount === 'number' ? obj.articleCount : undefined,
+      platform: typeof obj?.platform === 'string' ? obj.platform : undefined,
+      topic: typeof obj?.topic === 'string' ? obj.topic : undefined,
+      needFields: Array.isArray(obj?.needFields)
+        ? obj.needFields.filter((x) => typeof x === 'string').slice(0, 8)
+        : [],
+    };
+    const block = `\n\n\`\`\`canvas-it\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
+    return `${inputText}${block}`;
+  }
+  return inputText;
+}
+
+function appendDecisionItIfNeeded(text, toolResults) {
+  const inputText = typeof text === 'string' ? text : '';
+  if (inputText.includes('```decision-it')) return inputText;
+  if (!Array.isArray(toolResults)) return inputText;
+  for (const tr of toolResults) {
+    const out = tr && typeof tr === 'object' ? tr.output : undefined;
+    const obj = out && typeof out === 'object' ? out : undefined;
+    if (!obj) continue;
+    const cardId =
+      typeof obj.cardId === 'string'
+        ? obj.cardId
+        : typeof obj.decisionCardId === 'string'
+          ? obj.decisionCardId
+          : '';
+    if (!cardId) continue;
+    const payload = {
+      cardId,
+      title: typeof obj.title === 'string' ? obj.title : undefined,
+      summary: typeof obj.summary === 'string' ? obj.summary : undefined,
+      recommendation:
+        typeof obj.recommendation === 'string' ? obj.recommendation : undefined,
+      actions: Array.isArray(obj.actions)
+        ? obj.actions.filter((x) => typeof x === 'string').slice(0, 6)
+        : [],
+      risks: Array.isArray(obj.risks)
+        ? obj.risks.filter((x) => typeof x === 'string').slice(0, 4)
+        : [],
+      status: typeof obj.status === 'string' ? obj.status : undefined,
+    };
+    const block = `\n\n\`\`\`decision-it\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
+    return `${inputText}${block}`;
+  }
+  return inputText;
+}
+
 /* ─── Thinking Indicator (replaces tool call cards) ─── */
 
-const ThinkingBubble = ({ toolCount }) => (
+const ThinkingBubble = ({ toolCount, subagentCount }) => {
+  const parts = [];
+  if (toolCount > 0) parts.push(`工具 ${toolCount}`);
+  if (subagentCount > 0) parts.push(`子代理 ${subagentCount}`);
+  const hint = parts.length > 0 ? `（${parts.join(' · ')}）` : '...';
+  return (
   <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-sm mb-1 animate-pulse">
     <BrainCircuit size={16} className="text-indigo-500" />
     <span className="text-xs text-indigo-600 font-medium">
-      思考中{toolCount > 0 ? `（已调用 ${toolCount} 个工具）` : '...'}
+      思考中{hint}
     </span>
     <Loader2 size={12} className="animate-spin text-indigo-400" />
   </div>
-);
+  );
+};
 
 /* ─── AI Message Component ─── */
 
-const AIMessage = ({ msg }) => {
+const AIMessage = ({ msg, onOpenCanvas, onOpenDecision }) => {
   // Parse markdown securely
   const htmlContent = React.useMemo(() => {
     if (!msg.content) return { __html: '' };
@@ -75,8 +224,11 @@ const AIMessage = ({ msg }) => {
   return (
     <div className="flex flex-col space-y-1 max-w-[90%] overflow-hidden">
       {/* Thinking indicator — show when streaming and tools are being called */}
-      {msg.isStreaming && msg.toolCount > 0 && (
-        <ThinkingBubble toolCount={msg.toolCount} />
+      {msg.isStreaming && (msg.toolCount > 0 || msg.subagentCount > 0) && (
+        <ThinkingBubble
+          toolCount={msg.toolCount}
+          subagentCount={msg.subagentCount}
+        />
       )}
 
       {/* Text content */}
@@ -94,7 +246,33 @@ const AIMessage = ({ msg }) => {
                          [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap
                          [&_table]:border-collapse [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5
                          [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5"
-              dangerouslySetInnerHTML={htmlContent} 
+              dangerouslySetInnerHTML={htmlContent}
+              onClick={(e) => {
+                const target = e.target instanceof Element ? e.target : null;
+                if (!target) return;
+                const canvasBtn = target.closest('button[data-canvas-id]');
+                if (canvasBtn) {
+                  const raw = decodeURIComponent(
+                    String(canvasBtn.getAttribute('data-canvas-id') || '').trim(),
+                  );
+                  const id = Number(raw);
+                  if (Number.isFinite(id) && typeof onOpenCanvas === 'function') {
+                    onOpenCanvas(id);
+                  }
+                  return;
+                }
+                const decisionBtn = target.closest('button[data-decision-card-id]');
+                if (decisionBtn) {
+                  const cardId = decodeURIComponent(
+                    String(
+                      decisionBtn.getAttribute('data-decision-card-id') || '',
+                    ).trim(),
+                  );
+                  if (cardId && typeof onOpenDecision === 'function') {
+                    onOpenDecision(cardId);
+                  }
+                }
+              }}
             />
           ) : (
             msg.isStreaming && (
@@ -126,40 +304,125 @@ const AIMessage = ({ msg }) => {
   );
 };
 
+const DecisionCardModal = ({ cardId, onClose }) => {
+  const [loading, setLoading] = useState(false);
+  const [card, setCard] = useState(null);
+
+  useEffect(() => {
+    if (!cardId) return;
+    setLoading(true);
+    chatService
+      .getDecisionCard(cardId)
+      .then((res) => {
+        setCard(res?.card || null);
+      })
+      .finally(() => setLoading(false));
+  }, [cardId]);
+
+  const renderListBlock = (title, items) => {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    return (
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-slate-500">{title}</p>
+        <ul className="space-y-1">
+          {items.map((item, idx) => (
+            <li key={`${title}-${idx}`} className="text-sm text-slate-700 flex items-start gap-2">
+              <span className="text-slate-400">{idx + 1}.</span>
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 backdrop-blur-[1px] flex items-end sm:items-center justify-center p-3">
+      <div className="w-full max-w-2xl bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-800">决策详情</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-4 max-h-[70vh] overflow-y-auto space-y-4">
+          {loading && (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 size={22} className="animate-spin text-slate-400" />
+            </div>
+          )}
+          {!loading && card && (
+            <>
+              <div className="space-y-1">
+                <h4 className="text-base font-semibold text-slate-900">
+                  {card.title || '决策卡'}
+                </h4>
+                <p className="text-sm text-slate-600">{card.summary || '暂无摘要'}</p>
+              </div>
+              {card.recommendation && (
+                <div className="bg-indigo-50/60 rounded-lg p-3">
+                  <p className="text-xs font-medium text-indigo-500 mb-1">核心建议</p>
+                  <p className="text-sm text-indigo-700">{card.recommendation}</p>
+                </div>
+              )}
+              {renderListBlock('决策依据', card.reasoning)}
+              {renderListBlock('可选方案', card.options)}
+              {renderListBlock('行动计划', card.actions)}
+              {renderListBlock('风险提示', card.risks)}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /**
  * @description AI中枢对话视图组件，支持SSE流式解析，工具调用隐藏在思考状态中
  * @keyword-en ChatBIView
  */
-const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
+const ChatBIView = ({
+  isDrawerOpen,
+  onDrawerToggle,
+  sessionType = 'default',
+  sessionStorageKey = 'ai_commander_session_id',
+  welcomeTitle = 'AI 主脑中枢',
+  welcomeDesc = '我是您的智能业务助手。您可以问我关于营收、客流的分析，或者下达运营指令。',
+  quickPrompts = ['本月客流趋势如何？', '分析一下Top5商铺的销售额'],
+  inputPlaceholder = '问问数据，或者下达指令...',
+  showInlineSessionPicker = false,
+}) => {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState('');
   const [sessions, setSessions] = useState([]);
+  const [isSessionPickerOpen, setIsSessionPickerOpen] = useState(false);
+  const [activeCanvasId, setActiveCanvasId] = useState(null);
+  const [activeDecisionCardId, setActiveDecisionCardId] = useState('');
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     const init = async () => {
-      const loadedSessions = await chatService.getSessions();
+      const loadedSessions = await chatService.getSessions({ sessionType });
       setSessions(loadedSessions);
       
-      const savedSessionId = localStorage.getItem('ai_commander_session_id');
+      const savedSessionId = localStorage.getItem(sessionStorageKey);
       
       if (savedSessionId && savedSessionId.startsWith('local-')) {
-        // Just empty local session
         setSessionId(savedSessionId);
+        $currentSessionId.set(null);
       } else if (savedSessionId && loadedSessions.some(s => s.sessionId === savedSessionId)) {
-        // Load the saved remote session
         handleSwitchSession({ sessionId: savedSessionId }, loadedSessions);
       } else {
-        // Start fresh
         const newLocalId = 'local-' + Date.now();
         setSessionId(newLocalId);
-        localStorage.setItem('ai_commander_session_id', newLocalId);
+        localStorage.setItem(sessionStorageKey, newLocalId);
+        $currentSessionId.set(null);
       }
     };
     init();
-  }, []);
+  }, [sessionStorageKey, sessionType]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -169,7 +432,8 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
     const newId = 'local-' + Date.now();
     setSessionId(newId);
     setMessages([]);
-    localStorage.setItem('ai_commander_session_id', newId);
+    localStorage.setItem(sessionStorageKey, newId);
+    $currentSessionId.set(null);
     if (onDrawerToggle) onDrawerToggle(false);
   };
 
@@ -181,16 +445,30 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
     }
     setIsLoading(true);
     setSessionId(sess.sessionId);
-    localStorage.setItem('ai_commander_session_id', sess.sessionId);
+    localStorage.setItem(sessionStorageKey, sess.sessionId);
+    $currentSessionId.set(sess.sessionId);
     if (onDrawerToggle) onDrawerToggle(false);
     try {
-      const history = await chatService.fetchHistory(sess.sessionId);
+      const history = await chatService.fetchHistory(sess.sessionId, {
+        sessionType,
+      });
       const msgs = Array.isArray(history) ? history : (history.messages || []);
       setMessages(msgs.map(m => ({
         ...m,
         id: m.id || Date.now() + Math.random(),
         role: m.role === 'assistant' ? 'ai' : m.role,
+        content:
+          m.role === 'assistant'
+            ? appendDecisionItIfNeeded(
+                appendCanvasItIfNeeded(
+                  typeof m.content === 'string' ? m.content : '',
+                  Array.isArray(m.tool_results) ? m.tool_results : [],
+                ),
+                Array.isArray(m.tool_results) ? m.tool_results : [],
+              )
+            : m.content,
         toolCount: 0,
+        subagentCount: 0,
       })));
     } catch (e) {
       console.error(e);
@@ -211,9 +489,11 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
     let currentSessionId = sessionId;
     if (currentSessionId.startsWith('local-')) {
       try {
-        const session = await chatService.createSession();
+        const session = await chatService.createSession({ sessionType });
         currentSessionId = session.sessionId;
         setSessionId(currentSessionId);
+        $currentSessionId.set(currentSessionId);
+        localStorage.setItem(sessionStorageKey, currentSessionId);
       } catch (e) {
         console.error('Failed to create session', e);
         return;
@@ -232,6 +512,7 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       role: 'ai',
       content: '',
       toolCount: 0,
+      subagentCount: 0,
       isStreaming: true,
       errorText: null,
     };
@@ -240,7 +521,9 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
     setIsLoading(true);  // Blocks input field
 
     try {
-      const response = await chatService.streamChatPost(currentSessionId, userText);
+      const response = await chatService.streamChatPost(currentSessionId, userText, {
+        sessionType,
+      });
       if (!response.body) throw new Error('No response body');
 
       const reader = response.body.getReader();
@@ -248,11 +531,12 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       let sseBuffer = '';
       let textContent = '';
       let toolCount = 0;
+      let subagentCount = 0;
 
       const updateAiMsg = (overrides) => {
         setMessages(prev => prev.map(msg =>
           msg.id === aiMsgId
-            ? { ...msg, content: textContent, toolCount, ...overrides }
+            ? { ...msg, content: textContent, toolCount, subagentCount, ...overrides }
             : msg
         ));
       };
@@ -276,25 +560,35 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
               break;
             }
             case 'tool_start': {
-              toolCount++;
-              updateAiMsg();
               break;
             }
-            case 'tool_end':
             case 'tool_chunk':
             case 'reasoning':
             case 'log':
             case 'ping':
-              // All hidden — tool calls go into the thinking indicator count
               break;
+            case 'tool_end': {
+              toolCount++;
+              updateAiMsg();
+              break;
+            }
+            case 'subagent': {
+              subagentCount++;
+              updateAiMsg();
+              break;
+            }
             case 'error': {
               const errMsg = evt.data?.message || '未知错误';
               updateAiMsg({ errorText: errMsg, isStreaming: false });
               break;
             }
-            case 'end':
-              // Stream complete
+            case 'end': {
+              // 使用后端后处理后的最终文本（含 canvas-it / task-it 等代码块）
+              const endText = evt.data?.text ?? '';
+              if (endText) textContent = endText;
+              updateAiMsg({ isStreaming: false });
               break;
+            }
             default:
               break;
           }
@@ -305,7 +599,7 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
       updateAiMsg({ isStreaming: false });
 
       // Refresh session list
-      const updatedSessions = await chatService.getSessions();
+      const updatedSessions = await chatService.getSessions({ sessionType });
       setSessions(updatedSessions);
 
     } catch (error) {
@@ -393,6 +687,62 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
         />
       )}
 
+      {isSessionPickerOpen && (
+        <div className="absolute inset-0 z-20 bg-black/25 backdrop-blur-[1px] flex items-end justify-center p-3">
+          <div className="w-full max-w-xl bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-800">会话历史</h3>
+              <button
+                onClick={() => setIsSessionPickerOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-3 border-b border-slate-100">
+              <button
+                onClick={() => {
+                  handleNewSession();
+                  setIsSessionPickerOpen(false);
+                }}
+                className="w-full flex items-center justify-center space-x-2 bg-indigo-50 text-indigo-600 py-2 rounded-lg text-sm font-medium hover:bg-indigo-100 transition-colors border border-indigo-100"
+              >
+                <Plus size={15} />
+                <span>新会话</span>
+              </button>
+            </div>
+            <div className="max-h-72 overflow-y-auto p-3 space-y-2">
+              {sessions.length === 0 ? (
+                <div className="text-center text-xs text-slate-400 py-8">暂无历史会话</div>
+              ) : (
+                sessions.map((sess) => (
+                  <button
+                    key={sess.sessionId}
+                    onClick={() => {
+                      handleSwitchSession(sess);
+                      setIsSessionPickerOpen(false);
+                    }}
+                    className={`w-full text-left p-3 rounded-lg text-xs transition-all border ${
+                      sessionId === sess.sessionId
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-md'
+                        : 'bg-white text-slate-600 border-slate-100 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="font-medium truncate mb-1 flex items-center">
+                      <MessageSquare size={12} className="mr-2 opacity-70" />
+                      <span className="truncate">{sess.title || '未命名会话'}</span>
+                    </div>
+                    <div className="text-[10px] opacity-60">
+                      {new Date(sess.timestamp).toLocaleString()}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 消息列表区域 */}
       <div 
         className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-24 pt-4"
@@ -415,23 +765,22 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
             <div className="w-20 h-20 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-full flex items-center justify-center mb-6 shadow-sm border border-white ring-4 ring-indigo-50/50">
               <Sparkles size={32} className="text-indigo-600" />
             </div>
-            <h2 className="text-xl font-bold text-slate-900 mb-2">AI 主脑中枢</h2>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">{welcomeTitle}</h2>
             <p className="text-sm text-slate-500 max-w-xs text-center leading-relaxed">
-              我是您的智能业务助手。<br />
-              您可以问我关于营收、客流的分析，或者下达运营指令。
+              {welcomeDesc}
             </p>
             <div className="mt-8 grid grid-cols-2 gap-3 w-full max-w-md px-4">
               <button
-                onClick={() => setInputValue('本月客流趋势如何？')}
+                onClick={() => setInputValue(quickPrompts[0] || '')}
                 className="text-xs bg-white border border-slate-200 p-3 rounded-xl text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all text-left"
               >
-                📈 本月客流趋势如何？
+                📈 {quickPrompts[0] || '了解数据结构'}
               </button>
               <button
-                onClick={() => setInputValue('分析一下Top5商铺的销售额')}
+                onClick={() => setInputValue(quickPrompts[1] || '')}
                 className="text-xs bg-white border border-slate-200 p-3 rounded-xl text-slate-600 hover:border-indigo-300 hover:text-indigo-600 hover:shadow-sm transition-all text-left"
               >
-                💰 分析Top5商铺销售额
+                💰 {quickPrompts[1] || '生成一条思维链'}
               </button>
             </div>
           </div>
@@ -444,7 +793,11 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
                     {msg.content}
                   </div>
                 ) : (
-                  <AIMessage msg={msg} />
+                  <AIMessage
+                    msg={msg}
+                    onOpenCanvas={(id) => setActiveCanvasId(id)}
+                    onOpenDecision={(id) => setActiveDecisionCardId(id)}
+                  />
                 )}
               </div>
             ))}
@@ -455,6 +808,17 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
 
       {/* 底部输入框区域 */}
       <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#F7F9FC] via-[#F7F9FC] to-transparent pt-6 pb-4 px-4">
+        {showInlineSessionPicker && (
+          <div className="max-w-2xl mx-auto mb-2 flex justify-end">
+            <button
+              onClick={() => setIsSessionPickerOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs bg-white border border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition"
+            >
+              <History size={14} />
+              <span>会话历史</span>
+            </button>
+          </div>
+        )}
         <div className={`flex items-center bg-white border shadow-lg shadow-slate-200/50 rounded-full p-1.5 px-4 transition-all max-w-2xl mx-auto ${
           isLoading 
             ? 'border-indigo-200 bg-indigo-50/30' 
@@ -465,7 +829,7 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isLoading ? 'AI 正在回复中，请稍候...' : '问问数据，或者下达指令...'}
+            placeholder={isLoading ? 'AI 正在回复中，请稍候...' : inputPlaceholder}
             className="flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder-slate-400 py-2.5 font-medium disabled:cursor-not-allowed disabled:opacity-50"
             disabled={isLoading}
           />
@@ -482,6 +846,19 @@ const ChatBIView = ({ isDrawerOpen, onDrawerToggle }) => {
           </button>
         </div>
       </div>
+
+      {Number.isFinite(activeCanvasId) && (
+        <CanvasFeedView
+          canvasId={activeCanvasId}
+          onClose={() => setActiveCanvasId(null)}
+        />
+      )}
+      {activeDecisionCardId ? (
+        <DecisionCardModal
+          cardId={activeDecisionCardId}
+          onClose={() => setActiveDecisionCardId('')}
+        />
+      ) : null}
 
     </div>
   );

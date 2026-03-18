@@ -7,6 +7,8 @@ import {
   DataSourceSchemaSearchResult,
 } from '../entities/data-source-schema.entity.js';
 import { FieldMeta } from '../types/data-source.types.js';
+import { DataSourceService } from './data-source.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 
 /**
  * @title 主数据源定义 Main Data Source Definition
@@ -35,6 +37,8 @@ export class DataSourceSchemaService {
   constructor(
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly embeddingService: EmbeddingService,
+    private readonly dataSourceService: DataSourceService,
+    private readonly adminService: AdminService,
   ) {
     this.collection = db.collection<DataSourceSchemaEntity>(
       'data_source_schemas',
@@ -72,6 +76,7 @@ export class DataSourceSchemaService {
   async searchAllSources(
     query: string,
     limit = 10,
+    opts?: { tenantId?: string; sourceCode?: string },
   ): Promise<DataSourceSchemaSearchResult[]> {
     const q = String(query).toLowerCase();
     const tokens = q
@@ -88,9 +93,22 @@ export class DataSourceSchemaService {
       (t) => new RegExp(this.escapeRegex(t), 'i'),
     );
 
-    // 搜索所有数据源（不限制 sourceCode）
+    const visibleSourceCodes = await this.resolveVisibleSourceCodes(opts);
+    if (visibleSourceCodes.length === 0) return [];
+    if (
+      opts?.sourceCode &&
+      !visibleSourceCodes.includes(opts.sourceCode.trim())
+    ) {
+      return [];
+    }
+    const targetSourceCodes = opts?.sourceCode?.trim()
+      ? [opts.sourceCode.trim()]
+      : visibleSourceCodes;
+
+    // 搜索所有可见数据源
     const results = await this.collection
       .find({
+        sourceCode: { $in: targetSourceCodes },
         $or: [
           { keywords: { $in: regexPatterns } },
           {
@@ -197,6 +215,29 @@ export class DataSourceSchemaService {
   }
 
   /**
+   * @description 解析可见数据源列表
+   * @keyword-en resolve visible source codes
+   */
+  private async resolveVisibleSourceCodes(opts?: {
+    tenantId?: string;
+    sourceCode?: string;
+  }): Promise<string[]> {
+    if (opts?.sourceCode?.trim()) {
+      const hit = await this.dataSourceService.findAccessibleSource(
+        opts.sourceCode.trim(),
+        opts.tenantId,
+      );
+      return hit ? [hit.code] : [];
+    }
+    const rows = await this.dataSourceService.listAccessibleSources(
+      opts?.tenantId,
+    );
+    const set = new Set(rows.map((row) => row.code));
+    set.add(MAIN_DATA_SOURCE.code);
+    return Array.from(set);
+  }
+
+  /**
    * @title 向量搜索 Search by Vector
    * @description 使用向量相似度搜索（保底机制）。
    */
@@ -205,7 +246,11 @@ export class DataSourceSchemaService {
     sourceCode: string = MAIN_DATA_SOURCE.code,
     limit = 10,
   ): Promise<DataSourceSchemaSearchResult[]> {
-    const queryEmbedding = await this.embeddingService.embedText(query);
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+    const queryEmbedding = await this.embeddingService.embedText(
+      query,
+      embeddingConfig,
+    );
 
     // 如果已知 Atlas 不可用，直接使用本地搜索
     if (this.isAtlasAvailable === false) {
@@ -299,6 +344,7 @@ export class DataSourceSchemaService {
     // 生成向量嵌入（可选，失败时继续）
     let embedding: number[] = [];
     try {
+      const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
       const textForEmbedding = [
         input.collectionName,
         input.nameCn ?? '',
@@ -307,7 +353,10 @@ export class DataSourceSchemaService {
           (f) => `${f.name} ${f.nameCn ?? ''} ${f.description ?? ''}`,
         ),
       ].join(' ');
-      embedding = await this.embeddingService.embedText(textForEmbedding);
+      embedding = await this.embeddingService.embedText(
+        textForEmbedding,
+        embeddingConfig,
+      );
     } catch (error) {
       console.warn(
         `[DataSourceSchemaService] Failed to generate embedding for ${input.collectionName}, using keyword search only:`,
@@ -517,6 +566,31 @@ export class DataSourceSchemaService {
    */
   private escapeRegex(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * @description 解析默认Embedding配置
+   * @keyword-en resolve default embedding config
+   */
+  private async resolveDefaultEmbeddingConfig(): Promise<{
+    providerCode?: string;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }> {
+    const runtime = await this.adminService.getDefaultEmbeddingRuntime();
+    if (!runtime) {
+      return {
+        providerCode: 'gemini',
+        model: 'gemini-embedding-001',
+      };
+    }
+    return {
+      providerCode: runtime.providerCode,
+      model: runtime.model,
+      apiKey: runtime.apiKey,
+      baseUrl: runtime.baseUrl,
+    };
   }
 
   /**

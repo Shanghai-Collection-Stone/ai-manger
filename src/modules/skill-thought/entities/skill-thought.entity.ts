@@ -8,6 +8,8 @@ import { ObjectId } from 'mongodb';
  */
 export interface SkillThoughtEntity {
   _id: ObjectId;
+  tenantId?: string;
+  userId?: string;
   /**
    * 技能文字（长文）- 完整的思维链内容
    */
@@ -58,6 +60,8 @@ export interface SkillThoughtCreateInput {
   content: string;
   summary: string;
   keywords: string[];
+  tenantId?: string;
+  userId?: string;
   sessionId?: string;
   toolsUsed?: string[];
   category?: string;

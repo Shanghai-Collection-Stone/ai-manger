@@ -17,7 +17,7 @@
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
-    "forceConsistentCasingInFileNames": true,
+    "forceConsistentCasingInFileNames": false,
 
     "exactOptionalPropertyTypes": false,
     "strictFunctionTypes": false,

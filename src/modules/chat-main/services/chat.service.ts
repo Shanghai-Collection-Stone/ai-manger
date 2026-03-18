@@ -6,17 +6,19 @@ import {
   BaseMessage,
   AIMessage,
   CreateAgentParams,
-  ToolMessage,
   HumanMessage,
-  SystemMessage,
 } from 'langchain';
+import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
+import type { DeepAgentSubAgent } from '../../ai-agent/types/agent.types.js';
 import { ContextRole } from '../../context/enums/context.enums';
-import { MessagePart } from '../../context/types/context.types';
 import { ToolsService } from '../../function-call/tools/services/tools.service.js';
 import { TitleFunctionCallService } from '../../function-call/title/services/title.service.js';
+import { AnalysisFunctionCallService } from '../../function-call/analysis/services/analysis.service.js';
 import { RetrievalService } from '../../ai-context/services/retrieval.service.js';
 import { KeywordService } from '../../ai-context/services/keyword.service.js';
 import { Observable } from 'rxjs';
+import { AdminService } from '../../admin/services/admin.service.js';
+import type { ConversationSessionType } from '../../context/entities/conversation.entity.js';
 
 /**
  * @title 主对话服务 Chat-Main Service
@@ -33,6 +35,8 @@ export class ChatMainService {
     private readonly titleTools: TitleFunctionCallService,
     private readonly retrieval: RetrievalService,
     private readonly keywordTools: KeywordService,
+    private readonly adminService: AdminService,
+    private readonly analysisTools: AnalysisFunctionCallService,
   ) {}
 
   private readonly HITL_PLACEHOLDER = '##HITL_REQUIRED_FRONTEND##';
@@ -44,16 +48,21 @@ export class ChatMainService {
    * @keywords-en non-streaming, sync
    */
   async send(request: ChatRequest): Promise<ChatResponse> {
-    const sid = await this.ctx.createSession(request.sessionId);
-    await this.ctx.appendMessage(sid, {
-      role: ContextRole.User,
-      content: request.input,
-    });
+    const scope = this.getRequestScope(request);
+    const sid = await this.ctx.createSessionWithScope(request.sessionId, scope);
+    await this.ctx.appendMessage(
+      sid,
+      {
+        role: ContextRole.User,
+        content: request.input,
+      },
+      scope,
+    );
     try {
-      const meta = await this.ctx.getConversation(sid);
+      const meta = await this.ctx.getConversation(sid, scope);
       if (!meta || !meta.title || meta.title.trim().length === 0) {
         const t = this.provisionalTitle(request.input);
-        if (t && t.length > 0) await this.ctx.setTitle(sid, t);
+        if (t && t.length > 0) await this.ctx.setTitleWithScope(sid, t, scope);
       }
     } catch (e) {
       void e;
@@ -65,20 +74,34 @@ export class ChatMainService {
       `SESSION_ID:${sid}`,
       `REQUEST_TIME_ISO:${now}`,
       ip ? `CLIENT_IP:${ip}` : 'CLIENT_IP:unknown',
-      this.getDataAnalysisPromptCN(),
+      this.getSystemPromptCN(scope.sessionType),
     ].join('\n');
 
     // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
     const messages: BaseMessage[] = [new HumanMessage(request.input)];
-    const tools = this.getToolsForInput(request.input);
+    const tools = this.getToolsForInput(
+      request.input,
+      undefined,
+      scope,
+      scope.sessionType,
+    );
+    const subagents = this.buildDefaultSubagents(
+      tools,
+      scope.sessionType,
+      scope,
+      {
+        sid,
+        now,
+        ip: ip || 'unknown',
+      },
+    );
     const checkpoint_id =
-      (await this.ctx.getConversation(sid))?.lastCheckpointId ?? 'root';
+      (await this.ctx.getConversation(sid, scope))?.lastCheckpointId ?? 'root';
     const ai = await this.agent.runWithMessages({
       config: {
-        provider: request.provider ?? 'nvidia',
-        model: request.model ?? 'deepseek-ai/deepseek-v3.1-terminus',
         temperature: request.temperature ?? 0.5,
         tools,
+        subagents,
         system: sysContent,
         recursionLimit: 1000,
         context: {
@@ -171,16 +194,28 @@ export class ChatMainService {
       text,
       directToolResults ?? derivedToolResults,
     );
+    text = this.appendDecisionSummaryIfNeeded(
+      text,
+      directToolResults ?? derivedToolResults,
+    );
+    text = this.appendDecisionItIfNeeded(
+      text,
+      directToolResults ?? derivedToolResults,
+    );
 
-    await this.ctx.appendMessage(sid, {
-      role: ContextRole.Assistant,
-      content: text,
-      tool_calls:
-        Array.isArray(nonStreamToolCalls) && nonStreamToolCalls.length > 0
-          ? nonStreamToolCalls
-          : undefined,
-      tool_results: directToolResults ?? derivedToolResults,
-    });
+    await this.ctx.appendMessage(
+      sid,
+      {
+        role: ContextRole.Assistant,
+        content: text,
+        tool_calls:
+          Array.isArray(nonStreamToolCalls) && nonStreamToolCalls.length > 0
+            ? nonStreamToolCalls
+            : undefined,
+        tool_results: directToolResults ?? derivedToolResults,
+      },
+      scope,
+    );
 
     this.titleTools.ensureFirstTurnTitle(sid).catch(() => {});
     // 异步补充关键词
@@ -188,104 +223,84 @@ export class ChatMainService {
     // 更新最新checkpoint id
     this.ctx
       .getLatestCheckpointId(sid)
-      .then((cid) => (cid ? this.ctx.setLastCheckpointId(sid, cid) : undefined))
+      .then((cid) =>
+        cid ? this.ctx.setLastCheckpointId(sid, cid, scope) : undefined,
+      )
       .catch(() => {});
     return { text, messages };
   }
 
   /**
    * @title 流式发送 Stream
-   * @description 返回事件流，包含令牌与最终消息，并维护上下文。
-   * @keywords-cn 流式, 事件
-   * @keywords-en streaming, events
+   * @description 消费 AgentStreamEvent 事件流，转为 SSE MessageEvent，并维护上下文。
+   * @keywords-cn 流式, 事件, SSE
+   * @keywords-en streaming, events, SSE
    */
   stream(request: ChatRequest): Observable<MessageEvent> {
     return new Observable<MessageEvent>((subscriber) => {
-      const safeNext = (event: MessageEvent) => {
-        if (subscriber.closed) return;
-        try {
-          subscriber.next(event);
-        } catch (err) {
-          void err;
-        }
-      };
       void (async () => {
         let sid: string | null = null;
         try {
-          sid = await this.ctx.createSession(request.sessionId);
+          const scope = this.getRequestScope(request);
+          sid = await this.ctx.createSessionWithScope(request.sessionId, scope);
           if (!sid) throw new Error('SESSION_ID_MISSING');
-          const sessionId = sid;
-          await this.ctx.appendMessage(sessionId, {
-            role: ContextRole.User,
-            content: request.input,
-          });
-          try {
-            const meta = await this.ctx.getConversation(sessionId);
-            if (!meta || !meta.title || meta.title.trim().length === 0) {
-              const t = this.provisionalTitle(request.input);
-              if (t && t.length > 0) await this.ctx.setTitle(sessionId, t);
-            }
-          } catch (e) {
-            void e;
+
+          await this.ctx.appendMessage(
+            sid,
+            { role: ContextRole.User, content: request.input },
+            scope,
+          );
+
+          const meta = await this.ctx.getConversation(sid, scope);
+          if (!meta?.title || meta.title.trim().length === 0) {
+            const t = this.provisionalTitle(request.input);
+            if (t && t.length > 0)
+              void this.ctx.setTitleWithScope(sid, t, scope);
           }
 
-          const now = request.now ?? new Date().toISOString();
-          const ip = request.ip ?? '';
+          const nowStr = request.now ?? new Date().toISOString();
+          const ipStr = request.ip || 'unknown';
           const sysContent = [
-            `SESSION_ID:${sessionId}`,
-            `REQUEST_TIME_ISO:${now}`,
-            ip ? `CLIENT_IP:${ip}` : 'CLIENT_IP:unknown',
-            this.getDataAnalysisPromptCN(),
+            `SESSION_ID:${sid}`,
+            `REQUEST_TIME_ISO:${nowStr}`,
+            `CLIENT_IP:${ipStr}`,
+            this.getSystemPromptCN(scope.sessionType),
           ].join('\n');
 
-          // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
-          const messages: BaseMessage[] = [new HumanMessage(request.input)];
-
           const streamWriter = (msg: string) => {
-            safeNext({
-              data: {
-                type: 'log',
-                data: msg,
-                thread_id: sid,
-              },
-            } as MessageEvent);
+            if (!subscriber.closed)
+              subscriber.next({
+                data: { type: 'log', data: msg, thread_id: sid },
+              } as MessageEvent);
           };
 
-          const tools = this.getToolsForInput(request.input, streamWriter);
-          const checkpoint_id =
-            (await this.ctx.getConversation(sessionId))?.lastCheckpointId ??
-            'root';
+          const tools = this.getToolsForInput(
+            request.input,
+            streamWriter,
+            scope,
+            scope.sessionType,
+          );
+          const subagents = this.buildDefaultSubagents(
+            tools,
+            scope.sessionType,
+            scope,
+            { sid, now: nowStr, ip: ipStr },
+          );
+          const checkpoint_id = meta?.lastCheckpointId ?? 'root';
 
-          const toolTimeoutMs = 0;
-          const abortController = new AbortController();
-          const toolTimers = new Map<string, ReturnType<typeof setTimeout>>();
-          const pendingToolIds = new Set<string>();
-          let timedOutToolId: string | null = null;
-          const toolDebug =
-            process.env.TOOL_DEBUG === '1'
-              ? true
-              : process.env.TOOL_DEBUG === '0'
-                ? false
-                : process.env.NODE_ENV !== 'production';
-
-          const noTimeoutToolNames = new Set<string>(['topic_orchestrate']);
-
+          // ─── 消费 agent stream 事件 ───
           const iterable = this.agent.stream({
             config: {
-              provider: request.provider ?? 'nvidia',
-              model: request.model ?? 'deepseek-ai/deepseek-v3.1-terminus',
               temperature: request.temperature ?? 0.1,
               tools,
+              subagents,
               system: sysContent,
               recursionLimit: 1000,
-              context: {
-                threadId: sid,
-                checkpointId: checkpoint_id,
-              },
+              streamWriter,
+              context: { threadId: sid, checkpointId: checkpoint_id },
             },
-            messages,
+            messages: [new HumanMessage(request.input)],
             callOption: {
-              signal: abortController.signal,
               configurable: {
                 thread_id: sid,
                 checkpoint_ns: 'default',
@@ -294,636 +309,154 @@ export class ChatMainService {
             },
           });
 
-          let fullContent = '';
-          const injectedCanvasIds = new Set<number>();
-          const injectedTodoIds = new Set<number>();
-          const hiddenStreamToolNames = new Set<string>([]);
-          const toolCallMap = new Map<
-            string,
-            { id: string; name: string; input: unknown }
-          >();
-          const toolResultMap = new Map<
-            string,
-            { id: string; name?: string; output: unknown }
-          >();
-          const argsBuffer = new Map<string, string>();
-          const toolChunkCount = new Map<string, number>();
-          const debugToolNames = new Set<string>([]);
-          const parts: MessagePart[] = [];
+          let fullText = '';
+          let endToolCalls: unknown[] | undefined;
+          let endToolResults:
+            | { name?: unknown; output?: unknown }[]
+            | undefined;
 
-          const jsonSafe = (v: unknown): unknown => {
-            const seen = new WeakSet<object>();
-            const walk = (x: unknown): unknown => {
-              if (x === null) return null;
-              switch (typeof x) {
-                case 'string':
-                case 'number':
-                case 'boolean':
-                  return x;
-                case 'undefined':
-                  return undefined;
-                case 'bigint':
-                  return x.toString();
-                case 'function':
-                case 'symbol':
-                  return undefined;
-                case 'object': {
-                  if (x instanceof Error) {
-                    return { name: x.name, message: x.message, stack: x.stack };
-                  }
-                  if (Array.isArray(x)) return x.map((i) => walk(i));
-                  const obj = x as Record<string, unknown>;
-                  if (seen.has(obj)) return '[Circular]';
-                  seen.add(obj);
-                  const out: Record<string, unknown> = {};
-                  for (const [k, v2] of Object.entries(obj)) {
-                    const vv = walk(v2);
-                    if (typeof vv !== 'undefined') out[k] = vv;
-                  }
-                  return out;
-                }
+          const safeSend = (payload: unknown) => {
+            if (!subscriber.closed) {
+              subscriber.next({ data: payload } as MessageEvent);
+            }
+          };
+
+          for await (const step of iterable) {
+            switch (step.type) {
+              case 'start':
+                // 内部初始化，不推送
+                break;
+              case 'token':
+                fullText += step.data.text;
+                safeSend({
+                  type: 'token',
+                  data: { text: step.data.text, thread_id: sid },
+                });
+                break;
+              case 'tool_narration':
+                safeSend({
+                  type: 'tool_narration',
+                  data: { text: step.data.text },
+                });
+                break;
+              case 'reasoning':
+                safeSend({ type: 'reasoning', data: { text: step.data.text } });
+                break;
+              case 'tool_start':
+                safeSend({ type: 'tool_start', data: step.data });
+                break;
+              case 'tool_chunk':
+                safeSend({ type: 'tool_chunk', data: step.data });
+                break;
+              case 'tool_end':
+                safeSend({ type: 'tool_end', data: step.data });
+                break;
+              case 'subagent':
+                safeSend({ type: 'subagent', data: step.data });
+                break;
+              case 'end': {
+                endToolCalls = step.data.tool_calls as unknown[] | undefined;
+                endToolResults = step.data.tool_results;
+                // end 事件下发后再做后处理
+                break;
               }
-            };
-            return walk(v);
-          };
-
-          const safeNextStreamEvent = (payload: {
-            type: string;
-            data: Record<string, unknown>;
-          }) => {
-            const safeDataRaw = jsonSafe(payload.data);
-            const safeData =
-              safeDataRaw &&
-              typeof safeDataRaw === 'object' &&
-              !Array.isArray(safeDataRaw)
-                ? (safeDataRaw as Record<string, unknown>)
-                : { value: safeDataRaw };
-            safeNext({
-              data: {
-                type: payload.type,
-                data: safeData,
-                thread_id: sid,
-              },
-            } as MessageEvent);
-          };
-
-          const heartbeatMs = 15_000;
-          const heartbeat = setInterval(() => {
-            safeNextStreamEvent({
-              type: 'ping',
-              data: { ts: Date.now() },
-            });
-          }, heartbeatMs);
-
-          const emitToolStart = (input: {
-            id?: string;
-            name?: string;
-            input?: unknown;
-          }) => {
-            if (!input.id) return;
-            if (
-              typeof input.name === 'string' &&
-              hiddenStreamToolNames.has(input.name)
-            ) {
-              return;
+              case 'error': {
+                const errObj = step.data.error as
+                  | (Error & { code?: string })
+                  | undefined;
+                const errCode = errObj?.code || errObj?.name || 'STREAM_ERROR';
+                const errMsg = errObj?.message ?? 'STREAM_ERROR';
+                safeSend({
+                  type: 'error',
+                  data: { code: errCode, message: errMsg },
+                });
+                break;
+              }
+              case 'custom':
+                safeSend({ type: 'custom', data: step.data });
+                break;
+              default:
+                break;
             }
-            safeNextStreamEvent({
-              type: 'tool_start',
-              data: {
-                id: input.id,
-                name: input.name,
-                input: jsonSafe(input.input),
-              },
-            });
-          };
+          }
 
-          const emitToolEnd = (input: {
-            id?: string;
-            name?: string;
-            input?: unknown;
-            output?: unknown;
-          }) => {
-            if (!input.id) return;
-            if (
-              typeof input.name === 'string' &&
-              hiddenStreamToolNames.has(input.name)
-            ) {
-              return;
-            }
-            safeNextStreamEvent({
-              type: 'tool_end',
-              data: {
-                id: input.id,
-                name: input.name,
-                input: jsonSafe(input.input),
-                output: jsonSafe(input.output),
-              },
-            });
-          };
+          // ─── 后处理 ───
+          let text = this.sanitizeFinalText(fullText);
 
-          const appendAssistantText = (text: string) => {
-            const s = String(text ?? '');
-            if (!s) return;
-            fullContent += s;
-            const lastPart = parts[parts.length - 1];
-            if (lastPart && lastPart.type === 'text') {
-              lastPart.content += s;
-            } else {
-              parts.push({ type: 'text', content: s });
-            }
-          };
-
-          const clearToolTimer = (id: string) => {
-            const h = toolTimers.get(id);
-            if (h) clearTimeout(h);
-            toolTimers.delete(id);
-          };
-
-          const markToolDone = (id: string) => {
-            clearToolTimer(id);
-            pendingToolIds.delete(id);
-          };
-
-          const startToolTimer = (id: string) => {
-            if (toolTimeoutMs <= 0) return;
-            clearToolTimer(id);
-            const h = setTimeout(() => {
-              if (toolResultMap.has(id)) return;
-              if (!pendingToolIds.has(id)) return;
-              timedOutToolId = id;
-              abortController.abort(
-                new Error(`TOOL_TIMEOUT_${toolTimeoutMs}ms`),
-              );
-            }, toolTimeoutMs);
-            toolTimers.set(id, h);
-          };
-
-          const synthesizePendingToolResults = (err: unknown) => {
-            const errorObj =
-              err instanceof Error ? err : new Error(String(err));
-            for (const id of Array.from(pendingToolIds)) {
-              const call = toolCallMap.get(id);
-              const name = call?.name ?? '';
-              const output = {
-                ok: false,
-                error: id === timedOutToolId ? 'TOOL_TIMEOUT' : 'TOOL_ERROR',
-                message: errorObj.message,
-              };
-              toolResultMap.set(id, { id, name, output });
-              parts.push({ type: 'tool_result', id, name, output });
-              emitToolEnd({ id, name, input: call?.input, output });
-              markToolDone(id);
-            }
-
-            if (fullContent.trim().length === 0) {
-              const msg =
-                timedOutToolId && toolCallMap.get(timedOutToolId)?.name
-                  ? `工具调用超时（${Math.floor(toolTimeoutMs / 1000)}s）：${toolCallMap.get(timedOutToolId)?.name}`
-                  : `工具调用失败：${errorObj.message}`;
-              appendAssistantText(msg);
-              safeNextStreamEvent({
-                type: 'token',
-                data: { text: msg },
+          // HITL 检测
+          try {
+            const hasHitl = (arr?: { name?: unknown; output?: unknown }[]) =>
+              Array.isArray(arr) &&
+              arr.some((tr) => {
+                const r = tr as Record<string, unknown>;
+                const out = r['output'];
+                const obj =
+                  out && typeof out === 'object'
+                    ? (out as Record<string, unknown>)
+                    : undefined;
+                return !!(obj && obj['requires_human'] === true);
               });
-            }
-          };
-
-          try {
-            for await (const e of iterable) {
-              switch (e.type) {
-                case 'token': {
-                  appendAssistantText(e.data.text);
-                  safeNextStreamEvent({
-                    type: 'token',
-                    data: { text: e.data.text },
-                  });
-                  break;
-                }
-                case 'reasoning': {
-                  safeNextStreamEvent({
-                    type: 'reasoning',
-                    data: { text: e.data.text },
-                  });
-                  break;
-                }
-                case 'tool_start': {
-                  const { id, name, input } = e.data;
-                  if (id) {
-                    const existing = toolCallMap.get(id);
-                    if (existing) {
-                      if (typeof name === 'string' && name.length > 0) {
-                        existing.name = name;
-                      }
-                      if (typeof input !== 'undefined') {
-                        existing.input = input;
-                      }
-                      const part = parts.find(
-                        (p) => p.type === 'tool_call' && p.id === id,
-                      );
-                      if (part && part.type === 'tool_call') {
-                        if (typeof name === 'string' && name.length > 0) {
-                          part.name = name;
-                        }
-                        if (typeof input !== 'undefined') {
-                          part.input = input;
-                        }
-                      }
-                    } else {
-                      toolCallMap.set(id, { id, name, input });
-                      parts.push({ type: 'tool_call', id, name, input });
-                      pendingToolIds.add(id);
-                      if (!noTimeoutToolNames.has(String(name ?? ''))) {
-                        startToolTimer(id);
-                      }
-                    }
-                  }
-                  emitToolStart({ id, name, input });
-                  break;
-                }
-                case 'tool_chunk': {
-                  const { id, args } = e.data;
-                  if (id && !toolCallMap.has(id)) {
-                    const toolName =
-                      typeof (e.data as { name?: unknown }).name === 'string'
-                        ? ((e.data as { name?: unknown }).name as string)
-                        : '';
-                    toolCallMap.set(id, {
-                      id,
-                      name: toolName,
-                      input: undefined,
-                    });
-                    parts.push({
-                      type: 'tool_call',
-                      id,
-                      name: toolName,
-                      input: undefined,
-                    });
-                    pendingToolIds.add(id);
-                    if (!noTimeoutToolNames.has(String(toolName ?? ''))) {
-                      startToolTimer(id);
-                    }
-                    emitToolStart({ id, name: toolName, input: undefined });
-                  }
-                  if (id && args) {
-                    const current = argsBuffer.get(id) || '';
-                    argsBuffer.set(id, current + args);
-                    const nextCount = (toolChunkCount.get(id) ?? 0) + 1;
-                    toolChunkCount.set(id, nextCount);
-                  }
-                  break;
-                }
-                case 'tool_end': {
-                  const { id, name, output } = e.data;
-                  if (id && !toolCallMap.has(id)) {
-                    const toolName = typeof name === 'string' ? name : '';
-                    toolCallMap.set(id, {
-                      id,
-                      name: toolName,
-                      input: undefined,
-                    });
-                    parts.push({
-                      type: 'tool_call',
-                      id,
-                      name: toolName,
-                      input: undefined,
-                    });
-                    emitToolStart({ id, name: toolName, input: undefined });
-                  }
-                  if (id) {
-                    const resolvedName =
-                      typeof name === 'string' && name.length > 0
-                        ? name
-                        : (toolCallMap.get(id)?.name ?? '');
-                    toolResultMap.set(id, { id, name: resolvedName, output });
-                    parts.push({
-                      type: 'tool_result',
-                      id,
-                      name: resolvedName,
-                      output,
-                    });
-                    markToolDone(id);
-
-                    // Backfill: if tool_call entry has empty name, fix it now
-                    if (resolvedName && resolvedName.length > 0) {
-                      const call = toolCallMap.get(id);
-                      if (call && (!call.name || call.name.length === 0)) {
-                        call.name = resolvedName;
-                      }
-                      const callPart = parts.find(
-                        (p) => p.type === 'tool_call' && p.id === id,
-                      );
-                      if (
-                        callPart &&
-                        callPart.type === 'tool_call' &&
-                        (!callPart.name || callPart.name.length === 0)
-                      ) {
-                        callPart.name = resolvedName;
-                      }
-                    }
-                  }
-
-                  let parsedInput: unknown = undefined;
-                  if (id) {
-                    const rawArgs = argsBuffer.get(id);
-                    if (rawArgs && rawArgs.trim().length > 0) {
-                      try {
-                        parsedInput = JSON.parse(rawArgs);
-                      } catch {
-                        parsedInput = rawArgs;
-                      }
-                    } else {
-                      parsedInput = toolCallMap.get(id)?.input;
-                    }
-                  }
-
-                  emitToolEnd({ id, name, input: parsedInput, output });
-
-                  const items = this.extractCanvasItItems(output);
-                  for (const it of items) {
-                    const cid = Number(it.canvasId);
-                    if (!Number.isFinite(cid) || injectedCanvasIds.has(cid))
-                      continue;
-                    injectedCanvasIds.add(cid);
-
-                    const block = this.buildCanvasItBlock(it);
-                    safeNextStreamEvent({
-                      type: 'token',
-                      data: { text: block },
-                    });
-                    appendAssistantText(block);
-                  }
-
-                  const taskItems = this.extractTaskItItems(output);
-                  for (const it of taskItems) {
-                    const tid = Number(it.todoId);
-                    if (!Number.isFinite(tid) || injectedTodoIds.has(tid))
-                      continue;
-                    injectedTodoIds.add(tid);
-
-                    const block = this.buildTaskItBlock(it);
-                    safeNextStreamEvent({
-                      type: 'token',
-                      data: { text: block },
-                    });
-                    appendAssistantText(block);
-                  }
-                  break;
-                }
-                case 'end': {
-                  const { text } = e.data;
-
-                  // Safety net: if end event has text that wasn't streamed as tokens,
-                  // emit it as a token so the frontend still shows it.
-                  if (
-                    text &&
-                    text.trim().length > 0 &&
-                    fullContent.trim().length === 0
-                  ) {
-                    safeNextStreamEvent({
-                      type: 'token',
-                      data: { text },
-                    });
-                    appendAssistantText(text);
-                  }
-
-                  safeNextStreamEvent({
-                    type: 'end',
-                    data: { text },
-                  });
-                  break;
-                }
-              }
-            }
-          } catch (err: unknown) {
-            synthesizePendingToolResults(err);
-
-            const e = err instanceof Error ? err : new Error(String(err));
-            const rec = e as unknown as Record<string, unknown>;
-            const codeVal = rec['lc_error_code'];
-            const code = typeof codeVal === 'string' ? codeVal : undefined;
-            safeNextStreamEvent({
-              type: 'error',
-              data: {
-                code,
-                message: e.message,
-                can_continue: code === 'GRAPH_RECURSION_LIMIT',
-              },
-            });
-          } finally {
-            clearInterval(heartbeat);
-            for (const h of toolTimers.values()) clearTimeout(h);
-            toolTimers.clear();
-            pendingToolIds.clear();
-          }
-
-          // Merge buffered args into toolCallMap AND parts
-          for (const [id, jsonStr] of argsBuffer) {
-            const call = toolCallMap.get(id);
-            if (call) {
-              try {
-                const parsed = JSON.parse(jsonStr) as unknown;
-                call.input = parsed;
-                // 更新 parts 中的 input
-                const part = parts.find(
-                  (p) => p.type === 'tool_call' && p.id === id,
-                );
-                if (part && part.type === 'tool_call') {
-                  part.input = parsed;
-                }
-              } catch {
-                // Ignore parse error, keep original input or partial
-              }
-            }
-          }
-
-          // Backfill empty tool names in parts from toolCallMap
-          for (const p of parts) {
-            if (
-              (p.type === 'tool_call' || p.type === 'tool_result') &&
-              p.id &&
-              (!p.name || p.name.length === 0)
-            ) {
-              const resolved = toolCallMap.get(p.id)?.name;
-              if (resolved && resolved.length > 0) {
-                p.name = resolved;
-              }
-            }
-          }
-
-          // Save context
-          // Check for HITL (Human in the loop)
-          try {
-            const hitl = Array.from(toolResultMap.values()).some((tr) => {
-              const out = tr.output;
-              const obj =
-                out && typeof out === 'object'
-                  ? (out as Record<string, unknown>)
-                  : undefined;
-              const rh = !!(obj && obj['requires_human'] === true);
-              const missArr =
-                obj && Array.isArray(obj['missing'])
-                  ? (obj['missing'] as unknown[])
-                  : [];
-              return rh || (Array.isArray(missArr) && missArr.length > 0);
-            });
-            if (hitl) {
-              fullContent = this.HITL_PLACEHOLDER;
-              // 更新 parts？ HITL 可能意味着 content 改变
-            }
+            if (hasHitl(endToolResults)) text = this.HITL_PLACEHOLDER;
           } catch {
             void 0;
           }
 
-          // Build final tool results
-          const finalToolResults = Array.from(toolResultMap.values()).map(
-            (tr) => {
-              const call = toolCallMap.get(tr.id);
-              return {
-                id: tr.id,
-                name: call?.name ?? tr.name,
-                input: call?.input,
-                output: tr.output,
-              };
-            },
-          );
+          text = this.appendCanvasItIfNeeded(text, endToolResults);
+          text = this.appendTaskItIfNeeded(text, endToolResults);
+          text = this.appendDecisionSummaryIfNeeded(text, endToolResults);
+          text = this.appendDecisionItIfNeeded(text, endToolResults);
 
-          await this.ctx.appendMessage(sid, {
-            role: ContextRole.Assistant,
-            content: this.sanitizeFinalText(fullContent),
-            parts: parts.length > 0 ? parts : undefined,
-            tool_calls:
-              toolCallMap.size > 0
-                ? Array.from(toolCallMap.values())
-                : undefined,
-            tool_results:
-              finalToolResults.length > 0 ? finalToolResults : undefined,
+          // 推送最终 end 事件
+          safeSend({
+            type: 'end',
+            data: {
+              text,
+              tool_calls: endToolCalls,
+              tool_results: endToolResults,
+              thread_id: sid,
+            },
           });
 
-          this.titleTools.ensureFirstTurnTitle(sessionId).catch(() => {});
-          this.retrieval
-            .reindexSession(sessionId)
-            .catch((e) => console.error(e));
+          // 写入上下文
+          await this.ctx.appendMessage(
+            sid,
+            {
+              role: ContextRole.Assistant,
+              content: text,
+              tool_calls:
+                Array.isArray(endToolCalls) && endToolCalls.length > 0
+                  ? endToolCalls
+                  : undefined,
+              tool_results: endToolResults,
+            },
+            scope,
+          );
+
+          // 异步：标题、索引、checkpoint
+          this.titleTools.ensureFirstTurnTitle(sid).catch(() => {});
+          this.retrieval.reindexSession(sid).catch((e) => console.error(e));
           this.ctx
-            .getLatestCheckpointId(sessionId)
+            .getLatestCheckpointId(sid)
             .then((cid) =>
-              cid ? this.ctx.setLastCheckpointId(sessionId, cid) : undefined,
+              cid ? this.ctx.setLastCheckpointId(sid!, cid, scope) : undefined,
             )
             .catch(() => {});
-
-          if (!subscriber.closed) subscriber.complete();
         } catch (err: unknown) {
           const e = err instanceof Error ? err : new Error(String(err));
-          const rec = e as unknown as Record<string, unknown>;
-          const codeVal = rec['lc_error_code'];
-          const code = typeof codeVal === 'string' ? codeVal : undefined;
-          const payload = {
-            type: 'error',
-            data: {
-              code,
-              message: e.message,
-              can_continue: code === 'GRAPH_RECURSION_LIMIT',
-            },
-          };
-          const threadId = sid ?? request.sessionId;
-          safeNext({
-            type: payload.type,
-            data: {
-              type: payload.type,
+          console.error('[ChatMainService.stream] ERROR', e.message);
+          if (!subscriber.closed) {
+            subscriber.next({
               data: {
-                ...payload.data,
-                thread_id: threadId,
+                type: 'error',
+                data: { code: 'STREAM_ERROR', message: e.message },
               },
-              thread_id: threadId,
-            },
-          } as MessageEvent);
+            } as MessageEvent);
+          }
+        } finally {
           if (!subscriber.closed) subscriber.complete();
         }
       })();
     });
-  }
-
-  /**
-   * @title 智能上下文构建 Smart Context
-   * @description 根据输入与历史记录构建上下文，支持长上下文检索与工具调用过滤。
-   * @keywords-cn 智能上下文, 检索, 过滤
-   * @keywords-en smart context, retrieval, filtering
-   */
-  private toCheckpointMessages(
-    contextMessages: import('../../context/types/context.types').ContextMessage[],
-  ): BaseMessage[] {
-    const recent = contextMessages.slice(-20);
-    const messages: BaseMessage[] = [];
-    for (const m of recent) {
-      if (m.role === ContextRole.System) {
-        messages.push(new SystemMessage(m.content));
-      } else if (m.role === ContextRole.User) {
-        messages.push(new HumanMessage(m.content));
-      } else if (m.role === ContextRole.Assistant) {
-        const rawToolCalls = (
-          (m.tool_calls as
-            | Array<{ id: string; name: string; input: unknown }>
-            | undefined) || []
-        ).map((tc) => ({
-          id: tc.id,
-          name: tc.name,
-          args: tc.input as Record<string, unknown>,
-        }));
-
-        const allowedToolNames = new Set(
-          (this.getTools() ?? []).map(
-            (t) => (t as unknown as { name?: string }).name ?? '',
-          ),
-        );
-        const filteredToolCalls = rawToolCalls.filter((c) =>
-          allowedToolNames.has(c.name),
-        );
-
-        const results =
-          (m.tool_results as
-            | Array<{
-                id: string;
-                name?: string;
-                output: unknown;
-              }>
-            | undefined) || [];
-        const resultMap = new Map(results.map((r) => [r.id, r]));
-
-        const matchedCalls = filteredToolCalls.filter((c) =>
-          resultMap.has(c.id),
-        );
-        if (matchedCalls.length === 0) {
-          messages.push(new AIMessage({ content: m.content }));
-        } else {
-          for (let i = 0; i < matchedCalls.length; i += 5) {
-            const batchCalls = matchedCalls.slice(i, i + 5);
-            messages.push(
-              new AIMessage({
-                content: i === 0 ? m.content : '',
-                tool_calls: batchCalls.map((c) => ({
-                  id: c.id,
-                  name: c.name,
-                  args: c.args,
-                })),
-              }),
-            );
-            for (const call of batchCalls) {
-              const tr = resultMap.get(call.id)!;
-              messages.push(
-                new ToolMessage({
-                  tool_call_id: tr.id,
-                  name: call.name,
-                  content:
-                    typeof tr.output === 'string'
-                      ? tr.output
-                      : JSON.stringify(tr.output),
-                }),
-              );
-            }
-          }
-        }
-      }
-    }
-    return messages;
   }
 
   /**
@@ -932,27 +465,63 @@ export class ChatMainService {
    * @keywords-cn 上下文, CRUD
    * @keywords-en context, CRUD
    */
-  async createSession(sessionId?: string): Promise<string> {
-    return this.ctx.createSession(sessionId);
+  async createSession(
+    sessionId?: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<string> {
+    return this.ctx.createSessionWithScope(sessionId, scope);
   }
 
-  async appendUser(sessionId: string, content: string): Promise<void> {
-    await this.ctx.appendMessage(sessionId, {
-      role: ContextRole.User,
-      content,
-    });
+  async appendUser(
+    sessionId: string,
+    content: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    await this.ctx.appendMessage(
+      sessionId,
+      {
+        role: ContextRole.User,
+        content,
+      },
+      scope,
+    );
   }
 
-  async appendAssistant(sessionId: string, content: string): Promise<void> {
-    await this.ctx.appendMessage(sessionId, {
-      role: ContextRole.Assistant,
-      content,
-    });
+  async appendAssistant(
+    sessionId: string,
+    content: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    await this.ctx.appendMessage(
+      sessionId,
+      {
+        role: ContextRole.Assistant,
+        content,
+      },
+      scope,
+    );
   }
 
   async getMessages(
     sessionId: string,
     limit?: number,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<
     Array<
       import('../../context/types/context.types').ContextMessage & {
@@ -960,11 +529,20 @@ export class ChatMainService {
       }
     >
   > {
-    const history = await this.ctx.getMessages(sessionId, limit);
-    const deleted = await this.ctx.getDeletedFingerprints(sessionId);
+    const history = await this.ctx.getMessages(
+      sessionId,
+      limit,
+      undefined,
+      scope,
+    );
+    const deleted = await this.ctx.getDeletedFingerprints(sessionId, scope);
     const enriched = (history ?? []).map((m, idx) => {
       const fingerprint = this.ctx.fingerprintMessage(sessionId, m, idx);
-      return { ...m, fingerprint };
+      return {
+        ...m,
+        content: this.sanitizeHistoryContent(m.content),
+        fingerprint,
+      };
     });
     return enriched.filter((m) =>
       m.fingerprint ? !deleted.has(m.fingerprint) : true,
@@ -974,6 +552,11 @@ export class ChatMainService {
   async deleteMessages(
     sessionId: string,
     params?: { fingerprints?: string[]; indexes?: number[] },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
   ): Promise<{ deleted: number }> {
     const fingerprints = Array.isArray(params?.fingerprints)
       ? (params?.fingerprints ?? [])
@@ -989,7 +572,7 @@ export class ChatMainService {
       : [];
 
     if (fingerprints.length === 0 && idxs.length > 0) {
-      const visible = await this.getMessages(sessionId);
+      const visible = await this.getMessages(sessionId, undefined, scope);
       const uniq = Array.from(new Set(idxs.map((n) => Math.trunc(n))));
       for (const i of uniq) {
         if (i < 0 || i >= visible.length) continue;
@@ -1000,13 +583,20 @@ export class ChatMainService {
 
     const uniqueFps = Array.from(new Set(fingerprints));
     if (uniqueFps.length > 0) {
-      await this.ctx.markDeletedFingerprints(sessionId, uniqueFps);
+      await this.ctx.markDeletedFingerprints(sessionId, uniqueFps, scope);
     }
     return { deleted: uniqueFps.length };
   }
 
-  async clearSession(sessionId: string): Promise<void> {
-    await this.ctx.clearSession(sessionId);
+  async clearSession(
+    sessionId: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    await this.ctx.clearSessionWithScope(sessionId, scope);
   }
 
   private extractText(ai: AIMessage): string {
@@ -1014,7 +604,70 @@ export class ChatMainService {
     if (typeof content === 'string') {
       return content;
     }
+    const extracted = this.extractTextFromModelContent(content);
+    if (extracted) return extracted;
     return JSON.stringify(content);
+  }
+
+  private sanitizeHistoryContent(content: unknown): string {
+    if (typeof content !== 'string') return '';
+    const s = content.trim();
+    if (s.length === 0) return '';
+    const looksLikeBlocks =
+      s.startsWith('[') &&
+      (s.includes('"type":"thinking"') ||
+        s.includes('"type":"tool_use"') ||
+        s.includes('"thinking"') ||
+        s.includes('"tool_use"'));
+    if (!looksLikeBlocks) return content;
+    try {
+      const parsed: unknown = JSON.parse(s) as unknown;
+      const extracted = this.extractTextFromModelContent(parsed);
+      return extracted.length > 0 ? extracted : content;
+    } catch {
+      return content;
+    }
+  }
+
+  private extractTextFromModelContent(content: unknown): string {
+    if (content === null || content === undefined) return '';
+    if (typeof content === 'string') return content;
+    if (typeof content === 'number' || typeof content === 'boolean') {
+      return String(content);
+    }
+    if (Array.isArray(content)) {
+      const parts: string[] = [];
+      for (const item of content) {
+        if (typeof item === 'string') {
+          if (item.trim().length > 0) parts.push(item);
+          continue;
+        }
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        const type = typeof rec['type'] === 'string' ? rec['type'] : '';
+        if (type === 'thinking' || type === 'tool_use') continue;
+        const text = rec['text'];
+        if (typeof text === 'string' && text.trim().length > 0) {
+          parts.push(text);
+          continue;
+        }
+        const c = rec['content'];
+        if (typeof c === 'string' && c.trim().length > 0) {
+          parts.push(c);
+          continue;
+        }
+      }
+      return parts.join('\n').trim();
+    }
+    if (typeof content === 'object') {
+      const rec = content as Record<string, unknown>;
+      const text = rec['text'];
+      if (typeof text === 'string') return text;
+      const c = rec['content'];
+      if (typeof c === 'string') return c;
+      return '';
+    }
+    return '';
   }
 
   private sanitizeFinalText(text: string): string {
@@ -1080,7 +733,7 @@ export class ChatMainService {
 
   private ensureStringArray(
     v: unknown,
-    fallback: string[] = ['data_analysis'],
+    fallback: string[] = ['analysis_subagent'],
   ): string[] {
     if (!Array.isArray(v)) return fallback;
     const out: string[] = [];
@@ -1106,25 +759,27 @@ export class ChatMainService {
    */
   private getDataAnalysisPromptCN(): string {
     return [
-      '你是一名务实的中文数据分析与页面生成助理。',
+      '你是一名务实的中文数据分析与页面生成助理, 你叫 AI指挥官, 也可以叫你 小集',
+      '在需要复杂搜索或当前TOOL没提供的能力,优选选择使用 Subagent完成任务',
       '以“满足用户当前需求”为准则执行，不要进行不必要的数据获取或分析。',
       '当你通过工具获得 Canvas 信息（例如 canvasId）时，你必须在回复中输出一个 ```canvas-it 代码块；代码块内容必须是 JSON，至少包含 canvasId。',
       '不要在主对话中回显工具的原始 JSON 输出（尤其不要展示 articles/markdown 等长文本）；只需用一句话总结，并输出一个规范的 ```canvas-it JSON 代码块。',
       '如果回复中已经包含 ```canvas-it 代码块，不要重复输出第二个。',
       '小红书工作流采用“两阶段”：默认先生成“示例文章 Canvas”，用户确认后再发布。',
-      '当用户表达想做“小红书批量内容/系列文章/示例文章/批量软文”等需求但未明确要立即发布时：优先调用 topic_orchestrate 生成示例文章 Canvas 供用户查看与修改。',
+      '当用户表达想做“小红书批量内容/系列文章/示例文章/批量软文”等需求但未明确要立即发布时：优先通过 task 委派给 topic_orchestrate_subagent 生成示例文章 Canvas 供用户查看与修改。',
       '当用户明确表达“发布/执行/开始批量发布/直接发布/马上发布/开始跑批”等，或用户输入为“执行 canvas <id>”：进入小红书发布阶段。',
       '进入发布阶段前必须确认两个参数：要发多少篇（count）与怎么发（strategy）。若缺失必须先提问确认：默认 strategy=顺序一号一发（单账号串行）；如需多账号/并发必须由用户明确指定。',
       '发布阶段必须先检查登录：优先调用 check_login_status（多账号用 check_login_status_batch）；未登录则调用 get_login_qrcode 并提示用户扫码登录；需要重置登录可调用 delete_cookies 后再登录。',
-      '批量发布绝对不要直接调用 publish_content 或 publish_content_batch；批量发文必须走后端“批发工作流工具”xhs_batch_publish（工作流内部会编排并调用批量任务工具链与配图）。',
-      '当用户进入发布阶段且已确认 count/strategy，并且已拿到 canvasId：直接调用 xhs_batch_publish；将 count 映射为 xhs_batch_publish.taskCount；platform 默认 xhs。',
+      '批量发布绝对不要直接调用 publish_content 或 publish_content_batch；批量发文必须通过 Todo 派单给“robot:xhs_publisher（小红书发布机）”。',
+      '当用户进入发布阶段且已确认 count/strategy，并且已拿到 canvasId：创建或更新 Todo，assignee=robot:xhs_publisher，并在 Todo 文本中明确 canvasId 与 count。',
       '任何发布动作必须基于 Canvas：从 canvasId 对应文章中取内容，按 count 选择前 count 篇（不足则要求用户先补充或重新生成）。',
       '动态配图：发布任务的图片必须使用可访问的图片 URL（imageUrls）；不要使用本地绝对路径。若 Canvas 文章尚未有 imageUrls，则先提示用户补图或回到示例生成阶段补齐。',
-      '当你调用 topic_orchestrate、check_login_status、check_login_status_batch、get_login_qrcode、delete_cookies、xhs_batch_publish、publish_with_video 时，如果用户没有明确给出 userId，默认使用 userId="default"。',
-      '仅当用户明确提出需要数据、统计、具体记录或数据库信息时，调用 data_analysis；仅当用户明确提出需要生成页面、图表或可视化时，调用 frontend_plan 或 frontend_finalize。',
+      '当你调用 topic_orchestrate、check_login_status、check_login_status_batch、get_login_qrcode、delete_cookies、publish_with_video 时，如果用户没有明确给出 userId，默认使用 userId="default"。',
+      '仅当用户明确提出需要数据、统计、具体记录或数据库信息时，委派给 analysis_subagent；仅当用户明确提出需要生成页面、图表或可视化时，调用 frontend_plan 或 frontend_finalize。',
       '[重要]只有用户提出生成报表等类似字眼,才生成页面,否则不要随意生成报表页面',
-      'data_analysis 返回 JSON 以辅助回答；若已能直接回答问题，请用现有数据简洁回答。',
-      '[重要]data_analysis 有时候会有问题返回,格式一般为 { question:xx }, 把对应的内容返回给用户,让用户确定一下吧。',
+      'analysis_subagent 返回结构化结果以辅助回答；若已能直接回答问题，请用现有数据简洁回答。',
+      '涉及任何计算时必须调用 js_calc 或 js_calc_batch，不要在回复中直接心算。',
+      '[重要]若 analysis_subagent 返回需要用户确认的问题（例如 { question: xx }），直接转述给用户确认。',
       '若 frontend_finalize 产生外链，请不要在回答中返回任何代码或说明文字。',
       '若工具返回失败或为空，请直接告知并询问是否继续。',
       '进入发布阶段时，如果用户未提供必须的发布素材（图片/视频/链接等），先要求用户补齐或说明素材来源；不要自行猜测或编造素材。',
@@ -1132,13 +787,65 @@ export class ChatMainService {
       '[重要] UI 框架(uiFramework) 与 布局(layout) 必须由用户明确提供，不得由 AI 猜测；缺失时直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '当 frontend_plan 或 frontend_finalize 返回 requires_human=true 或 missing 非空时，不继续生成页面，直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
       '避免在工具间反复循环；完成一次工具调用后直接输出答案或结果。',
+      '[重要] 绝对不要在回复中重复相同的文字或问题；不要无限循环调用工具。',
+      '[重要] 主代理不要直接调用 topic_orchestrate；必须通过 task 委派给 topic_orchestrate_subagent，并在子代理返回后直接答复用户。',
     ].join('\n');
   }
 
+  /**
+   * @description 获取会话模式系统提示
+   * @keyword-en resolve system prompt by session mode
+   */
+  private getSystemPromptCN(sessionType: ConversationSessionType): string {
+    if (sessionType === 'thought') return this.getThoughtPromptCN();
+    return this.getDataAnalysisPromptCN();
+  }
+
+  /**
+   * @description 思维链路专用提示词
+   * @keyword-en thought route system prompt
+   */
+  private getThoughtPromptCN(): string {
+    return [
+      '你是“思维链路沉淀助手”，本会话唯一目标是产出可复用思维链。',
+      '禁止执行：页面生成、发布编排、业务任务执行、与思维链无关的工具调用。',
+      '回答需聚焦：sourceCode、collection/table、关键字段含义、典型过滤条件与适用场景。',
+      '当用户提供的是某一些数据的查询方法的时候,或者说明逻辑的时候,不需要分析,可以寻找有没有相关的思维链来合并更新进去或者新建条思维进去',
+      '若信息不足先提问澄清，不得编造字段。',
+      '【关键】当需要生成思维链时，必须：1. 先完成完整的数据分析 2. 存入经验时 content 必须包含：数据源、涉及的表/集合、核心字段（字段名+含义+业务用途）、典型查询条件、业务场景、查询示例、结果解读 3. 禁止只写入抽象性描述，必须写入具体分析过程和结论 4. category 使用具体业务场景标签',
+    ].join('\n');
+  }
+
+  /**
+   * @description 获取工具集合
+   * @keyword-en get tools
+   */
   private getTools(
     streamWriter?: (msg: string) => void,
+    scope?: { tenantId?: string; userId?: string },
+    mode: ConversationSessionType = 'default',
   ): CreateAgentParams['tools'] {
-    return this.tools.getHandle(streamWriter);
+    return this.tools.getHandle(streamWriter, scope, { mode });
+  }
+
+  /**
+   * @description 读取请求租户范围
+   * @keyword-en resolve request scope
+   */
+  private getRequestScope(request: ChatRequest): {
+    tenantId?: string;
+    userId?: string;
+    sessionType: ConversationSessionType;
+  } {
+    const tenantId = request.tenantId?.trim();
+    const userId = request.userId?.trim();
+    const sessionType =
+      request.sessionType === 'thought' ? 'thought' : 'default';
+    return {
+      tenantId: tenantId || undefined,
+      userId: userId || undefined,
+      sessionType,
+    };
   }
 
   /**
@@ -1151,31 +858,189 @@ export class ChatMainService {
   private getToolsForInput(
     input: string,
     streamWriter?: (msg: string) => void,
+    scope?: { tenantId?: string; userId?: string },
+    mode: ConversationSessionType = 'default',
   ): CreateAgentParams['tools'] {
-    const tools = this.getTools(streamWriter) ?? [];
+    const tools = this.getTools(streamWriter, scope, mode) ?? [];
+    if (mode === 'thought') return tools;
     if (this.isTopicOrchestrateIntent(input)) {
-      return tools.filter(
-        (t) => (t as unknown as { name?: string }).name === 'topic_orchestrate',
-      );
+      return tools.filter((t) => {
+        const name = (t as unknown as { name?: string }).name ?? '';
+        return name === 'topic_orchestrate' || name === 'task';
+      });
     }
     return tools;
   }
 
-  private isBatchPublishIntent(input: string): boolean {
-    const s = String(input || '').trim();
-    if (!s) return false;
-    const wantsStart =
-      /开始批量发布|立即发布|马上发布|直接发布|执行批量发布|开始跑批|开始执行批量/.test(
-        s,
-      );
-    const isExecuteCanvas = /执行\s*canvas\s*\d+/i.test(s);
-    const hasCanvasId = /canvas\s*\d+/i.test(s) || /```canvas-it/i.test(s);
-    const mentionsBatchPublish = /批量发布/.test(s);
-    return (
-      wantsStart || isExecuteCanvas || (mentionsBatchPublish && hasCanvasId)
+  /**
+   * @description 构建默认子代理配置
+   * @keyword-en build default subagents
+   */
+  private buildDefaultSubagents(
+    tools: CreateAgentParams['tools'],
+    mode: ConversationSessionType,
+    scope?: { tenantId?: string; userId?: string },
+    env?: { sid: string; now: string; ip: string },
+  ): DeepAgentSubAgent[] {
+    const baseTools = this.normalizeSubagentTools(tools);
+    const envStr = env
+      ? [
+          `SESSION_ID:${env.sid}`,
+          `REQUEST_TIME_ISO:${env.now}`,
+          `CLIENT_IP:${env.ip}`,
+        ].join('\n')
+      : '';
+
+    if (mode === 'thought') {
+      return [
+        {
+          name: 'analysis_subagent',
+          description: '思维链/Schema 分析子代理',
+          systemPrompt: [envStr, this.getThoughtPromptCN()]
+            .filter(Boolean)
+            .join('\n\n'),
+          tools: baseTools,
+        },
+      ];
+    }
+
+    const dataSourceTools = this.normalizeSubagentTools(
+      this.analysisTools.getAllDataSourceTools(scope),
     );
+    const topicOrchestrateTools = baseTools.filter(
+      (t) => (t as unknown as { name?: string }).name === 'topic_orchestrate',
+    );
+
+    const analysisSys = [
+      '你是一名严谨、务实的数据分析 Agent。',
+      '目标：以最小推理成本与最少工具调用，在单次流程内一次性获取所需数据并返回最终答案。',
+      '涉及任何加减乘除、比例、汇总、均值、环比、同比等计算时，必须调用 js_calc 或 js_calc_batch，禁止心算。',
+      '为了检索速度,你可以并发返回Tool call,我将并发执行返回结果',
+      '[!重要!] 所有的数据分析,都要带上对应的数据表,也就是数据来源标识',
+      '所有数据纬度都以给人理解为准,比如标识用户的就不用ID,用username等来考虑,理解为用户更方便记忆和操作。',
+      '在进行任何复杂数据查询前，必须优先调用 search_thought 搜索相似的历史经验，而不是直接进行 schema_search 或数据查询。',
+      '[重要] search_thought 得到历史经验后,要分析是否有本次查询需要的表结构,从而达成快速搜索的目的',
+      '如果本次调用中已经通过 search_thought 找到了可复用的思维链（返回结果非空），则本次流程中严禁再调用 generate_thought，只能基于已有思维链内容进行查询与回答。',
+      '如果存在多数据源的情况,以 JSON 返回内容 { question:xx },告诉用户要确定的数据源',
+      '',
+      '【核心流程】遵循以下顺序执行：',
+      '',
+      '1. 【搜索历史经验】先调用 search_thought 搜索相似的历史查询经验：',
+      '   - 若找到匹配 需要强结合历史经验,不要在过度搜索Schema, 通过相关经验的工具调用链路和表结构,来获取你需要的数据即可',
+      '   - 若无匹配，继续下一步',
+      '',
+      '2. 【推断数据源】调用 schema_search 搜索相关表/资源：',
+      '   - 返回结果包含 sourceCode 字段，标识数据来源',
+      '   - 不同数据源返回不同资源标识（见下方映射表）',
+      '',
+      '3. 【根据 sourceCode 选择工具】：',
+      '   | sourceCode      | 资源标识字段   | 查询工具                    |',
+      '   |-----------------|---------------|----------------------------|',
+      '   | main-mongo      | collectionName | data_source_query          |',
+      '   | super-party     | collectionName | super_party_query          |',
+      '   | feishu-bitable  | tableId        | feishu_bitable_list_records|',
+      '',
+      '4. 【多数据源确认】若 schema_search 返回多个不同 sourceCode 的结果，',
+      '   请与用户确认使用哪个数据源，不要自行选择。',
+      '',
+      '5. 【构建查询】严格依据 schema 字段构建查询，不得编造字段。',
+      '   - 飞书日期字段：使用 YYYY-MM-DD 字符串格式，系统自动转换',
+      '   - 飞书日期操作符：仅支持 is/isNot/isGreater/isLess/isEmpty/isNotEmpty',
+      '',
+      '6. 【保存经验】仅在本次未通过 search_thought 找到可复用思维链时，才调用 generate_thought 保存本次 schema 经验：',
+      '   - 请先检查最近一次 search_thought 的返回字段 shouldGenerateThought：仅当其为 true 时，才允许调用 generate_thought。',
+      '   - 调用 generate_thought 时，必须显式传入 allowGenerate=true；若 shouldGenerateThought 为 false，则不得调用该工具。',
+      '   - content: 必须记录完整、具体的经验内容，而非抽象概述。内容需包含以下部分：',
+      '     【数据源】使用的具体数据源及 sourceCode（如 main-mongo、feishu-bitable）',
+      '     【涉及的表/集合】具体的 schema 名称、collectionName 或 tableId',
+      '     【核心字段】列出本次查询实际使用的关键字段（不仅是字段名，还要说明其含义、业务用途）',
+      '     【典型查询条件】本次问题的核心过滤条件（如时间范围、状态筛选），用自然语言解释条件含义',
+      '     【业务场景】本次问题对应的具体业务场景（如"查询某供应商的月度订单汇总"），而非泛泛的"数据分析"',
+      '     【查询示例】（如有）本次实际执行的核心查询逻辑或关键参数组合',
+      '     【结果解读】查询返回的数据结构或典型结果，便于后续理解如何解析数据',
+      '   - 重要：禁止只写入抽象性描述（如"feishu-bitable database schema analysis"），必须写入本次具体分析过程和结论',
+      '   - 建议将上述信息组织为结构化 JSON 对象字符串，字段示例：dataSource、sourceCode、schemaName、collectionName/tableId、fields、filters、queryExample、resultFormat、businessScenario、toolsUsed、category 等。',
+      '   - toolsUsed: 使用的工具名列表（如 schema_search、data_source_query、feishu_bitable_list_records 等）',
+      '   - category: 建议使用能表达具体业务场景的标签，如 "供应商订单汇总"、"月度销售统计"、"任务进度追踪" 等，避免泛泛的 "schema-knowledge"',
+      '   - 如果当前调用中 search_thought 返回了结果，则不得调用 generate_thought，只需在回答中引用该历史思维链内容',
+      '',
+      '7. 【决策卡生成】当用户意图为“方案/决策/策略/建议”，且你已拿到可支撑决策的数据时，调用 decision_card_generate：',
+      '   - 调用成功后，在 answer 中明确告知“决策已生成”，并简述建议',
+      '',
+      '【约束】',
+      '- 默认 limit = 50，最大 200',
+      '- 避免不必要的多轮工具调用',
+      scope?.tenantId
+        ? `- 当前租户 tenantId=${scope?.tenantId}，所有数据查询必须带 tenantId 过滤条件，禁止跨租户`
+        : '- 当前为平台范围（无 tenantId），仅允许查询平台级数据',
+    ];
+    if (envStr) analysisSys.unshift(envStr);
+
+    return [
+      {
+        name: 'analysis_subagent',
+        description:
+          '数据分析与检索子代理。凡是需要查询数据、分析数据的情况都必须委派给此代理。',
+        systemPrompt: analysisSys.join('\n'),
+        tools: dataSourceTools,
+      },
+      {
+        name: 'topic_orchestrate_subagent',
+        description:
+          '示例文章生成子代理。凡是需要生成小红书等平台示例文章、批量内容、系列文章的情况都必须委派给此代理。',
+        systemPrompt: [
+          envStr,
+          '你是示例文章生成子代理，负责生成可直接发布的示例文章内容。',
+          '你必须生成完整的、可以直接使用的小红书正文内容，而不是文章方向或大纲。',
+          '小红书文章要求：开头 1-2 句强钩子；全篇短句短段；多用要点列表；语气真实分享；不要像教科书。',
+          '文章长度要求：至少 200 字，确保内容充实。',
+          '必须包含具体数字化细节（人数、预算、时长、转化指标等）。',
+          '必须在末尾给 3-6 个话题标签（#标签）。',
+          '必须调用 topic_orchestrate 工具产出文章，禁止你自己直接写文章正文或大纲。',
+          '工具返回后，直接返回工具结果；不要自行改写成大纲或方向建议。',
+          '如果工具调用报错，必须把错误原文直接返回给用户，不要继续重试，不要换参数重复调用。',
+          '当出现 ARTICLE_DRAFT_INVALID 时，直接告知“本次生成未通过发布质量校验”，并建议用户调整话题后再试。',
+          '调用 topic_orchestrate 工具时，userId 默认使用 "default"。',
+          '[重要约束] 调用 topic_orchestrate 工具时，只需要调用一次，不要重复调用。',
+          '[重要约束] 工具调用完成后，必须直接返回结果，不要再次调用任何工具。',
+          '[重要约束] 绝对不要在回复中重复相同的文字或问题。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        tools: topicOrchestrateTools,
+      },
+      {
+        name: 'frontend_subagent',
+        description: '前端页面生成子代理',
+        systemPrompt: [
+          envStr,
+          '你是前端页面生成子代理。',
+          '只在用户明确要求图表/页面/可视化时工作。',
+          '输出需严格遵循工具与系统提示的约束。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        tools: baseTools,
+      },
+      {
+        name: 'ops_subagent',
+        description: '发布与执行编排子代理',
+        systemPrompt: [
+          envStr,
+          '你是执行编排子代理。',
+          '专注批量发布与流程执行，严格遵守工具调用规则。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        tools: baseTools,
+      },
+    ];
   }
 
+  /**
+   * @description 判断选题编排意图
+   * @keyword-en topic orchestrate intent
+   */
   private isTopicOrchestrateIntent(input: string): boolean {
     const s = String(input || '').trim();
     if (!s) return false;
@@ -1189,6 +1054,17 @@ export class ChatMainService {
       (hasPlatform && (wantsBatchContent || wantsPlanning)) ||
       (wantsBatchContent && (wantsPlanning || wantsPromote))
     );
+  }
+
+  /**
+   * @description 规范子代理工具列表
+   * @keyword-en normalize subagent tools
+   */
+  private normalizeSubagentTools(
+    tools: CreateAgentParams['tools'],
+  ): StructuredTool[] {
+    if (!Array.isArray(tools)) return [];
+    return tools.filter((t): t is StructuredTool => isStructuredTool(t));
   }
 
   private parseCanvasExecuteCanvasId(input: string): number | null {
@@ -1544,13 +1420,8 @@ export class ChatMainService {
     toolResults?: Array<{ name?: unknown; output?: unknown }>,
   ): string {
     const base = typeof text === 'string' ? text : String(text ?? '');
-    const existing = new Set<number>();
     const re = /```canvas-it\s*([\s\S]*?)```/gi;
-    base.replace(re, (_full, body) => {
-      const items = this.extractCanvasItItems(body);
-      for (const it of items) existing.add(Number(it.canvasId));
-      return '';
-    });
+    const cleaned = base.replace(re, '').trimEnd();
 
     const results = Array.isArray(toolResults) ? toolResults : [];
     const fromTools = results
@@ -1564,7 +1435,7 @@ export class ChatMainService {
       status?: string;
       needFields?: string[];
     }> = [];
-    const seen = new Set<number>(existing);
+    const seen = new Set<number>();
     for (const it of fromTools) {
       const cid = Number(it.canvasId);
       if (!Number.isFinite(cid) || seen.has(cid)) continue;
@@ -1577,7 +1448,194 @@ export class ChatMainService {
     }
     if (unique.length === 0) return base;
 
-    return base + unique.map((it) => this.buildCanvasItBlock(it)).join('');
+    const last = unique[unique.length - 1];
+    return cleaned + this.buildCanvasItBlock(last);
+  }
+
+  private extractDecisionItems(output: unknown): Array<{
+    cardId: string;
+    decisionSummary?: string;
+    title?: string;
+    recommendation?: string;
+    actions?: string[];
+    risks?: string[];
+    status?: string;
+  }> {
+    const out: Array<{
+      cardId: string;
+      decisionSummary?: string;
+      title?: string;
+      recommendation?: string;
+      actions?: string[];
+      risks?: string[];
+      status?: string;
+    }> = [];
+    const tryPush = (obj: Record<string, unknown>) => {
+      const cardIdRaw = obj['cardId'] ?? obj['card_id'] ?? obj['id'];
+      let cardId = '';
+      if (typeof cardIdRaw === 'string') {
+        cardId = cardIdRaw.trim();
+      } else if (
+        typeof cardIdRaw === 'number' ||
+        typeof cardIdRaw === 'bigint'
+      ) {
+        cardId = String(cardIdRaw);
+      }
+      if (!cardId) return;
+      const renderPayload =
+        obj['cardRenderPayload'] && typeof obj['cardRenderPayload'] === 'object'
+          ? (obj['cardRenderPayload'] as Record<string, unknown>)
+          : {};
+      const actions = Array.isArray(renderPayload['actions'])
+        ? (renderPayload['actions'] as unknown[])
+            .filter((x) => typeof x === 'string')
+            .map((x) => String(x))
+        : undefined;
+      const risks = Array.isArray(renderPayload['risks'])
+        ? (renderPayload['risks'] as unknown[])
+            .filter((x) => typeof x === 'string')
+            .map((x) => String(x))
+        : undefined;
+      out.push({
+        cardId,
+        decisionSummary:
+          typeof obj['decisionSummary'] === 'string'
+            ? obj['decisionSummary']
+            : typeof renderPayload['summary'] === 'string'
+              ? renderPayload['summary']
+              : undefined,
+        title:
+          typeof renderPayload['title'] === 'string'
+            ? renderPayload['title']
+            : undefined,
+        recommendation:
+          typeof renderPayload['recommendation'] === 'string'
+            ? renderPayload['recommendation']
+            : undefined,
+        actions,
+        risks,
+        status:
+          typeof renderPayload['status'] === 'string'
+            ? renderPayload['status']
+            : undefined,
+      });
+    };
+    if (output && typeof output === 'object') {
+      tryPush(output as Record<string, unknown>);
+      return out;
+    }
+    if (typeof output !== 'string') return out;
+    const s = output.trim();
+    if (!s) return out;
+    if (s.startsWith('{') || s.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(s);
+        if (Array.isArray(parsed)) {
+          for (const it of parsed) {
+            if (it && typeof it === 'object')
+              tryPush(it as Record<string, unknown>);
+          }
+        } else if (parsed && typeof parsed === 'object') {
+          tryPush(parsed as Record<string, unknown>);
+        }
+      } catch {
+        void 0;
+      }
+    }
+    return out;
+  }
+
+  private buildDecisionItBlock(item: {
+    cardId: string;
+    title?: string;
+    decisionSummary?: string;
+    recommendation?: string;
+    actions?: string[];
+    risks?: string[];
+    status?: string;
+  }): string {
+    const payload: Record<string, unknown> = { cardId: item.cardId };
+    if (typeof item.title === 'string' && item.title.length > 0) {
+      payload['title'] = item.title;
+    }
+    if (
+      typeof item.decisionSummary === 'string' &&
+      item.decisionSummary.length > 0
+    ) {
+      payload['summary'] = item.decisionSummary;
+    }
+    if (
+      typeof item.recommendation === 'string' &&
+      item.recommendation.length > 0
+    ) {
+      payload['recommendation'] = item.recommendation;
+    }
+    if (Array.isArray(item.actions) && item.actions.length > 0) {
+      payload['actions'] = item.actions;
+    }
+    if (Array.isArray(item.risks) && item.risks.length > 0) {
+      payload['risks'] = item.risks;
+    }
+    if (typeof item.status === 'string' && item.status.length > 0) {
+      payload['status'] = item.status;
+    }
+    return `\n\n\`\`\`decision-it\n${JSON.stringify(payload)}\n\`\`\`\n`;
+  }
+
+  private appendDecisionSummaryIfNeeded(
+    text: string,
+    toolResults?: Array<{ name?: unknown; output?: unknown }>,
+  ): string {
+    const base = typeof text === 'string' ? text : String(text ?? '');
+    const first = (toolResults ?? [])
+      .flatMap((tr) =>
+        this.extractDecisionItems((tr as { output?: unknown }).output),
+      )
+      .find(
+        (it) =>
+          typeof it.decisionSummary === 'string' &&
+          it.decisionSummary.length > 0,
+      );
+    if (!first || !first.decisionSummary) return base;
+    if (base.includes('决策已生成')) return base;
+    return `${base}\n\n决策已生成：${first.decisionSummary}`;
+  }
+
+  private appendDecisionItIfNeeded(
+    text: string,
+    toolResults?: Array<{ name?: unknown; output?: unknown }>,
+  ): string {
+    const base = typeof text === 'string' ? text : String(text ?? '');
+    const existing = new Set<string>();
+    const re = /```decision-it\s*([\s\S]*?)```/gi;
+    base.replace(re, (_full, body) => {
+      const arr = this.extractDecisionItems(body);
+      for (const it of arr) existing.add(String(it.cardId));
+      return '';
+    });
+    const fromTools = (toolResults ?? [])
+      .flatMap((tr) =>
+        this.extractDecisionItems((tr as { output?: unknown }).output),
+      )
+      .filter((it) => it.cardId && String(it.cardId).length > 0);
+    const uniq: Array<{
+      cardId: string;
+      title?: string;
+      decisionSummary?: string;
+      recommendation?: string;
+      actions?: string[];
+      risks?: string[];
+      status?: string;
+    }> = [];
+    const seen = new Set<string>(existing);
+    for (const it of fromTools) {
+      const id = String(it.cardId);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      uniq.push(it);
+    }
+    if (uniq.length === 0) return base;
+    return base + uniq.map((it) => this.buildDecisionItBlock(it)).join('');
   }
 
   private shouldUseAnalysis(text: string): boolean {

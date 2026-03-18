@@ -39,11 +39,13 @@ export class TodoService {
    */
   async ensureIndexes(): Promise<void> {
     await this.todos.createIndex({ id: 1 }, { unique: true });
+    await this.todos.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     await this.todos.createIndex({ userId: 1 });
     await this.todos.createIndex({ status: 1 });
     await this.todos.createIndex({ type: 1 });
     await this.todos.createIndex({ assignee: 1 });
     await this.todoItems.createIndex({ id: 1 }, { unique: true });
+    await this.todoItems.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     await this.todoItems.createIndex({ todoId: 1 });
     await this.todoItems.createIndex({ userId: 1 });
     await this.todoItems.createIndex({ status: 1 });
@@ -97,6 +99,7 @@ export class TodoService {
     const doc: TodoEntity = {
       _id: new ObjectId(),
       id,
+      tenantId: input.tenantId,
       userId: input.userId,
       title: input.title,
       description: input.description,
@@ -128,7 +131,7 @@ export class TodoService {
       if (typeof v !== 'undefined') upd[k] = v;
     }
     const res = await this.todos.findOneAndUpdate(
-      { id: input.id },
+      { id: input.id, ...this.buildTenantFilter(input.tenantId) },
       { $set: upd },
       { returnDocument: 'after', includeResultMetadata: true },
     );
@@ -142,8 +145,11 @@ export class TodoService {
    * @keyword todo, delete
    * @since 2026-01-27
    */
-  async delete(id: number): Promise<boolean> {
-    const res = await this.todos.deleteOne({ id });
+  async delete(id: number, tenantId?: string): Promise<boolean> {
+    const res = await this.todos.deleteOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
     return res.deletedCount === 1;
   }
 
@@ -154,8 +160,11 @@ export class TodoService {
    * @keyword todo, get
    * @since 2026-01-27
    */
-  async get(id: number): Promise<TodoEntity | null> {
-    return (await this.todos.findOne({ id })) ?? null;
+  async get(id: number, tenantId?: string): Promise<TodoEntity | null> {
+    return (
+      (await this.todos.findOne({ id, ...this.buildTenantFilter(tenantId) })) ??
+      null
+    );
   }
 
   /**
@@ -165,8 +174,8 @@ export class TodoService {
    * @keyword todo, list, user
    * @since 2026-01-27
    */
-  async list(userId?: string): Promise<TodoEntity[]> {
-    const filter: Record<string, unknown> = {};
+  async list(userId?: string, tenantId?: string): Promise<TodoEntity[]> {
+    const filter: Record<string, unknown> = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
     return this.todos
       .find(filter, { projection: { _id: 0 } })
@@ -182,11 +191,13 @@ export class TodoService {
     canViewAll: boolean;
     userId?: string;
     assignee?: string;
+    tenantId?: string;
   }): Promise<TodoEntity[]> {
     if (input.canViewAll) {
-      return this.list(input.userId);
+      return this.list(input.userId, input.tenantId);
     }
     const filter: Record<string, unknown> = {
+      ...this.buildTenantFilter(input.tenantId),
       $or: [],
     };
     const orList = filter.$or as Record<string, unknown>[];
@@ -202,7 +213,10 @@ export class TodoService {
   }
 
   async createItem(input: TodoItemCreateInput): Promise<TodoItemEntity> {
-    const parent = await this.todos.findOne({ id: input.todoId });
+    const parent = await this.todos.findOne({
+      id: input.todoId,
+      ...this.buildTenantFilter(input.tenantId),
+    });
     if (!parent) throw new Error('TODO_NOT_FOUND');
 
     const now = new Date();
@@ -211,6 +225,7 @@ export class TodoService {
       _id: new ObjectId(),
       id,
       todoId: input.todoId,
+      tenantId: parent.tenantId,
       userId: parent.userId,
       title: input.title,
       description: input.description,
@@ -233,25 +248,39 @@ export class TodoService {
       if (typeof v !== 'undefined') upd[k] = v;
     }
     const res = await this.todoItems.findOneAndUpdate(
-      { id: input.id },
+      { id: input.id, ...this.buildTenantFilter(input.tenantId) },
       { $set: upd },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;
   }
 
-  async deleteItem(id: number): Promise<boolean> {
-    const res = await this.todoItems.deleteOne({ id });
+  async deleteItem(id: number, tenantId?: string): Promise<boolean> {
+    const res = await this.todoItems.deleteOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
     return res.deletedCount === 1;
   }
 
-  async getItem(id: number): Promise<TodoItemEntity | null> {
-    return (await this.todoItems.findOne({ id })) ?? null;
+  async getItem(id: number, tenantId?: string): Promise<TodoItemEntity | null> {
+    return (
+      (await this.todoItems.findOne({
+        id,
+        ...this.buildTenantFilter(tenantId),
+      })) ?? null
+    );
   }
 
-  async listItems(todoId: number): Promise<TodoItemEntity[]> {
+  async listItems(
+    todoId: number,
+    tenantId?: string,
+  ): Promise<TodoItemEntity[]> {
     return this.todoItems
-      .find({ todoId }, { projection: { _id: 0 } })
+      .find(
+        { todoId, ...this.buildTenantFilter(tenantId) },
+        { projection: { _id: 0 } },
+      )
       .sort({ plannedAt: 1, id: 1 })
       .toArray();
   }
@@ -259,8 +288,11 @@ export class TodoService {
   /**
    * @description 返回历史接单人名称列表（去重）
    */
-  async listAssignees(): Promise<string[]> {
-    const values = await this.todos.distinct('assignee');
+  async listAssignees(tenantId?: string): Promise<string[]> {
+    const values = await this.todos.distinct(
+      'assignee',
+      this.buildTenantFilter(tenantId),
+    );
     return values.filter(
       (v): v is string => typeof v === 'string' && v.trim().length > 0,
     );
@@ -269,13 +301,28 @@ export class TodoService {
   /**
    * @description 接单：设置 assignee 并将状态改为 in_progress
    */
-  async acceptTask(id: number, assignee: string): Promise<TodoEntity | null> {
+  async acceptTask(
+    id: number,
+    assignee: string,
+    tenantId?: string,
+  ): Promise<TodoEntity | null> {
     const now = new Date();
     const res = await this.todos.findOneAndUpdate(
-      { id },
+      { id, ...this.buildTenantFilter(tenantId) },
       { $set: { assignee, status: 'in_progress' as const, updatedAt: now } },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;
+  }
+
+  /**
+   * @description 构造租户过滤条件
+   * @keyword-en build tenant filter
+   */
+  private buildTenantFilter(tenantId?: string): Record<string, unknown> {
+    if (typeof tenantId === 'undefined') return {};
+    const value = tenantId.trim();
+    if (!value) return { tenantId: { $exists: false } };
+    return { tenantId: value };
   }
 }

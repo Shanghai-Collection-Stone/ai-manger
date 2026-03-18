@@ -8,7 +8,16 @@
 
 ### tools.service.ts
 工具聚合服务。
-- **关键词**: tools, function-call, aggregation, langchain, agent, graph-workflow, batch-publish, mcp-batch-task, gallery-tags, gallery-search, tool-filtering, service
+- **关键词**: tools, function-call, aggregation, thought-route, tool-whitelist, langchain, agent, service
+- **函数**:
+  - `getHandle`: 获取工具集合/get handle
+  - `getThoughtRouteTools`: 获取思维链路工具/get thought route tools
+
+### services/graph-workflow.service.ts
+图工作流工具服务，负责 Canvas 生成、单篇写入、发布编排。
+- **关键词**: graph-workflow, topic_orchestrate, canvas_append_article, canvas_execute, xhs_batch_publish
+- **函数**:
+  - `getHandle`: 获取图工作流工具/get graph workflow tools
 
 ### tools.module.ts
 工具模块定义。

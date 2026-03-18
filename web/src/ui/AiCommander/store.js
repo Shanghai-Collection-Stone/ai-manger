@@ -18,3 +18,14 @@ export const $taskCount = persistentAtom('ai_commander_task_count', 0);
 
 // 任务中心: 新建派单弹窗开关
 export const $createTaskOpen = atom(false);
+
+// 当前会话ID，用于加载决策卡片
+export const $currentSessionId = atom(null);
+
+export const $decisionFocusCardId = atom(null);
+
+export const $canvasFocusId = atom(null);
+
+export const $decisionsRefreshKey = atom(0);
+
+export const $tasksRefreshKey = atom(0);

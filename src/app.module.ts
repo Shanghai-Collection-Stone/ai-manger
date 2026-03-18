@@ -11,6 +11,7 @@ import { ChatMainModule } from './modules/chat-main/chat-main.module';
 import { EmbeddingModule } from './modules/shared/embedding/embedding.module';
 import { DataSourceModule } from './modules/data-source/data-source.module';
 import { SkillThoughtModule } from './modules/skill-thought/skill-thought.module';
+import { SkillThoughtTestModule } from './modules/skill-thought-test/skill-thought-test.module';
 import { BatchTaskModule } from './modules/batch-task/batch-task.module';
 import { GalleryModule } from './modules/gallery/gallery.module';
 import { CanvasModule } from './modules/canvas/canvas.module';
@@ -18,6 +19,7 @@ import { GraphModule } from './modules/graph/graph.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SassModule } from './modules/sass/sass.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
+import { DecisionCardModule } from './modules/decision-card/decision-card.module.js';
 
 @Module({
   imports: [
@@ -34,6 +36,7 @@ import { AdminModule } from './modules/admin/admin.module.js';
     ChatMainModule,
     DataSourceModule,
     SkillThoughtModule,
+    SkillThoughtTestModule,
     BatchTaskModule,
     GalleryModule,
     CanvasModule,
@@ -41,6 +44,7 @@ import { AdminModule } from './modules/admin/admin.module.js';
     DashboardModule,
     SassModule,
     AdminModule,
+    DecisionCardModule,
   ],
   controllers: [AppController],
   providers: [AppService],

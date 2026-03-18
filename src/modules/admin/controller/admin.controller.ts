@@ -57,6 +57,16 @@ export class AdminController {
   }
 
   /**
+   * @description 获取登录可选租户
+   * @keyword-en list auth login tenant options
+   */
+  @Get('auth/tenants')
+  async listLoginTenants() {
+    const tenants = await this.adminService.listLoginTenants();
+    return { tenants };
+  }
+
+  /**
    * @description 获取当前登录用户
    * @keyword-en get admin me endpoint
    */

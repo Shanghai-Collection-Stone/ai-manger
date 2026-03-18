@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { SassModule } from '../sass/sass.module.js';
 import { AdminController } from './controller/admin.controller.js';
@@ -10,7 +10,7 @@ import { AdminService } from './services/admin.service.js';
  * @keyword-en admin module
  */
 @Module({
-  imports: [DataSourceModule, SassModule],
+  imports: [forwardRef(() => DataSourceModule), SassModule],
   controllers: [AdminController],
   providers: [AdminService, AdminAuthGuard],
   exports: [AdminService, AdminAuthGuard],

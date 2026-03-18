@@ -17,7 +17,10 @@ export class SkillThoughtToolsService {
    * @title 获取工具句柄 Get Handle
    * @description 返回思维链相关的工具列表。
    */
-  getHandle(): CreateAgentParams['tools'] {
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
     /**
      * Tool 1: search_thought
      * 搜索思维链，用于快速检索相关经验
@@ -25,11 +28,30 @@ export class SkillThoughtToolsService {
     const searchThought = tool(
       async ({ query, limit, minScore }) => {
         try {
+          console.log(
+            '[searchThought] 开始搜索, query:',
+            query,
+            'limit:',
+            limit,
+            'minScore:',
+            minScore,
+          );
+
           const results = await this.thoughtService.searchSimilar(
             query,
             limit ?? 5,
             minScore ?? 0.5,
+            scope,
           );
+
+          console.log('[searchThought] 向量搜索命中结果数:', results.length);
+          if (results.length > 0) {
+            results.forEach((r, i) => {
+              console.log(
+                `[searchThought] 命中 ${i + 1}: score=${r.score.toFixed(4)}, keywords=${r.thought.keywords?.join(', ')}, summary=${r.thought.summary?.slice(0, 50)}...`,
+              );
+            });
+          }
 
           let used = results;
           const normalizedQuery = query.toLowerCase().trim();
@@ -42,6 +64,7 @@ export class SkillThoughtToolsService {
                 return k.length > 0 && normalizedQuery.indexOf(k) !== -1;
               });
             });
+            console.log('[searchThought] 关键词命中结果数:', overlapped.length);
             if (overlapped.length > 0) {
               used = overlapped;
             }
@@ -59,6 +82,7 @@ export class SkillThoughtToolsService {
           for (const r of used) {
             await this.thoughtService.incrementUsageCount(
               r.thought._id.toString(),
+              scope,
             );
           }
 
@@ -128,12 +152,15 @@ export class SkillThoughtToolsService {
                 'Thought generation is disabled in this context (allowGenerate=false).',
             });
           }
+          console.log(content);
 
           // 1. 使用 AI 生成摘要和关键词
           const summary = await this.thoughtService.generateSummary(content);
           const keywords = await this.thoughtService.extractKeywords(content);
 
+          console.log(summary, keywords);
           if (keywords.length === 0) {
+            console.error('Failed to extract keywords from content');
             return JSON.stringify({
               success: false,
               error: 'Failed to extract keywords from content',
@@ -142,8 +169,11 @@ export class SkillThoughtToolsService {
 
           // 2. 搜索是否有强相关的已有思维链（相似度 > 0.85）
           const searchQuery = `${summary} ${keywords.join(' ')}`;
-          const existingThought =
-            await this.thoughtService.findStronglyRelated(searchQuery);
+          const existingThought = await this.thoughtService.findStronglyRelated(
+            searchQuery,
+            undefined,
+            scope,
+          );
 
           if (existingThought) {
             // 3. 若有强相关，则合并更新
@@ -152,6 +182,7 @@ export class SkillThoughtToolsService {
               content,
               keywords,
               toolsUsed,
+              scope,
             );
 
             if (merged) {
@@ -172,6 +203,8 @@ export class SkillThoughtToolsService {
             content,
             summary,
             keywords,
+            tenantId: scope?.tenantId,
+            userId: scope?.userId,
             sessionId,
             toolsUsed,
             category,
@@ -186,6 +219,7 @@ export class SkillThoughtToolsService {
             keywords: newThought.keywords,
           });
         } catch (error) {
+          console.error('Error in generate_thought:', error);
           return JSON.stringify({
             success: false,
             error: error instanceof Error ? error.message : String(error),
@@ -205,7 +239,7 @@ export class SkillThoughtToolsService {
           content: z
             .string()
             .describe(
-              'Structured description centered on schema, field meanings, and key filters/conditions needed to solve similar questions; do NOT include low-level execution steps.',
+              '所有关于该思维的分析和数据分析的所有信息,用于生成或合并思维链',
             ),
           allowGenerate: z
             .boolean()
@@ -238,13 +272,7 @@ export class SkillThoughtToolsService {
     const getThoughtDetail = tool(
       async ({ thoughtId }) => {
         try {
-          const results = await this.thoughtService.findByKeywords(
-            [],
-            false,
-            1,
-          );
-          // 这里需要一个 findById 方法，暂时通过搜索实现
-          const thought = results.find((t) => t._id.toString() === thoughtId);
+          const thought = await this.thoughtService.getById(thoughtId, scope);
 
           if (!thought) {
             return JSON.stringify({
@@ -253,7 +281,7 @@ export class SkillThoughtToolsService {
             });
           }
 
-          await this.thoughtService.incrementUsageCount(thoughtId);
+          await this.thoughtService.incrementUsageCount(thoughtId, scope);
 
           return JSON.stringify({
             success: true,

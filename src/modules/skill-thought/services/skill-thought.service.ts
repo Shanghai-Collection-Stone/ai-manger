@@ -2,6 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { Db, Collection, ObjectId } from 'mongodb';
 import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import {
   SkillThoughtEntity,
   SkillThoughtCreateInput,
@@ -26,6 +27,7 @@ export class SkillThoughtService {
     @Inject('ST_MONGO_DB') private readonly db: Db,
     private readonly embeddingService: EmbeddingService,
     private readonly agentService: AgentService,
+    private readonly adminService: AdminService,
   ) {
     this.collection = db.collection<SkillThoughtEntity>('skill_thoughts');
     void this.ensureIndexes();
@@ -37,13 +39,19 @@ export class SkillThoughtService {
    */
   async create(input: SkillThoughtCreateInput): Promise<SkillThoughtEntity> {
     const now = new Date();
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
 
     // 生成向量嵌入（使用摘要+关键词组合）
     const textForEmbedding = `${input.summary} ${input.keywords.join(' ')}`;
-    const embedding = await this.embeddingService.embedText(textForEmbedding);
+    const embedding = await this.embeddingService.embedText(
+      textForEmbedding,
+      embeddingConfig,
+    );
 
     const entity: SkillThoughtEntity = {
       _id: new ObjectId(),
+      tenantId: input.tenantId,
+      userId: input.userId,
       content: input.content,
       summary: input.summary,
       keywords: input.keywords,
@@ -55,7 +63,7 @@ export class SkillThoughtService {
       createdAt: now,
       updatedAt: now,
     };
-
+    console.log('开始创建');
     await this.collection.insertOne(entity);
     return entity;
   }
@@ -68,15 +76,21 @@ export class SkillThoughtService {
     query: string,
     limit = 5,
     minScore = 0.5,
+    scope?: { tenantId?: string; userId?: string },
   ): Promise<SkillThoughtSearchResult[]> {
-    const queryEmbedding = await this.embeddingService.embedText(query);
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+    const queryEmbedding = await this.embeddingService.embedText(
+      query,
+      embeddingConfig,
+    );
 
     // 如果已知 Atlas 不可用，直接使用本地搜索
     if (this.isAtlasAvailable === false) {
-      return this.searchSimilarLocal(queryEmbedding, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, limit, minScore, scope);
     }
 
     try {
+      const scopeMatch = this.buildScopeMatchStage(scope);
       // 使用 Atlas Vector Search
       const results = await this.collection
         .aggregate<SkillThoughtEntity & { score: number }>([
@@ -94,6 +108,7 @@ export class SkillThoughtService {
               score: { $meta: 'vectorSearchScore' },
             },
           },
+          ...(scopeMatch ? [scopeMatch] : []),
         ])
         .toArray();
 
@@ -115,7 +130,7 @@ export class SkillThoughtService {
         );
         this.isAtlasAvailable = false;
       }
-      return this.searchSimilarLocal(queryEmbedding, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, limit, minScore, scope);
     }
   }
 
@@ -126,8 +141,11 @@ export class SkillThoughtService {
     queryEmbedding: number[],
     limit: number,
     minScore: number,
+    scope?: { tenantId?: string; userId?: string },
   ): Promise<SkillThoughtSearchResult[]> {
-    const allThoughts = await this.collection.find({}).toArray();
+    const allThoughts = await this.collection
+      .find(this.buildReadScopeFilter(scope))
+      .toArray();
 
     const scored = allThoughts
       .filter(
@@ -155,8 +173,9 @@ export class SkillThoughtService {
   async findStronglyRelated(
     query: string,
     threshold = this.SIMILARITY_THRESHOLD,
+    scope?: { tenantId?: string; userId?: string },
   ): Promise<SkillThoughtSearchResult | null> {
-    const results = await this.searchSimilar(query, 1, threshold);
+    const results = await this.searchSimilar(query, 1, threshold, scope);
     return results.length > 0 ? results[0] : null;
   }
 
@@ -167,6 +186,7 @@ export class SkillThoughtService {
   async update(
     id: string,
     input: SkillThoughtUpdateInput,
+    scope?: { tenantId?: string; userId?: string },
   ): Promise<SkillThoughtEntity | null> {
     const now = new Date();
     const updates: Record<string, unknown> = { updatedAt: now };
@@ -181,18 +201,22 @@ export class SkillThoughtService {
     if (input.summary !== undefined || input.keywords !== undefined) {
       const existing = await this.collection.findOne({
         _id: new ObjectId(id),
+        ...this.buildScopeFilter(scope),
       });
       if (existing) {
         const summary = input.summary ?? existing.summary;
         const keywords = input.keywords ?? existing.keywords;
         const textForEmbedding = `${summary} ${keywords.join(' ')}`;
-        updates['embedding'] =
-          await this.embeddingService.embedText(textForEmbedding);
+        const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+        updates['embedding'] = await this.embeddingService.embedText(
+          textForEmbedding,
+          embeddingConfig,
+        );
       }
     }
 
     const result = await this.collection.findOneAndUpdate(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), ...this.buildScopeFilter(scope) },
       { $set: updates },
       { returnDocument: 'after' },
     );
@@ -209,9 +233,11 @@ export class SkillThoughtService {
     newContent: string,
     newKeywords: string[],
     newToolsUsed?: string[],
+    scope?: { tenantId?: string; userId?: string },
   ): Promise<SkillThoughtEntity | null> {
     const existing = await this.collection.findOne({
       _id: new ObjectId(existingId),
+      ...this.buildScopeFilter(scope),
     });
     if (!existing) return null;
 
@@ -235,20 +261,27 @@ ${newContent}`;
     // 使用 AI 生成新的摘要
     const newSummary = await this.generateSummary(mergedContent);
 
-    return this.update(existingId, {
-      content: mergedContent,
-      summary: newSummary,
-      keywords: mergedKeywords,
-      toolsUsed: mergedTools,
-    });
+    return this.update(
+      existingId,
+      {
+        content: mergedContent,
+        summary: newSummary,
+        keywords: mergedKeywords,
+        toolsUsed: mergedTools,
+      },
+      scope,
+    );
   }
 
   /**
    * @title 增加使用次数 Increment Usage Count
    */
-  async incrementUsageCount(id: string): Promise<void> {
+  async incrementUsageCount(
+    id: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): Promise<void> {
     await this.collection.updateOne(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(id), ...this.buildScopeFilter(scope) },
       {
         $inc: { usageCount: 1 },
         $set: { updatedAt: new Date() },
@@ -263,13 +296,14 @@ ${newContent}`;
     keywords: string[],
     matchAll = false,
     limit = 10,
+    scope?: { tenantId?: string; userId?: string },
   ): Promise<SkillThoughtEntity[]> {
     const filter = matchAll
       ? { keywords: { $all: keywords } }
       : { keywords: { $in: keywords } };
 
     return this.collection
-      .find(filter)
+      .find({ ...filter, ...this.buildReadScopeFilter(scope) })
       .sort({ usageCount: -1, updatedAt: -1 })
       .limit(limit)
       .toArray();
@@ -278,11 +312,46 @@ ${newContent}`;
   /**
    * @title 删除思维链 Delete Thought
    */
-  async delete(id: string): Promise<boolean> {
+  async delete(
+    id: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): Promise<boolean> {
     const result = await this.collection.deleteOne({
       _id: new ObjectId(id),
+      ...this.buildScopeFilter(scope),
     });
     return result.deletedCount > 0;
+  }
+
+  /**
+   * @description 列出思维链
+   * @keyword-en list thoughts
+   */
+  async list(
+    scope?: { tenantId?: string; userId?: string },
+    limit = 100,
+  ): Promise<SkillThoughtEntity[]> {
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
+    return this.collection
+      .find(this.buildReadScopeFilter(scope))
+      .sort({ updatedAt: -1 })
+      .limit(safeLimit)
+      .toArray();
+  }
+
+  /**
+   * @description 获取单条思维链
+   * @keyword-en get thought by id
+   */
+  async getById(
+    id: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): Promise<SkillThoughtEntity | null> {
+    if (!ObjectId.isValid(id)) return null;
+    return this.collection.findOne({
+      _id: new ObjectId(id),
+      ...this.buildReadScopeFilter(scope),
+    });
   }
 
   /**
@@ -290,20 +359,34 @@ ${newContent}`;
    */
   async generateSummary(content: string): Promise<string> {
     try {
+      const aiConfig = await this.resolveDefaultAiConfig();
       const messages = this.agentService.toMessages([
         {
           role: 'system',
-          content:
-            '你是一个面向“思维链/经验库”的专业摘要生成器。你的目标是：将下面的内容压缩成一到两句话，重点突出：1）涉及到的 schema 或数据表（包括数据源、schema 名称、collectionName 或 tableId）；2）这些 schema 中关键字段的含义；3）适用的典型查询条件或使用场景。不要展开具体的操作步骤或查询执行过程，只保留足以让下次快速复用的关键信息。',
+          content: `你是一个面向"思维链/经验库"的专业摘要生成器。
+你的目标是：将内容压缩成2-3句话，重点突出以下可检索信息：
+
+1. 核心业务对象：涉及的主要实体、Schema、数据表（如用户、订单、任务、报表）
+2. 关键字段/属性：重要的参数、配置、筛选条件
+3. 典型场景：这段经验适用于什么场景（如数据分析、报表生成、任务自动化）
+4. 解决的问题：这段经验能帮助解决什么问题
+
+要求：
+- 使用标准化的领域术语，便于语义检索
+- 避免口语化表达，使用规范的技术/业务词汇
+- 只保留足以让下次快速复用的关键信息
+- 不要展开具体操作步骤或代码实现细节`,
         },
         { role: 'user', content },
       ]);
 
       const result = await this.agentService.runWithMessages({
         config: {
-          provider: 'deepseek',
-          model: 'deepseek-chat',
+          provider: aiConfig.provider,
+          model: aiConfig.model,
           temperature: 0.3,
+          apiKey: aiConfig.apiKey,
+          baseUrl: aiConfig.baseUrl,
         },
         messages,
       });
@@ -324,20 +407,38 @@ ${newContent}`;
    */
   async extractKeywords(content: string): Promise<string[]> {
     try {
+      const aiConfig = await this.resolveDefaultAiConfig();
       const messages = this.agentService.toMessages([
         {
           role: 'system',
-          content:
-            '你是一个关键词提取器。请从以下内容中提取 5-10 个用于“广泛检索和复用”的关键词。只返回关键词，用逗号分隔，不要其他内容。关键词应尽量短小、泛化，优先选择：1）领域核心名词（如 营业额、订单、任务）；2）上位概念或模块名（如 财务分析、任务管理）；3）典型业务场景（如 日报、对账、统计）。避免带有过多限定条件的长句（如 “1月营业额>1000 的统计”），而是用其上位概念（如 营业额统计、月度报表）。',
+          content: `你是一个面向"思维链/经验库"的关键词提取专家。
+
+请提取 5-10 个用于"广泛检索和复用"的高质量关键词。
+
+关键词选择原则（按优先级）：
+1. 核心业务对象：如 用户、订单、报表、任务、财务、销售
+2. 业务动作：如 统计、汇总、对账、导出、生成、同步
+3. 上位概念/模块名：如 财务分析、任务管理、数据看板、报表中心
+4. 典型场景/用途：如 日报生成、月度对账、订单统计、任务提醒
+5. 技术/工具名：如 Excel、PDF、API、Webhook、定时任务
+
+要求：
+- 关键词应短小精悍（2-6字为宜），便于向量匹配
+- 优先使用标准化的技术/业务术语
+- 避免带有过多限定条件的长句（如"2024年1月销售额统计"）
+  应使用其上位概念（如 销售额统计、月度报表）
+- 只返回关键词，用逗号分隔，不要其他内容`,
         },
         { role: 'user', content },
       ]);
 
       const result = await this.agentService.runWithMessages({
         config: {
-          provider: 'deepseek',
-          model: 'deepseek-chat',
+          provider: aiConfig.provider,
+          model: aiConfig.model,
           temperature: 0.1,
+          apiKey: aiConfig.apiKey,
+          baseUrl: aiConfig.baseUrl,
         },
         messages,
       });
@@ -363,13 +464,170 @@ ${newContent}`;
    */
   private async ensureIndexes(): Promise<void> {
     try {
-      await this.collection.createIndex({ keywords: 1 });
-      await this.collection.createIndex({ sessionId: 1 });
-      await this.collection.createIndex({ category: 1 });
-      await this.collection.createIndex({ usageCount: -1 });
-      await this.collection.createIndex({ updatedAt: -1 });
+      await this.collection.createIndex(
+        { keywords: 1 },
+        { name: 'keywords_1' },
+      );
+      await this.collection.createIndex(
+        { sessionId: 1 },
+        { name: 'sessionId_1' },
+      );
+      await this.collection.createIndex(
+        { category: 1 },
+        { name: 'category_1' },
+      );
+      await this.collection.createIndex(
+        { usageCount: -1 },
+        { name: 'usageCount_-1' },
+      );
+      await this.collection.createIndex(
+        { updatedAt: -1 },
+        { name: 'updatedAt_-1' },
+      );
+      await this.collection.createIndex(
+        { createdAt: -1 },
+        { name: 'createdAt_-1' },
+      );
+      await this.collection.createIndex(
+        { tenantId: 1, updatedAt: -1 },
+        { name: 'tenantId_1_updatedAt_-1' },
+      );
+      await this.collection.createIndex(
+        { tenantId: 1, userId: 1, updatedAt: -1 },
+        { name: 'tenantId_1_userId_1_updatedAt_-1' },
+      );
     } catch {
       // ignore
     }
+  }
+
+  /**
+   * @description 构建向量检索作用域过滤
+   * @keyword-en build vector search scope match
+   */
+  private buildScopeMatchStage(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): { $match: Record<string, unknown> } | null {
+    const filter = this.buildReadScopeFilter(scope);
+    const keys = Object.keys(filter);
+    if (keys.length === 0) return null;
+    return { $match: filter };
+  }
+
+  /**
+   * @description 构建读取范围过滤
+   * @keyword-en build read scope filter
+   */
+  private buildReadScopeFilter(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): Record<string, unknown> {
+    const tenantId = scope?.tenantId?.trim();
+    const userId = scope?.userId?.trim();
+    if (!tenantId && !userId) return this.buildScopeFilter(scope);
+    if (tenantId && userId) {
+      return {
+        $or: [
+          { tenantId, userId },
+          { tenantId, userId: { $exists: false } },
+          { tenantId: { $exists: false }, userId },
+          { tenantId: { $exists: false }, userId: { $exists: false } },
+        ],
+      };
+    }
+    if (tenantId) {
+      return {
+        $or: [{ tenantId }, { tenantId: { $exists: false } }],
+      };
+    }
+    return {
+      $or: [{ userId }, { userId: { $exists: false } }],
+    };
+  }
+
+  /**
+   * @description 解析默认AI模型配置
+   * @keyword-en resolve default ai model config
+   */
+  private async resolveDefaultAiConfig(preferEmModel = false): Promise<{
+    provider: string;
+    model: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }> {
+    if (preferEmModel) {
+      const emRuntime = await this.adminService.getDefaultEmbeddingRuntime();
+      if (emRuntime) {
+        return {
+          provider: emRuntime.providerCode,
+          model: emRuntime.model,
+          apiKey: emRuntime.apiKey,
+          baseUrl: emRuntime.baseUrl,
+        };
+      }
+    }
+    const runtime = await this.adminService.getDefaultAiProviderRuntime();
+    if (runtime) {
+      const selectedModel =
+        runtime.model || 'deepseek-ai/deepseek-v3.1-terminus';
+      return {
+        provider: runtime.providerCode,
+        model: selectedModel,
+        apiKey: runtime.apiKey,
+        baseUrl: runtime.baseUrl,
+      };
+    }
+    return {
+      provider: 'nvidia',
+      model: 'deepseek-ai/deepseek-v3.1-terminus',
+    };
+  }
+
+  /**
+   * @description 解析默认Embedding配置
+   * @keyword-en resolve default embedding config
+   */
+  private async resolveDefaultEmbeddingConfig(): Promise<{
+    providerCode?: string;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }> {
+    const runtime = await this.adminService.getDefaultEmbeddingRuntime();
+    if (!runtime) {
+      return {
+        providerCode: 'gemini',
+        model: 'gemini-embedding-001',
+      };
+    }
+    return {
+      providerCode: runtime.providerCode,
+      model: runtime.model,
+      apiKey: runtime.apiKey,
+      baseUrl: runtime.baseUrl,
+    };
+  }
+
+  /**
+   * @description 构建租户过滤
+   * @keyword-en build tenant scope filter
+   */
+  private buildScopeFilter(scope?: { tenantId?: string; userId?: string }): {
+    tenantId?: string | { $exists: false };
+    userId?: string;
+  } {
+    const filter: {
+      tenantId?: string | { $exists: false };
+      userId?: string;
+    } = {};
+    if (scope && 'tenantId' in scope) {
+      const tenantId = scope.tenantId?.trim();
+      filter.tenantId = tenantId ? tenantId : { $exists: false };
+    }
+    if (scope?.userId?.trim()) {
+      filter.userId = scope.userId.trim();
+    }
+    return filter;
   }
 }

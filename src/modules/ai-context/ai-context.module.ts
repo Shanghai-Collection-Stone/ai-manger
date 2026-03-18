@@ -1,5 +1,6 @@
 import { Module, Provider } from '@nestjs/common';
 import { AiAgentModule } from '../ai-agent/ai-agent.module';
+import { AdminModule } from '../admin/admin.module';
 //
 import { RetrievalController } from './controller/retrieval.controller';
 //
@@ -58,7 +59,7 @@ const mongoProviders: Provider[] = [
 ];
 
 @Module({
-  imports: [AiAgentModule],
+  imports: [AiAgentModule, AdminModule],
   controllers: [RetrievalController],
   providers: [...mongoProviders, KeywordService, RetrievalService],
   exports: [KeywordService, RetrievalService, ...mongoProviders],

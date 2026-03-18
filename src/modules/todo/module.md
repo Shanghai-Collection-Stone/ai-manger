@@ -9,10 +9,24 @@
 ### todo.controller.ts
 Todo控制器。
 - **关键词**: todo, tasks, todo-items, checklist, ai-plan, crud, mongo, controller
+- **函数**:
+  - `create`: 创建待办/create todo
+  - `list`: 列表查询/list todos
+  - `get`: 获取待办/get todo
+  - `update`: 更新待办/update todo
+  - `remove`: 删除待办/delete todo
+  - `createItem`: 创建清单/create todo item
+  - `listItems`: 清单列表/list todo items
 
 ### todo.service.ts
 Todo服务。
 - **关键词**: service
+- **函数**:
+  - `create`: 创建待办/create
+  - `update`: 更新待办/update
+  - `listByScope`: 范围查询/list by scope
+  - `createItem`: 创建清单/create item
+  - `buildTenantFilter`: 租户过滤/build tenant filter
 
 ### todo.module.ts
 Todo模块定义。

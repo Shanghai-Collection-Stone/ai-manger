@@ -3,6 +3,7 @@ import {
   IsIn,
   IsInt,
   IsMongoId,
+  IsObject,
   Max,
   IsOptional,
   IsString,
@@ -10,7 +11,10 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import type { DataSourceStatus } from '../../data-source/entities/data-source.entity.js';
+import type {
+  DataSourceStatus,
+  MongoConnectionConfig,
+} from '../../data-source/entities/data-source.entity.js';
 import type { AdminUserRole } from '../entities/admin.entity.js';
 
 /**
@@ -27,6 +31,10 @@ export class AdminLoginDto {
   @MinLength(6)
   @MaxLength(120)
   password!: string;
+
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
 }
 
 /**
@@ -113,17 +121,22 @@ export class UpsertAiProviderDto {
   model?: string;
 
   @IsString()
+  @IsIn(['llm', 'em'])
+  modelCategory!: 'llm' | 'em';
+
+  @IsOptional()
+  @IsString()
   @MinLength(8)
   @MaxLength(300)
-  apiKey!: string;
+  apiKey?: string;
 
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
 
   @IsOptional()
-  @IsMongoId()
-  tenantId?: string;
+  @IsBoolean()
+  isDefault?: boolean;
 }
 
 /**
@@ -154,6 +167,10 @@ export class UpdateAiProviderDto {
   model?: string;
 
   @IsOptional()
+  @IsIn(['llm', 'em'])
+  modelCategory?: 'llm' | 'em';
+
+  @IsOptional()
   @IsString()
   @MinLength(8)
   @MaxLength(300)
@@ -164,8 +181,8 @@ export class UpdateAiProviderDto {
   enabled?: boolean;
 
   @IsOptional()
-  @IsMongoId()
-  tenantId?: string;
+  @IsBoolean()
+  isDefault?: boolean;
 }
 
 /**
@@ -267,6 +284,22 @@ export class CreateDataSourceByAdminDto {
   moduleRef!: string;
 
   @IsOptional()
+  @IsIn(['mongo', 'api'])
+  sourceType?: 'mongo' | 'api';
+
+  @IsOptional()
+  @IsIn(['platform', 'tenant'])
+  scope?: 'platform' | 'tenant';
+
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
+
+  @IsOptional()
+  @IsObject()
+  connection?: MongoConnectionConfig;
+
+  @IsOptional()
   @IsIn(['active', 'inactive'])
   status?: DataSourceStatus;
 }
@@ -293,6 +326,22 @@ export class UpdateDataSourceByAdminDto {
   @MinLength(3)
   @MaxLength(120)
   moduleRef?: string;
+
+  @IsOptional()
+  @IsIn(['mongo', 'api'])
+  sourceType?: 'mongo' | 'api';
+
+  @IsOptional()
+  @IsIn(['platform', 'tenant'])
+  scope?: 'platform' | 'tenant';
+
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
+
+  @IsOptional()
+  @IsObject()
+  connection?: MongoConnectionConfig;
 
   @IsOptional()
   @IsIn(['active', 'inactive'])

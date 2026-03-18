@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "checkJs": false,
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "baseUrl": ".",
+    "forceConsistentCasingInFileNames": false
+  },
+  "include": ["src/**/*.js", "src/**/*.jsx"]
+}

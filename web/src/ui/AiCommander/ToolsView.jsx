@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit
 } from 'lucide-react';
+import ThoughtRouteView from './ThoughtRouteView';
+import CanvasFeedView from './CanvasFeedView';
 
 /**
  * @description Tools View for AI Commander, including AI Gallery
@@ -223,6 +225,22 @@ const api = {
       return { updated: 0 };
     }
   },
+
+  async listCanvases({ userId, limit } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (userId) params.set('userId', userId);
+      if (typeof limit === 'number' && Number.isFinite(limit)) {
+        params.set('limit', String(Math.max(1, Math.floor(limit))));
+      }
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`);
+      if (!res.ok) return { canvases: [] };
+      return await res.json();
+    } catch {
+      return { canvases: [] };
+    }
+  },
 };
 
 const mergeUnique = (a, b) => {
@@ -237,6 +255,96 @@ const mergeUniqueStrings = (a, b) => {
   (b || []).forEach((x) => set.add(x));
   return Array.from(set).sort();
 };
+
+function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
+  const [input, setInput] = useState('');
+  const [open, setOpen] = useState(false);
+  const tags = Array.isArray(value) ? value : [];
+  const known = Array.isArray(allTags) ? allTags : [];
+  const selectedSet = useMemo(() => new Set(tags.map((t) => String(t))), [tags]);
+
+  const suggestions = useMemo(() => {
+    const q = String(input || '').trim().toLowerCase();
+    const base = known
+      .map((t) => String(t || '').trim())
+      .filter(Boolean)
+      .filter((t) => !selectedSet.has(t));
+    const filtered = q ? base.filter((t) => t.toLowerCase().includes(q)) : base;
+    return filtered.slice(0, 10);
+  }, [input, known, selectedSet]);
+
+  const addFromRaw = useCallback((raw) => {
+    if (disabled) return;
+    const s = String(raw || '').trim();
+    if (!s) return;
+    const tokens = s.split(/[\s,]+/g).map(x => String(x || '').trim()).filter(Boolean);
+    if (tokens.length === 0) return;
+    const next = [...tags];
+    const nextSet = new Set(selectedSet);
+    for (const t of tokens) {
+      if (!t || nextSet.has(t)) continue;
+      nextSet.add(t);
+      next.push(t);
+    }
+    if (next.length === tags.length) return;
+    onChange && onChange(next);
+    setInput('');
+  }, [disabled, onChange, selectedSet, tags]);
+
+  const removeOne = useCallback((t) => {
+    if (disabled) return;
+    const key = String(t || '').trim();
+    if (!key) return;
+    const next = tags.filter((x) => String(x) !== key);
+    onChange && onChange(next);
+  }, [disabled, onChange, tags]);
+
+  return (
+    <div className="space-y-1">
+      {label ? <div className="text-xs font-medium text-gray-600">{label}</div> : null}
+      <div className={`relative rounded-lg border px-2 py-2 bg-white ${disabled ? 'opacity-60' : ''}`}>
+        <div className="flex flex-wrap gap-1">
+          {tags.map((t) => (
+            <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
+              {t}
+              <button type="button" onClick={() => removeOne(t)} disabled={disabled} className="hover:text-red-500">
+                <X size={12} />
+              </button>
+            </span>
+          ))}
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => { setInput(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 200)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); addFromRaw(input); }
+              if (e.key === 'Backspace' && !input && tags.length > 0) { removeOne(tags[tags.length - 1]); }
+            }}
+            placeholder={tags.length === 0 ? placeholder : ''}
+            disabled={disabled}
+            className="flex-1 min-w-[60px] text-sm outline-none bg-transparent"
+          />
+        </div>
+        {open && suggestions.length > 0 && (
+          <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-30 max-h-40 overflow-y-auto">
+            {suggestions.map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => addFromRaw(t)}
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100"
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /**
  * @description Gallery view component for managing images and groups
@@ -253,6 +361,17 @@ const GalleryView = ({ onBack }) => {
   const [hasMoreImages, setHasMoreImages] = useState(true);
   const [pageSize] = useState(20);
   const [uploading, setUploading] = useState(false);
+  
+  // Tags
+  const [allTags, setAllTags] = useState([]);
+  
+  // Preview State
+  const [previewImage, setPreviewImage] = useState(null);
+  const [previewAddTags, setPreviewAddTags] = useState([]);
+  const [previewRemoveTags, setPreviewRemoveTags] = useState([]);
+  
+  // Upload Tags State
+  const [uploadDraft, setUploadDraft] = useState({ tags: '' });
   
   // Create Group State
   const [showCreateGroup, setShowCreateGroup] = useState(false);
@@ -272,6 +391,18 @@ const GalleryView = ({ onBack }) => {
   // Sync refs
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => { selectedGroupIdRef.current = selectedGroupId; }, [selectedGroupId]);
+
+  // Load Tags
+  const loadTags = useCallback(async () => {
+    const uid = String(userId || '').trim() || 'default';
+    const data = await api.listGalleryTags({ userId: uid, limit: 2000 });
+    const list = Array.isArray(data?.tags) ? data.tags : [];
+    setAllTags((prev) => {
+      const set = new Set(prev);
+      list.forEach(t => set.add(t));
+      return Array.from(set).sort();
+    });
+  }, [userId]);
 
   // Load Groups
   const loadGroups = useCallback(async () => {
@@ -309,8 +440,14 @@ const GalleryView = ({ onBack }) => {
   // Initial Load
   useEffect(() => {
     loadGroups();
+    loadTags();
     loadImages();
-  }, [loadGroups, loadImages]);
+  }, [loadGroups, loadTags, loadImages]);
+
+  // Reload images when group changes
+  useEffect(() => {
+    loadImages({ append: false });
+  }, [selectedGroupId, loadImages]);
 
   // Infinite Scroll
   useEffect(() => {
@@ -348,20 +485,85 @@ const GalleryView = ({ onBack }) => {
     if (files.length === 0) return;
     setUploading(true);
     try {
+      const tags = String(uploadDraft.tags || '')
+        .split(/[\s,]+/g)
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
       const res = await api.uploadGalleryImages(files, {
         userId: userId || 'default',
         groupId: selectedGroupId,
+        tags: tags.length > 0 ? tags.join(',') : undefined,
       });
       if (res?.images) {
         await loadImages({ append: false });
+        await loadTags();
       }
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+      setUploadDraft({ tags: '' });
     }
   };
 
   const currentGroup = groups.find(g => g.id === selectedGroupId);
+
+  // Preview handlers
+  const openPreview = useCallback((img) => {
+    setPreviewImage(img);
+    setPreviewAddTags([]);
+    setPreviewRemoveTags([]);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewImage(null);
+    setPreviewAddTags([]);
+    setPreviewRemoveTags([]);
+  }, []);
+
+  const applyPreviewTags = useCallback(async () => {
+    if (!previewImage) return;
+    const img = previewImage;
+    const addTags = Array.isArray(previewAddTags) ? previewAddTags : [];
+    const removeTags = Array.isArray(previewRemoveTags) ? previewRemoveTags : [];
+    if (addTags.length === 0 && removeTags.length === 0) {
+      closePreview();
+      return;
+    }
+    const uid = userId || 'default';
+    await api.batchUpdateGalleryImageTags({
+      userId: uid,
+      ids: [img.id],
+      addTags: addTags.length > 0 ? addTags : undefined,
+      removeTags: removeTags.length > 0 ? removeTags : undefined,
+    });
+    await loadTags();
+    setImages((prev) => prev.map((x) => {
+      if (x.id !== img.id) return x;
+      const currentTags = Array.isArray(x.tags) ? x.tags : [];
+      const filtered = currentTags.filter((t) => !removeTags.includes(t));
+      const newTags = [...new Set([...filtered, ...addTags])].sort();
+      return { ...x, tags: newTags };
+    }));
+    setPreviewImage((prev) => {
+      if (!prev) return null;
+      const oldTags = Array.isArray(prev.tags) ? prev.tags : [];
+      const filteredOld = oldTags.filter((t) => !removeTags.includes(t));
+      const newTagsList = [...new Set([...filteredOld, ...addTags])];
+      return { ...prev, tags: newTagsList };
+    });
+    setPreviewAddTags([]);
+    setPreviewRemoveTags([]);
+  }, [previewImage, previewAddTags, previewRemoveTags, userId, loadTags, closePreview]);
+
+  const deletePreviewImage = useCallback(async () => {
+    if (!previewImage) return;
+    const img = previewImage;
+    const uid = userId || 'default';
+    await api.deleteGalleryImage(img.id, { userId: uid });
+    setImages((prev) => prev.filter((x) => x.id !== img.id));
+    closePreview();
+    await loadTags();
+  }, [previewImage, userId, closePreview, loadTags]);
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -376,7 +578,7 @@ const GalleryView = ({ onBack }) => {
             <p className="text-[10px] text-slate-400">共 {groups.reduce((acc, g) => acc + (g.image_count || 0), 0)} 张图片</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
            <input 
               type="file" 
               multiple 
@@ -385,20 +587,27 @@ const GalleryView = ({ onBack }) => {
               ref={fileRef}
               onChange={onUploadFiles}
             />
+            <input
+              type="text"
+              value={uploadDraft.tags}
+              onChange={(e) => setUploadDraft({ ...uploadDraft, tags: e.target.value })}
+              placeholder="标签(逗号分隔)"
+              className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-32"
+            />
             <button 
               onClick={() => fileRef.current?.click()}
               disabled={uploading}
               className="flex items-center gap-1.5 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-slate-800 transition shadow-lg shadow-slate-200 disabled:opacity-50 disabled:shadow-none"
             >
               {uploading ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
-              <span>上传图片</span>
+              <span>上传</span>
             </button>
         </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="w-64 border-r border-slate-100 bg-slate-50 flex flex-col hidden md:flex">
+        <div className="w-64 border-r border-slate-100 bg-slate-50 flex-col hidden md:flex">
           <div className="p-3 border-b border-slate-100 flex justify-between items-center">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">图库分组</span>
             <button onClick={() => setShowCreateGroup(true)} className="p-1 hover:bg-slate-200 rounded text-slate-500">
@@ -461,14 +670,28 @@ const GalleryView = ({ onBack }) => {
            {/* Images Grid */}
            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {images.map(img => (
-                <div key={img.id} className="aspect-square bg-slate-100 rounded-xl overflow-hidden relative group">
+                <div key={img.id} onClick={() => openPreview(img)} className="aspect-square bg-slate-100 rounded-xl overflow-hidden relative group cursor-pointer">
                   <img 
-                    src={img.thumb_path || img.path} 
+                    src={img.thumbUrl || img.url} 
                     alt={img.description || 'Image'} 
                     className="w-full h-full object-cover transition transform group-hover:scale-105"
                     loading="lazy"
                   />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition" />
+                  {Array.isArray(img.tags) && img.tags.length > 0 && (
+                    <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-0.5">
+                      {img.tags.slice(0, 3).map((t) => (
+                        <span key={t} className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] truncate max-w-full">
+                          {t}
+                        </span>
+                      ))}
+                      {img.tags.length > 3 && (
+                        <span className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">
+                          +{img.tags.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
            </div>
@@ -514,21 +737,239 @@ const GalleryView = ({ onBack }) => {
           </div>
         </div>
       )}
+
+      {/* Image Preview Modal */}
+      {previewImage && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={closePreview} />
+          <div className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-200">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-900 truncate">
+                  #{previewImage.id} {previewImage.originalName || ''}
+                </div>
+                <div className="text-xs text-gray-500 truncate">{previewImage.fileName || ''}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={deletePreviewImage}
+                  className="h-8 px-3 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+                >
+                  删除
+                </button>
+                <button
+                  type="button"
+                  onClick={closePreview}
+                  className="h-8 px-3 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50"
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2">
+              <div className="bg-black/5 p-4 flex items-center justify-center">
+                <img
+                  src={previewImage.url || previewImage.thumbUrl}
+                  alt={previewImage.originalName || `img-${previewImage.id}`}
+                  className="max-h-[70vh] w-full object-contain rounded-lg"
+                  loading="eager"
+                  decoding="async"
+                />
+              </div>
+              <div className="p-4 space-y-3">
+                <div>
+                  <div className="text-xs font-medium text-gray-600 mb-1">原图路径</div>
+                  <div className="text-xs break-all bg-gray-50 p-2 rounded border border-gray-200">
+                    {previewImage.url || ''}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-500 mb-1">当前标签</div>
+                  {Array.isArray(previewImage.tags) && previewImage.tags.length > 0 ? (
+                    <div className="flex flex-wrap gap-1 mb-2">
+                      {previewImage.tags.map((t) => (
+                        <span key={t} className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-400 italic mb-2">暂无标签</div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  <TagPicker
+                    label="添加标签"
+                    value={previewAddTags}
+                    onChange={setPreviewAddTags}
+                    allTags={allTags}
+                    placeholder="输入或选择，回车添加"
+                    disabled={false}
+                  />
+                  <TagPicker
+                    label="移除标签"
+                    value={previewRemoveTags}
+                    onChange={setPreviewRemoveTags}
+                    allTags={Array.isArray(previewImage.tags) ? previewImage.tags : []}
+                    placeholder="输入或选择，回车添加"
+                    disabled={false}
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewAddTags([]);
+                      setPreviewRemoveTags([]);
+                    }}
+                    className="h-8 px-4 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  >
+                    清空
+                  </button>
+                  <button
+                    type="button"
+                    onClick={applyPreviewTags}
+                    disabled={((previewAddTags?.length || 0) === 0 && (previewRemoveTags?.length || 0) === 0)}
+                    className="h-8 px-4 text-sm bg-black text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+                  >
+                    应用标签
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-const ToolsView = () => {
-  const [view, setView] = useState('list'); // 'list' | 'gallery'
+const ToolsView = ({ onThoughtRouteChange }) => {
+  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas'
+  const [canvases, setCanvases] = useState([]);
+  const [canvasLoading, setCanvasLoading] = useState(false);
+  const [canvasQuery, setCanvasQuery] = useState('');
+  const [activeCanvasId, setActiveCanvasId] = useState(null);
+
+  const loadCanvases = useCallback(async () => {
+    setCanvasLoading(true);
+    try {
+      const res = await api.listCanvases({ limit: 100 });
+      const rows = Array.isArray(res?.canvases) ? res.canvases : [];
+      setCanvases(rows);
+    } finally {
+      setCanvasLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof onThoughtRouteChange === 'function') {
+      onThoughtRouteChange(view === 'thought');
+    }
+    return () => {
+      if (typeof onThoughtRouteChange === 'function') {
+        onThoughtRouteChange(false);
+      }
+    };
+  }, [onThoughtRouteChange, view]);
+
+  useEffect(() => {
+    if (view === 'canvas') {
+      void loadCanvases();
+    }
+  }, [view, loadCanvases]);
 
   if (view === 'gallery') {
     return <GalleryView onBack={() => setView('list')} />;
+  }
+  if (view === 'thought') {
+    return <ThoughtRouteView onBack={() => setView('list')} />;
+  }
+  if (view === 'canvas') {
+    const normalizedQuery = String(canvasQuery || '').trim().toLowerCase();
+    const filtered = (Array.isArray(canvases) ? canvases : []).filter((c) => {
+      if (!normalizedQuery) return true;
+      const idText = String(c?.id ?? '').toLowerCase();
+      const topic = String(c?.topic ?? '').toLowerCase();
+      return idText.includes(normalizedQuery) || topic.includes(normalizedQuery);
+    });
+    return (
+      <div className="p-4 animate-fade-in space-y-3">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setView('list')}
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-slate-300"
+          >
+            <ChevronLeft size={14} />
+            返回
+          </button>
+          <button
+            onClick={() => {
+              void loadCanvases();
+            }}
+            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-slate-300"
+          >
+            <RefreshCw size={14} />
+            刷新
+          </button>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-100 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Search size={14} className="text-slate-400" />
+            <input
+              value={canvasQuery}
+              onChange={(e) => setCanvasQuery(e.target.value)}
+              placeholder="按 Canvas ID / 主题筛选"
+              className="w-full text-sm bg-transparent outline-none placeholder:text-slate-400"
+            />
+          </div>
+          {canvasLoading ? (
+            <div className="py-8 flex items-center justify-center text-slate-400">
+              <RefreshCw size={16} className="animate-spin" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="py-8 text-center text-xs text-slate-400">暂无 Canvas</div>
+          ) : (
+            <div className="space-y-2 max-h-[70vh] overflow-y-auto pr-1">
+              {filtered.map((c) => (
+                <button
+                  key={String(c?.id ?? Math.random())}
+                  onClick={() => {
+                    const id = Number(c?.id);
+                    if (Number.isFinite(id)) setActiveCanvasId(id);
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40 transition"
+                >
+                  <div className="text-sm font-medium text-slate-800">
+                    {c?.topic || `Canvas #${c?.id ?? '-'}`}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {`#${c?.id ?? '-'} · ${(Array.isArray(c?.articles) ? c.articles.length : 0)} 篇 · ${c?.status || 'unknown'}`}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {Number.isFinite(activeCanvasId) && (
+          <CanvasFeedView
+            canvasId={activeCanvasId}
+            onClose={() => setActiveCanvasId(null)}
+          />
+        )}
+      </div>
+    );
   }
 
   return (
     <div className="p-4 animate-fade-in">
       
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <div 
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-blue-100 transition-all duration-300 aspect-square relative overflow-hidden"
           onClick={() => setView('gallery')}
@@ -547,12 +988,40 @@ const ToolsView = () => {
           </div>
         </div>
         
-        {/* Placeholder for future tool */}
-        <div className="bg-slate-50 p-5 rounded-3xl border border-slate-100 border-dashed flex flex-col items-center justify-center aspect-square opacity-60">
-           <div className="w-14 h-14 rounded-2xl bg-slate-200 flex items-center justify-center mb-4 text-slate-400">
-             <Plus size={24} />
-           </div>
-           <span className="font-medium text-slate-400">敬请期待</span>
+        <div 
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-indigo-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => setView('thought')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+          
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center mb-4 text-white shadow-indigo-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <BrainCircuit size={32} />
+          </div>
+          
+          <span className="font-bold text-slate-800 text-lg z-10">思维链路</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">Schema理解与链路沉淀</span>
+          
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-indigo-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+
+        <div 
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-emerald-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => setView('canvas')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+          
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mb-4 text-white shadow-emerald-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <FolderPlus size={30} />
+          </div>
+          
+          <span className="font-bold text-slate-800 text-lg z-10">Canvas 管理</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">查看与预览画布</span>
+          
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-emerald-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
         </div>
       </div>
     </div>

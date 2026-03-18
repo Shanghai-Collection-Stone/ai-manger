@@ -29,7 +29,10 @@ export interface AdminUserEntity {
  */
 export interface AdminSessionEntity {
   _id: ObjectId;
+  sessionId: string;
   userId: string;
+  tenantId?: string;
+  role: AdminUserRole;
   tokenHash: string;
   expiresAt: Date;
   createdAt: Date;
@@ -45,10 +48,25 @@ export interface AdminAiProviderEntity {
   providerCode: string;
   name: string;
   baseUrl?: string;
+  modelCategory: 'llm' | 'em';
   model?: string;
-  apiKey: string;
+  apiKey?: string;
   enabled: boolean;
-  tenantId?: string;
+  isDefault?: boolean;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * @description 后台JWT载荷
+ * @keyword-en admin jwt payload
+ */
+export interface AdminJwtPayload {
+  sub: string;
+  sid: string;
+  role: AdminUserRole;
+  tenantId?: string;
+  username: string;
+  exp: number;
+  iat: number;
 }

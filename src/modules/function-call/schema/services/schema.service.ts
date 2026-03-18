@@ -13,15 +13,31 @@ import { DataSourceSchemaService } from '../../../data-source/services/data-sour
 export class SchemaFunctionCallService {
   constructor(private readonly schemaService: DataSourceSchemaService) {}
 
-  getHandle(): CreateAgentParams['tools'] {
+  /**
+   * @description 获取Schema工具句柄
+   * @keyword-en get schema tool handle
+   */
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
     const schemaSearch = tool(
-      async ({ query, limit }) => {
-        console.log('[schema_search] Searching all sources:', query, { limit });
+      async ({ query, limit, sourceCode, tenantId }) => {
+        const scopedTenantId = this.resolveTenantId(tenantId, scope);
+        console.log('[schema_search] Searching all sources:', query, {
+          limit,
+          sourceCode,
+          tenantId: scopedTenantId,
+        });
 
         // 跨所有数据源搜索
         const results = await this.schemaService.searchAllSources(
           query,
           limit ?? 10,
+          {
+            tenantId: scopedTenantId,
+            sourceCode,
+          },
         );
 
         if (results.length === 0) {
@@ -79,9 +95,27 @@ export class SchemaFunctionCallService {
         schema: z.object({
           query: z.string().describe('表的中文或英文关键词，多个用空格隔开'),
           limit: z.number().optional().default(10).describe('返回结果数量限制'),
+          sourceCode: z
+            .string()
+            .optional()
+            .describe('数据源代码，建议显式传入'),
+          tenantId: z.string().optional().describe('租户ID，不传表示平台范围'),
         }),
       },
     );
     return [schemaSearch];
+  }
+
+  /**
+   * @description 解析租户ID优先级
+   * @keyword-en resolve tenant id for schema tool
+   */
+  private resolveTenantId(
+    tenantId?: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): string | undefined {
+    const value = tenantId?.trim();
+    if (value) return value;
+    return scope?.tenantId;
   }
 }

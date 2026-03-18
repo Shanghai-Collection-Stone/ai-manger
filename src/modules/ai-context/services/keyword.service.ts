@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AgentService } from '../../ai-agent/services/agent.service';
+import { AdminService } from '../../admin/services/admin.service';
 
 /**
  * @title 关键词服务 Keyword Service
@@ -47,7 +48,10 @@ export class KeywordService {
     'did',
   ]);
 
-  constructor(private readonly agent: AgentService) {}
+  constructor(
+    private readonly agent: AgentService,
+    private readonly adminService: AdminService,
+  ) {}
 
   /**
    * @title 提取关键词 Extract Keywords
@@ -58,23 +62,30 @@ export class KeywordService {
    * @returns 去重后的关键词数组
    */
   async extractKeywords(text: string): Promise<string[]> {
+    let aiConfig:
+      | {
+          provider: string;
+          model: string;
+          apiKey?: string;
+          baseUrl?: string;
+        }
+      | undefined;
     try {
       if (!text || text.trim().length === 0) return [];
+      aiConfig = await this.resolveKeywordAiConfig();
 
       const aiResult = await this.agent.runWithMessages({
         config: {
-          provider: 'nvidia',
-          model: 'deepseek-ai/deepseek-v3.1-terminus',
+          provider: aiConfig.provider,
+          model: aiConfig.model,
           temperature: 0.1,
+          apiKey: aiConfig.apiKey,
+          baseUrl: aiConfig.baseUrl,
+          responseFormat: undefined,
+          system:
+            'You are an advanced keyword extraction and expansion tool. Your goal is to identify the core subject and intent of the user input, and then generate a list of keywords that includes:\n1. The core entities/concepts explicitly mentioned.\n2. Synonyms or closely related terms.\n3. Broader categories or specific attributes (e.g., if input is "Apple", include "Red", "Fruit", "Rosaceae", "Technology", "iPhone" depending on context).\n\nIMPORTANT: ALL KEYWORDS MUST BE IN ENGLISH ONLY, regardless of the input language.\n\nReturn ONLY the keywords separated by commas. No explanation.',
         },
-        messages: this.agent.toMessages([
-          {
-            role: 'system',
-            content:
-              'You are an advanced keyword extraction and expansion tool. Your goal is to identify the core subject and intent of the user input, and then generate a list of keywords that includes:\n1. The core entities/concepts explicitly mentioned.\n2. Synonyms or closely related terms.\n3. Broader categories or specific attributes (e.g., if input is "Apple", include "Red", "Fruit", "Rosaceae", "Technology", "iPhone" depending on context).\n\nIMPORTANT: ALL KEYWORDS MUST BE IN ENGLISH ONLY, regardless of the input language.\n\nReturn ONLY the keywords separated by commas. No explanation.',
-          },
-          { role: 'user', content: text },
-        ]),
+        messages: this.agent.toMessages([{ role: 'user', content: text }]),
       });
 
       const content = (aiResult as unknown as { content: unknown }).content;
@@ -90,7 +101,18 @@ export class KeywordService {
         return Array.from(new Set(keywords));
       }
     } catch (e) {
-      console.error('AI keyword extraction failed, falling back to regex', e);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/invalid chat setting|2013/i.test(msg)) {
+        console.warn(
+          'AI keyword extraction skipped due to model chat setting',
+          {
+            provider: aiConfig?.provider,
+            model: aiConfig?.model,
+          },
+        );
+      } else {
+        console.error('AI keyword extraction failed, falling back to regex', e);
+      }
     }
 
     // Fallback to regex
@@ -108,5 +130,30 @@ export class KeywordService {
     }
 
     return Array.from(set);
+  }
+
+  /**
+   * @description 解析关键词模型配置
+   * @keyword-en resolve keyword model config
+   */
+  private async resolveKeywordAiConfig(): Promise<{
+    provider: string;
+    model: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }> {
+    const runtime = await this.adminService.getDefaultAiProviderRuntime();
+    if (runtime) {
+      return {
+        provider: runtime.providerCode,
+        model: runtime.model || 'deepseek-ai/deepseek-v3.1-terminus',
+        apiKey: runtime.apiKey,
+        baseUrl: runtime.baseUrl,
+      };
+    }
+    return {
+      provider: 'nvidia',
+      model: 'deepseek-ai/deepseek-v3.1-terminus',
+    };
   }
 }

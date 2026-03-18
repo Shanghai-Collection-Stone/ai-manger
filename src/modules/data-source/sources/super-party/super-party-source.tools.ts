@@ -19,12 +19,15 @@ export class SuperPartySourceToolsService {
   private safeTruncate(json: string, maxChars = 60000): string {
     if (json.length <= maxChars) return json;
     try {
-      const parsed = JSON.parse(json);
-      const data = Array.isArray(parsed?.data)
-        ? parsed.data
-        : Array.isArray(parsed)
-          ? parsed
-          : null;
+      const parsed: unknown = JSON.parse(json);
+      let data: unknown[] | null = null;
+      if (Array.isArray(parsed)) {
+        data = parsed;
+      } else if (parsed && typeof parsed === 'object') {
+        const rec = parsed as Record<string, unknown>;
+        const candidate = rec['data'];
+        if (Array.isArray(candidate)) data = candidate;
+      }
       if (data && data.length > 1) {
         const totalLen = json.length;
         const avgPerItem = totalLen / data.length;

@@ -13,6 +13,13 @@
 ### gallery.service.ts
 图片服务。
 - **关键词**: image, service
+- **函数**:
+  - `ensureIndexes`: 初始化索引/ensure indexes
+  - `createMany`: 批量创建图片/create many images
+  - `list`: 图片列表/list images
+  - `searchSimilar`: 向量相似检索/search similar
+  - `rebuildEmbeddings`: 批量重建向量/rebuild embeddings
+  - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
 
 ### gallery-group.service.ts
 图库组服务。

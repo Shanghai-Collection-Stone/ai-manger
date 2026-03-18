@@ -35,12 +35,6 @@ export class GraphController {
       platform:
         typeof body?.platform === 'string' ? body.platform.trim() : undefined,
       topic: typeof body?.topic === 'string' ? body.topic.trim() : undefined,
-      outline:
-        body?.outline && typeof body.outline === 'object'
-          ? body.outline
-          : undefined,
-      style:
-        body?.style && typeof body.style === 'object' ? body.style : undefined,
       count: typeof body?.count === 'number' ? body.count : undefined,
       galleryUserId:
         typeof body?.galleryUserId === 'string' &&
@@ -57,9 +51,6 @@ export class GraphController {
         Number.isFinite(body.minImageScore)
           ? body.minImageScore
           : undefined,
-      provider: body?.provider,
-      model: body?.model,
-      temperature: body?.temperature,
     });
     return res;
   }

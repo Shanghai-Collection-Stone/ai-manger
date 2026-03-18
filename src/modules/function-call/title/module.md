@@ -10,7 +10,7 @@ Title函数模块：根据首轮问答生成简洁标题，并写入上下文会
 标题生成服务。
 - **关键词**: title, function-call, first turn, persist, service
 - **函数**:
-  - `getHandle.title_generate`: 生成标题/generate title
+  - `getHandle`: 工具句柄/get handle
   - `ensureFirstTurnTitle`: 首轮自动/ensure first turn
 
 ### title.module.ts

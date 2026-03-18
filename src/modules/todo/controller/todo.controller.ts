@@ -11,9 +11,11 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { RobotRegistryService } from '../../auto-task-robot/services/robot-registry.service.js';
 import { TodoService } from '../services/todo.service.js';
 import type {
   TodoCreateInput,
+  TodoEntity,
   TodoUpdateInput,
 } from '../entities/todo.entity.js';
 import type {
@@ -31,16 +33,20 @@ export class TodoController {
   constructor(
     private readonly todo: TodoService,
     private readonly adminService: AdminService,
+    private readonly robots: RobotRegistryService,
   ) {}
 
   @Post(':todoId/items')
   async createItem(
     @Param('todoId') todoId: string,
     @Body() input: Omit<TodoItemCreateInput, 'todoId'>,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
     const doc = await this.todo.createItem({
       ...input,
       todoId: Number(todoId),
+      tenantId: authUser?.tenantId,
     });
     return { item: { ...doc, _id: undefined } };
   }
@@ -48,14 +54,20 @@ export class TodoController {
   @Get(':todoId/items')
   async listItems(
     @Param('todoId') todoId: string,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const rows = await this.todo.listItems(Number(todoId));
+    const authUser = await this.resolveAuthUser(req);
+    const rows = await this.todo.listItems(Number(todoId), authUser?.tenantId);
     return { items: rows };
   }
 
   @Get('items/:id')
-  async getItem(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const doc = await this.todo.getItem(Number(id));
+  async getItem(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
+    const doc = await this.todo.getItem(Number(id), authUser?.tenantId);
     return { item: doc };
   }
 
@@ -63,14 +75,24 @@ export class TodoController {
   async updateItem(
     @Param('id') id: string,
     @Body() input: Omit<TodoItemUpdateInput, 'id'>,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.todo.updateItem({ ...input, id: Number(id) });
+    const authUser = await this.resolveAuthUser(req);
+    const doc = await this.todo.updateItem({
+      ...input,
+      id: Number(id),
+      tenantId: authUser?.tenantId,
+    });
     return { item: doc };
   }
 
   @Delete('items/:id')
-  async removeItem(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const ok = await this.todo.deleteItem(Number(id));
+  async removeItem(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
+    const ok = await this.todo.deleteItem(Number(id), authUser?.tenantId);
     return { ok };
   }
 
@@ -84,9 +106,15 @@ export class TodoController {
   @Post()
   async create(
     @Body() input: TodoCreateInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.todo.create(input);
-    return { todo: { ...doc, _id: undefined } };
+    const authUser = await this.resolveAuthUser(req);
+    const doc = await this.todo.create({
+      ...input,
+      tenantId: authUser?.tenantId,
+    });
+    const robotTrigger = await this.triggerRobotIfNeeded(doc);
+    return { todo: { ...doc, _id: undefined }, robotTrigger };
   }
 
   /**
@@ -101,6 +129,7 @@ export class TodoController {
     const canViewAll = this.canViewAllTasks(authUser?.role);
     const rows = await this.todo.listByScope({
       canViewAll,
+      tenantId: authUser?.tenantId,
       userId: canViewAll ? userId : authUser?.username,
       assignee: canViewAll ? undefined : authUser?.displayName,
     });
@@ -111,9 +140,43 @@ export class TodoController {
    * @description 获取历史接单人名称列表
    */
   @Get('assignees')
-  async listAssignees(): Promise<Record<string, unknown>> {
-    const assignees = await this.todo.listAssignees();
+  async listAssignees(@Req() req: Request): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
+    const assignees = await this.todo.listAssignees(authUser?.tenantId);
     return { assignees };
+  }
+
+  @Get('assignee-targets')
+  async listAssigneeTargets(
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
+    const users = authUser ? await this.adminService.listUsers(authUser) : [];
+    const userTargets = users
+      .map((u) => {
+        const displayName = String(u.displayName ?? '').trim();
+        const username = String(u.username ?? '').trim();
+        const label = displayName || username;
+        if (!label) return null;
+        return {
+          value: label,
+          label,
+          type: 'user',
+          username,
+          role: String(u.role ?? ''),
+        };
+      })
+      .filter((x) => !!x);
+    const robots = this.robots.listRobots().map((r) => ({
+      value: `robot:${r.code}`,
+      label: r.name,
+      type: 'robot',
+      code: r.code,
+      description: r.description,
+    }));
+    return {
+      targets: [...userTargets, ...robots],
+    };
   }
 
   /**
@@ -123,9 +186,16 @@ export class TodoController {
   async accept(
     @Param('id') id: string,
     @Body() body: { assignee: string },
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.todo.acceptTask(Number(id), body.assignee);
-    return { todo: doc ? { ...doc, _id: undefined } : null };
+    const authUser = await this.resolveAuthUser(req);
+    const doc = await this.todo.acceptTask(
+      Number(id),
+      body.assignee,
+      authUser?.tenantId,
+    );
+    const robotTrigger = await this.triggerRobotIfNeeded(doc);
+    return { todo: doc ? { ...doc, _id: undefined } : null, robotTrigger };
   }
 
   /**
@@ -136,8 +206,12 @@ export class TodoController {
    * @since 2026-01-27
    */
   @Get(':id')
-  async get(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const doc = await this.todo.get(Number(id));
+  async get(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
+    const doc = await this.todo.get(Number(id), authUser?.tenantId);
     return { todo: doc };
   }
 
@@ -153,9 +227,16 @@ export class TodoController {
   async update(
     @Param('id') id: string,
     @Body() input: TodoUpdateInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.todo.update({ ...input, id: Number(id) });
-    return { todo: doc };
+    const authUser = await this.resolveAuthUser(req);
+    const doc = await this.todo.update({
+      ...input,
+      id: Number(id),
+      tenantId: authUser?.tenantId,
+    });
+    const robotTrigger = await this.triggerRobotIfNeeded(doc);
+    return { todo: doc, robotTrigger };
   }
 
   /**
@@ -166,8 +247,12 @@ export class TodoController {
    * @since 2026-01-27
    */
   @Delete(':id')
-  async remove(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const ok = await this.todo.delete(Number(id));
+  async remove(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authUser = await this.resolveAuthUser(req);
+    const ok = await this.todo.delete(Number(id), authUser?.tenantId);
     return { ok };
   }
 
@@ -191,5 +276,13 @@ export class TodoController {
    */
   private canViewAllTasks(role?: string): boolean {
     return role === 'super_admin' || role === 'tenant_admin';
+  }
+
+  private async triggerRobotIfNeeded(
+    todo: TodoEntity | null,
+  ): Promise<Record<string, unknown>> {
+    if (!todo) return { triggered: false };
+    const res = await this.robots.triggerIfRobotAssigned({ todo });
+    return res;
   }
 }

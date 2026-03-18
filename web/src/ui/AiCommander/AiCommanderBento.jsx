@@ -9,10 +9,24 @@ import DecisionFeedView from './DecisionFeedView';
 import ChatBIView from './ChatBIView';
 import TaskCenterView from './TaskCenterView';
 import ToolsView from './ToolsView';
+import CanvasFeedView from './CanvasFeedView';
 import NavItem from './NavItem';
-import { $activeTab, $decisionCount, $taskCount, $createTaskOpen } from './store';
+import {
+  $activeTab,
+  $decisionCount,
+  $taskCount,
+  $createTaskOpen,
+  $decisionFocusCardId,
+  $canvasFocusId,
+  $decisionsRefreshKey,
+  $tasksRefreshKey,
+} from './store';
 import { useSwipe } from './useSwipe';
-import { adminApi, getAdminToken, resolveAdminPageHref } from '../Admin/adminApi';
+import {
+  adminApi,
+  getAdminToken,
+  resolveLoginPageHref,
+} from '../Admin/adminApi';
 
 /**
  * @description AI 指挥官 Bento 风格主界面组件
@@ -23,6 +37,7 @@ const AiCommanderBento = () => {
   const activeTab = useStore($activeTab);
   const decisionCount = useStore($decisionCount);
   const taskCount = useStore($taskCount);
+  const canvasFocusId = useStore($canvasFocusId);
   const [isChatDrawerOpen, setIsChatDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState('本月');
   const [trOpen, setTrOpen] = useState(false);
@@ -30,6 +45,10 @@ const AiCommanderBento = () => {
   const [slideDir, setSlideDir] = useState('none');
   const [authChecking, setAuthChecking] = useState(true);
   const [currentUser, setCurrentUser] = useState(null);
+  const [isThoughtRouteActive, setIsThoughtRouteActive] = useState(false);
+  const scrollRef = useRef(null);
+  const scrollPositionsRef = useRef(new Map());
+  const lastTabRef = useRef(activeTab);
   const timeRanges = [
     '今天','明天','昨天',
     '过去7天内','未来7天内',
@@ -38,6 +57,23 @@ const AiCommanderBento = () => {
   ];
 
   const mainTabs = ['dashboard', 'decisions', 'chat', 'tasks', 'tools'];
+
+  /**
+   * @description 解析当前前台页面标识用于登录回跳
+   * @keyword-en resolve current frontend next page
+   * @returns {string}
+   */
+  const resolveCurrentFrontendNextPage = () => {
+    const path = window.location.pathname || '';
+    const fileName = (path.split('/').pop() || '').trim();
+    if (!fileName) return 'ai-commander';
+    if (fileName.endsWith('.html')) {
+      const name = fileName.slice(0, -5).trim();
+      return name || 'ai-commander';
+    }
+    const cleaned = fileName.replace(/[^a-zA-Z0-9-_]/g, '').trim();
+    return cleaned || 'ai-commander';
+  };
 
   const onSwipeLeft = () => {
     const idx = mainTabs.indexOf(activeTab);
@@ -58,6 +94,29 @@ const AiCommanderBento = () => {
   const swipeHandlers = useSwipe({ onSwipeLeft, onSwipeRight });
 
   useEffect(() => {
+    const prevTab = lastTabRef.current;
+    const scroller = scrollRef.current;
+    if (scroller && prevTab && prevTab !== activeTab) {
+      scrollPositionsRef.current.set(prevTab, scroller.scrollTop || 0);
+    }
+    const nextTop = scrollPositionsRef.current.get(activeTab) ?? 0;
+    if (scroller) {
+      requestAnimationFrame(() => {
+        scroller.scrollTop = nextTop;
+      });
+    }
+    if (prevTab !== activeTab) {
+      if (activeTab === 'decisions') {
+        $decisionsRefreshKey.set($decisionsRefreshKey.get() + 1);
+      }
+      if (activeTab === 'tasks') {
+        $tasksRefreshKey.set($tasksRefreshKey.get() + 1);
+      }
+    }
+    lastTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
     const onClick = (e) => {
       if (!trRef.current) return;
       if (!trRef.current.contains(e.target)) setTrOpen(false);
@@ -73,8 +132,12 @@ const AiCommanderBento = () => {
    */
   const ensureAuthorized = async () => {
     const token = getAdminToken();
+    const nextPage = resolveCurrentFrontendNextPage();
     if (!token) {
-      window.location.href = resolveAdminPageHref('login');
+      window.location.href = resolveLoginPageHref({
+        from: 'frontend',
+        next: nextPage,
+      });
       return;
     }
     try {
@@ -82,12 +145,39 @@ const AiCommanderBento = () => {
       setCurrentUser(user);
       setAuthChecking(false);
     } catch {
-      window.location.href = resolveAdminPageHref('login');
+      window.location.href = resolveLoginPageHref({
+        from: 'frontend',
+        next: nextPage,
+      });
     }
   };
 
   useEffect(() => {
     void ensureAuthorized();
+  }, []);
+
+  useEffect(() => {
+    const applyHashRoute = () => {
+      const hash = window.location.hash || '';
+      const c = hash.match(/^#canvas-(\d+)$/);
+      if (c) {
+        const canvasId = Number(c[1]);
+        if (Number.isFinite(canvasId)) {
+          $activeTab.set('tools');
+          $canvasFocusId.set(canvasId);
+        }
+        return;
+      }
+      const m = hash.match(/^#decision-card-(.+)$/);
+      if (!m) return;
+      const cardId = decodeURIComponent(m[1] || '').trim();
+      if (!cardId) return;
+      $activeTab.set('decisions');
+      $decisionFocusCardId.set(cardId);
+    };
+    applyHashRoute();
+    window.addEventListener('hashchange', applyHashRoute);
+    return () => window.removeEventListener('hashchange', applyHashRoute);
   }, []);
 
   if (authChecking) {
@@ -113,6 +203,7 @@ const AiCommanderBento = () => {
         .animate-slide-in-left { animation: slideInLeft 0.3s ease-out forwards; }
       `}</style>
       {/* 顶部控制台 */}
+      {!(activeTab === 'tools' && isThoughtRouteActive) && (
       <div className="pt-4 pb-3 px-5 bg-white shadow-[0_4px_20px_rgba(0,0,0,0.02)] z-10 relative shrink-0">
         <div className="flex justify-between items-center mb-1">
           <div>
@@ -197,10 +288,12 @@ const AiCommanderBento = () => {
           <MapPin size={14} className="mr-1" /> 上海月亮湾集合石 <ChevronRight size={14} className="ml-0.5" />
         </div>
       </div>
+      )}
 
       {/* 核心内容区 (可滚动) */}
       <div 
-        className={`flex-1 overflow-y-auto pb-24 px-4 pt-4 custom-scrollbar ${
+        ref={scrollRef}
+        className={`flex-1 overflow-y-auto pb-[calc(7.5rem+env(safe-area-inset-bottom))] ${(activeTab === 'tools' && isThoughtRouteActive) ? 'px-0 pt-0' : 'px-4 pt-4'} custom-scrollbar ${
           slideDir === 'right' ? 'animate-slide-in-right' : 
           slideDir === 'left' ? 'animate-slide-in-left' : ''
         }`}
@@ -216,7 +309,7 @@ const AiCommanderBento = () => {
           <TaskCenterView currentUser={currentUser} />
         </div>
         <div style={{ display: activeTab === 'tools' ? 'block' : 'none', height: '100%' }}>
-          <ToolsView />
+          <ToolsView onThoughtRouteChange={setIsThoughtRouteActive} />
         </div>
         <div style={{ display: activeTab === 'chat' ? 'block' : 'none', height: '100%' }}>
           <ChatBIView 
@@ -227,7 +320,7 @@ const AiCommanderBento = () => {
       </div>
 
       {/* 极简毛玻璃底部导航 */}
-      <div className="fixed bottom-0 w-full h-20 bg-white/80 backdrop-blur-xl border-t border-slate-100 flex items-center px-2 pb-4 z-40">
+      <div className="fixed bottom-0 w-full h-[calc(5rem+env(safe-area-inset-bottom))] bg-white/80 backdrop-blur-xl border-t border-slate-100 flex items-center px-2 pb-[calc(1rem+env(safe-area-inset-bottom))] z-40">
         <div className="flex-1 flex justify-around">
           <NavItem icon={<LayoutDashboard size={22} />} label="看板" isActive={activeTab === 'dashboard'} onClick={() => $activeTab.set('dashboard')} />
           <NavItem 
@@ -264,6 +357,17 @@ const AiCommanderBento = () => {
           <NavItem icon={<LayoutGrid size={22} />} label="工具" isActive={activeTab === 'tools'} onClick={() => $activeTab.set('tools')} />
         </div>
       </div>
+      {canvasFocusId ? (
+        <CanvasFeedView
+          canvasId={canvasFocusId}
+          onClose={() => {
+            $canvasFocusId.set(null);
+            if ((window.location.hash || '').startsWith('#canvas-')) {
+              history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 };

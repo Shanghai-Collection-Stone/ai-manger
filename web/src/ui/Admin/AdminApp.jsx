@@ -1,5 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { adminApi, clearAdminToken, resolveAdminPageHref } from './adminApi';
+import {
+  adminApi,
+  clearAdminToken,
+  resolveFrontendPageHref,
+  resolveLoginPageHref,
+} from './adminApi';
 
 const PAGE_SIZE = 6;
 
@@ -20,10 +25,21 @@ const ROLE_OPTIONS = [
   { value: 'operator', label: '运营人员' },
 ];
 
+const PROVIDER_CODE_OPTIONS = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'gemini', label: 'Google Gemini' },
+  { value: 'nvidia', label: 'NVIDIA' },
+  { value: 'minimax', label: 'MiniMax' },
+];
+
 const getRoleLabel = (role) => {
   const match = ROLE_OPTIONS.find((item) => item.value === role);
   return match?.label || role || '';
 };
+
+const hasAdminFullAccess = (role) =>
+  role === 'super_admin' || role === 'tenant_admin';
 
 const buildPagedRows = (rows, page) => {
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
@@ -81,7 +97,7 @@ const AdminApp = () => {
   const [editingSourceCode, setEditingSourceCode] = useState('');
   const [filters, setFilters] = useState({
     users: { keyword: '', tenantId: '' },
-    providers: { keyword: '', tenantId: '' },
+    providers: { keyword: '' },
     tenants: { keyword: '' },
     keys: { keyword: '', tenantId: '' },
     sources: { keyword: '', status: '' },
@@ -106,10 +122,11 @@ const AdminApp = () => {
       providerCode: '',
       name: '',
       baseUrl: '',
+      modelCategory: 'llm',
       model: '',
       apiKey: '',
-      tenantId: '',
       enabled: true,
+      isDefault: false,
     },
     tenant: {
       name: '',
@@ -136,6 +153,10 @@ const AdminApp = () => {
     setError('');
     try {
       const meRes = await adminApi.me();
+      if (!hasAdminFullAccess(meRes?.role)) {
+        window.location.href = resolveFrontendPageHref('ai-commander');
+        return;
+      }
       setMe(meRes);
       const [u, p, t, k, s] = await Promise.all([
         adminApi.listUsers(),
@@ -161,7 +182,10 @@ const AdminApp = () => {
       }
     } catch {
       clearAdminToken();
-      window.location.href = resolveAdminPageHref('login');
+      window.location.href = resolveLoginPageHref({
+        from: 'admin',
+        next: 'admin',
+      });
     } finally {
       setLoading(false);
     }
@@ -203,7 +227,10 @@ const AdminApp = () => {
       undefined;
     }
     clearAdminToken();
-    window.location.href = resolveAdminPageHref('login');
+    window.location.href = resolveLoginPageHref({
+      from: 'admin',
+      next: 'admin',
+    });
   };
 
   const onSubmitUser = async () => {
@@ -246,10 +273,11 @@ const AdminApp = () => {
       providerCode: forms.provider.providerCode.trim(),
       name: forms.provider.name.trim(),
       baseUrl: forms.provider.baseUrl.trim() || undefined,
+      modelCategory: forms.provider.modelCategory,
       model: forms.provider.model.trim() || undefined,
-      apiKey: forms.provider.apiKey.trim(),
-      tenantId: forms.provider.tenantId || undefined,
+      apiKey: forms.provider.apiKey.trim() || undefined,
       enabled: forms.provider.enabled,
+      isDefault: forms.provider.isDefault,
     };
     if (editingProviderId) {
       const res = await adminApi.updateProvider(editingProviderId, payload);
@@ -262,6 +290,11 @@ const AdminApp = () => {
     }
     const res = await adminApi.saveProvider(payload);
     setProviders((prev) => [res.provider, ...prev]);
+    setEditingProviderId(res.provider._id);
+    setForms((prev) => ({
+      ...prev,
+      provider: { ...res.provider },
+    }));
     setNotice('AI提供商已创建');
   };
 
@@ -392,10 +425,7 @@ const AdminApp = () => {
       !keyword ||
       toLower(item.providerCode).includes(keyword) ||
       toLower(item.name).includes(keyword);
-    const hitTenant =
-      !filters.providers.tenantId ||
-      toText(item.tenantId) === filters.providers.tenantId;
-    return hitKeyword && hitTenant;
+    return hitKeyword;
   });
   const filteredTenants = tenants.filter((item) => {
     const keyword = toLower(filters.tenants.keyword.trim());
@@ -582,22 +612,27 @@ const AdminApp = () => {
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
               <h2 className="font-semibold text-slate-900">{editingProviderId ? '编辑AI提供商' : '新增AI提供商'}</h2>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入提供商编码（如openai）" value={forms.provider.providerCode} onChange={(e) => updateForm('provider', 'providerCode', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入提供商名称" value={forms.provider.name} onChange={(e) => updateForm('provider', 'name', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入服务地址（可选）" value={forms.provider.baseUrl} onChange={(e) => updateForm('provider', 'baseUrl', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入默认模型（可选）" value={forms.provider.model} onChange={(e) => updateForm('provider', 'model', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入API Key" value={forms.provider.apiKey} onChange={(e) => updateForm('provider', 'apiKey', e.target.value)} />
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.tenantId} onChange={(e) => updateForm('provider', 'tenantId', e.target.value)}>
-                <option value="">不绑定租户（平台级）</option>
-                {tenants.map((tenant) => (
-                  <option key={tenant._id} value={tenant._id}>
-                    {tenant.name}
-                  </option>
+              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.providerCode} onChange={(e) => updateForm('provider', 'providerCode', e.target.value)}>
+                <option value="">请选择提供商编码</option>
+                {PROVIDER_CODE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
+              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入提供商名称" value={forms.provider.name} onChange={(e) => updateForm('provider', 'name', e.target.value)} />
+              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入服务地址（可选）" value={forms.provider.baseUrl} onChange={(e) => updateForm('provider', 'baseUrl', e.target.value)} />
+              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.modelCategory} onChange={(e) => updateForm('provider', 'modelCategory', e.target.value)}>
+                <option value="llm">类别: 非EM模型（LLM/关键词/任务）</option>
+                <option value="em">类别: EM模型（向量计算）</option>
+              </select>
+              <input className="w-full border rounded px-3 py-2 text-sm" placeholder={forms.provider.modelCategory === 'em' ? '请输入EM模型（向量模型）' : '请输入非EM模型（LLM模型）'} value={forms.provider.model} onChange={(e) => updateForm('provider', 'model', e.target.value)} />
+              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入API Key（可修改）" value={forms.provider.apiKey} onChange={(e) => updateForm('provider', 'apiKey', e.target.value)} />
               <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.enabled ? '1' : '0'} onChange={(e) => updateForm('provider', 'enabled', e.target.value === '1')}>
                 <option value="1">启用</option>
                 <option value="0">禁用</option>
+              </select>
+              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.isDefault ? '1' : '0'} onChange={(e) => updateForm('provider', 'isDefault', e.target.value === '1')}>
+                <option value="0">非默认（当前类别）</option>
+                <option value="1">设为默认（当前类别）</option>
               </select>
               <div className="flex gap-2">
                 <button onClick={() => onSubmitProvider().catch((err) => setError(err.message))} className="px-3 py-2 bg-slate-900 text-white text-sm rounded">
@@ -612,16 +647,8 @@ const AdminApp = () => {
             </div>
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <h2 className="font-semibold text-slate-900 mb-2">提供商列表</h2>
-              <div className="grid grid-cols-2 gap-2 mb-3">
+              <div className="grid grid-cols-1 gap-2 mb-3">
                 <input className="border rounded px-3 py-2 text-sm" placeholder="按编码或名称搜索" value={filters.providers.keyword} onChange={(e) => updateFilter('providers', 'keyword', e.target.value)} />
-                <select className="border rounded px-3 py-2 text-sm" value={filters.providers.tenantId} onChange={(e) => updateFilter('providers', 'tenantId', e.target.value)}>
-                  <option value="">全部租户</option>
-                  {tenants.map((tenant) => (
-                    <option key={tenant._id} value={tenant._id}>
-                      {tenant.name}
-                    </option>
-                  ))}
-                </select>
               </div>
               <div className="space-y-2 text-sm">
                 {pagedProviders.rows.map((item) => (
@@ -629,7 +656,9 @@ const AdminApp = () => {
                     <div>
                       <div className="font-medium">{item.name}</div>
                       <div className="text-slate-500">{item.providerCode}</div>
-                      <div className="text-xs text-slate-500">{item.tenantId || '平台级(空租户)'}</div>
+                      <div className="text-xs text-slate-500">类别：{item.modelCategory === 'em' ? 'EM模型' : '非EM模型'}</div>
+                      <div className="text-xs text-slate-500">模型：{item.model || '-'}</div>
+                      <div className="text-xs text-slate-500">{item.isDefault ? `${item.modelCategory === 'em' ? 'EM' : '非EM'}默认` : '候选提供商'}</div>
                     </div>
                     <div className="flex flex-col gap-1">
                       <button onClick={() => {
@@ -641,10 +670,11 @@ const AdminApp = () => {
                             providerCode: item.providerCode || '',
                             name: item.name || '',
                             baseUrl: item.baseUrl || '',
+                            modelCategory: item.modelCategory || 'llm',
                             model: item.model || '',
                             apiKey: item.apiKey || '',
-                            tenantId: item.tenantId || '',
                             enabled: Boolean(item.enabled),
+                            isDefault: Boolean(item.isDefault),
                           },
                         }));
                       }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">

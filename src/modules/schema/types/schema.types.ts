@@ -14,10 +14,10 @@ export const ZFieldOverride = z.object({
 export const ZTableOverride = z.object({
   nameCn: z.string().optional(),
   keywords: z.array(z.string()).optional(),
-  fields: z.record(ZFieldOverride).optional(),
+  fields: z.record(z.string(), ZFieldOverride).optional(),
 });
 
-export const ZOverrides = z.record(ZTableOverride);
+export const ZOverrides = z.record(z.string(), ZTableOverride);
 
 export type FieldOverride = z.infer<typeof ZFieldOverride>;
 export type TableOverride = z.infer<typeof ZTableOverride>;
@@ -46,4 +46,4 @@ export const ZTableOverrideAlt = z.object({
   fields: z.array(ZFieldArrayItem).optional(),
 });
 
-export const ZOverridesKeyedAlt = z.record(ZTableOverrideAlt);
+export const ZOverridesKeyedAlt = z.record(z.string(), ZTableOverrideAlt);

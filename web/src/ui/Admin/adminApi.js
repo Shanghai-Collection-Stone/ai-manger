@@ -48,6 +48,36 @@ export function resolveAdminPageHref(pageName) {
 }
 
 /**
+ * @description 解析前台页面跳转路径
+ * @keyword-en resolve frontend page href
+ */
+export function resolveFrontendPageHref(pageName = 'ai-commander') {
+  if (typeof window === 'undefined') return `/pages/${pageName}.html`;
+  const currentPath = window.location.pathname || '';
+  if (currentPath.startsWith('/pages/')) {
+    return `./${pageName}.html`;
+  }
+  return `/pages/${pageName}.html`;
+}
+
+/**
+ * @description 解析登录页面地址并附带来源参数
+ * @keyword-en resolve login page href with source
+ */
+export function resolveLoginPageHref(options = {}) {
+  const base = resolveAdminPageHref('login');
+  const params = new URLSearchParams();
+  if (typeof options.from === 'string' && options.from.trim()) {
+    params.set('from', options.from.trim());
+  }
+  if (typeof options.next === 'string' && options.next.trim()) {
+    params.set('next', options.next.trim());
+  }
+  const query = params.toString();
+  return query ? `${base}?${query}` : base;
+}
+
+/**
  * @description 后台API请求
  * @keyword-en admin api request
  */
@@ -81,11 +111,18 @@ async function request(path, options = {}) {
  * @keyword-en admin api service
  */
 export const adminApi = {
-  async login(username, password) {
+  async login(username, password, tenantId = '') {
     return request('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({
+        username,
+        password,
+        tenantId: tenantId || undefined,
+      }),
     });
+  },
+  async listLoginTenants() {
+    return request('/auth/tenants');
   },
   async me() {
     return request('/auth/me');

@@ -8,7 +8,7 @@
 
 ### embedding.service.ts
 提供文本向量化与余弦相似度计算服务。
-- **关键词**: embedding, vector, gemini-embedding-001, google-genai, cosine, similarity, langchain, global, service
+- **关键词**: embedding, vector, em-model, provider-code, gemini, openai-compatible, cosine, similarity, langchain, global, service
 
 ### embedding.module.ts
 Embedding模块定义。

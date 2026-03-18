@@ -8,7 +8,10 @@
 
 ### schema.service.ts
 Schema服务。
-- **关键词**: schema, function-call, tools, data-source, mongo, query, service
+- **关键词**: schema, function-call, tools, data-source, mongo, tenant, source-code, service
+- **函数**:
+  - `getHandle`: 获取句柄/get handle
+  - `resolveTenantId`: 解析租户ID/resolve tenant id
 
 ### schema.module.ts
 Schema模块定义。

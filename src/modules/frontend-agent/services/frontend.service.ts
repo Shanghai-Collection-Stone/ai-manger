@@ -5,6 +5,7 @@ import { CreateAgentParams, tool } from 'langchain';
 import * as z from 'zod';
 import { ZPageResult, PageResult } from '../types/frontend.types.js';
 import { BaseMessage } from 'langchain';
+import type { DeepAgentSubAgent } from '../../ai-agent/types/agent.types.js';
 
 /**
  * @title 前端页Agent服务 Frontend Page Agent Service
@@ -89,18 +90,33 @@ export class FrontendAgentService {
   }): Promise<PageResult> {
     const sys =
       '你是一个前端页面生成Agent。请严格返回JSON对象，符合ZPageResult的结构，包含elements数组，元素可以是chart/table/markdown三种。Markdown支持表格与复杂元素。禁止返回除JSON外的任何字符。';
+    const subagent: DeepAgentSubAgent = {
+      name: 'frontend_subagent',
+      description: '前端页面生成子代理',
+      systemPrompt: sys,
+    };
+    const mainSystem = [
+      '你是前端页面生成协调者。',
+      '必须使用 task 工具委托给 frontend_subagent。',
+      '仅返回子代理最终 JSON 结果。',
+    ].join('\n');
     const config = {
       provider: params.provider ?? 'deepseek',
       model: params.model ?? 'deepseek-chat',
       temperature: params.temperature ?? 0.1,
-      system: sys,
+      system: mainSystem,
       contextSchema:
         ZPageResult as unknown as CreateAgentParams['contextSchema'],
+      subagents: [subagent],
     };
     const messages: BaseMessage[] = [
-      ...this.agent.toMessages([{ role: 'system', content: sys }]),
       ...params.history,
-      ...this.agent.toMessages([{ role: 'user', content: params.input }]),
+      ...this.agent.toMessages([
+        {
+          role: 'user',
+          content: `请使用 task 工具委托给 frontend_subagent，任务：${params.input}`,
+        },
+      ]),
     ];
     const ai = await this.agent.runWithMessages({ config, messages });
     const text = (ai as unknown as { content: unknown }).content;

@@ -19,6 +19,7 @@ AI上下文检索模块：提供关键词提取、命中检索与滑动窗口上
 - **关键词**: keywords, extract
 - **函数**:
   - `extractKeywords`: 关键词提取/extractKeywords
+  - `resolveKeywordAiConfig`: 关键词模型配置解析/resolve keyword ai config
 
 ### retrieval.controller.ts
 检索控制器。

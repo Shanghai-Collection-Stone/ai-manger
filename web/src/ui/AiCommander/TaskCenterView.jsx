@@ -3,7 +3,7 @@ import { useStore } from '@nanostores/react';
 import { 
   Brush, Shield, Wrench, Megaphone, Plus, Clock, User, X, ClipboardList, Zap, UserCheck, AlertTriangle, CheckCircle2
 } from 'lucide-react';
-import { $createTaskOpen, $taskCount } from './store';
+import { $createTaskOpen, $taskCount, $tasksRefreshKey } from './store';
 import { getAdminToken } from '../Admin/adminApi';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
@@ -16,6 +16,7 @@ const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 const TaskCenterView = ({ currentUser }) => {
   const [activeTab, setActiveTab] = useState('inprogress');
   const [activeCategory, setActiveCategory] = useState('all');
+  const refreshKey = useStore($tasksRefreshKey);
   const isCreateModalOpen = useStore($createTaskOpen);
   
   // 新建任务表单状态
@@ -29,8 +30,8 @@ const TaskCenterView = ({ currentUser }) => {
   const [tasks, setTasks] = useState([]);
   const [isFetching, setIsFetching] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [acceptName, setAcceptName] = useState('');
-  const [assignees, setAssignees] = useState([]);
+   const [acceptName, setAcceptName] = useState('');
+  const [assigneeTargets, setAssigneeTargets] = useState([]);
   const [showAssigneeDropdown, setShowAssigneeDropdown] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
@@ -39,6 +40,8 @@ const TaskCenterView = ({ currentUser }) => {
   const [abnormalReasonText, setAbnormalReasonText] = useState('');
   const [showReworkInput, setShowReworkInput] = useState(false);
   const [reworkAssignee, setReworkAssignee] = useState('');
+  const [descExpanded, setDescExpanded] = useState(false);
+  const [planExpanded, setPlanExpanded] = useState(false);
   const [authUserName, setAuthUserName] = useState('');
   const [authDisplayName, setAuthDisplayName] = useState('');
   const [roleScope, setRoleScope] = useState('self');
@@ -157,7 +160,12 @@ const TaskCenterView = ({ currentUser }) => {
           eta: timeText ? `更新 ${timeText}` : '',
           actionText: '催办',
           type,
-          priority: 'medium'
+          priority: 'medium',
+          aiPlan: todo.aiPlan || '',
+          aiConsideration: todo.aiConsideration || '',
+          decisionReason: todo.decisionReason || '',
+          createdAt: todo.createdAt || '',
+          updatedAt: todo.updatedAt || ''
         };
       });
       setTasks(mapped);
@@ -178,18 +186,47 @@ const TaskCenterView = ({ currentUser }) => {
   useEffect(() => {
     if (!authUserName && !authDisplayName) return;
     loadTodos();
-    // Load historical assignees
-    fetch(`${API_BASE}/todo/assignees`, {
+    fetch(`${API_BASE}/todo/assignee-targets`, {
       headers: {
         ...buildAuthHeaders(),
       },
     })
       .then(r => r.json())
       .then(d => {
-        if (Array.isArray(d.assignees)) setAssignees(d.assignees);
+        if (Array.isArray(d.targets)) {
+          setAssigneeTargets(
+            d.targets
+              .map((x) => {
+                const value = String(x?.value || '').trim();
+                const label = String(x?.label || value).trim();
+                const type = String(x?.type || 'user').trim();
+                if (!value) return null;
+                return { value, label, type };
+              })
+              .filter(Boolean),
+          );
+          return;
+        }
+        if (Array.isArray(d.assignees)) {
+          setAssigneeTargets(
+            d.assignees
+              .map((x) => {
+                const v = String(x || '').trim();
+                if (!v) return null;
+                return { value: v, label: v, type: 'user' };
+              })
+              .filter(Boolean),
+          );
+        }
       })
       .catch(() => {});
   }, [authUserName, authDisplayName, roleScope]);
+
+  useEffect(() => {
+    if (!authUserName && !authDisplayName) return;
+    if (refreshKey <= 0) return;
+    loadTodos();
+  }, [refreshKey]);
 
   const handleCreateTask = async () => {
     if (!newTask.title) return;
@@ -353,6 +390,8 @@ const TaskCenterView = ({ currentUser }) => {
                 setAbnormalReasonText('');
                 setShowReworkInput(false);
                 setReworkAssignee(task.assignee || '');
+                setDescExpanded(false);
+                setPlanExpanded(false);
               }}
               className="bg-white rounded-xl px-4 py-3 border border-slate-100 hover:border-slate-200 hover:shadow-sm transition cursor-pointer active:scale-[0.99]"
             >
@@ -435,13 +474,18 @@ const TaskCenterView = ({ currentUser }) => {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">指派给</label>
-                  <input 
-                    type="text" 
+                  <select
                     value={newTask.assignee}
                     onChange={(e) => setNewTask({...newTask, assignee: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
-                    placeholder="例如：李阿姨"
-                  />
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition appearance-none"
+                  >
+                    <option value="">请选择指派对象</option>
+                    {assigneeTargets.map((target) => (
+                      <option key={target.value} value={target.value}>
+                        {target.type === 'robot' ? `🤖 ${target.label}` : `👤 ${target.label}`}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -497,8 +541,45 @@ const TaskCenterView = ({ currentUser }) => {
             <div className="p-5 space-y-4 overflow-y-auto flex-1">
               {/* Description */}
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider">任务描述</label>
-                <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{selectedTask.desc || '暂无描述'}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider">任务描述</label>
+                  {String(selectedTask.desc || '').length > 220 && (
+                    <button
+                      onClick={() => setDescExpanded((v) => !v)}
+                      className="text-[10px] font-bold text-slate-500 hover:text-slate-700"
+                    >
+                      {descExpanded ? '收起' : '展开'}
+                    </button>
+                  )}
+                </div>
+                <div
+                  className={`text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words bg-slate-50 rounded-xl p-3 border border-slate-100 ${
+                    descExpanded ? '' : 'max-h-40 overflow-y-auto'
+                  }`}
+                >
+                  {selectedTask.desc || '暂无描述'}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wider">执行计划</label>
+                  {String(selectedTask.aiPlan || '').length > 400 && (
+                    <button
+                      onClick={() => setPlanExpanded((v) => !v)}
+                      className="text-[10px] font-bold text-slate-500 hover:text-slate-700"
+                    >
+                      {planExpanded ? '收起' : '展开'}
+                    </button>
+                  )}
+                </div>
+                <div
+                  className={`text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words bg-white rounded-xl p-3 border border-slate-200 ${
+                    planExpanded ? '' : 'max-h-56 overflow-y-auto'
+                  }`}
+                >
+                  {selectedTask.aiPlan || '暂无执行计划'}
+                </div>
               </div>
 
               {/* Meta Info */}
@@ -545,18 +626,23 @@ const TaskCenterView = ({ currentUser }) => {
                       placeholder="输入或选择接单人姓名"
                       autoFocus
                     />
-                    {showAssigneeDropdown && assignees.length > 0 && (
+                    {showAssigneeDropdown && assigneeTargets.length > 0 && (
                       <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-32 overflow-y-auto">
-                        {assignees
-                          .filter(a => !acceptName || a.toLowerCase().includes(acceptName.toLowerCase()))
-                          .map(name => (
+                        {assigneeTargets
+                          .filter((a) => {
+                            if (!acceptName) return true;
+                            const q = acceptName.toLowerCase();
+                            return a.label.toLowerCase().includes(q) || a.value.toLowerCase().includes(q);
+                          })
+                          .map((target) => (
                             <button
-                              key={name}
-                              onMouseDown={(e) => { e.preventDefault(); setAcceptName(name); setShowAssigneeDropdown(false); }}
+                              key={target.value}
+                              onMouseDown={(e) => { e.preventDefault(); setAcceptName(target.value); setShowAssigneeDropdown(false); }}
                               className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition flex items-center gap-2"
                             >
                               <User size={14} className="text-slate-400" />
-                              {name}
+                              <span>{target.label}</span>
+                              <span className="ml-auto text-[10px] text-slate-400">{target.type === 'robot' ? '机器人' : '人员'}</span>
                             </button>
                           ))
                         }
@@ -574,9 +660,6 @@ const TaskCenterView = ({ currentUser }) => {
                           body: JSON.stringify({ assignee: acceptName.trim() })
                         });
                         if (res.ok) {
-                          if (!assignees.includes(acceptName.trim())) {
-                            setAssignees(prev => [...prev, acceptName.trim()]);
-                          }
                           await loadTodos();
                           setSelectedTask(null);
                         }
@@ -699,18 +782,23 @@ const TaskCenterView = ({ currentUser }) => {
                       />
                       <User className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
                       
-                      {showAssigneeDropdown && assignees.length > 0 && (
+                      {showAssigneeDropdown && assigneeTargets.length > 0 && (
                         <div className="absolute z-60 top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto">
-                          {assignees
-                            .filter(name => !reworkAssignee || name.toLowerCase().includes(reworkAssignee.toLowerCase()))
-                            .map(name => (
+                          {assigneeTargets
+                            .filter((target) => {
+                              if (!reworkAssignee) return true;
+                              const q = reworkAssignee.toLowerCase();
+                              return target.label.toLowerCase().includes(q) || target.value.toLowerCase().includes(q);
+                            })
+                            .map((target) => (
                               <button
-                                key={name}
-                                onMouseDown={(e) => { e.preventDefault(); setReworkAssignee(name); setShowAssigneeDropdown(false); }}
+                                key={target.value}
+                                onMouseDown={(e) => { e.preventDefault(); setReworkAssignee(target.value); setShowAssigneeDropdown(false); }}
                                 className="w-full text-left px-4 py-2 text-sm text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition flex items-center gap-2"
                               >
                                 <User size={14} className="text-slate-400" />
-                                {name}
+                                <span>{target.label}</span>
+                                <span className="ml-auto text-[10px] text-slate-400">{target.type === 'robot' ? '机器人' : '人员'}</span>
                               </button>
                             ))
                           }
@@ -735,9 +823,6 @@ const TaskCenterView = ({ currentUser }) => {
                               body: JSON.stringify({ status: 'in_progress', abnormalReason: '', assignee: reworkAssignee.trim() })
                             });
                             if (res.ok) {
-                              if (!assignees.includes(reworkAssignee.trim())) {
-                                setAssignees(prev => [...prev, reworkAssignee.trim()]);
-                              }
                               await loadTodos();
                               setSelectedTask(null);
                             }

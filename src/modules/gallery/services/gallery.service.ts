@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { join, resolve } from 'path';
 import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   GalleryImageCreateInput,
   GalleryImageEntity,
@@ -19,6 +20,7 @@ export class GalleryService {
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly embedding: EmbeddingService,
+    private readonly adminService: AdminService,
   ) {
     this.images = db.collection<GalleryImageEntity>('gallery_images');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
@@ -182,7 +184,8 @@ export class GalleryService {
     const now = new Date();
     const ids = await Promise.all(inputs.map(() => this.nextId()));
     const texts = inputs.map((i) => this.buildEmbeddingText(i));
-    const embeddings = await this.embedding.embedBatch(texts);
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+    const embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
 
     const docs: GalleryImageEntity[] = inputs.map((input, idx) => ({
       _id: new ObjectId(),
@@ -473,7 +476,8 @@ export class GalleryService {
     if (rows.length === 0) return { updated: 0 };
 
     const texts = rows.map((r) => this.buildEmbeddingTextFromEntity(r));
-    const embeddings = await this.embedding.embedBatch(texts);
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+    const embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
     const now = new Date();
     const ops = rows.map((r, idx) => ({
       updateOne: {
@@ -512,7 +516,11 @@ export class GalleryService {
     limit = 8,
     minScore = 0.5,
   ): Promise<GallerySearchResult[]> {
-    const queryEmbedding = await this.embedding.embedText(query);
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+    const queryEmbedding = await this.embedding.embedText(
+      query,
+      embeddingConfig,
+    );
     if (this.isAtlasAvailable === false) {
       return this.searchSimilarLocal(queryEmbedding, userId, limit, minScore);
     }
@@ -589,5 +597,30 @@ export class GalleryService {
         };
       });
     return scored;
+  }
+
+  /**
+   * @description 解析默认Embedding配置（来源于AI提供商表）
+   * @keyword-en resolve default embedding config from provider table
+   */
+  private async resolveDefaultEmbeddingConfig(): Promise<{
+    providerCode?: string;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }> {
+    const runtime = await this.adminService.getDefaultEmbeddingRuntime();
+    if (!runtime) {
+      return {
+        providerCode: 'gemini',
+        model: 'gemini-embedding-001',
+      };
+    }
+    return {
+      providerCode: runtime.providerCode,
+      model: runtime.model,
+      apiKey: runtime.apiKey,
+      baseUrl: runtime.baseUrl,
+    };
   }
 }

@@ -1,5 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { GoogleGenerativeAIEmbeddings } from '@langchain/google-genai';
+import { OpenAIEmbeddings } from '@langchain/openai';
+
+type EmbeddingRuntimeConfig = {
+  providerCode?: string;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+};
 
 /**
  * @title 向量嵌入服务 Embedding Service
@@ -9,16 +17,7 @@ import { GoogleGenerativeAIEmbeddings } from '@langchain/google-genai';
  */
 @Injectable()
 export class EmbeddingService {
-  private readonly embeddings: GoogleGenerativeAIEmbeddings;
   private readonly dim = 768;
-
-  constructor() {
-    const apiKey = process.env.GEMINI_API_KEY ?? '';
-    this.embeddings = new GoogleGenerativeAIEmbeddings({
-      apiKey,
-      model: 'gemini-embedding-001',
-    });
-  }
 
   /**
    * @title 单文本向量化 Embed Single Text
@@ -28,12 +27,16 @@ export class EmbeddingService {
    * @param text 待向量化的文本
    * @returns 768维浮点数数组
    */
-  async embedText(text: string): Promise<number[]> {
+  async embedText(
+    text: string,
+    config?: EmbeddingRuntimeConfig,
+  ): Promise<number[]> {
     if (!text || text.trim().length === 0) {
       return new Array<number>(this.dim).fill(0);
     }
     try {
-      const vector = await this.embeddings.embedQuery(text);
+      const embeddings = this.resolveEmbeddings(config);
+      const vector = await embeddings.embedQuery(text);
       return vector;
     } catch (error) {
       console.error('Embedding failed:', error);
@@ -49,12 +52,16 @@ export class EmbeddingService {
    * @param texts 待向量化的文本数组
    * @returns 二维数组，每个元素是对应文本的768维向量
    */
-  async embedBatch(texts: string[]): Promise<number[][]> {
+  async embedBatch(
+    texts: string[],
+    config?: EmbeddingRuntimeConfig,
+  ): Promise<number[][]> {
     if (!texts || texts.length === 0) {
       return [];
     }
     try {
-      const vectors = await this.embeddings.embedDocuments(texts);
+      const embeddings = this.resolveEmbeddings(config);
+      const vectors = await embeddings.embedDocuments(texts);
       return vectors;
     } catch (error) {
       console.error('Batch embedding failed:', error);
@@ -86,5 +93,49 @@ export class EmbeddingService {
     const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
     if (magnitude === 0) return 0;
     return dotProduct / magnitude;
+  }
+
+  /**
+   * @title 解析向量模型客户端 Resolve Embeddings Client
+   * @description 按 providerCode 返回对应 embedding 客户端。
+   * @keywords-cn 向量模型, provider, 客户端
+   * @keywords-en embeddings, provider, runtime client
+   */
+  private resolveEmbeddings(
+    config?: EmbeddingRuntimeConfig,
+  ): GoogleGenerativeAIEmbeddings | OpenAIEmbeddings {
+    const providerCode = (config?.providerCode || 'gemini')
+      .trim()
+      .toLowerCase();
+    if (providerCode === 'gemini') {
+      return new GoogleGenerativeAIEmbeddings({
+        apiKey: config?.apiKey ?? process.env.GEMINI_API_KEY ?? '',
+        model: config?.model || 'gemini-embedding-001',
+      });
+    }
+    const baseURL =
+      config?.baseUrl ||
+      (providerCode === 'deepseek'
+        ? 'https://api.deepseek.com'
+        : providerCode === 'nvidia'
+          ? 'https://integrate.api.nvidia.com/v1'
+          : providerCode === 'minimax'
+            ? 'https://api.minimax.chat/v1'
+            : undefined);
+    const fallbackKey =
+      providerCode === 'deepseek'
+        ? (process.env.DEEPSEEK_API_KEY ?? '')
+        : providerCode === 'nvidia'
+          ? (process.env.NVIDIA_API_KEY ?? '')
+          : providerCode === 'openai'
+            ? (process.env.OPENAI_API_KEY ?? '')
+            : providerCode === 'minimax'
+              ? (process.env.MINIMAX_API_KEY ?? '')
+              : '';
+    return new OpenAIEmbeddings({
+      apiKey: config?.apiKey ?? fallbackKey,
+      model: config?.model || 'text-embedding-3-small',
+      configuration: baseURL ? { baseURL } : undefined,
+    });
   }
 }

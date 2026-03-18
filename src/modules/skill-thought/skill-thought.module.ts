@@ -5,6 +5,8 @@ import { SkillThoughtService } from './services/skill-thought.service.js';
 import { SkillThoughtToolsService } from './tools/skill-thought.tools.js';
 import { EmbeddingModule } from '../shared/embedding/embedding.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
+import { AdminModule } from '../admin/admin.module.js';
+import { SkillThoughtController } from './controller/skill-thought.controller.js';
 
 const ST_MONGO_CLIENT = 'ST_MONGO_CLIENT';
 const ST_MONGO_DB = 'ST_MONGO_DB';
@@ -62,7 +64,8 @@ const mongoProviders: Provider[] = [
  * @keywords-en skill thought module, storage, retrieval
  */
 @Module({
-  imports: [EmbeddingModule, AiAgentModule],
+  imports: [EmbeddingModule, AiAgentModule, AdminModule],
+  controllers: [SkillThoughtController],
   providers: [...mongoProviders, SkillThoughtService, SkillThoughtToolsService],
   exports: [SkillThoughtService, SkillThoughtToolsService, ...mongoProviders],
 })

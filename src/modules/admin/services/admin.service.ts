@@ -8,7 +8,7 @@ import { Inject } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import {
   createHash,
-  randomBytes,
+  createHmac,
   randomUUID,
   scryptSync,
   timingSafeEqual,
@@ -17,6 +17,7 @@ import { DataSourceService } from '../../data-source/services/data-source.servic
 import type {
   DataSourceCreateInput,
   DataSourceEntity,
+  MongoConnectionConfig,
   DataSourceStatus,
 } from '../../data-source/entities/data-source.entity.js';
 import type { SassApiKeyEntity } from '../../sass/entities/sass-api-key.entity.js';
@@ -24,6 +25,7 @@ import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js
 import { SassService } from '../../sass/services/sass.service.js';
 import type {
   AdminAiProviderEntity,
+  AdminJwtPayload,
   AdminSessionEntity,
   AdminUserEntity,
   AdminUserRole,
@@ -44,6 +46,7 @@ export class AdminService {
   private readonly sassApiKeys: Collection<SassApiKeyEntity>;
   private readonly dataSources: Collection<DataSourceEntity>;
   private readonly SESSION_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
+  private readonly jwtSecret: string;
 
   constructor(
     @Inject('DS_MONGO_DB') private readonly db: Db,
@@ -57,8 +60,21 @@ export class AdminService {
     this.sassTenants = db.collection<SassTenantEntity>('sass_tenants');
     this.sassApiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.dataSources = db.collection<DataSourceEntity>('data_sources');
-    void this.ensureIndexes();
-    void this.ensureBootstrapUser();
+    this.jwtSecret =
+      process.env.ADMIN_JWT_SECRET?.trim() ||
+      process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim() ||
+      'ai-mvp-admin-jwt-secret';
+    void this.initializeAdminInfrastructure();
+  }
+
+  /**
+   * @description 顺序初始化后台基础设施
+   * @keyword-en initialize admin infrastructure in sequence
+   */
+  private async initializeAdminInfrastructure(): Promise<void> {
+    await this.ensureIndexes();
+    await this.ensureBootstrapUser();
+    await this.ensureProvidersFromEnv();
   }
 
   /**
@@ -66,20 +82,37 @@ export class AdminService {
    * @keyword-en ensure admin indexes
    */
   async ensureIndexes(): Promise<void> {
-    await this.users.createIndex({ username: 1 }, { unique: true });
+    await this.users.dropIndex('username_1').catch(() => undefined);
+    await this.users.createIndex(
+      { username: 1, tenantId: 1 },
+      { unique: true },
+    );
     await this.users.createIndex({ tenantId: 1 });
     await this.sessions.createIndex({ tokenHash: 1 }, { unique: true });
+    await this.sessions.createIndex({ sessionId: 1 }, { unique: true });
     await this.sessions.createIndex({ userId: 1 });
+    await this.sessions.createIndex({ tenantId: 1 });
     await this.sessions.createIndex(
       { expiresAt: 1 },
       { expireAfterSeconds: 0 },
     );
+    await this.aiProviders.dropIndex('providerCode_1').catch(() => undefined);
+    await this.aiProviders
+      .dropIndex('providerCode_1_tenantId_1')
+      .catch(() => undefined);
+    await this.aiProviders.dropIndex('isDefault_1').catch(() => undefined);
     await this.aiProviders.createIndex(
-      { providerCode: 1, tenantId: 1 },
+      { providerCode: 1, modelCategory: 1 },
       { unique: true },
     );
-    await this.aiProviders.createIndex({ tenantId: 1 });
     await this.aiProviders.createIndex({ enabled: 1 });
+    await this.aiProviders.createIndex(
+      { modelCategory: 1, isDefault: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { isDefault: true },
+      },
+    );
   }
 
   /**
@@ -113,21 +146,40 @@ export class AdminService {
   async login(input: {
     username: string;
     password: string;
+    tenantId?: string;
   }): Promise<{ token: string; user: AdminUserPublic }> {
     const username = input.username.trim();
-    const user = await this.users.findOne({ username });
+    const tenantId = input.tenantId?.trim();
+    const user = await this.users.findOne(
+      tenantId
+        ? { username, tenantId }
+        : { username, tenantId: { $exists: false } },
+    );
     if (!user) throw new UnauthorizedException('INVALID_USERNAME_OR_PASSWORD');
     if (!user.enabled) throw new ForbiddenException('ACCOUNT_DISABLED');
     if (!this.verifyPassword(input.password, user.passwordHash)) {
       throw new UnauthorizedException('INVALID_USERNAME_OR_PASSWORD');
     }
-    const token = randomBytes(32).toString('hex');
     const now = new Date();
+    const exp = Math.floor((now.getTime() + this.SESSION_EXPIRE_MS) / 1000);
+    const iat = Math.floor(now.getTime() / 1000);
+    const sid = randomUUID().replace(/-/g, '');
+    const payload: Omit<AdminJwtPayload, 'exp' | 'iat'> = {
+      sub: String(user._id),
+      sid,
+      role: user.role,
+      tenantId: user.tenantId,
+      username: user.username,
+    };
+    const token = this.signJwt(payload, iat, exp);
     await this.sessions.insertOne({
       _id: new ObjectId(),
+      sessionId: sid,
       userId: String(user._id),
+      tenantId: user.tenantId,
+      role: user.role,
       tokenHash: this.hashToken(token),
-      expiresAt: new Date(now.getTime() + this.SESSION_EXPIRE_MS),
+      expiresAt: new Date(exp * 1000),
       createdAt: now,
       updatedAt: now,
     });
@@ -143,12 +195,17 @@ export class AdminService {
    * @keyword-en get user from token
    */
   async getUserByToken(token: string): Promise<AdminUserEntity | null> {
+    const payload = this.verifyJwt(token);
+    if (!payload) return null;
     const tokenHash = this.hashToken(token);
     const session = await this.sessions.findOne({ tokenHash });
     if (!session) return null;
     if (session.expiresAt.getTime() <= Date.now()) return null;
+    if (session.sessionId !== payload.sid) return null;
+    if (session.userId !== payload.sub) return null;
+    if ((session.tenantId ?? '') !== (payload.tenantId ?? '')) return null;
     const user = await this.users.findOne({
-      _id: new ObjectId(session.userId),
+      _id: new ObjectId(payload.sub),
     });
     if (!user || !user.enabled) return null;
     return user;
@@ -291,15 +348,11 @@ export class AdminService {
   async listAiProviders(
     currentUser: AdminUserEntity,
   ): Promise<AdminAiProviderEntity[]> {
-    const filter = currentUser.tenantId
-      ? {
-          $or: [
-            { tenantId: currentUser.tenantId },
-            { tenantId: { $exists: false } },
-          ],
-        }
-      : {};
-    return this.aiProviders.find(filter).sort({ updatedAt: -1 }).toArray();
+    void currentUser;
+    return this.aiProviders
+      .find({})
+      .sort({ isDefault: -1, updatedAt: -1 })
+      .toArray();
   }
 
   /**
@@ -313,26 +366,32 @@ export class AdminService {
       name: string;
       baseUrl?: string;
       model?: string;
-      apiKey: string;
+      modelCategory: 'llm' | 'em';
+      apiKey?: string;
       enabled?: boolean;
-      tenantId?: string;
+      isDefault?: boolean;
     },
   ): Promise<AdminAiProviderEntity> {
-    const tenantId = this.resolveTargetTenant(currentUser, input.tenantId);
+    this.assertSuperAdmin(currentUser);
     const now = new Date();
+    const modelCategory: AdminAiProviderEntity['modelCategory'] =
+      input.modelCategory === 'em' ? 'em' : 'llm';
     const filter: Record<string, unknown> = {
       providerCode: input.providerCode.trim(),
+      modelCategory,
     };
-    if (tenantId) filter.tenantId = tenantId;
-    else filter.tenantId = { $exists: false };
     const doc = {
       providerCode: input.providerCode.trim(),
       name: input.name.trim(),
       baseUrl: input.baseUrl?.trim() || undefined,
       model: input.model?.trim() || undefined,
-      apiKey: input.apiKey.trim(),
+      modelCategory,
+      apiKey:
+        typeof input.apiKey === 'string' && input.apiKey.trim().length > 0
+          ? input.apiKey.trim()
+          : undefined,
       enabled: input.enabled ?? true,
-      tenantId,
+      isDefault: input.isDefault ?? false,
       updatedAt: now,
     };
     const res = await this.aiProviders.findOneAndUpdate(
@@ -344,6 +403,15 @@ export class AdminService {
       { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
     if (!res.value) throw new BadRequestException('AI_PROVIDER_SAVE_FAILED');
+    if (res.value.isDefault) {
+      await this.aiProviders.updateMany(
+        {
+          _id: { $ne: res.value._id },
+          modelCategory: res.value.modelCategory,
+        },
+        { $set: { isDefault: false, updatedAt: now } },
+      );
+    }
     return res.value;
   }
 
@@ -359,15 +427,16 @@ export class AdminService {
       name?: string;
       baseUrl?: string;
       model?: string;
+      modelCategory?: 'llm' | 'em';
       apiKey?: string;
       enabled?: boolean;
-      tenantId?: string;
+      isDefault?: boolean;
     },
   ): Promise<AdminAiProviderEntity | null> {
+    this.assertSuperAdmin(currentUser);
     const targetId = this.toObjectId(id, 'INVALID_AI_PROVIDER_ID');
     const target = await this.aiProviders.findOne({ _id: targetId });
     if (!target) return null;
-    this.assertSameTenantOrPlatform(currentUser, target.tenantId);
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (typeof input.providerCode === 'string' && input.providerCode.trim()) {
       updates.providerCode = input.providerCode.trim();
@@ -381,20 +450,32 @@ export class AdminService {
     if (typeof input.model === 'string') {
       updates.model = input.model.trim() || undefined;
     }
-    if (typeof input.apiKey === 'string' && input.apiKey.trim()) {
-      updates.apiKey = input.apiKey.trim();
+    if (input.modelCategory === 'llm' || input.modelCategory === 'em') {
+      updates.modelCategory = input.modelCategory;
+    }
+    if (typeof input.apiKey === 'string') {
+      updates.apiKey = input.apiKey.trim() || undefined;
     }
     if (typeof input.enabled === 'boolean') {
       updates.enabled = input.enabled;
     }
-    if (typeof input.tenantId !== 'undefined') {
-      updates.tenantId = this.resolveTargetTenant(currentUser, input.tenantId);
+    if (typeof input.isDefault === 'boolean') {
+      updates.isDefault = input.isDefault;
     }
     const res = await this.aiProviders.findOneAndUpdate(
       { _id: targetId },
       { $set: updates },
       { returnDocument: 'after', includeResultMetadata: true },
     );
+    if (res.value?.isDefault) {
+      await this.aiProviders.updateMany(
+        {
+          _id: { $ne: res.value._id },
+          modelCategory: res.value.modelCategory,
+        },
+        { $set: { isDefault: false, updatedAt: new Date() } },
+      );
+    }
     return res.value ?? null;
   }
 
@@ -406,12 +487,78 @@ export class AdminService {
     currentUser: AdminUserEntity,
     id: string,
   ): Promise<boolean> {
+    this.assertSuperAdmin(currentUser);
     const targetId = this.toObjectId(id, 'INVALID_AI_PROVIDER_ID');
-    const target = await this.aiProviders.findOne({ _id: targetId });
-    if (!target) return false;
-    this.assertSameTenantOrPlatform(currentUser, target.tenantId);
     const res = await this.aiProviders.deleteOne({ _id: targetId });
     return res.deletedCount === 1;
+  }
+
+  /**
+   * @description 登录页可选租户列表
+   * @keyword-en list login tenant options
+   */
+  async listLoginTenants(): Promise<SassTenantEntity[]> {
+    return this.sassService.listTenant();
+  }
+
+  /**
+   * @description 读取默认AI提供商
+   * @keyword-en get default ai provider
+   */
+  async getDefaultAiProvider(
+    modelCategory: 'llm' | 'em' = 'llm',
+  ): Promise<AdminAiProviderEntity | null> {
+    const row = await this.aiProviders.findOne(
+      { enabled: true, isDefault: true, modelCategory },
+      { sort: { updatedAt: -1 } },
+    );
+    if (row) return row;
+    return this.aiProviders.findOne(
+      { enabled: true, modelCategory },
+      { sort: { updatedAt: -1 } },
+    );
+  }
+
+  /**
+   * @description 读取默认提供商运行配置
+   * @keyword-en get default ai provider runtime config
+   */
+  async getDefaultAiProviderRuntime(): Promise<{
+    providerCode: string;
+    model?: string;
+    baseUrl?: string;
+    apiKey?: string;
+  } | null> {
+    const row = await this.getDefaultAiProvider('llm');
+    if (!row) return null;
+    return {
+      providerCode: row.providerCode,
+      model: row.model,
+      baseUrl: row.baseUrl,
+      apiKey: row.apiKey,
+    };
+  }
+
+  /**
+   * @description 读取默认Embedding运行配置
+   * @keyword-en get default embedding runtime config
+   */
+  async getDefaultEmbeddingRuntime(): Promise<{
+    providerCode: string;
+    model: string;
+    baseUrl?: string;
+    apiKey?: string;
+  } | null> {
+    const row = await this.getDefaultAiProvider('em');
+    if (!row) return null;
+    const providerCode = row.providerCode;
+    const model = row.model?.trim() || 'gemini-embedding-001';
+    return {
+      providerCode,
+      model,
+      baseUrl: row.baseUrl,
+      apiKey: row.apiKey,
+    };
   }
 
   /**
@@ -620,6 +767,10 @@ export class AdminService {
       name?: string;
       description?: string;
       moduleRef?: string;
+      sourceType?: 'mongo' | 'api';
+      scope?: 'platform' | 'tenant';
+      tenantId?: string;
+      connection?: MongoConnectionConfig;
       status?: DataSourceStatus;
     },
   ): Promise<DataSourceEntity | null> {
@@ -632,6 +783,18 @@ export class AdminService {
     }
     if (typeof input.moduleRef === 'string' && input.moduleRef.trim()) {
       updates.moduleRef = input.moduleRef.trim();
+    }
+    if (input.sourceType === 'mongo' || input.sourceType === 'api') {
+      updates.sourceType = input.sourceType;
+    }
+    if (input.scope === 'platform' || input.scope === 'tenant') {
+      updates.scope = input.scope;
+    }
+    if (typeof input.tenantId === 'string') {
+      updates.tenantId = input.tenantId.trim() || undefined;
+    }
+    if (typeof input.connection === 'object' && input.connection) {
+      updates.connection = input.connection;
     }
     if (typeof input.status === 'string') {
       updates.status = input.status;
@@ -667,6 +830,65 @@ export class AdminService {
    */
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * @description 签发JWT
+   * @keyword-en sign jwt token
+   */
+  private signJwt(
+    payload: Omit<AdminJwtPayload, 'iat' | 'exp'>,
+    iat: number,
+    exp: number,
+  ): string {
+    const header = { alg: 'HS256', typ: 'JWT' };
+    const body: AdminJwtPayload = { ...payload, iat, exp };
+    const encodedHeader = Buffer.from(JSON.stringify(header)).toString(
+      'base64url',
+    );
+    const encodedBody = Buffer.from(JSON.stringify(body)).toString('base64url');
+    const unsigned = `${encodedHeader}.${encodedBody}`;
+    const signature = createHmac('sha256', this.jwtSecret)
+      .update(unsigned)
+      .digest('base64url');
+    return `${unsigned}.${signature}`;
+  }
+
+  /**
+   * @description 校验JWT并解析载荷
+   * @keyword-en verify jwt token
+   */
+  private verifyJwt(token: string): AdminJwtPayload | null {
+    const segments = token.split('.');
+    if (segments.length !== 3) return null;
+    const [encodedHeader, encodedBody, signature] = segments;
+    if (!encodedHeader || !encodedBody || !signature) return null;
+    const unsigned = `${encodedHeader}.${encodedBody}`;
+    const expected = createHmac('sha256', this.jwtSecret)
+      .update(unsigned)
+      .digest('base64url');
+    if (signature.length !== expected.length) return null;
+    if (
+      !timingSafeEqual(
+        Buffer.from(signature, 'utf8'),
+        Buffer.from(expected, 'utf8'),
+      )
+    ) {
+      return null;
+    }
+    try {
+      const payload = JSON.parse(
+        Buffer.from(encodedBody, 'base64url').toString('utf8'),
+      ) as AdminJwtPayload;
+      if (!payload || typeof payload !== 'object') return null;
+      if (typeof payload.sub !== 'string' || !payload.sub.trim()) return null;
+      if (typeof payload.sid !== 'string' || !payload.sid.trim()) return null;
+      if (typeof payload.exp !== 'number' || payload.exp <= 0) return null;
+      if (payload.exp * 1000 <= Date.now()) return null;
+      return payload;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -770,5 +992,116 @@ export class AdminService {
     }
     if (!tenantId) throw new BadRequestException('TENANT_ID_REQUIRED');
     return tenantId;
+  }
+
+  /**
+   * @description 启动时迁移环境变量提供商元数据
+   * @keyword-en migrate env providers to database
+   */
+  private async ensureProvidersFromEnv(): Promise<void> {
+    const now = new Date();
+    await this.aiProviders.updateMany(
+      { modelCategory: { $exists: false }, emModel: { $exists: true } },
+      { $set: { modelCategory: 'em', updatedAt: now } },
+    );
+    await this.aiProviders.updateMany(
+      { modelCategory: { $exists: false } },
+      { $set: { modelCategory: 'llm', updatedAt: now } },
+    );
+    await this.aiProviders.updateMany(
+      {},
+      { $unset: { emProviderCode: '', emModel: '' } },
+    );
+    const candidates = [
+      {
+        providerCode: 'nvidia',
+        name: 'NVIDIA',
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
+        model: 'deepseek-ai/deepseek-v3.1-terminus',
+        modelCategory: 'llm' as const,
+      },
+      {
+        providerCode: 'deepseek',
+        name: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
+        modelCategory: 'llm' as const,
+      },
+      {
+        providerCode: 'gemini',
+        name: 'Gemini',
+        baseUrl: undefined,
+        model: 'gemini-1.5-flash',
+        modelCategory: 'llm' as const,
+      },
+      {
+        providerCode: 'gemini',
+        name: 'Gemini Embedding',
+        baseUrl: undefined,
+        model: 'gemini-embedding-001',
+        modelCategory: 'em' as const,
+      },
+      {
+        providerCode: 'openai',
+        name: 'OpenAI Embedding',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'text-embedding-3-small',
+        modelCategory: 'em' as const,
+      },
+      {
+        providerCode: 'deepseek',
+        name: 'DeepSeek Embedding',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'text-embedding-3-small',
+        modelCategory: 'em' as const,
+      },
+      {
+        providerCode: 'nvidia',
+        name: 'NVIDIA Embedding',
+        baseUrl: 'https://integrate.api.nvidia.com/v1',
+        model: 'text-embedding-3-small',
+        modelCategory: 'em' as const,
+      },
+    ];
+    for (const item of candidates) {
+      await this.aiProviders.findOneAndUpdate(
+        { providerCode: item.providerCode, modelCategory: item.modelCategory },
+        {
+          $setOnInsert: {
+            _id: new ObjectId(),
+            providerCode: item.providerCode,
+            name: item.name,
+            baseUrl: item.baseUrl,
+            model: item.model,
+            modelCategory: item.modelCategory,
+            enabled: true,
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        { upsert: true },
+      );
+    }
+    const ensureDefaultForCategory = async (category: 'llm' | 'em') => {
+      const exists = await this.aiProviders.findOne({
+        isDefault: true,
+        modelCategory: category,
+      });
+      if (exists) return;
+      const fallback = candidates.find(
+        (item) => item.modelCategory === category,
+      );
+      if (!fallback) return;
+      await this.aiProviders.updateOne(
+        {
+          providerCode: fallback.providerCode,
+          modelCategory: fallback.modelCategory,
+        },
+        { $set: { isDefault: true, enabled: true, updatedAt: now } },
+      );
+    };
+    await ensureDefaultForCategory('llm');
+    await ensureDefaultForCategory('em');
   }
 }

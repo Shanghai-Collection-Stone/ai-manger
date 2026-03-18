@@ -10,6 +10,7 @@ import { SuperPartySourceModule } from './sources/super-party/super-party-source
 import { FeishuBitableSourceModule } from './sources/feishu-bitable/feishu-bitable-source.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { FormatModule } from '../format/format.module.js';
+import { AdminModule } from '../admin/admin.module.js';
 
 const DS_MONGO_CLIENT = 'DS_MONGO_CLIENT';
 const DS_MONGO_DB = 'DS_MONGO_DB';
@@ -69,7 +70,8 @@ const mongoProviders: Provider[] = [
 @Module({
   imports: [
     EmbeddingModule,
-    AiAgentModule,
+    forwardRef(() => AiAgentModule),
+    forwardRef(() => AdminModule),
     FormatModule,
     forwardRef(() => SuperPartySourceModule),
     forwardRef(() => FeishuBitableSourceModule),

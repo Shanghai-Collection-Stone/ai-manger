@@ -4,13 +4,12 @@ import { FeishuBitableSourceService } from '../data-source/sources/feishu-bitabl
 /* ─── 表 ID 常量 ─── */
 const TABLE_DEMAND = 'tbl8gGo7QwYfNTbC'; // 需求进入工作流
 const TABLE_DAILY = 'tblz1A10mzaLM2pQ'; // 日台账
-const TABLE_MALL = 'tblDxSPwNpi51DPe'; // 商城业绩
 
 /* ─── 工具函数 ─── */
 
 /**
- * 获取当前北京时间的年月日（无论服务器时区如何）
- * 返回 { year, month(0-based), day, todayMs(UTC ms of 00:00 Beijing time) }
+ * @description 获取当前北京时间日期信息
+ * @keyword-en beijing date
  */
 function getBeijingDate() {
   const OFFSET_MS = 8 * 3600 * 1000; // UTC+8
@@ -28,9 +27,12 @@ function getBeijingDate() {
   return { year, month, day, dow, todayMs };
 }
 
-/** 解析 timeRange 字符串 → { start, end } 毫秒时间戳 (始终使用北京时间) */
+/**
+ * @description 解析 timeRange 为时间戳范围
+ * @keyword-en parse time range
+ */
 function parseTimeRange(timeRange: string): { start: number; end: number } {
-  const { year, month, day, dow, todayMs } = getBeijingDate();
+  const { year, month, dow, todayMs } = getBeijingDate();
   const dayMs = 86400000;
 
   let range: { start: number; end: number };
@@ -84,15 +86,13 @@ function parseTimeRange(timeRange: string): { start: number; end: number } {
     }
   }
 
-  console.log(
-    `[Dashboard] parseTimeRange("${timeRange}") → ` +
-      `start=${new Date(range.start).toISOString()} ` +
-      `end=${new Date(range.end).toISOString()}`,
-  );
   return range;
 }
 
-/** 安全提取数值 —— 处理飞书数字/公式/货币字段的各种返回格式 */
+/**
+ * @description 安全提取数值
+ * @keyword-en parse number
+ */
 function num(val: unknown): number {
   if (val == null) return 0;
   if (typeof val === 'number') return val;
@@ -106,20 +106,34 @@ function num(val: unknown): number {
   return 0;
 }
 
-/** 安全提取字符串 */
+/**
+ * @description 安全提取字符串
+ * @keyword-en parse string
+ */
 function str(val: unknown): string {
   if (val == null) return '';
   if (typeof val === 'string') return val;
+  if (
+    typeof val === 'number' ||
+    typeof val === 'boolean' ||
+    typeof val === 'bigint'
+  ) {
+    return String(val);
+  }
   if (Array.isArray(val)) return val.map(str).join(', ');
   if (typeof val === 'object') {
     const obj = val as Record<string, unknown>;
     if (typeof obj.text === 'string') return obj.text;
     if (typeof obj.name === 'string') return obj.name;
+    return JSON.stringify(obj);
   }
-  return String(val);
+  return '';
 }
 
-/** 安全提取数组字段（多选、人员等） */
+/**
+ * @description 安全提取数组字段
+ * @keyword-en parse array
+ */
 function arr(val: unknown): string[] {
   if (val == null) return [];
   if (typeof val === 'string') return [val];
@@ -135,7 +149,10 @@ function arr(val: unknown): string[] {
   return [str(val)];
 }
 
-/** 拉取所有记录(分页) */
+/**
+ * @description 拉取全部记录（分页）
+ * @keyword-en fetch all
+ */
 async function fetchAll(
   feishu: FeishuBitableSourceService,
   tableId: string,
@@ -161,17 +178,23 @@ async function fetchAll(
     hasMore = res.hasMore;
     pageToken = res.pageToken;
   }
-  console.log(`[Dashboard] fetchAll(${tableId}) → ${all.length} records`);
   return all;
 }
 
 /* ─── 服务 ─── */
 
+/**
+ * @description 看板业务服务
+ * @keyword-en dashboard service
+ */
 @Injectable()
 export class DashboardService {
   constructor(private readonly feishu: FeishuBitableSourceService) {}
 
-  /* ────────────────────── 1. 营收总览 ────────────────────── */
+  /**
+   * @description 营收总览
+   * @keyword-en revenue overview
+   */
   async getRevenueOverview(timeRange: string) {
     const { start, end } = parseTimeRange(timeRange);
 
@@ -251,7 +274,10 @@ export class DashboardService {
     };
   }
 
-  /* ────────────────────── 2. 日营收趋势 ────────────────────── */
+  /**
+   * @description 日营收与人数趋势
+   * @keyword-en daily revenue
+   */
   async getDailyRevenue(timeRange: string) {
     const { start, end } = parseTimeRange(timeRange);
     const dailyRecords = await fetchAll(this.feishu, TABLE_DAILY, {
@@ -289,7 +315,10 @@ export class DashboardService {
     };
   }
 
-  /* ────────────────────── 3. 人数统计 ────────────────────── */
+  /**
+   * @description 人数统计
+   * @keyword-en people stats
+   */
   async getPeopleStats(timeRange: string) {
     const { start, end } = parseTimeRange(timeRange);
     const dailyRecords = await fetchAll(this.feishu, TABLE_DAILY, {
@@ -340,7 +369,10 @@ export class DashboardService {
     };
   }
 
-  /* ────────────────────── 4. 需求与渠道 ────────────────────── */
+  /**
+   * @description 需求与渠道
+   * @keyword-en demand channel
+   */
   async getDemandChannel(timeRange: string) {
     const { start, end } = parseTimeRange(timeRange);
     const records = await fetchAll(this.feishu, TABLE_DEMAND, {
@@ -426,7 +458,10 @@ export class DashboardService {
     };
   }
 
-  /* ────────────────────── 5. 活动与类型 ────────────────────── */
+  /**
+   * @description 活动与类型
+   * @keyword-en events
+   */
   async getEvents(timeRange: string) {
     const { start, end } = parseTimeRange(timeRange);
     const records = await fetchAll(this.feishu, TABLE_DEMAND, {
@@ -543,7 +578,10 @@ export class DashboardService {
     };
   }
 
-  /* ────────────────────── 6. 销售与客户 ────────────────────── */
+  /**
+   * @description 销售与客户
+   * @keyword-en sales
+   */
   async getSales(timeRange: string) {
     const { start, end } = parseTimeRange(timeRange);
     const records = await fetchAll(this.feishu, TABLE_DEMAND, {

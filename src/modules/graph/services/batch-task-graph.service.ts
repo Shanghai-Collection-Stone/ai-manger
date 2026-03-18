@@ -15,6 +15,7 @@ import { BatchTaskService } from '../../batch-task/services/batch-task.service.j
 import { CanvasService } from '../../canvas/services/canvas.service.js';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import { AgentConfig } from '../../ai-agent/types/agent.types.js';
 import { TextFormatService } from '../../format/services/format.service';
 
 const ZGalleryTagSelection = z.object({
@@ -194,7 +195,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       temperature: input.temperature,
       system: sys,
       responseFormat:
-        input.provider === 'deepseek' ? { type: 'json_object' } : undefined,
+        input.provider === 'deepseek'
+          ? ({
+              type: 'json_object',
+            } as unknown as AgentConfig['responseFormat'])
+          : undefined,
     };
 
     let lastNormalized = '';
@@ -482,7 +487,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           : 0.2,
       system: sys,
       responseFormat:
-        provider === 'deepseek' ? { type: 'json_object' } : undefined,
+        provider === 'deepseek'
+          ? ({
+              type: 'json_object',
+            } as unknown as AgentConfig['responseFormat'])
+          : undefined,
     };
     try {
       const messages: BaseMessage[] = [
@@ -744,6 +753,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     model?: string;
     temperature?: number;
     taskCount: number;
+    todoId?: number;
   }): Promise<Record<string, unknown>> {
     const platform =
       typeof input.platform === 'string' && input.platform.trim().length > 0
@@ -830,6 +840,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       platform,
       topic: typeof c.topic === 'string' ? c.topic : undefined,
       canvasId: canvasIdStr,
+      todoId: input.todoId,
     });
     console.log('[openAndStartXhsFromCanvas] Batch task created:', task.id);
 
@@ -865,8 +876,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       payload: Record<string, unknown>;
     }> = [];
     for (let idx = 0; idx < taskCountRaw; idx++) {
-      const refIndex = idx % allArticles.length;
-      const refArticle = allArticles[refIndex];
+      const refIndex = idx < allArticles.length ? idx : undefined;
+      const refArticle =
+        typeof refIndex === 'number' ? allArticles[refIndex] : undefined;
       const refTitleRaw =
         typeof refArticle?.title === 'string' ? refArticle.title.trim() : '';
       const title =
@@ -888,7 +900,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           canvasId: c.id,
           refArticleId:
             typeof refArticle?.id === 'number' ? refArticle.id : undefined,
-          refIndex,
+          refIndex: typeof refIndex === 'number' ? refIndex : undefined,
           refTitle: refTitleRaw.length > 0 ? refTitleRaw : undefined,
         },
       });
@@ -1171,6 +1183,8 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
             ? articles[current.refIndex]
             : undefined;
         const byFallback =
+          (typeof current.refArticleId === 'number' ||
+            typeof current.refIndex === 'number') &&
           articles.length > 0
             ? articles[state.idx % articles.length]
             : undefined;
@@ -1209,6 +1223,10 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           referenceMarkdown: refMarkdown,
           referenceTags: refTags,
           referenceImageQuery: refImageQuery,
+          todoContext:
+            state.payload && typeof state.payload === 'object'
+              ? state.payload['todoContext']
+              : undefined,
           availableTags: state.availableTags,
         };
 
@@ -1219,7 +1237,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           system: sys,
           nonStreaming: true,
           responseFormat:
-            state.provider === 'deepseek' ? { type: 'json_object' } : undefined,
+            state.provider === 'deepseek'
+              ? ({
+                  type: 'json_object',
+                } as unknown as AgentConfig['responseFormat'])
+              : undefined,
         };
 
         let parsed: z.infer<typeof ZXhsDraft> | null = null;

@@ -10,8 +10,11 @@
 前端生成服务。
 - **关键词**: frontend, async, HITL, HTML, static, layout, service
 - **函数**:
-  - `frontend_plan`: 规划/plan
-  - `frontend_finalize`: 确认/finalize
+  - `getHandle`: 工具句柄/get handle
+  - `generateHtmlAsync`: 异步生成/async generate
+  - `sanitizeHtmlOutput`: 清理输出/sanitize html
+  - `minimalHtml`: 最小占位/minimal html
+  - `getDefaultTemplate`: 默认模板/default template
 
 ### frontend.module.ts
 前端生成模块定义。
