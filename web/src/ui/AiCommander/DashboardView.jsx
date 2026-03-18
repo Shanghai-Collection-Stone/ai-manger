@@ -151,6 +151,23 @@ const OverviewDashboard = ({ timeRange }) => {
 
   return (
     <div className="space-y-4 animate-fade-in">
+      {/* AI 覆盖达成率 */}
+      <div className="bg-white p-4 rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+            <span className="text-xs font-bold text-slate-700">AI 覆盖达成率</span>
+          </div>
+          <span className="text-xs font-bold text-indigo-600">73%</span>
+        </div>
+        <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+          <div 
+            className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out" 
+            style={{ width: '73%' }}
+          ></div>
+        </div>
+      </div>
+
       {/* 总营收卡片 */}
       <div className="bg-white p-5 rounded-3xl shadow-[0_2px_10px_rgba(0,0,0,0.02)] border border-slate-50">
         <div className="flex justify-between items-center mb-2">
