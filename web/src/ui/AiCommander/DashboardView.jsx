@@ -101,7 +101,7 @@ const DashboardContent = ({ config, timeRange }) => {
 
       {/* ── Tab 水平导航条（sticky，滚动时保持可见）── */}
       <div
-        className="flex space-x-6 overflow-x-auto pb-2 mb-2 no-scrollbar shrink-0 sticky top-0 bg-[#F7F9FC] z-10"
+        className="flex space-x-6 overflow-x-auto pt-4 pb-2 mb-2 no-scrollbar shrink-0 sticky top-0 bg-[#F7F9FC] z-10"
         onTouchStart={(e) => e.stopPropagation()}
         onTouchEnd={(e) => e.stopPropagation()}
       >
