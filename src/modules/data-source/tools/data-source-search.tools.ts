@@ -439,10 +439,18 @@ export class DataSourceSearchToolsService {
     const conn = this.dataSourceService.resolveMongoConnection(source);
     const logicalCollectionName = collectionName.trim();
     const mappedByMap = conn.collectionMap?.[logicalCollectionName];
-    const prefix = conn.localCollectionPrefix?.trim() || '';
+    const configPrefix = conn.localCollectionPrefix?.trim() || '';
+    // main/local 模式下：若无显式前缀配置，则按 tenantId 自动推导 SaaS 4 字符前缀
+    const autoPrefix =
+      !configPrefix && tenantId && (conn.mode === 'main' || conn.mode === 'local')
+        ? this.buildSaasTenantPrefix(tenantId) + '_'
+        : '';
+    const effectivePrefix = configPrefix || autoPrefix;
     const physicalCollectionName =
       mappedByMap ||
-      (prefix ? `${prefix}${logicalCollectionName}` : logicalCollectionName);
+      (effectivePrefix
+        ? `${effectivePrefix}${logicalCollectionName}`
+        : logicalCollectionName);
     if (conn.mode === 'main' || conn.mode === 'local') {
       return {
         source,
@@ -526,6 +534,16 @@ export class DataSourceSearchToolsService {
    * @description 解析租户ID优先级
    * @keyword-en resolve tenant id
    */
+  /**
+   * @description 根据 tenantId 构建 4 字符集合前缀（与 SaaS 租户表命名规则一致）
+   * @keyword-en build tenant collection prefix
+   */
+  private buildSaasTenantPrefix(tenantId: string): string {
+    const raw = String(tenantId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const safe = raw.length > 0 ? raw : 'tn';
+    return (safe + '0000').slice(0, 4);
+  }
+
   private resolveTenantId(
     tenantId?: string,
     scope?: { tenantId?: string; userId?: string },

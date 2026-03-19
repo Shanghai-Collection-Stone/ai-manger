@@ -68,7 +68,7 @@ export class DashboardToolsService {
      * keyword: tenant_query
      */
     const tenantQuery = tool(
-      async ({ table, mode, where, limit, sort }) => {
+      async ({ table, mode, where, limit, sort, pipeline }) => {
         if (!tenantId) return JSON.stringify({ error: 'NO_TENANT_SCOPE' });
         const prefix = this.buildTenantPrefix(tenantId);
         const collection = `${prefix}_${table}`;
@@ -78,6 +78,14 @@ export class DashboardToolsService {
         if (mode === 'count') {
           const count = await col.countDocuments(filter);
           return JSON.stringify({ count });
+        }
+        if (mode === 'aggregate') {
+          // pipeline 优先；未提供时自动构建简单 match+count pipeline
+          const agg = Array.isArray(pipeline)
+            ? (pipeline as Record<string, unknown>[])
+            : ([{ $match: filter }, { $count: 'total' }] as Record<string, unknown>[]);
+          const rows = await col.aggregate(agg).toArray();
+          return JSON.stringify({ rows });
         }
         const safeLimit = Math.min(limit ?? 50, 100);
         const rows = await col
@@ -90,19 +98,29 @@ export class DashboardToolsService {
       {
         name: 'tenant_query',
         description:
-          'Query data from a logical tenant table by table name (without prefix). Use tenant_tables first to understand available tables and fields. Supports count/list mode.',
+          'Query data from a logical tenant table by table name (without prefix). ' +
+          'Use tenant_tables first to understand available tables and fields. ' +
+          'Modes: count=count matching docs; list=fetch rows; aggregate=run aggregation pipeline. ' +
+          'For aggregate mode, provide a "pipeline" array of MongoDB aggregation stages. ' +
+          'Table name is the logical name (e.g. "order_usages") — prefix is added automatically.',
         schema: z.object({
           table: z
             .string()
-            .describe('Logical table name, e.g. "orders", "order_usages"'),
+            .describe('Logical table name, e.g. "orders", "order_usages" (no prefix)'),
           mode: z
-            .enum(['count', 'list'])
+            .enum(['count', 'list', 'aggregate'])
             .default('count')
-            .describe('count returns total matching rows; list returns actual rows'),
+            .describe('count=total docs; list=fetch rows; aggregate=run aggregation pipeline'),
           where: z
             .record(z.string(), z.unknown())
             .optional()
-            .describe('MongoDB filter object, e.g. {"channelName": "抖音"}'),
+            .describe('MongoDB filter for count/list mode, e.g. {"channelName": "抖音"}'),
+          pipeline: z
+            .array(z.record(z.string(), z.unknown()))
+            .optional()
+            .describe(
+              'Aggregation pipeline stages for aggregate mode, e.g. [{"$match": {...}}, {"$group": {...}}]',
+            ),
           limit: z
             .number()
             .int()

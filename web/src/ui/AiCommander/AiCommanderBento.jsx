@@ -363,18 +363,18 @@ const AiCommanderBento = () => {
           />
         </div>
 
-        <div className="relative -top-6">
+        <div className="flex flex-col items-center -mt-2">
           <button
             onClick={() => $activeTab.set('chat')}
-            className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105 ${
-              activeTab === 'chat' 
-              ? 'bg-slate-900 text-white shadow-slate-400/50' 
+            className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105 ${
+              activeTab === 'chat'
+              ? 'bg-slate-900 text-white shadow-slate-400/50'
               : 'bg-white text-slate-900 border border-slate-100 shadow-slate-200/50'
             }`}
           >
-            <Sparkles size={24} />
+            <Sparkles size={22} />
           </button>
-          <div className={`text-[10px] text-center font-bold mt-1 ${activeTab === 'chat' ? 'text-slate-900' : 'text-slate-500 font-medium'}`}>AI 指挥官</div>
+          <div className={`text-[10px] text-center font-bold mt-0.5 ${activeTab === 'chat' ? 'text-slate-900' : 'text-slate-500 font-medium'}`}>AI 指挥官</div>
         </div>
 
         <div className="flex-1 flex justify-around">
