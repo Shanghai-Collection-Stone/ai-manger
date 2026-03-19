@@ -1,3 +1,254 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* AI Commander Dashboard Styles */
+.ai-commander-container {
+  @apply min-h-screen bg-gray-900 text-white p-6;
+}
+
+.commander-header {
+  @apply flex justify-between items-center mb-6 pb-4 border-b border-gray-700;
+}
+
+.header-content {
+  @apply flex flex-col gap-1;
+}
+
+.header-title {
+  @apply text-2xl font-bold text-white;
+}
+
+.header-desc {
+  @apply text-gray-400 text-sm;
+}
+
+.header-controls {
+  @apply flex items-center gap-3;
+}
+
+.time-range-select {
+  @apply bg-gray-800 text-white px-4 py-2 rounded-lg border border-gray-600;
+}
+
+.tabs-container {
+  @apply mb-6;
+}
+
+.tabs-list {
+  @apply flex gap-2 flex-wrap;
+}
+
+.tab-button {
+  @apply px-4 py-2 rounded-lg text-sm font-medium transition-colors;
+  @apply bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white;
+}
+
+.tab-button.active {
+  @apply bg-blue-600 text-white;
+}
+
+.dashboard-tab {
+  @apply w-full;
+}
+
+.tab-content {
+  @apply w-full;
+}
+
+.block-wrapper {
+  @apply bg-gray-800 rounded-xl p-4;
+}
+
+.block-container {
+  @apply h-full;
+}
+
+.block-error {
+  @apply bg-red-900/50 border border-red-700 rounded-lg p-4 text-red-300;
+}
+
+.block-loading {
+  @apply animate-pulse text-gray-400;
+}
+
+.block-empty {
+  @apply text-gray-500;
+}
+
+/* Card Base Styles */
+.card-base {
+  @apply bg-gray-800 rounded-xl p-4 h-full flex flex-col;
+}
+
+.card-title {
+  @apply text-sm font-medium text-gray-400 mb-3;
+}
+
+.card-content {
+  @apply flex-1 flex items-center justify-center;
+}
+
+/* Stat Card */
+.stat-card .card-content {
+  @apply flex-col items-start justify-center gap-1;
+}
+
+.stat-label {
+  @apply text-sm text-gray-400;
+}
+
+.stat-value {
+  @apply text-2xl font-bold text-white;
+}
+
+/* Revenue Overview */
+.revenue-overview-card .revenue-display {
+  @apply flex items-baseline gap-2;
+}
+
+.revenue-value {
+  @apply text-4xl font-bold text-white;
+}
+
+.revenue-unit {
+  @apply text-lg text-gray-400;
+}
+
+/* People Total */
+.people-total-card .people-display {
+  @apply flex items-baseline gap-2;
+}
+
+.people-value {
+  @apply text-4xl font-bold text-white;
+}
+
+.people-unit {
+  @apply text-lg text-gray-400;
+}
+
+/* AI Progress Card */
+.ai-progress-card .card-content {
+  @apply justify-center;
+}
+
+.progress-display {
+  @apply flex justify-center;
+}
+
+.progress-circle {
+  @apply relative w-28 h-28;
+}
+
+.progress-circle svg {
+  @apply w-full h-full transform -rotate-90;
+}
+
+.progress-bg {
+  fill: none;
+  stroke: #374151;
+  stroke-width: 8;
+}
+
+.progress-fill {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.5s ease;
+}
+
+.progress-text {
+  @apply absolute inset-0 flex items-center justify-center;
+}
+
+.progress-value {
+  @apply text-2xl font-bold text-white;
+}
+
+/* Pie Cards */
+.pie-chart-placeholder {
+  @apply flex items-center justify-center h-32 bg-gray-700/50 rounded-lg mb-3;
+}
+
+.placeholder-text {
+  @apply text-gray-500 text-sm;
+}
+
+.pie-legend {
+  @apply flex flex-col gap-2;
+}
+
+.legend-item {
+  @apply flex items-center gap-2 text-sm;
+}
+
+.legend-color {
+  @apply w-3 h-3 rounded-full;
+}
+
+.legend-label {
+  @apply text-gray-300 flex-1;
+}
+
+.legend-value {
+  @apply text-gray-400 font-medium;
+}
+
+/* Channel List */
+.channel-list {
+  @apply flex flex-col gap-2 w-full;
+}
+
+.channel-item {
+  @apply flex justify-between items-center py-2 px-3 bg-gray-700/50 rounded-lg;
+}
+
+.channel-name {
+  @apply text-gray-300;
+}
+
+.channel-value {
+  @apply text-white font-medium;
+}
+
+/* Skeleton Loaders */
+.skeleton-loader {
+  @apply w-full h-32 bg-gray-700 rounded-lg animate-pulse;
+}
+
+.skeleton-loader-big {
+  @apply w-full h-24 bg-gray-700 rounded-lg animate-pulse;
+}
+
+.skeleton-loader-text {
+  @apply w-3/4 h-8 bg-gray-700 rounded-lg animate-pulse;
+}
+
+/* Ranking List */
+.ranking-list {
+  @apply flex flex-col gap-2;
+}
+
+.ranking-item {
+  @apply flex items-center gap-3 py-2 px-3 bg-gray-700/50 rounded-lg;
+}
+
+.ranking-item .rank {
+  @apply text-gray-400 font-medium w-8;
+}
+
+.ranking-item .name {
+  @apply text-gray-300 flex-1;
+}
+
+.ranking-item .value {
+  @apply text-white font-medium;
+}
+
+/* Chart Placeholder */
+.chart-placeholder {
+  @apply bg-gray-700/50 rounded-lg p-4 text-sm text-gray-400 overflow-auto;
+  max-height: 200px;
+}

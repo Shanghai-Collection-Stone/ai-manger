@@ -72,7 +72,7 @@ export class AdminController {
    */
   @UseGuards(AdminAuthGuard)
   @Get('auth/me')
-  me(@Req() req: Request) {
+  async me(@Req() req: Request) {
     return this.adminService.getMe(this.requireUser(req));
   }
 

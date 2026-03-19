@@ -1,0 +1,90 @@
+{
+  "dashboardCode": "ai-commander",
+  "version": 2,
+  "title": "AI 指挥官看板 - 母平台",
+  "description": "默认看板配置（与前端代码完全同步）",
+  "timeRanges": ["今天","明天","昨天","过去7天内","未来7天内","过去30天内","未来30天内","本周","上周","上月","本月"],
+  "tabs": [
+    {
+      "id": "overview",
+      "label": "总览",
+      "keywordEn": "overview",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        { "id": "ai_progress_main", "type": "ai_progress", "layout": { "colSpan": 2 }, "props": { "title": "AI 覆盖达成率", "value": 73 } },
+        { "id": "revenue_overview", "type": "revenue_overview_card", "query": "revenueOverview", "layout": { "colSpan": 2 }, "props": { "title": "实际总营收", "unit": "万元", "showConversionBadge": true, "showSubStats": true } },
+        { "id": "people_pie", "type": "people_pie_card", "query": "peopleStats", "layout": { "colSpan": 2 }, "props": { "title": "人数分析" } },
+        { "id": "demand_channel_pie", "type": "demand_channel_pie_card", "query": "demandChannel", "layout": { "colSpan": 2 }, "props": { "title": "各渠道进入数量", "topN": 5 } },
+        { "id": "daily_revenue_chart", "type": "daily_revenue_people_chart", "query": "dailyRevenue", "layout": { "colSpan": 2 }, "props": { "title": "日人数&日营收趋势", "height": 160 } },
+        { "id": "daily_demand_overview", "type": "daily_demand_trend_chart", "query": "demandChannel", "layout": { "colSpan": 2 }, "props": { "title": "每日需求进入趋势", "height": 150 } },
+        { "id": "sales_ranking", "type": "sales_ranking_inline", "query": "sales", "layout": { "colSpan": 2 }, "props": { "title": "销售榜", "topN": 3 } }
+      ]
+    },
+    {
+      "id": "revenue",
+      "label": "营收与订单",
+      "keywordEn": "revenue",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        { "id": "revenue_total", "type": "revenue_overview_card", "query": "revenueOverview", "layout": { "colSpan": 2 }, "props": { "title": "累计营收", "unit": "万元" } },
+        { "id": "actual_revenue", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "实际总营收", "valuePath": "totalRevenue", "format": "wan", "suffix": "万" } },
+        { "id": "success_amount", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "成功订单金额", "valuePath": "successTotalAmount", "format": "wan", "suffix": "万" } },
+        { "id": "conversion_stat", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "转化率", "valuePath": "conversionRate", "suffix": "%", "showProgress": true } },
+        { "id": "success_order_count", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "成功订单数量", "valuePath": "successOrderCount" } },
+        { "id": "success_order_people", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "成功订单人数", "valuePath": "successOrderPeople" } },
+        { "id": "avg_order_price", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "场均价格", "valuePath": "avgOrderPrice", "suffix": "元" } },
+        { "id": "avg_per_person", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "人均价格", "valuePath": "avgPerPerson", "suffix": "元" } },
+        { "id": "total_demand", "type": "stat_card", "query": "revenueOverview", "layout": { "colSpan": 1 }, "props": { "label": "需求总量", "valuePath": "totalDemand" } }
+      ]
+    },
+    {
+      "id": "people",
+      "label": "客流与人数",
+      "keywordEn": "people",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        { "id": "people_total_large", "type": "people_total_card", "query": "peopleStats", "layout": { "colSpan": 2 }, "props": { "title": "总计人数" } },
+        { "id": "people_pie_large", "type": "people_pie_card", "query": "peopleStats", "layout": { "colSpan": 2 }, "props": { "title": "人数分析" } },
+        { "id": "daily_people_chart", "type": "daily_revenue_people_chart", "query": "dailyRevenue", "layout": { "colSpan": 2 }, "props": { "title": "日人数&日营收趋势", "height": 160 } }
+      ]
+    },
+    {
+      "id": "demand",
+      "label": "需求与渠道",
+      "keywordEn": "demand",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        { "id": "demand_total", "type": "stat_card", "query": "demandChannel", "layout": { "colSpan": 1 }, "props": { "label": "需求进入总量", "valuePath": "total" } },
+        { "id": "demand_conversion", "type": "stat_card", "query": "demandChannel", "layout": { "colSpan": 1 }, "props": { "label": "需求进入转化比", "valuePath": "conversionRate", "suffix": "%", "showProgress": true } },
+        { "id": "demand_channel_large", "type": "demand_channel_pie_card", "query": "demandChannel", "layout": { "colSpan": 2 }, "props": { "title": "各渠道进入数量", "topN": 5, "colors": ["#3b82f6","#22c55e","#f59e0b","#ef4444","#8b5cf6"] } },
+        { "id": "demand_type_pie", "type": "demand_type_pie_card", "query": "demandChannel", "layout": { "colSpan": 2 }, "props": { "title": "需求类型", "topN": 4 } },
+        { "id": "daily_demand_chart", "type": "daily_demand_trend_chart", "query": "demandChannel", "layout": { "colSpan": 2 }, "props": { "title": "每日需求进入趋势", "height": 150 } },
+        { "id": "staff_distribution", "type": "staff_distribution_card", "query": "demandChannel", "layout": { "colSpan": 2 }, "props": { "title": "客服接收占比", "topN": 5 } }
+      ]
+    },
+    {
+      "id": "events",
+      "label": "活动与类型",
+      "keywordEn": "events",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        { "id": "activity_type_conversion", "type": "activity_type_conversion_card", "query": "events", "layout": { "colSpan": 2 }, "props": { "title": "活动类型成单率" } },
+        { "id": "theme_ratio", "type": "theme_ratio_card", "query": "events", "layout": { "colSpan": 2 }, "props": { "title": "主题活动场次占比" } },
+        { "id": "room_ratio", "type": "room_ratio_card", "query": "events", "layout": { "colSpan": 2 }, "props": { "title": "包厢场次占比" } },
+        { "id": "theme_revenue_chart", "type": "theme_revenue_people_chart", "query": "events", "layout": { "colSpan": 2 }, "props": { "title": "主题活动收入&人数", "height": 160 } },
+        { "id": "room_revenue_chart", "type": "room_revenue_people_chart", "query": "events", "layout": { "colSpan": 2 }, "props": { "title": "包厢收入&人数", "height": 160 } }
+      ]
+    },
+    {
+      "id": "sales",
+      "label": "销售与客户",
+      "keywordEn": "sales",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        { "id": "sales_ranking_full", "type": "sales_ranking_card", "query": "sales", "layout": { "colSpan": 2 }, "props": { "title": "销售榜" } },
+        { "id": "customer_tag_cloud", "type": "customer_tag_cloud_card", "query": "sales", "layout": { "colSpan": 2 }, "props": { "title": "客户TAG", "height": 240 } },
+        { "id": "sales_rate_grid", "type": "sales_rate_grid_card", "query": "sales", "layout": { "colSpan": 2 }, "props": { "title": "人员总成单率" } }
+      ]
+    }
+  ]
+}

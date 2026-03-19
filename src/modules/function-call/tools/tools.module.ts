@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ToolsService } from './services/tools.service.js';
+import { DashboardFunctionCallModule } from '../dashboard/dashboard.module.js';
 import { FrontendFunctionCallModule } from '../frontend/frontend.module.js';
 import { AnalysisFunctionCallModule } from '../analysis/analysis.module.js';
 import { TitleFunctionCallModule } from '../title/title.module.js';
@@ -18,6 +19,7 @@ import { AutoTaskRobotModule } from '../../auto-task-robot/auto-task-robot.modul
  */
 @Module({
   imports: [
+    DashboardFunctionCallModule,
     FrontendFunctionCallModule,
     AnalysisFunctionCallModule,
     TitleFunctionCallModule,

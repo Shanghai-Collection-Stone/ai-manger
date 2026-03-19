@@ -679,6 +679,7 @@ export class ContextService {
   private extractText(content: unknown): string {
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
+      // 提取 type=text 内容；thinking / tool_use 等非文本块直接忽略（不序列化）
       const parts = content
         .map((p) => {
           const rec = p as Record<string, unknown>;
@@ -690,7 +691,7 @@ export class ContextService {
           return '';
         })
         .filter((s) => s && s.length > 0);
-      if (parts.length > 0) return parts.join('\n');
+      return parts.join('\n');
     }
     try {
       if (content === undefined || content === null) return '';

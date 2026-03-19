@@ -1,0 +1,325 @@
+{
+  "dashboardCode": "ai-commander",
+  "version": 1,
+  "title": "AI 指挥官看板 - 母平台",
+  "description": "默认看板配置",
+  "timeRanges": ["今天", "明天", "昨天", "过去7天内", "未来7天内", "过去30天内", "未来30天内", "本周", "上周", "上月", "本月"],
+  "tabs": [
+    {
+      "id": "overview",
+      "label": "总览",
+      "keywordEn": "overview",
+      "layout": {
+        "cols": 2,
+        "gap": 16
+      },
+      "blocks": [
+        {
+          "id": "ai_progress_main",
+          "type": "ai_progress",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "AI 覆盖达成率",
+            "value": 73
+          }
+        },
+        {
+          "id": "revenue_overview",
+          "type": "revenue_overview_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "实际总营收",
+            "unit": "万元"
+          }
+        },
+        {
+          "id": "people_total",
+          "type": "people_total_card",
+          "query": "peopleStats",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "总计人数"
+          }
+        },
+        {
+          "id": "conversion_stat",
+          "type": "stat_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "label": "转化率",
+            "valuePath": "conversionRate",
+            "suffix": "%"
+          }
+        },
+        {
+          "id": "people_pie",
+          "type": "people_pie_card",
+          "query": "peopleStats",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 2
+          },
+          "props": {
+            "title": "人数分析"
+          }
+        },
+        {
+          "id": "demand_channel_pie",
+          "type": "demand_channel_pie_card",
+          "query": "demandChannel",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 2
+          },
+          "props": {
+            "title": "各渠道进入数量",
+            "topN": 5
+          }
+        },
+        {
+          "id": "daily_revenue_chart",
+          "type": "daily_revenue_people_chart",
+          "query": "dailyRevenue",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "日人数&日营收趋势",
+            "height": 160
+          }
+        },
+        {
+          "id": "sales_ranking",
+          "type": "sales_ranking_inline",
+          "query": "sales",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "销售榜",
+            "topN": 5
+          }
+        }
+      ]
+    },
+    {
+      "id": "revenue",
+      "label": "营收与订单",
+      "keywordEn": "revenue",
+      "layout": {
+        "cols": 2,
+        "gap": 16
+      },
+      "blocks": [
+        {
+          "id": "revenue_total",
+          "type": "revenue_overview_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "累计营收",
+            "unit": "万元"
+          }
+        },
+        {
+          "id": "success_order_count",
+          "type": "stat_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "label": "成功订单数量",
+            "valuePath": "successOrderCount",
+            "suffix": "单"
+          }
+        },
+        {
+          "id": "success_order_people",
+          "type": "stat_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "label": "成功订单人数",
+            "valuePath": "successOrderPeople",
+            "suffix": "人"
+          }
+        },
+        {
+          "id": "avg_order_amount",
+          "type": "stat_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "label": "平均订单金额",
+            "valuePath": "avgOrderAmount",
+            "prefix": "¥",
+            "suffix": "元"
+          }
+        },
+        {
+          "id": "order_success_rate",
+          "type": "stat_card",
+          "query": "revenueOverview",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "label": "订单成功率",
+            "valuePath": "orderSuccessRate",
+            "suffix": "%"
+          }
+        },
+        {
+          "id": "daily_revenue_detailed",
+          "type": "daily_revenue_people_chart",
+          "query": "dailyRevenue",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "日人数&日营收趋势",
+            "height": 200
+          }
+        },
+        {
+          "id": "revenue_by_channel",
+          "type": "revenue_channel_bar_chart",
+          "query": "revenueByChannel",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "各渠道营收分布",
+            "height": 180
+          }
+        }
+      ]
+    },
+    {
+      "id": "people",
+      "label": "客流与人数",
+      "keywordEn": "people",
+      "layout": {
+        "cols": 2,
+        "gap": 16
+      },
+      "blocks": [
+        {
+          "id": "people_total_large",
+          "type": "people_total_card",
+          "query": "peopleStats",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "总计人数"
+          }
+        },
+        {
+          "id": "people_pie_large",
+          "type": "people_pie_card",
+          "query": "peopleStats",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "人数分析"
+          }
+        },
+        {
+          "id": "daily_people_chart",
+          "type": "daily_revenue_people_chart",
+          "query": "dailyRevenue",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "日人数趋势",
+            "height": 160
+          }
+        }
+      ]
+    },
+    {
+      "id": "demand",
+      "label": "需求与渠道",
+      "keywordEn": "demand",
+      "layout": {
+        "cols": 2,
+        "gap": 16
+      },
+      "blocks": [
+        {
+          "id": "demand_channel_large",
+          "type": "demand_channel_pie_card",
+          "query": "demandChannel",
+          "layout": {
+            "colSpan": 2,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "各渠道进入数量",
+            "topN": 8
+          }
+        }
+      ]
+    },
+    {
+      "id": "sales",
+      "label": "销售与客户",
+      "keywordEn": "sales",
+      "layout": {
+        "cols": 1,
+        "gap": 16
+      },
+      "blocks": [
+        {
+          "id": "sales_ranking_full",
+          "type": "sales_ranking_inline",
+          "query": "sales",
+          "layout": {
+            "colSpan": 1,
+            "rowSpan": 1
+          },
+          "props": {
+            "title": "销售榜 TOP 10",
+            "topN": 10
+          }
+        }
+      ]
+    }
+  ]
+}

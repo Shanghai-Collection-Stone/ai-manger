@@ -220,11 +220,16 @@ export class AdminService {
   }
 
   /**
-   * @description 获取当前用户信息
-   * @keyword-en get current admin user
+   * @description 获取当前用户信息（含租户名）
+   * @keyword-en get current admin user with tenant name
    */
-  getMe(currentUser: AdminUserEntity): AdminUserPublic {
-    return this.toPublicUser(currentUser);
+  async getMe(currentUser: AdminUserEntity): Promise<AdminUserPublic & { tenantName?: string }> {
+    const base = this.toPublicUser(currentUser);
+    if (currentUser.tenantId) {
+      const tenant = await this.sassService.getTenant(currentUser.tenantId);
+      return { ...base, tenantName: tenant?.name };
+    }
+    return base;
   }
 
   /**

@@ -1,0 +1,208 @@
+{
+  "dashboardCode": "ai-commander",
+  "version": 1,
+  "title": "三水集团 - 运营看板",
+  "description": "租户看板：订单、核销、退款数据分析（基于万用 Mongo 查询）",
+  "timeRanges": ["今天","昨天","过去7天内","过去30天内","本周","上周","本月","上月"],
+  "queries": {
+    "orderList": { "collection": "orders", "mode": "list", "limit": 500, "timeField": "orderTime", "sort": { "orderTime": -1 } },
+    "orderCount": { "collection": "orders", "mode": "count", "timeField": "orderTime" },
+    "usageList": { "collection": "order_usages", "mode": "list", "limit": 500, "timeField": "usageTime", "sort": { "usageTime": -1 } },
+    "usageCount": { "collection": "order_usages", "mode": "count", "timeField": "usageTime" },
+    "refundList": { "collection": "order_refunds", "mode": "list", "limit": 500, "timeField": "refundTime", "sort": { "refundTime": -1 } },
+    "refundCount": { "collection": "order_refunds", "mode": "count", "timeField": "refundTime" }
+  },
+  "tabs": [
+    {
+      "id": "overview",
+      "label": "总览",
+      "keywordEn": "overview",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        {
+          "id": "order_total", "type": "mongo_count_card", "query": "orderCount",
+          "layout": { "colSpan": 1 },
+          "props": { "label": "总订单数", "icon": "📦" }
+        },
+        {
+          "id": "usage_total", "type": "mongo_count_card", "query": "usageCount",
+          "layout": { "colSpan": 1 },
+          "props": { "label": "总核销数", "icon": "✅" }
+        },
+        {
+          "id": "refund_total", "type": "mongo_count_card", "query": "refundCount",
+          "layout": { "colSpan": 2 },
+          "props": { "label": "总退款数", "icon": "↩️" }
+        },
+        {
+          "id": "usage_rate", "type": "mongo_rate_card", "query": "usageCount",
+          "dependencies": ["orderCount"],
+          "layout": { "colSpan": 2 },
+          "props": { "label": "核销率", "denominatorQuery": "orderCount" }
+        },
+        {
+          "id": "channel_pie", "type": "mongo_group_pie", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "渠道分布", "groupField": "channelName", "topN": 6 }
+        },
+        {
+          "id": "product_pie", "type": "mongo_group_pie", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "产品分布", "groupField": "productName", "topN": 6, "colors": ["#22c55e","#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4"] }
+        },
+        {
+          "id": "daily_order_trend", "type": "mongo_daily_trend", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日订单趋势", "timeField": "orderTime", "height": 150 }
+        }
+      ]
+    },
+    {
+      "id": "orders",
+      "label": "订单分析",
+      "keywordEn": "order-analysis",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        {
+          "id": "oa_count", "type": "mongo_count_card", "query": "orderCount",
+          "layout": { "colSpan": 1 },
+          "props": { "label": "订单总量", "icon": "📦" }
+        },
+        {
+          "id": "oa_qty_sum", "type": "mongo_sum_card", "query": "orderList",
+          "layout": { "colSpan": 1 },
+          "props": { "label": "总下单数量", "sumField": "productQuantity", "suffix": "份" }
+        },
+        {
+          "id": "oa_channel_ranking", "type": "mongo_ranking", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "渠道订单排行", "groupField": "channelName", "topN": 8 }
+        },
+        {
+          "id": "oa_product_ranking", "type": "mongo_ranking", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "产品订单排行", "groupField": "productName", "topN": 8 }
+        },
+        {
+          "id": "oa_daily_bar", "type": "mongo_daily_bar", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日订单量", "timeField": "orderTime", "height": 150, "color": "#3b82f6" }
+        },
+        {
+          "id": "oa_daily_qty", "type": "mongo_daily_bar", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日下单数量", "timeField": "orderTime", "sumField": "productQuantity", "height": 150, "color": "#22c55e" }
+        },
+        {
+          "id": "oa_recent", "type": "mongo_recent_table", "query": "orderList",
+          "layout": { "colSpan": 2 },
+          "props": {
+            "title": "最近订单",
+            "topN": 10,
+            "columns": [
+              { "field": "orderNo", "label": "订单号" },
+              { "field": "channelName", "label": "渠道" },
+              { "field": "productName", "label": "产品" },
+              { "field": "productQuantity", "label": "数量" },
+              { "field": "orderTime", "label": "下单时间", "format": "date" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "usage",
+      "label": "核销分析",
+      "keywordEn": "usage-analysis",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        {
+          "id": "ua_count", "type": "mongo_count_card", "query": "usageCount",
+          "layout": { "colSpan": 1 },
+          "props": { "label": "核销总量", "icon": "✅" }
+        },
+        {
+          "id": "ua_rate", "type": "mongo_rate_card", "query": "usageCount",
+          "dependencies": ["orderCount"],
+          "layout": { "colSpan": 1 },
+          "props": { "label": "核销率", "denominatorQuery": "orderCount" }
+        },
+        {
+          "id": "ua_qty_sum", "type": "mongo_sum_card", "query": "usageList",
+          "layout": { "colSpan": 2 },
+          "props": { "label": "核销总数量", "sumField": "usageQuantity", "suffix": "份" }
+        },
+        {
+          "id": "ua_daily_trend", "type": "mongo_daily_trend", "query": "usageList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日核销趋势", "timeField": "usageTime", "height": 150, "color": "#22c55e" }
+        },
+        {
+          "id": "ua_daily_qty", "type": "mongo_daily_bar", "query": "usageList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日核销数量", "timeField": "usageTime", "sumField": "usageQuantity", "height": 150, "color": "#06b6d4" }
+        },
+        {
+          "id": "ua_recent", "type": "mongo_recent_table", "query": "usageList",
+          "layout": { "colSpan": 2 },
+          "props": {
+            "title": "最近核销",
+            "topN": 10,
+            "columns": [
+              { "field": "orderNo", "label": "订单号" },
+              { "field": "usageQuantity", "label": "核销数量" },
+              { "field": "usageTime", "label": "核销时间", "format": "date" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "refund",
+      "label": "退款分析",
+      "keywordEn": "refund-analysis",
+      "layout": { "cols": 2, "gap": 16 },
+      "blocks": [
+        {
+          "id": "ra_count", "type": "mongo_count_card", "query": "refundCount",
+          "layout": { "colSpan": 1 },
+          "props": { "label": "退款总量", "icon": "↩️" }
+        },
+        {
+          "id": "ra_rate", "type": "mongo_rate_card", "query": "refundCount",
+          "dependencies": ["orderCount"],
+          "layout": { "colSpan": 1 },
+          "props": { "label": "退款率", "denominatorQuery": "orderCount" }
+        },
+        {
+          "id": "ra_qty_sum", "type": "mongo_sum_card", "query": "refundList",
+          "layout": { "colSpan": 2 },
+          "props": { "label": "退款总数量", "sumField": "refundQuantity", "suffix": "份" }
+        },
+        {
+          "id": "ra_daily_trend", "type": "mongo_daily_trend", "query": "refundList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日退款趋势", "timeField": "refundTime", "height": 150, "color": "#ef4444" }
+        },
+        {
+          "id": "ra_daily_qty", "type": "mongo_daily_bar", "query": "refundList",
+          "layout": { "colSpan": 2 },
+          "props": { "title": "每日退款数量", "timeField": "refundTime", "sumField": "refundQuantity", "height": 150, "color": "#f59e0b" }
+        },
+        {
+          "id": "ra_recent", "type": "mongo_recent_table", "query": "refundList",
+          "layout": { "colSpan": 2 },
+          "props": {
+            "title": "最近退款",
+            "topN": 10,
+            "columns": [
+              { "field": "orderNo", "label": "订单号" },
+              { "field": "refundQuantity", "label": "退款数量" },
+              { "field": "refundTime", "label": "退款时间", "format": "date" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

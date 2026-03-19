@@ -613,17 +613,17 @@ export class ChatMainService {
     if (typeof content !== 'string') return '';
     const s = content.trim();
     if (s.length === 0) return '';
+    // 宽松检测：Anthropic content block 数组（兼容 minimax 带空格的 JSON 序列化）
     const looksLikeBlocks =
       s.startsWith('[') &&
-      (s.includes('"type":"thinking"') ||
-        s.includes('"type":"tool_use"') ||
-        s.includes('"thinking"') ||
-        s.includes('"tool_use"'));
+      (s.includes('"type"') || s.includes('"type" :')) &&
+      (s.includes('thinking') || s.includes('tool_use') || s.includes('text'));
     if (!looksLikeBlocks) return content;
     try {
       const parsed: unknown = JSON.parse(s) as unknown;
       const extracted = this.extractTextFromModelContent(parsed);
-      return extracted.length > 0 ? extracted : content;
+      // 只有 thinking/tool_use 块、没有 text 块时，extracted 为空 → 返回空字符串而非原始 JSON
+      return extracted;
     } catch {
       return content;
     }

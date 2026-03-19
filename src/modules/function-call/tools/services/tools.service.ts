@@ -7,6 +7,7 @@ import { SkillThoughtToolsService } from '../../../skill-thought/tools/skill-tho
 import { McpFunctionCallService } from '../../mcp/services/mcp.service.js';
 import { McpAdaptersService } from '../../mcp/services/mcp-adapter.service.js';
 import { TodoFunctionCallService } from '../../todo/services/todo.service.js';
+import { DashboardToolsService } from '../../dashboard/services/dashboard-tools.service.js';
 import { GraphWorkflowFunctionCallService } from './graph-workflow.service.js';
 import { RobotRegistryService } from '../../../auto-task-robot/services/robot-registry.service.js';
 import { tool } from 'langchain';
@@ -28,6 +29,7 @@ export class ToolsService {
     private readonly mcp: McpFunctionCallService,
     private readonly mcpAdapters: McpAdaptersService,
     private readonly todo: TodoFunctionCallService,
+    private readonly dashboard: DashboardToolsService,
     private readonly graphWorkflow: GraphWorkflowFunctionCallService,
     private readonly robots: RobotRegistryService,
   ) {}
@@ -84,6 +86,7 @@ export class ToolsService {
       return name === 'topic_orchestrate';
     });
     const tTodo = this.todo.getHandle(scope) ?? [];
+    const tDashboard = this.dashboard.getHandle(scope) ?? [];
     const tRobots: CreateAgentParams['tools'] = [
       tool(
         () => {
@@ -112,6 +115,7 @@ export class ToolsService {
       ...tDecision,
       ...tGraphWorkflow,
       ...tTodo,
+      ...tDashboard,
       ...tRobots,
     );
     return tools.filter((t) => {

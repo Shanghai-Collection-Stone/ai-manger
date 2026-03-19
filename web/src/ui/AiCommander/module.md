@@ -17,10 +17,33 @@ AI 指挥官主界面容器，管理底部导航和视图切换。
 
 ### DashboardView.jsx
 
-仪表盘视图，支持多类型看板切换（总览、客流、销售、物业），展示核心营收指标、客流趋势和 AI 异常洞察。
-支持左右滑动切换看板子标签。
+仪表盘视图，自动加载后端 JSON 配置（`/dashboard-config/current`），按配置中的 Tabs + Blocks 网格渲染看板。
+支持左右滑动切换看板子标签，所有区块通过 `blocks/BlockRegistry` 分发。
 
-- **关键词**: DashboardView, KPI, BentoGrid, AIInsight, TabNavigation, SwipeNavigation
+- **关键词**: DashboardView, JSON-config-driven, BentoGrid, TabNavigation, SwipeNavigation, useTabData
+
+### dashboardApi.js
+
+Dashboard 数据 API + 看板 JSON 配置获取接口 + 通用 Mongo 查询支持。
+
+- `getRevenueOverview` — 营收总览（预置）
+- `getDailyRevenue` — 日营收与人数（预置）
+- `getPeopleStats` — 人数统计（预置）
+- `getDemandChannel` — 需求与渠道（预置）
+- `getEvents` — 活动与类型（预置）
+- `getSales` — 销售与客户（预置）
+- `getDashboardConfig` — 看板 JSON 配置
+- `queryFetchers` — query key → 预置 fetcher 映射
+- `timeRangeToWhere` — 中文时间范围 → Mongo Where DSL 转换
+- `fetchMongoQuery` — 通用 Mongo 查询执行（消费 config.queries 定义）
+
+- **关键词**: dashboardApi, dashboard-config, json, api, queryFetchers, mongo-query, timeRange, where-dsl
+
+### blocks/
+
+看板 Block 组件库子模块，详见 `blocks/module.md`。
+
+- **关键词**: blocks, block-registry, shared, echart
 
 ### DecisionFeedView.jsx
 

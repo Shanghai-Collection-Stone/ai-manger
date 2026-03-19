@@ -20,6 +20,8 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SassModule } from './modules/sass/sass.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { DecisionCardModule } from './modules/decision-card/decision-card.module.js';
+import { MongoQueryModule } from './modules/mongo-query/mongo-query.module.js';
+import { DashboardConfigModule } from './modules/dashboard-config/dashboard-config.module.js';
 
 @Module({
   imports: [
@@ -45,6 +47,8 @@ import { DecisionCardModule } from './modules/decision-card/decision-card.module
     SassModule,
     AdminModule,
     DecisionCardModule,
+    MongoQueryModule,
+    DashboardConfigModule,
   ],
   controllers: [AppController],
   providers: [AppService],

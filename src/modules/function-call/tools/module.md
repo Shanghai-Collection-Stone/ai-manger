@@ -7,8 +7,8 @@
 ## 功能描述及关键词
 
 ### tools.service.ts
-工具聚合服务。
-- **关键词**: tools, function-call, aggregation, thought-route, tool-whitelist, langchain, agent, service
+工具聚合服务。聚合所有子模块工具（含 dashboard、todo、analysis 等），统一向对话层暴露。
+- **关键词**: tools, function-call, aggregation, thought-route, tool-whitelist, langchain, agent, service, dashboard
 - **函数**:
   - `getHandle`: 获取工具集合/get handle
   - `getThoughtRouteTools`: 获取思维链路工具/get thought route tools

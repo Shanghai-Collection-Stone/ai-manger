@@ -234,4 +234,44 @@ export const adminApi = {
       method: 'DELETE',
     });
   },
+
+  /**
+   * @description 列出看板配置映射
+   * @keyword-en list dashboard config mappings
+   */
+  async listDashboardConfigMappings() {
+    return request('/dashboard-config/mappings');
+  },
+
+  /**
+   * @description Upsert 看板配置映射
+   * @keyword-en upsert dashboard config mapping
+   */
+  async upsertDashboardConfigMapping(payload) {
+    return request('/dashboard-config/mappings', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除看板配置映射
+   * @keyword-en delete dashboard config mapping
+   */
+  async deleteDashboardConfigMapping(id) {
+    return request(`/dashboard-config/mappings/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * @description 清除 AI 修改的 customConfig，回退到文件配置
+   * @keyword-en reset dashboard custom config to file
+   */
+  async resetDashboardCustomConfig(dashboardCode) {
+    return request('/dashboard-config/reset-custom', {
+      method: 'POST',
+      body: JSON.stringify({ dashboardCode }),
+    });
+  },
 };

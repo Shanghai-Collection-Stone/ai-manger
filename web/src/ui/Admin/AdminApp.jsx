@@ -7,10 +7,32 @@ import {
 } from './adminApi';
 
 const PAGE_SIZE = 6;
+const ADMIN_ACTIVE_TAB_KEY = 'admin_active_tab';
 
 const toText = (value) => (typeof value === 'string' ? value : '');
 
 const toLower = (value) => toText(value).toLowerCase();
+
+/**
+ * @description 读取后台管理当前tab（用于刷新保留）
+ * @keyword-en read admin active tab
+ * @returns {string}
+ */
+const readAdminActiveTab = () => {
+  if (typeof window === 'undefined') return '';
+  return toText(window.localStorage.getItem(ADMIN_ACTIVE_TAB_KEY)).trim();
+};
+
+/**
+ * @description 写入后台管理当前tab（用于刷新保留）
+ * @keyword-en write admin active tab
+ * @param {string} tabId
+ * @returns {void}
+ */
+const writeAdminActiveTab = (tabId) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(ADMIN_ACTIVE_TAB_KEY, toText(tabId));
+};
 
 const toDateInput = (value) => {
   if (!value) return '';
@@ -68,19 +90,38 @@ const renderPager = (pageInfo, onPrev, onNext) => (
   </div>
 );
 
+/**
+ * @description 判断是否为母平台超级管理员（区别于 hasAdminFullAccess 包含 tenant_admin）
+ * @keyword-en check super admin role
+ */
+const isSuperAdmin = (role) => role === 'super_admin';
+
+/**
+ * @description 全量 Tab 定义（含平台限定标记）
+ * @keyword-en all admin tabs definition
+ */
+const ALL_TABS = [
+  { id: 'users', label: '用户管理' },
+  { id: 'providers', label: 'Ai提供商设置', platformOnly: true },
+  { id: 'tenants', label: '租户管理', platformOnly: true },
+  { id: 'keys', label: 'key管理' },
+  { id: 'sources', label: '数据源管理' },
+  { id: 'dashboard_configs', label: '看板配置' },
+];
+
 const AdminApp = () => {
+  const [currentRole, setCurrentRole] = useState('');
   const tabs = useMemo(
-    () => [
-      { id: 'users', label: '用户管理' },
-      { id: 'providers', label: 'Ai提供商设置' },
-      { id: 'tenants', label: '租户管理' },
-      { id: 'keys', label: 'key管理' },
-      { id: 'sources', label: '数据源管理' },
-    ],
-    [],
+    () => ALL_TABS.filter((t) => !t.platformOnly || isSuperAdmin(currentRole)),
+    [currentRole],
   );
 
-  const [activeTab, setActiveTab] = useState('users');
+  const [activeTab, setActiveTab] = useState(() => {
+    const stored = readAdminActiveTab();
+    const fallback = 'users';
+    // 初始时 tabs 可能不含 platformOnly 项，安全回退
+    return ALL_TABS.some((t) => t.id === stored) ? stored : fallback;
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -90,17 +131,20 @@ const AdminApp = () => {
   const [tenants, setTenants] = useState([]);
   const [keys, setKeys] = useState([]);
   const [sources, setSources] = useState([]);
+  const [dashboardConfigs, setDashboardConfigs] = useState([]);
   const [editingUserId, setEditingUserId] = useState('');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
   const [editingKeyId, setEditingKeyId] = useState('');
   const [editingSourceCode, setEditingSourceCode] = useState('');
+  const [editingDashboardConfigId, setEditingDashboardConfigId] = useState('');
   const [filters, setFilters] = useState({
     users: { keyword: '', tenantId: '' },
     providers: { keyword: '' },
     tenants: { keyword: '' },
     keys: { keyword: '', tenantId: '' },
     sources: { keyword: '', status: '' },
+    dashboardConfigs: { keyword: '', tenantId: '' },
   });
   const [pages, setPages] = useState({
     users: 1,
@@ -108,6 +152,7 @@ const AdminApp = () => {
     tenants: 1,
     keys: 1,
     sources: 1,
+    dashboardConfigs: 1,
   });
   const [forms, setForms] = useState({
     user: {
@@ -146,6 +191,12 @@ const AdminApp = () => {
       moduleRef: '',
       status: 'active',
     },
+    dashboardConfig: {
+      dashboardCode: 'ai-commander',
+      tenantId: '',
+      filePath: 'config/dashboards/platform.dashboard.json',
+      enabled: true,
+    },
   });
 
   const loadData = async () => {
@@ -158,12 +209,17 @@ const AdminApp = () => {
         return;
       }
       setMe(meRes);
-      const [u, p, t, k, s] = await Promise.all([
+      setCurrentRole(meRes?.role || '');
+      const isSA = meRes?.role === 'super_admin';
+
+      // 母平台加载全部数据；租户跳过 providers / tenants
+      const [u, p, t, k, s, dc] = await Promise.all([
         adminApi.listUsers(),
-        adminApi.listProviders(),
+        isSA ? adminApi.listProviders() : { providers: [] },
         adminApi.listTenants(),
         adminApi.listKeys(),
         adminApi.listDataSources(),
+        adminApi.listDashboardConfigMappings(),
       ]);
       const tenantRows = t.tenants || [];
       setUsers(u.users || []);
@@ -171,12 +227,18 @@ const AdminApp = () => {
       setTenants(tenantRows);
       setKeys(k.keys || []);
       setSources(s.sources || []);
+      setDashboardConfigs(dc.rows || []);
       if (tenantRows.length > 0) {
         setForms((prev) => ({
           ...prev,
           key: {
             ...prev.key,
             tenantId: prev.key.tenantId || tenantRows[0]._id,
+          },
+          // 租户管理员默认锁定自己的 tenantId
+          dashboardConfig: {
+            ...prev.dashboardConfig,
+            tenantId: meRes?.tenantId || prev.dashboardConfig.tenantId,
           },
         }));
       }
@@ -194,6 +256,17 @@ const AdminApp = () => {
   useEffect(() => {
     void loadData();
   }, []);
+
+  // 角色变更后若当前 Tab 不可见，回退到首个可见 Tab
+  useEffect(() => {
+    if (tabs.length && !tabs.some((t) => t.id === activeTab)) {
+      setActiveTab(tabs[0].id);
+    }
+  }, [tabs]);
+
+  useEffect(() => {
+    writeAdminActiveTab(activeTab);
+  }, [activeTab]);
 
   const updateForm = (group, key, value) => {
     setForms((prev) => ({
@@ -218,6 +291,60 @@ const AdminApp = () => {
 
   const gotoPage = (group, next) => {
     setPages((prev) => ({ ...prev, [group]: Math.max(1, next) }));
+  };
+
+  /**
+   * @description 刷新看板配置映射列表
+   * @keyword-en reload dashboard config mappings
+   * @returns {Promise<void>}
+   */
+  const reloadDashboardConfigs = async () => {
+    const res = await adminApi.listDashboardConfigMappings();
+    setDashboardConfigs(res.rows || []);
+  };
+
+  /**
+   * @description 提交看板配置映射（创建/更新）
+   * @keyword-en submit dashboard config mapping
+   * @returns {Promise<void>}
+   */
+  const onSubmitDashboardConfig = async () => {
+    const payload = {
+      dashboardCode: toText(forms.dashboardConfig.dashboardCode).trim() || undefined,
+      tenantId: toText(forms.dashboardConfig.tenantId).trim() || undefined,
+      filePath: toText(forms.dashboardConfig.filePath).trim(),
+      enabled: Boolean(forms.dashboardConfig.enabled),
+    };
+    const res = await adminApi.upsertDashboardConfigMapping(payload);
+    setEditingDashboardConfigId(toText(res?.row?._id));
+    await reloadDashboardConfigs();
+    setNotice(editingDashboardConfigId ? '看板配置映射已更新' : '看板配置映射已创建');
+  };
+
+  /**
+   * @description 删除看板配置映射
+   * @keyword-en delete dashboard config mapping
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onDeleteDashboardConfig = async (id) => {
+    await adminApi.deleteDashboardConfigMapping(id);
+    await reloadDashboardConfigs();
+    if (editingDashboardConfigId === id) {
+      setEditingDashboardConfigId('');
+    }
+    setNotice('看板配置映射已删除');
+  };
+
+  /**
+   * @description 重置 AI 修改的 customConfig，回退到文件配置
+   * @keyword-en reset dashboard custom config to file config
+   * @param {string} dashboardCode
+   * @returns {Promise<void>}
+   */
+  const onResetDashboardCustomConfig = async (dashboardCode) => {
+    await adminApi.resetDashboardCustomConfig(dashboardCode || 'ai-commander');
+    setNotice('已重置 AI 修改，已回退到文件配置');
   };
 
   const onLogout = async () => {
@@ -455,11 +582,28 @@ const AdminApp = () => {
     return hitKeyword && hitStatus;
   });
 
+  const filteredDashboardConfigs = dashboardConfigs.filter((item) => {
+    const keyword = toLower(filters.dashboardConfigs.keyword.trim());
+    const hitKeyword =
+      !keyword ||
+      toLower(item.dashboardCode).includes(keyword) ||
+      toLower(item.filePath).includes(keyword);
+    const tenantFilter = toText(filters.dashboardConfigs.tenantId).trim();
+    if (!tenantFilter) return hitKeyword;
+    const isPlatform = !item.tenantId;
+    if (tenantFilter === '__platform__') return hitKeyword && isPlatform;
+    return hitKeyword && item.tenantId === tenantFilter;
+  });
+
   const pagedUsers = buildPagedRows(filteredUsers, pages.users);
   const pagedProviders = buildPagedRows(filteredProviders, pages.providers);
   const pagedTenants = buildPagedRows(filteredTenants, pages.tenants);
   const pagedKeys = buildPagedRows(filteredKeys, pages.keys);
   const pagedSources = buildPagedRows(filteredSources, pages.sources);
+  const pagedDashboardConfigs = buildPagedRows(
+    filteredDashboardConfigs,
+    pages.dashboardConfigs,
+  );
 
   if (loading) {
     return (
@@ -915,6 +1059,172 @@ const AdminApp = () => {
                 pagedSources,
                 () => gotoPage('sources', pages.sources - 1),
                 () => gotoPage('sources', pages.sources + 1),
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {activeTab === 'dashboard_configs' ? (
+          <div className="grid lg:grid-cols-2 gap-4 pb-8">
+            {/* 看板配置映射编辑区域 | @keyword-en dashboard config mapping editor */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <h2 className="font-semibold text-slate-900">
+                {editingDashboardConfigId ? '编辑看板配置映射' : '新增看板配置映射'}
+              </h2>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="dashboardCode（默认 ai-commander）"
+                value={forms.dashboardConfig.dashboardCode}
+                onChange={(e) => updateForm('dashboardConfig', 'dashboardCode', e.target.value)}
+              />
+              {/* 租户管理员锁定 tenantId，平台管理员可选 */}
+              {isSuperAdmin(me?.role) ? (
+                <select
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  value={forms.dashboardConfig.tenantId}
+                  onChange={(e) => updateForm('dashboardConfig', 'tenantId', e.target.value)}
+                >
+                  <option value="">母平台（空租户）</option>
+                  {tenants.map((tenant) => (
+                    <option key={tenant._id} value={tenant._id}>
+                      {tenant.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="w-full border rounded px-3 py-2 text-sm text-slate-500 bg-slate-50">
+                  租户：{tenants.find((t) => t._id === me?.tenantId)?.name || me?.tenantId || '当前租户'}
+                </div>
+              )}
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="配置文件路径（相对项目根，如 config/dashboards/xxx.json）"
+                value={forms.dashboardConfig.filePath}
+                onChange={(e) => updateForm('dashboardConfig', 'filePath', e.target.value)}
+              />
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(forms.dashboardConfig.enabled)}
+                  onChange={(e) => updateForm('dashboardConfig', 'enabled', e.target.checked)}
+                />
+                启用
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onSubmitDashboardConfig().catch((err) => setError(err.message))}
+                  className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
+                >
+                  {editingDashboardConfigId ? '保存映射' : '创建映射'}
+                </button>
+                {editingDashboardConfigId ? (
+                  <button
+                    onClick={() => {
+                      setEditingDashboardConfigId('');
+                      setForms((prev) => ({
+                        ...prev,
+                        dashboardConfig: {
+                          dashboardCode: 'ai-commander',
+                          tenantId: '',
+                          filePath: 'config/dashboards/platform.dashboard.json',
+                          enabled: true,
+                        },
+                      }));
+                    }}
+                    className="px-3 py-2 bg-white border text-sm rounded"
+                  >
+                    取消编辑
+                  </button>
+                ) : null}
+              </div>
+              <div className="text-xs text-slate-500">
+                配置文件仅允许在 <span className="font-mono">config/dashboards/</span> 目录下。
+              </div>
+            </div>
+
+            {/* 看板配置映射列表区域 | @keyword-en dashboard config mapping list */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4">
+              <h2 className="font-semibold text-slate-900 mb-2">映射列表</h2>
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <input
+                  className="border rounded px-3 py-2 text-sm"
+                  placeholder="按 dashboardCode 或 filePath 搜索"
+                  value={filters.dashboardConfigs.keyword}
+                  onChange={(e) => updateFilter('dashboardConfigs', 'keyword', e.target.value)}
+                />
+                <select
+                  className="border rounded px-3 py-2 text-sm"
+                  value={filters.dashboardConfigs.tenantId}
+                  onChange={(e) => updateFilter('dashboardConfigs', 'tenantId', e.target.value)}
+                >
+                  <option value="">全部租户</option>
+                  <option value="__platform__">母平台（空租户）</option>
+                  {tenants.map((tenant) => (
+                    <option key={tenant._id} value={tenant._id}>
+                      {tenant.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-2 text-sm">
+                {pagedDashboardConfigs.rows.map((item) => (
+                  <div key={item._id} className="border rounded-lg p-3 flex justify-between">
+                    <div>
+                      <div className="font-medium">
+                        {item.dashboardCode || 'ai-commander'}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {item.tenantId ? item.tenantId : '母平台(空租户)'}
+                      </div>
+                      <div className="text-xs text-slate-500">{item.filePath}</div>
+                      <div className="text-xs text-slate-500">
+                        {item.enabled ? 'enabled' : 'disabled'}
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        onClick={() => {
+                          setEditingDashboardConfigId(item._id);
+                          setForms((prev) => ({
+                            ...prev,
+                            dashboardConfig: {
+                              dashboardCode: item.dashboardCode || 'ai-commander',
+                              tenantId: item.tenantId || '',
+                              filePath: item.filePath || '',
+                              enabled: Boolean(item.enabled),
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        onClick={() => onDeleteDashboardConfig(item._id).catch((err) => setError(err.message))}
+                        className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
+                      >
+                        删除
+                      </button>
+                      {/* 重置 AI 修改按钮：清除 customConfig 回退到文件配置 | @keyword-en reset ai custom config */}
+                      <button
+                        onClick={() =>
+                          onResetDashboardCustomConfig(item.dashboardCode).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-amber-300 text-amber-700"
+                        title="清除 AI 修改的自定义配置，回退到文件配置"
+                      >
+                        重置配置
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {renderPager(
+                pagedDashboardConfigs,
+                () => gotoPage('dashboardConfigs', pages.dashboardConfigs - 1),
+                () => gotoPage('dashboardConfigs', pages.dashboardConfigs + 1),
               )}
             </div>
           </div>
