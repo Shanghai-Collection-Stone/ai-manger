@@ -429,8 +429,11 @@ export class DataSourceSearchToolsService {
     col: Collection<Record<string, unknown>>;
     logicalCollectionName: string;
   }> {
+    // tenant-mongo 是 schema_search 返回的虚拟 sourceCode，指向本租户主数据库
+    const resolvedSourceCode =
+      sourceCode === 'tenant-mongo' ? MAIN_DATA_SOURCE.code : sourceCode;
     const source = await this.dataSourceService.findAccessibleSource(
-      sourceCode,
+      resolvedSourceCode,
       tenantId,
     );
     if (!source) {

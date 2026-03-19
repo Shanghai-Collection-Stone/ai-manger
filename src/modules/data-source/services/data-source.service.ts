@@ -88,18 +88,10 @@ export class DataSourceService {
   ): Promise<DataSourceEntity | null> {
     const source = await this.collection.findOne({ code, status: 'active' });
     if (!source) return null;
-    const scope = source.scope;
-    const currentTenantId = tenantId?.trim();
-
-    // scope=platform → 全局可用
+    const scope = source.scope ?? 'platform';
+    // scope=platform 或无 scope（旧数据兼容）→ 全局可用
     if (scope === 'platform') return source;
-
-    // scope 不存在（旧数据）：仅平台上下文（无 tenantId）可用，租户上下文不可见
-    if (!scope) {
-      return currentTenantId ? null : source;
-    }
-
-    // scope=tenant → 必须租户匹配
+    const currentTenantId = tenantId?.trim();
     if (!currentTenantId) return null;
     if ((source.tenantId ?? '').trim() !== currentTenantId) return null;
     return source;
@@ -112,7 +104,6 @@ export class DataSourceService {
   async listAccessibleSources(tenantId?: string): Promise<DataSourceEntity[]> {
     const currentTenantId = tenantId?.trim();
     if (!currentTenantId) {
-      // 平台范围：仅返回 scope=platform 或无 scope 的数据源（兜底兼容）
       return this.collection
         .find({
           status: 'active',
@@ -120,13 +111,12 @@ export class DataSourceService {
         })
         .toArray();
     }
-    // 租户范围：只返回 scope=platform（通用）和当前租户专属的数据源
-    // scope 不存在的视为平台级（旧数据兼容）→ 已改为仅平台可见，防止租户间泄露
     return this.collection
       .find({
         status: 'active',
         $or: [
           { scope: 'platform' },
+          { scope: { $exists: false } },
           { scope: 'tenant', tenantId: currentTenantId },
         ],
       })

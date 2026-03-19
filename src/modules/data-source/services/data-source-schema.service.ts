@@ -234,6 +234,21 @@ export class DataSourceSchemaService {
     );
     const set = new Set(rows.map((row) => row.code));
     set.add(MAIN_DATA_SOURCE.code);
+
+    // 租户上下文：过滤掉不可直接查询的平台专属服务（如 feishu-bitable）
+    // feishu-bitable 是平台级配置，租户只能通过专属授权后的 scope=tenant 数据源访问
+    // 若无对应 scope=tenant 的 feishu-bitable 记录，则不应出现在租户 schema 搜索中
+    if (opts?.tenantId?.trim()) {
+      const PLATFORM_ONLY_SOURCES = new Set(['feishu-bitable']);
+      for (const code of PLATFORM_ONLY_SOURCES) {
+        // 仅当该 code 没有当前租户的专属记录时才移除
+        const hasTenantRecord = rows.some(
+          (r) => r.code === code && r.scope === 'tenant',
+        );
+        if (!hasTenantRecord) set.delete(code);
+      }
+    }
+
     return Array.from(set);
   }
 
