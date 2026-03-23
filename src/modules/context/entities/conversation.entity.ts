@@ -2,10 +2,10 @@ import { ObjectId } from 'mongodb';
 
 /**
  * @title 会话类型 Conversation Session Type
- * @description 区分默认对话与思维链路专用对话。
+ * @description 区分默认对话、思维链路、图库Agent、小红书专家专用对话。
  * @keyword-en conversation session type
  */
-export type ConversationSessionType = 'default' | 'thought';
+export type ConversationSessionType = 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist';
 
 /**
  * @title 会话实体 Conversation Entity

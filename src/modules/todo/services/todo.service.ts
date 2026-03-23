@@ -168,15 +168,18 @@ export class TodoService {
   }
 
   /**
-   * @description 列出待办（可按用户过滤）
+   * @description 列出待办（可按用户和指派人过滤）
    * @param {string} [userId] - 指定用户
+   * @param {string} [tenantId] - 租户ID
+   * @param {string} [assignee] - 指派人（支持 robot:xxx 格式）
    * @returns {Promise<TodoEntity[]>} 列表
    * @keyword todo, list, user
    * @since 2026-01-27
    */
-  async list(userId?: string, tenantId?: string): Promise<TodoEntity[]> {
+  async list(userId?: string, tenantId?: string, assignee?: string): Promise<TodoEntity[]> {
     const filter: Record<string, unknown> = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
+    if (assignee) filter.assignee = assignee;
     return this.todos
       .find(filter, { projection: { _id: 0 } })
       .sort({ updatedAt: -1 })
@@ -194,7 +197,7 @@ export class TodoService {
     tenantId?: string;
   }): Promise<TodoEntity[]> {
     if (input.canViewAll) {
-      return this.list(input.userId, input.tenantId);
+      return this.list(input.userId, input.tenantId, input.assignee);
     }
     const filter: Record<string, unknown> = {
       ...this.buildTenantFilter(input.tenantId),

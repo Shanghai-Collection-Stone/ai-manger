@@ -200,8 +200,9 @@ export class ContextService {
     },
   ): Promise<ContextMessage[]> {
     await this.assertSessionScope(sessionId, scope);
+    const messageFilter = this.buildConversationFilter(sessionId, scope);
     const storedMessages = await this.messages
-      .find({ sessionId, ...this.buildScopeFilter(scope) })
+      .find(messageFilter)
       .sort({ timestamp: 1 })
       .toArray();
     const tuple: CheckpointTuple | undefined = await this.saver.getTuple({
@@ -1129,7 +1130,10 @@ export class ContextService {
   private normalizeSessionType(
     sessionType?: ConversationSessionType,
   ): ConversationSessionType {
-    return sessionType === 'thought' ? 'thought' : 'default';
+    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist'];
+    return validTypes.includes(sessionType as ConversationSessionType)
+      ? (sessionType as ConversationSessionType)
+      : 'default';
   }
 
   /**
@@ -1145,14 +1149,8 @@ export class ContextService {
       ...this.buildScopeFilter(scope),
     };
     const type = this.normalizeSessionType(scope?.sessionType);
-    if (type === 'thought') {
-      filter.sessionType = 'thought';
-      return filter;
-    }
-    filter.$or = [
-      { sessionType: 'default' },
-      { sessionType: { $exists: false } },
-    ];
+    // 保留所有 sessionType，不做简化处理
+    filter.sessionType = type;
     return filter;
   }
 
@@ -1191,14 +1189,8 @@ export class ContextService {
       ...this.buildScopeFilter(scope),
     };
     const type = this.normalizeSessionType(scope?.sessionType);
-    if (type === 'thought') {
-      base.sessionType = 'thought';
-      return base;
-    }
-    base.$or = [
-      { sessionType: 'default' },
-      { sessionType: { $exists: false } },
-    ];
+    // 保留所有 sessionType，不做简化处理
+    base.sessionType = type;
     return base;
   }
 

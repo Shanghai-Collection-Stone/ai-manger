@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { 
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit
+import {
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import CanvasFeedView from './CanvasFeedView';
+import XhsSpecialistView from './XhsSpecialistView';
+import ChatBIView from './ChatBIView';
 
 /**
  * @description Tools View for AI Commander, including AI Gallery
@@ -353,6 +355,7 @@ function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
  * @param {Function} props.onBack - Callback when back button is clicked
  */
 const GalleryView = ({ onBack }) => {
+  const [tab, setTab] = useState('gallery'); // 'gallery' | 'chat'
   const [userId, setUserId] = useState('');
   const [groups, setGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
@@ -565,47 +568,100 @@ const GalleryView = ({ onBack }) => {
     await loadTags();
   }, [previewImage, userId, closePreview, loadTags]);
 
-  return (
-    <div className="h-full flex flex-col bg-white">
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-slate-100 bg-white/80 backdrop-blur-xl sticky top-0 z-20">
-        <div className="flex items-center gap-2">
-          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800">
+  // Chat tab - render ChatBIView and return early
+  if (tab === 'chat') {
+    return (
+      <div className="h-full flex flex-col bg-white animate-fade-in">
+        {/* Header with back + tab switch */}
+        <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
+          <button
+            onClick={onBack}
+            className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800"
+          >
             <ChevronLeft size={22} />
           </button>
-          <div>
-            <h2 className="text-lg font-bold text-slate-800">AI 图库</h2>
-            <p className="text-[10px] text-slate-400">共 {groups.reduce((acc, g) => acc + (g.image_count || 0), 0)} 张图片</p>
+          <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100%-88px)]">
+            <button
+              onClick={() => setTab('chat')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              对话
+            </button>
+            <button
+              onClick={() => setTab('gallery')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              图库
+            </button>
           </div>
         </div>
-        <div className="flex gap-2 items-center">
-           <input 
-              type="file" 
-              multiple 
-              accept="image/*" 
-              className="hidden" 
-              ref={fileRef}
-              onChange={onUploadFiles}
-            />
-            <input
-              type="text"
-              value={uploadDraft.tags}
-              onChange={(e) => setUploadDraft({ ...uploadDraft, tags: e.target.value })}
-              placeholder="标签(逗号分隔)"
-              className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-32"
-            />
-            <button 
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-1.5 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-slate-800 transition shadow-lg shadow-slate-200 disabled:opacity-50 disabled:shadow-none"
+        {/* ChatBIView for gallery chat */}
+        <div className="flex-1 min-h-0">
+          <ChatBIView
+            sessionType="gallery-agent"
+            sessionStorageKey="ai_gallery_chat_session"
+            welcomeTitle="图库智能助手"
+            welcomeDesc="基于图库和标签管理，帮你搜索和管理图片素材"
+            quickPrompts={['搜索风景类图片', '查找所有人物照片', '帮我整理图片标签']}
+            inputPlaceholder="输入问题，关于图库搜索和管理..."
+            showInlineSessionPicker
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col bg-white animate-fade-in">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 border-b border-slate-100 bg-white/90 gap-3 sm:gap-0">
+        <div className="flex items-center gap-2">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0">
+            <ChevronLeft size={22} />
+          </button>
+          <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100%-88px)]">
+            <button
+              onClick={() => setTab('chat')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
-              {uploading ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
-              <span>上传</span>
+              对话
             </button>
+            <button
+              onClick={() => setTab('gallery')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              图库
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 justify-between sm:justify-end w-full sm:w-auto overflow-x-auto px-1 pb-1 sm:p-0">
+          <input
+            type="file"
+            multiple
+            accept="image/*"
+            className="hidden"
+            ref={fileRef}
+            onChange={onUploadFiles}
+          />
+          <input
+            type="text"
+            value={uploadDraft.tags}
+            onChange={(e) => setUploadDraft({ ...uploadDraft, tags: e.target.value })}
+            placeholder="标签(逗号分隔)"
+            className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-full sm:w-32 min-w-[120px]"
+          />
+          <button 
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="shrink-0 flex items-center justify-center gap-1.5 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-slate-800 transition shadow-lg shadow-slate-200 disabled:opacity-50 disabled:shadow-none whitespace-nowrap"
+          >
+            {uploading ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
+            <span>上传</span>
+          </button>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden min-h-0">
         {/* Sidebar */}
         <div className="w-64 border-r border-slate-100 bg-slate-50 flex-col hidden md:flex">
           <div className="p-3 border-b border-slate-100 flex justify-between items-center">
@@ -742,19 +798,19 @@ const GalleryView = ({ onBack }) => {
       {previewImage && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60" onClick={closePreview} />
-          <div className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-200">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-              <div className="min-w-0">
+          <div className="relative w-full max-w-5xl bg-white rounded-2xl shadow-2xl overflow-hidden border border-gray-200 flex flex-col max-h-[95vh] md:max-h-[85vh]">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
+              <div className="min-w-0 pr-3">
                 <div className="text-sm font-semibold text-gray-900 truncate">
                   #{previewImage.id} {previewImage.originalName || ''}
                 </div>
                 <div className="text-xs text-gray-500 truncate">{previewImage.fileName || ''}</div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={deletePreviewImage}
-                  className="h-8 px-3 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
+                  className="h-8 px-3 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 hidden sm:block"
                 >
                   删除
                 </button>
@@ -768,17 +824,17 @@ const GalleryView = ({ onBack }) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2">
-              <div className="bg-black/5 p-4 flex items-center justify-center">
+            <div className="flex-1 overflow-y-auto flex flex-col md:grid md:grid-cols-2 min-h-0 bg-white">
+              <div className="bg-black/5 p-4 flex items-center justify-center min-h-[30vh] md:min-h-0 shrink-0">
                 <img
                   src={previewImage.url || previewImage.thumbUrl}
                   alt={previewImage.originalName || `img-${previewImage.id}`}
-                  className="max-h-[70vh] w-full object-contain rounded-lg"
+                  className="max-h-[40vh] md:max-h-[70vh] w-full object-contain rounded-lg"
                   loading="eager"
                   decoding="async"
                 />
               </div>
-              <div className="p-4 space-y-3">
+              <div className="p-4 space-y-3 bg-white shrink-0">
                 <div>
                   <div className="text-xs font-medium text-gray-600 mb-1">原图路径</div>
                   <div className="text-xs break-all bg-gray-50 p-2 rounded border border-gray-200">
@@ -820,18 +876,26 @@ const GalleryView = ({ onBack }) => {
                   />
                 </div>
 
-                <div className="flex justify-end gap-2 pt-2">
+                <div className="flex justify-between md:justify-end gap-2 pt-2 mt-4 border-t border-gray-100 md:border-none md:mt-0 md:pt-0">
                   <button
                     type="button"
-                    onClick={() => {
-                      setPreviewAddTags([]);
-                      setPreviewRemoveTags([]);
-                    }}
-                    className="h-8 px-4 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                    onClick={deletePreviewImage}
+                    className="h-8 px-4 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 sm:hidden"
                   >
-                    清空
+                    删除图片
                   </button>
-                  <button
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPreviewAddTags([]);
+                        setPreviewRemoveTags([]);
+                      }}
+                      className="h-8 px-4 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                    >
+                      清空
+                    </button>
+                    <button
                     type="button"
                     onClick={applyPreviewTags}
                     disabled={((previewAddTags?.length || 0) === 0 && (previewRemoveTags?.length || 0) === 0)}
@@ -839,6 +903,7 @@ const GalleryView = ({ onBack }) => {
                   >
                     应用标签
                   </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -850,7 +915,7 @@ const GalleryView = ({ onBack }) => {
 };
 
 const ToolsView = ({ onThoughtRouteChange }) => {
-  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas'
+  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist'
   const [canvases, setCanvases] = useState([]);
   const [canvasLoading, setCanvasLoading] = useState(false);
   const [canvasQuery, setCanvasQuery] = useState('');
@@ -869,7 +934,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
 
   useEffect(() => {
     if (typeof onThoughtRouteChange === 'function') {
-      onThoughtRouteChange(view === 'thought');
+      onThoughtRouteChange(view !== 'list');
     }
     return () => {
       if (typeof onThoughtRouteChange === 'function') {
@@ -890,7 +955,19 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   if (view === 'thought') {
     return <ThoughtRouteView onBack={() => setView('list')} />;
   }
+  if (view === 'xhs-specialist') {
+    return <XhsSpecialistView onBack={() => setView('list')} />;
+  }
   if (view === 'canvas') {
+    if (Number.isFinite(activeCanvasId)) {
+      return (
+        <CanvasFeedView
+          canvasId={activeCanvasId}
+          onClose={() => setActiveCanvasId(null)}
+        />
+      );
+    }
+    
     const normalizedQuery = String(canvasQuery || '').trim().toLowerCase();
     const filtered = (Array.isArray(canvases) ? canvases : []).filter((c) => {
       if (!normalizedQuery) return true;
@@ -899,76 +976,75 @@ const ToolsView = ({ onThoughtRouteChange }) => {
       return idText.includes(normalizedQuery) || topic.includes(normalizedQuery);
     });
     return (
-      <div className="p-4 animate-fade-in space-y-3">
-        <div className="flex items-center justify-between">
+      <div className="h-full flex flex-col bg-white animate-fade-in">
+        {/* Header matching other tools */}
+        <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
           <button
             onClick={() => setView('list')}
-            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-slate-300"
+            className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800"
           >
-            <ChevronLeft size={14} />
-            返回
+            <ChevronLeft size={22} />
           </button>
-          <button
-            onClick={() => {
-              void loadCanvases();
-            }}
-            className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-slate-300"
-          >
-            <RefreshCw size={14} />
-            刷新
-          </button>
+          <div className="font-bold text-slate-800">Canvas 管理</div>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-100 p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Search size={14} className="text-slate-400" />
-            <input
-              value={canvasQuery}
-              onChange={(e) => setCanvasQuery(e.target.value)}
-              placeholder="按 Canvas ID / 主题筛选"
-              className="w-full text-sm bg-transparent outline-none placeholder:text-slate-400"
-            />
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
+          <div className="bg-white rounded-2xl border border-slate-100 p-4">
+            <div className="flex items-center gap-2 mb-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
+              <Search size={16} className="text-slate-400" />
+              <input
+                value={canvasQuery}
+                onChange={(e) => setCanvasQuery(e.target.value)}
+                placeholder="按 Canvas ID / 主题筛选"
+                className="w-full text-sm bg-transparent outline-none placeholder:text-slate-400"
+              />
+              <button
+                onClick={() => void loadCanvases()}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <RefreshCw size={14} className={canvasLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+            
+            {canvasLoading ? (
+              <div className="py-12 flex items-center justify-center text-slate-400">
+                <RefreshCw size={24} className="animate-spin" />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="py-12 text-center text-sm text-slate-400">暂无 Canvas</div>
+            ) : (
+              <div className="space-y-2">
+                {filtered.map((c) => (
+                  <button
+                    key={String(c?.id ?? Math.random())}
+                    onClick={() => {
+                      const id = Number(c?.id);
+                      if (Number.isFinite(id)) setActiveCanvasId(id);
+                    }}
+                    className="w-full flex items-center justify-between text-left p-3 rounded-xl border border-slate-100 bg-white hover:border-indigo-200 hover:bg-indigo-50/30 transition shadow-sm"
+                  >
+                    <div>
+                      <div className="text-sm font-medium text-slate-800 line-clamp-1">
+                        {c?.topic || `Canvas #${c?.id ?? '-'}`}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {`#${c?.id ?? '-'} · ${(Array.isArray(c?.articles) ? c.articles.length : 0)} 篇 · ${c?.status || 'unknown'}`}
+                      </div>
+                    </div>
+                    <ChevronLeft size={16} className="text-slate-300 rotate-180" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          {canvasLoading ? (
-            <div className="py-8 flex items-center justify-center text-slate-400">
-              <RefreshCw size={16} className="animate-spin" />
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-8 text-center text-xs text-slate-400">暂无 Canvas</div>
-          ) : (
-            <div className="space-y-2 max-h-[70vh] overflow-y-auto pr-1">
-              {filtered.map((c) => (
-                <button
-                  key={String(c?.id ?? Math.random())}
-                  onClick={() => {
-                    const id = Number(c?.id);
-                    if (Number.isFinite(id)) setActiveCanvasId(id);
-                  }}
-                  className="w-full text-left px-3 py-2 rounded-xl border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40 transition"
-                >
-                  <div className="text-sm font-medium text-slate-800">
-                    {c?.topic || `Canvas #${c?.id ?? '-'}`}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {`#${c?.id ?? '-'} · ${(Array.isArray(c?.articles) ? c.articles.length : 0)} 篇 · ${c?.status || 'unknown'}`}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
         </div>
-        {Number.isFinite(activeCanvasId) && (
-          <CanvasFeedView
-            canvasId={activeCanvasId}
-            onClose={() => setActiveCanvasId(null)}
-          />
-        )}
       </div>
     );
   }
 
   return (
-    <div className="p-4 animate-fade-in">
-      
+    <div className="h-full flex flex-col overflow-hidden animate-fade-in p-4">
+      <div className="flex-1 overflow-y-auto">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <div 
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-blue-100 transition-all duration-300 aspect-square relative overflow-hidden"
@@ -1023,6 +1099,26 @@ const ToolsView = ({ onThoughtRouteChange }) => {
              <ChevronLeft size={18} className="rotate-180" />
           </div>
         </div>
+
+        {/* XHS Specialist Card */}
+        <div
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-rose-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => setView('xhs-specialist')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-rose-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-rose-500 to-pink-600 flex items-center justify-center mb-4 text-white shadow-rose-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <BookOpen size={30} />
+          </div>
+
+          <span className="font-bold text-slate-800 text-lg z-10">小红书专家</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">专项内容助手</span>
+
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-rose-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+      </div>
       </div>
     </div>
   );

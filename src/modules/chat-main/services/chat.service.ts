@@ -798,6 +798,8 @@ export class ChatMainService {
    */
   private getSystemPromptCN(sessionType: ConversationSessionType): string {
     if (sessionType === 'thought') return this.getThoughtPromptCN();
+    if (sessionType === 'gallery-agent') return this.getGalleryAgentPromptCN();
+    if (sessionType === 'xhs-specialist') return this.getXhsSpecialistPromptCN();
     return this.getDataAnalysisPromptCN();
   }
 
@@ -813,6 +815,37 @@ export class ChatMainService {
       '当用户提供的是某一些数据的查询方法的时候,或者说明逻辑的时候,不需要分析,可以寻找有没有相关的思维链来合并更新进去或者新建条思维进去',
       '若信息不足先提问澄清，不得编造字段。',
       '【关键】当需要生成思维链时，必须：1. 先完成完整的数据分析 2. 存入经验时 content 必须包含：数据源、涉及的表/集合、核心字段（字段名+含义+业务用途）、典型查询条件、业务场景、查询示例、结果解读 3. 禁止只写入抽象性描述，必须写入具体分析过程和结论 4. category 使用具体业务场景标签',
+    ].join('\n');
+  }
+
+  /**
+   * @description 图库Agent专用提示词
+   * @keyword-en gallery agent system prompt
+   */
+  private getGalleryAgentPromptCN(): string {
+    return [
+      '你是"图库智能助手"，专注于帮助用户搜索和管理图片素材。',
+      '你可以使用图库工具来：',
+      '1. 搜索图片 - 通过文字描述搜索相似图片',
+      '2. 列出标签 - 查看图库中已有的标签',
+      '3. 列出图片 - 查看图库中的图片列表',
+      '请根据用户需求，调用合适的图库工具来完成任务。',
+      '如果图库中没有相关图片，请告知用户并建议其他获取图片的方式。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 小红书专家专用提示词
+   * @keyword-en XHS specialist system prompt
+   */
+  private getXhsSpecialistPromptCN(): string {
+    return [
+      '你是"小红书内容创作专家"，专注于帮助用户生成和管理小红书内容。',
+      '你可以使用Canvas和图库工具来：',
+      '1. 查看Canvas列表 - 了解用户的内容集合',
+      '2. 获取Canvas详情 - 查看具体文章内容',
+      '3. 结合图库图片 - 为文章配图',
+      '请根据用户需求，帮助他们创建高质量的小红书内容。',
     ].join('\n');
   }
 
@@ -839,8 +872,10 @@ export class ChatMainService {
   } {
     const tenantId = request.tenantId?.trim();
     const userId = request.userId?.trim();
-    const sessionType =
-      request.sessionType === 'thought' ? 'thought' : 'default';
+    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist'];
+    const sessionType = validTypes.includes(request.sessionType as ConversationSessionType)
+      ? (request.sessionType as ConversationSessionType)
+      : 'default';
     return {
       tenantId: tenantId || undefined,
       userId: userId || undefined,

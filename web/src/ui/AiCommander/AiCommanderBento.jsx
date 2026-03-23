@@ -389,15 +389,17 @@ const AiCommanderBento = () => {
         </div>
       </div>
       {canvasFocusId ? (
-        <CanvasFeedView
-          canvasId={canvasFocusId}
-          onClose={() => {
-            $canvasFocusId.set(null);
-            if ((window.location.hash || '').startsWith('#canvas-')) {
-              history.replaceState(null, '', window.location.pathname + window.location.search);
-            }
-          }}
-        />
+        <div className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh]">
+          <CanvasFeedView
+            canvasId={canvasFocusId}
+            onClose={() => {
+              $canvasFocusId.set(null);
+              if ((window.location.hash || '').startsWith('#canvas-')) {
+                history.replaceState(null, '', window.location.pathname + window.location.search);
+              }
+            }}
+          />
+        </div>
       ) : null}
     </div>
   );

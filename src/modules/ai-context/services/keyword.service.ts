@@ -110,6 +110,13 @@ export class KeywordService {
             model: aiConfig?.model,
           },
         );
+      } else if (/999|1000|overload|api_error|unknown error/i.test(msg)) {
+        // Anthropic / provider transient errors (overloaded, unknown error 999, etc.)
+        console.warn('AI keyword extraction skipped due to transient API error, falling back to regex', {
+          provider: aiConfig?.provider,
+          model: aiConfig?.model,
+          error: msg.slice(0, 200),
+        });
       } else {
         console.error('AI keyword extraction failed, falling back to regex', e);
       }

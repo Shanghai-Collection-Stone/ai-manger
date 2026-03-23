@@ -36,6 +36,8 @@ export class GalleryGroupService {
     await this.groups.createIndex({ userId: 1 });
     await this.groups.createIndex({ tags: 1 });
     await this.groups.createIndex({ createdAt: -1 });
+    // 租户隔离索引
+    await this.groups.createIndex({ scope: 1, tenantId: 1, userId: 1 });
     const exists = await this.counters.findOne({ _id: 'gallery_groups' });
     if (!exists)
       await this.counters.insertOne({ _id: 'gallery_groups', seq: 0 });
@@ -100,6 +102,8 @@ export class GalleryGroupService {
       _id: new ObjectId(),
       id,
       userId: input.userId,
+      scope: (input.scope ?? 'tenant') as 'platform' | 'tenant',
+      tenantId: input.tenantId,
       name: input.name,
       description: input.description,
       tags,

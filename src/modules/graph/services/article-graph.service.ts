@@ -836,6 +836,7 @@ export class ArticleGraphService {
     const byQuery = await this.gallery.searchSimilar(
       queryText,
       input.galleryUserId,
+      undefined, // tenantId not available in this context
       12,
       input.minImageScore,
     );

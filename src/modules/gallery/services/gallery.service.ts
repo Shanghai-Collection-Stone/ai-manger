@@ -40,6 +40,9 @@ export class GalleryService {
     await this.images.createIndex({ groupId: 1, createdAt: -1 });
     await this.images.createIndex({ tags: 1 });
     await this.images.createIndex({ createdAt: -1 });
+    // 租户隔离索引
+    await this.images.createIndex({ scope: 1, tenantId: 1, userId: 1 });
+    await this.images.createIndex({ scope: 1, tenantId: 1, tags: 1 });
     const exists = await this.counters.findOne({ _id: 'gallery_images' });
     if (!exists)
       await this.counters.insertOne({ _id: 'gallery_images', seq: 0 });
@@ -191,6 +194,8 @@ export class GalleryService {
       _id: new ObjectId(),
       id: ids[idx],
       userId: input.userId,
+      scope: (input.scope ?? 'tenant') as 'platform' | 'tenant',
+      tenantId: input.tenantId,
       groupId: input.groupId,
       originalName: input.originalName,
       fileName: input.fileName,
@@ -209,6 +214,101 @@ export class GalleryService {
 
     await this.images.insertMany(docs);
     return docs;
+  }
+
+  /**
+   * @description 按租户可见性查找图片（租户隔离）
+   * @param {string} userId - 用户ID
+   * @param {string} [tenantId] - 租户ID
+   * @param {Object} [options] - 查询选项
+   * @param {number} [options.groupId] - 图库组ID
+   * @param {string} [options.tag] - 标签
+   * @param {number} [options.cursorId] - 游标
+   * @param {number} [options.limit=50] - 返回条数
+   * @returns {Promise<GalleryImageEntity[]>} 图片列表
+   * @keyword-en find accessible images by tenant scope
+   * @since 2026-03-23
+   */
+  async findAccessibleImages(
+    userId: string | undefined,
+    tenantId?: string,
+    options?: { groupId?: number; tag?: string; cursorId?: number; limit?: number },
+  ): Promise<GalleryImageEntity[]> {
+    const { groupId, tag, cursorId, limit = 50 } = options ?? {};
+    const filter = this.buildTenantFilter(userId, tenantId);
+    if (groupId !== undefined) filter.groupId = groupId;
+    if (tag) filter.tags = tag;
+    if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
+      filter.id = { $lt: cursorId };
+    }
+    const lim = Math.max(1, Math.min(200, Math.floor(limit)));
+    return this.images
+      .find(filter, { projection: { _id: 0 } })
+      .sort({ id: -1 })
+      .limit(lim)
+      .toArray();
+  }
+
+  /**
+   * @description 构建租户过滤条件
+   * @param {string} userId - 用户ID
+   * @param {string} [tenantId] - 租户ID
+   * @returns {Record<string, unknown>} MongoDB filter 对象
+   * @keyword-en build tenant filter
+   * @since 2026-03-23
+   */
+  private buildTenantFilter(userId: string | undefined, tenantId?: string): Record<string, unknown> {
+    const currentTenantId = tenantId?.trim();
+    const base: Record<string, unknown> = {};
+    // 有 userId 时才按 userId 过滤，否则返回所有可见图片（LLM 工具场景）
+    if (userId) base.userId = userId;
+    // 无 tenantId 时：返回 platform、无 scope 字段（旧数据）、以及没有 tenantId 的 tenant-scope（个人上传）
+    if (!currentTenantId) {
+      return {
+        ...base,
+        $or: [
+          { scope: 'platform' },
+          { scope: { $exists: false } },
+          { scope: 'tenant', tenantId: { $in: [null, ''] } },
+        ],
+      };
+    }
+    // 有 tenantId 时返回 platform 或匹配 tenantId 的数据
+    return {
+      ...base,
+      $or: [
+        { scope: 'platform' },
+        { scope: { $exists: false } },
+        { scope: 'tenant', tenantId: currentTenantId },
+      ],
+    };
+  }
+
+  /**
+   * @description 按租户过滤列出标签
+   * @param {string} userId - 用户ID
+   * @param {string} [tenantId] - 租户ID
+   * @param {number} [limit=500] - 返回条数
+   * @returns {Promise<string[]>} 标签列表
+   * @keyword-en list tags with tenant filter
+   * @since 2026-03-23
+   */
+  async listDistinctTagsWithTenant(userId: string | undefined, tenantId?: string, limit = 500): Promise<string[]> {
+    const filter = this.buildTenantFilter(userId, tenantId);
+    const raw = await this.images.distinct('tags', filter);
+    const list = (Array.isArray(raw) ? raw : [])
+      .map((x) => String(x ?? '').trim())
+      .filter(Boolean);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of list) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+    out.sort((a, b) => a.localeCompare(b));
+    const lim = Math.max(1, Math.min(5000, Math.floor(limit || 500)));
+    return out.slice(0, lim);
   }
 
   /**
@@ -324,17 +424,17 @@ export class GalleryService {
 
   async sampleRandom(input: {
     userId?: string;
+    tenantId?: string;
     groupId?: number;
     limit?: number;
   }): Promise<GalleryImageEntity[]> {
-    const match: Record<string, unknown> = {};
-    if (input.userId) match.userId = input.userId;
+    // 使用租户过滤构建基础 filter
+    const baseFilter = this.buildTenantFilter(input.userId, input.tenantId);
     if (typeof input.groupId === 'number' && Number.isFinite(input.groupId)) {
-      match.groupId = input.groupId;
+      baseFilter.groupId = input.groupId;
     }
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
-    const pipe: Record<string, unknown>[] = [];
-    if (Object.keys(match).length > 0) pipe.push({ $match: match });
+    const pipe: Record<string, unknown>[] = [{ $match: baseFilter }];
     pipe.push({ $sample: { size: lim } });
     pipe.push({ $project: { _id: 0 } });
     return this.images.aggregate<GalleryImageEntity>(pipe).toArray();
@@ -500,19 +600,21 @@ export class GalleryService {
    * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度。
    * @param {string} query - 查询文本。
    * @param {string} [userId] - 用户ID过滤。
+   * @param {string} [tenantId] - 租户ID，用于租户隔离。
    * @param {number} [limit=8] - 返回条数。
    * @param {number} [minScore=0.5] - 最小相似度阈值。
    * @returns {Promise<GallerySearchResult[]>} 相似检索结果。
    * @throws {Error} 当Embedding生成失败且未能回退时抛出。
    * @keyword gallery, vector-search, similarity
    * @example
-   * // 搜索与“简历头像”相似的图片
-   * const results = await galleryService.searchSimilar('resume avatar', 'u1', 8, 0.6);
+   * // 搜索与”简历头像”相似的图片
+   * const results = await galleryService.searchSimilar('resume avatar', 'u1', undefined, 8, 0.6);
    * @since 2026-02-04
    */
   async searchSimilar(
     query: string,
     userId?: string,
+    tenantId?: string,
     limit = 8,
     minScore = 0.5,
   ): Promise<GallerySearchResult[]> {
@@ -522,11 +624,10 @@ export class GalleryService {
       embeddingConfig,
     );
     if (this.isAtlasAvailable === false) {
-      return this.searchSimilarLocal(queryEmbedding, userId, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
     }
     try {
-      const filter: Record<string, unknown> = {};
-      if (userId) filter.userId = userId;
+      const filter = this.buildTenantFilter(userId, tenantId);
       const pipe: Record<string, unknown>[] = [
         {
           $vectorSearch: {
@@ -535,7 +636,7 @@ export class GalleryService {
             queryVector: queryEmbedding,
             numCandidates: limit * 10,
             limit: limit * 2,
-            ...(Object.keys(filter).length > 0 ? { filter } : {}),
+            filter,
           },
         },
         { $addFields: { score: { $meta: 'vectorSearchScore' } } },
@@ -551,7 +652,7 @@ export class GalleryService {
         .map((r) => ({ image: r, score: r.score }));
     } catch {
       if (this.isAtlasAvailable === null) this.isAtlasAvailable = false;
-      return this.searchSimilarLocal(queryEmbedding, userId, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
     }
   }
 
@@ -559,6 +660,7 @@ export class GalleryService {
    * @description 本地相似检索回退：全量拉取后计算余弦相似度并排序。
    * @param {number[]} queryEmbedding - 查询向量。
    * @param {string | undefined} userId - 用户ID过滤。
+   * @param {string | undefined} tenantId - 租户ID过滤。
    * @param {number} limit - 返回条数。
    * @param {number} minScore - 最小相似度阈值。
    * @returns {Promise<GallerySearchResult[]>} 相似检索结果。
@@ -569,11 +671,11 @@ export class GalleryService {
   private async searchSimilarLocal(
     queryEmbedding: number[],
     userId: string | undefined,
+    tenantId: string | undefined,
     limit: number,
     minScore: number,
   ): Promise<GallerySearchResult[]> {
-    const filter: Record<string, unknown> = {};
-    if (userId) filter.userId = userId;
+    const filter = this.buildTenantFilter(userId, tenantId);
     const rows = await this.images.find(filter).toArray();
     const scored = rows
       .filter(

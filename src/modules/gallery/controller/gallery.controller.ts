@@ -394,7 +394,7 @@ export class GalleryController {
   /**
    * @description 上传图片文件并写入图库记录（含Embedding向量）。
    * @param {Express.Multer.File[]} files - 上传的文件数组（字段名：files）。
-   * @param {{ userId?: string; groupId?: string; tags?: string; description?: string }} body - 表单字段。
+   * @param {{ userId?: string; tenantId?: string; groupId?: string; tags?: string; description?: string }} body - 表单字段。
    * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 新建图片记录列表。
    * @throws {BadRequestException} 当未上传文件或缺少 userId 时抛出。
    * @keyword gallery, controller, upload
@@ -439,6 +439,7 @@ export class GalleryController {
     @Body()
     body: {
       userId?: string;
+      tenantId?: string;
       groupId?: string;
       tags?: string;
       description?: string;
@@ -449,6 +450,7 @@ export class GalleryController {
     }
     const userId = String(body?.userId ?? '').trim();
     if (!userId) throw new BadRequestException('userId is required');
+    const tenantId = String(body?.tenantId ?? '').trim() || undefined;
 
     const rawTags = String(body?.tags ?? '');
     const tags = rawTags
@@ -469,6 +471,7 @@ export class GalleryController {
 
     const inputs = files.map((f) => ({
       userId,
+      tenantId,
       groupId:
         typeof groupId === 'number' && Number.isFinite(groupId)
           ? groupId
@@ -491,6 +494,7 @@ export class GalleryController {
   /**
    * @description 列出图库图片，支持按 userId/tag/groupId 过滤，并支持基于自增 id 的游标分页。
    * @param {string} [userId] - 查询参数：用户ID。
+   * @param {string} [tenantId] - 查询参数：租户ID。
    * @param {string} [groupId] - 查询参数：图库组ID。
    * @param {string} [tag] - 查询参数：标签。
    * @param {string} [cursorId] - 查询参数：游标（仅返回 id < cursorId 的更早数据）。
@@ -502,20 +506,25 @@ export class GalleryController {
   @Get()
   async list(
     @Query('userId') userId?: string,
+    @Query('tenantId') tenantId?: string,
     @Query('groupId') groupId?: string,
     @Query('tag') tag?: string,
     @Query('cursorId') cursorId?: string,
     @Query('limit') limit?: string,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
+    const tid = tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : undefined;
     const gid = groupId ? Number(groupId) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
-    const rows = await this.gallery.list(
-      userId,
-      typeof gid === 'number' && Number.isFinite(gid) ? gid : undefined,
-      tag,
-      typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
-      lim ?? 50,
+    const rows = await this.gallery.findAccessibleImages(
+      userId ?? 'default',
+      tid,
+      {
+        groupId: typeof gid === 'number' && Number.isFinite(gid) ? gid : undefined,
+        tag,
+        cursorId: typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
+        limit: lim ?? 50,
+      },
     );
     return { images: rows as Array<Omit<GalleryImageEntity, '_id'>> };
   }
@@ -523,6 +532,7 @@ export class GalleryController {
   /**
    * @description 列出图库中已存在的所有标签（distinct tags）。
    * @param {string} [userId] - 查询参数：用户ID过滤。
+   * @param {string} [tenantId] - 查询参数：租户ID。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @returns {Promise<{ tags: string[] }>} 标签列表。
    * @keyword gallery, tag, list
@@ -531,11 +541,14 @@ export class GalleryController {
   @Get('tags')
   async listTags(
     @Query('userId') userId?: string,
+    @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
   ): Promise<{ tags: string[] }> {
+    const tid = tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 500;
-    const tags = await this.gallery.listDistinctTags(
-      userId ? String(userId).trim() : undefined,
+    const tags = await this.gallery.listDistinctTagsWithTenant(
+      userId ? String(userId).trim() : 'default',
+      tid,
       lim,
     );
     return { tags };
@@ -771,6 +784,7 @@ export class GalleryController {
    * @description 向量相似检索接口。
    * @param {string} [q] - 查询参数：检索文本（必填）。
    * @param {string} [userId] - 查询参数：用户ID过滤。
+   * @param {string} [tenantId] - 查询参数：租户ID。
    * @param {string} [limit] - 查询参数：返回条数。
    * @param {string} [minScore] - 查询参数：最小相似度阈值。
    * @returns {Promise<{ results: Array<{ image: Record<string, unknown>; score: number }> }>} 检索结果。
@@ -782,6 +796,7 @@ export class GalleryController {
   async search(
     @Query('q') q?: string,
     @Query('userId') userId?: string,
+    @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
     @Query('minScore') minScore?: string,
   ): Promise<{
@@ -791,7 +806,7 @@ export class GalleryController {
     if (!query) throw new BadRequestException('q is required');
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
-    const results = await this.gallery.searchSimilar(query, userId, lim, ms);
+    const results = await this.gallery.searchSimilar(query, userId, tenantId, lim, ms);
     return {
       results: results.map((r) => ({
         image: { ...r.image, _id: undefined },

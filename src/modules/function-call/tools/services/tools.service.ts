@@ -10,6 +10,7 @@ import { TodoFunctionCallService } from '../../todo/services/todo.service.js';
 import { DashboardToolsService } from '../../dashboard/services/dashboard-tools.service.js';
 import { GraphWorkflowFunctionCallService } from './graph-workflow.service.js';
 import { RobotRegistryService } from '../../../auto-task-robot/services/robot-registry.service.js';
+import { MediaAgentService } from '../../../media-agent/services/media-agent.service.js';
 import { tool } from 'langchain';
 import * as z from 'zod';
 
@@ -32,6 +33,7 @@ export class ToolsService {
     private readonly dashboard: DashboardToolsService,
     private readonly graphWorkflow: GraphWorkflowFunctionCallService,
     private readonly robots: RobotRegistryService,
+    private readonly mediaAgent: MediaAgentService,
   ) {}
 
   /**
@@ -60,11 +62,17 @@ export class ToolsService {
   getHandle(
     streamWriter?: (msg: string) => void,
     scope?: { tenantId?: string; userId?: string },
-    options?: { mode?: 'default' | 'thought' },
+    options?: { mode?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' },
   ): CreateAgentParams['tools'] {
     const mode = options?.mode ?? 'default';
     if (mode === 'thought') {
       return this.getThoughtRouteTools(scope);
+    }
+    if (mode === 'gallery-agent') {
+      return this.getGalleryAgentTools(scope);
+    }
+    if (mode === 'xhs-specialist') {
+      return this.getXhsSpecialistTools(scope);
     }
     const tools: CreateAgentParams['tools'] = [];
     const tFrontend = this.frontend.getHandle() ?? [];
@@ -87,6 +95,7 @@ export class ToolsService {
     });
     const tTodo = this.todo.getHandle(scope) ?? [];
     const tDashboard = this.dashboard.getHandle(scope) ?? [];
+    const tGallery = this.mediaAgent.getGalleryToolsHandle(scope) ?? [];
     const tRobots: CreateAgentParams['tools'] = [
       tool(
         () => {
@@ -116,6 +125,7 @@ export class ToolsService {
       ...tGraphWorkflow,
       ...tTodo,
       ...tDashboard,
+      ...tGallery,
       ...tRobots,
     );
     return tools.filter((t) => {
@@ -159,5 +169,29 @@ export class ToolsService {
       const name = (t as { name?: string }).name ?? '';
       return name === 'decision_card_generate';
     });
+  }
+
+  /**
+   * @description 获取图库Agent专用工具集（以图库工具为主）
+   * @keyword-en gallery agent tools
+   */
+  private getGalleryAgentTools(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
+    const tGallery = this.mediaAgent.getGalleryToolsHandle(scope) ?? [];
+    return tGallery;
+  }
+
+  /**
+   * @description 获取小红书专家专用工具集（以XHS工具为主）
+   * @keyword-en XHS specialist tools
+   */
+  private getXhsSpecialistTools(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
+    const tXhs = this.mediaAgent.getXhsToolsHandle(scope) ?? [];
+    return tXhs;
   }
 }

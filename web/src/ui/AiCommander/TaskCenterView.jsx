@@ -1,12 +1,236 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useStore } from '@nanostores/react';
-import { 
-  Brush, Shield, Wrench, Megaphone, Plus, Clock, User, X, ClipboardList, Zap, UserCheck, AlertTriangle, CheckCircle2
+import {
+  Brush, Shield, Wrench, Megaphone, Plus, Clock, User, X, ClipboardList, Zap, UserCheck, AlertTriangle, CheckCircle2, ChevronRight, CircleDot, CheckCircle, XCircle, Timer
 } from 'lucide-react';
 import { $createTaskOpen, $taskCount, $tasksRefreshKey } from './store';
 import { getAdminToken } from '../Admin/adminApi';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+// Configure marked
+marked.setOptions({ breaks: true, gfm: true });
+
+/**
+ * @description 渲染 markdown 为安全的 HTML
+ * @keyword-en renderMarkdown
+ * @param {string} content
+ * @returns {{ __html: string }}
+ */
+const renderMarkdown = (content) => {
+  if (!content) return { __html: '' };
+  try {
+    const raw = marked.parse(content);
+    return { __html: DOMPurify.sanitize(raw) };
+  } catch {
+    return { __html: DOMPurify.sanitize(content) };
+  }
+};
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
+
+/* ─── Timeline Modal ─── */
+
+/**
+ * @description 任务节点时间轴弹窗组件
+ * @keyword-en TodoTimelineModal
+ * @param {Object} props
+ * @param {Object} props.task - 当前任务对象
+ * @param {Function} props.onClose - 关闭回调
+ * @returns {JSX.Element}
+ */
+const TodoTimelineModal = ({ task, onClose }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fetched, setFetched] = useState(false);
+
+  const buildAuthHeaders = () => {
+    const token = getAdminToken();
+    if (!token) return {};
+    return { Authorization: `Bearer ${token}` };
+  };
+
+  useEffect(() => {
+    // Only fetch once when modal opens
+    if (!task?.id || fetched) return;
+
+    let cancelled = false;
+    setLoading(true);
+
+    fetch(`${API_BASE}/todo/${task.id}/items`, {
+      headers: buildAuthHeaders(),
+    })
+      .then(res => {
+        if (cancelled) return null;
+        if (!res.ok) return { items: [] };
+        return res.json();
+      })
+      .then(data => {
+        if (cancelled || !data) return;
+        const list = Array.isArray(data.items) ? data.items : [];
+        setItems(list);
+        setFetched(true);
+      })
+      .catch(() => {
+        if (!cancelled) setItems([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [task?.id, fetched]);
+
+  const formatTime = (date) => {
+    if (!date) return '';
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const formatDate = (date) => {
+    if (!date) return '';
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+  };
+
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'done':
+        return { icon: <CheckCircle size={14} />, color: 'text-green-600', bgColor: 'bg-green-50 border-green-200' };
+      case 'in_progress':
+        return { icon: <CircleDot size={14} />, color: 'text-blue-600', bgColor: 'bg-blue-50 border-blue-200' };
+      case 'failed':
+      case 'cancelled':
+        return { icon: <XCircle size={14} />, color: 'text-red-600', bgColor: 'bg-red-50 border-red-200' };
+      default:
+        return { icon: <Timer size={14} />, color: 'text-slate-400', bgColor: 'bg-slate-50 border-slate-200' };
+    }
+  };
+
+  const getStatusText = (status) => {
+    switch (status) {
+      case 'done': return '已完成';
+      case 'in_progress': return '进行中';
+      case 'failed': return '失败';
+      case 'cancelled': return '已取消';
+      default: return '待处理';
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-3">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-lg max-h-[85vh] flex flex-col bg-white rounded-2xl shadow-2xl overflow-hidden animate-fade-in-up">
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/50 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center shrink-0">
+              <Clock size={16} className="text-indigo-600" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-slate-800 truncate">执行节点</h3>
+              <p className="text-[10px] text-slate-500 truncate">
+                {task?.title || `任务 #${task?.id}`}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-full hover:bg-slate-200 transition text-slate-400 hover:text-slate-600 shrink-0"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-6 h-6 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
+            </div>
+          ) : items.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+              <Clock size={32} className="mb-2 opacity-30" />
+              <p className="text-sm">暂无执行节点</p>
+            </div>
+          ) : (
+            <div className="relative">
+              {/* Timeline line */}
+              <div className="absolute left-[19px] top-3 bottom-3 w-0.5 bg-slate-200" />
+
+              <div className="space-y-3">
+                {items.map((item, idx) => {
+                  const style = getStatusStyle(item.status);
+                  const isLast = idx === items.length - 1;
+                  return (
+                    <div key={item.id} className="relative flex gap-3">
+                      {/* Status dot */}
+                      <div className={`relative z-10 w-9 h-9 rounded-full border-2 flex items-center justify-center shrink-0 ${style.bgColor}`}>
+                        <span className={style.color}>{style.icon}</span>
+                      </div>
+
+                      {/* Content card */}
+                      <div className={`flex-1 min-w-0 pb-${isLast ? '0' : '4'}`}>
+                        <div className="bg-white rounded-xl border border-slate-100 p-3 shadow-sm">
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <h4 className="text-sm font-medium text-slate-800 line-clamp-1">
+                              {item.title || '未命名节点'}
+                            </h4>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border shrink-0 ${style.bgColor} ${style.color}`}>
+                              {getStatusText(item.status)}
+                            </span>
+                          </div>
+
+                          {item.description && (
+                            <p className="text-xs text-slate-500 line-clamp-2 mb-2">
+                              {item.description}
+                            </p>
+                          )}
+
+                          <div className="flex items-center gap-3 text-[10px] text-slate-400">
+                            {item.plannedAt && (
+                              <span className="flex items-center gap-1">
+                                <Clock size={10} />
+                                {formatDate(item.plannedAt)} {formatTime(item.plannedAt)}
+                              </span>
+                            )}
+                            {item.userId && (
+                              <span className="flex items-center gap-1">
+                                <User size={10} />
+                                {item.userId}
+                              </span>
+                            )}
+                          </div>
+
+                          {item.doneNote && (
+                            <div className="mt-2 pt-2 border-t border-slate-100">
+                              <p className="text-xs text-slate-600 italic">
+                                {item.doneNote}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer hint */}
+        <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/50 shrink-0">
+          <p className="text-[10px] text-slate-400 text-center">
+            共 {items.length} 个节点 · 按计划时间排序
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 /**
  * @description 任务中心视图组件，展示执行指挥中心任务流
@@ -45,6 +269,9 @@ const TaskCenterView = ({ currentUser }) => {
   const [authUserName, setAuthUserName] = useState('');
   const [authDisplayName, setAuthDisplayName] = useState('');
   const [roleScope, setRoleScope] = useState('self');
+
+  // Timeline modal state
+  const [showTimeline, setShowTimeline] = useState(false);
 
   const quickActions = [
     { id: 'all', icon: <ClipboardList size={16} className="text-slate-600" />, label: '全部' },
@@ -574,11 +801,24 @@ const TaskCenterView = ({ currentUser }) => {
                   )}
                 </div>
                 <div
-                  className={`text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words bg-white rounded-xl p-3 border border-slate-200 ${
-                    planExpanded ? '' : 'max-h-56 overflow-y-auto'
+                  className={`bg-white rounded-xl p-3 border border-slate-200 overflow-y-auto ${
+                    planExpanded ? '' : 'max-h-56'
                   }`}
                 >
-                  {selectedTask.aiPlan || '暂无执行计划'}
+                  {selectedTask.aiPlan ? (
+                    <div
+                      className="text-sm text-slate-700 leading-relaxed break-words prose prose-sm prose-slate max-w-none
+                        prose-p:my-1 prose-li:my-0.5
+                        [&_ul]:list-disc [&_ul]:pl-5 [&_li]:pl-1
+                        [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:pl-1
+                        [&_code]:bg-slate-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs
+                        [&_pre]:bg-slate-100 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:text-xs [&_pre]:overflow-x-auto
+                        [&_strong]:font-semibold [&_em]:italic"
+                      dangerouslySetInnerHTML={renderMarkdown(selectedTask.aiPlan)}
+                    />
+                  ) : (
+                    <span className="text-sm text-slate-400">暂无执行计划</span>
+                  )}
                 </div>
               </div>
 
@@ -599,6 +839,16 @@ const TaskCenterView = ({ currentUser }) => {
                   </div>
                 </div>
               </div>
+
+              {/* Timeline Button */}
+              <button
+                onClick={() => setShowTimeline(true)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition text-sm font-medium"
+              >
+                <Clock size={16} />
+                <span>查看执行节点</span>
+                <ChevronRight size={14} />
+              </button>
 
               {/* Abnormal Reason */}
               {(selectedTask.status === 'abnormal' || selectedTask.status === 'failed') && selectedTask.abnormalReason && (
@@ -853,6 +1103,14 @@ const TaskCenterView = ({ currentUser }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Timeline Modal */}
+      {showTimeline && (
+        <TodoTimelineModal
+          task={selectedTask}
+          onClose={() => setShowTimeline(false)}
+        />
       )}
     </div>
   );

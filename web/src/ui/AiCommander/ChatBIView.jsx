@@ -238,11 +238,11 @@ const AIMessage = ({ msg, onOpenCanvas, onOpenDecision }) => {
             <div 
               className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words
                          prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5
-                         [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:bg-slate-50 [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:text-xs [&_pre]:my-2
+                         [&_pre]:overflow-x-auto [&_pre]:overflow-y-auto [&_pre]:max-w-full [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:bg-slate-50 [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:text-xs [&_pre]:my-2 [&_pre]:max-h-64
                          [&_code]:break-all [&_code]:text-xs
                          [&_p]:[overflow-wrap:anywhere]
                          [&_.ai-table-scroll]:overflow-x-auto [&_.ai-table-scroll]:rounded-lg [&_.ai-table-scroll]:my-2
-                         [&_table]:w-max [&_table]:min-w-full
+                         [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto [&_table]:w-max [&_table]:min-w-full
                          [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap
                          [&_table]:border-collapse [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5
                          [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5"
@@ -401,6 +401,23 @@ const ChatBIView = ({
   const [activeCanvasId, setActiveCanvasId] = useState(null);
   const [activeDecisionCardId, setActiveDecisionCardId] = useState('');
   const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  // Auto-resize textarea: grow with content up to MAX_HEIGHT, then scroll
+  const MAX_LINES = 4;
+  const LINE_HEIGHT = 24; // approximate px per line
+  const MAX_HEIGHT = MAX_LINES * LINE_HEIGHT;
+
+  const handleInputChange = (e) => {
+    const val = e.target.value;
+    setInputValue(val);
+    // Auto-resize textarea
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, MAX_HEIGHT) + 'px';
+    }
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -819,18 +836,20 @@ const ChatBIView = ({
             </button>
           </div>
         )}
-        <div className={`flex items-center bg-white border shadow-lg shadow-slate-200/50 rounded-full p-1.5 px-4 transition-all max-w-2xl mx-auto ${
-          isLoading 
-            ? 'border-indigo-200 bg-indigo-50/30' 
+        <div className={`flex items-end bg-white border shadow-lg shadow-slate-200/50 rounded-2xl p-1.5 px-4 transition-all max-w-2xl mx-auto ${
+          isLoading
+            ? 'border-indigo-200 bg-indigo-50/30'
             : 'border-slate-200 focus-within:ring-2 focus-within:ring-indigo-500/20'
         }`}>
-          <input
-            type="text"
+          <textarea
+            ref={textareaRef}
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder={isLoading ? 'AI 正在回复中，请稍候...' : inputPlaceholder}
-            className="flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder-slate-400 py-2.5 font-medium disabled:cursor-not-allowed disabled:opacity-50"
+            rows={1}
+            style={{ height: 'auto', maxHeight: MAX_HEIGHT + 'px', overflowY: 'auto' }}
+            className="flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder-slate-400 py-2.5 font-medium disabled:cursor-not-allowed disabled:opacity-50 resize-none leading-relaxed"
             disabled={isLoading}
           />
           <button

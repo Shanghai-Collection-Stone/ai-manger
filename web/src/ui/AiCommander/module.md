@@ -84,10 +84,25 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。支持�
 
 ### ToolsView.jsx
 
-工具箱视图，集成 AI 图库与思维链路工具入口。
+工具箱视图，集成 AI 图库、思维链路、Canvas 管理和智能 Agent 入口。
 包含完整的 AI 图库管理功能：分组管理、图片上传、无限滚动加载、图片预览等。
+新增 Gallery Agent 和小红书专家双 Tab 智能助手入口。
 
-- **关键词**: ToolsView, AIGallery, ThoughtRoute, ImageManagement, ToolBox, InfiniteScroll, FileUpload
+- **关键词**: ToolsView, AIGallery, ThoughtRoute, ImageManagement, ToolBox, InfiniteScroll, FileUpload, GalleryAgent, XhsSpecialist
+
+### GalleryAgentView.jsx
+
+图库智能助手视图，采用「对话」和「图库」双 Tab 设计。
+对话模式基于图库工具提供智能搜索和标签管理，图库模式展示完整图库管理界面。
+
+- **关键词**: GalleryAgentView, gallery-agent, dual-tab, chat, ImageManagement
+
+### XhsSpecialistView.jsx
+
+小红书专家视图，采用「对话」和「发布任务」双 Tab 设计。
+对话模式基于 Canvas 和图库工具提供小红书内容创作支持，任务模式展示批量发布进度。
+
+- **关键词**: XhsSpecialistView, xhs-specialist, xiaohongshu, dual-tab, canvas, batch-publish
 
 ### NavItem.jsx
 

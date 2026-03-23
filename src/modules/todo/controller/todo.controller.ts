@@ -118,20 +118,23 @@ export class TodoController {
   }
 
   /**
-   * @description 列出待办，支持按用户过滤
+   * @description 列出待办，支持按用户和指派人过滤
    */
   @Get()
   async list(
     @Req() req: Request,
     @Query('userId') userId?: string,
+    @Query('assignee') assignee?: string,
   ): Promise<Record<string, unknown>> {
     const authUser = await this.resolveAuthUser(req);
     const canViewAll = this.canViewAllTasks(authUser?.role);
+    // 如果指定了 assignee，优先使用指定的 assignee 进行过滤
+    const filterAssignee = assignee ?? (canViewAll ? undefined : authUser?.displayName);
     const rows = await this.todo.listByScope({
       canViewAll,
       tenantId: authUser?.tenantId,
       userId: canViewAll ? userId : authUser?.username,
-      assignee: canViewAll ? undefined : authUser?.displayName,
+      assignee: filterAssignee,
     });
     return { todos: rows };
   }

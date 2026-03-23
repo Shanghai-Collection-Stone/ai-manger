@@ -122,7 +122,7 @@ const ThoughtRouteView = ({ onBack }) => {
         <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800">
           <ChevronLeft size={22} />
         </button>
-        <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100vw-88px)]">
+        <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100%-88px)]">
           <button onClick={() => setTab('chat')} className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>对话</button>
           <button onClick={() => setTab('table')} className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'table' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>思维链表格管理</button>
         </div>
