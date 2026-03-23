@@ -6,6 +6,8 @@ import {
   Param,
   Post,
   Query,
+  Req,
+  UnauthorizedException,
   UseInterceptors,
   UploadedFiles,
 } from '@nestjs/common';
@@ -17,8 +19,10 @@ import { promises as fs } from 'fs';
 import { randomUUID } from 'crypto';
 import { GalleryService } from '../services/gallery.service.js';
 import { GalleryGroupService } from '../services/gallery-group.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
+import type { Request } from 'express';
 
 type JimpLike = { read: (path: string) => Promise<unknown> };
 type JimpImageLike = {
@@ -389,7 +393,37 @@ export class GalleryController {
   constructor(
     private readonly gallery: GalleryService,
     private readonly groups: GalleryGroupService,
+    private readonly adminService: AdminService,
   ) {}
+
+  /**
+   * @description 从请求中解析租户范围（必须提供有效的认证 token）
+   * @param {Request} req - Express 请求对象
+   * @returns {Promise<{ tenantId?: string; userId?: string }>} 租户和用户范围
+   * @throws {UnauthorizedException} 当没有 token 或 token 无效时抛出
+   * @keyword-en resolve auth scope from request
+   */
+  private async resolveAuthScope(req: Request): Promise<{
+    tenantId?: string;
+    userId?: string;
+  }> {
+    const auth = req?.headers.authorization;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const token = auth.slice(7).trim();
+    if (!token) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const user = await this.adminService.getUserByToken(token);
+    if (!user) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    return {
+      tenantId: user.tenantId,
+      userId: user.username,
+    };
+  }
 
   /**
    * @description 上传图片文件并写入图库记录（含Embedding向量）。
@@ -494,7 +528,7 @@ export class GalleryController {
   /**
    * @description 列出图库图片，支持按 userId/tag/groupId 过滤，并支持基于自增 id 的游标分页。
    * @param {string} [userId] - 查询参数：用户ID。
-   * @param {string} [tenantId] - 查询参数：租户ID。
+   * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [groupId] - 查询参数：图库组ID。
    * @param {string} [tag] - 查询参数：标签。
    * @param {string} [cursorId] - 查询参数：游标（仅返回 id < cursorId 的更早数据）。
@@ -511,8 +545,11 @@ export class GalleryController {
     @Query('tag') tag?: string,
     @Query('cursorId') cursorId?: string,
     @Query('limit') limit?: string,
+    @Req() req?: Request,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
-    const tid = tenantId?.trim() || undefined;
+    // 优先从请求token解析tenantId，其次使用query参数
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : undefined;
     const gid = groupId ? Number(groupId) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
@@ -532,7 +569,7 @@ export class GalleryController {
   /**
    * @description 列出图库中已存在的所有标签（distinct tags）。
    * @param {string} [userId] - 查询参数：用户ID过滤。
-   * @param {string} [tenantId] - 查询参数：租户ID。
+   * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @returns {Promise<{ tags: string[] }>} 标签列表。
    * @keyword gallery, tag, list
@@ -543,8 +580,10 @@ export class GalleryController {
     @Query('userId') userId?: string,
     @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
+    @Req() req?: Request,
   ): Promise<{ tags: string[] }> {
-    const tid = tenantId?.trim() || undefined;
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 500;
     const tags = await this.gallery.listDistinctTagsWithTenant(
       userId ? String(userId).trim() : 'default',
@@ -690,11 +729,15 @@ export class GalleryController {
   @Get('groups')
   async listGroups(
     @Query('userId') userId?: string,
+    @Query('tenantId') tenantId?: string,
     @Query('tag') tag?: string,
     @Query('limit') limit?: string,
+    @Req() req?: Request,
   ): Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id'>> }> {
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 50;
-    const rows = await this.groups.list(userId, tag, lim);
+    const rows = await this.groups.listAccessibleGroups(userId, tid, tag, lim);
     return { groups: rows as Array<Omit<GalleryGroupEntity, '_id'>> };
   }
 
@@ -762,16 +805,20 @@ export class GalleryController {
   async searchGroups(
     @Query('q') q?: string,
     @Query('userId') userId?: string,
+    @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
     @Query('minScore') minScore?: string,
+    @Req() req?: Request,
   ): Promise<{
     results: Array<{ group: Record<string, unknown>; score: number }>;
   }> {
     const query = String(q ?? '').trim();
     if (!query) throw new BadRequestException('q is required');
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
-    const results = await this.groups.searchSimilar(query, userId, lim, ms);
+    const results = await this.groups.searchSimilar(query, userId, tid, lim, ms);
     return {
       results: results.map((r) => ({
         group: { ...r.group, _id: undefined },
@@ -784,7 +831,7 @@ export class GalleryController {
    * @description 向量相似检索接口。
    * @param {string} [q] - 查询参数：检索文本（必填）。
    * @param {string} [userId] - 查询参数：用户ID过滤。
-   * @param {string} [tenantId] - 查询参数：租户ID。
+   * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [limit] - 查询参数：返回条数。
    * @param {string} [minScore] - 查询参数：最小相似度阈值。
    * @returns {Promise<{ results: Array<{ image: Record<string, unknown>; score: number }> }>} 检索结果。
@@ -799,14 +846,17 @@ export class GalleryController {
     @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
     @Query('minScore') minScore?: string,
+    @Req() req?: Request,
   ): Promise<{
     results: Array<{ image: Record<string, unknown>; score: number }>;
   }> {
     const query = String(q ?? '').trim();
     if (!query) throw new BadRequestException('q is required');
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
-    const results = await this.gallery.searchSimilar(query, userId, tenantId, lim, ms);
+    const results = await this.gallery.searchSimilar(query, userId, tid, lim, ms);
     return {
       results: results.map((r) => ({
         image: { ...r.image, _id: undefined },

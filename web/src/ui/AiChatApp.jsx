@@ -8,6 +8,24 @@ const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
+/**
+ * @description 获取认证 token
+ * @keyword-en get auth token
+ */
+function getToken() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('admin_token') || '';
+}
+
+/**
+ * @description 获取认证 header
+ * @keyword-en get auth headers
+ */
+function getAuthHeaders() {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 const toAbsoluteUrl = (url) => {
   const u = String(url || '').trim();
   if (!u) return '';
@@ -287,7 +305,9 @@ const api = {
       if (userId) params.set('userId', userId);
       if (typeof limit === 'number') params.set('limit', String(limit));
       const qs = params.toString();
-      const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`);
+      const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return { canvases: [] };
       return await res.json();
     } catch {
@@ -298,7 +318,9 @@ const api = {
     const cid = Number(id);
     if (!Number.isFinite(cid)) return null;
     try {
-      const res = await fetch(`${API_BASE}/canvas/${cid}`);
+      const res = await fetch(`${API_BASE}/canvas/${cid}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -312,7 +334,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/canvas/${cid}/articles/${aid}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(patch || {}),
       });
       if (!res.ok) return null;
@@ -2412,7 +2434,9 @@ const MessageBubble = ({
     try {
       const cid = Number(canvasId);
       if (!Number.isFinite(cid)) return;
-      const res = await fetch(`${API_BASE}/canvas/${cid}`);
+      const res = await fetch(`${API_BASE}/canvas/${cid}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return;
       const doc = await res.json();
       setExpandedCanvasDoc(doc);

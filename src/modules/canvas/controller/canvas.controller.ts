@@ -6,8 +6,12 @@ import {
   Patch,
   Post,
   Query,
+  Req,
+  UnauthorizedException,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { CanvasService } from '../services/canvas.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   CanvasAddArticlesInput,
   CanvasCreateInput,
@@ -17,7 +21,39 @@ import type {
 
 @Controller('canvas')
 export class CanvasController {
-  constructor(private readonly canvas: CanvasService) {}
+  constructor(
+    private readonly canvas: CanvasService,
+    private readonly adminService: AdminService,
+  ) {}
+
+  /**
+   * @description 从请求中解析认证用户（必须提供有效的认证 token）
+   * @param {Request} req - Express 请求对象
+   * @returns {Promise<{ tenantId?: string; userId?: string }>} 租户和用户范围
+   * @throws {UnauthorizedException} 当没有 token 或 token 无效时抛出
+   * @keyword-en resolve auth from request
+   */
+  private async resolveAuthScope(req: Request): Promise<{
+    tenantId?: string;
+    userId?: string;
+  }> {
+    const auth = req?.headers.authorization;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const token = auth.slice(7).trim();
+    if (!token) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const user = await this.adminService.getUserByToken(token);
+    if (!user) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    return {
+      tenantId: user.tenantId,
+      userId: user.username,
+    };
+  }
 
   /**
    * @description 创建画布。
@@ -29,8 +65,13 @@ export class CanvasController {
   @Post()
   async create(
     @Body() input: CanvasCreateInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.canvas.create(input);
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.create({
+      ...input,
+      tenantId: authScope.tenantId,
+    });
     return { canvas: { ...doc, _id: undefined } };
   }
 
@@ -42,8 +83,12 @@ export class CanvasController {
    * @since 2026-02-04
    */
   @Get(':id')
-  async get(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const doc = await this.canvas.get(Number(id));
+  async get(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.get(Number(id), authScope.tenantId);
     return { canvas: doc };
   }
 
@@ -59,9 +104,11 @@ export class CanvasController {
   async list(
     @Query('userId') userId?: string,
     @Query('limit') limit?: string,
+    @Req() req?: Request,
   ): Promise<Record<string, unknown>> {
+    const authScope = req ? await this.resolveAuthScope(req) : { tenantId: undefined };
     const lim = limit ? Number(limit) : 50;
-    const rows = await this.canvas.list(userId, lim);
+    const rows = await this.canvas.list(userId, authScope.tenantId, lim);
     return { canvases: rows };
   }
 
@@ -77,8 +124,10 @@ export class CanvasController {
   async addArticles(
     @Param('id') id: string,
     @Body() input: CanvasAddArticlesInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.canvas.addArticles(Number(id), input);
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.addArticles(Number(id), input, authScope.tenantId);
     return { canvas: doc };
   }
 
@@ -94,8 +143,10 @@ export class CanvasController {
   async updateStatus(
     @Param('id') id: string,
     @Body() input: CanvasUpdateStatusInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.canvas.updateStatus(Number(id), input.status);
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.updateStatus(Number(id), input.status, authScope.tenantId);
     return { canvas: doc };
   }
 
@@ -104,11 +155,14 @@ export class CanvasController {
     @Param('id') id: string,
     @Param('articleId') articleId: string,
     @Body() input: CanvasUpdateArticleInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
     const doc = await this.canvas.updateArticle(
       Number(id),
       Number(articleId),
       input,
+      authScope.tenantId,
     );
     return { canvas: doc };
   }

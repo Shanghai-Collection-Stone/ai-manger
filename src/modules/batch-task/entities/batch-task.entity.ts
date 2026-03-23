@@ -61,6 +61,7 @@ export interface BatchTaskEntity {
   _id: ObjectId;
   id: number;
   userId: string;
+  tenantId?: string;
   platform?: string;
   topic?: string;
   canvasId?: string;
@@ -75,6 +76,7 @@ export interface BatchTaskEntity {
 
 export interface BatchTaskCreateInput {
   userId: string;
+  tenantId?: string;
   platform?: string;
   topic?: string;
   canvasId?: string;

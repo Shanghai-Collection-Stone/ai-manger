@@ -21,6 +21,7 @@ export interface CanvasEntity {
   _id: ObjectId;
   id: number;
   userId: string;
+  tenantId?: string;
   topic?: string;
   outline?: Record<string, unknown>;
   style?: Record<string, unknown>;
@@ -32,6 +33,7 @@ export interface CanvasEntity {
 
 export interface CanvasCreateInput {
   userId: string;
+  tenantId?: string;
   topic?: string;
   outline?: Record<string, unknown>;
   style?: Record<string, unknown>;

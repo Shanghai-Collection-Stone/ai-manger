@@ -88,7 +88,10 @@ export class GraphWorkflowFunctionCallService {
    * @keyword graph, workflow, tools
    * @since 2026-02-04
    */
-  getHandle(streamWriter?: (msg: string) => void): CreateAgentParams['tools'] {
+  getHandle(
+    streamWriter?: (msg: string) => void,
+    scope?: { tenantId?: string; userId?: string },
+  ): CreateAgentParams['tools'] {
     const topicOrchestrate = tool(
       async ({
         userId,
@@ -755,6 +758,7 @@ export class GraphWorkflowFunctionCallService {
           typeof userId === 'string' && userId.trim().length > 0
             ? userId.trim()
             : undefined;
+        const tid = scope?.tenantId?.trim() || undefined;
         const gid =
           typeof groupId === 'number' && Number.isFinite(groupId)
             ? groupId
@@ -763,18 +767,16 @@ export class GraphWorkflowFunctionCallService {
           typeof limit === 'number' && Number.isFinite(limit)
             ? Math.max(1, Math.min(5000, Math.floor(limit)))
             : 500;
-        const tags = gid
-          ? await this.gallery.listDistinctTagsByGroup(uid, gid, lim)
-          : await this.gallery.listDistinctTags(uid, lim);
+        const tags = await this.gallery.listDistinctTagsWithTenant(uid, tid, lim);
         return JSON.stringify({ ok: true, tags });
       },
       {
         name: 'gallery_list_tags',
         description:
-          'Gallery Tags Tool. Lists all distinct image tags in the gallery, optionally filtered by userId and groupId.',
+          'Gallery Tags Tool. Lists all distinct image tags in the gallery, optionally filtered by userId and tenantId.',
         schema: z.object({
           userId: z.string().optional().describe('Gallery owner user id'),
-          groupId: z.number().optional().describe('Gallery group id filter'),
+          groupId: z.number().optional().describe('Gallery group id filter (deprecated, use tenant isolation)'),
           limit: z
             .number()
             .optional()
@@ -789,6 +791,7 @@ export class GraphWorkflowFunctionCallService {
           typeof userId === 'string' && userId.trim().length > 0
             ? userId.trim()
             : undefined;
+        const tid = scope?.tenantId?.trim() || undefined;
         const gid =
           typeof groupId === 'number' && Number.isFinite(groupId)
             ? groupId
@@ -802,6 +805,7 @@ export class GraphWorkflowFunctionCallService {
           : [];
         const images = await this.gallery.searchByTags({
           userId: uid,
+          tenantId: tid,
           groupId: gid,
           tags: tagList,
           limit: lim,

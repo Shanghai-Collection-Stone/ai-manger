@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   Req,
+  UnauthorizedException,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminService } from '../../admin/services/admin.service.js';
@@ -266,11 +267,17 @@ export class TodoController {
   private async resolveAuthUser(req: Request) {
     const auth = req.headers.authorization;
     if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
-      return null;
+      throw new UnauthorizedException('AUTH_REQUIRED');
     }
     const token = auth.slice(7).trim();
-    if (!token) return null;
-    return this.adminService.getUserByToken(token);
+    if (!token) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const user = await this.adminService.getUserByToken(token);
+    if (!user) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    return user;
   }
 
   /**

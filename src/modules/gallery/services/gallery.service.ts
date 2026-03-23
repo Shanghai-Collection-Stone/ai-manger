@@ -260,27 +260,22 @@ export class GalleryService {
   private buildTenantFilter(userId: string | undefined, tenantId?: string): Record<string, unknown> {
     const currentTenantId = tenantId?.trim();
     const base: Record<string, unknown> = {};
-    // 有 userId 时才按 userId 过滤，否则返回所有可见图片（LLM 工具场景）
     if (userId) base.userId = userId;
-    // 无 tenantId 时：返回 platform、无 scope 字段（旧数据）、以及没有 tenantId 的 tenant-scope（个人上传）
+    // 无 tenantId 时（母平台）：返回 tenantId 为空/null/不存在的母平台数据
     if (!currentTenantId) {
       return {
         ...base,
         $or: [
-          { scope: 'platform' },
-          { scope: { $exists: false } },
-          { scope: 'tenant', tenantId: { $in: [null, ''] } },
+          { tenantId: { $exists: false } },
+          { tenantId: null },
+          { tenantId: '' },
         ],
       };
     }
-    // 有 tenantId 时返回 platform 或匹配 tenantId 的数据
+    // 有 tenantId 时：只返回匹配该 tenantId 的租户数据
     return {
       ...base,
-      $or: [
-        { scope: 'platform' },
-        { scope: { $exists: false } },
-        { scope: 'tenant', tenantId: currentTenantId },
-      ],
+      tenantId: currentTenantId,
     };
   }
 
@@ -401,6 +396,7 @@ export class GalleryService {
 
   async searchByTags(input: {
     userId?: string;
+    tenantId?: string;
     groupId?: number;
     tags: string[];
     limit?: number;
@@ -409,8 +405,8 @@ export class GalleryService {
       ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
       : [];
     if (tags.length === 0) return [];
-    const filter: Record<string, unknown> = { tags: { $in: tags } };
-    if (input.userId) filter.userId = input.userId;
+    const filter = this.buildTenantFilter(input.userId, input.tenantId);
+    filter.tags = { $in: tags };
     if (typeof input.groupId === 'number' && Number.isFinite(input.groupId)) {
       filter.groupId = input.groupId;
     }

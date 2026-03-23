@@ -4,6 +4,24 @@ import ChatBIView from './ChatBIView';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
+/**
+ * @description 获取认证 token
+ * @keyword-en get auth token
+ */
+function getToken() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('admin_token') || '';
+}
+
+/**
+ * @description 获取认证 header
+ * @keyword-en get auth headers
+ */
+function getAuthHeaders() {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 const XHS_ROBOT_ASSIGNEE = 'robot:xhs_publisher';
 
 /**
@@ -25,7 +43,7 @@ const XhsSpecialistView = ({ onBack }) => {
     setLoading(true);
     try {
       const query = `${API_BASE}/todo?limit=100&assignee=${encodeURIComponent(XHS_ROBOT_ASSIGNEE)}`;
-      const res = await fetch(query);
+      const res = await fetch(query, { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
         setTasks(Array.isArray(data.todos) ? data.todos : []);
@@ -50,7 +68,7 @@ const XhsSpecialistView = ({ onBack }) => {
     let cancelled = false;
     setItemsLoading(true);
 
-    fetch(`${API_BASE}/todo/${selectedTask.id}/items`)
+    fetch(`${API_BASE}/todo/${selectedTask.id}/items`, { headers: getAuthHeaders() })
       .then(res => {
         if (cancelled) return null;
         if (!res.ok) return { items: [] };

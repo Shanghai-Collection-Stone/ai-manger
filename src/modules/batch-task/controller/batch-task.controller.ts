@@ -1,5 +1,17 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Query,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
+import type { Request } from 'express';
 import { BatchTaskService } from '../services/batch-task.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   BatchTaskAddPostsInput,
   BatchTaskCallbackInput,
@@ -9,7 +21,39 @@ import type {
 
 @Controller('batch-task')
 export class BatchTaskController {
-  constructor(private readonly batch: BatchTaskService) {}
+  constructor(
+    private readonly batch: BatchTaskService,
+    private readonly adminService: AdminService,
+  ) {}
+
+  /**
+   * @description 从请求中解析认证用户（必须提供有效的认证 token）
+   * @param {Request} req - Express 请求对象
+   * @returns {Promise<{ tenantId?: string; userId?: string }>} 租户和用户范围
+   * @throws {UnauthorizedException} 当没有 token 或 token 无效时抛出
+   * @keyword-en resolve auth from request
+   */
+  private async resolveAuthScope(req: Request): Promise<{
+    tenantId?: string;
+    userId?: string;
+  }> {
+    const auth = req?.headers.authorization;
+    if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const token = auth.slice(7).trim();
+    if (!token) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    const user = await this.adminService.getUserByToken(token);
+    if (!user) {
+      throw new UnauthorizedException('AUTH_REQUIRED');
+    }
+    return {
+      tenantId: user.tenantId,
+      userId: user.username,
+    };
+  }
 
   /**
    * @description 创建批量任务，并创建对应的待办总览以便追踪。
@@ -21,8 +65,13 @@ export class BatchTaskController {
   @Post()
   async create(
     @Body() input: BatchTaskCreateInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.batch.create(input);
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.batch.create({
+      ...input,
+      tenantId: authScope.tenantId,
+    });
     return { batchTask: { ...doc, _id: undefined } };
   }
 
@@ -34,8 +83,12 @@ export class BatchTaskController {
    * @since 2026-02-04
    */
   @Post(':id/open-mcp')
-  async openMcp(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const doc = await this.batch.openMcpTask(Number(id));
+  async openMcp(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.batch.openMcpTask(Number(id), authScope.tenantId);
     return { batchTask: doc };
   }
 
@@ -51,8 +104,10 @@ export class BatchTaskController {
   async addPosts(
     @Param('id') id: string,
     @Body() input: BatchTaskAddPostsInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.batch.addPostsParallel(Number(id), input);
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.batch.addPostsParallel(Number(id), input, authScope.tenantId);
     return { batchTask: doc };
   }
 
@@ -68,8 +123,10 @@ export class BatchTaskController {
   async run(
     @Param('id') id: string,
     @Body() input: BatchTaskRunInput,
+    @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    const doc = await this.batch.run(Number(id), input);
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.batch.run(Number(id), input, authScope.tenantId);
     return { batchTask: doc };
   }
 
@@ -96,8 +153,12 @@ export class BatchTaskController {
    * @since 2026-02-04
    */
   @Get(':id')
-  async get(@Param('id') id: string): Promise<Record<string, unknown>> {
-    const doc = await this.batch.get(Number(id));
+  async get(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.batch.get(Number(id), authScope.tenantId);
     return { batchTask: doc };
   }
 
@@ -111,8 +172,10 @@ export class BatchTaskController {
   @Get()
   async list(
     @Query('userId') userId?: string,
+    @Req() req?: Request,
   ): Promise<Record<string, unknown>> {
-    const rows = await this.batch.list(userId);
+    const authScope = req ? await this.resolveAuthScope(req) : { tenantId: undefined };
+    const rows = await this.batch.list(userId, authScope.tenantId);
     return { batchTasks: rows };
   }
 }

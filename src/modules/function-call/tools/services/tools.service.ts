@@ -88,7 +88,7 @@ export class ToolsService {
       this.mcpAdapters.getTools(),
     );
     const tDecision = this.getDecisionTools(scope) ?? [];
-    const tGraphWorkflowAll = this.graphWorkflow.getHandle(streamWriter) ?? [];
+    const tGraphWorkflowAll = this.graphWorkflow.getHandle(streamWriter, scope) ?? [];
     const tGraphWorkflow = tGraphWorkflowAll.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       return name === 'topic_orchestrate';

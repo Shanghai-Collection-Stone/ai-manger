@@ -163,8 +163,31 @@ export class BatchTaskService {
     await this.tasks.createIndex({ userId: 1, canvasId: 1, updatedAt: -1 });
     await this.tasks.createIndex({ 'graphJob.status': 1, updatedAt: -1 });
     await this.tasks.createIndex({ 'graphJob.input.kind': 1, updatedAt: -1 });
+    // 租户隔离索引
+    await this.tasks.createIndex({ tenantId: 1, userId: 1 });
     const exists = await this.counters.findOne({ _id: 'batch_tasks' });
     if (!exists) await this.counters.insertOne({ _id: 'batch_tasks', seq: 0 });
+  }
+
+  /**
+   * @description 构建租户过滤条件
+   * @param {string | undefined} tenantId - 租户ID
+   * @returns {Record<string, unknown>} MongoDB filter 对象
+   * @keyword-en build tenant filter
+   * @since 2026-03-24
+   */
+  private buildTenantFilter(tenantId?: string): Record<string, unknown> {
+    const currentTenantId = tenantId?.trim();
+    if (!currentTenantId) {
+      return {
+        $or: [
+          { tenantId: { $exists: false } },
+          { tenantId: null },
+          { tenantId: '' },
+        ],
+      };
+    }
+    return { tenantId: currentTenantId };
   }
 
   /**
@@ -221,6 +244,7 @@ export class BatchTaskService {
     } else {
       const todo = await this.todo.create({
         userId: input.userId,
+        tenantId: input.tenantId,
         title: todoTitle,
         description: todoDescription,
         type: 'auto_execute',
@@ -235,6 +259,7 @@ export class BatchTaskService {
       _id: new ObjectId(),
       id,
       userId: input.userId,
+      tenantId: input.tenantId,
       platform: input.platform,
       topic: input.topic,
       canvasId: input.canvasId,
@@ -250,28 +275,33 @@ export class BatchTaskService {
   }
 
   /**
-   * @description 根据自增ID获取批量任务。
+   * @description 根据自增ID获取批量任务（租户隔离）。
    * @param {number} id - 批量任务ID。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<BatchTaskEntity | null>} 任务实体，不存在时返回 null。
    * @throws {Error} 当数据库查询失败时抛出。
    * @keyword batch-task, get, mongo
    * @since 2026-02-04
    */
-  async get(id: number): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id }, { projection: { _id: 0 } });
+  async get(id: number, tenantId?: string): Promise<BatchTaskEntity | null> {
+    const doc = await this.tasks.findOne(
+      { id, ...this.buildTenantFilter(tenantId) },
+      { projection: { _id: 0 } },
+    );
     return (doc as BatchTaskEntity | null) ?? null;
   }
 
   /**
-   * @description 列出批量任务，支持按 userId 过滤。
+   * @description 列出批量任务，支持按 userId 过滤（租户隔离）。
    * @param {string} [userId] - 用户ID。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<BatchTaskEntity[]>} 任务列表，按 updatedAt 倒序。
    * @throws {Error} 当数据库查询失败时抛出。
    * @keyword batch-task, list, user-filter
    * @since 2026-02-04
    */
-  async list(userId?: string): Promise<BatchTaskEntity[]> {
-    const filter: Record<string, unknown> = {};
+  async list(userId?: string, tenantId?: string): Promise<BatchTaskEntity[]> {
+    const filter = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
     return this.tasks
       .find(filter, { projection: { _id: 0 } })
@@ -314,16 +344,17 @@ export class BatchTaskService {
   /**
    * @description 为批量任务创建/绑定 MCP 侧任务ID（若尚未打开）。
    * @param {number} id - 批量任务ID。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<BatchTaskEntity | null>} 更新后的任务实体，不存在时返回 null。
    * @throws {Error} 当 MCP 调用或数据库写入失败时抛出。
    * @keyword batch-task, mcp, open
    * @keyword-en batch-task, mcp, open
    * @since 2026-02-04
    */
-  async openMcpTask(id: number): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id });
+  async openMcpTask(id: number, tenantId?: string): Promise<BatchTaskEntity | null> {
+    const doc = await this.tasks.findOne({ id, ...this.buildTenantFilter(tenantId) });
     if (!doc) return null;
-    if (doc.mcpTaskId && doc.mcpTaskId.length > 0) return await this.get(id);
+    if (doc.mcpTaskId && doc.mcpTaskId.length > 0) return await this.get(id, tenantId);
 
     // batch_task_open 工具不接受任何参数，只返回任务ID
     console.log('[openMcpTask] Calling batch_task_open with empty input');
@@ -371,6 +402,7 @@ export class BatchTaskService {
    * @description 并行追加发布条目：先创建待办清单条目，再并行调用 MCP 入队。
    * @param {number} id - 批量任务ID。
    * @param {BatchTaskAddPostsInput} input - 发布条目列表与并发度。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<BatchTaskEntity | null>} 更新后的任务实体，不存在时返回 null。
    * @throws {Error} 当任务未绑定 todoId 或未打开 MCP 任务时抛出。
    * @keyword batch-task, parallel, todo-items
@@ -386,8 +418,9 @@ export class BatchTaskService {
   async addPostsParallel(
     id: number,
     input: BatchTaskAddPostsInput,
+    tenantId?: string,
   ): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id });
+    const doc = await this.tasks.findOne({ id, ...this.buildTenantFilter(tenantId) });
     if (!doc) return null;
     if (!doc.todoId) throw new Error('BATCH_TASK_TODO_NOT_FOUND');
     if (!doc.mcpTaskId) throw new Error('BATCH_TASK_MCP_NOT_OPENED');
@@ -528,7 +561,7 @@ export class BatchTaskService {
       );
     }
 
-    return await this.get(id);
+    return await this.get(id, tenantId);
   }
 
   async initPosts(
@@ -889,6 +922,7 @@ export class BatchTaskService {
    * @description 触发 MCP 批量任务运行（异步），并将本地状态标记为 in_progress。
    * @param {number} id - 批量任务ID。
    * @param {BatchTaskRunInput} input - 运行参数（callbackUrl 与 payload）。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<BatchTaskEntity | null>} 更新后的任务实体，不存在时返回 null。
    * @throws {Error} 当任务未打开 MCP 任务时抛出。
    * @keyword batch-task, run, mcp
@@ -898,8 +932,9 @@ export class BatchTaskService {
   async run(
     id: number,
     input: BatchTaskRunInput,
+    tenantId?: string,
   ): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id });
+    const doc = await this.tasks.findOne({ id, ...this.buildTenantFilter(tenantId) });
     if (!doc) return null;
     if (!doc.mcpTaskId) throw new Error('BATCH_TASK_MCP_NOT_OPENED');
 
@@ -955,7 +990,7 @@ export class BatchTaskService {
       { $set: { status: 'in_progress', updatedAt: new Date() } },
     );
     await this.updateTodoSummary({ batchTaskId: id, status: 'in_progress' });
-    return await this.get(id);
+    return await this.get(id, tenantId);
   }
 
   async runSync(

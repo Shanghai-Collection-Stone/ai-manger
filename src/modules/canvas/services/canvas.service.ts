@@ -31,8 +31,33 @@ export class CanvasService {
     await this.canvases.createIndex({ userId: 1 });
     await this.canvases.createIndex({ status: 1 });
     await this.canvases.createIndex({ createdAt: -1 });
+    // 租户隔离索引
+    await this.canvases.createIndex({ tenantId: 1, userId: 1 });
     const exists = await this.counters.findOne({ _id: 'canvases' });
     if (!exists) await this.counters.insertOne({ _id: 'canvases', seq: 0 });
+  }
+
+  /**
+   * @description 构建租户过滤条件
+   * @param {string | undefined} tenantId - 租户ID
+   * @returns {Record<string, unknown>} MongoDB filter 对象
+   * @keyword-en build tenant filter
+   * @since 2026-03-24
+   */
+  private buildTenantFilter(tenantId?: string): Record<string, unknown> {
+    const currentTenantId = tenantId?.trim();
+    // 无 tenantId 时（母平台）：返回 tenantId 为空/null/不存在的母平台数据
+    if (!currentTenantId) {
+      return {
+        $or: [
+          { tenantId: { $exists: false } },
+          { tenantId: null },
+          { tenantId: '' },
+        ],
+      };
+    }
+    // 有 tenantId 时：只返回匹配该 tenantId 的租户数据
+    return { tenantId: currentTenantId };
   }
 
   /**
@@ -67,6 +92,7 @@ export class CanvasService {
       _id: new ObjectId(),
       id,
       userId: input.userId,
+      tenantId: input.tenantId,
       topic: input.topic,
       outline: input.outline,
       style: input.style,
@@ -80,29 +106,32 @@ export class CanvasService {
   }
 
   /**
-   * @description 根据自增ID获取画布。
+   * @description 根据自增ID获取画布（租户隔离）。
    * @param {number} id - 画布ID。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<CanvasEntity | null>} 画布实体，不存在时返回 null。
    * @throws {Error} 当数据库查询失败时抛出。
    * @keyword canvas, get, mongo
    * @since 2026-02-04
    */
-  async get(id: number): Promise<CanvasEntity | null> {
-    const doc = await this.canvases.findOne({ id }, { projection: { _id: 0 } });
+  async get(id: number, tenantId?: string): Promise<CanvasEntity | null> {
+    const filter = { id, ...this.buildTenantFilter(tenantId) };
+    const doc = await this.canvases.findOne(filter, { projection: { _id: 0 } });
     return (doc as CanvasEntity | null) ?? null;
   }
 
   /**
-   * @description 列出画布，支持按 userId 过滤。
+   * @description 列出画布，支持按 userId 过滤（租户隔离）。
    * @param {string} [userId] - 用户ID。
+   * @param {string} [tenantId] - 租户ID。
    * @param {number} [limit=50] - 返回条数上限。
    * @returns {Promise<CanvasEntity[]>} 画布列表，按 updatedAt 倒序。
    * @throws {Error} 当数据库查询失败时抛出。
    * @keyword canvas, list, user-filter
    * @since 2026-02-04
    */
-  async list(userId?: string, limit = 50): Promise<CanvasEntity[]> {
-    const filter: Record<string, unknown> = {};
+  async list(userId?: string, tenantId?: string, limit = 50): Promise<CanvasEntity[]> {
+    const filter = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
     return this.canvases
@@ -124,8 +153,9 @@ export class CanvasService {
   async addArticles(
     id: number,
     input: CanvasAddArticlesInput,
+    tenantId?: string,
   ): Promise<CanvasEntity | null> {
-    const cur = await this.canvases.findOne({ id });
+    const cur = await this.canvases.findOne({ id, ...this.buildTenantFilter(tenantId) });
     if (!cur) return null;
     const start = (cur.articles?.length ?? 0) + 1;
     const incoming: CanvasArticleEntity[] = (input.articles ?? []).map(
@@ -144,13 +174,14 @@ export class CanvasService {
         $set: { updatedAt: new Date() },
       },
     );
-    return await this.get(id);
+    return await this.get(id, tenantId);
   }
 
   /**
    * @description 更新画布整体状态。
    * @param {number} id - 画布ID。
    * @param {CanvasStatus} status - 画布状态。
+   * @param {string} [tenantId] - 租户ID。
    * @returns {Promise<CanvasEntity | null>} 更新后的画布实体，不存在时返回 null。
    * @throws {Error} 当数据库更新失败时抛出。
    * @keyword canvas, status, update
@@ -159,9 +190,10 @@ export class CanvasService {
   async updateStatus(
     id: number,
     status: CanvasStatus,
+    tenantId?: string,
   ): Promise<CanvasEntity | null> {
     const res = await this.canvases.findOneAndUpdate(
-      { id },
+      { id, ...this.buildTenantFilter(tenantId) },
       { $set: { status, updatedAt: new Date() } },
       { returnDocument: 'after', includeResultMetadata: true },
     );
@@ -224,6 +256,16 @@ export class CanvasService {
     return await this.get(canvasId);
   }
 
+  /**
+   * @description 更新画布文章内容与状态。
+   * @param {number} canvasId - 画布ID。
+   * @param {number} articleId - 文章ID。
+   * @param {object} patch - 更新字段。
+   * @param {string} [tenantId] - 租户ID。
+   * @returns {Promise<CanvasEntity | null>} 更新后的画布实体。
+   * @keyword canvas, article, update
+   * @since 2026-02-04
+   */
   async updateArticle(
     canvasId: number,
     articleId: number,
@@ -235,6 +277,7 @@ export class CanvasService {
       status?: CanvasArticleEntity['status'];
       doneNote?: string;
     },
+    tenantId?: string,
   ): Promise<CanvasEntity | null> {
     const upd: Record<string, unknown> = { updatedAt: new Date() };
     if (typeof patch.title === 'string') upd['articles.$.title'] = patch.title;
@@ -249,9 +292,9 @@ export class CanvasService {
     if (typeof patch.doneNote === 'string')
       upd['articles.$.doneNote'] = patch.doneNote;
     await this.canvases.updateOne(
-      { id: canvasId, 'articles.id': articleId },
+      { id: canvasId, 'articles.id': articleId, ...this.buildTenantFilter(tenantId) },
       { $set: upd },
     );
-    return await this.get(canvasId);
+    return await this.get(canvasId, tenantId);
   }
 }

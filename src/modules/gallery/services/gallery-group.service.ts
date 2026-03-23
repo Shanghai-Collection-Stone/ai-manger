@@ -116,6 +116,65 @@ export class GalleryGroupService {
   }
 
   /**
+   * @description 构建租户过滤条件
+   * @param {string | undefined} userId - 用户ID
+   * @param {string | undefined} tenantId - 租户ID
+   * @returns {Record<string, unknown>} MongoDB filter 对象
+   * @keyword-en build tenant filter
+   * @since 2026-03-24
+   */
+  private buildTenantFilter(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Record<string, unknown> {
+    const currentTenantId = tenantId?.trim();
+    const base: Record<string, unknown> = {};
+    if (userId) base.userId = userId;
+    // 无 tenantId 时（母平台）：返回 tenantId 为空/null/不存在的母平台数据
+    if (!currentTenantId) {
+      return {
+        ...base,
+        $or: [
+          { tenantId: { $exists: false } },
+          { tenantId: null },
+          { tenantId: '' },
+        ],
+      };
+    }
+    // 有 tenantId 时：只返回匹配该 tenantId 的租户数据
+    return {
+      ...base,
+      tenantId: currentTenantId,
+    };
+  }
+
+  /**
+   * @description 按租户可见性列出图库组（租户隔离）
+   * @param {string | undefined} userId - 用户ID
+   * @param {string | undefined} tenantId - 租户ID
+   * @param {string} [tag] - 标签
+   * @param {number} [limit=50] - 返回条数上限
+   * @returns {Promise<GalleryGroupEntity[]>} 图库组列表
+   * @keyword-en list gallery groups with tenant filter
+   * @since 2026-03-24
+   */
+  async listAccessibleGroups(
+    userId: string | undefined,
+    tenantId?: string,
+    tag?: string,
+    limit = 50,
+  ): Promise<GalleryGroupEntity[]> {
+    const filter = this.buildTenantFilter(userId, tenantId);
+    if (tag) filter.tags = tag;
+    const lim = Math.max(1, Math.min(200, Math.floor(limit)));
+    return this.groups
+      .find(filter, { projection: { _id: 0 } })
+      .sort({ createdAt: -1, id: -1 })
+      .limit(lim)
+      .toArray();
+  }
+
+  /**
    * @description 列出图库组，支持按 userId 与 tag 过滤。
    * @param {string} [userId] - 用户ID。
    * @param {string} [tag] - 标签。
@@ -124,6 +183,7 @@ export class GalleryGroupService {
    * @throws {Error} 当数据库查询失败时抛出。
    * @keyword gallery, groups, list
    * @since 2026-02-04
+   * @deprecated 使用 listAccessibleGroups 代替以支持租户隔离
    */
   async list(
     userId?: string,
@@ -193,31 +253,32 @@ export class GalleryGroupService {
   }
 
   /**
-   * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度。
+   * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度（租户隔离）。
    * @param {string} query - 查询文本。
    * @param {string} [userId] - 用户ID过滤。
+   * @param {string} [tenantId] - 租户ID（用于租户隔离）。
    * @param {number} [limit=8] - 返回条数。
    * @param {number} [minScore=0.5] - 最小相似度阈值。
    * @returns {Promise<GalleryGroupSearchResult[]>} 相似检索结果。
    * @throws {Error} 当Embedding生成失败且未能回退时抛出。
    * @keyword gallery, groups, vector-search
    * @example
-   * const results = await galleryGroupService.searchSimilar('avatar portraits', 'u1', 8, 0.6);
+   * const results = await galleryGroupService.searchSimilar('avatar portraits', 'u1', 'tenant1', 8, 0.6);
    * @since 2026-02-04
    */
   async searchSimilar(
     query: string,
     userId?: string,
+    tenantId?: string,
     limit = 8,
     minScore = 0.5,
   ): Promise<GalleryGroupSearchResult[]> {
     const queryEmbedding = await this.embedding.embedText(query);
     if (this.isAtlasAvailable === false) {
-      return this.searchSimilarLocal(queryEmbedding, userId, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
     }
     try {
-      const filter: Record<string, unknown> = {};
-      if (userId) filter.userId = userId;
+      const filter = this.buildTenantFilter(userId, tenantId);
       const pipe: Record<string, unknown>[] = [
         {
           $vectorSearch: {
@@ -226,7 +287,7 @@ export class GalleryGroupService {
             queryVector: queryEmbedding,
             numCandidates: limit * 10,
             limit: limit * 2,
-            ...(Object.keys(filter).length > 0 ? { filter } : {}),
+            filter,
           },
         },
         { $addFields: { score: { $meta: 'vectorSearchScore' } } },
@@ -242,14 +303,15 @@ export class GalleryGroupService {
         .map((r) => ({ group: r, score: r.score }));
     } catch {
       if (this.isAtlasAvailable === null) this.isAtlasAvailable = false;
-      return this.searchSimilarLocal(queryEmbedding, userId, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
     }
   }
 
   /**
-   * @description 本地相似检索回退：全量拉取后计算余弦相似度并排序。
+   * @description 本地相似检索回退：全量拉取后计算余弦相似度并排序（租户隔离）。
    * @param {number[]} queryEmbedding - 查询向量。
    * @param {string | undefined} userId - 用户ID过滤。
+   * @param {string | undefined} tenantId - 租户ID过滤。
    * @param {number} limit - 返回条数。
    * @param {number} minScore - 最小相似度阈值。
    * @returns {Promise<GalleryGroupSearchResult[]>} 相似检索结果。
@@ -260,11 +322,11 @@ export class GalleryGroupService {
   private async searchSimilarLocal(
     queryEmbedding: number[],
     userId: string | undefined,
+    tenantId: string | undefined,
     limit: number,
     minScore: number,
   ): Promise<GalleryGroupSearchResult[]> {
-    const filter: Record<string, unknown> = {};
-    if (userId) filter.userId = userId;
+    const filter = this.buildTenantFilter(userId, tenantId);
     const rows = await this.groups.find(filter).toArray();
     return rows
       .filter(

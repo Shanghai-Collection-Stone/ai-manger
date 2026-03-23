@@ -14,6 +14,23 @@ import ChatBIView from './ChatBIView';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
+/**
+ * @description 获取认证 token
+ * @keyword-en get auth token
+ */
+function getToken() {
+  return localStorage.getItem('admin_token') || '';
+}
+
+/**
+ * @description 获取认证 header
+ * @keyword-en get auth headers
+ */
+function getAuthHeaders() {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 const api = {
   /**
    * @description List gallery groups
@@ -27,7 +44,9 @@ const api = {
       const params = new URLSearchParams();
       if (userId) params.set('userId', userId);
       const qs = params.toString();
-      const res = await fetch(`${API_BASE}/gallery/groups${qs ? `?${qs}` : ''}`);
+      const res = await fetch(`${API_BASE}/gallery/groups${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return { groups: [] };
       return await res.json();
     } catch {
@@ -45,7 +64,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/gallery/groups`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
       if (!res.ok) return null;
@@ -66,7 +85,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/gallery/groups/${id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
       if (!res.ok) return null;
@@ -86,6 +105,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/gallery/groups/${id}/delete`, {
         method: 'POST',
+        headers: getAuthHeaders(),
       });
       if (!res.ok) return { ok: false };
       return await res.json();
@@ -113,7 +133,9 @@ const api = {
       }
       if (typeof limit === 'number') params.set('limit', String(limit));
       const qs = params.toString();
-      const res = await fetch(`${API_BASE}/gallery${qs ? `?${qs}` : ''}`);
+      const res = await fetch(`${API_BASE}/gallery${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return { images: [] };
       return await res.json();
     } catch {
@@ -138,6 +160,7 @@ const api = {
       });
       const res = await fetch(`${API_BASE}/gallery/upload`, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: fd,
       });
       if (!res.ok) return { images: [] };
@@ -159,7 +182,9 @@ const api = {
       if (userId) params.set('userId', userId);
       if (typeof limit === 'number') params.set('limit', String(limit));
       const qs = params.toString();
-      const res = await fetch(`${API_BASE}/gallery/tags${qs ? `?${qs}` : ''}`);
+      const res = await fetch(`${API_BASE}/gallery/tags${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return { tags: [] };
       return await res.json();
     } catch {
@@ -177,7 +202,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/gallery/images/tags/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
       if (!res.ok) return { matched: 0, modified: 0 };
@@ -198,7 +223,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/gallery/images/${id}/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
       if (!res.ok) return { ok: false };
@@ -218,7 +243,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/gallery/embeddings/rebuild`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
       if (!res.ok) return { updated: 0 };
@@ -236,7 +261,9 @@ const api = {
         params.set('limit', String(Math.max(1, Math.floor(limit))));
       }
       const qs = params.toString();
-      const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`);
+      const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return { canvases: [] };
       return await res.json();
     } catch {
