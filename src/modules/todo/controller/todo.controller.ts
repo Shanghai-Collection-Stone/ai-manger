@@ -115,7 +115,10 @@ export class TodoController {
       tenantId: authUser?.tenantId,
     });
     const robotTrigger = await this.triggerRobotIfNeeded(doc);
-    return { todo: { ...doc, _id: undefined }, robotTrigger };
+    return {
+      todo: this.toApiTodo(doc),
+      robotTrigger,
+    };
   }
 
   /**
@@ -137,7 +140,7 @@ export class TodoController {
       userId: canViewAll ? userId : authUser?.username,
       assignee: filterAssignee,
     });
-    return { todos: rows };
+    return { todos: rows.map((x) => this.toApiTodo(x)) };
   }
 
   /**
@@ -199,7 +202,10 @@ export class TodoController {
       authUser?.tenantId,
     );
     const robotTrigger = await this.triggerRobotIfNeeded(doc);
-    return { todo: doc ? { ...doc, _id: undefined } : null, robotTrigger };
+    return {
+      todo: doc ? this.toApiTodo(doc) : null,
+      robotTrigger,
+    };
   }
 
   /**
@@ -216,7 +222,7 @@ export class TodoController {
   ): Promise<Record<string, unknown>> {
     const authUser = await this.resolveAuthUser(req);
     const doc = await this.todo.get(Number(id), authUser?.tenantId);
-    return { todo: doc };
+    return { todo: doc ? this.toApiTodo(doc) : null };
   }
 
   /**
@@ -240,7 +246,7 @@ export class TodoController {
       tenantId: authUser?.tenantId,
     });
     const robotTrigger = await this.triggerRobotIfNeeded(doc);
-    return { todo: doc, robotTrigger };
+    return { todo: doc ? this.toApiTodo(doc) : null, robotTrigger };
   }
 
   /**
@@ -294,5 +300,27 @@ export class TodoController {
     if (!todo) return { triggered: false };
     const res = await this.robots.triggerIfRobotAssigned({ todo });
     return res;
+  }
+
+  private getRobotDisplayName(assignee?: string): string | undefined {
+    const raw = String(assignee ?? '').trim();
+    if (!raw.toLowerCase().startsWith('robot:')) return undefined;
+    const code = raw.slice(6).trim().toLowerCase();
+    if (!code) return undefined;
+    return this.robots.listRobots().find((r) => r.code === code)?.name;
+  }
+
+  private toApiTodo(
+    todo: TodoEntity | (TodoEntity & { _id?: unknown }),
+  ): Record<string, unknown> {
+    const assignee = String(todo.assignee ?? '').trim();
+    const robotName = this.getRobotDisplayName(assignee);
+    const rec = todo as TodoEntity & { _id?: unknown };
+    const { _id, ...rest } = rec;
+    void _id;
+    return {
+      ...rest,
+      assigneeDisplayName: robotName || (assignee || undefined),
+    };
   }
 }

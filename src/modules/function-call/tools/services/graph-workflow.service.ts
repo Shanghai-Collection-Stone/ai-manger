@@ -786,7 +786,7 @@ export class GraphWorkflowFunctionCallService {
     );
 
     const gallerySearchImages = tool(
-      async ({ userId, groupId, tags, limit }) => {
+      async ({ userId, groupId, tags, limit, matchCollage }) => {
         const uid =
           typeof userId === 'string' && userId.trim().length > 0
             ? userId.trim()
@@ -809,6 +809,7 @@ export class GraphWorkflowFunctionCallService {
           groupId: gid,
           tags: tagList,
           limit: lim,
+          matchCollage: matchCollage !== false,
         });
         return JSON.stringify({
           ok: true,
@@ -823,6 +824,8 @@ export class GraphWorkflowFunctionCallService {
             groupId: img.groupId,
             tags: img.tags,
             description: img.description,
+            isCollage: img.isCollage === true,
+            collageSourceImageIds: img.collageSourceImageIds,
           })),
         });
       },
@@ -834,6 +837,10 @@ export class GraphWorkflowFunctionCallService {
           userId: z.string().optional().describe('Gallery owner user id'),
           groupId: z.number().optional().describe('Gallery group id filter'),
           tags: z.array(z.string()).describe('Selected tags'),
+          matchCollage: z
+            .boolean()
+            .optional()
+            .describe('Whether to include collage images (default true)'),
           limit: z
             .number()
             .optional()

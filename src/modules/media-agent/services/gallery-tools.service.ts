@@ -122,8 +122,9 @@ export class GalleryToolsService {
         tag?: string;
         cursor_id?: number;
         limit?: number;
+        match_collage?: boolean;
       }) => {
-        const { group_id, tag, cursor_id, limit = 24 } = input;
+        const { group_id, tag, cursor_id, limit = 24, match_collage } = input;
         try {
           const images = await this.gallery.findAccessibleImages(
             scope?.userId,
@@ -131,6 +132,7 @@ export class GalleryToolsService {
             {
               groupId: group_id,
               tag,
+              includeCollage: match_collage !== false,
               cursorId: cursor_id,
               limit,
             },
@@ -143,6 +145,8 @@ export class GalleryToolsService {
               tags: img.tags,
               description: img.description,
               groupId: img.groupId,
+              isCollage: img.isCollage === true,
+              collageSourceImageIds: img.collageSourceImageIds,
             })),
             total: images.length,
             has_more: images.length === limit,
@@ -157,6 +161,10 @@ export class GalleryToolsService {
         schema: z.object({
           group_id: z.number().optional().describe('Filter by group ID'),
           tag: z.string().optional().describe('Filter by tag'),
+          match_collage: z
+            .boolean()
+            .optional()
+            .describe('Whether to include collage images (default true)'),
           cursor_id: z.number().optional().describe('Cursor for pagination'),
           limit: z.number().optional().describe('Max results, default 24'),
         }),

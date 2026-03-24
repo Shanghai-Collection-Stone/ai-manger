@@ -120,7 +120,7 @@ const api = {
    * @param {Object} [params]
    * @returns {Promise<Object>}
    */
-  async listGalleryImages({ userId, groupId, tag, cursorId, limit } = {}) {
+  async listGalleryImages({ userId, groupId, tag, includeCollage, cursorId, limit } = {}) {
     try {
       const params = new URLSearchParams();
       if (userId) params.set('userId', userId);
@@ -128,6 +128,9 @@ const api = {
         params.set('groupId', String(groupId));
       }
       if (tag) params.set('tag', tag);
+      if (typeof includeCollage === 'boolean') {
+        params.set('includeCollage', includeCollage ? 'true' : 'false');
+      }
       if (cursorId !== undefined && cursorId !== null && `${cursorId}` !== '') {
         params.set('cursorId', String(cursorId));
       }
@@ -285,6 +288,65 @@ const mergeUniqueStrings = (a, b) => {
   return Array.from(set).sort();
 };
 
+const COLLAGE_WIDTH = 640;
+const COLLAGE_HEIGHT = 853;
+const COLLAGE_DPI = 96;
+
+const loadImageElement = (src) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => resolve(img);
+  img.onerror = () => reject(new Error(`IMAGE_LOAD_FAILED:${src}`));
+  img.src = src;
+});
+
+const drawCover = (ctx, img, x, y, width, height) => {
+  const iw = Number(img?.naturalWidth || img?.width || 0);
+  const ih = Number(img?.naturalHeight || img?.height || 0);
+  if (iw <= 0 || ih <= 0) return;
+  const scale = Math.max(width / iw, height / ih);
+  const sw = iw * scale;
+  const sh = ih * scale;
+  const dx = x + (width - sw) / 2;
+  const dy = y + (height - sh) / 2;
+  ctx.drawImage(img, dx, dy, sw, sh);
+};
+
+const createTwoImageCollageFile = async (urlA, urlB) => {
+  const [imgA, imgB] = await Promise.all([
+    loadImageElement(urlA),
+    loadImageElement(urlB),
+  ]);
+  const canvas = document.createElement('canvas');
+  canvas.width = COLLAGE_WIDTH;
+  canvas.height = COLLAGE_HEIGHT;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('COLLAGE_CANVAS_CONTEXT_FAILED');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, COLLAGE_WIDTH, COLLAGE_HEIGHT);
+
+  const topH = Math.floor(COLLAGE_HEIGHT / 2);
+  const bottomH = COLLAGE_HEIGHT - topH;
+  drawCover(ctx, imgA, 0, 0, COLLAGE_WIDTH, topH);
+  drawCover(ctx, imgB, 0, topH, COLLAGE_WIDTH, bottomH);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillRect(0, topH - 1, COLLAGE_WIDTH, 2);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error('COLLAGE_BLOB_FAILED'));
+    }, 'image/jpeg', 0.92);
+  });
+  const file = new File(
+    [blob],
+    `collage-${Date.now()}.jpg`,
+    { type: 'image/jpeg' },
+  );
+  return file;
+};
+
 function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
   const [input, setInput] = useState('');
   const [open, setOpen] = useState(false);
@@ -382,7 +444,7 @@ function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
  * @param {Function} props.onBack - Callback when back button is clicked
  */
 const GalleryView = ({ onBack }) => {
-  const [tab, setTab] = useState('gallery'); // 'gallery' | 'chat'
+  const [tab, setTab] = useState('gallery'); // 'gallery' | 'chat' | 'collage'
   const [userId, setUserId] = useState('');
   const [groups, setGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
@@ -410,6 +472,9 @@ const GalleryView = ({ onBack }) => {
   // Edit Group State
   const [isEditingGroup, setIsEditingGroup] = useState(false);
   const [editGroupDraft, setEditGroupDraft] = useState({ name: '', description: '', tags: '' });
+  const [collageSelectedIds, setCollageSelectedIds] = useState([]);
+  const [collageGenerating, setCollageGenerating] = useState(false);
+  const [collageMessage, setCollageMessage] = useState('');
 
   // Refs
   const imagesReqIdRef = useRef(0);
@@ -421,6 +486,11 @@ const GalleryView = ({ onBack }) => {
   // Sync refs
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => { selectedGroupIdRef.current = selectedGroupId; }, [selectedGroupId]);
+
+  const collageSourceImages = useMemo(
+    () => (Array.isArray(images) ? images.filter((img) => img?.isCollage !== true) : []),
+    [images],
+  );
 
   // Load Tags
   const loadTags = useCallback(async () => {
@@ -479,6 +549,11 @@ const GalleryView = ({ onBack }) => {
     loadImages({ append: false });
   }, [selectedGroupId, loadImages]);
 
+  useEffect(() => {
+    setCollageSelectedIds([]);
+    setCollageMessage('');
+  }, [selectedGroupId, tab]);
+
   // Infinite Scroll
   useEffect(() => {
     if (!loadMoreRef.current) return;
@@ -534,6 +609,80 @@ const GalleryView = ({ onBack }) => {
       setUploadDraft({ tags: '' });
     }
   };
+
+  const toggleCollagePick = useCallback((id) => {
+    const targetId = Number(id);
+    if (!Number.isFinite(targetId)) return;
+    setCollageMessage('');
+    setCollageSelectedIds((prev) => {
+      const has = prev.includes(targetId);
+      if (has) return prev.filter((x) => x !== targetId);
+      if (prev.length >= 2) return prev;
+      return [...prev, targetId];
+    });
+  }, []);
+
+  const generateCollage = useCallback(async () => {
+    if (collageGenerating) return;
+    if (!Array.isArray(collageSelectedIds) || collageSelectedIds.length !== 2) {
+      setCollageMessage('请先选择 2 张图片');
+      return;
+    }
+    const selected = collageSelectedIds
+      .map((id) => collageSourceImages.find((img) => img.id === id))
+      .filter(Boolean);
+    if (selected.length !== 2) {
+      setCollageMessage('选中的图片不存在，请重新选择');
+      return;
+    }
+
+    setCollageGenerating(true);
+    setCollageMessage('');
+    try {
+      const file = await createTwoImageCollageFile(
+        selected[0].url || selected[0].thumbUrl,
+        selected[1].url || selected[1].thumbUrl,
+      );
+      const mergedTags = Array.from(new Set([
+        ...((Array.isArray(selected[0].tags) ? selected[0].tags : [])),
+        ...((Array.isArray(selected[1].tags) ? selected[1].tags : [])),
+        '拼图',
+      ]));
+      const desc = `双图拼图：#${selected[0].id} + #${selected[1].id}`;
+      const uid = String(userId || '').trim() || 'default';
+      const res = await api.uploadGalleryImages([file], {
+        userId: uid,
+        groupId: selectedGroupId,
+        tags: mergedTags.join(','),
+        description: desc,
+        isCollage: 'true',
+        collageSourceImageIds: `${selected[0].id},${selected[1].id}`,
+        collageWidth: String(COLLAGE_WIDTH),
+        collageHeight: String(COLLAGE_HEIGHT),
+        collageDpi: String(COLLAGE_DPI),
+      });
+      if (Array.isArray(res?.images) && res.images.length > 0) {
+        setCollageMessage('拼图已生成并入库');
+        setCollageSelectedIds([]);
+        await loadImages({ append: false });
+        await loadTags();
+      } else {
+        setCollageMessage('拼图上传失败，请稍后重试');
+      }
+    } catch (e) {
+      setCollageMessage(`拼图生成失败：${e?.message || 'unknown error'}`);
+    } finally {
+      setCollageGenerating(false);
+    }
+  }, [
+    collageGenerating,
+    collageSelectedIds,
+    collageSourceImages,
+    userId,
+    selectedGroupId,
+    loadImages,
+    loadTags,
+  ]);
 
   const currentGroup = groups.find(g => g.id === selectedGroupId);
 
@@ -607,7 +756,7 @@ const GalleryView = ({ onBack }) => {
           >
             <ChevronLeft size={22} />
           </button>
-          <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100%-88px)]">
+          <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
             <button
               onClick={() => setTab('chat')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
@@ -619,6 +768,12 @@ const GalleryView = ({ onBack }) => {
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
+            </button>
+            <button
+              onClick={() => setTab('collage')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              拼图
             </button>
           </div>
         </div>
@@ -638,15 +793,17 @@ const GalleryView = ({ onBack }) => {
     );
   }
 
-  return (
-    <div className="h-full flex flex-col bg-white animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 border-b border-slate-100 bg-white/90 gap-3 sm:gap-0">
-        <div className="flex items-center gap-2">
-          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0">
+  if (tab === 'collage') {
+    return (
+      <div className="h-full flex flex-col bg-white animate-fade-in">
+        <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
+          <button
+            onClick={onBack}
+            className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800"
+          >
             <ChevronLeft size={22} />
           </button>
-          <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100%-88px)]">
+          <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
             <button
               onClick={() => setTab('chat')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
@@ -658,6 +815,158 @@ const GalleryView = ({ onBack }) => {
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
+            </button>
+            <button
+              onClick={() => setTab('collage')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              拼图
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-800">双图拼图</div>
+            <div className="text-xs text-slate-500 mt-1">
+              规则：必须选择 2 张图；生成成品固定 {COLLAGE_WIDTH}x{COLLAGE_HEIGHT}，分辨率 {COLLAGE_DPI} DPI。
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setCollageSelectedIds([])}
+                className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-white"
+              >
+                清空选择
+              </button>
+              <button
+                onClick={() => void generateCollage()}
+                disabled={collageGenerating || collageSelectedIds.length !== 2}
+                className="px-3 py-1.5 text-xs rounded-lg bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {collageGenerating ? '拼图生成中...' : '生成拼图并入库'}
+              </button>
+              <span className="text-xs text-slate-500">
+                已选 {collageSelectedIds.length}/2
+              </span>
+            </div>
+            {collageMessage ? (
+              <div className="mt-3 text-xs text-slate-600">{collageMessage}</div>
+            ) : null}
+          </div>
+
+          <div
+            className="md:hidden flex overflow-x-auto gap-2 pb-2"
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setSelectedGroupId(null)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${
+                selectedGroupId === null ? 'bg-black text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              全部
+            </button>
+            {groups.map((g) => (
+              <button
+                key={g.id}
+                onClick={() => setSelectedGroupId(g.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${
+                  selectedGroupId === g.id ? 'bg-black text-white' : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {g.name}
+              </button>
+            ))}
+          </div>
+
+          <div className="hidden md:flex overflow-x-auto gap-2 pb-1">
+            <button
+              onClick={() => setSelectedGroupId(null)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${
+                selectedGroupId === null ? 'bg-black text-white' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              全部分组
+            </button>
+            {groups.map((g) => (
+              <button
+                key={g.id}
+                onClick={() => setSelectedGroupId(g.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${
+                  selectedGroupId === g.id ? 'bg-black text-white' : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {g.name}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {collageSourceImages.map((img) => {
+              const selected = collageSelectedIds.includes(img.id);
+              const disabled = !selected && collageSelectedIds.length >= 2;
+              return (
+                <button
+                  key={img.id}
+                  type="button"
+                  onClick={() => toggleCollagePick(img.id)}
+                  disabled={disabled}
+                  className={`aspect-square relative rounded-xl overflow-hidden border transition ${
+                    selected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200'
+                  } ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:border-slate-400'}`}
+                >
+                  <img
+                    src={img.thumbUrl || img.url}
+                    alt={img.description || `image-${img.id}`}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-black/60 text-white text-[11px] flex items-center justify-center">
+                    {selected ? '✓' : ''}
+                  </div>
+                  <div className="absolute left-0 right-0 bottom-0 bg-black/55 text-white text-[10px] px-2 py-1 text-left truncate">
+                    #{img.id}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div ref={loadMoreRef} className="h-10 flex items-center justify-center mt-2">
+            {imagesLoading && <RefreshCw className="animate-spin text-slate-400" size={20} />}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full flex flex-col bg-white animate-fade-in">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 border-b border-slate-100 bg-white/90 gap-3 sm:gap-0">
+        <div className="flex items-center gap-2">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0">
+            <ChevronLeft size={22} />
+          </button>
+          <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
+            <button
+              onClick={() => setTab('chat')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              对话
+            </button>
+            <button
+              onClick={() => setTab('gallery')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              图库
+            </button>
+            <button
+              onClick={() => setTab('collage')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              拼图
             </button>
           </div>
         </div>
@@ -761,6 +1070,11 @@ const GalleryView = ({ onBack }) => {
                     loading="lazy"
                   />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition" />
+                  {img?.isCollage === true && (
+                    <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-blue-600/85 text-white text-[10px]">
+                      拼图
+                    </div>
+                  )}
                   {Array.isArray(img.tags) && img.tags.length > 0 && (
                     <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-0.5">
                       {img.tags.slice(0, 3).map((t) => (
@@ -883,6 +1197,15 @@ const GalleryView = ({ onBack }) => {
                     <div className="text-xs text-gray-400 italic mb-2">暂无标签</div>
                   )}
                 </div>
+
+                {previewImage?.isCollage === true && (
+                  <div className="text-xs text-gray-600">
+                    拼图来源：
+                    {Array.isArray(previewImage.collageSourceImageIds) && previewImage.collageSourceImageIds.length > 0
+                      ? previewImage.collageSourceImageIds.map((id) => `#${id}`).join(' + ')
+                      : '未知'}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 gap-3">
                   <TagPicker

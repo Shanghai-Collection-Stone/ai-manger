@@ -22,6 +22,16 @@ export interface GalleryImageEntity {
   size?: number;
   tags: string[];
   description?: string;
+  /** @description 是否为两图拼图（640x853） */
+  isCollage?: boolean;
+  /** @description 拼图来源图片ID（固定2张） */
+  collageSourceImageIds?: number[];
+  /** @description 拼图尺寸/分辨率元数据 */
+  collageMeta?: {
+    width: number;
+    height: number;
+    dpi: number;
+  };
   embedding: number[];
   createdAt: Date;
   updatedAt: Date;
@@ -44,6 +54,13 @@ export interface GalleryImageCreateInput {
   size?: number;
   tags?: string[];
   description?: string;
+  isCollage?: boolean;
+  collageSourceImageIds?: number[];
+  collageMeta?: {
+    width: number;
+    height: number;
+    dpi: number;
+  };
 }
 
 export interface GallerySearchResult {

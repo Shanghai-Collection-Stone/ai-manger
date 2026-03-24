@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import type { TodoEntity } from '../../todo/entities/todo.entity.js';
 import { BatchTaskGraphService } from '../../graph/services/batch-task-graph.service.js';
+import { TodoService } from '../../todo/services/todo.service.js';
 
 export interface AutoTaskRobotDescriptor {
   code: string;
@@ -12,6 +13,20 @@ export interface AutoTaskRobotDescriptor {
 @Injectable()
 export class RobotRegistryService {
   constructor(private readonly moduleRef: ModuleRef) {}
+
+  private findRobotName(code?: string): string | undefined {
+    const key = String(code ?? '').trim().toLowerCase();
+    if (!key) return undefined;
+    return this.listRobots().find((r) => r.code === key)?.name;
+  }
+
+  private logRobot(event: string, extra?: Record<string, unknown>): void {
+    console.log('[AutoRobot]', {
+      event,
+      at: new Date().toISOString(),
+      ...(extra ?? {}),
+    });
+  }
 
   listRobots(): AutoTaskRobotDescriptor[] {
     return [
@@ -39,9 +54,20 @@ export class RobotRegistryService {
   }): Promise<{ triggered: boolean; robotCode?: string; error?: string }> {
     const robotCode = this.parseRobotCode(input.todo.assignee);
     if (!robotCode) return { triggered: false };
+    this.logRobot('handle_assigned_todo', {
+      todoId: input.todo.id,
+      assignee: input.todo.assignee,
+      robotCode,
+      robotName: this.findRobotName(robotCode),
+      status: input.todo.status,
+    });
     try {
       if (robotCode === 'xhs_publisher') {
         await this.handleXhsPublisher(input.todo);
+        this.logRobot('handle_completed', {
+          todoId: input.todo.id,
+          robotCode,
+        });
         return { triggered: true, robotCode };
       }
       return {
@@ -50,6 +76,11 @@ export class RobotRegistryService {
         error: 'ROBOT_NOT_FOUND',
       };
     } catch (error) {
+      this.logRobot('handle_failed', {
+        todoId: input.todo.id,
+        robotCode,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return {
         triggered: true,
         robotCode,
@@ -87,7 +118,40 @@ export class RobotRegistryService {
     return Math.max(1, Math.min(100, Math.floor(n)));
   }
 
+  private async markTodoAcceptedForRobot(
+    todo: TodoEntity,
+    robotCode: string,
+  ): Promise<void> {
+    const todoService = this.moduleRef.get(TodoService, { strict: false });
+    if (!todoService) return;
+    const robotName = this.findRobotName(robotCode) ?? `自动化代理(${robotCode})`;
+
+    await todoService.update({
+      id: todo.id,
+      tenantId: todo.tenantId,
+      status: 'in_progress',
+      abnormalReason: '',
+    });
+
+    const existedItems = await todoService.listItems(todo.id, todo.tenantId);
+    const existed = existedItems.some((x) =>
+      String(x.title ?? '').includes(`${robotName}已接单`),
+    );
+    if (!existed) {
+      await todoService.createItem({
+        todoId: todo.id,
+        tenantId: todo.tenantId,
+        title: `${robotName}已接单`,
+        description: `自动化代理 ${robotName} 收到任务并启动执行流程`,
+        status: 'in_progress',
+        stage: '自动执行已启动',
+        doneNote: `source=robot:${robotCode}`,
+      });
+    }
+  }
+
   private async handleXhsPublisher(todo: TodoEntity): Promise<void> {
+    await this.markTodoAcceptedForRobot(todo, 'xhs_publisher');
     const graph = this.moduleRef.get(BatchTaskGraphService, { strict: false });
     if (!graph) throw new Error('XHS_GRAPH_SERVICE_UNAVAILABLE');
     const canvasId = this.extractCanvasId(todo);

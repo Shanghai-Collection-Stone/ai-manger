@@ -60,6 +60,16 @@ function errorMessage(err: unknown): string {
   }
 }
 
+function parseBooleanFlag(input: unknown): boolean | undefined {
+  if (typeof input === 'boolean') return input;
+  if (typeof input !== 'string') return undefined;
+  const v = input.trim().toLowerCase();
+  if (!v) return undefined;
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'y') return true;
+  if (v === '0' || v === 'false' || v === 'no' || v === 'n') return false;
+  return undefined;
+}
+
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
@@ -477,6 +487,11 @@ export class GalleryController {
       groupId?: string;
       tags?: string;
       description?: string;
+      isCollage?: string;
+      collageSourceImageIds?: string;
+      collageWidth?: string;
+      collageHeight?: string;
+      collageDpi?: string;
     },
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     if (!Array.isArray(files) || files.length === 0) {
@@ -496,6 +511,25 @@ export class GalleryController {
       body.description.trim().length > 0
         ? body.description.trim()
         : undefined;
+    const isCollage = parseBooleanFlag(body?.isCollage) === true;
+    const collageSourceImageIds = String(body?.collageSourceImageIds ?? '')
+      .split(/[,\s]+/g)
+      .map((x) => Number(x))
+      .filter((x) => Number.isFinite(x))
+      .slice(0, 2);
+    if (isCollage) {
+      if (files.length !== 1) {
+        throw new BadRequestException('collage upload requires exactly one file');
+      }
+      if (collageSourceImageIds.length !== 2) {
+        throw new BadRequestException(
+          'collageSourceImageIds requires exactly two image ids',
+        );
+      }
+    }
+    const collageWidth = Number(body?.collageWidth ?? 640);
+    const collageHeight = Number(body?.collageHeight ?? 853);
+    const collageDpi = Number(body?.collageDpi ?? 96);
 
     const groupIdRaw = String(body?.groupId ?? '').trim();
     const groupId = groupIdRaw.length > 0 ? Number(groupIdRaw) : undefined;
@@ -519,6 +553,15 @@ export class GalleryController {
       size: typeof f.size === 'number' ? f.size : undefined,
       tags,
       description,
+      isCollage,
+      collageSourceImageIds: isCollage ? collageSourceImageIds : undefined,
+      collageMeta: isCollage
+        ? {
+            width: Number.isFinite(collageWidth) ? collageWidth : 640,
+            height: Number.isFinite(collageHeight) ? collageHeight : 853,
+            dpi: Number.isFinite(collageDpi) ? collageDpi : 96,
+          }
+        : undefined,
     }));
 
     const docs = await this.gallery.createMany(inputs);
@@ -543,6 +586,7 @@ export class GalleryController {
     @Query('tenantId') tenantId?: string,
     @Query('groupId') groupId?: string,
     @Query('tag') tag?: string,
+    @Query('includeCollage') includeCollage?: string,
     @Query('cursorId') cursorId?: string,
     @Query('limit') limit?: string,
     @Req() req?: Request,
@@ -553,12 +597,14 @@ export class GalleryController {
     const lim = limit ? Number(limit) : undefined;
     const gid = groupId ? Number(groupId) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
+    const includeCollageFlag = parseBooleanFlag(includeCollage);
     const rows = await this.gallery.findAccessibleImages(
       userId ?? 'default',
       tid,
       {
         groupId: typeof gid === 'number' && Number.isFinite(gid) ? gid : undefined,
         tag,
+        includeCollage: includeCollageFlag !== false,
         cursorId: typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
         limit: lim ?? 50,
       },

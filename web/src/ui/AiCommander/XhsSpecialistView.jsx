@@ -393,7 +393,7 @@ const XhsSpecialistView = ({ onBack }) => {
         >
           <ChevronLeft size={22} />
         </button>
-        <div className="inline-flex rounded-full bg-slate-100 p-1 overflow-x-auto max-w-[calc(100%-88px)]">
+        <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
           <button
             onClick={() => setTab('chat')}
             className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${

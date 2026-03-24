@@ -774,6 +774,7 @@ export class ChatMainService {
       '当用户进入发布阶段且已确认 count/strategy，并且已拿到 canvasId：创建或更新 Todo，assignee=robot:xhs_publisher，并在 Todo 文本中明确 canvasId 与 count。',
       '任何发布动作必须基于 Canvas：从 canvasId 对应文章中取内容，按 count 选择前 count 篇（不足则要求用户先补充或重新生成）。',
       '动态配图：发布任务的图片必须使用可访问的图片 URL（imageUrls）；不要使用本地绝对路径。若 Canvas 文章尚未有 imageUrls，则先提示用户补图或回到示例生成阶段补齐。',
+      '当用户需要“拼图/对比图/双图合并”时：必须使用两张图，生成固定尺寸 640x853（96dpi）的拼图后再入图库/发布链路。',
       '当你调用 topic_orchestrate、check_login_status、check_login_status_batch、get_login_qrcode、delete_cookies、publish_with_video 时，如果用户没有明确给出 userId，默认使用 userId="default"。',
       '仅当用户明确提出需要数据、统计、具体记录或数据库信息时，委派给 analysis_subagent；仅当用户明确提出需要生成页面、图表或可视化时，调用 frontend_plan 或 frontend_finalize。',
       '[重要]只有用户提出生成报表等类似字眼,才生成页面,否则不要随意生成报表页面',
@@ -829,6 +830,8 @@ export class ChatMainService {
       '1. 搜索图片 - 通过文字描述搜索相似图片',
       '2. 列出标签 - 查看图库中已有的标签',
       '3. 列出图片 - 查看图库中的图片列表',
+      '4. 生成拼图 - 必须严格选择 2 张图片，生成 640x853（96dpi）拼图并入图库。',
+      '当使用 tag 匹配图片时，可通过 matchCollage 参数控制是否包含拼图素材。',
       '请根据用户需求，调用合适的图库工具来完成任务。',
       '如果图库中没有相关图片，请告知用户并建议其他获取图片的方式。',
     ].join('\n');
@@ -845,6 +848,7 @@ export class ChatMainService {
       '1. 查看Canvas列表 - 了解用户的内容集合',
       '2. 获取Canvas详情 - 查看具体文章内容',
       '3. 结合图库图片 - 为文章配图',
+      '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi），再用于内容链路。',
       '请根据用户需求，帮助他们创建高质量的小红书内容。',
     ].join('\n');
   }

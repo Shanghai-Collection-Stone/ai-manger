@@ -382,7 +382,8 @@ const TaskCenterView = ({ currentUser }) => {
           title: todo.title || '未命名任务',
           desc: todo.description || '暂无描述',
           ...statusInfo,
-          assignee: todo.assignee || '待分配',
+          assigneeRaw: todo.assignee || '',
+          assignee: todo.assigneeDisplayName || todo.assignee || '待分配',
           abnormalReason: todo.abnormalReason || '',
           eta: timeText ? `更新 ${timeText}` : '',
           actionText: '催办',
@@ -616,7 +617,7 @@ const TaskCenterView = ({ currentUser }) => {
                 setShowAbnormalInput(false);
                 setAbnormalReasonText('');
                 setShowReworkInput(false);
-                setReworkAssignee(task.assignee || '');
+                setReworkAssignee(task.assigneeRaw || '');
                 setDescExpanded(false);
                 setPlanExpanded(false);
               }}
@@ -1090,7 +1091,7 @@ const TaskCenterView = ({ currentUser }) => {
                 ) : (
                   <button 
                     onClick={() => {
-                      setReworkAssignee(selectedTask.assignee || '');
+                      setReworkAssignee(selectedTask.assigneeRaw || '');
                       setShowReworkInput(true);
                     }}
                     className="w-full bg-blue-500 text-white py-3 rounded-xl font-bold text-sm shadow-lg shadow-blue-200 hover:bg-blue-600 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2"

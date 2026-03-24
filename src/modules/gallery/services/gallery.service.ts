@@ -39,6 +39,7 @@ export class GalleryService {
     await this.images.createIndex({ userId: 1 });
     await this.images.createIndex({ groupId: 1, createdAt: -1 });
     await this.images.createIndex({ tags: 1 });
+    await this.images.createIndex({ isCollage: 1, updatedAt: -1 });
     await this.images.createIndex({ createdAt: -1 });
     // 租户隔离索引
     await this.images.createIndex({ scope: 1, tenantId: 1, userId: 1 });
@@ -207,6 +208,27 @@ export class GalleryService {
       size: input.size,
       tags: Array.isArray(input.tags) ? input.tags : [],
       description: input.description,
+      isCollage: input.isCollage === true,
+      collageSourceImageIds: Array.isArray(input.collageSourceImageIds)
+        ? input.collageSourceImageIds
+            .map((x) => Number(x))
+            .filter((x) => Number.isFinite(x))
+            .slice(0, 2)
+        : undefined,
+      collageMeta:
+        input.collageMeta &&
+        Number.isFinite(Number(input.collageMeta.width)) &&
+        Number.isFinite(Number(input.collageMeta.height)) &&
+        Number.isFinite(Number(input.collageMeta.dpi))
+          ? {
+              width: Math.max(1, Math.floor(Number(input.collageMeta.width))),
+              height: Math.max(
+                1,
+                Math.floor(Number(input.collageMeta.height)),
+              ),
+              dpi: Math.max(1, Math.floor(Number(input.collageMeta.dpi))),
+            }
+          : undefined,
       embedding: embeddings[idx] ?? new Array<number>(768).fill(0),
       createdAt: now,
       updatedAt: now,
@@ -232,12 +254,22 @@ export class GalleryService {
   async findAccessibleImages(
     userId: string | undefined,
     tenantId?: string,
-    options?: { groupId?: number; tag?: string; cursorId?: number; limit?: number },
+    options?: {
+      groupId?: number;
+      tag?: string;
+      cursorId?: number;
+      limit?: number;
+      includeCollage?: boolean;
+    },
   ): Promise<GalleryImageEntity[]> {
-    const { groupId, tag, cursorId, limit = 50 } = options ?? {};
+    const { groupId, tag, cursorId, limit = 50, includeCollage = true } =
+      options ?? {};
     const filter = this.buildTenantFilter(userId, tenantId);
     if (groupId !== undefined) filter.groupId = groupId;
     if (tag) filter.tags = tag;
+    if (!includeCollage) {
+      filter.isCollage = { $ne: true };
+    }
     if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
       filter.id = { $lt: cursorId };
     }
@@ -400,6 +432,7 @@ export class GalleryService {
     groupId?: number;
     tags: string[];
     limit?: number;
+    matchCollage?: boolean;
   }): Promise<GalleryImageEntity[]> {
     const tags = Array.isArray(input?.tags)
       ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
@@ -409,6 +442,9 @@ export class GalleryService {
     filter.tags = { $in: tags };
     if (typeof input.groupId === 'number' && Number.isFinite(input.groupId)) {
       filter.groupId = input.groupId;
+    }
+    if (input.matchCollage === false) {
+      filter.isCollage = { $ne: true };
     }
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     return this.images

@@ -75,9 +75,9 @@ export class DecisionCardService {
       'reasoning/options/actions/risks 每个数组至少返回2条，内容要具体可执行。',
       'actions 必须体现“AI下一步要做的具体操作”，每条动作包含：操作对象、使用能力/工具、负责人、完成标准。',
       'actions 至少一条要体现任务分配（例如使用 todo_create 创建并指派线下执行人员任务）。',
-      '如果 actions 中提到具体能力/工具/机器人，请同时给出更易懂的中文释义，格式：能力代号（中文释义）。例如：topic_orchestrate（生成示例文章Canvas）、robot:xhs_publisher（小红书发布机）。',
+      'actions 中涉及能力时，必须只写中文能力名；禁止出现工具函数名、robot:xxx、下划线英文代号。',
       hasXhsIntent
-        ? '若问题涉及小红书发布，actions 至少一条要体现从示例生成到发布执行的链路（如 topic_orchestrate -> 指派 robot:xhs_publisher）。'
+        ? '若问题涉及小红书发布，actions 至少一条要体现从“示例内容生成”到“自动发布机执行”的链路。'
         : '若问题不涉及发布，可将发布链路作为备选动作，不要强制写发布执行。',
     ].join('\n');
     const payload = {
@@ -498,11 +498,11 @@ export class DecisionCardService {
       String(input.question),
     );
     return [
-      `创建执行总任务：围绕“${input.question}”拆分周计划，明确客流、转化、复购三类目标值，并用 todo_create 生成主任务。`,
-      '分配线下执行任务：使用 todo_create 为门店负责人创建“物料准备/活动执行/到店转化复盘”任务，明确负责人和截止时间。',
+      `创建执行总任务：围绕“${input.question}”拆分周计划，明确客流、转化、复购三类目标值，并生成主任务。`,
+      '分配线下执行任务：为门店负责人创建“物料准备/活动执行/到店转化复盘”任务，明确负责人和截止时间。',
       hasXhsIntent
-        ? '发布链路执行：先调用 topic_orchestrate 生成示例内容，再使用 todo_create 指派 robot:xhs_publisher 执行发布并跟踪结果。'
-        : '建立监控复盘任务：使用 todo_create 创建“日报监控+周复盘”任务，连续4周跟踪关键指标变化并调整策略。',
+        ? '发布链路执行：先做示例内容生成，再指派小红书发布机执行发布并跟踪结果。'
+        : '建立监控复盘任务：创建“日报监控+周复盘”任务，连续4周跟踪关键指标变化并调整策略。',
     ];
   }
 
@@ -512,24 +512,46 @@ export class DecisionCardService {
       robots.length > 0
         ? robots
             .map(
-              (r, i) =>
-                `${i + 1}) robot:${r.code}（${r.name}）：${r.description}`,
+              (r, i) => `${i + 1}) ${r.name}：${r.description}`,
             )
             .join('\n')
         : '（当前无自动机器人）';
     const base = [
-      '可用能力清单（写 actions 时请用“代号（中文释义）”表达）：',
-      'A) 内容生成：topic_orchestrate（生成示例文章 Canvas）',
-      'B) 任务管理：Todo（创建/更新/分配/跟踪），可指派到人或 robot:xxx',
+      '可用能力清单（仅输出中文能力名）：',
+      'A) 内容生成：示例文章生成（可产出 Canvas）',
+      'B) 任务管理：待办创建/更新/分配/跟踪（可指派到人或自动化代理）',
       'C) 自动机器人：',
       robotLines,
-      'D) 数据分析：analysis_subagent（查询/统计/复盘，必要时使用）',
-      'E) 计算能力：js_calc / js_calc_batch（精确计算）',
-      '约束：小红书发布必须基于 Canvas；若要批量发布，先有 CanvasId，再指派 robot:xhs_publisher 执行。',
+      'D) 数据分析：数据分析子代理（查询/统计/复盘，必要时使用）',
+      'E) 计算能力：精确计算器（用于复杂/批量计算）',
+      '约束：小红书发布必须基于 Canvas；若要批量发布，先有 CanvasId，再指派小红书发布机执行。',
     ].join('\n');
-    const extra = String(input || '').trim();
+    const extra = this.localizeCapabilityText(String(input || '').trim());
     if (!extra) return base;
     return `${base}\n补充能力信息：\n${extra}`;
+  }
+
+  private localizeCapabilityText(text: string): string {
+    let out = String(text ?? '').trim();
+    if (!out) return '';
+    const replacements: Array<[RegExp, string]> = [
+      [/\btopic_orchestrate\b/gi, '示例文章生成'],
+      [/\brobot:xhs_publisher\b/gi, '小红书发布机'],
+      [/\btodo_create\b/gi, '待办创建'],
+      [/\btodo_update\b/gi, '待办更新'],
+      [/\btodo_list\b/gi, '待办查询'],
+      [/\banalysis_subagent\b/gi, '数据分析子代理'],
+      [/\bjs_calc_batch\b/gi, '批量精确计算'],
+      [/\bjs_calc\b/gi, '精确计算'],
+      [/\bcanvas_execute\b/gi, '执行画布发布流程'],
+      [/\bxhs_batch_publish\b/gi, '小红书批量发布'],
+      [/\bgallery_search_images\b/gi, '图库按标签搜图'],
+      [/\bgallery_list_tags\b/gi, '图库标签查询'],
+    ];
+    for (const [pattern, value] of replacements) {
+      out = out.replace(pattern, value);
+    }
+    return out;
   }
 
   /**
@@ -820,155 +842,155 @@ export class DecisionCardService {
     }
 
     const outlineTasks = outlinePlan.data.tasks;
-    const detailedTasks: Array<{
-      title: string;
-      description?: string;
-      aiConsideration: string;
-      decisionReason: string;
-      aiPlan: string;
-      assignee?: string;
-      type?: string;
-    }> = [];
-    for (const t of outlineTasks) {
-      let detail = ZTodoDetail.safeParse(undefined);
-      let lastDetailRaw = '';
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const must = this.buildDetailMust(t.title, t.type, {
-            hasXhsIntent,
-            canvasId,
-            publishCount,
-          });
-          const userPayload =
-            attempt === 0
-              ? {
-                  task: {
-                    title: t.title,
-                    description: t.description,
-                    assignee: t.assignee,
-                    type: t.type,
-                    detailHint: t.detailHint,
-                  },
-                  context: {
-                    decision: payload,
-                    allTasks: outlineTasks.map((x) => ({
-                      title: x.title,
-                      assignee: x.assignee,
-                      type: x.type,
-                      detailHint: x.detailHint,
-                    })),
-                  },
-                  required: { must },
-                }
-              : {
-                  task: {
-                    title: t.title,
-                    description: t.description,
-                    assignee: t.assignee,
-                    type: t.type,
-                    detailHint: t.detailHint,
-                  },
-                  context: {
-                    decision: payload,
-                    allTasks: outlineTasks.map((x) => ({
-                      title: x.title,
-                      assignee: x.assignee,
-                      type: x.type,
-                      detailHint: x.detailHint,
-                    })),
-                  },
-                  previousOutput: lastDetailRaw,
-                  required: {
-                    schema:
-                      '{ "goalAndScope": string, "prerequisites": string[], "materials": string[], "steps": string[], "deliverables": string[], "acceptanceCriteria": string[], "dataAndReview": string[] }',
-                    must: [
-                      'Only output JSON object',
-                      'All fields must match schema types',
-                      'No newline characters in array items',
-                      'steps length >= 6',
-                      ...must,
-                    ],
-                  },
-                };
-          const ai = await llm.invoke([
-            ...this.agent.toMessages([{ role: 'system', content: sysDetail }]),
-            ...this.agent.toMessages([
-              { role: 'user', content: JSON.stringify(userPayload) },
-            ]),
-          ]);
-          const content = (ai as unknown as { content?: unknown }).content;
-          const extracted = this.extractTextFromModelContent(content);
-          lastDetailRaw =
-            extracted ||
-            (typeof content === 'string'
-              ? content
-              : JSON.stringify(content ?? ''));
-          const parsed = this.parseJsonFromModelText(lastDetailRaw);
-          detail = ZTodoDetail.safeParse(parsed);
-          if (detail.success) {
-            if (this.isDetailSpecificEnough(t.title, detail.data)) break;
-            detail = ZTodoDetail.safeParse(undefined);
+    const detailedTasksResults = await Promise.all(
+      outlineTasks.map(async (t) => {
+        let detail = ZTodoDetail.safeParse(undefined);
+        let lastDetailRaw = '';
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const must = this.buildDetailMust(t.title, t.type, {
+              hasXhsIntent,
+              canvasId,
+              publishCount,
+            });
+            const userPayload =
+              attempt === 0
+                ? {
+                    task: {
+                      title: t.title,
+                      description: t.description,
+                      assignee: t.assignee,
+                      type: t.type,
+                      detailHint: t.detailHint,
+                    },
+                    context: {
+                      decision: payload,
+                      allTasks: outlineTasks.map((x) => ({
+                        title: x.title,
+                        assignee: x.assignee,
+                        type: x.type,
+                        detailHint: x.detailHint,
+                      })),
+                    },
+                    required: { must },
+                  }
+                : {
+                    task: {
+                      title: t.title,
+                      description: t.description,
+                      assignee: t.assignee,
+                      type: t.type,
+                      detailHint: t.detailHint,
+                    },
+                    context: {
+                      decision: payload,
+                      allTasks: outlineTasks.map((x) => ({
+                        title: x.title,
+                        assignee: x.assignee,
+                        type: x.type,
+                        detailHint: x.detailHint,
+                      })),
+                    },
+                    previousOutput: lastDetailRaw,
+                    required: {
+                      schema:
+                        '{ "goalAndScope": string, "prerequisites": string[], "materials": string[], "steps": string[], "deliverables": string[], "acceptanceCriteria": string[], "dataAndReview": string[] }',
+                      must: [
+                        'Only output JSON object',
+                        'All fields must match schema types',
+                        'No newline characters in array items',
+                        'steps length >= 6',
+                        ...must,
+                      ],
+                    },
+                  };
+            const ai = await llm.invoke([
+              ...this.agent.toMessages([
+                { role: 'system', content: sysDetail },
+              ]),
+              ...this.agent.toMessages([
+                { role: 'user', content: JSON.stringify(userPayload) },
+              ]),
+            ]);
+            const content = (ai as unknown as { content?: unknown }).content;
+            const extracted = this.extractTextFromModelContent(content);
+            lastDetailRaw =
+              extracted ||
+              (typeof content === 'string'
+                ? content
+                : JSON.stringify(content ?? ''));
+            const parsed = this.parseJsonFromModelText(lastDetailRaw);
+            detail = ZTodoDetail.safeParse(parsed);
+            if (detail.success) {
+              if (this.isDetailSpecificEnough(t.title, detail.data)) break;
+              detail = ZTodoDetail.safeParse(undefined);
+            }
+          } catch (e) {
+            failures.push(
+              capture('task_detail', e, {
+                title: trunc(t.title, 120),
+                attempt,
+                lastRaw: lastDetailRaw ? trunc(lastDetailRaw) : undefined,
+              }),
+            );
           }
-        } catch (e) {
-          failures.push(
-            capture('task_detail', e, {
-              title: trunc(t.title, 120),
-              attempt,
-              lastRaw: lastDetailRaw ? trunc(lastDetailRaw) : undefined,
-            }),
-          );
         }
-      }
-      if (!detail.success) {
-        detail = ZTodoDetail.safeParse({
-          goalAndScope: t.detailHint,
-          prerequisites: ['待确认：相关数据/负责人/预算/渠道'],
-          materials: ['待确认：海报/文案/二维码/话术/表格模板'],
-          steps: [
-            '负责人=运营负责人，Day1：确认目标与范围并补齐缺失信息',
-            '负责人=门店负责人，Day1：盘点现有资源与物料缺口',
-            '负责人=运营负责人，Day2：输出执行方案与物料清单',
-            '负责人=门店负责人，Day3：完成物料准备与人员排班',
-            '负责人=门店负责人，Day4-14：按方案执行并每日记录数据',
-            '负责人=运营负责人，本周五 18:00：复盘会议与优化调整',
-          ],
-          deliverables: [
-            '执行方案文档',
-            '物料清单',
-            '数据记录表',
-            '复盘结论与优化项',
-          ],
-          acceptanceCriteria: [
-            '有明确负责人',
-            '有明确截止时间',
-            '有可量化验收标准',
-          ],
-          dataAndReview: [
-            '记录位置：飞书多维表格',
-            '每周五复盘会议',
-            '字段：客流/转化/复购/成本/问题',
-          ],
-        });
-      }
-      if (!detail.success) {
+        if (!detail.success) {
+          detail = ZTodoDetail.safeParse({
+            goalAndScope: t.detailHint,
+            prerequisites: ['待确认：相关数据/负责人/预算/渠道'],
+            materials: ['待确认：海报/文案/二维码/话术/表格模板'],
+            steps: [
+              '负责人=运营负责人，Day1：确认目标与范围并补齐缺失信息',
+              '负责人=门店负责人，Day1：盘点现有资源与物料缺口',
+              '负责人=运营负责人，Day2：输出执行方案与物料清单',
+              '负责人=门店负责人，Day3：完成物料准备与人员排班',
+              '负责人=门店负责人，Day4-14：按方案执行并每日记录数据',
+              '负责人=运营负责人，本周五 18:00：复盘会议与优化调整',
+            ],
+            deliverables: [
+              '执行方案文档',
+              '物料清单',
+              '数据记录表',
+              '复盘结论与优化项',
+            ],
+            acceptanceCriteria: [
+              '有明确负责人',
+              '有明确截止时间',
+              '有可量化验收标准',
+            ],
+            dataAndReview: [
+              '记录位置：飞书多维表格',
+              '每周五复盘会议',
+              '字段：客流/转化/复购/成本/问题',
+            ],
+          });
+        }
+        if (!detail.success) return null;
         return {
-          success: false,
-          error: '生成待办任务失败',
-          details: { failures },
+          title: t.title,
+          description: this.renderTodoDescriptionFromDetail(
+            t.description,
+            detail.data,
+          ),
+          aiConsideration: t.aiConsideration,
+          decisionReason: t.decisionReason,
+          aiPlan: this.renderTodoAiPlan(detail.data),
+          assignee: t.assignee,
+          type: t.type,
         };
-      }
-      detailedTasks.push({
-        title: t.title,
-        description: this.renderTodoDescriptionFromDetail(
-          t.description,
-          detail.data,
-        ),
-        aiConsideration: t.aiConsideration,
-        decisionReason: t.decisionReason,
-        aiPlan: this.renderTodoAiPlan(detail.data),
-        assignee: t.assignee,
-        type: t.type,
-      });
+      }),
+    );
+
+    const detailedTasks = detailedTasksResults.filter(
+      (x): x is NonNullable<(typeof detailedTasksResults)[number]> => !!x,
+    );
+    if (detailedTasks.length === 0) {
+      return {
+        success: false,
+        error: '生成待办任务失败',
+        details: { failures },
+      };
     }
 
     const expected = Math.min(
@@ -990,30 +1012,39 @@ export class DecisionCardService {
       robotCode?: string;
       error?: string;
     }> = [];
-    for (const t of tasks) {
-      try {
-        const todo = await this.todoService.create({
-          tenantId: card.tenantId,
-          userId,
-          title: t.title,
-          description: t.description,
-          aiConsideration: t.aiConsideration,
-          decisionReason: t.decisionReason,
-          aiPlan: t.aiPlan,
-          assignee:
-            typeof t.assignee === 'string' && t.assignee.trim().length > 0
-              ? t.assignee.trim()
-              : undefined,
-          type: typeof t.type === 'string' ? t.type : undefined,
-        });
-        createdIds.push(todo.id);
-        const trig = await this.robots.triggerIfRobotAssigned({ todo });
-        robotTriggers.push({ todoId: todo.id, ...trig });
-      } catch (e) {
-        failures.push(
-          capture('todo_create_or_trigger', e, { title: trunc(t.title, 120) }),
-        );
-      }
+    const createResults = await Promise.all(
+      tasks.map(async (t) => {
+        try {
+          const todo = await this.todoService.create({
+            tenantId: card.tenantId,
+            userId,
+            title: t.title,
+            description: t.description,
+            aiConsideration: t.aiConsideration,
+            decisionReason: t.decisionReason,
+            aiPlan: t.aiPlan,
+            assignee:
+              typeof t.assignee === 'string' && t.assignee.trim().length > 0
+                ? t.assignee.trim()
+                : undefined,
+            type: typeof t.type === 'string' ? t.type : undefined,
+          });
+          const trig = await this.robots.triggerIfRobotAssigned({ todo });
+          return { todoId: todo.id, trig };
+        } catch (e) {
+          failures.push(
+            capture('todo_create_or_trigger', e, {
+              title: trunc(t.title, 120),
+            }),
+          );
+          return null;
+        }
+      }),
+    );
+    for (const result of createResults) {
+      if (!result) continue;
+      createdIds.push(result.todoId);
+      robotTriggers.push({ todoId: result.todoId, ...result.trig });
     }
     if (createdIds.length === 0) {
       return {
