@@ -31,7 +31,7 @@ Graph控制器。
 ### batch-task-graph.service.ts
 批量发布图服务。
 - **关键词**: batch-task, publishing, mcp, task-it, todo-summary, service
-- 发布封面渲染支持项目内自定义字体：默认读取 `public/fonts/cover-cjk.ttf`；若封面文案包含中文且字体文件不存在，则直接抛错（不再降级为豆腐块或随机回退）。
+- 发布封面渲染支持项目内自定义字体：默认读取 `public/fonts/cover-cjk.ttf`，并兼容 `dist/public/fonts/cover-cjk.ttf` 与 `web/public/fonts/cover-cjk.ttf`；也可通过环境变量 `COVER_FONT_PATH` 指定绝对/相对路径。若封面文案包含中文且字体文件不存在，则直接抛错（不再降级为豆腐块或随机回退）。
 
 ### graph.module.ts
 Graph模块定义。

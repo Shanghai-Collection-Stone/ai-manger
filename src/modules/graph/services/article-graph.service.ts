@@ -710,16 +710,50 @@ export class ArticleGraphService {
       return this.customCoverFontBase64;
     }
 
-    const absPath = join(process.cwd(), ...COVER_FONT_RELATIVE_PATH.split('/'));
-    try {
-      const buf = await fs.readFile(absPath);
-      const base64 = Buffer.from(buf).toString('base64');
-      this.customCoverFontBase64 = base64;
-      this.customCoverFontLoaded = true;
-      return base64;
-    } catch {
-      throw new Error(`COVER_CUSTOM_FONT_MISSING: ${COVER_FONT_RELATIVE_PATH}`);
+    const candidates = this.getCoverFontCandidates();
+    for (const absPath of candidates) {
+      try {
+        const buf = await fs.readFile(absPath);
+        const base64 = Buffer.from(buf).toString('base64');
+        this.customCoverFontBase64 = base64;
+        this.customCoverFontLoaded = true;
+        return base64;
+      } catch {
+        void 0;
+      }
     }
+
+    throw new Error(
+      `COVER_CUSTOM_FONT_MISSING: place font at ${COVER_FONT_RELATIVE_PATH} (or set COVER_FONT_PATH). tried=${candidates.join('|')}`,
+    );
+  }
+
+  /**
+   * @description 返回封面字体候选绝对路径（兼容 build 后目录）。
+   * @returns {string[]} 候选路径列表。
+   * @keyword-en cover font candidate paths
+   */
+  private getCoverFontCandidates(): string[] {
+    const envPath = String(process.env.COVER_FONT_PATH || '').trim();
+    const out: string[] = [];
+    const pushPath = (p: string) => {
+      const v = String(p || '').trim();
+      if (!v || out.includes(v)) return;
+      out.push(v);
+    };
+
+    if (envPath) {
+      if (/^(?:[a-zA-Z]:\\|\/)/.test(envPath)) {
+        pushPath(envPath);
+      } else {
+        pushPath(join(process.cwd(), envPath));
+      }
+    }
+
+    pushPath(join(process.cwd(), 'public', 'fonts', 'cover-cjk.ttf'));
+    pushPath(join(process.cwd(), 'dist', 'public', 'fonts', 'cover-cjk.ttf'));
+    pushPath(join(process.cwd(), 'web', 'public', 'fonts', 'cover-cjk.ttf'));
+    return out;
   }
 
   /**
