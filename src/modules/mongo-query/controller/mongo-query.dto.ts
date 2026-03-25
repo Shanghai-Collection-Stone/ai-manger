@@ -69,8 +69,16 @@ export class MongoQueryDto {
   @IsString()
   collection!: string;
 
-  @IsIn(['list', 'count'])
-  mode!: 'list' | 'count';
+  @IsIn(['list', 'count', 'aggregate'])
+  mode!: 'list' | 'count' | 'aggregate';
+
+  @IsOptional()
+  @IsIn(['mongo', 'feishu-bitable'])
+  sourceType?: 'mongo' | 'feishu-bitable';
+
+  @IsOptional()
+  @IsString()
+  sourceCode?: string;
 
   @IsOptional()
   @IsObject()
@@ -100,6 +108,27 @@ export class MongoQueryDto {
   skip?: number;
 
   @IsOptional()
+  pipeline?: Record<string, unknown>[] | string;
+
+  @IsOptional()
+  @IsObject()
+  feishuFilter?: {
+    conjunction?: 'and' | 'or';
+    conditions?: Array<{
+      field?: string;
+      fieldName?: string;
+      field_name?: string;
+      operator: string;
+      value?: string | string[];
+    }>;
+  };
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  feishuSort?: string[];
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => MongoQueryJoinDto)
@@ -109,4 +138,3 @@ export class MongoQueryDto {
   @IsString()
   tenantField?: string;
 }
-

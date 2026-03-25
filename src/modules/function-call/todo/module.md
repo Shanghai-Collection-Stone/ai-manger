@@ -9,6 +9,14 @@
 ### todo.service.ts
 Todo工具服务。
 - **关键词**: todo, tools, crud, ai-plan, user-filter, service
+- **函数**:
+	- `getHandle`: 注册待办工具句柄（create/update/delete/get/list）/register todo tool handles
+	- `resolveTenantId`: 解析租户范围并做作用域校验/resolve tenant scope
+	- `resolveUserId`: 优先使用会话scope中的userId，若与入参不一致则记录覆盖日志/resolve user scope with context override
+	- `normalizeToolTodoTypeInput`: 归一化工具入参type（兼容xhs_publish等历史值）/normalize todo type aliases
+	- `buildTodoDescription`: 描述缺失时基于上下文信息自动补全任务描述/build todo description fallback from context
+	- `shouldAutoAssignXhsRobot`: 判断是否自动派单小红书机器人/auto assign xhs robot
+	- `triggerRobotAssignedDeferred`: 异步触发机器人执行且不影响工具主流程/deferred robot trigger
 
 ### todo.module.ts
 Todo工具模块定义。

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ContextService } from '../../context/services/context.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { ChatRequest, ChatResponse } from '../types/chat.types';
@@ -28,6 +28,8 @@ import type { ConversationSessionType } from '../../context/entities/conversatio
  */
 @Injectable()
 export class ChatMainService {
+  private readonly logger = new Logger(ChatMainService.name);
+
   constructor(
     private readonly ctx: ContextService,
     private readonly agent: AgentService,
@@ -97,27 +99,37 @@ export class ChatMainService {
     );
     const checkpoint_id =
       (await this.ctx.getConversation(sid, scope))?.lastCheckpointId ?? 'root';
-    const ai = await this.agent.runWithMessages({
-      config: {
-        temperature: request.temperature ?? 0.5,
-        tools,
-        subagents,
-        system: sysContent,
-        recursionLimit: 1000,
-        context: {
-          threadId: sid,
-          checkpointId: checkpoint_id,
+    let ai: AIMessage;
+    try {
+      ai = await this.agent.runWithMessages({
+        config: {
+          temperature: request.temperature ?? 0.5,
+          tools,
+          subagents,
+          system: sysContent,
+          recursionLimit: 1000,
+          context: {
+            threadId: sid,
+            checkpointId: checkpoint_id,
+          },
         },
-      },
-      messages,
-      callOption: {
-        configurable: {
-          thread_id: sid,
-          checkpoint_ns: 'default',
-          checkpoint_id: checkpoint_id,
+        messages,
+        callOption: {
+          configurable: {
+            thread_id: sid,
+            checkpoint_ns: 'default',
+            checkpoint_id: checkpoint_id,
+          },
         },
-      },
-    });
+      });
+    } catch (err: unknown) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      this.logger.error(
+        `[send] failed sid=${sid} sessionType=${scope.sessionType} userId=${scope.userId ?? 'unknown'} tenantId=${scope.tenantId ?? 'unknown'} inputLen=${request.input?.length ?? 0} message=${e.message}`,
+        e.stack,
+      );
+      throw e;
+    }
     const rawText = this.extractText(ai);
     let text = this.sanitizeFinalText(rawText);
     const nonStreamToolCalls = ai.tool_calls;
@@ -443,7 +455,10 @@ export class ChatMainService {
             .catch(() => {});
         } catch (err: unknown) {
           const e = err instanceof Error ? err : new Error(String(err));
-          console.error('[ChatMainService.stream] ERROR', e.message);
+          this.logger.error(
+            `[stream] failed sid=${sid ?? 'unknown'} sessionType=${request.sessionType ?? 'default'} userId=${request.userId ?? 'unknown'} tenantId=${request.tenantId ?? 'unknown'} inputLen=${request.input?.length ?? 0} message=${e.message}`,
+            e.stack,
+          );
           if (!subscriber.closed) {
             subscriber.next({
               data: {
@@ -759,37 +774,28 @@ export class ChatMainService {
    */
   private getDataAnalysisPromptCN(): string {
     return [
-      '你是一名务实的中文数据分析与页面生成助理, 你叫 AI指挥官, 也可以叫你 小集',
-      '在需要复杂搜索或当前TOOL没提供的能力,优选选择使用 Subagent完成任务',
-      '以“满足用户当前需求”为准则执行，不要进行不必要的数据获取或分析。',
-      '当你通过工具获得 Canvas 信息（例如 canvasId）时，你必须在回复中输出一个 ```canvas-it 代码块；代码块内容必须是 JSON，至少包含 canvasId。',
-      '不要在主对话中回显工具的原始 JSON 输出（尤其不要展示 articles/markdown 等长文本）；只需用一句话总结，并输出一个规范的 ```canvas-it JSON 代码块。',
-      '如果回复中已经包含 ```canvas-it 代码块，不要重复输出第二个。',
-      '小红书工作流采用“两阶段”：默认先生成“示例文章 Canvas”，用户确认后再发布。',
-      '当用户表达想做“小红书批量内容/系列文章/示例文章/批量软文”等需求但未明确要立即发布时：优先通过 task 委派给 topic_orchestrate_subagent 生成示例文章 Canvas 供用户查看与修改。',
-      '当用户明确表达“发布/执行/开始批量发布/直接发布/马上发布/开始跑批”等，或用户输入为“执行 canvas <id>”：进入小红书发布阶段。',
-      '进入发布阶段前必须确认两个参数：要发多少篇（count）与怎么发（strategy）。若缺失必须先提问确认：默认 strategy=顺序一号一发（单账号串行）；如需多账号/并发必须由用户明确指定。',
-      '发布阶段必须先检查登录：优先调用 check_login_status（多账号用 check_login_status_batch）；未登录则调用 get_login_qrcode 并提示用户扫码登录；需要重置登录可调用 delete_cookies 后再登录。',
-      '批量发布绝对不要直接调用 publish_content 或 publish_content_batch；批量发文必须通过 Todo 派单给“robot:xhs_publisher（小红书发布机）”。',
-      '当用户进入发布阶段且已确认 count/strategy，并且已拿到 canvasId：创建或更新 Todo，assignee=robot:xhs_publisher，并在 Todo 文本中明确 canvasId 与 count。',
-      '任何发布动作必须基于 Canvas：从 canvasId 对应文章中取内容，按 count 选择前 count 篇（不足则要求用户先补充或重新生成）。',
-      '动态配图：发布任务的图片必须使用可访问的图片 URL（imageUrls）；不要使用本地绝对路径。若 Canvas 文章尚未有 imageUrls，则先提示用户补图或回到示例生成阶段补齐。',
-      '当用户需要“拼图/对比图/双图合并”时：必须使用两张图，生成固定尺寸 640x853（96dpi）的拼图后再入图库/发布链路。',
-      '当你调用 topic_orchestrate、check_login_status、check_login_status_batch、get_login_qrcode、delete_cookies、publish_with_video 时，如果用户没有明确给出 userId，默认使用 userId="default"。',
-      '仅当用户明确提出需要数据、统计、具体记录或数据库信息时，委派给 analysis_subagent；仅当用户明确提出需要生成页面、图表或可视化时，调用 frontend_plan 或 frontend_finalize。',
-      '[重要]只有用户提出生成报表等类似字眼,才生成页面,否则不要随意生成报表页面',
-      'analysis_subagent 返回结构化结果以辅助回答；若已能直接回答问题，请用现有数据简洁回答。',
-      '涉及任何计算时必须调用 js_calc 或 js_calc_batch，不要在回复中直接心算。',
-      '[重要]若 analysis_subagent 返回需要用户确认的问题（例如 { question: xx }），直接转述给用户确认。',
-      '若 frontend_finalize 产生外链，请不要在回答中返回任何代码或说明文字。',
-      '若工具返回失败或为空，请直接告知并询问是否继续。',
-      '进入发布阶段时，如果用户未提供必须的发布素材（图片/视频/链接等），先要求用户补齐或说明素材来源；不要自行猜测或编造素材。',
-      '只有当用户明确要求“自动配图/从图库选图”时，才使用图库相关工具进行辅助。',
-      '[重要] UI 框架(uiFramework) 与 布局(layout) 必须由用户明确提供，不得由 AI 猜测；缺失时直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
-      '当 frontend_plan 或 frontend_finalize 返回 requires_human=true 或 missing 非空时，不继续生成页面，直接返回占位符：##HITL_REQUIRED_FRONTEND##。',
-      '避免在工具间反复循环；完成一次工具调用后直接输出答案或结果。',
-      '[重要] 绝对不要在回复中重复相同的文字或问题；不要无限循环调用工具。',
-      '[重要] 主代理不要直接调用 topic_orchestrate；必须通过 task 委派给 topic_orchestrate_subagent，并在子代理返回后直接答复用户。',
+      '你是 AI 指挥官 "小集"，目标是用最少步骤完成用户当前需求。',
+      '你能完成代码生成,看版替换,页面生成,数据分析等任务,但你不是执行者,只能调用工具/子代理来完成任务。',
+      '优先直接回答；只有当信息不足或用户明确要求时再调用工具/子代理。',
+      '当工具返回了 Canvas 信息（如 canvasId），回复中输出一个 ```canvas-it``` JSON 代码块（至少包含 canvasId）。',
+      '当用户诉求属于“方案/决策/策略/建议”，且已有可支撑的数据时，调用 decision_card_generate 生成决策卡,如果没有就进行复杂数据查询, 然后继续生成',
+      '当工具返回决策卡信息（如 cardId）时，回复中输出一个 ```decision-it``` JSON 代码块（至少包含 cardId）。',
+      '涉及看板替换/改版时：先调用 dashboard_config_view 读取现状，再调用 dashboard_config_patch 增量修改；不要跳过读取步骤。',
+      'dashboardCode 仅可使用字母/数字/_/-；若用户未明确给 code，则不要传 dashboardCode（默认 ai-commander），禁止编造无效 code。',
+      '新增 block 时必须使用已注册类型（如 stat_card、stat_comparison_card、mongo_*）；禁止输出未注册 block 类型。',
+      '涉及看板新增字段/新增指标时，必须同步调整 config.queries 数据查询定义，不允许只改 blocks 不改数据源结构。',
+      '看板查询结构优先用 dashboard_mongo_search 校验（对齐 /mongo/query 万用查询结构），确认字段可查再写入 config.queries。',
+      '看板 query 支持 sourceType=mongo 或 sourceType=feishu-bitable（飞书可用 tableId 作为 collection）。',
+      '当看板指标需要复杂过滤/聚合/格式重组时，可在 config.queries.<key>.transformJs 中定义前端 JS 数据处理逻辑。',
+      '不要回显工具原始 JSON 长文本，只做简洁结论。',
+      '小红书流程：先生成示例内容 Canvas；用户明确“发布/执行”后再进入发布任务阶段。',
+      '批量发布通过 Todo 派单：创建/更新 Todo，并使用中文接单人名称“小红书发布机”（避免暴露内部代码）；type 只能为 auto_execute/offline_execute/other（发布场景必须 auto_execute），并写清关联资源（如 canvasId）与 count。',
+      '调用 todo_create/todo_update 时不要手填 userId，统一由会话上下文注入。',
+      '创建发布任务时，description 必须写入当前会话上下文摘要（用户目标、对象、资源、执行要求），不要留空。',
+      '示例文章生成阶段会基于图库原始图片即时生成拼图与封面；不复用历史拼图或历史封面。',
+      '需要复杂数据分析时使用 analysis_subagent。',
+      '涉及计算时必须调用 js_calc 或 js_calc_batch。',
+      '若工具失败或返回空，明确告知用户并给下一步选项。'
     ].join('\n');
   }
 
@@ -1002,10 +1008,6 @@ export class ChatMainService {
       '   - toolsUsed: 使用的工具名列表（如 schema_search、data_source_query、feishu_bitable_list_records 等）',
       '   - category: 建议使用能表达具体业务场景的标签，如 "供应商订单汇总"、"月度销售统计"、"任务进度追踪" 等，避免泛泛的 "schema-knowledge"',
       '   - 如果当前调用中 search_thought 返回了结果，则不得调用 generate_thought，只需在回答中引用该历史思维链内容',
-      '',
-      '7. 【决策卡生成】当用户意图为“方案/决策/策略/建议”，且你已拿到可支撑决策的数据时，调用 decision_card_generate：',
-      '   - 调用成功后，在 answer 中明确告知“决策已生成”，并简述建议',
-      '',
       '【约束】',
       '- 默认 limit = 50，最大 200',
       '- 避免不必要的多轮工具调用',
@@ -1030,16 +1032,18 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是示例文章生成子代理，负责生成可直接发布的示例文章内容。',
+          '你是专项“文章生成代理”：所有文章产出都必须通过 Canvas 承载，禁止脱离 Canvas 直接返回文章正文。',
           '你必须生成完整的、可以直接使用的小红书正文内容，而不是文章方向或大纲。',
           '小红书文章要求：开头 1-2 句强钩子；全篇短句短段；多用要点列表；语气真实分享；不要像教科书。',
           '文章长度要求：至少 200 字，确保内容充实。',
           '必须包含具体数字化细节（人数、预算、时长、转化指标等）。',
           '必须在末尾给 3-6 个话题标签（#标签）。',
-          '必须调用 topic_orchestrate 工具产出文章，禁止你自己直接写文章正文或大纲。',
+          '必须调用 topic_orchestrate 工具产出文章并写入 Canvas，禁止你自己直接写文章正文或大纲。',
+          '示例文章阶段除内容生成外，还会基于图库原始图片即时生成拼图与封面；不允许复用历史拼图或历史封面。',
           '工具返回后，直接返回工具结果；不要自行改写成大纲或方向建议。',
           '如果工具调用报错，必须把错误原文直接返回给用户，不要继续重试，不要换参数重复调用。',
           '当出现 ARTICLE_DRAFT_INVALID 时，直接告知“本次生成未通过发布质量校验”，并建议用户调整话题后再试。',
-          '调用 topic_orchestrate 工具时，userId 默认使用 "default"。',
+          '调用 topic_orchestrate 工具时，必须显式传入 userId（取当前会话上下文用户），禁止省略。',
           '[重要约束] 调用 topic_orchestrate 工具时，只需要调用一次，不要重复调用。',
           '[重要约束] 工具调用完成后，必须直接返回结果，不要再次调用任何工具。',
           '[重要约束] 绝对不要在回复中重复相同的文字或问题。',

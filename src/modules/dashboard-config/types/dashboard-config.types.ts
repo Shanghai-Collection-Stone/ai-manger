@@ -12,6 +12,7 @@ export type BlockType =
   | 'revenue_overview_card'
   | 'revenue_total_card'
   | 'stat_card'
+  | 'stat_comparison_card'
   | 'conversion_rate_card'
   | 'people_total_card'
   | 'people_pie_card'
@@ -82,6 +83,26 @@ export interface DashboardConfig {
   title: string;
   description?: string;
   timeRanges?: string[];
+  queries?: Record<
+    string,
+    {
+      sourceType?: 'mongo' | 'feishu-bitable';
+      sourceCode?: string;
+      collection?: string;
+      tableId?: string;
+      mode?: 'list' | 'count' | 'aggregate';
+      filter?: Record<string, unknown>;
+      where?: Record<string, unknown>;
+      projection?: Record<string, 0 | 1>;
+      sort?: Record<string, 1 | -1>;
+      limit?: number;
+      skip?: number;
+      pipeline?: Record<string, unknown>[] | string;
+      feishuFilter?: Record<string, unknown>;
+      feishuSort?: string[];
+      transformJs?: string;
+    }
+  >;
   tabs: DashboardTab[];
 }
 

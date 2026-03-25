@@ -54,13 +54,27 @@ export type MongoQueryJoin = {
 
 export type MongoQueryRequest = {
   collection: string;
-  mode: 'list' | 'count';
+  mode: 'list' | 'count' | 'aggregate';
+  sourceType?: 'mongo' | 'feishu-bitable';
+  sourceCode?: string;
   filter?: Record<string, unknown>;
   where?: MongoWhereNode;
   projection?: Record<string, 0 | 1>;
   sort?: Record<string, 1 | -1>;
   limit?: number;
   skip?: number;
+  pipeline?: Record<string, unknown>[] | string;
+  feishuFilter?: {
+    conjunction?: 'and' | 'or';
+    conditions?: Array<{
+      field?: string;
+      fieldName?: string;
+      field_name?: string;
+      operator: string;
+      value?: string | string[];
+    }>;
+  };
+  feishuSort?: string[];
   joins?: MongoQueryJoin[];
   tenantField?: string;
 };
@@ -68,4 +82,3 @@ export type MongoQueryRequest = {
 export type MongoQueryResponse =
   | { rows: Record<string, unknown>[] }
   | { count: number };
-

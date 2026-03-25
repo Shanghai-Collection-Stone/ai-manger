@@ -621,10 +621,14 @@ const ChatBIView = ({
 
     } catch (error) {
       console.error('Chat error:', error);
+      const reason =
+        error && typeof error === 'object' && typeof error.message === 'string'
+          ? error.message
+          : '未知错误';
       // Record error in the already-created AI message (not a new one)
       setMessages(prev => prev.map(msg =>
         msg.id === aiMsgId
-          ? { ...msg, errorText: '抱歉，我现在无法回答。请稍后再试。', isStreaming: false }
+          ? { ...msg, errorText: `抱歉，我现在无法回答。请稍后再试。(${reason})`, isStreaming: false }
           : msg
       ));
     } finally {
@@ -867,10 +871,12 @@ const ChatBIView = ({
       </div>
 
       {Number.isFinite(activeCanvasId) && (
-        <CanvasFeedView
-          canvasId={activeCanvasId}
-          onClose={() => setActiveCanvasId(null)}
-        />
+        <div className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh]">
+          <CanvasFeedView
+            canvasId={activeCanvasId}
+            onClose={() => setActiveCanvasId(null)}
+          />
+        </div>
       )}
       {activeDecisionCardId ? (
         <DecisionCardModal

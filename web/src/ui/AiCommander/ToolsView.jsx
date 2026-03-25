@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import CanvasFeedView from './CanvasFeedView';
@@ -347,6 +347,50 @@ const createTwoImageCollageFile = async (urlA, urlB) => {
   return file;
 };
 
+const createCoverFromCollageFile = async (collageUrl, text) => {
+  const collageImg = await loadImageElement(collageUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = COLLAGE_WIDTH;
+  canvas.height = COLLAGE_HEIGHT;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('COVER_CANVAS_CONTEXT_FAILED');
+
+  drawCover(ctx, collageImg, 0, 0, COLLAGE_WIDTH, COLLAGE_HEIGHT);
+
+  const plateTop = Math.floor(COLLAGE_HEIGHT * 0.33);
+  const plateHeight = Math.floor(COLLAGE_HEIGHT * 0.35);
+  const gradient = ctx.createLinearGradient(0, plateTop, 0, plateTop + plateHeight);
+  gradient.addColorStop(0, 'rgba(0,0,0,0.52)');
+  gradient.addColorStop(1, 'rgba(0,0,0,0.36)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, plateTop, COLLAGE_WIDTH, plateHeight);
+
+  const title = String(text || '').trim().slice(0, 16) || '示例文章';
+  const centerX = COLLAGE_WIDTH / 2;
+  const centerY = Math.floor(COLLAGE_HEIGHT * 0.52);
+  const fontSize = title.length > 8 ? 72 : 84;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.font = `900 ${fontSize}px Impact, 'Arial Black', sans-serif`;
+
+  ctx.lineWidth = 16;
+  ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+  ctx.strokeText(title, centerX, centerY);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(title, centerX, centerY);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error('COVER_BLOB_FAILED'));
+    }, 'image/jpeg', 0.92);
+  });
+
+  return new File([blob], `cover-${Date.now()}.jpg`, { type: 'image/jpeg' });
+};
+
 function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
   const [input, setInput] = useState('');
   const [open, setOpen] = useState(false);
@@ -444,7 +488,7 @@ function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
  * @param {Function} props.onBack - Callback when back button is clicked
  */
 const GalleryView = ({ onBack }) => {
-  const [tab, setTab] = useState('gallery'); // 'gallery' | 'chat' | 'collage'
+  const [tab, setTab] = useState('gallery'); // 'gallery' | 'chat' | 'collage' | 'cover'
   const [userId, setUserId] = useState('');
   const [groups, setGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
@@ -475,6 +519,10 @@ const GalleryView = ({ onBack }) => {
   const [collageSelectedIds, setCollageSelectedIds] = useState([]);
   const [collageGenerating, setCollageGenerating] = useState(false);
   const [collageMessage, setCollageMessage] = useState('');
+  const [coverSelectedId, setCoverSelectedId] = useState(null);
+  const [coverText, setCoverText] = useState('');
+  const [coverGenerating, setCoverGenerating] = useState(false);
+  const [coverMessage, setCoverMessage] = useState('');
 
   // Refs
   const imagesReqIdRef = useRef(0);
@@ -489,6 +537,11 @@ const GalleryView = ({ onBack }) => {
 
   const collageSourceImages = useMemo(
     () => (Array.isArray(images) ? images.filter((img) => img?.isCollage !== true) : []),
+    [images],
+  );
+
+  const collageImages = useMemo(
+    () => (Array.isArray(images) ? images.filter((img) => img?.isCollage === true) : []),
     [images],
   );
 
@@ -552,6 +605,8 @@ const GalleryView = ({ onBack }) => {
   useEffect(() => {
     setCollageSelectedIds([]);
     setCollageMessage('');
+    setCoverSelectedId(null);
+    setCoverMessage('');
   }, [selectedGroupId, tab]);
 
   // Infinite Scroll
@@ -684,6 +739,69 @@ const GalleryView = ({ onBack }) => {
     loadTags,
   ]);
 
+  const generateCover = useCallback(async () => {
+    if (coverGenerating) return;
+    const targetId = Number(coverSelectedId);
+    if (!Number.isFinite(targetId)) {
+      setCoverMessage('请先选择 1 张拼图素材');
+      return;
+    }
+    const source = collageImages.find((img) => img.id === targetId);
+    if (!source) {
+      setCoverMessage('拼图素材不存在，请刷新后重试');
+      return;
+    }
+
+    const text = String(coverText || '').trim();
+    if (!text) {
+      setCoverMessage('请先填写封面文字（文章类型）');
+      return;
+    }
+
+    setCoverGenerating(true);
+    setCoverMessage('');
+    try {
+      const file = await createCoverFromCollageFile(
+        source.url || source.thumbUrl,
+        text,
+      );
+      const mergedTags = Array.from(new Set([
+        ...((Array.isArray(source.tags) ? source.tags : [])),
+        '封面',
+        '拼图封面',
+        text,
+      ]));
+      const uid = String(userId || '').trim() || 'default';
+      const res = await api.uploadGalleryImages([file], {
+        userId: uid,
+        groupId: selectedGroupId,
+        tags: mergedTags.join(','),
+        description: `封面图：基于拼图#${source.id}，文字=${text}`,
+      });
+      if (Array.isArray(res?.images) && res.images.length > 0) {
+        setCoverMessage('封面图已生成并入库');
+        setCoverSelectedId(null);
+        await loadImages({ append: false });
+        await loadTags();
+      } else {
+        setCoverMessage('封面图上传失败，请稍后重试');
+      }
+    } catch (e) {
+      setCoverMessage(`封面生成失败：${e?.message || 'unknown error'}`);
+    } finally {
+      setCoverGenerating(false);
+    }
+  }, [
+    coverGenerating,
+    coverSelectedId,
+    coverText,
+    collageImages,
+    userId,
+    selectedGroupId,
+    loadImages,
+    loadTags,
+  ]);
+
   const currentGroup = groups.find(g => g.id === selectedGroupId);
 
   // Preview handlers
@@ -775,6 +893,12 @@ const GalleryView = ({ onBack }) => {
             >
               拼图
             </button>
+            <button
+              onClick={() => setTab('cover')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              封面
+            </button>
           </div>
         </div>
         {/* ChatBIView for gallery chat */}
@@ -821,6 +945,12 @@ const GalleryView = ({ onBack }) => {
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
+            </button>
+            <button
+              onClick={() => setTab('cover')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              封面
             </button>
           </div>
         </div>
@@ -941,6 +1071,126 @@ const GalleryView = ({ onBack }) => {
     );
   }
 
+  if (tab === 'cover') {
+    return (
+      <div className="h-full flex flex-col bg-white animate-fade-in">
+        <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
+          <button
+            onClick={onBack}
+            className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800"
+          >
+            <ChevronLeft size={22} />
+          </button>
+          <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
+            <button
+              onClick={() => setTab('chat')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              对话
+            </button>
+            <button
+              onClick={() => setTab('gallery')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              图库
+            </button>
+            <button
+              onClick={() => setTab('collage')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              拼图
+            </button>
+            <button
+              onClick={() => setTab('cover')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              封面
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+              <Type size={16} /> 拼图封面生成
+            </div>
+            <div className="text-xs text-slate-500 mt-1">
+              规则：先选 1 张拼图素材，再输入文章类型文字，系统会生成“拼图 + 浮动文字”封面图并入库。
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                value={coverText}
+                onChange={(e) => setCoverText(e.target.value)}
+                placeholder="封面文字（文章类型，如：生日布置）"
+                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs w-[240px] max-w-full"
+              />
+              <button
+                onClick={() => {
+                  setCoverSelectedId(null);
+                  setCoverMessage('');
+                }}
+                className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 text-slate-600 hover:bg-white"
+              >
+                清空选择
+              </button>
+              <button
+                onClick={() => void generateCover()}
+                disabled={coverGenerating || !Number.isFinite(Number(coverSelectedId)) || !String(coverText || '').trim()}
+                className="px-3 py-1.5 text-xs rounded-lg bg-black text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {coverGenerating ? '封面生成中...' : '生成封面并入库'}
+              </button>
+              <span className="text-xs text-slate-500">
+                已选 {Number.isFinite(Number(coverSelectedId)) ? 1 : 0}/1
+              </span>
+            </div>
+            {coverMessage ? (
+              <div className="mt-3 text-xs text-slate-600">{coverMessage}</div>
+            ) : null}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {collageImages.map((img) => {
+              const selected = Number(coverSelectedId) === Number(img.id);
+              return (
+                <button
+                  key={img.id}
+                  type="button"
+                  onClick={() => {
+                    setCoverSelectedId(img.id);
+                    setCoverMessage('');
+                  }}
+                  className={`aspect-square relative rounded-xl overflow-hidden border transition ${
+                    selected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-400'
+                  }`}
+                >
+                  <img
+                    src={img.thumbUrl || img.url}
+                    alt={img.description || `collage-${img.id}`}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-black/60 text-white text-[11px] flex items-center justify-center">
+                    {selected ? '✓' : ''}
+                  </div>
+                  <div className="absolute left-0 right-0 bottom-0 bg-black/55 text-white text-[10px] px-2 py-1 text-left truncate">
+                    拼图 #{img.id}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {collageImages.length === 0 && (
+            <div className="text-center text-xs text-slate-400 py-8 border border-dashed border-slate-200 rounded-xl">
+              当前分组暂无拼图素材，请先到“拼图”Tab生成后再制作封面。
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in">
       {/* Header */}
@@ -967,6 +1217,12 @@ const GalleryView = ({ onBack }) => {
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
+            </button>
+            <button
+              onClick={() => setTab('cover')}
+              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+            >
+              封面
             </button>
           </div>
         </div>
@@ -1311,10 +1567,12 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   if (view === 'canvas') {
     if (Number.isFinite(activeCanvasId)) {
       return (
-        <CanvasFeedView
-          canvasId={activeCanvasId}
-          onClose={() => setActiveCanvasId(null)}
-        />
+        <div className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh]">
+          <CanvasFeedView
+            canvasId={activeCanvasId}
+            onClose={() => setActiveCanvasId(null)}
+          />
+        </div>
       );
     }
     

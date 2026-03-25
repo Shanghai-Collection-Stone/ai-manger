@@ -493,13 +493,15 @@ export class GalleryController {
       collageHeight?: string;
       collageDpi?: string;
     },
+    @Req() req?: Request,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('No image files uploaded');
     }
-    const userId = String(body?.userId ?? '').trim();
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const userId = String(body?.userId ?? '').trim() || authScope.userId || undefined;
     if (!userId) throw new BadRequestException('userId is required');
-    const tenantId = String(body?.tenantId ?? '').trim() || undefined;
+    const tenantId = authScope.tenantId || String(body?.tenantId ?? '').trim() || undefined;
 
     const rawTags = String(body?.tags ?? '');
     const tags = rawTags

@@ -551,8 +551,14 @@ export class DataSourceSearchToolsService {
     tenantId?: string,
     scope?: { tenantId?: string; userId?: string },
   ): string | undefined {
-    const value = tenantId?.trim();
-    if (value) return value;
-    return scope?.tenantId;
+    const scoped = scope?.tenantId?.trim();
+    const requested = tenantId?.trim();
+    if (scoped) {
+      if (requested && requested !== scoped) {
+        throw new Error('TENANT_SCOPE_MISMATCH');
+      }
+      return scoped;
+    }
+    return requested;
   }
 }

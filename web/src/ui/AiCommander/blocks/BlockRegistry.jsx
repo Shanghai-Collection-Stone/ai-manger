@@ -19,6 +19,24 @@ const getNestedValue = (obj, path) => {
   return path.split('.').reduce((o, k) => o?.[k], obj);
 };
 
+/**
+ * @description 将任意值安全转数字
+ * @keyword-en safe parse number
+ */
+const toNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * @description 指标格式化（支持 wan）
+ * @keyword-en format metric
+ */
+const formatMetric = (value, format) => {
+  if (format === 'wan') return wan(value);
+  return `${value ?? 0}`;
+};
+
 /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Block 组件定义
    每个组件接收 { block, data, timeRange }
@@ -118,6 +136,54 @@ const StatCardBlock = ({ block, data }) => {
         {suffix && <span className="text-sm text-slate-500">{suffix}</span>}
       </div>
       {showProgress && <ProgressBar value={Number(val) || 0} />}
+    </div>
+  );
+};
+
+/* ─── stat_comparison_card ─── */
+
+/**
+ * @description 环比/同比指标卡（支持 current/last 自动计算变化率）
+ * @keyword-en stat comparison card block
+ */
+const StatComparisonCardBlock = ({ block, data }) => {
+  if (!data) return <LoadingBox height={96} />;
+  const source =
+    Array.isArray(data.rows) && data.rows.length > 0
+      ? data.rows[0]
+      : data;
+  const {
+    label = '对比指标',
+    currentPath = 'currentValue',
+    lastPath = 'lastValue',
+    deltaPath,
+    suffix = '',
+    format,
+    positiveIsGood = true,
+  } = block.props || {};
+
+  const current = toNum(getNestedValue(source, currentPath));
+  const last = toNum(getNestedValue(source, lastPath));
+  const delta = deltaPath ? toNum(getNestedValue(source, deltaPath)) : current - last;
+  const pct = last !== 0 ? (delta / Math.abs(last)) * 100 : 0;
+  const trendUp = pct >= 0;
+  const goodTrend = positiveIsGood ? trendUp : !trendUp;
+  const trendColor = goodTrend ? 'text-emerald-600' : 'text-rose-600';
+
+  return (
+    <div className={`${CARD} p-4`}>
+      <div className="text-xs text-slate-500 mb-1">{label}</div>
+      <div className="text-2xl font-bold text-slate-900 mb-1">
+        {formatMetric(current, format)}
+        {suffix && <span className="text-sm text-slate-500 ml-1">{suffix}</span>}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        上期 {formatMetric(last, format)}
+        {suffix && <span className="ml-0.5">{suffix}</span>}
+      </div>
+      <div className={`text-[11px] font-semibold mt-1 ${trendColor}`}>
+        {trendUp ? '↑' : '↓'} {Math.abs(pct).toFixed(1)}%
+      </div>
     </div>
   );
 };
@@ -987,6 +1053,7 @@ const BLOCK_REGISTRY = {
   ai_progress: AiProgressBlock,
   revenue_overview_card: RevenueOverviewBlock,
   stat_card: StatCardBlock,
+  stat_comparison_card: StatComparisonCardBlock,
   people_total_card: PeopleTotalBlock,
   people_pie_card: PeoplePieBlock,
   demand_channel_pie_card: DemandChannelPieBlock,

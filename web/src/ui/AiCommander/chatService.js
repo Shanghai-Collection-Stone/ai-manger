@@ -64,6 +64,17 @@ export const chatService = {
       },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        detail = await res.text();
+      } catch {
+        detail = '';
+      }
+      throw new Error(
+        `STREAM_HTTP_${res.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
+      );
+    }
     return res;
   },
 

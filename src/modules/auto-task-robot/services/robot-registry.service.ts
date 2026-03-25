@@ -43,10 +43,16 @@ export class RobotRegistryService {
     const raw = String(assignee ?? '').trim();
     if (!raw) return undefined;
     const m = /^robot:([a-z0-9_-]+)$/i.exec(raw);
-    if (!m) return undefined;
-    return String(m[1] ?? '')
-      .trim()
-      .toLowerCase();
+    if (m) {
+      return String(m[1] ?? '')
+        .trim()
+        .toLowerCase();
+    }
+    const byName = this.listRobots().find(
+      (r) => r.name.trim().toLowerCase() === raw.toLowerCase(),
+    );
+    if (byName) return byName.code;
+    return undefined;
   }
 
   async triggerIfRobotAssigned(input: {
@@ -76,6 +82,16 @@ export class RobotRegistryService {
         error: 'ROBOT_NOT_FOUND',
       };
     } catch (error) {
+      try {
+        await this.markTodoFailedForRobot(input.todo, robotCode, error);
+      } catch (syncErr) {
+        this.logRobot('sync_failed_state_error', {
+          todoId: input.todo.id,
+          robotCode,
+          error:
+            syncErr instanceof Error ? syncErr.message : String(syncErr),
+        });
+      }
       this.logRobot('handle_failed', {
         todoId: input.todo.id,
         robotCode,
@@ -148,6 +164,36 @@ export class RobotRegistryService {
         doneNote: `source=robot:${robotCode}`,
       });
     }
+  }
+
+  private async markTodoFailedForRobot(
+    todo: TodoEntity,
+    robotCode: string,
+    rawError: unknown,
+  ): Promise<void> {
+    const todoService = this.moduleRef.get(TodoService, { strict: false });
+    if (!todoService) return;
+    const robotName = this.findRobotName(robotCode) ?? `自动化代理(${robotCode})`;
+    const errMsg =
+      rawError instanceof Error ? rawError.message : String(rawError);
+    const reason = `${robotName}执行失败：${errMsg}`;
+
+    await todoService.update({
+      id: todo.id,
+      tenantId: todo.tenantId,
+      status: 'failed',
+      abnormalReason: reason,
+    });
+
+    await todoService.createItem({
+      todoId: todo.id,
+      tenantId: todo.tenantId,
+      title: `${robotName}执行失败`,
+      description: reason,
+      status: 'failed',
+      stage: '自动执行失败',
+      doneNote: errMsg.slice(0, 300),
+    });
   }
 
   private async handleXhsPublisher(todo: TodoEntity): Promise<void> {

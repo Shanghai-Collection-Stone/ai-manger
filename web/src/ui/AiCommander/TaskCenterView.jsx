@@ -1,10 +1,12 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useStore } from '@nanostores/react';
 import {
   Brush, Shield, Wrench, Megaphone, Plus, Clock, User, X, ClipboardList, Zap, UserCheck, AlertTriangle, CheckCircle2, ChevronRight, CircleDot, CheckCircle, XCircle, Timer
 } from 'lucide-react';
 import { $createTaskOpen, $taskCount, $tasksRefreshKey } from './store';
 import { getAdminToken } from '../Admin/adminApi';
+import { chatService } from './chatService';
+import CanvasFeedView from './CanvasFeedView';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -28,6 +30,152 @@ const renderMarkdown = (content) => {
 };
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
+
+/**
+ * @description 判断资源链接是否为图片。
+ * @keyword-en isImageResourceUrl
+ * @param {string} url
+ * @returns {boolean}
+ */
+const isImageResourceUrl = (url) => {
+  const s = String(url || '').trim().toLowerCase();
+  if (!s) return false;
+  return /(\.png|\.jpg|\.jpeg|\.gif|\.webp|\.bmp|\.svg)(\?|#|$)/i.test(s);
+};
+
+/**
+ * @description 规范化资源链接到可访问地址。
+ * @keyword-en normalizeResourceUrl
+ * @param {string} raw
+ * @returns {string}
+ */
+const normalizeResourceUrl = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^(uploads|uploads_thumbs|pages)\//i.test(s)) return `${API_BASE}/${s}`;
+  if (/^\/(uploads|uploads_thumbs|pages)\//i.test(s)) return `${API_BASE}${s}`;
+  return s;
+};
+
+/**
+ * @description 解析关联资源文本，提取Canvas、图片和链接资源。
+ * @keyword-en extractResourceItems
+ * @param {string} raw
+ * @returns {Array<{ id: string; kind: 'canvas' | 'image' | 'url' | 'text'; label: string; value: string; canvasId?: number }>}
+ */
+const extractResourceItems = (raw) => {
+  const text = String(raw || '').trim();
+  if (!text) return [];
+
+  /** @type {Array<{ id: string; kind: 'canvas' | 'image' | 'url' | 'text'; label: string; value: string; canvasId?: number }>} */
+  const items = [];
+  const seen = new Set();
+
+  const pushItem = (item) => {
+    const key = `${item.kind}:${item.value}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+
+  // 尝试从 JSON 资源提取结构化字段
+  try {
+    const maybe = JSON.parse(text);
+    if (maybe && typeof maybe === 'object') {
+      const obj = /** @type {Record<string, unknown>} */ (maybe);
+      const canvasIdNum = Number(obj.canvasId ?? obj.canvas_id ?? obj.canvas);
+      if (Number.isFinite(canvasIdNum) && canvasIdNum > 0) {
+        pushItem({
+          id: `canvas-${canvasIdNum}`,
+          kind: 'canvas',
+          label: `Canvas #${canvasIdNum}`,
+          value: String(canvasIdNum),
+          canvasId: canvasIdNum,
+        });
+      }
+      const oneUrl = normalizeResourceUrl(String(obj.url ?? obj.imageUrl ?? '').trim());
+      if (oneUrl) {
+        pushItem({
+          id: `url-${oneUrl}`,
+          kind: isImageResourceUrl(oneUrl) ? 'image' : 'url',
+          label: isImageResourceUrl(oneUrl) ? '图片资源' : '链接资源',
+          value: oneUrl,
+        });
+      }
+      const imageUrls = Array.isArray(obj.imageUrls) ? obj.imageUrls : [];
+      imageUrls.forEach((u, idx) => {
+        const normalized = normalizeResourceUrl(String(u || '').trim());
+        if (!normalized) return;
+        pushItem({
+          id: `image-${idx}-${normalized}`,
+          kind: 'image',
+          label: `图片 ${idx + 1}`,
+          value: normalized,
+        });
+      });
+    }
+  } catch {
+    // ignore json parse errors
+  }
+
+  const canvasRegex = /(?:canvas(?:id)?|画布)\s*[#：:\-]?\s*(\d+)/gi;
+  let canvasMatch = canvasRegex.exec(text);
+  while (canvasMatch) {
+    const n = Number(canvasMatch[1]);
+    if (Number.isFinite(n) && n > 0) {
+      pushItem({
+        id: `canvas-text-${n}`,
+        kind: 'canvas',
+        label: `Canvas #${n}`,
+        value: String(n),
+        canvasId: n,
+      });
+    }
+    canvasMatch = canvasRegex.exec(text);
+  }
+
+  const urlRegex = /(https?:\/\/[^\s,，;；]+)/gi;
+  let urlMatch = urlRegex.exec(text);
+  while (urlMatch) {
+    const normalized = normalizeResourceUrl(urlMatch[1]);
+    if (normalized) {
+      pushItem({
+        id: `url-text-${normalized}`,
+        kind: isImageResourceUrl(normalized) ? 'image' : 'url',
+        label: isImageResourceUrl(normalized) ? '图片资源' : '链接资源',
+        value: normalized,
+      });
+    }
+    urlMatch = urlRegex.exec(text);
+  }
+
+  const pathRegex = /(?:^|[\s,，;；])((?:\/?)(?:uploads|uploads_thumbs|pages)\/[^\s,，;；]+)/gi;
+  let pathMatch = pathRegex.exec(text);
+  while (pathMatch) {
+    const normalized = normalizeResourceUrl(pathMatch[1]);
+    if (normalized && isImageResourceUrl(normalized)) {
+      pushItem({
+        id: `path-image-${normalized}`,
+        kind: 'image',
+        label: '图片资源',
+        value: normalized,
+      });
+    }
+    pathMatch = pathRegex.exec(text);
+  }
+
+  if (items.length === 0) {
+    pushItem({
+      id: 'text-resource',
+      kind: 'text',
+      label: '文本资源',
+      value: text,
+    });
+  }
+
+  return items;
+};
 
 /* ─── Timeline Modal ─── */
 
@@ -242,13 +390,31 @@ const TaskCenterView = ({ currentUser }) => {
   const [activeCategory, setActiveCategory] = useState('all');
   const refreshKey = useStore($tasksRefreshKey);
   const isCreateModalOpen = useStore($createTaskOpen);
+
+  /**
+   * @description 统一任务类型到三分类，兼容历史类型值
+   * @keyword-en normalizeTaskType
+   * @param {string} rawType
+   * @returns {string}
+   */
+  const normalizeTaskType = useCallback((rawType) => {
+    const t = String(rawType || '').trim().toLowerCase();
+    if (t === 'auto_execute') return 'auto_execute';
+    if (t === 'offline_execute') return 'offline_execute';
+    if (t === 'other') return 'other';
+    if (['cleaning', 'security', 'repair', 'inspection'].includes(t)) {
+      return 'offline_execute';
+    }
+    return 'other';
+  }, []);
   
   // 新建任务表单状态
   const [newTask, setNewTask] = useState({
     title: '',
     desc: '',
-    type: 'cleaning',
-    assignee: ''
+    type: 'offline_execute',
+    assignee: '',
+    resource: ''
   });
 
   const [tasks, setTasks] = useState([]);
@@ -272,22 +438,78 @@ const TaskCenterView = ({ currentUser }) => {
 
   // Timeline modal state
   const [showTimeline, setShowTimeline] = useState(false);
+  const [showResourceModal, setShowResourceModal] = useState(false);
+  const [resourceCanvasViewerId, setResourceCanvasViewerId] = useState(null);
+  const [resourcePreview, setResourcePreview] = useState(null);
+  const [resourceCanvas, setResourceCanvas] = useState(null);
+  const [resourceCanvasLoading, setResourceCanvasLoading] = useState(false);
+
+  /**
+   * @description 关闭任务详情与其子弹窗
+   * @keyword-en closeTaskDetail
+   * @returns {void}
+   */
+  const closeTaskDetail = () => {
+    setSelectedTask(null);
+    setShowTimeline(false);
+    setShowResourceModal(false);
+    setResourceCanvasViewerId(null);
+  };
+
+  const resourceItems = useMemo(
+    () => extractResourceItems(selectedTask?.resource || ''),
+    [selectedTask?.resource],
+  );
+
+  useEffect(() => {
+    if (!showResourceModal) {
+      setResourcePreview(null);
+      setResourceCanvas(null);
+      setResourceCanvasLoading(false);
+      return;
+    }
+    setResourcePreview(resourceItems[0] || null);
+    setResourceCanvas(null);
+    setResourceCanvasLoading(false);
+  }, [showResourceModal, resourceItems]);
+
+  useEffect(() => {
+    if (!showResourceModal) return;
+    if (!resourcePreview || resourcePreview.kind !== 'canvas') return;
+    const canvasId = Number(resourcePreview.canvasId);
+    if (!Number.isFinite(canvasId) || canvasId <= 0) return;
+
+    let cancelled = false;
+    setResourceCanvasLoading(true);
+    setResourceCanvas(null);
+
+    chatService
+      .getCanvas(canvasId)
+      .then((res) => {
+        if (cancelled) return;
+        const canvas = res?.canvas && typeof res.canvas === 'object' ? res.canvas : null;
+        setResourceCanvas(canvas);
+      })
+      .finally(() => {
+        if (!cancelled) setResourceCanvasLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showResourceModal, resourcePreview]);
 
   const quickActions = [
     { id: 'all', icon: <ClipboardList size={16} className="text-slate-600" />, label: '全部' },
     { id: 'auto_execute', icon: <Zap size={16} className="text-purple-500" />, label: '自动执行' },
-    { id: 'cleaning', icon: <Brush size={16} className="text-orange-500" />, label: '保洁' },
-    { id: 'security', icon: <Shield size={16} className="text-blue-500" />, label: '安保' },
-    { id: 'repair', icon: <Wrench size={16} className="text-slate-600" />, label: '报修' },
-    { id: 'inspection', icon: <Megaphone size={16} className="text-red-500" />, label: '巡检' },
+    { id: 'offline_execute', icon: <Brush size={16} className="text-orange-500" />, label: '线下执行' },
+    { id: 'other', icon: <Shield size={16} className="text-blue-500" />, label: '其他' },
   ];
 
   const typeLabelMap = {
     auto_execute: '自动执行',
-    cleaning: '保洁调度',
-    security: '安保维序',
-    repair: '设备报修',
-    inspection: '店长巡检'
+    offline_execute: '线下执行',
+    other: '其他'
   };
 
   const priorityLabelMap = {
@@ -362,7 +584,7 @@ const TaskCenterView = ({ currentUser }) => {
           );
         })
         .map(todo => {
-        const type = todo.type || 'inspection';
+        const type = normalizeTaskType(todo.type);
         const statusInfo = todo.status === 'pending'
           ? { status: 'pending', statusText: '待接单' }
           : todo.status === 'in_progress'
@@ -382,6 +604,7 @@ const TaskCenterView = ({ currentUser }) => {
           title: todo.title || '未命名任务',
           desc: todo.description || '暂无描述',
           ...statusInfo,
+          owner: todo.userId || '系统',
           assigneeRaw: todo.assignee || '',
           assignee: todo.assigneeDisplayName || todo.assignee || '待分配',
           abnormalReason: todo.abnormalReason || '',
@@ -393,7 +616,8 @@ const TaskCenterView = ({ currentUser }) => {
           aiConsideration: todo.aiConsideration || '',
           decisionReason: todo.decisionReason || '',
           createdAt: todo.createdAt || '',
-          updatedAt: todo.updatedAt || ''
+          updatedAt: todo.updatedAt || '',
+          resource: todo.resource || ''
         };
       });
       setTasks(mapped);
@@ -448,7 +672,7 @@ const TaskCenterView = ({ currentUser }) => {
         }
       })
       .catch(() => {});
-  }, [authUserName, authDisplayName, roleScope]);
+  }, [authUserName, authDisplayName, roleScope, normalizeTaskType]);
 
   useEffect(() => {
     if (!authUserName && !authDisplayName) return;
@@ -465,10 +689,11 @@ const TaskCenterView = ({ currentUser }) => {
         userId: authUserName || authDisplayName || newTask.assignee || 'system',
         title: newTask.title,
         description: newTask.desc || '手动创建的任务工单',
-        type: newTask.type,
+        type: String(newTask.assignee || '').startsWith('robot:') ? 'auto_execute' : newTask.type,
         assignee: roleScope === 'all'
           ? newTask.assignee || undefined
           : authDisplayName || authUserName || undefined,
+        resource: (newTask.resource || '').trim() || undefined,
         aiConsideration: '人工创建待办任务',
         decisionReason: '来自待办管理系统创建',
         aiPlan: '等待负责人处理并反馈结果'
@@ -484,7 +709,7 @@ const TaskCenterView = ({ currentUser }) => {
         await loadTodos();
       }
       $createTaskOpen.set(false);
-      setNewTask({ title: '', desc: '', type: 'cleaning', assignee: '' });
+      setNewTask({ title: '', desc: '', type: 'offline_execute', assignee: '', resource: '' });
     } finally {
       setIsCreating(false);
     }
@@ -593,7 +818,7 @@ const TaskCenterView = ({ currentUser }) => {
             onClick={() => setActiveTab('abnormal')}
             className={`pb-2 text-sm font-bold transition-colors relative ${activeTab === 'abnormal' ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}
           >
-            异常工单
+            异常工单 ({abnormalCount})
             {activeTab === 'abnormal' && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-slate-900 rounded-full" />}
           </button>
         </div>
@@ -613,6 +838,7 @@ const TaskCenterView = ({ currentUser }) => {
               key={task.id} 
               onClick={() => {
                 setSelectedTask(task);
+                setShowResourceModal(false);
                 setShowAcceptInDetail(false);
                 setShowAbnormalInput(false);
                 setAbnormalReasonText('');
@@ -646,7 +872,7 @@ const TaskCenterView = ({ currentUser }) => {
                 <div className="flex flex-col items-end gap-2 min-w-[80px]">
                   <div className="flex items-center gap-1 text-[11px] text-slate-600">
                     <User size={12} className="text-slate-400" />
-                    <span className="line-clamp-1">{task.assignee}</span>
+                    <span className="line-clamp-1">{task.owner || '-'}</span>
                   </div>
                   {task.eta && (
                     <span className="flex items-center text-[11px] text-slate-400">
@@ -691,20 +917,26 @@ const TaskCenterView = ({ currentUser }) => {
                   <select 
                     value={newTask.type}
                     onChange={(e) => setNewTask({...newTask, type: e.target.value})}
+                    disabled={String(newTask.assignee || '').startsWith('robot:')}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition appearance-none"
                   >
-                    <option value="cleaning">保洁调度</option>
-                    <option value="security">安保维序</option>
-                    <option value="repair">设备报修</option>
-                    <option value="inspection">店长巡检</option>
                     <option value="auto_execute">自动执行</option>
+                    <option value="offline_execute">线下执行</option>
+                    <option value="other">其他</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">指派给</label>
                   <select
                     value={newTask.assignee}
-                    onChange={(e) => setNewTask({...newTask, assignee: e.target.value})}
+                    onChange={(e) => {
+                      const nextAssignee = e.target.value;
+                      setNewTask({
+                        ...newTask,
+                        assignee: nextAssignee,
+                        type: String(nextAssignee || '').startsWith('robot:') ? 'auto_execute' : newTask.type,
+                      });
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition appearance-none"
                   >
                     <option value="">请选择指派对象</option>
@@ -715,6 +947,17 @@ const TaskCenterView = ({ currentUser }) => {
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">关联资源 (选填)</label>
+                <input
+                  type="text"
+                  value={newTask.resource}
+                  onChange={(e) => setNewTask({...newTask, resource: e.target.value})}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
+                  placeholder="例如：店铺A-B区监控、https://..."
+                />
               </div>
 
               <div>
@@ -742,7 +985,7 @@ const TaskCenterView = ({ currentUser }) => {
       {/* Task Detail Modal */}
       {selectedTask && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedTask(null)} />
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeTaskDetail} />
           <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md shadow-2xl relative z-10 animate-fade-in-up overflow-hidden max-h-[85vh] flex flex-col">
             {/* Header */}
             <div className="p-5 border-b border-slate-100 flex justify-between items-start bg-slate-50/50 flex-shrink-0">
@@ -760,7 +1003,7 @@ const TaskCenterView = ({ currentUser }) => {
                   </span>
                 </div>
               </div>
-              <button onClick={() => setSelectedTask(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100 transition flex-shrink-0">
+              <button onClick={closeTaskDetail} className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100 transition flex-shrink-0">
                 <X size={20} />
               </button>
             </div>
@@ -824,12 +1067,19 @@ const TaskCenterView = ({ currentUser }) => {
               </div>
 
               {/* Meta Info */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-slate-50 rounded-xl p-3">
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">负责人</div>
                   <div className="flex items-center gap-1.5 text-sm text-slate-700">
                     <User size={14} className="text-slate-400" />
-                    <span>{selectedTask.assignee}</span>
+                    <span>{selectedTask.owner || '-'}</span>
+                  </div>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3">
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">接单人</div>
+                  <div className="flex items-center gap-1.5 text-sm text-slate-700">
+                    <User size={14} className="text-slate-400" />
+                    <span>{selectedTask.assignee || '待分配'}</span>
                   </div>
                 </div>
                 <div className="bg-slate-50 rounded-xl p-3">
@@ -839,6 +1089,20 @@ const TaskCenterView = ({ currentUser }) => {
                     <span className="text-xs">{selectedTask.eta || '无'}</span>
                   </div>
                 </div>
+              </div>
+
+              <div className="bg-slate-50 rounded-xl p-3">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">关联资源</div>
+                {selectedTask.resource ? (
+                  <button
+                    onClick={() => setShowResourceModal(true)}
+                    className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                  >
+                    查看关联资源
+                  </button>
+                ) : (
+                  <div className="text-sm text-slate-400">暂无关联资源</div>
+                )}
               </div>
 
               {/* Timeline Button */}
@@ -1112,6 +1376,120 @@ const TaskCenterView = ({ currentUser }) => {
           task={selectedTask}
           onClose={() => setShowTimeline(false)}
         />
+      )}
+
+      {showResourceModal && selectedTask && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowResourceModal(false)} />
+          <div className="relative w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50/50">
+              <h3 className="text-sm font-semibold text-slate-800">关联资源</h3>
+              <button
+                onClick={() => setShowResourceModal(false)}
+                className="p-1.5 rounded-full hover:bg-slate-200 transition text-slate-400 hover:text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-4 grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4 max-h-[70vh] overflow-y-auto">
+              <div className="space-y-2">
+                {resourceItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setResourcePreview(item)}
+                    className={`w-full text-left rounded-xl border px-3 py-2 transition ${
+                      resourcePreview?.id === item.id
+                        ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                        : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold">{item.label}</div>
+                    <div className="text-[11px] text-slate-500 truncate mt-1">{item.value}</div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 min-h-[260px]">
+                {!resourcePreview ? (
+                  <div className="text-sm text-slate-400">暂无可预览资源</div>
+                ) : resourcePreview.kind === 'image' ? (
+                  <div className="space-y-3">
+                    <div className="w-full h-[320px] bg-white rounded-lg border border-slate-100 overflow-hidden flex items-center justify-center">
+                      <img
+                        src={resourcePreview.value}
+                        alt="resource-preview"
+                        className="max-w-full max-h-full object-contain"
+                      />
+                    </div>
+                    <a
+                      href={resourcePreview.value}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                    >
+                      打开原图
+                    </a>
+                  </div>
+                ) : resourcePreview.kind === 'canvas' ? (
+                  <div className="space-y-3">
+                    <div className="text-sm font-semibold text-slate-800">
+                      Canvas #{resourcePreview.canvasId}
+                    </div>
+                    {resourceCanvasLoading ? (
+                      <div className="text-sm text-slate-500">加载 Canvas 中...</div>
+                    ) : resourceCanvas ? (
+                      <>
+                        <div className="text-sm text-slate-700">
+                          主题：{resourceCanvas.topic || '未命名'}
+                        </div>
+                        <div className="text-sm text-slate-700">
+                          状态：{resourceCanvas.status || 'unknown'}
+                        </div>
+                        <div className="text-sm text-slate-700">
+                          文章数：{Array.isArray(resourceCanvas.articles) ? resourceCanvas.articles.length : 0}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setResourceCanvasViewerId(resourcePreview.canvasId || null)}
+                          className="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                        >
+                          打开 Canvas 弹窗
+                        </button>
+                      </>
+                    ) : (
+                      <div className="text-sm text-amber-600">未找到对应 Canvas 数据</div>
+                    )}
+                  </div>
+                ) : resourcePreview.kind === 'url' ? (
+                  <div className="space-y-3">
+                    <div className="text-sm text-slate-700 break-all">{resourcePreview.value}</div>
+                    <a
+                      href={resourcePreview.value}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                    >
+                      打开链接
+                    </a>
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-700 whitespace-pre-wrap break-all">
+                    {resourcePreview.value}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resourceCanvasViewerId && (
+        <div className="fixed inset-0 z-[95] bg-white">
+          <CanvasFeedView
+            canvasId={resourceCanvasViewerId}
+            onClose={() => setResourceCanvasViewerId(null)}
+          />
+        </div>
       )}
     </div>
   );

@@ -96,6 +96,8 @@ export class TodoService {
   async create(input: TodoCreateInput): Promise<TodoEntity> {
     const now = new Date();
     const id = await this.nextId();
+    const normalizedType = this.normalizeTodoType(input.type, input.assignee);
+    const resource = String(input.resource ?? '').trim() || undefined;
     const doc: TodoEntity = {
       _id: new ObjectId(),
       id,
@@ -103,7 +105,8 @@ export class TodoService {
       userId: input.userId,
       title: input.title,
       description: input.description,
-      type: input.type,
+      resource,
+      type: normalizedType,
       assignee: input.assignee,
       aiConsideration: input.aiConsideration,
       decisionReason: input.decisionReason,
@@ -124,11 +127,28 @@ export class TodoService {
    * @since 2026-01-27
    */
   async update(input: TodoUpdateInput): Promise<TodoEntity | null> {
+    const existing = await this.todos.findOne({
+      id: input.id,
+      ...this.buildTenantFilter(input.tenantId),
+    });
+    if (!existing) return null;
+
     const now = new Date();
     const upd: Record<string, unknown> = { updatedAt: now };
     for (const [k, v] of Object.entries(input)) {
       if (k === 'id') continue;
       if (typeof v !== 'undefined') upd[k] = v;
+    }
+    const nextAssignee =
+      typeof input.assignee !== 'undefined' ? input.assignee : existing.assignee;
+    const nextType = this.normalizeTodoType(
+      typeof input.type !== 'undefined' ? input.type : existing.type,
+      nextAssignee,
+    );
+    upd.type = nextType;
+    if (typeof input.resource !== 'undefined') {
+      const r = String(input.resource ?? '').trim();
+      upd.resource = r || undefined;
     }
     const res = await this.todos.findOneAndUpdate(
       { id: input.id, ...this.buildTenantFilter(input.tenantId) },
@@ -309,22 +329,67 @@ export class TodoService {
     assignee: string,
     tenantId?: string,
   ): Promise<TodoEntity | null> {
+    const current = await this.todos.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
+    if (!current) return null;
+
     const now = new Date();
+    const nextType = this.normalizeTodoType(current.type, assignee);
     const res = await this.todos.findOneAndUpdate(
       { id, ...this.buildTenantFilter(tenantId) },
-      { $set: { assignee, status: 'in_progress' as const, updatedAt: now } },
+      {
+        $set: {
+          assignee,
+          type: nextType,
+          status: 'in_progress' as const,
+          updatedAt: now,
+        },
+      },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;
   }
 
   /**
+   * @description 统一归一化任务类型：自动执行/线下执行/其他。
+   * @param {string} type - 原始类型。
+   * @param {string} assignee - 接单人。
+   * @returns {string} 归一化类型。
+   * @keyword-en normalize todo type
+   */
+  private normalizeTodoType(type?: string, assignee?: string): string {
+    const assigneeText = String(assignee ?? '').trim().toLowerCase();
+    const isRobot = assigneeText.startsWith('robot:');
+    if (isRobot) return 'auto_execute';
+
+    const t = String(type ?? '').trim().toLowerCase();
+    if (!t) return 'other';
+    if (['auto_execute', '自动执行', 'auto'].includes(t)) return 'auto_execute';
+    if (
+      [
+        'offline_execute',
+        '线下执行',
+        'cleaning',
+        'security',
+        'repair',
+        'inspection',
+      ].includes(t)
+    ) {
+      return 'offline_execute';
+    }
+    if (['other', '其他'].includes(t)) return 'other';
+    return 'other';
+  }
+
+  /**
    * @description 构造租户过滤条件
    * @keyword-en build tenant filter
    */
-  private buildTenantFilter(tenantId?: string): Record<string, unknown> {
-    if (typeof tenantId === 'undefined') return {};
-    const value = tenantId.trim();
+  private buildTenantFilter(tenantId?: string | null): Record<string, unknown> {
+    if (typeof tenantId === 'undefined' || tenantId === null) return {};
+    const value = String(tenantId).trim();
     if (!value) return { tenantId: { $exists: false } };
     return { tenantId: value };
   }

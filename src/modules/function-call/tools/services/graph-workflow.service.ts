@@ -81,6 +81,47 @@ export class GraphWorkflowFunctionCallService {
     }
   }
 
+  private resolveScopedUserId(
+    userId: string | undefined,
+    scope?: { tenantId?: string; userId?: string },
+  ): string {
+    const scoped = scope?.userId?.trim();
+    const requested = typeof userId === 'string' ? userId.trim() : '';
+    if (scoped) {
+      // 作用域用户是硬限制：当工具参数与作用域冲突时，强制使用作用域用户而不是抛错中断流程
+      return scoped;
+    }
+    return requested || 'default';
+  }
+
+  private resolveScopedOptionalUserId(
+    userId: string | undefined,
+    scope?: { tenantId?: string; userId?: string },
+  ): string | undefined {
+    const scoped = scope?.userId?.trim();
+    const requested = typeof userId === 'string' ? userId.trim() : '';
+    if (scoped) {
+      // 作用域用户优先，参数仅作补充
+      return scoped;
+    }
+    return requested || undefined;
+  }
+
+  private resolveScopedGalleryUserId(
+    galleryUserId: string | undefined,
+    finalUserId: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): string {
+    const scoped = scope?.userId?.trim();
+    const requested =
+      typeof galleryUserId === 'string' ? galleryUserId.trim() : '';
+    if (scoped) {
+      // 图库 owner 也必须受同一作用域约束
+      return scoped;
+    }
+    return requested || finalUserId;
+  }
+
   /**
    * @description 返回 Graph 工作流相关的工具句柄集合（topic_orchestrate）。
    * @param {(msg: string) => void} [streamWriter] - 可选的流式日志输出。
@@ -105,15 +146,21 @@ export class GraphWorkflowFunctionCallService {
         minImageScore,
       }) => {
         if (streamWriter) streamWriter('[Graph] Orchestrating topic workflow');
+        const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalGalleryUserId = this.resolveScopedGalleryUserId(
+          galleryUserId,
+          finalUserId,
+          scope,
+        );
 
         const dedupKey = this.buildTopicOrchestrateDedupKey({
-          userId,
+          userId: finalUserId,
           platform,
           topic,
           outline,
           style,
           count,
-          galleryUserId,
+          galleryUserId: finalGalleryUserId,
           galleryGroupId,
           minImageScore,
         });
@@ -136,11 +183,12 @@ export class GraphWorkflowFunctionCallService {
 
         const runPromise = (async () => {
           const gen = await this.articles.generateToCanvas({
-            userId,
+            userId: finalUserId,
+            tenantId: scope?.tenantId,
             platform,
             topic,
             count,
-            galleryUserId,
+            galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,
           });
@@ -199,7 +247,7 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Topic Orchestration Tool. Generates up to 5 sample articles with images in Canvas based on user requirements and provided data.',
         schema: z.object({
-          userId: z.string().describe('Target user id'),
+          userId: z.string().describe('Target user id (required)'),
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
           outline: z
@@ -241,8 +289,14 @@ export class GraphWorkflowFunctionCallService {
         intervalMinutes,
         concurrency,
         callbackUrl,
-        payload,
+          payload,
       }) => {
+        const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalGalleryUserId = this.resolveScopedGalleryUserId(
+          galleryUserId,
+          finalUserId,
+          scope,
+        );
         const toolDebug =
           process.env.TOOL_DEBUG === '1'
             ? true
@@ -255,10 +309,10 @@ export class GraphWorkflowFunctionCallService {
               ? Object.keys(payload).slice(0, 50)
               : [];
           console.log('[Tool.canvas_execute] args', {
-            userId,
+            userId: finalUserId,
             canvasId,
             platform,
-            galleryUserId,
+            galleryUserId: finalGalleryUserId,
             galleryGroupId,
             plannedAtStart,
             intervalMinutes,
@@ -279,10 +333,10 @@ export class GraphWorkflowFunctionCallService {
           );
         }
         const res = await this.batch.runFromCanvas({
-          userId,
+          userId: finalUserId,
           canvasId: canvasIdNum,
           platform,
-          galleryUserId,
+          galleryUserId: finalGalleryUserId,
           galleryGroupId,
           plannedAtStart,
           intervalMinutes,
@@ -350,16 +404,22 @@ export class GraphWorkflowFunctionCallService {
         temperature,
         taskCount,
       }) => {
+        const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalGalleryUserId = this.resolveScopedGalleryUserId(
+          galleryUserId,
+          finalUserId,
+          scope,
+        );
         const canvasIdNum = Number(canvasId);
         if (!Number.isFinite(canvasIdNum)) {
           return JSON.stringify({ ok: false, error: 'CANVAS_ID_INVALID' });
         }
 
         console.log('[xhs_batch_publish] payload', {
-          userId,
+          userId: finalUserId,
           canvasId: canvasIdNum,
           platform,
-          galleryUserId,
+          galleryUserId: finalGalleryUserId,
           galleryGroupId,
           minImageScore,
           plannedAtStart,
@@ -375,10 +435,10 @@ export class GraphWorkflowFunctionCallService {
 
         try {
           const res = await this.batch.openAndStartXhsFromCanvas({
-            userId,
+            userId: finalUserId,
             canvasId: canvasIdNum,
             platform,
-            galleryUserId,
+            galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,
             plannedAtStart,
@@ -472,6 +532,12 @@ export class GraphWorkflowFunctionCallService {
         callbackUrl,
         payload,
       }) => {
+        const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalGalleryUserId = this.resolveScopedGalleryUserId(
+          galleryUserId,
+          finalUserId,
+          scope,
+        );
         let canvasIdNum = Number(canvasId);
         let canvas: unknown = undefined;
         let needFields: string[] = [];
@@ -482,11 +548,12 @@ export class GraphWorkflowFunctionCallService {
             );
 
           const gen = await this.articles.generateToCanvas({
-            userId,
+            userId: finalUserId,
+            tenantId: scope?.tenantId,
             platform,
             topic,
             count,
-            galleryUserId,
+            galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,
           });
@@ -528,10 +595,10 @@ export class GraphWorkflowFunctionCallService {
           streamWriter('[Graph] Executing canvas workflow (batch publish)');
 
         const res = await this.batch.runFromCanvas({
-          userId,
+          userId: finalUserId,
           canvasId: canvasIdNum,
           platform,
-          galleryUserId,
+          galleryUserId: finalGalleryUserId,
           galleryGroupId,
           plannedAtStart,
           intervalMinutes,
@@ -682,6 +749,10 @@ export class GraphWorkflowFunctionCallService {
           if (!c) {
             return JSON.stringify({ ok: false, error: 'CANVAS_NOT_FOUND' });
           }
+          const scopedUserId = scope?.userId?.trim();
+          if (scopedUserId && c.userId !== scopedUserId) {
+            return JSON.stringify({ ok: false, error: 'CANVAS_SCOPE_FORBIDDEN' });
+          }
 
           const articles = Array.isArray(c.articles) ? c.articles : [];
           const articlesSummary = articles.map((a, idx) => ({
@@ -754,10 +825,7 @@ export class GraphWorkflowFunctionCallService {
 
     const galleryListTags = tool(
       async ({ userId, groupId, limit }) => {
-        const uid =
-          typeof userId === 'string' && userId.trim().length > 0
-            ? userId.trim()
-            : undefined;
+        const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
           typeof groupId === 'number' && Number.isFinite(groupId)
@@ -787,10 +855,7 @@ export class GraphWorkflowFunctionCallService {
 
     const gallerySearchImages = tool(
       async ({ userId, groupId, tags, limit, matchCollage }) => {
-        const uid =
-          typeof userId === 'string' && userId.trim().length > 0
-            ? userId.trim()
-            : undefined;
+        const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
           typeof groupId === 'number' && Number.isFinite(groupId)

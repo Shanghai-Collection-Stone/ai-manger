@@ -14,6 +14,7 @@ export class GraphController {
     @Body()
     body: {
       userId?: string;
+      tenantId?: string;
       platform?: string;
       topic?: string;
       outline?: Record<string, unknown>;
@@ -32,6 +33,10 @@ export class GraphController {
 
     const res = await this.articles.generateToCanvas({
       userId,
+      tenantId:
+        typeof body?.tenantId === 'string' && body.tenantId.trim().length > 0
+          ? body.tenantId.trim()
+          : undefined,
       platform:
         typeof body?.platform === 'string' ? body.platform.trim() : undefined,
       topic: typeof body?.topic === 'string' ? body.topic.trim() : undefined,

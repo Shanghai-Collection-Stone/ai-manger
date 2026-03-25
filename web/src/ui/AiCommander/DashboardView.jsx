@@ -8,8 +8,8 @@ import { LoadingBox, ErrorBox } from './blocks/shared.jsx';
 const PRESET_FETCHERS = api.queryFetchers;
 
 /**
- * @description 按当前 Tab 的 blocks 收集所有 query key 并批量请求数据（兼容预置接口 + config.queries Mongo 查询）
- * @keyword-en use tab data batch fetch hook with mongo query support
+ * @description 按当前 Tab 的 blocks 收集所有 query key 并批量请求数据（兼容预置接口 + config.queries 多数据源查询）
+ * @keyword-en use tab data batch fetch hook with multi-source query support
  */
 function useTabData(tab, timeRange, configQueries) {
   const [dataMap, setDataMap] = useState({});
@@ -33,10 +33,10 @@ function useTabData(tab, timeRange, configQueries) {
 
     Promise.all(
       queryKeys.map((key) => {
-        // 优先 config.queries 中定义的 Mongo 查询
+        // 优先 config.queries 中定义的查询（Mongo/飞书 + transformJs）
         const mqDef = configQueries?.[key];
         if (mqDef) {
-          return api.fetchMongoQuery(mqDef, timeRange).then((d) => ({ key, data: d }));
+          return api.fetchDashboardQuery(mqDef, timeRange).then((d) => ({ key, data: d }));
         }
         // 回退到预置 fetcher
         const fetcher = PRESET_FETCHERS[key];
@@ -53,7 +53,7 @@ function useTabData(tab, timeRange, configQueries) {
       .catch((e) => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [tab?.id, timeRange]);
+  }, [tab?.id, timeRange, configQueries]);
 
   return { dataMap, loading, error };
 }

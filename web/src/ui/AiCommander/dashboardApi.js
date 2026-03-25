@@ -18,6 +18,38 @@ function getToken() {
 }
 
 /**
+ * @description 执行前端 JS 数据转换（用于看板 query 自定义规则）
+ * @keyword-en run dashboard query transform js
+ */
+function runTransformJs(script, data, context) {
+  const code = typeof script === 'string' ? script.trim() : '';
+  if (!code) return data;
+
+  // 1) 支持传入函数表达式： (data, ctx) => ...
+  try {
+    const asFn = new Function(
+      'data',
+      'context',
+      `"use strict"; const __fn = (${code}); return typeof __fn === 'function' ? __fn(data, context) : data;`,
+    );
+    const out = asFn(data, context);
+    return typeof out === 'undefined' ? data : out;
+  } catch {
+    // ignore and fallback to function body mode
+  }
+
+  // 2) 支持传入函数体：可直接 return 新数据
+  try {
+    const asBody = new Function('data', 'context', `"use strict"; ${code}`);
+    const out = asBody(data, context);
+    return typeof out === 'undefined' ? data : out;
+  } catch (err) {
+    console.warn('[dashboardApi] transformJs failed:', err);
+    return data;
+  }
+}
+
+/**
  * @description 通用数据接口请求（预置 /dashboard/* 路由）
  * @keyword-en fetch dashboard data api
  */
@@ -87,19 +119,30 @@ export function timeRangeToWhere(timeField, timeRange) {
 /* ━━━ 通用 Mongo 查询 ━━━ */
 
 /**
- * @description 执行 config.queries 中定义的 Mongo 查询（POST /mongo/query）
- * @keyword-en fetch mongo query from dashboard config
+ * @description 执行 config.queries 中定义的查询（支持 Mongo / 飞书），并可做前端 JS 转换
+ * @keyword-en fetch dashboard query from config
  */
-export async function fetchMongoQuery(queryDef, timeRange) {
+export async function fetchDashboardQuery(queryDef, timeRange) {
   const token = getToken();
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
+  const sourceType = queryDef.sourceType || (String(queryDef.sourceCode || '').includes('feishu') ? 'feishu-bitable' : 'mongo');
+
   const body = {
-    collection: queryDef.collection,
+    collection: queryDef.collection || queryDef.tableId,
     mode: queryDef.mode || 'list',
+    sourceType,
+    sourceCode: queryDef.sourceCode,
+    filter: queryDef.filter,
+    pipeline: queryDef.pipeline,
+    joins: queryDef.joins,
+    tenantField: queryDef.tenantField,
+    feishuFilter: queryDef.feishuFilter,
+    feishuSort: queryDef.feishuSort,
     sort: queryDef.sort,
     limit: queryDef.limit,
+    skip: queryDef.skip,
     projection: queryDef.projection,
   };
 
@@ -120,8 +163,19 @@ export async function fetchMongoQuery(queryDef, timeRange) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Mongo query error: ${res.status}`);
-  return res.json();
+  const raw = await res.json();
+  return runTransformJs(queryDef.transformJs || queryDef.transform, raw, {
+    queryDef,
+    timeRange,
+    sourceType,
+  });
 }
+
+/**
+ * @description 兼容旧命名（历史调用仍可用）
+ * @keyword-en backward compatible mongo query alias
+ */
+export const fetchMongoQuery = fetchDashboardQuery;
 
 /* ━━━ 预置 Dashboard 数据接口 ━━━ */
 

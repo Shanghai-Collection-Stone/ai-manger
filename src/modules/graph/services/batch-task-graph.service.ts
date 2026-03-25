@@ -4,7 +4,11 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { mkdirSync } from 'fs';
+import { promises as fs } from 'fs';
 import * as z from 'zod';
+import { extname, join } from 'path';
 import {
   BaseMessage,
   HumanMessage,
@@ -14,6 +18,7 @@ import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { BatchTaskService } from '../../batch-task/services/batch-task.service.js';
 import { CanvasService } from '../../canvas/services/canvas.service.js';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
+import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { AgentConfig } from '../../ai-agent/types/agent.types.js';
 import { TextFormatService } from '../../format/services/format.service';
@@ -35,6 +40,34 @@ const ZXhsDraft = z.object({
   tags: z.array(z.string()).optional(),
   imageQuery: z.string().optional(),
 });
+
+const COLLAGE_WIDTH = 640;
+const COLLAGE_HEIGHT = 853;
+const COLLAGE_DPI = 96;
+
+type JimpModuleLike = {
+  Jimp: {
+    read: (input: string) => Promise<unknown>;
+    rgbaToInt?: (r: number, g: number, b: number, a: number) => number;
+  };
+  loadFont?: (font: unknown) => Promise<unknown>;
+  HorizontalAlign?: {
+    LEFT?: number;
+    CENTER?: number;
+    RIGHT?: number;
+  };
+  VerticalAlign?: {
+    TOP?: number;
+    MIDDLE?: number;
+    BOTTOM?: number;
+  };
+  FONT_SANS_64_WHITE?: unknown;
+  FONT_SANS_64_BLACK?: unknown;
+  FONT_SANS_32_WHITE?: unknown;
+  FONT_SANS_32_BLACK?: unknown;
+};
+
+let jimpModulePromise: Promise<unknown> | null = null;
 
 @Injectable()
 export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
@@ -153,6 +186,271 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       .join('\n')
       .trim();
     return trimmed;
+  }
+
+  /**
+   * @description 判断发布链路是否明确要求复用历史拼图。
+   * @param {string} text - 语义文本。
+   * @returns {boolean} 是否复用历史拼图。
+   * @keyword-en publish historical collage intent
+   */
+  private shouldUseHistoricalCollage(text: string): boolean {
+    const s = String(text || '').trim();
+    if (!s) return false;
+    return /历史拼图|已有拼图|之前拼图|拼图库|复用拼图|历史素材拼图/i.test(s);
+  }
+
+  /**
+   * @description 提取封面浮动文案（文章类型）。
+   * @param {string} title - 发布标题。
+   * @param {string[]} tags - 标签。
+   * @returns {string} 封面文案。
+   * @keyword-en derive cover text
+   */
+  private deriveCoverText(title: string, tags?: string[]): string {
+    const firstTag = Array.isArray(tags)
+      ? tags
+          .map((x) => String(x ?? '').trim())
+          .find((x) => x.length > 0)
+      : undefined;
+    if (firstTag) return firstTag.slice(0, 14);
+    const clean = String(title || '').replace(/[\s\-_:：]+/g, ' ').trim();
+    if (!clean) return '发布封面';
+    return clean.slice(0, 14);
+  }
+
+  /**
+   * @description 映射图库 URL 到本地绝对路径。
+   * @param {string} url - 图库URL。
+   * @returns {string | undefined} 本地路径。
+   * @keyword-en resolve local image path from gallery url
+   */
+  private resolveLocalPathFromGalleryUrl(url?: string): string | undefined {
+    const s = String(url ?? '').trim();
+    if (!s || /^https?:\/\//i.test(s)) return undefined;
+    if (s.startsWith('/static/uploads/')) {
+      return join(process.cwd(), 'public', 'uploads', s.slice('/static/uploads/'.length));
+    }
+    if (s.startsWith('/static/uploads_thumbs/')) {
+      return join(
+        process.cwd(),
+        'public',
+        'uploads_thumbs',
+        s.slice('/static/uploads_thumbs/'.length),
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * @description 读取 Jimp 模块。
+   * @returns {Promise<JimpModuleLike>} Jimp 模块。
+   * @keyword-en load jimp module
+   */
+  private async getJimpModule(): Promise<JimpModuleLike> {
+    if (!jimpModulePromise) {
+      jimpModulePromise = import('jimp') as Promise<unknown>;
+    }
+    return (await jimpModulePromise) as JimpModuleLike;
+  }
+
+  /**
+   * @description 创建双图动态拼图（640x853）。
+   * @param {string} pathA - 图片A本地路径。
+   * @param {string} pathB - 图片B本地路径。
+   * @returns {Promise<{ fileName: string; absPath: string; url: string }>} 文件信息。
+   * @keyword-en create publish dynamic collage
+   */
+  private async createDynamicCollageFile(pathA: string, pathB: string): Promise<{
+    fileName: string;
+    absPath: string;
+    url: string;
+  }> {
+    const mod = await this.getJimpModule();
+    const JimpCtor = mod.Jimp as unknown as {
+      read: (input: string) => Promise<{
+        bitmap: { width: number; height: number };
+        resize: (opts: { w: number; h: number }) => unknown;
+        crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
+        composite: (img: unknown, x: number, y: number) => unknown;
+      }>;
+      new (args: { width: number; height: number; color: number }): {
+        composite: (img: unknown, x: number, y: number) => unknown;
+        write: (path: string, opts?: { quality?: number }) => Promise<unknown>;
+      };
+      rgbaToInt?: (r: number, g: number, b: number, a: number) => number;
+    };
+
+    const [imgA, imgB] = await Promise.all([JimpCtor.read(pathA), JimpCtor.read(pathB)]);
+    const white =
+      typeof JimpCtor.rgbaToInt === 'function'
+        ? JimpCtor.rgbaToInt(255, 255, 255, 255)
+        : 0xffffffff;
+    const out = new JimpCtor({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, color: white });
+
+    const drawHalf = (
+      img: {
+        bitmap: { width: number; height: number };
+        resize: (opts: { w: number; h: number }) => unknown;
+        crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
+      },
+      y: number,
+      h: number,
+    ) => {
+      const iw = Math.max(1, Number(img.bitmap?.width ?? 1));
+      const ih = Math.max(1, Number(img.bitmap?.height ?? 1));
+      const scale = Math.max(COLLAGE_WIDTH / iw, h / ih);
+      const rw = Math.max(COLLAGE_WIDTH, Math.ceil(iw * scale));
+      const rh = Math.max(h, Math.ceil(ih * scale));
+      img.resize({ w: rw, h: rh });
+      const cx = Math.max(0, Math.floor((rw - COLLAGE_WIDTH) / 2));
+      const cy = Math.max(0, Math.floor((rh - h) / 2));
+      img.crop({ x: cx, y: cy, w: COLLAGE_WIDTH, h });
+      out.composite(img, 0, y);
+    };
+
+    const topH = Math.floor(COLLAGE_HEIGHT / 2);
+    drawHalf(imgA, 0, topH);
+    drawHalf(imgB, topH, COLLAGE_HEIGHT - topH);
+
+    const uploadsDir = join(process.cwd(), 'public', 'uploads');
+    mkdirSync(uploadsDir, { recursive: true });
+    const fileName = `${Date.now()}-${randomUUID()}-publish-collage.jpg`;
+    const absPath = join(uploadsDir, fileName);
+    await out.write(absPath, { quality: 90 });
+    return {
+      fileName,
+      absPath,
+      url: `/static/uploads/${fileName}`,
+    };
+  }
+
+  /**
+   * @description 基于拼图生成封面图（浮动文字）。
+   * @param {string} collagePath - 拼图本地路径。
+   * @param {string} coverText - 封面文字。
+   * @returns {Promise<{ fileName: string; absPath: string; url: string }>} 文件信息。
+   * @keyword-en create publish cover from collage
+   */
+  private async createCoverFromCollageFile(
+    collagePath: string,
+    coverText: string,
+  ): Promise<{ fileName: string; absPath: string; url: string }> {
+    const mod = await this.getJimpModule();
+    const JimpCtor = mod.Jimp as unknown as {
+      read: (input: string) => Promise<{
+        bitmap: { width: number; height: number; data: Buffer };
+        resize: (opts: { w: number; h: number }) => unknown;
+        print: (
+          font: unknown,
+          x: number,
+          y: number,
+          text: unknown,
+          maxWidth?: number,
+          maxHeight?: number,
+        ) => unknown;
+        write: (path: string, opts?: { quality?: number }) => Promise<unknown>;
+      }>;
+    };
+
+    const img = await JimpCtor.read(collagePath);
+    const iw = Math.max(1, Number(img.bitmap?.width ?? COLLAGE_WIDTH));
+    const ih = Math.max(1, Number(img.bitmap?.height ?? COLLAGE_HEIGHT));
+    if (iw !== COLLAGE_WIDTH || ih !== COLLAGE_HEIGHT) {
+      img.resize({ w: COLLAGE_WIDTH, h: COLLAGE_HEIGHT });
+    }
+
+    const data = img.bitmap.data;
+    const plateTop = Math.floor(COLLAGE_HEIGHT * 0.33);
+    const plateBottom = Math.floor(COLLAGE_HEIGHT * 0.68);
+    for (let y = plateTop; y < plateBottom; y++) {
+      for (let x = 0; x < COLLAGE_WIDTH; x++) {
+        const idx = (y * COLLAGE_WIDTH + x) * 4;
+        data[idx] = Math.floor(data[idx] * 0.46);
+        data[idx + 1] = Math.floor(data[idx + 1] * 0.46);
+        data[idx + 2] = Math.floor(data[idx + 2] * 0.46);
+      }
+    }
+
+    const text = String(coverText || '').trim().slice(0, 16) || '发布封面';
+    if (typeof mod.loadFont === 'function') {
+      const fontWhite = await mod.loadFont(mod.FONT_SANS_64_WHITE ?? mod.FONT_SANS_32_WHITE);
+      const fontBlack = await mod.loadFont(mod.FONT_SANS_64_BLACK ?? mod.FONT_SANS_32_BLACK);
+      const alignX = mod.HorizontalAlign?.CENTER ?? 1;
+      const alignY = mod.VerticalAlign?.MIDDLE ?? 1;
+      const style = { text, alignmentX: alignX, alignmentY: alignY };
+      const ty = Math.floor(COLLAGE_HEIGHT * 0.42);
+      img.print(fontBlack, 6, ty + 6, style, COLLAGE_WIDTH - 12, 220);
+      img.print(fontBlack, -6, ty + 6, style, COLLAGE_WIDTH - 12, 220);
+      img.print(fontBlack, 6, ty - 6, style, COLLAGE_WIDTH - 12, 220);
+      img.print(fontBlack, -6, ty - 6, style, COLLAGE_WIDTH - 12, 220);
+      img.print(fontWhite, 0, ty, style, COLLAGE_WIDTH, 220);
+    }
+
+    const uploadsDir = join(process.cwd(), 'public', 'uploads');
+    mkdirSync(uploadsDir, { recursive: true });
+    const fileName = `${Date.now()}-${randomUUID()}-publish-cover.jpg`;
+    const absPath = join(uploadsDir, fileName);
+    await img.write(absPath, { quality: 92 });
+    return {
+      fileName,
+      absPath,
+      url: `/static/uploads/${fileName}`,
+    };
+  }
+
+  /**
+   * @description 将发布阶段生成图片持久化到图库。
+   * @param {object} input - 入参。
+   * @returns {Promise<GalleryImageEntity | null>} 图库实体。
+   * @keyword-en save generated publish image to gallery
+   */
+  private async saveGeneratedImageToGallery(input: {
+    userId: string;
+    tenantId?: string;
+    groupId?: number;
+    absPath: string;
+    fileName: string;
+    url: string;
+    tags: string[];
+    description: string;
+    isCollage?: boolean;
+    collageSourceImageIds?: number[];
+  }): Promise<GalleryImageEntity | null> {
+    let statSize = 0;
+    try {
+      const stat = await fs.stat(input.absPath);
+      statSize = stat.size;
+    } catch {
+      statSize = 0;
+    }
+    const ext = extname(input.fileName).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+    const docs = await this.gallery.createMany([
+      {
+        userId: input.userId,
+        tenantId: input.tenantId,
+        groupId: input.groupId,
+        originalName: input.fileName,
+        fileName: input.fileName,
+        absPath: input.absPath,
+        url: input.url,
+        mimeType,
+        size: statSize > 0 ? statSize : undefined,
+        tags: input.tags,
+        description: input.description,
+        isCollage: input.isCollage === true,
+        collageSourceImageIds:
+          input.isCollage === true
+            ? (input.collageSourceImageIds ?? []).slice(0, 2)
+            : undefined,
+        collageMeta:
+          input.isCollage === true
+            ? { width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, dpi: COLLAGE_DPI }
+            : undefined,
+      },
+    ]);
+    return Array.isArray(docs) && docs.length > 0 ? docs[0] : null;
   }
 
   private async pickGalleryTags(input: {
@@ -1001,6 +1299,10 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   }): Promise<void> {
     const GraphState = Annotation.Root({
       userId: Annotation<string>({ default: () => '', reducer: (_a, b) => b }),
+      tenantId: Annotation<string | undefined>({
+        default: () => undefined,
+        reducer: (_a, b) => b,
+      }),
       canvasId: Annotation<number>({ default: () => 0, reducer: (_a, b) => b }),
       batchTaskId: Annotation<number>({
         default: () => 0,
@@ -1156,6 +1458,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         return {
           posts,
           availableTags: tags,
+          tenantId: task.tenantId,
         };
       })
       .addNode('generate_one', async (state) => {
@@ -1324,58 +1627,149 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
 
         const cleanedContent = this.sanitizeXhsContent(parsed.content);
 
+        const intentText = [
+          current.title,
+          current.refTitle,
+          parsed.imageQuery,
+          refImageQuery,
+          JSON.stringify(
+            state.payload && typeof state.payload === 'object'
+              ? state.payload['todoContext']
+              : {},
+          ),
+        ]
+          .filter(Boolean)
+          .join('\n');
+        const wantsHistoricalCollage =
+          this.shouldUseHistoricalCollage(intentText);
+
         const usedSet = new Set<string>(state.usedImageKeys ?? []);
-        const pickImages = async (): Promise<{
-          imageUrls: string[];
-          imageIds: number[];
-        }> => {
-          const byTags =
-            chosenTags.length > 0
-              ? await this.gallery.searchByTags({
-                  userId: state.galleryUserId,
-                  groupId: state.galleryGroupId,
-                  tags: chosenTags,
-                  limit: 48,
-                })
-              : [];
+        const byTagsRaw =
+          chosenTags.length > 0
+            ? await this.gallery.searchByTags({
+                userId: state.galleryUserId,
+                tenantId: state.tenantId,
+                groupId: state.galleryGroupId,
+                tags: chosenTags,
+                limit: 48,
+                matchCollage: wantsHistoricalCollage,
+              })
+            : [];
+        const randomRaw = await this.gallery.sampleRandom({
+          userId: state.galleryUserId,
+          tenantId: state.tenantId,
+          groupId: state.galleryGroupId,
+          limit: 48,
+        });
 
-          const randomList =
-            byTags.length > 0
-              ? []
-              : await this.gallery.sampleRandom({
-                  userId: state.galleryUserId,
-                  groupId: state.galleryGroupId,
-                  limit: 48,
-                });
+        const basePool = [...byTagsRaw, ...randomRaw].filter((img) => {
+          if (!wantsHistoricalCollage && img?.isCollage === true) return false;
+          return true;
+        });
 
-          const pool = [...byTags, ...randomList]
-            .map((it) => {
-              const id = typeof it.id === 'number' ? it.id : undefined;
-              const url =
-                typeof it.url === 'string' ? it.url.trim() : undefined;
-              const keyId = typeof id === 'number' ? `id:${id}` : undefined;
-              const keyUrl = url ? `url:${url}` : undefined;
-              return { id, url, keyId, keyUrl };
-            })
-            .filter((it) => it.id || it.url);
-
-          const imageUrls: string[] = [];
-          const imageIds: number[] = [];
-          for (const it of pool) {
-            if (imageUrls.length >= 3) break;
-            if (it.keyId && usedSet.has(it.keyId)) continue;
-            if (it.keyUrl && usedSet.has(it.keyUrl)) continue;
-            if (typeof it.url === 'string' && it.url.length > 0)
-              imageUrls.push(it.url);
-            if (typeof it.id === 'number' && Number.isFinite(it.id))
-              imageIds.push(it.id);
-            if (it.keyId) usedSet.add(it.keyId);
-            if (it.keyUrl) usedSet.add(it.keyUrl);
+        const takeUnique = (items: GalleryImageEntity[]): GalleryImageEntity[] => {
+          const out: GalleryImageEntity[] = [];
+          for (const it of items) {
+            const id = typeof it.id === 'number' ? it.id : undefined;
+            const url = typeof it.url === 'string' ? it.url.trim() : '';
+            const keyId = typeof id === 'number' ? `id:${id}` : '';
+            const keyUrl = url ? `url:${url}` : '';
+            if (keyId && usedSet.has(keyId)) continue;
+            if (keyUrl && usedSet.has(keyUrl)) continue;
+            if (keyId) usedSet.add(keyId);
+            if (keyUrl) usedSet.add(keyUrl);
+            out.push(it);
+            if (out.length >= 6) break;
           }
-          return { imageUrls, imageIds };
+          return out;
         };
 
-        const images = await pickImages();
+        const pickedBase = takeUnique(basePool);
+        const rawSources = pickedBase.filter((x) => x?.isCollage !== true).slice(0, 2);
+
+        let publishCollage: GalleryImageEntity | null = null;
+        if (!wantsHistoricalCollage && rawSources.length === 2) {
+          const p0 = rawSources[0]?.absPath || this.resolveLocalPathFromGalleryUrl(rawSources[0]?.url);
+          const p1 = rawSources[1]?.absPath || this.resolveLocalPathFromGalleryUrl(rawSources[1]?.url);
+          if (p0 && p1) {
+            try {
+              const collageFile = await this.createDynamicCollageFile(p0, p1);
+              publishCollage = await this.saveGeneratedImageToGallery({
+                userId: state.galleryUserId,
+                tenantId: state.tenantId,
+                groupId: state.galleryGroupId,
+                absPath: collageFile.absPath,
+                fileName: collageFile.fileName,
+                url: collageFile.url,
+                tags: Array.from(new Set([...chosenTags, '拼图', '动态拼图'])).slice(0, 24),
+                description: `发文动态拼图：#${rawSources[0]?.id ?? '-'} + #${rawSources[1]?.id ?? '-'}`,
+                isCollage: true,
+                collageSourceImageIds: [rawSources[0]?.id, rawSources[1]?.id].filter(
+                  (x): x is number => typeof x === 'number' && Number.isFinite(x),
+                ),
+              });
+            } catch {
+              publishCollage = null;
+            }
+          }
+        }
+
+        if (wantsHistoricalCollage) {
+          publishCollage =
+            pickedBase.find((x) => x?.isCollage === true) ||
+            byTagsRaw.find((x) => x?.isCollage === true) ||
+            null;
+        }
+
+        let publishCover: GalleryImageEntity | null = null;
+        if (publishCollage) {
+          const collagePath =
+            publishCollage.absPath ||
+            this.resolveLocalPathFromGalleryUrl(publishCollage.url);
+          if (collagePath) {
+            try {
+              const coverText = this.deriveCoverText(parsed.title, chosenTags);
+              const coverFile = await this.createCoverFromCollageFile(
+                collagePath,
+                coverText,
+              );
+              publishCover = await this.saveGeneratedImageToGallery({
+                userId: state.galleryUserId,
+                tenantId: state.tenantId,
+                groupId: state.galleryGroupId,
+                absPath: coverFile.absPath,
+                fileName: coverFile.fileName,
+                url: coverFile.url,
+                tags: Array.from(new Set([...chosenTags, '封面', '自动封面', coverText])).slice(0, 24),
+                description: `发文封面：${coverText}`,
+              });
+            } catch {
+              publishCover = null;
+            }
+          }
+        }
+
+        const images = {
+          imageUrls: [] as string[],
+          imageIds: [] as number[],
+        };
+        const pushImage = (it?: { id?: number; url?: string } | null) => {
+          if (!it) return;
+          const id = typeof it.id === 'number' ? it.id : undefined;
+          const url = typeof it.url === 'string' ? it.url.trim() : '';
+          if (url && !images.imageUrls.includes(url)) images.imageUrls.push(url);
+          if (typeof id === 'number' && Number.isFinite(id) && !images.imageIds.includes(id)) {
+            images.imageIds.push(id);
+          }
+        };
+
+        pushImage(publishCover);
+        pushImage(publishCollage);
+        for (const it of pickedBase) {
+          if (images.imageUrls.length >= 3) break;
+          pushImage(it);
+        }
+
         if (images.imageUrls.length === 0) {
           const fallbackUrls = Array.isArray(article?.imageUrls)
             ? article.imageUrls
@@ -1481,6 +1875,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     const app = workflow.compile();
     await app.invoke({
       userId: input.userId,
+      tenantId: undefined,
       canvasId: input.canvasId,
       batchTaskId: input.batchTaskId,
       mcpTaskId: input.mcpTaskId,

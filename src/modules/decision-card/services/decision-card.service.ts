@@ -547,6 +547,11 @@ export class DecisionCardService {
       [/\bxhs_batch_publish\b/gi, '小红书批量发布'],
       [/\bgallery_search_images\b/gi, '图库按标签搜图'],
       [/\bgallery_list_tags\b/gi, '图库标签查询'],
+      [/\bdashboard_mongo_search\b/gi, '看板万用查询'],
+      [/\bdashboard_config_view\b/gi, '查看看板配置'],
+      [/\bdashboard_config_patch\b/gi, '更新看板配置'],
+      [/\btenant_query\b/gi, '租户数据查询'],
+      [/\btenant_tables\b/gi, '租户表结构查询'],
     ];
     for (const [pattern, value] of replacements) {
       out = out.replace(pattern, value);
@@ -640,6 +645,7 @@ export class DecisionCardService {
           ? (graphUnknown as {
               generateToCanvas?: (input: {
                 userId: string;
+                tenantId?: string;
                 platform?: string;
                 topic?: string;
                 count?: number;
@@ -654,6 +660,7 @@ export class DecisionCardService {
           const topic = this.extractTopicFromText(card.question);
           const gen = await graph.generateToCanvas({
             userId,
+            tenantId: scope?.tenantId,
             platform: 'xhs',
             topic,
             count: Math.max(1, Math.min(5, publishCount)),

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, Loader2, Image as ImageIcon } from 'lucide-react';
+import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import { chatService } from './chatService';
 
 const toTextPreview = (value) => {
@@ -18,16 +18,25 @@ const readMarkdown = (article) => {
   return typeof md === 'string' ? md : '';
 };
 
-const readImage = (article) => {
+const readImages = (article) => {
   const urls = Array.isArray(article?.imageUrls) ? article.imageUrls : [];
-  const first = urls.find((x) => typeof x === 'string' && x.trim().length > 0);
-  return first || '';
+  return urls
+    .map((x) => String(x ?? '').trim())
+    .filter((x) => x.length > 0)
+    .slice(0, 9);
+};
+
+const readImage = (article) => {
+  const images = readImages(article);
+  return images[0] || '';
 };
 
 const CanvasFeedView = ({ canvasId, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [canvas, setCanvas] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
+  const [detailImageIndex, setDetailImageIndex] = useState(0);
+  const [touchStartX, setTouchStartX] = useState(null);
 
   useEffect(() => {
     const cid = Number(canvasId);
@@ -57,6 +66,30 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
       null,
     [articles, selectedId],
   );
+  const selectedImages = useMemo(() => readImages(selected), [selected]);
+
+  useEffect(() => {
+    setDetailImageIndex(0);
+  }, [selectedId]);
+
+  const activeImage =
+    selectedImages.length > 0
+      ? selectedImages[Math.max(0, Math.min(detailImageIndex, selectedImages.length - 1))]
+      : '';
+
+  const goPrevImage = () => {
+    if (selectedImages.length <= 1) return;
+    setDetailImageIndex((prev) =>
+      prev <= 0 ? selectedImages.length - 1 : prev - 1,
+    );
+  };
+
+  const goNextImage = () => {
+    if (selectedImages.length <= 1) return;
+    setDetailImageIndex((prev) =>
+      prev >= selectedImages.length - 1 ? 0 : prev + 1,
+    );
+  };
 
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in">
@@ -113,9 +146,9 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                       : 'border-slate-200 hover:border-slate-300'
                   }`}
                 >
-                  <div className="h-28 md:h-36 bg-slate-100 w-full shrink-0">
+                  <div className="h-28 md:h-36 bg-slate-100 w-full shrink-0 flex items-center justify-center overflow-hidden">
                     {img ? (
-                      <img src={img} alt={a.title || ''} className="w-full h-full object-cover" />
+                      <img src={img} alt={a.title || ''} className="max-w-full max-h-full object-contain" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-slate-300">
                         <ImageIcon size={20} />
@@ -138,18 +171,55 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
             {selected ? (
               <div className="max-w-2xl mx-auto pb-6">
                 <div className="rounded-3xl overflow-hidden border border-slate-100 bg-white shadow-sm">
-                  <div className="h-48 md:h-60 bg-slate-100">
-                    {readImage(selected) ? (
-                      <img
-                        src={readImage(selected)}
-                        alt={selected.title || ''}
-                        className="w-full h-full object-cover"
-                      />
+                  {/* Detail image carousel area */}
+                  <div
+                    className="relative h-48 md:h-60 bg-slate-100 flex items-center justify-center overflow-hidden"
+                    onTouchStart={(e) => {
+                      const p = e.touches?.[0]?.clientX;
+                      if (typeof p === 'number') setTouchStartX(p);
+                    }}
+                    onTouchEnd={(e) => {
+                      const endX = e.changedTouches?.[0]?.clientX;
+                      if (typeof endX !== 'number' || typeof touchStartX !== 'number') {
+                        setTouchStartX(null);
+                        return;
+                      }
+                      const diff = endX - touchStartX;
+                      if (Math.abs(diff) >= 35) {
+                        if (diff > 0) goPrevImage();
+                        else goNextImage();
+                      }
+                      setTouchStartX(null);
+                    }}
+                  >
+                    {activeImage ? (
+                      <img src={activeImage} alt={selected.title || ''} className="max-w-full max-h-full object-contain" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-slate-300">
                         <ImageIcon size={24} />
                       </div>
                     )}
+                    {selectedImages.length > 1 ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={goPrevImage}
+                          className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/45 text-white flex items-center justify-center"
+                        >
+                          <ChevronLeft size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={goNextImage}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/45 text-white flex items-center justify-center"
+                        >
+                          <ChevronRight size={16} />
+                        </button>
+                        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-black/45 text-white text-[10px]">
+                          {detailImageIndex + 1}/{selectedImages.length}
+                        </div>
+                      </>
+                    ) : null}
                   </div>
                   <div className="p-4 md:p-5">
                     <h4 className="text-base md:text-lg font-semibold text-slate-900">

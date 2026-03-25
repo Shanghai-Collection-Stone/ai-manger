@@ -1,8 +1,15 @@
-import { BadRequestException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Optional,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { createHash } from 'crypto';
 import type { Request } from 'express';
 import type { Db, Filter } from 'mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { FeishuBitableSourceService } from '../../data-source/sources/feishu-bitable/feishu-bitable-source.service.js';
 import type {
   MongoQueryJoin,
   MongoQueryRequest,
@@ -59,6 +66,8 @@ export class MongoQueryService {
   constructor(
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly adminService: AdminService,
+    @Optional()
+    private readonly feishuBitableService?: FeishuBitableSourceService,
   ) {}
 
   /**
@@ -72,11 +81,200 @@ export class MongoQueryService {
   }
 
   /**
-   * @description 执行查询（list / count），并按租户注入隔离条件
+   * @description 解析查询数据源类型（默认 mongo）
+   * @keyword-en resolve query source type
+   */
+  private resolveSourceType(input: MongoQueryRequest): 'mongo' | 'feishu-bitable' {
+    const sourceType = String(input.sourceType ?? '').trim().toLowerCase();
+    if (sourceType === 'feishu-bitable') return 'feishu-bitable';
+    const sourceCode = String(input.sourceCode ?? '').trim().toLowerCase();
+    if (sourceCode.includes('feishu')) return 'feishu-bitable';
+    return 'mongo';
+  }
+
+  /**
+   * @description 规范化飞书过滤条件
+   * @keyword-en normalize feishu filter
+   */
+  private normalizeFeishuFilter(value?: {
+    conjunction?: 'and' | 'or';
+    conditions?: Array<{
+      field?: string;
+      fieldName?: string;
+      field_name?: string;
+      operator: string;
+      value?: string | string[];
+    }>;
+  }): {
+    conjunction?: 'and' | 'or';
+    conditions?: Array<{
+      field?: string;
+      fieldName?: string;
+      field_name?: string;
+      operator: string;
+      value?: string | string[];
+    }>;
+  } | undefined {
+    if (!value || !isObjectRecord(value)) return undefined;
+    const conjunction = value.conjunction === 'or' ? 'or' : 'and';
+    const conditions: Array<{
+      field_name: string;
+      operator: string;
+      value?: string | string[];
+    }> = [];
+    if (Array.isArray(value.conditions) && value.conditions.length > 0) {
+      for (const item of value.conditions) {
+        if (!item || !isObjectRecord(item)) continue;
+        const operator = String(item.operator ?? '').trim();
+        const field = String(
+          item.field_name ?? item.fieldName ?? item.field ?? '',
+        ).trim();
+        if (!operator || !field) continue;
+        const rawValue = (item as { value?: string | string[] }).value;
+        conditions.push({
+          field_name: field,
+          operator,
+          value: rawValue,
+        });
+      }
+    }
+    if (conditions.length === 0) return undefined;
+    return { conjunction, conditions };
+  }
+
+  /**
+   * @description 将简单 filter 转换为飞书过滤（等值）
+   * @keyword-en convert simple filter to feishu filter
+   */
+  private convertSimpleFilterToFeishuFilter(
+    value?: Record<string, unknown>,
+  ): {
+    conjunction: 'and' | 'or';
+    conditions: Array<{
+      field_name: string;
+      operator: string;
+      value: string[];
+    }>;
+  } | undefined {
+    if (!value || !isObjectRecord(value)) return undefined;
+    const conditions: Array<{
+      field_name: string;
+      operator: string;
+      value: string[];
+    }> = [];
+    for (const [fieldName, raw] of Object.entries(value)) {
+      const field = String(fieldName).trim();
+      if (!field) continue;
+      if (Array.isArray(raw)) {
+        if (raw.length === 0) continue;
+        for (const item of raw) {
+          conditions.push({
+            field_name: field,
+            operator: 'is',
+            value: [String(item)],
+          });
+        }
+      } else {
+        conditions.push({
+          field_name: field,
+          operator: 'is',
+          value: [String(raw)],
+        });
+      }
+    }
+    if (conditions.length === 0) return undefined;
+    return { conjunction: 'and', conditions };
+  }
+
+  /**
+   * @description 将 sort 对象转换为飞书 sort 规则
+   * @keyword-en convert sort to feishu sort
+   */
+  private toFeishuSort(sort?: Record<string, 1 | -1>): string[] | undefined {
+    if (!sort || Object.keys(sort).length === 0) return undefined;
+    const out: string[] = [];
+    for (const [field, dir] of Object.entries(sort)) {
+      const safeField = this.assertFieldPath(field, 'INVALID_SORT_FIELD');
+      out.push(`${safeField} ${dir === -1 ? 'DESC' : 'ASC'}`);
+    }
+    return out.length > 0 ? out : undefined;
+  }
+
+  /**
+   * @description 执行飞书多维表格查询（list/count；aggregate 退化为 list）
+   * @keyword-en execute feishu bitable query
+   */
+  private async executeFeishuQuery(
+    input: MongoQueryRequest,
+  ): Promise<MongoQueryResponse> {
+    if (!this.feishuBitableService) {
+      throw new BadRequestException('FEISHU_SOURCE_UNAVAILABLE');
+    }
+    const tableId = this.assertCollectionName(input.collection);
+    const requestedMode = input.mode;
+    const mode: 'list' | 'count' =
+      requestedMode === 'count' ? 'count' : 'list';
+
+    const limit = this.normalizeLimit(input.limit, 500);
+    const skip = this.normalizeSkip(input.skip);
+    const targetCount = mode === 'count' ? Number.MAX_SAFE_INTEGER : skip + limit;
+    const sort = this.normalizeSort(input.sort);
+    const feishuSort = Array.isArray(input.feishuSort)
+      ? input.feishuSort
+      : this.toFeishuSort(sort);
+    const simpleFilter = this.sanitizeSimpleFilter(input.filter);
+    const normalizedFeishuFilter = this.normalizeFeishuFilter(input.feishuFilter);
+    const feishuFilter = normalizedFeishuFilter ?? this.convertSimpleFilterToFeishuFilter(simpleFilter);
+
+    let hasMore = true;
+    let pageToken: string | undefined;
+    let totalFromServer: number | undefined;
+    const rows: Record<string, unknown>[] = [];
+    while (hasMore && rows.length < targetCount) {
+      const pageSize =
+        mode === 'count'
+          ? 500
+          : Math.min(500, Math.max(targetCount - rows.length, 1));
+      const response = await this.feishuBitableService.listRecords(tableId, {
+        pageSize,
+        pageToken,
+        filter: feishuFilter,
+        sort: feishuSort,
+      });
+      if (typeof response.total === 'number') {
+        totalFromServer = response.total;
+      }
+      rows.push(
+        ...response.records.map((record) => ({
+          recordId: record.recordId,
+          ...record.fields,
+        })),
+      );
+      hasMore = Boolean(response.hasMore);
+      pageToken = response.pageToken;
+      if (mode === 'count' && typeof totalFromServer === 'number') {
+        return { count: totalFromServer };
+      }
+    }
+
+    if (mode === 'count') {
+      return { count: typeof totalFromServer === 'number' ? totalFromServer : rows.length };
+    }
+    const sliced = rows.slice(skip, skip + limit);
+    return { rows: sliced };
+  }
+
+  /**
+   * @description 执行查询（list / count / aggregate），并按租户注入隔离条件
    * @keyword-en execute mongo query
    */
   async execute(req: Request, input: MongoQueryRequest): Promise<MongoQueryResponse> {
     const scope = await this.requireScope(req);
+    const sourceType = this.resolveSourceType(input);
+    if (sourceType === 'feishu-bitable') {
+      return this.executeFeishuQuery(input);
+    }
+
     const tenantId = scope.tenantId;
     const tenantField = this.normalizeTenantField(input.tenantField);
 
@@ -104,14 +302,29 @@ export class MongoQueryService {
       input.where,
       tenantMatch,
     );
+    const col = this.db.collection(collection);
+
+    if (input.mode === 'aggregate') {
+      const pipeline = this.buildCustomAggregatePipeline({
+        baseMatch: baseFilter,
+        joins,
+        tenantId: isPrefixIsolated ? undefined : tenantId,
+        projection,
+        sort,
+        skip,
+        limit,
+        customPipeline: input.pipeline,
+      });
+      const rows = await col.aggregate(pipeline).toArray();
+      return { rows: rows as unknown as Record<string, unknown>[] };
+    }
 
     if (joins.length === 0) {
       if (input.mode === 'count') {
-        const count = await this.db.collection(collection).countDocuments(baseFilter);
+        const count = await col.countDocuments(baseFilter);
         return { count };
       }
-      const rows = await this.db
-        .collection(collection)
+      const rows = await col
         .find(baseFilter, projection ? { projection } : undefined)
         .sort(sort ?? { _id: -1 })
         .skip(skip)
@@ -132,7 +345,7 @@ export class MongoQueryService {
       mode: input.mode,
     });
 
-    const rows = await this.db.collection(collection).aggregate(pipeline).toArray();
+    const rows = await col.aggregate(pipeline).toArray();
     if (input.mode === 'count') {
       const first = rows[0] as Record<string, unknown> | undefined;
       const count = typeof first?.count === 'number' ? first.count : 0;
@@ -414,6 +627,79 @@ export class MongoQueryService {
   }
 
   /**
+   * @description 规范化自定义聚合管道输入（支持数组或 JSON 字符串）
+   * @keyword-en normalize custom aggregate pipeline
+   */
+  private normalizeCustomPipeline(
+    value?: Record<string, unknown>[] | string,
+  ): Record<string, unknown>[] {
+    if (typeof value === 'undefined') return [];
+    const parseStages = (input: unknown): Record<string, unknown>[] => {
+      if (!Array.isArray(input)) throw new BadRequestException('INVALID_PIPELINE');
+      const stages: Record<string, unknown>[] = [];
+      const forbidden = new Set(['$out', '$merge']);
+      for (const stage of input) {
+        if (!isObjectRecord(stage) || Array.isArray(stage)) {
+          throw new BadRequestException('INVALID_PIPELINE_STAGE');
+        }
+        const stageKeys = Object.keys(stage);
+        if (stageKeys.length === 0) throw new BadRequestException('INVALID_PIPELINE_STAGE');
+        for (const k of stageKeys) {
+          if (forbidden.has(k.toLowerCase())) {
+            throw new BadRequestException('FORBIDDEN_PIPELINE_STAGE');
+          }
+        }
+        stages.push(stage);
+      }
+      return stages;
+    };
+    if (Array.isArray(value)) return parseStages(value);
+    const raw = String(value).trim();
+    if (!raw) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return parseStages(parsed);
+    } catch {
+      throw new BadRequestException('INVALID_PIPELINE_JSON');
+    }
+  }
+
+  /**
+   * @description 构建自定义 aggregate 管道（支持 where/filter/joins + 用户 pipeline）
+   * @keyword-en build custom aggregate pipeline
+   */
+  private buildCustomAggregatePipeline(input: {
+    baseMatch: Filter<Record<string, unknown>>;
+    joins: MongoQueryJoin[];
+    tenantId?: string;
+    projection?: Record<string, 0 | 1>;
+    sort?: Record<string, 1 | -1>;
+    skip: number;
+    limit: number;
+    customPipeline?: Record<string, unknown>[] | string;
+  }): Record<string, unknown>[] {
+    const pipeline: Record<string, unknown>[] = [];
+    if (Object.keys(input.baseMatch).length > 0) {
+      pipeline.push({ $match: input.baseMatch });
+    }
+    for (const join of input.joins) {
+      pipeline.push(...this.buildLookupStages(join, input.tenantId));
+    }
+    const customStages = this.normalizeCustomPipeline(input.customPipeline);
+    pipeline.push(...customStages);
+
+    if (input.projection && Object.keys(input.projection).length > 0) {
+      pipeline.push({ $project: input.projection });
+    }
+    if (input.sort && Object.keys(input.sort).length > 0) {
+      pipeline.push({ $sort: input.sort });
+    }
+    if (input.skip > 0) pipeline.push({ $skip: input.skip });
+    pipeline.push({ $limit: input.limit });
+    return pipeline;
+  }
+
+  /**
    * @description 构建聚合管道（含 $lookup 关联查询）
    * @keyword-en build aggregate pipeline with lookup
    */
@@ -509,4 +795,3 @@ export class MongoQueryService {
     return stages;
   }
 }
-

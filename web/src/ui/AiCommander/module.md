@@ -54,6 +54,7 @@ Dashboard 数据 API + 看板 JSON 配置获取接口 + 通用 Mongo 查询支�
 ### CanvasFeedView.jsx
 
 Canvas 文章看板视图，支持按 canvasId 加载文章列表与详情，提供小红书风格文章卡片阅读体验。
+详情区支持多图轮播（左右按钮 + 移动端手势滑动），可在 1-N 张配图间切换浏览。
 
 - **关键词**: CanvasFeedView, canvas, article, xiaohongshu, detail, modal
 
@@ -79,6 +80,10 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。支持�
 
 - 支持新建派单功能，通过模态框录入任务信息。
 - 支持分类筛选功能，点击快捷入口可过滤任务列表。
+- 任务类型统一为三分类：自动执行、线下执行、其他，并兼容历史类型映射。
+- 新建派单支持填写关联资源，任务详情支持弹窗查看关联资源。
+- 关联资源弹窗支持结构化解析：可点击打开链接、图片预览，Canvas 资源可在内置弹窗中直接查看。
+- 异常工单 Tab 显示实时数量，便于快速定位异常积压。
 
 - **关键词**: TaskCenterView, TaskManagement, WorkOrder, QuickActions, TabFilter, CreateTaskModal, CategoryFilter
 
@@ -87,8 +92,9 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。支持�
 工具箱视图，集成 AI 图库、思维链路、Canvas 管理和智能 Agent 入口。
 包含完整的 AI 图库管理功能：分组管理、图片上传、无限滚动加载、图片预览等。
 新增 Gallery Agent 和小红书专家双 Tab 智能助手入口。
+图库工具页包含“对话/图库/拼图/封面”四个子Tab，其中“封面”支持基于拼图手动生成浮动文字封面图。
 
-- **关键词**: ToolsView, AIGallery, ThoughtRoute, ImageManagement, ToolBox, InfiniteScroll, FileUpload, GalleryAgent, XhsSpecialist
+- **关键词**: ToolsView, AIGallery, ThoughtRoute, ImageManagement, ToolBox, InfiniteScroll, FileUpload, GalleryAgent, XhsSpecialist, Collage, Cover
 
 ### GalleryAgentView.jsx
 

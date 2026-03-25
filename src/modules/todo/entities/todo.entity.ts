@@ -13,6 +13,7 @@ export interface TodoEntity {
   userId: string;
   title: string;
   description?: string;
+  resource?: string;
   type?: string;
   assignee?: string;
   abnormalReason?: string;
@@ -32,6 +33,7 @@ export interface TodoCreateInput {
   userId: string;
   title: string;
   description?: string;
+  resource?: string;
   type?: string;
   assignee?: string;
   aiConsideration: string;
@@ -48,6 +50,7 @@ export interface TodoUpdateInput {
   userId?: string;
   title?: string;
   description?: string;
+  resource?: string;
   type?: string;
   assignee?: string;
   abnormalReason?: string;

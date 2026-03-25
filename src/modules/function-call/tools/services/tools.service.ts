@@ -45,7 +45,13 @@ export class ToolsService {
   private filterMcpAdapterTools(
     tools?: CreateAgentParams['tools'],
   ): NonNullable<CreateAgentParams['tools']> {
-    const blockedPrefixes = [/^batch_task_/i];
+    const blockedPrefixes = [
+      /^batch_task_/i,
+      /^publish_/i,
+      /^check_login_/i,
+      /^get_login_qrcode$/i,
+      /^delete_cookies$/i,
+    ];
     return (tools ?? []).filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       if (!name) return true;
