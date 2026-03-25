@@ -255,6 +255,112 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * @description 按候选顺序尝试加载 Jimp 字体。
+   * @param {JimpModuleLike} mod - Jimp 模块。
+   * @param {unknown[]} candidates - 候选字体常量或路径。
+   * @returns {Promise<unknown | undefined>} 成功字体对象。
+   * @keyword-en load jimp font fallback
+   */
+  private async loadJimpFontFallback(
+    mod: JimpModuleLike,
+    candidates: unknown[],
+  ): Promise<unknown | undefined> {
+    if (typeof mod.loadFont !== 'function') return undefined;
+    for (const c of candidates) {
+      if (!c) continue;
+      try {
+        const f = await mod.loadFont(c);
+        if (f) return f;
+      } catch {
+        void 0;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * @description 转义 SVG 文本。
+   * @param {string} text - 原始文本。
+   * @returns {string} 转义后文本。
+   * @keyword-en escape svg text
+   */
+  private escapeSvgText(text: string): string {
+    return String(text ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /**
+   * @description 使用 sharp + SVG 渲染发布封面文案。
+   * @param {{ collagePath: string; coverText: string; outputPath: string }} input - 渲染入参。
+   * @returns {Promise<boolean>} 是否渲染成功。
+   * @keyword-en render publish cover with sharp svg
+   */
+  private async renderPublishCoverWithSharp(input: {
+    collagePath: string;
+    coverText: string;
+    outputPath: string;
+  }): Promise<boolean> {
+    try {
+      const mod = (await import('sharp')) as unknown as {
+        default: (input: string | Buffer) => {
+          resize: (w: number, h: number, opts?: Record<string, unknown>) => unknown;
+          composite: (layers: Array<{ input: Buffer; top?: number; left?: number }>) => unknown;
+          jpeg: (opts?: Record<string, unknown>) => unknown;
+          toFile: (path: string) => Promise<unknown>;
+        };
+      };
+      const sharpFn = mod?.default;
+      if (typeof sharpFn !== 'function') return false;
+
+      const text = String(input.coverText || '').trim() || '发布封面';
+      const lines = text.match(/.{1,12}/g) ?? [text];
+      const renderLines = lines.slice(0, 2);
+      const multi = renderLines.length > 1;
+      const fontSize = multi ? 30 : 34;
+      const boxHeight = multi ? 92 : 58;
+      const boxWidth = 380;
+      const boxX = Math.floor((COLLAGE_WIDTH - boxWidth) / 2);
+      const boxY = Math.floor((COLLAGE_HEIGHT - boxHeight) / 2);
+      const tspans = lines
+        .slice(0, 2)
+        .map(
+          (line, idx) =>
+            `<tspan x="50%" dy="${idx === 0 ? 0 : 1.25}em">${this.escapeSvgText(line)}</tspan>`,
+        )
+        .join('');
+
+      const svg = `
+<svg width="${COLLAGE_WIDTH}" height="${COLLAGE_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .mask{fill:#000000;opacity:.78;}
+    .t{fill:#ffffff;font-size:${fontSize}px;font-weight:800;font-family:'Noto Sans CJK SC','WenQuanYi Micro Hei','Source Han Sans SC','Microsoft YaHei','PingFang SC','SimHei',Arial,Helvetica,sans-serif;letter-spacing:1px;}
+  </style>
+  <rect x="${boxX}" y="${boxY}" rx="8" ry="8" width="${boxWidth}" height="${boxHeight}" class="mask"/>
+  <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="t">${tspans}</text>
+</svg>`;
+
+      await (sharpFn(input.collagePath) as unknown as {
+        resize: (w: number, h: number, opts?: Record<string, unknown>) => {
+          composite: (layers: Array<{ input: Buffer; top?: number; left?: number }>) => {
+            jpeg: (opts?: Record<string, unknown>) => { toFile: (path: string) => Promise<unknown> };
+          };
+        };
+      })
+        .resize(COLLAGE_WIDTH, COLLAGE_HEIGHT, { fit: 'cover' })
+        .composite([{ input: Buffer.from(svg, 'utf8'), top: 0, left: 0 }])
+        .jpeg({ quality: 92 })
+        .toFile(input.outputPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * @description 创建双图动态拼图（640x853）。
    * @param {string} pathA - 图片A本地路径。
    * @param {string} pathB - 图片B本地路径。
@@ -336,6 +442,24 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     collagePath: string,
     coverText: string,
   ): Promise<{ fileName: string; absPath: string; url: string }> {
+    const uploadsDir = join(process.cwd(), 'public', 'uploads');
+    mkdirSync(uploadsDir, { recursive: true });
+    const fileName = `${Date.now()}-${randomUUID()}-publish-cover.jpg`;
+    const absPath = join(uploadsDir, fileName);
+
+    const sharpOk = await this.renderPublishCoverWithSharp({
+      collagePath,
+      coverText,
+      outputPath: absPath,
+    });
+    if (sharpOk) {
+      return {
+        fileName,
+        absPath,
+        url: `/static/uploads/${fileName}`,
+      };
+    }
+
     const mod = await this.getJimpModule();
     const JimpCtor = mod.Jimp as unknown as {
       read: (input: string) => Promise<{
@@ -374,23 +498,29 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
 
     const text = String(coverText || '').trim().slice(0, 16) || '发布封面';
     if (typeof mod.loadFont === 'function') {
-      const fontWhite = await mod.loadFont(mod.FONT_SANS_64_WHITE ?? mod.FONT_SANS_32_WHITE);
-      const fontBlack = await mod.loadFont(mod.FONT_SANS_64_BLACK ?? mod.FONT_SANS_32_BLACK);
+      const fontWhite = await this.loadJimpFontFallback(mod, [
+        mod.FONT_SANS_64_WHITE,
+        mod.FONT_SANS_32_WHITE,
+      ]);
+      const fontBlack = await this.loadJimpFontFallback(mod, [
+        mod.FONT_SANS_64_BLACK,
+        mod.FONT_SANS_32_BLACK,
+      ]);
       const alignX = mod.HorizontalAlign?.CENTER ?? 1;
       const alignY = mod.VerticalAlign?.MIDDLE ?? 1;
       const style = { text, alignmentX: alignX, alignmentY: alignY };
       const ty = Math.floor(COLLAGE_HEIGHT * 0.42);
-      img.print(fontBlack, 6, ty + 6, style, COLLAGE_WIDTH - 12, 220);
-      img.print(fontBlack, -6, ty + 6, style, COLLAGE_WIDTH - 12, 220);
-      img.print(fontBlack, 6, ty - 6, style, COLLAGE_WIDTH - 12, 220);
-      img.print(fontBlack, -6, ty - 6, style, COLLAGE_WIDTH - 12, 220);
-      img.print(fontWhite, 0, ty, style, COLLAGE_WIDTH, 220);
+      if (fontWhite) {
+        if (fontBlack) {
+          img.print(fontBlack, 6, ty + 6, style, COLLAGE_WIDTH - 12, 220);
+          img.print(fontBlack, -6, ty + 6, style, COLLAGE_WIDTH - 12, 220);
+          img.print(fontBlack, 6, ty - 6, style, COLLAGE_WIDTH - 12, 220);
+          img.print(fontBlack, -6, ty - 6, style, COLLAGE_WIDTH - 12, 220);
+        }
+        img.print(fontWhite, 0, ty, style, COLLAGE_WIDTH, 220);
+      }
     }
 
-    const uploadsDir = join(process.cwd(), 'public', 'uploads');
-    mkdirSync(uploadsDir, { recursive: true });
-    const fileName = `${Date.now()}-${randomUUID()}-publish-cover.jpg`;
-    const absPath = join(uploadsDir, fileName);
     await img.write(absPath, { quality: 92 });
     return {
       fileName,

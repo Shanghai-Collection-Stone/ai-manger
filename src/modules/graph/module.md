@@ -31,6 +31,7 @@ Graph控制器。
 ### batch-task-graph.service.ts
 批量发布图服务。
 - **关键词**: batch-task, publishing, mcp, task-it, todo-summary, service
+- 发布封面渲染采用跨平台策略：`sharp+SVG` 优先，失败时回退 `Jimp`，并对字体加载做容错，避免 Linux 环境因字体常量缺失导致封面生成失败。
 
 ### graph.module.ts
 Graph模块定义。
