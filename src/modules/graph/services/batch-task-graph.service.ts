@@ -44,6 +44,7 @@ const ZXhsDraft = z.object({
 const COLLAGE_WIDTH = 640;
 const COLLAGE_HEIGHT = 853;
 const COLLAGE_DPI = 96;
+const COVER_FONT_RELATIVE_PATH = 'public/fonts/cover-cjk.ttf';
 
 type JimpModuleLike = {
   Jimp: {
@@ -73,6 +74,8 @@ let jimpModulePromise: Promise<unknown> | null = null;
 export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   private graphJobTimer: ReturnType<typeof setInterval> | null = null;
   private graphJobBusy = false;
+  private customCoverFontBase64: string | null = null;
+  private customCoverFontLoaded = false;
 
   constructor(
     private readonly canvas: CanvasService,
@@ -304,6 +307,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     coverText: string;
     outputPath: string;
   }): Promise<boolean> {
+    const rawText = String(input.coverText || '').trim() || '发布封面';
+    const needsCjk = this.hasCjkChars(rawText);
+    const fontFaceCss = needsCjk
+      ? await this.buildCustomFontFaceCssOrThrow()
+      : '';
+
     try {
       const mod = (await import('sharp')) as unknown as {
         default: (input: string | Buffer) => {
@@ -316,7 +325,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const sharpFn = mod?.default;
       if (typeof sharpFn !== 'function') return false;
 
-      const text = String(input.coverText || '').trim() || '发布封面';
+      const text = rawText;
       const lines = text.match(/.{1,12}/g) ?? [text];
       const renderLines = lines.slice(0, 2);
       const multi = renderLines.length > 1;
@@ -336,8 +345,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const svg = `
 <svg width="${COLLAGE_WIDTH}" height="${COLLAGE_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
   <style>
+    ${fontFaceCss}
     .mask{fill:#000000;opacity:.78;}
-    .t{fill:#ffffff;font-size:${fontSize}px;font-weight:800;font-family:'Noto Sans CJK SC','WenQuanYi Micro Hei','Source Han Sans SC','Microsoft YaHei','PingFang SC','SimHei',Arial,Helvetica,sans-serif;letter-spacing:1px;}
+    .t{fill:#ffffff;font-size:${fontSize}px;font-weight:800;font-family:'ProjectCoverCJK','Noto Sans CJK SC','WenQuanYi Micro Hei','Source Han Sans SC','Microsoft YaHei','PingFang SC','SimHei',Arial,Helvetica,sans-serif;letter-spacing:1px;}
   </style>
   <rect x="${boxX}" y="${boxY}" rx="8" ry="8" width="${boxWidth}" height="${boxHeight}" class="mask"/>
   <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="t">${tspans}</text>
@@ -460,6 +470,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (this.hasCjkChars(coverText)) {
+      throw new Error(
+        `COVER_RENDER_FAILED_WITH_CUSTOM_FONT: ${COVER_FONT_RELATIVE_PATH}`,
+      );
+    }
+
     const mod = await this.getJimpModule();
     const JimpCtor = mod.Jimp as unknown as {
       read: (input: string) => Promise<{
@@ -527,6 +543,48 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       absPath,
       url: `/static/uploads/${fileName}`,
     };
+  }
+
+  /**
+   * @description 判断文本是否包含中文字符。
+   * @param {string} text - 输入文本。
+   * @returns {boolean} 是否包含中文。
+   * @keyword-en has cjk chars
+   */
+  private hasCjkChars(text: string): boolean {
+    return /[\u3400-\u9fff]/.test(String(text || ''));
+  }
+
+  /**
+   * @description 读取项目内自定义中文字体并返回 base64。
+   * @returns {Promise<string>} 字体 base64。
+   * @keyword-en load custom cover font base64
+   */
+  private async loadCustomCoverFontBase64OrThrow(): Promise<string> {
+    if (this.customCoverFontLoaded && this.customCoverFontBase64) {
+      return this.customCoverFontBase64;
+    }
+
+    const absPath = join(process.cwd(), ...COVER_FONT_RELATIVE_PATH.split('/'));
+    try {
+      const buf = await fs.readFile(absPath);
+      const base64 = Buffer.from(buf).toString('base64');
+      this.customCoverFontBase64 = base64;
+      this.customCoverFontLoaded = true;
+      return base64;
+    } catch {
+      throw new Error(`COVER_CUSTOM_FONT_MISSING: ${COVER_FONT_RELATIVE_PATH}`);
+    }
+  }
+
+  /**
+   * @description 生成 SVG 可用的自定义字体声明。
+   * @returns {Promise<string>} @font-face css。
+   * @keyword-en build custom font face css
+   */
+  private async buildCustomFontFaceCssOrThrow(): Promise<string> {
+    const base64 = await this.loadCustomCoverFontBase64OrThrow();
+    return `@font-face{font-family:'ProjectCoverCJK';src:url(data:font/ttf;base64,${base64}) format('truetype');font-weight:400 900;font-style:normal;}`;
   }
 
   /**

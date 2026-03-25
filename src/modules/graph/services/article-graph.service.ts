@@ -50,6 +50,7 @@ const ZCoverCopy = z.object({
 const COLLAGE_WIDTH = 640;
 const COLLAGE_HEIGHT = 853;
 const COLLAGE_DPI = 96;
+const COVER_FONT_RELATIVE_PATH = 'public/fonts/cover-cjk.ttf';
 
 type JimpModuleLike = {
   Jimp: {
@@ -78,6 +79,8 @@ let jimpModulePromise: Promise<unknown> | null = null;
 @Injectable()
 export class ArticleGraphService {
   private readonly logger = new Logger(ArticleGraphService.name);
+  private customCoverFontBase64: string | null = null;
+  private customCoverFontLoaded = false;
 
   constructor(
     private readonly agent: AgentService,
@@ -618,6 +621,13 @@ export class ArticleGraphService {
     subtitle: string;
     outputPath: string;
   }): Promise<boolean> {
+    const safeTitle = String(input.title || '').trim() || '示例封面';
+    const safeSubtitle = String(input.subtitle || '').trim();
+    const needsCjk = this.hasCjkChars(safeTitle) || this.hasCjkChars(safeSubtitle);
+    const fontFaceCss = needsCjk
+      ? await this.buildCustomFontFaceCssOrThrow()
+      : '';
+
     try {
       const mod = (await import('sharp')) as unknown as {
         default: (input: string | Buffer) => {
@@ -630,14 +640,14 @@ export class ArticleGraphService {
       const sharpFn = mod?.default;
       if (typeof sharpFn !== 'function') return false;
 
-      const titleEscaped = this.escapeSvgText(input.title);
-      const subtitleEscaped = this.escapeSvgText(input.subtitle);
-      const titleUnits = this.getVisualWidthUnits(input.title);
-      const subtitleUnits = this.getVisualWidthUnits(input.subtitle);
+      const subtitleForRender = safeSubtitle;
+      const subtitleEscaped = this.escapeSvgText(subtitleForRender);
+      const titleUnits = this.getVisualWidthUnits(safeTitle);
+      const subtitleUnits = this.getVisualWidthUnits(subtitleForRender);
       const titleFontSize = Math.max(34, Math.min(60, Math.floor(900 / Math.max(10, titleUnits))));
       const subtitleFontSize = Math.max(22, Math.min(34, Math.floor(760 / Math.max(12, subtitleUnits))));
-      const titleLines = this.splitTextByVisualWidth(input.title, 20);
-      const subtitleLines = this.splitTextByVisualWidth(input.subtitle, 28);
+      const titleLines = this.splitTextByVisualWidth(safeTitle, 20);
+      const subtitleLines = this.splitTextByVisualWidth(subtitleForRender, 28);
       const titleStartY = Math.max(34, 41 - (Math.max(1, titleLines.length) - 1) * 4);
       const subtitleStartY = Math.min(74, 54 + (Math.max(1, titleLines.length) - 1) * 3);
       const titleTspans = (titleLines.length > 0 ? titleLines : [''])
@@ -655,8 +665,9 @@ export class ArticleGraphService {
       const svg = `
 <svg width="${COLLAGE_WIDTH}" height="${COLLAGE_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
   <style>
-    .t{fill:#ffffff;font-size:${titleFontSize}px;font-weight:900;font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Source Han Sans SC','SimHei',Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#000000;stroke-width:8px;}
-    .s{fill:#ffffff;font-size:${subtitleFontSize}px;font-weight:700;font-family:'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Source Han Sans SC','SimHei',Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#000000;stroke-width:5px;}
+    ${fontFaceCss}
+    .t{fill:#ffffff;font-size:${titleFontSize}px;font-weight:900;font-family:'ProjectCoverCJK','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Source Han Sans SC','SimHei',Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#000000;stroke-width:8px;}
+    .s{fill:#ffffff;font-size:${subtitleFontSize}px;font-weight:700;font-family:'ProjectCoverCJK','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Source Han Sans SC','SimHei',Arial,Helvetica,sans-serif;paint-order:stroke;stroke:#000000;stroke-width:5px;}
   </style>
   <text x="50%" y="${titleStartY}%" text-anchor="middle" dominant-baseline="middle" class="t">${titleTspans}</text>
   ${subtitleEscaped ? `<text x="50%" y="${subtitleStartY}%" text-anchor="middle" dominant-baseline="middle" class="s">${subtitleTspans}</text>` : ''}
@@ -677,6 +688,48 @@ export class ArticleGraphService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * @description 判断文本是否包含中文字符。
+   * @param {string} text - 输入文本。
+   * @returns {boolean} 是否包含中文。
+   * @keyword-en has cjk chars
+   */
+  private hasCjkChars(text: string): boolean {
+    return /[\u3400-\u9fff]/.test(String(text || ''));
+  }
+
+  /**
+   * @description 读取项目内自定义中文字体并返回 base64。
+   * @returns {Promise<string>} 字体 base64。
+   * @keyword-en load custom cover font base64
+   */
+  private async loadCustomCoverFontBase64OrThrow(): Promise<string> {
+    if (this.customCoverFontLoaded && this.customCoverFontBase64) {
+      return this.customCoverFontBase64;
+    }
+
+    const absPath = join(process.cwd(), ...COVER_FONT_RELATIVE_PATH.split('/'));
+    try {
+      const buf = await fs.readFile(absPath);
+      const base64 = Buffer.from(buf).toString('base64');
+      this.customCoverFontBase64 = base64;
+      this.customCoverFontLoaded = true;
+      return base64;
+    } catch {
+      throw new Error(`COVER_CUSTOM_FONT_MISSING: ${COVER_FONT_RELATIVE_PATH}`);
+    }
+  }
+
+  /**
+   * @description 生成 SVG 可用的自定义字体声明。
+   * @returns {Promise<string>} @font-face css。
+   * @keyword-en build custom font face css
+   */
+  private async buildCustomFontFaceCssOrThrow(): Promise<string> {
+    const base64 = await this.loadCustomCoverFontBase64OrThrow();
+    return `@font-face{font-family:'ProjectCoverCJK';src:url(data:font/ttf;base64,${base64}) format('truetype');font-weight:400 900;font-style:normal;}`;
   }
 
   /**
@@ -835,6 +888,12 @@ export class ArticleGraphService {
         absPath,
         url: `/static/uploads/${fileName}`,
       };
+    }
+
+    if (this.hasCjkChars(coverTitle) || this.hasCjkChars(coverSubtitle)) {
+      throw new Error(
+        `COVER_RENDER_FAILED_WITH_CUSTOM_FONT: ${COVER_FONT_RELATIVE_PATH}`,
+      );
     }
     this.logger.warn('[cover-render] sharp_overlay_failed fallback_to_jimp=true');
 
