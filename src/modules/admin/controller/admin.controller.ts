@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UnauthorizedException,
@@ -376,6 +377,32 @@ export class AdminController {
   async deleteDataSource(@Param('code') code: string) {
     const ok = await this.adminService.deleteDataSource(code);
     return { ok };
+  }
+
+  /**
+   * @description 获取平台信息（AI补充说明）
+   * @keyword-en admin get platform info endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Get('platform-info')
+  async getPlatformInfo(@Req() req: Request) {
+    return this.adminService.getPlatformInfo(this.requireUser(req));
+  }
+
+  /**
+   * @description 更新平台信息（AI补充说明）
+   * @keyword-en admin upsert platform info endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Put('platform-info')
+  async upsertPlatformInfo(
+    @Req() req: Request,
+    @Body() body: { aiPromptSupplement: string },
+  ) {
+    return this.adminService.upsertPlatformInfo(
+      this.requireUser(req),
+      body.aiPromptSupplement,
+    );
   }
 
   /**

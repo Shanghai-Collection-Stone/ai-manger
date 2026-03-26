@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import '@uiw/react-md-editor/markdown-editor.css';
+import MDEditor from '@uiw/react-md-editor';
 import {
   adminApi,
   clearAdminToken,
@@ -107,6 +109,7 @@ const ALL_TABS = [
   { id: 'keys', label: 'key管理' },
   { id: 'sources', label: '数据源管理' },
   { id: 'dashboard_configs', label: '看板配置' },
+  { id: 'platform_info', label: '平台AI配置' },
 ];
 
 const AdminApp = () => {
@@ -132,6 +135,7 @@ const AdminApp = () => {
   const [keys, setKeys] = useState([]);
   const [sources, setSources] = useState([]);
   const [dashboardConfigs, setDashboardConfigs] = useState([]);
+  const [platformInfo, setPlatformInfo] = useState(null);
   const [editingUserId, setEditingUserId] = useState('');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
@@ -197,6 +201,9 @@ const AdminApp = () => {
       filePath: 'config/dashboards/platform.dashboard.json',
       enabled: true,
     },
+    platformInfo: {
+      aiPromptSupplement: '',
+    },
   });
 
   const loadData = async () => {
@@ -228,6 +235,19 @@ const AdminApp = () => {
       setKeys(k.keys || []);
       setSources(s.sources || []);
       setDashboardConfigs(dc.rows || []);
+      // 加载平台AI配置（租户级）
+      try {
+        const pi = await adminApi.getPlatformInfo();
+        setPlatformInfo(pi.platformInfo || null);
+        setForms((prev) => ({
+          ...prev,
+          platformInfo: {
+            aiPromptSupplement: pi.platformInfo?.aiPromptSupplement || '',
+          },
+        }));
+      } catch {
+        // 忽略加载失败
+      }
       if (tenantRows.length > 0) {
         setForms((prev) => ({
           ...prev,
@@ -345,6 +365,23 @@ const AdminApp = () => {
   const onResetDashboardCustomConfig = async (dashboardCode) => {
     await adminApi.resetDashboardCustomConfig(dashboardCode || 'ai-commander');
     setNotice('已重置 AI 修改，已回退到文件配置');
+  };
+
+  /**
+   * @description 保存平台AI配置
+   * @keyword-en submit platform info
+   * @returns {Promise<void>}
+   */
+  const onSubmitPlatformInfo = async () => {
+    const res = await adminApi.upsertPlatformInfo(forms.platformInfo.aiPromptSupplement);
+    setPlatformInfo(res.platformInfo || null);
+    setForms((prev) => ({
+      ...prev,
+      platformInfo: {
+        aiPromptSupplement: res.platformInfo?.aiPromptSupplement || '',
+      },
+    }));
+    setNotice('平台AI配置已保存');
   };
 
   const onLogout = async () => {
@@ -1226,6 +1263,55 @@ const AdminApp = () => {
                 () => gotoPage('dashboardConfigs', pages.dashboardConfigs - 1),
                 () => gotoPage('dashboardConfigs', pages.dashboardConfigs + 1),
               )}
+            </div>
+          </div>
+        ) : null}
+
+        {/* 平台AI配置 | @keyword-en platform info management */}
+        {activeTab === 'platform_info' ? (
+          <div className="grid lg:grid-cols-1 gap-4 pb-8">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold text-slate-900">平台AI补充说明</h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    此处的配置将作为AI补充提示，在所有LLM调用时自动注入，让AI更好地适应本平台的使用习惯。
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onSubmitPlatformInfo().catch((err) => setError(err.message))}
+                    className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                  >
+                    保存配置
+                  </button>
+                </div>
+              </div>
+              {/* Markdown编辑器区域 | @keyword-en markdown editor area */}
+              <div className="w-full" data-color-mode="light">
+                <MDEditor
+                  height={500}
+                  value={forms.platformInfo.aiPromptSupplement}
+                  onChange={(val) =>
+                    setForms((prev) => ({
+                      ...prev,
+                      platformInfo: {
+                        ...prev.platformInfo,
+                        aiPromptSupplement: val || '',
+                      },
+                    }))
+                  }
+                  preview="edit"
+                  textareaProps={{
+                    placeholder: '# 平台AI补充说明\n\n在这里填写适合本平台的AI使用习惯和补充提示，支持Markdown格式：\n\n- 使用简洁的中文回复\n- 适当使用Emoji增加可读性\n- ...',
+                  }}
+                />
+              </div>
+              {platformInfo?.updatedAt ? (
+                <div className="text-xs text-slate-400">
+                  上次更新：{new Date(platformInfo.updatedAt).toLocaleString()}
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

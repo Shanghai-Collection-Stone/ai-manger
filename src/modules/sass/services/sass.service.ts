@@ -15,6 +15,7 @@ import type {
   SassApiKeyEntity,
 } from '../entities/sass-api-key.entity.js';
 import type { SassDatabaseLogEntity } from '../entities/sass-database-log.entity.js';
+import type { PlatformInfoEntity } from '../entities/platform-info.entity.js';
 
 type SassFilterOp =
   | 'eq'
@@ -113,12 +114,14 @@ export class SassService {
   private readonly tenants: Collection<SassTenantEntity>;
   private readonly apiKeys: Collection<SassApiKeyEntity>;
   private readonly logs: Collection<SassDatabaseLogEntity>;
+  private readonly platformInfos: Collection<PlatformInfoEntity>;
 
   constructor(@Inject('DS_MONGO_DB') private readonly db: Db) {
     this.schemas = db.collection<SassSchemaEntity>('sass_schema');
     this.tenants = db.collection<SassTenantEntity>('sass_tenants');
     this.apiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.logs = db.collection<SassDatabaseLogEntity>('sass_database_log');
+    this.platformInfos = db.collection<PlatformInfoEntity>('sass_platform_infos');
     void this.ensureIndexes();
   }
 
@@ -136,6 +139,7 @@ export class SassService {
     await this.apiKeys.createIndex({ tenantId: 1 });
     await this.logs.createIndex({ tenantId: 1, schemaId: 1, createdAt: -1 });
     await this.logs.createIndex({ operation: 1, createdAt: -1 });
+    await this.platformInfos.createIndex({ tenantId: 1 }, { unique: true });
   }
 
   /**
@@ -1242,5 +1246,52 @@ export class SassService {
       refundQuantity: item.refundQuantity,
     }));
     return this.insertData(schemaId, tenantId, keyId, { data });
+  }
+
+  /**
+   * @description 获取租户平台信息（AI补充说明）
+   * @param {string} tenantId - 租户ID
+   * @returns {Promise<PlatformInfoEntity | null>} 平台信息
+   * @keyword-en get platform info
+   */
+  async getPlatformInfo(tenantId: string): Promise<PlatformInfoEntity | null> {
+    const normalized = (tenantId ?? '').trim();
+    if (!normalized) return null;
+    return this.platformInfos.findOne({ tenantId: normalized }) as Promise<PlatformInfoEntity | null>;
+  }
+
+  /**
+   * @description 更新租户平台信息（AI补充说明）
+   * @param {string} tenantId - 租户ID
+   * @param {string} aiPromptSupplement - AI补充说明（markdown）
+   * @returns {Promise<PlatformInfoEntity>} 更新后的平台信息
+   * @keyword-en upsert platform info
+   */
+  async upsertPlatformInfo(
+    tenantId: string,
+    aiPromptSupplement: string,
+  ): Promise<PlatformInfoEntity> {
+    const normalized = (tenantId ?? '').trim();
+    if (!normalized) throw new BadRequestException('TENANT_ID_REQUIRED');
+    const now = new Date();
+    const res = await this.platformInfos.findOneAndUpdate(
+      { tenantId: normalized },
+      {
+        $set: {
+          aiPromptSupplement: String(aiPromptSupplement ?? ''),
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          _id: new ObjectId(),
+          tenantId: normalized,
+          createdAt: now,
+        },
+      },
+      { upsert: true, returnDocument: 'after', includeResultMetadata: true },
+    );
+    if (!res.value) {
+      throw new BadRequestException('UPSERT_PLATFORM_INFO_FAILED');
+    }
+    return res.value as PlatformInfoEntity;
   }
 }

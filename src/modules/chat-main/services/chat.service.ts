@@ -19,6 +19,7 @@ import { KeywordService } from '../../ai-context/services/keyword.service.js';
 import { Observable } from 'rxjs';
 import { AdminService } from '../../admin/services/admin.service.js';
 import type { ConversationSessionType } from '../../context/entities/conversation.entity.js';
+import { SassService } from '../../sass/services/sass.service.js';
 
 /**
  * @title 主对话服务 Chat-Main Service
@@ -39,6 +40,7 @@ export class ChatMainService {
     private readonly keywordTools: KeywordService,
     private readonly adminService: AdminService,
     private readonly analysisTools: AnalysisFunctionCallService,
+    private readonly sass: SassService,
   ) {}
 
   private readonly HITL_PLACEHOLDER = '##HITL_REQUIRED_FRONTEND##';
@@ -72,10 +74,12 @@ export class ChatMainService {
 
     const now = request.now ?? new Date().toISOString();
     const ip = request.ip ?? '';
+    const platformSupplement = await this.buildPlatformSupplement(scope.tenantId);
     const sysContent = [
       `SESSION_ID:${sid}`,
       `REQUEST_TIME_ISO:${now}`,
       ip ? `CLIENT_IP:${ip}` : 'CLIENT_IP:unknown',
+      platformSupplement,
       this.getSystemPromptCN(scope.sessionType),
     ].join('\n');
 
@@ -272,10 +276,12 @@ export class ChatMainService {
 
           const nowStr = request.now ?? new Date().toISOString();
           const ipStr = request.ip || 'unknown';
+          const platformSupplement = await this.buildPlatformSupplement(scope.tenantId);
           const sysContent = [
             `SESSION_ID:${sid}`,
             `REQUEST_TIME_ISO:${nowStr}`,
             `CLIENT_IP:${ipStr}`,
+            platformSupplement,
             this.getSystemPromptCN(scope.sessionType),
           ].join('\n');
 
@@ -808,6 +814,19 @@ export class ChatMainService {
     if (sessionType === 'gallery-agent') return this.getGalleryAgentPromptCN();
     if (sessionType === 'xhs-specialist') return this.getXhsSpecialistPromptCN();
     return this.getDataAnalysisPromptCN();
+  }
+
+  /**
+   * @description 构建平台AI补充说明（租户个性化提示）
+   * @param {string | undefined} tenantId - 租户ID
+   * @returns {Promise<string>} 平台补充说明，如有则拼入SYSTEM_PROMPT块
+   * @keyword-en build platform AI prompt supplement
+   */
+  private async buildPlatformSupplement(tenantId?: string): Promise<string> {
+    if (!tenantId?.trim()) return '';
+    const info = await this.sass.getPlatformInfo(tenantId);
+    if (!info?.aiPromptSupplement?.trim()) return '';
+    return [`【平台AI补充说明】`, info.aiPromptSupplement.trim()].join('\n');
   }
 
   /**

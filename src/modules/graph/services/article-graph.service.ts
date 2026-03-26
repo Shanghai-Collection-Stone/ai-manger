@@ -56,6 +56,7 @@ type JimpModuleLike = {
   Jimp: {
     read: (input: string) => Promise<unknown>;
     rgbaToInt?: (r: number, g: number, b: number, a: number) => number;
+    intToRGBA?: (value: number) => { r: number; g: number; b: number; a: number };
   };
   loadFont?: (font: unknown) => Promise<unknown>;
   HorizontalAlign?: {
@@ -100,6 +101,46 @@ export class ArticleGraphService {
     base.push(...t1, ...t2);
     base.push(...(this.analysisTools.getAllDataSourceTools() ?? []));
     return base;
+  }
+
+  /**
+   * @description 构建文章生成链路的 LangChain 运行上下文。
+   * @param {object} input - 上下文输入。
+   * @returns {Record<string, unknown>} 传递给 LangChain 的 context 对象。
+   * @keyword-en build langchain context
+   */
+  private buildLangChainContext(input: {
+    userId: string;
+    tenantId?: string;
+    platform: string;
+    topic?: string;
+  }): Record<string, unknown> {
+    return {
+      scene: 'graph.generate_to_canvas',
+      userId: input.userId,
+      tenantId: input.tenantId,
+      platform: input.platform,
+      topic: input.topic,
+    };
+  }
+
+  /**
+   * @description 组装 LangChain invoke 配置，统一附带 context/configurable。
+   * @param {Record<string, unknown>} context - 运行上下文。
+   * @returns {{ context: Record<string, unknown>; configurable: Record<string, unknown>; }} invoke 配置。
+   * @keyword-en build langchain invoke option
+   */
+  private buildLangChainInvokeOption(context: Record<string, unknown>): {
+    context: Record<string, unknown>;
+    configurable: Record<string, unknown>;
+  } {
+    return {
+      context,
+      configurable: {
+        tenantId: context['tenantId'],
+        userId: context['userId'],
+      },
+    };
   }
 
   private parseJsonFromModelText(text: string): unknown {
@@ -853,6 +894,75 @@ export class ArticleGraphService {
   }
 
   /**
+   * @description 提取图片语义 token（标签+描述+文件名）用于相似度估计。
+   * @param {GalleryImageEntity} img - 图片实体。
+   * @returns {Set<string>} token 集合。
+   * @keyword-en build image semantic tokens
+   */
+  private buildImageSemanticTokens(img: GalleryImageEntity): Set<string> {
+    const tokens = new Set<string>();
+    const pushText = (value: unknown) => {
+      const s = String(value ?? '').toLowerCase();
+      const parts = s
+        .split(/[^\p{L}\p{N}]+/u)
+        .map((x) => x.trim())
+        .filter((x) => x.length >= 2);
+      for (const p of parts) tokens.add(p);
+    };
+    for (const t of Array.isArray(img?.tags) ? img.tags : []) pushText(t);
+    pushText(img?.description);
+    pushText(img?.fileName);
+    pushText(img?.originalName);
+    return tokens;
+  }
+
+  /**
+   * @description 计算两图差异分，越大代表越不相似。
+   * @param {GalleryImageEntity} a - 图片A。
+   * @param {GalleryImageEntity} b - 图片B。
+   * @returns {number} 差异分（0~1）。
+   * @keyword-en score collage pair diversity
+   */
+  private scoreImagePairDiversity(a: GalleryImageEntity, b: GalleryImageEntity): number {
+    const ta = this.buildImageSemanticTokens(a);
+    const tb = this.buildImageSemanticTokens(b);
+    if (ta.size === 0 && tb.size === 0) return 0.5;
+    let inter = 0;
+    for (const t of ta) {
+      if (tb.has(t)) inter++;
+    }
+    const union = ta.size + tb.size - inter;
+    const jaccard = union > 0 ? inter / union : 0;
+    return Math.max(0, Math.min(1, 1 - jaccard));
+  }
+
+  /**
+   * @description 在候选图中挑选差异度最高的一组拼图对。
+   * @param {GalleryImageEntity[]} input - 候选图列表。
+   * @returns {[GalleryImageEntity, GalleryImageEntity] | null} 最优二元组。
+   * @keyword-en pick best diverse collage pair
+   */
+  private pickMostDiversePair(
+    input: GalleryImageEntity[],
+  ): [GalleryImageEntity, GalleryImageEntity] | null {
+    if (!Array.isArray(input) || input.length < 2) return null;
+    let best: [GalleryImageEntity, GalleryImageEntity] | null = null;
+    let bestScore = -1;
+    for (let i = 0; i < input.length; i++) {
+      for (let j = i + 1; j < input.length; j++) {
+        const a = input[i];
+        const b = input[j];
+        const score = this.scoreImagePairDiversity(a, b);
+        if (score > bestScore) {
+          bestScore = score;
+          best = [a, b];
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
    * @description 生成双图动态拼图（640x853）。
    * @param {string} pathA - 图片A本地路径。
    * @param {string} pathB - 图片B本地路径。
@@ -870,7 +980,6 @@ export class ArticleGraphService {
         bitmap: { width: number; height: number };
         resize: (opts: { w: number; h: number }) => unknown;
         crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
-        composite: (img: unknown, x: number, y: number) => unknown;
       }>;
       new (args: { width: number; height: number; color: number }): {
         composite: (img: unknown, x: number, y: number) => unknown;
@@ -880,42 +989,119 @@ export class ArticleGraphService {
     };
 
     const [imgA, imgB] = await Promise.all([JimpCtor.read(pathA), JimpCtor.read(pathB)]);
-    const white =
+    const black =
       typeof JimpCtor.rgbaToInt === 'function'
-        ? JimpCtor.rgbaToInt(255, 255, 255, 255)
-        : 0xffffffff;
-    const out = new JimpCtor({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, color: white });
+        ? JimpCtor.rgbaToInt(0, 0, 0, 255)
+        : 0x000000ff;
+    const out = new JimpCtor({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, color: black });
 
-    const drawHalf = (
-      img: {
-        bitmap: { width: number; height: number };
-        resize: (opts: { w: number; h: number }) => unknown;
-        crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
-      },
-      y: number,
-      h: number,
-    ) => {
+    /**
+     * 将图片缩放裁剪至整图尺寸（cover 填充），用于像素级双图混合。
+     * @keyword-en fit-to-collage cover-crop resize
+     */
+    const fitToCollage = (img: {
+      bitmap: { width: number; height: number };
+      resize: (opts: { w: number; h: number }) => unknown;
+      crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
+    }) => {
       const iw = Math.max(1, Number(img.bitmap?.width ?? 1));
       const ih = Math.max(1, Number(img.bitmap?.height ?? 1));
-      const scale = Math.max(COLLAGE_WIDTH / iw, h / ih);
+      const scale = Math.max(COLLAGE_WIDTH / iw, COLLAGE_HEIGHT / ih);
       const rw = Math.max(COLLAGE_WIDTH, Math.ceil(iw * scale));
-      const rh = Math.max(h, Math.ceil(ih * scale));
+      const rh = Math.max(COLLAGE_HEIGHT, Math.ceil(ih * scale));
       img.resize({ w: rw, h: rh });
       const cx = Math.max(0, Math.floor((rw - COLLAGE_WIDTH) / 2));
-      const cy = Math.max(0, Math.floor((rh - h) / 2));
-      img.crop({ x: cx, y: cy, w: COLLAGE_WIDTH, h });
-      out.composite(img, 0, y);
+      const cy = Math.max(0, Math.floor((rh - COLLAGE_HEIGHT) / 2));
+      img.crop({ x: cx, y: cy, w: COLLAGE_WIDTH, h: COLLAGE_HEIGHT });
     };
 
-    const topH = Math.floor(COLLAGE_HEIGHT / 2);
-    drawHalf(imgA, 0, topH);
-    drawHalf(imgB, topH, COLLAGE_HEIGHT - topH);
+    // 两张图都缩放到完整画布大小，imgA 作为底层铺满
+    fitToCollage(imgA);
+    fitToCollage(imgB);
+    out.composite(imgA, 0, 0);
+
+    const outAny = out as unknown as {
+      getPixelColor?: (x: number, y: number) => number;
+      setPixelColor?: (color: number, x: number, y: number) => void;
+      composite: (img: unknown, x: number, y: number) => unknown;
+    };
+    const intToRgba = (JimpCtor as unknown as { intToRGBA?: (value: number) => { r: number; g: number; b: number; a: number } }).intToRGBA;
+    if (
+      typeof outAny.getPixelColor === 'function' &&
+      typeof outAny.setPixelColor === 'function' &&
+      typeof intToRgba === 'function' &&
+      typeof JimpCtor.rgbaToInt === 'function'
+    ) {
+      const clamp8 = (v: number): number => Math.max(0, Math.min(255, v));
+      const smoothstep = (v: number): number => {
+        const x = Math.max(0, Math.min(1, v));
+        return x * x * (3 - 2 * x);
+      };
+      // 融合带: 约占总高 16%，仅用于中缝渐变过渡
+      const blendBand = Math.max(72, Math.floor(COLLAGE_HEIGHT * 0.16));
+      const topH = Math.floor(COLLAGE_HEIGHT / 2);
+      const startY = Math.max(0, topH - Math.floor(blendBand * 0.45));
+      const endY = Math.min(COLLAGE_HEIGHT - 1, topH + Math.ceil(blendBand * 0.55));
+      const span = Math.max(1, endY - startY);
+      // imgB 已按 fitToCollage 缩放裁剪至整图尺寸，可直接读取任意坐标像素
+      const imgBAny = imgB as unknown as { getPixelColor: (x: number, y: number) => number };
+      const imgAAny = imgA as unknown as { getPixelColor: (x: number, y: number) => number };
+      // Pass 1: 先明确上下拼图结构（上半固定用 A，下半固定用 B）
+      for (let y = 0; y < COLLAGE_HEIGHT; y++) {
+        for (let x = 0; x < COLLAGE_WIDTH; x++) {
+          const src = y < topH
+            ? intToRgba(imgAAny.getPixelColor(x, y))
+            : intToRgba(imgBAny.getPixelColor(x, y));
+          outAny.setPixelColor!(
+            JimpCtor.rgbaToInt(clamp8(src.r), clamp8(src.g), clamp8(src.b), 255),
+            x,
+            y,
+          );
+        }
+      }
+
+      // Pass 1.5: 渐变透明混合——过渡带内上层透明度平滑变化，下层图片隐约透出
+      for (let y = startY; y <= endY; y++) {
+        const rawT = (y - startY) / span;
+        const t = smoothstep(rawT);
+        // 上半带 (y < topH)：A 透明度从 1 降到 0，B 从 0 升到 1
+        // 下半带 (y >= topH)：A 透明度 0，B 透明度从 t 升到 1
+        for (let x = 0; x < COLLAGE_WIDTH; x++) {
+          const cA = intToRgba(imgAAny.getPixelColor(x, y));
+          const cB = intToRgba(imgBAny.getPixelColor(x, y));
+          let finalR: number, finalG: number, finalB: number, finalA: number;
+          if (y < topH) {
+            // 上半带：AB 混合，B 隐约透出，A 透明度渐降
+            const alphaA = clamp8(Math.round(255 * (1 - t)));
+            finalR = clamp8(Math.round((cA.r * alphaA + cB.r * (255 - alphaA)) / 255));
+            finalG = clamp8(Math.round((cA.g * alphaA + cB.g * (255 - alphaA)) / 255));
+            finalB = clamp8(Math.round((cA.b * alphaA + cB.b * (255 - alphaA)) / 255));
+            finalA = 255;
+          } else {
+            // 下半带：B 为主导，A 继续淡出
+            const alphaB = clamp8(Math.round(255 * t));
+            finalR = clamp8(Math.round((cB.r * alphaB + cA.r * (255 - alphaB)) / 255));
+            finalG = clamp8(Math.round((cB.g * alphaB + cA.g * (255 - alphaB)) / 255));
+            finalB = clamp8(Math.round((cB.b * alphaB + cA.b * (255 - alphaB)) / 255));
+            finalA = 255;
+          }
+          outAny.setPixelColor!(JimpCtor.rgbaToInt(finalR, finalG, finalB, finalA), x, y);
+        }
+      }
+
+      // 不叠加额外风格化效果，保持”上下双图 + 中缝渐变”纯拼图语义。
+    } else {
+      // Fallback: 像素级混合不可用时，使用简单的上下分区合成
+      const topH = Math.floor(COLLAGE_HEIGHT / 2);
+      out.composite(imgA, 0, 0);
+      out.composite(imgB, 0, topH);
+    }
 
     const uploadsDir = join(process.cwd(), 'public', 'uploads');
     mkdirSync(uploadsDir, { recursive: true });
-    const fileName = `${Date.now()}-${randomUUID()}-collage.jpg`;
+    const fileName = `${Date.now()}-${randomUUID()}-collage.png`;
     const absPath = join(uploadsDir, fileName);
-    await out.write(absPath, { quality: 90 });
+    await out.write(absPath);
     return {
       fileName,
       absPath,
@@ -1116,6 +1302,7 @@ export class ArticleGraphService {
     galleryUserId?: string;
     galleryGroupId?: number;
     minImageScore?: number;
+    langchainContext?: Record<string, unknown>;
   }): Promise<Record<string, unknown>> {
     const count =
       typeof input.count === 'number' && Number.isFinite(input.count)
@@ -1151,9 +1338,19 @@ export class ArticleGraphService {
       Number.isFinite(input.minImageScore)
         ? Math.max(0, Math.min(1, input.minImageScore))
         : 0.5;
+    const langchainContext = {
+      ...this.buildLangChainContext({
+        userId: input.userId,
+        tenantId,
+        platform,
+        topic,
+      }),
+      ...(input.langchainContext ?? {}),
+    };
 
     const canvas = await this.canvas.create({
       userId: input.userId,
+      tenantId,
       topic,
       outline: { topic, platform, articleCount: count },
       style: { platform, language: 'zh-CN' },
@@ -1166,12 +1363,17 @@ export class ArticleGraphService {
       platform,
       topic,
       count,
+      langchainContext,
     });
 
-    await this.canvas.updateMeta(canvas.id, {
+    await this.canvas.updateMeta(
+      canvas.id,
+      {
       topic,
       outline: { topic, platform, articleCount: count, blueprints },
-    });
+      },
+      tenantId,
+    );
 
     await this.generateArticlesAndImages({
       canvasId: canvas.id,
@@ -1185,9 +1387,10 @@ export class ArticleGraphService {
       galleryUserId,
       galleryGroupId,
       minImageScore,
+      langchainContext,
     });
 
-    const after = await this.canvas.get(canvas.id);
+    const after = await this.canvas.get(canvas.id, tenantId);
     if (!after) throw new BadRequestException('CANVAS_NOT_FOUND');
 
     const canvasTags = Array.from(
@@ -1199,7 +1402,7 @@ export class ArticleGraphService {
       ),
     ).slice(0, 50);
 
-    await this.canvas.updateStatus(canvas.id, 'completed');
+    await this.canvas.updateStatus(canvas.id, 'completed', tenantId);
 
     return {
       canvasId: canvas.id,
@@ -1222,6 +1425,7 @@ export class ArticleGraphService {
     platform: string;
     topic?: string;
     count: number;
+    langchainContext: Record<string, unknown>;
   }): Promise<
     Array<{
       index: number;
@@ -1275,10 +1479,11 @@ export class ArticleGraphService {
     ];
 
     const llm = await this.agent.buildLLM(config);
+    const invokeOption = this.buildLangChainInvokeOption(input.langchainContext);
     let plan = ZArticleBlueprintPlan.safeParse(undefined);
     try {
       const structured = llm.withStructuredOutput(ZArticleBlueprintPlan);
-      const output = await structured.invoke(messages);
+      const output = await structured.invoke(messages, invokeOption);
       console.log('output', output);
       plan = ZArticleBlueprintPlan.safeParse(output);
       if (!plan.success) {
@@ -1346,10 +1551,10 @@ export class ArticleGraphService {
                     ],
                   },
                 };
-        const ai = await llm.invoke([
-          new SystemMessage(sys),
-          new HumanMessage(JSON.stringify(payload)),
-        ]);
+        const ai = await llm.invoke(
+          [new SystemMessage(sys), new HumanMessage(JSON.stringify(payload))],
+          invokeOption,
+        );
         const content = (ai as unknown as { content?: unknown }).content;
         const raw = this.extractTextFromModelContent(content);
         lastText = this.format.normalizeJsonText(raw);
@@ -1420,6 +1625,7 @@ export class ArticleGraphService {
     galleryUserId: string;
     galleryGroupId?: number;
     minImageScore: number;
+    langchainContext: Record<string, unknown>;
   }): Promise<void> {
     for (const bp of input.blueprints) {
       const article = await this.generateOneArticle({
@@ -1429,25 +1635,30 @@ export class ArticleGraphService {
         platform: input.platform,
         topic: input.topic,
         blueprint: bp,
+        langchainContext: input.langchainContext,
       });
 
-      await this.canvas.addArticles(input.canvasId, {
-        articles: [
-          {
-            title: article.title,
-            tags: article.tags,
-            contentJson: {
-              platform: input.platform,
-              topic: input.topic,
-              blueprint: bp,
-              markdown: article.markdown,
-              imageQuery: article.imageQuery,
+      await this.canvas.addArticles(
+        input.canvasId,
+        {
+          articles: [
+            {
+              title: article.title,
+              tags: article.tags,
+              contentJson: {
+                platform: input.platform,
+                topic: input.topic,
+                blueprint: bp,
+                markdown: article.markdown,
+                imageQuery: article.imageQuery,
+              },
             },
-          },
-        ],
-      });
+          ],
+        },
+        input.tenantId,
+      );
 
-      const updatedCanvas = await this.canvas.get(input.canvasId);
+      const updatedCanvas = await this.canvas.get(input.canvasId, input.tenantId);
       if (!updatedCanvas) continue;
       const latestArticle =
         updatedCanvas.articles[updatedCanvas.articles.length - 1];
@@ -1472,6 +1683,7 @@ export class ArticleGraphService {
     temperature: number;
     platform: string;
     topic?: string;
+    langchainContext: Record<string, unknown>;
     blueprint: {
       index: number;
       title: string;
@@ -1532,10 +1744,11 @@ export class ArticleGraphService {
     ];
 
     const llm = await this.agent.buildLLM(config);
+    const invokeOption = this.buildLangChainInvokeOption(input.langchainContext);
     let article = ZSingleArticle.safeParse(undefined);
     try {
       const structured = llm.withStructuredOutput(ZSingleArticle);
-      const output = await structured.invoke(messages);
+      const output = await structured.invoke(messages, invokeOption);
       article = ZSingleArticle.safeParse(output);
     } catch {
       void 0;
@@ -1562,10 +1775,10 @@ export class ArticleGraphService {
                   must: ['Only output JSON object'],
                 },
               };
-        const ai = await llm.invoke([
-          new SystemMessage(sys),
-          new HumanMessage(JSON.stringify(payload)),
-        ]);
+        const ai = await llm.invoke(
+          [new SystemMessage(sys), new HumanMessage(JSON.stringify(payload))],
+          invokeOption,
+        );
         const content = (ai as unknown as { content?: unknown }).content;
         const raw = this.extractTextFromModelContent(content);
         lastText = this.format.normalizeJsonText(raw);
@@ -1613,12 +1826,14 @@ export class ArticleGraphService {
     minImageScore: number;
   }): Promise<void> {
     const queryText = input.imageQuery?.trim() || input.articleTitle;
+    const targetImageCount = this.randomInt(1, 3);
     this.logger.debug(
-      `[assign-image] start canvasId=${input.canvasId} articleId=${input.articleId} queryLen=${queryText.length}`,
+      `[assign-image] start canvasId=${input.canvasId} articleId=${input.articleId} queryLen=${queryText.length} targetImageCount=${targetImageCount}`,
     );
     const allImageKeys = new Set<string>();
     const pickedImages: GalleryImageEntity[] = [];
     const needRawSourceCount = 2;
+    const maxPickedImages = Math.max(6, targetImageCount * 4);
     const ownerCandidates = Array.from(
       new Set(
         [input.galleryUserId, 'default']
@@ -1644,21 +1859,21 @@ export class ArticleGraphService {
     };
 
     for (const ownerId of ownerCandidates) {
-      if (pickedImages.length >= 3) break;
+      if (pickedImages.length >= maxPickedImages) break;
       const byQuery = await this.gallery.searchSimilar(
         queryText,
         ownerId,
         input.tenantId,
-        12,
+        24,
         input.minImageScore,
       );
       for (const r of byQuery) {
-        if (pickedImages.length >= 3) break;
+        if (pickedImages.length >= maxPickedImages) break;
         tryAddPicked(r.image, ownerId);
       }
 
       if (
-        pickedImages.length < 3 &&
+        pickedImages.length < maxPickedImages &&
         input.articleTags &&
         input.articleTags.length > 0
       ) {
@@ -1671,17 +1886,17 @@ export class ArticleGraphService {
           tenantId: input.tenantId,
           groupId: input.galleryGroupId,
           tags: validTags,
-          limit: 24,
+          limit: 48,
           matchCollage: false,
         });
         for (const img of byTags) {
-          if (pickedImages.length >= 3) break;
+          if (pickedImages.length >= maxPickedImages) break;
           tryAddPicked(img, ownerId);
         }
       }
 
-      if (pickedImages.length < 3) {
-        const needed = 3 - pickedImages.length;
+      if (pickedImages.length < maxPickedImages) {
+        const needed = maxPickedImages - pickedImages.length;
         const randomList = await this.gallery.sampleRandom({
           userId: ownerId,
           tenantId: input.tenantId,
@@ -1689,7 +1904,7 @@ export class ArticleGraphService {
           limit: needed + 12,
         });
         for (const img of randomList) {
-          if (pickedImages.length >= 3) break;
+          if (pickedImages.length >= maxPickedImages) break;
           tryAddPicked(img, ownerId);
         }
       }
@@ -1699,17 +1914,36 @@ export class ArticleGraphService {
       pickedImages.filter(
         (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
       ),
-    ).slice(0, 2);
+    ).slice(0, Math.max(6, targetImageCount * 3));
     this.logger.debug(
       `[assign-image] source_pool picked=${pickedImages.length} rawSources=${rawSources.length}`,
     );
     let collageImage: GalleryImageEntity | null = null;
     let coverImage: GalleryImageEntity | null = null;
+    const contentCollageImages: GalleryImageEntity[] = [];
     let coverTitleMissing = false;
+    let coverPairKey: string | null = null;
 
-    if (rawSources.length >= needRawSourceCount) {
-      const p0 = rawSources[0]?.absPath || this.resolveLocalPathFromGalleryUrl(rawSources[0]?.url);
-      const p1 = rawSources[1]?.absPath || this.resolveLocalPathFromGalleryUrl(rawSources[1]?.url);
+    const coverPair = this.pickMostDiversePair(rawSources.slice(0, Math.min(rawSources.length, 8)));
+    const coverSources = coverPair ? [coverPair[0], coverPair[1]] : rawSources.slice(0, 2);
+    const coverSourceIds = new Set(
+      coverSources
+        .map((x) => Number(x?.id ?? 0))
+        .filter((x) => Number.isFinite(x) && x > 0),
+    );
+    const contentSourcePool = rawSources.filter((x) => {
+      const id = Number(x?.id ?? 0);
+      if (!Number.isFinite(id) || id <= 0) return true;
+      return !coverSourceIds.has(id);
+    });
+
+    if (coverSources.length >= needRawSourceCount) {
+      const p0 =
+        coverSources[0]?.absPath ||
+        this.resolveLocalPathFromGalleryUrl(coverSources[0]?.url);
+      const p1 =
+        coverSources[1]?.absPath ||
+        this.resolveLocalPathFromGalleryUrl(coverSources[1]?.url);
       if (p0 && p1) {
         try {
           const collageFile = await this.createDynamicCollageFile(p0, p1);
@@ -1723,18 +1957,75 @@ export class ArticleGraphService {
             tags: Array.from(
               new Set([...(Array.isArray(input.articleTags) ? input.articleTags : []), '拼图', '动态拼图']),
             ).slice(0, 24),
-            description: `Canvas动态拼图：#${rawSources[0]?.id ?? '-'} + #${rawSources[1]?.id ?? '-'}`,
+            description: `Canvas动态拼图：#${coverSources[0]?.id ?? '-'} + #${coverSources[1]?.id ?? '-'}`,
             isCollage: true,
-            collageSourceImageIds: [rawSources[0]?.id, rawSources[1]?.id].filter(
+            collageSourceImageIds: [coverSources[0]?.id, coverSources[1]?.id].filter(
               (x): x is number => typeof x === 'number' && Number.isFinite(x),
             ),
           });
+          const aId = Number(coverSources[0]?.id ?? 0);
+          const bId = Number(coverSources[1]?.id ?? 0);
+          coverPairKey = `${Math.min(aId, bId)}-${Math.max(aId, bId)}`;
+          const diversity = this.scoreImagePairDiversity(coverSources[0], coverSources[1]);
           this.logger.debug(
-            `[assign-image] collage_generated collageId=${String(collageImage?.id ?? '')}`,
+            `[assign-image] collage_generated collageId=${String(collageImage?.id ?? '')} sourceA=${String(coverSources[0]?.id ?? '')} sourceB=${String(coverSources[1]?.id ?? '')} diversity=${diversity.toFixed(2)}`,
           );
         } catch {
           this.logger.warn('[assign-image] collage_generate_failed');
           collageImage = null;
+        }
+      }
+    }
+
+    const needContentCollageCount = Math.max(0, targetImageCount - 1);
+    if (contentSourcePool.length >= 2 && needContentCollageCount > 0) {
+      const pairs: Array<{ a: GalleryImageEntity; b: GalleryImageEntity; key: string; diversity: number }> = [];
+      for (let i = 0; i < contentSourcePool.length; i++) {
+        for (let j = i + 1; j < contentSourcePool.length; j++) {
+          const a = contentSourcePool[i];
+          const b = contentSourcePool[j];
+          const aId = Number(a?.id ?? 0);
+          const bId = Number(b?.id ?? 0);
+          const key = `${Math.min(aId, bId)}-${Math.max(aId, bId)}`;
+          if (coverPairKey && key === coverPairKey) continue;
+          pairs.push({ a, b, key, diversity: this.scoreImagePairDiversity(a, b) });
+        }
+      }
+
+      const orderedPairs = pairs
+        .sort((x, y) => y.diversity - x.diversity)
+        .slice(0, Math.max(needContentCollageCount * 4, needContentCollageCount));
+      for (const pair of this.shuffleArray(orderedPairs)) {
+        if (contentCollageImages.length >= needContentCollageCount) break;
+        const pa = pair.a.absPath || this.resolveLocalPathFromGalleryUrl(pair.a.url);
+        const pb = pair.b.absPath || this.resolveLocalPathFromGalleryUrl(pair.b.url);
+        if (!pa || !pb) continue;
+        try {
+          const file = await this.createDynamicCollageFile(pa, pb);
+          const img = await this.saveGeneratedImageToGallery({
+            userId: input.galleryUserId,
+            tenantId: input.tenantId,
+            groupId: input.galleryGroupId,
+            absPath: file.absPath,
+            fileName: file.fileName,
+            url: file.url,
+            tags: Array.from(
+              new Set([...(Array.isArray(input.articleTags) ? input.articleTags : []), '拼图', '正文配图拼图']),
+            ).slice(0, 24),
+            description: `Canvas正文拼图：#${pair.a?.id ?? '-'} + #${pair.b?.id ?? '-'}`,
+            isCollage: true,
+            collageSourceImageIds: [pair.a?.id, pair.b?.id].filter(
+              (x): x is number => typeof x === 'number' && Number.isFinite(x),
+            ),
+          });
+          if (img) {
+            contentCollageImages.push(img);
+            this.logger.debug(
+              `[assign-image] content_collage_generated collageId=${String(img?.id ?? '')} sourceA=${String(pair.a?.id ?? '')} sourceB=${String(pair.b?.id ?? '')} diversity=${pair.diversity.toFixed(2)}`,
+            );
+          }
+        } catch {
+          this.logger.warn('[assign-image] content_collage_generate_failed');
         }
       }
     }
@@ -1800,16 +2091,15 @@ export class ArticleGraphService {
       }
     }
 
-    const targetImageCount = this.randomInt(1, 3);
     const finalImages: Array<GalleryImageEntity> = [];
     if (coverImage) finalImages.push(coverImage);
-    if (collageImage && finalImages.length < targetImageCount) {
-      finalImages.push(collageImage);
-    }
-    for (const img of this.shuffleArray(pickedImages)) {
+    for (const img of contentCollageImages) {
       if (finalImages.length >= targetImageCount) break;
-      if (finalImages.some((x) => x.id === img.id)) continue;
       finalImages.push(img);
+    }
+
+    if (finalImages.length === 0 && collageImage) {
+      finalImages.push(collageImage);
     }
 
     const imageIds = finalImages
@@ -1825,6 +2115,8 @@ export class ArticleGraphService {
       let doneNote = 'AUTO_QUERY_MATCH';
       if (finalImages.length === 0) {
         doneNote = 'NO_GALLERY_IMAGE';
+      } else if (coverImage && finalImages.length > 1) {
+        doneNote = 'AUTO_CANVAS_COVER_AND_COLLAGE_IMAGES';
       } else if (coverImage) {
         doneNote = 'AUTO_CANVAS_COVER_IMAGE';
       } else if (collageImage && coverTitleMissing) {
@@ -1843,7 +2135,7 @@ export class ArticleGraphService {
         imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
         status: 'done',
         doneNote,
-      });
+      }, input.tenantId);
       this.logger.debug(
         `[assign-image] done canvasId=${input.canvasId} articleId=${input.articleId} doneNote=${doneNote} imageCount=${imageUrls.length}`,
       );
@@ -1851,7 +2143,7 @@ export class ArticleGraphService {
       await this.canvas.updateArticleImages(input.canvasId, input.articleId, {
         status: 'requires_human',
         doneNote: 'NO_GALLERY_IMAGE',
-      });
+      }, input.tenantId);
       this.logger.warn(
         `[assign-image] no_image canvasId=${input.canvasId} articleId=${input.articleId}`,
       );

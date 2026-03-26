@@ -9,6 +9,7 @@ import { TitleFunctionCallModule } from '../function-call/title/title.module';
 import { AiContextModule } from '../ai-context/ai-context.module';
 import { AdminModule } from '../admin/admin.module.js';
 import { AnalysisFunctionCallModule } from '../function-call/analysis/analysis.module.js';
+import { SassModule } from '../sass/sass.module.js';
 
 /**
  * @title 主对话模块 Chat-Main Module
@@ -26,6 +27,7 @@ import { AnalysisFunctionCallModule } from '../function-call/analysis/analysis.m
     AiContextModule,
     AdminModule,
     AnalysisFunctionCallModule,
+    SassModule,
   ],
   controllers: [ChatMainController],
   providers: [ChatMainService],

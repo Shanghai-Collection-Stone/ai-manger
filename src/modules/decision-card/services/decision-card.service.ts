@@ -652,6 +652,7 @@ export class DecisionCardService {
                 galleryUserId?: string;
                 galleryGroupId?: number;
                 minImageScore?: number;
+                langchainContext?: Record<string, unknown>;
               }) => Promise<Record<string, unknown>>;
             })
           : undefined;
@@ -664,6 +665,13 @@ export class DecisionCardService {
             platform: 'xhs',
             topic,
             count: Math.max(1, Math.min(5, publishCount)),
+            langchainContext: {
+              source: 'decision_card.auto_generate_canvas',
+              userId,
+              tenantId: scope?.tenantId,
+              platform: 'xhs',
+              topic,
+            },
           });
           const genObj: Record<string, unknown> =
             gen && typeof gen === 'object' ? gen : {};

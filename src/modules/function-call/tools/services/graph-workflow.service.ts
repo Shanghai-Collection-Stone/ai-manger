@@ -191,6 +191,13 @@ export class GraphWorkflowFunctionCallService {
             galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,
+            langchainContext: {
+              source: 'tool.topic_orchestrate',
+              userId: finalUserId,
+              tenantId: scope?.tenantId,
+              platform,
+              topic,
+            },
           });
 
           const genObj: Record<string, unknown> =
@@ -556,6 +563,13 @@ export class GraphWorkflowFunctionCallService {
             galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,
+            langchainContext: {
+              source: 'tool.batch_publish_auto_generate',
+              userId: finalUserId,
+              tenantId: scope?.tenantId,
+              platform,
+              topic,
+            },
           });
 
           const genObj: Record<string, unknown> =

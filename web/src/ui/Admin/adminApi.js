@@ -274,4 +274,23 @@ export const adminApi = {
       body: JSON.stringify({ dashboardCode }),
     });
   },
+
+  /**
+   * @description 获取平台信息（AI补充说明）
+   * @keyword-en get platform info
+   */
+  async getPlatformInfo() {
+    return request('/platform-info');
+  },
+
+  /**
+   * @description 更新平台信息（AI补充说明）
+   * @keyword-en upsert platform info
+   */
+  async upsertPlatformInfo(aiPromptSupplement) {
+    return request('/platform-info', {
+      method: 'PUT',
+      body: JSON.stringify({ aiPromptSupplement }),
+    });
+  },
 };

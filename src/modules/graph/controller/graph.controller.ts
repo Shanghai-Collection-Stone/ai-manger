@@ -56,6 +56,17 @@ export class GraphController {
         Number.isFinite(body.minImageScore)
           ? body.minImageScore
           : undefined,
+      langchainContext: {
+        source: 'http.graph.articles.generate',
+        userId,
+        tenantId:
+          typeof body?.tenantId === 'string' && body.tenantId.trim().length > 0
+            ? body.tenantId.trim()
+            : undefined,
+        platform:
+          typeof body?.platform === 'string' ? body.platform.trim() : undefined,
+        topic: typeof body?.topic === 'string' ? body.topic.trim() : undefined,
+      },
     });
     return res;
   }

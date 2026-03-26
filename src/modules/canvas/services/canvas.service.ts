@@ -200,6 +200,14 @@ export class CanvasService {
     return (res.value as CanvasEntity | null) ?? null;
   }
 
+  /**
+   * @description 更新画布元信息（租户隔离）。
+   * @param {number} id - 画布ID。
+   * @param {{ topic?: string; outline?: Record<string, unknown>; style?: Record<string, unknown>; }} patch - 更新字段。
+   * @param {string} [tenantId] - 租户ID。
+   * @returns {Promise<CanvasEntity | null>} 更新后的画布实体。
+   * @keyword-en update canvas meta
+   */
   async updateMeta(
     id: number,
     patch: {
@@ -207,6 +215,7 @@ export class CanvasService {
       outline?: Record<string, unknown>;
       style?: Record<string, unknown>;
     },
+    tenantId?: string,
   ): Promise<CanvasEntity | null> {
     const upd: Record<string, unknown> = { updatedAt: new Date() };
     if (typeof patch.topic === 'string') upd['topic'] = patch.topic;
@@ -216,8 +225,11 @@ export class CanvasService {
     if (patch.style && typeof patch.style === 'object') {
       upd['style'] = patch.style;
     }
-    await this.canvases.updateOne({ id }, { $set: upd });
-    return await this.get(id);
+    await this.canvases.updateOne(
+      { id, ...this.buildTenantFilter(tenantId) },
+      { $set: upd },
+    );
+    return await this.get(id, tenantId);
   }
 
   /**
@@ -239,6 +251,7 @@ export class CanvasService {
       status?: CanvasArticleEntity['status'];
       doneNote?: string;
     },
+    tenantId?: string,
   ): Promise<CanvasEntity | null> {
     const upd: Record<string, unknown> = { updatedAt: new Date() };
     if (Array.isArray(patch.imageIds))
@@ -250,10 +263,10 @@ export class CanvasService {
     if (typeof patch.doneNote === 'string')
       upd['articles.$.doneNote'] = patch.doneNote;
     await this.canvases.updateOne(
-      { id: canvasId, 'articles.id': articleId },
+      { id: canvasId, 'articles.id': articleId, ...this.buildTenantFilter(tenantId) },
       { $set: upd },
     );
-    return await this.get(canvasId);
+    return await this.get(canvasId, tenantId);
   }
 
   /**

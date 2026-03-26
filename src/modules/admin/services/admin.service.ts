@@ -1109,4 +1109,49 @@ export class AdminService {
     await ensureDefaultForCategory('llm');
     await ensureDefaultForCategory('em');
   }
+
+  /**
+   * @description 获取平台信息（AI补充说明）
+   * @param {AdminUserEntity} adminUser - 管理员用户
+   * @returns {Promise<object>} 平台信息
+   * @keyword-en get platform info
+   */
+  async getPlatformInfo(adminUser: AdminUserEntity): Promise<object> {
+    // 租户管理员只能访问自己的租户，平台管理员可以访问任何租户
+    const tenantId =
+      adminUser.role === 'tenant_admin'
+        ? (adminUser.tenantId || '')
+        : undefined;
+    if (!tenantId && adminUser.role !== 'super_admin') {
+      throw new ForbiddenException('INSUFFICIENT_PERMISSIONS');
+    }
+    const info = await this.sassService.getPlatformInfo(tenantId || '');
+    return { platformInfo: info };
+  }
+
+  /**
+   * @description 更新平台信息（AI补充说明）
+   * @param {AdminUserEntity} adminUser - 管理员用户
+   * @param {string} aiPromptSupplement - AI补充说明
+   * @returns {Promise<object>} 更新后的平台信息
+   * @keyword-en upsert platform info
+   */
+  async upsertPlatformInfo(
+    adminUser: AdminUserEntity,
+    aiPromptSupplement: string,
+  ): Promise<object> {
+    // 租户管理员只能管理自己的租户，平台管理员可以管理任何租户
+    const tenantId =
+      adminUser.role === 'tenant_admin'
+        ? (adminUser.tenantId || '')
+        : undefined;
+    if (!tenantId && adminUser.role !== 'super_admin') {
+      throw new ForbiddenException('INSUFFICIENT_PERMISSIONS');
+    }
+    const info = await this.sassService.upsertPlatformInfo(
+      tenantId || '',
+      aiPromptSupplement,
+    );
+    return { platformInfo: info };
+  }
 }

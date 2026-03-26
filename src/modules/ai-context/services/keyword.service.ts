@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { AgentService } from '../../ai-agent/services/agent.service';
 import { AdminService } from '../../admin/services/admin.service';
 
@@ -72,25 +73,25 @@ export class KeywordService {
       | undefined;
     try {
       if (!text || text.trim().length === 0) return [];
+      const normalizedText = this.normalizeKeywordInput(text);
+      if (normalizedText.length === 0) return [];
       aiConfig = await this.resolveKeywordAiConfig();
 
-      const aiResult = await this.agent.runWithMessages({
-        config: {
-          provider: aiConfig.provider,
-          model: aiConfig.model,
-          temperature: 0.1,
-          apiKey: aiConfig.apiKey,
-          baseUrl: aiConfig.baseUrl,
-          responseFormat: undefined,
-          system:
-            'You are an advanced keyword extraction and expansion tool. Your goal is to identify the core subject and intent of the user input, and then generate a list of keywords that includes:\n1. The core entities/concepts explicitly mentioned.\n2. Synonyms or closely related terms.\n3. Broader categories or specific attributes (e.g., if input is "Apple", include "Red", "Fruit", "Rosaceae", "Technology", "iPhone" depending on context).\n\nIMPORTANT: ALL KEYWORDS MUST BE IN ENGLISH ONLY, regardless of the input language.\n\nReturn ONLY the keywords separated by commas. No explanation.',
-        },
-        messages: this.agent.toMessages([{ role: 'user', content: text }]),
+      const llm = await this.agent.buildLLM({
+        provider: aiConfig.provider,
+        model: aiConfig.model,
+        temperature: 0.1,
+        apiKey: aiConfig.apiKey,
+        baseUrl: aiConfig.baseUrl,
       });
+      const aiResult = await llm.invoke([
+        new SystemMessage(
+          'You are an advanced keyword extraction and expansion tool. Your goal is to identify the core subject and intent of the user input, and then generate a list of keywords that includes:\n1. The core entities/concepts explicitly mentioned.\n2. Synonyms or closely related terms.\n3. Broader categories or specific attributes (e.g., if input is "Apple", include "Red", "Fruit", "Rosaceae", "Technology", "iPhone" depending on context).\n\nIMPORTANT: ALL KEYWORDS MUST BE IN ENGLISH ONLY, regardless of the input language.\n\nReturn ONLY the keywords separated by commas. No explanation.',
+        ),
+        new HumanMessage(normalizedText),
+      ]);
 
-      const content = (aiResult as unknown as { content: unknown }).content;
-      const aiText =
-        typeof content === 'string' ? content : JSON.stringify(content);
+      const aiText = this.toPlainText((aiResult as unknown as { content: unknown }).content);
 
       const keywords = aiText
         .split(/[,\n]/)
@@ -124,14 +125,15 @@ export class KeywordService {
 
     // Fallback to regex
     const set = new Set<string>();
-    const lower = text.toLowerCase();
+    const normalizedText = this.normalizeKeywordInput(text);
+    const lower = normalizedText.toLowerCase();
 
     const english = lower.match(/[a-z][a-z0-9-]{1,}/g) ?? [];
     for (const w of english) {
       if (w.length >= 2 && !this.stopwords.has(w)) set.add(w);
     }
 
-    const chineseSeq = text.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
+    const chineseSeq = normalizedText.match(/[\u4e00-\u9fa5]{2,}/g) ?? [];
     for (const seq of chineseSeq) {
       if (seq.length >= 2) set.add(seq);
     }
@@ -162,5 +164,38 @@ export class KeywordService {
       provider: 'nvidia',
       model: 'deepseek-ai/deepseek-v3.1-terminus',
     };
+  }
+
+  /**
+   * @description 清洗关键词输入，移除伪参数标签与多余空白，防止模型误触发工具调用语义。
+   * @keyword-en normalize keyword input
+   */
+  private normalizeKeywordInput(text: string): string {
+    return String(text ?? '')
+      .replace(/<parameter[^>]*>.*?<\/parameter>/gis, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * @description 将模型 content 统一转为纯文本。
+   * @keyword-en normalize model content text
+   */
+  private toPlainText(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object' && 'text' in item) {
+            const text = (item as { text?: unknown }).text;
+            return typeof text === 'string' ? text : '';
+          }
+          return '';
+        })
+        .join('\n');
+    }
+    return JSON.stringify(content ?? '');
   }
 }

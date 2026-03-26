@@ -3136,10 +3136,11 @@ export default function AiChatApp() {
     const fallbackImgs = Array.isArray(article.imageUrls)
       ? article.imageUrls.map((x) => String(x || '').trim()).filter(Boolean)
       : [];
-    const imageUrls =
-      Array.isArray(parsed.imageUrls) && parsed.imageUrls.length > 0
-        ? parsed.imageUrls
-        : fallbackImgs;
+    const parsedImgs = Array.isArray(parsed.imageUrls)
+      ? parsed.imageUrls.map((x) => String(x || '').trim()).filter(Boolean)
+      : [];
+    const mergedImageUrls = Array.from(new Set([...parsedImgs, ...fallbackImgs]));
+    const imageUrls = mergedImageUrls;
     setArticleDraft({
       title: String(article.title || ''),
       tagsText: tagsArr.map((t) => String(t || '').trim()).filter(Boolean).join(', '),

@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UnauthorizedException,
@@ -132,6 +133,33 @@ export class SassController {
   async getTenant(@Param('id') id: string): Promise<Record<string, unknown>> {
     const tenant = await this.sass.getTenant(id);
     return { tenant };
+  }
+
+  /**
+   * @description 获取平台信息（AI补充说明）
+   * @keyword-en get platform info
+   */
+  @Get('platform-info')
+  async getPlatformInfo(
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const tenantId = this.readTenantId(req);
+    const info = await this.sass.getPlatformInfo(tenantId);
+    return { platformInfo: info };
+  }
+
+  /**
+   * @description 更新平台信息（AI补充说明）
+   * @keyword-en upsert platform info
+   */
+  @Put('platform-info')
+  async upsertPlatformInfo(
+    @Req() req: Request,
+    @Body() body: { aiPromptSupplement: string },
+  ): Promise<Record<string, unknown>> {
+    const tenantId = this.readTenantId(req);
+    const info = await this.sass.upsertPlatformInfo(tenantId, body.aiPromptSupplement);
+    return { platformInfo: info };
   }
 
   /**
