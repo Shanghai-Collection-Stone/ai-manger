@@ -81,6 +81,7 @@ export class ArticleGraphService {
   private readonly logger = new Logger(ArticleGraphService.name);
   private customCoverFontBase64: string | null = null;
   private customCoverFontLoaded = false;
+  private fontconfigSetupDone = false;
 
   constructor(
     private readonly agent: AgentService,
@@ -717,6 +718,7 @@ export class ArticleGraphService {
         const base64 = Buffer.from(buf).toString('base64');
         this.customCoverFontBase64 = base64;
         this.customCoverFontLoaded = true;
+        await this.ensureFontconfigSetup(absPath);
         return base64;
       } catch {
         void 0;
@@ -754,6 +756,39 @@ export class ArticleGraphService {
     pushPath(join(process.cwd(), 'dist', 'public', 'fonts', 'cover-cjk.ttf'));
     pushPath(join(process.cwd(), 'web', 'public', 'fonts', 'cover-cjk.ttf'));
     return out;
+  }
+
+  /**
+   * @description 将字体写入 /tmp/cover-fonts 并通过 FONTCONFIG_FILE 使 librsvg 能发现该字体，解决 Alpine 无系统中文字体问题。
+   * @param {string} fontFilePath - 字体绝对路径。
+   * @keyword-en setup fontconfig for cover cjk font
+   */
+  private async ensureFontconfigSetup(fontFilePath: string): Promise<void> {
+    if (this.fontconfigSetupDone) return;
+    try {
+      const tmpDir = '/tmp/cover-fonts';
+      const cacheDir = `${tmpDir}/cache`;
+      await fs.mkdir(cacheDir, { recursive: true });
+      const tmpFont = `${tmpDir}/cover-cjk.ttf`;
+      try { await fs.access(tmpFont); } catch { await fs.copyFile(fontFilePath, tmpFont); }
+      const confPath = `${tmpDir}/fonts.conf`;
+      try { await fs.access(confPath); } catch {
+        const conf = [
+          '<?xml version="1.0"?>',
+          '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">',
+          '<fontconfig>',
+          `  <dir>${tmpDir}</dir>`,
+          `  <cachedir>${cacheDir}</cachedir>`,
+          '</fontconfig>',
+        ].join('\n');
+        await fs.writeFile(confPath, conf, 'utf8');
+      }
+      process.env.FONTCONFIG_FILE = confPath;
+      process.env.FONTCONFIG_PATH = tmpDir;
+      this.fontconfigSetupDone = true;
+    } catch {
+      void 0; // best-effort, Windows dev env 忽略
+    }
   }
 
   /**
