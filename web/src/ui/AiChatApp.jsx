@@ -3,6 +3,7 @@ import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import html2canvas from 'html2canvas';
 import { $currentSessionId } from './AiCommander/store';
+import { ToastContainer } from './AiCommander/blocks/shared';
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
@@ -497,8 +498,14 @@ const api = {
   },
   async uploadGalleryImages(files, body) {
     try {
+      const fileList = Array.isArray(files) ? files : [];
+      const maxFiles = 24;
+      const maxFileSize = 12 * 1024 * 1024;
+      if (fileList.length > maxFiles) return { images: [], message: `最多只能同时上传 ${maxFiles} 个文件` };
+      const oversize = fileList.find((f) => Number(f?.size || 0) > maxFileSize);
+      if (oversize) return { images: [], message: `文件 ${oversize.name || ''} 超过 12MB 限制` };
       const fd = new FormData();
-      (Array.isArray(files) ? files : []).forEach((f) => fd.append('files', f));
+      fileList.forEach((f) => fd.append('files', f));
       Object.entries(body || {}).forEach(([k, v]) => {
         if (v === undefined || v === null) return;
         fd.append(k, String(v));
@@ -4296,6 +4303,7 @@ export default function AiChatApp() {
   }, [resources]);
 
   return (
+    <ToastContainer>
     <div className="flex h-screen bg-white text-gray-900 font-sans overflow-hidden">
       {isSidebarOpen && (
         <div
@@ -5188,5 +5196,6 @@ export default function AiChatApp() {
 
       <SettingsModal open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
     </div>
+    </ToastContainer>
   );
 }

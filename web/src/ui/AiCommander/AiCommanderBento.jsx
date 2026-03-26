@@ -11,6 +11,7 @@ import TaskCenterView from './TaskCenterView';
 import ToolsView from './ToolsView';
 import CanvasFeedView from './CanvasFeedView';
 import NavItem from './NavItem';
+import { ToastContainer } from './blocks/shared';
 import {
   $activeTab,
   $decisionCount,
@@ -206,7 +207,8 @@ const AiCommanderBento = () => {
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-[#F7F9FC] font-sans text-slate-800 overflow-hidden">
+    <ToastContainer>
+      <div className="flex flex-col h-[100dvh] bg-[#F7F9FC] font-sans text-slate-800 overflow-hidden">
       <style>{`
         @keyframes slideInRight {
           from { transform: translateX(20px); opacity: 0; }
@@ -401,7 +403,8 @@ const AiCommanderBento = () => {
           />
         </div>
       ) : null}
-    </div>
+      </div>
+    </ToastContainer>
   );
 };
 

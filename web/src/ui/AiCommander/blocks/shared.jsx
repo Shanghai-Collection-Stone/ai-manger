@@ -189,3 +189,103 @@ export const EChart = ({ option, height = 160, plugins = [] }) => {
 
 /** @description 通用卡片样式常量 @keyword-en card style constant */
 export const CARD = 'bg-white rounded-3xl border border-slate-50 shadow-[0_2px_10px_rgba(0,0,0,0.02)]';
+
+/* ━━━ Toast 通知系统 ━━━ */
+
+const TOAST_LIMIT = 5;
+
+// 用 window 确保跨 chunk 共享
+const g = typeof window !== 'undefined' ? window : global;
+if (!g._toastSeq) g._toastSeq = 0;
+if (!g._toastListeners) g._toastListeners = new Set();
+
+/**
+ * @description 显示顶部 Toast 通知
+ * error 类型不自动消失（常驻），其他类型 3.5s 后消失
+ * @param {string} message - 通知内容
+ * @param {'success'|'error'|'info'} [type='info'] - 通知类型
+ * @param {number} [duration] - 显示时长(ms)，不传则 error 类型常驻，其他 3.5s
+ * @keyword-en show toast notification
+ */
+export function showToast(message, type = 'info', duration) {
+  const actualDuration = duration !== undefined ? duration : 3500;
+  const id = ++g._toastSeq;
+  const toast = { id, message, type };
+  g._toastListeners.forEach((fn) => fn([toast]));
+  if (actualDuration > 0) {
+    setTimeout(() => {
+      g._toastListeners.forEach((fn) => fn(null, id));
+    }, actualDuration);
+  }
+}
+
+/**
+ * @description 移除指定 id 的 toast
+ * @param {number} id - toast id
+ * @keyword-en remove toast by id
+ */
+export function removeToast(id) {
+  g._toastListeners.forEach((fn) => fn(null, id));
+}
+
+/**
+ * @description 监听 toast 变化（返回 unsubscribe）
+ * @param {(toasts: Array|null, removedId?: number) => void} listener
+ * @keyword-en toast change listener
+ */
+export function onToastChange(listener) {
+  g._toastListeners.add(listener);
+  return () => g._toastListeners.delete(listener);
+}
+
+/**
+ * @description Toast 容器组件（放在 App 根节点）
+ * @param {Object} props
+ * @param {React.ReactNode} props.children
+ * @keyword-en Toast container component
+ */
+export function ToastContainer({ children }) {
+  const [toasts, setToasts] = React.useState([]);
+  const timeoutsRef = useRef(new Map());
+
+  React.useEffect(() => {
+    const unsubscribe = onToastChange((toastOrNull, removedId) => {
+      if (removedId) {
+        setToasts((prev) => prev.filter((t) => t.id !== removedId));
+        timeoutsRef.current.delete(removedId);
+      } else if (toastOrNull && Array.isArray(toastOrNull)) {
+        setToasts((prev) => {
+          const next = [...prev, ...toastOrNull];
+          return next.slice(-TOAST_LIMIT);
+        });
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  const typeStyles = {
+    success: 'bg-emerald-600',
+    error: 'bg-red-600',
+    info: 'bg-slate-800',
+  };
+
+  return (
+    <>
+      {children}
+      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            onClick={() => removeToast(toast.id)}
+            className={`pointer-events-auto cursor-pointer max-w-sm px-4 py-3 pr-8 rounded-xl text-white text-sm shadow-lg flex items-center gap-2 animate-fade-in relative ${typeStyles[toast.type] || typeStyles.info}`}
+            title="点击关闭"
+          >
+            {toast.type === 'success' && <span>✓</span>}
+            {toast.type === 'error' && <span>✕</span>}
+            <span>{toast.message}</span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}

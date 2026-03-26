@@ -10,6 +10,13 @@
 图库控制器。
 - **关键词**: gallery, image, group, groups, upload, pagination, cursor, embedding, vector-search, similarity, groupId, atlas, cosine, mongo, controller
 
+### filters/gallery-upload-exception.filter.ts
+图库上传异常过滤器（拦截 Multer 上传错误并转换为前端可读消息）。
+- **关键词**: upload, multer, exception, filter, file-count, file-size
+- **函数**:
+  - `catch`: 捕获并返回统一错误响应/catch and normalize upload exception response
+  - `resolveMulterError`: 映射 Multer 错误码到业务文案/map multer codes to user-friendly message
+
 ### gallery.service.ts
 图片服务。
 - **关键词**: image, service

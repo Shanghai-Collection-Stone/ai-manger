@@ -8,6 +8,7 @@ import {
   Query,
   Req,
   UnauthorizedException,
+  UseFilters,
   UseInterceptors,
   UploadedFiles,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { GalleryService } from '../services/gallery.service.js';
 import { GalleryGroupService } from '../services/gallery-group.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { GalleryUploadExceptionFilter } from '../filters/gallery-upload-exception.filter.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
 import type { Request } from 'express';
@@ -445,6 +447,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Post('upload')
+  @UseFilters(new GalleryUploadExceptionFilter())
   @UseInterceptors(
     FilesInterceptor('files', 24, {
       storage: multer.diskStorage({
@@ -475,7 +478,7 @@ export class GalleryController {
         const mt = String(file.mimetype || '').toLowerCase();
         cb(null, mt.startsWith('image/'));
       },
-      limits: { files: 24, fileSize: 12 * 1024 * 1024 },
+      limits: { fileSize: 12 * 1024 * 1024 },
     }),
   )
   async upload(
@@ -497,6 +500,9 @@ export class GalleryController {
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('No image files uploaded');
+    }
+    if (files.length > 24) {
+      throw new BadRequestException(`最多只能同时上传 24 个文件，当前选择了 ${files.length} 个`);
     }
     const authScope = req ? await this.resolveAuthScope(req) : {};
     const userId = String(body?.userId ?? '').trim() || authScope.userId || undefined;

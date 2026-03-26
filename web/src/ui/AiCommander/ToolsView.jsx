@@ -6,6 +6,7 @@ import ThoughtRouteView from './ThoughtRouteView';
 import CanvasFeedView from './CanvasFeedView';
 import XhsSpecialistView from './XhsSpecialistView';
 import ChatBIView from './ChatBIView';
+import { showToast } from './blocks/shared';
 
 /**
  * @description Tools View for AI Commander, including AI Gallery
@@ -47,9 +48,16 @@ const api = {
       const res = await fetch(`${API_BASE}/gallery/groups${qs ? `?${qs}` : ''}`, {
         headers: getAuthHeaders(),
       });
-      if (!res.ok) return { groups: [] };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `获取图库分组失败 (${res.status})`, 'error');
+        return { groups: [] };
+      }
+      return data;
+    } catch (e) {
+      showToast(`获取图库分组失败: ${e?.message || '网络错误'}`, 'error');
       return { groups: [] };
     }
   },
@@ -67,9 +75,16 @@ const api = {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `创建图库分组失败 (${res.status})`, 'error');
+        return null;
+      }
+      return data;
+    } catch (e) {
+      showToast(`创建图库分组失败: ${e?.message || '网络错误'}`, 'error');
       return null;
     }
   },
@@ -88,9 +103,16 @@ const api = {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `更新图库分组失败 (${res.status})`, 'error');
+        return null;
+      }
+      return data;
+    } catch (e) {
+      showToast(`更新图库分组失败: ${e?.message || '网络错误'}`, 'error');
       return null;
     }
   },
@@ -107,9 +129,16 @@ const api = {
         method: 'POST',
         headers: getAuthHeaders(),
       });
-      if (!res.ok) return { ok: false };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `删除图库分组失败 (${res.status})`, 'error');
+        return { ok: false };
+      }
+      return data;
+    } catch (e) {
+      showToast(`删除图库分组失败: ${e?.message || '网络错误'}`, 'error');
       return { ok: false };
     }
   },
@@ -139,9 +168,16 @@ const api = {
       const res = await fetch(`${API_BASE}/gallery${qs ? `?${qs}` : ''}`, {
         headers: getAuthHeaders(),
       });
-      if (!res.ok) return { images: [] };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `获取图库图片失败 (${res.status})`, 'error');
+        return { images: [] };
+      }
+      return data;
+    } catch (e) {
+      showToast(`获取图库图片失败: ${e?.message || '网络错误'}`, 'error');
       return { images: [] };
     }
   },
@@ -155,8 +191,20 @@ const api = {
    */
   async uploadGalleryImages(files, body) {
     try {
+      const fileList = Array.isArray(files) ? files : [];
+      const maxFiles = 24;
+      const maxFileSize = 12 * 1024 * 1024;
+      if (fileList.length > maxFiles) {
+        showToast(`最多只能同时上传 ${maxFiles} 个文件`, 'error');
+        return { images: [] };
+      }
+      const oversize = fileList.find((f) => Number(f?.size || 0) > maxFileSize);
+      if (oversize) {
+        showToast(`文件 ${oversize.name || ''} 超过 12MB 限制`, 'error');
+        return { images: [] };
+      }
       const fd = new FormData();
-      (Array.isArray(files) ? files : []).forEach((f) => fd.append('files', f));
+      fileList.forEach((f) => fd.append('files', f));
       Object.entries(body || {}).forEach(([k, v]) => {
         if (v === undefined || v === null) return;
         fd.append(k, String(v));
@@ -166,9 +214,20 @@ const api = {
         headers: getAuthHeaders(),
         body: fd,
       });
-      if (!res.ok) return { images: [] };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      console.log('[upload] status:', res.status, 'ok:', res.ok, 'raw:', raw.substring(0, 500));
+      if (!res.ok) {
+        showToast(data?.message || `上传失败 (${res.status})`, 'error');
+        return { images: [] };
+      }
+      if (Array.isArray(data.images) && data.images.length > 0) {
+        showToast(`上传成功 ${data.images.length} 张图片`, 'success');
+      }
+      return data;
+    } catch (e) {
+      showToast(`上传失败: ${e?.message || '网络错误'}`, 'error');
       return { images: [] };
     }
   },
@@ -188,9 +247,16 @@ const api = {
       const res = await fetch(`${API_BASE}/gallery/tags${qs ? `?${qs}` : ''}`, {
         headers: getAuthHeaders(),
       });
-      if (!res.ok) return { tags: [] };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `获取标签列表失败 (${res.status})`, 'error');
+        return { tags: [] };
+      }
+      return data;
+    } catch (e) {
+      showToast(`获取标签列表失败: ${e?.message || '网络错误'}`, 'error');
       return { tags: [] };
     }
   },
@@ -208,9 +274,16 @@ const api = {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
-      if (!res.ok) return { matched: 0, modified: 0 };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `更新标签失败 (${res.status})`, 'error');
+        return { matched: 0, modified: 0 };
+      }
+      return data;
+    } catch (e) {
+      showToast(`更新标签失败: ${e?.message || '网络错误'}`, 'error');
       return { matched: 0, modified: 0 };
     }
   },
@@ -229,9 +302,16 @@ const api = {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
-      if (!res.ok) return { ok: false };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `删除图片失败 (${res.status})`, 'error');
+        return { ok: false };
+      }
+      return data;
+    } catch (e) {
+      showToast(`删除图片失败: ${e?.message || '网络错误'}`, 'error');
       return { ok: false };
     }
   },
@@ -249,9 +329,16 @@ const api = {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),
       });
-      if (!res.ok) return { updated: 0 };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `重建向量失败 (${res.status})`, 'error');
+        return { updated: 0 };
+      }
+      return data;
+    } catch (e) {
+      showToast(`重建向量失败: ${e?.message || '网络错误'}`, 'error');
       return { updated: 0 };
     }
   },
@@ -267,9 +354,16 @@ const api = {
       const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`, {
         headers: getAuthHeaders(),
       });
-      if (!res.ok) return { canvases: [] };
-      return await res.json();
-    } catch {
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `获取Canvas列表失败 (${res.status})`, 'error');
+        return { canvases: [] };
+      }
+      return data;
+    } catch (e) {
+      showToast(`获取Canvas列表失败: ${e?.message || '网络错误'}`, 'error');
       return { canvases: [] };
     }
   },
@@ -292,13 +386,78 @@ const COLLAGE_WIDTH = 640;
 const COLLAGE_HEIGHT = 853;
 const COLLAGE_DPI = 96;
 
-const loadImageElement = (src) => new Promise((resolve, reject) => {
+// 上传图片最大边像素限制
+const MAX_UPLOAD_DIMENSION = 4096;
+
+/**
+ * @description 获取图片文件的尺寸
+ * @param {File} file - 图片文件
+ * @returns {Promise<{width: number, height: number}>}
+ * @keyword-en get image dimensions
+ */
+const getImageDimensions = (file) => new Promise((resolve, reject) => {
+  const url = URL.createObjectURL(file);
   const img = new Image();
-  img.crossOrigin = 'anonymous';
-  img.onload = () => resolve(img);
-  img.onerror = () => reject(new Error(`IMAGE_LOAD_FAILED:${src}`));
-  img.src = src;
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    resolve({ width: img.naturalWidth, height: img.naturalHeight });
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    reject(new Error('无法读取图片尺寸'));
+  };
+  img.src = url;
 });
+
+/**
+ * @description 检查文件是否需要压缩（边长超过限制）
+ * @param {File} file - 图片文件
+ * @returns {Promise<boolean>}
+ * @keyword-en check if image needs compression
+ */
+const needsCompression = async (file) => {
+  const { width, height } = await getImageDimensions(file);
+  return width > MAX_UPLOAD_DIMENSION || height > MAX_UPLOAD_DIMENSION;
+};
+
+/**
+ * @description 使用 canvas 对图片进行尺寸压缩（保持高画质）
+ * @param {File} file - 原始图片文件
+ * @param {number} maxDim - 最大边像素限制
+ * @returns {Promise<File>} 压缩后的图片文件
+ * @keyword-en compress image by resizing with canvas
+ */
+const compressImage = async (file, maxDim = MAX_UPLOAD_DIMENSION) => {
+  const { width, height } = await getImageDimensions(file);
+  if (width <= maxDim && height <= maxDim) return file;
+
+  const ratio = Math.min(maxDim / width, maxDim / height);
+  const newW = Math.round(width * ratio);
+  const newH = Math.round(height * ratio);
+
+  const url = URL.createObjectURL(file);
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload = () => resolve(i);
+    i.onerror = reject;
+    i.src = url;
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = newW;
+  canvas.height = newH;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, newW, newH);
+  URL.revokeObjectURL(url);
+
+  const blob = await new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.95);
+  });
+
+  const ext = file.name.split('.').pop() || 'jpg';
+  const baseName = file.name.replace(/\.[^.]+$/, '');
+  return new File([blob], `${baseName}_${newW}x${newH}.jpg`, { type: 'image/jpeg' });
+};
 
 const drawCover = (ctx, img, x, y, width, height) => {
   const iw = Number(img?.naturalWidth || img?.width || 0);
@@ -508,7 +667,11 @@ const GalleryView = ({ onBack }) => {
   
   // Upload Tags State
   const [uploadDraft, setUploadDraft] = useState({ tags: '' });
-  
+
+  // Compression Confirm State
+  const [showCompressConfirm, setShowCompressConfirm] = useState(false);
+  const [pendingUpload, setPendingUpload] = useState(null); // { files, tags, groupId }
+
   // Create Group State
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [groupDraft, setGroupDraft] = useState({ name: '', description: '', tags: '' });
@@ -636,6 +799,7 @@ const GalleryView = ({ onBack }) => {
       setShowCreateGroup(false);
       await loadGroups();
       setSelectedGroupId(res.group.id);
+      showToast(`图库分组 "${name}" 创建成功`, 'success');
     }
   };
 
@@ -643,12 +807,42 @@ const GalleryView = ({ onBack }) => {
   const onUploadFiles = async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
+
+    const tags = String(uploadDraft.tags || '')
+      .split(/[\s,]+/g)
+      .map(t => t.trim())
+      .filter(t => t.length > 0);
+
+    // 检查是否有图片尺寸过大
+    const largeFiles = [];
+    for (const file of files) {
+      try {
+        if (await needsCompression(file)) {
+          const { width, height } = await getImageDimensions(file);
+          largeFiles.push({ file, width, height });
+        }
+      } catch {}
+    }
+
+    // 多文件上传时，把文件名和大小作为 key 用于后续匹配
+    const largeKeys = new Set(largeFiles.map(lf => `${lf.file.name}__${lf.file.size}`));
+
+    if (largeFiles.length > 0) {
+      // 有大图，弹出确认框
+      setPendingUpload({ files, tags, largeFiles, largeKeys });
+      setShowCompressConfirm(true);
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
+
+    // 尺寸正常，直接上传
+    await doUpload(files, tags);
+  };
+
+  // 执行上传（内部方法）
+  const doUpload = async (files, tags) => {
     setUploading(true);
     try {
-      const tags = String(uploadDraft.tags || '')
-        .split(/[\s,]+/g)
-        .map(t => t.trim())
-        .filter(t => t.length > 0);
       const res = await api.uploadGalleryImages(files, {
         userId: userId || 'default',
         groupId: selectedGroupId,
@@ -663,6 +857,40 @@ const GalleryView = ({ onBack }) => {
       if (fileRef.current) fileRef.current.value = '';
       setUploadDraft({ tags: '' });
     }
+  };
+
+  // 确认压缩并上传
+  const onConfirmCompress = async () => {
+    if (!pendingUpload) return;
+    const { files, tags, largeKeys } = pendingUpload;
+    setShowCompressConfirm(false);
+
+    setUploading(true);
+    try {
+      // 压缩所有大图
+      const compressedFiles = await Promise.all(
+        files.map(async (f) => {
+          const key = `${f.name}__${f.size}`;
+          if (largeKeys.has(key)) {
+            return compressImage(f);
+          }
+          return f;
+        })
+      );
+      await doUpload(compressedFiles, tags);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+      setUploadDraft({ tags: '' });
+      setPendingUpload(null);
+    }
+  };
+
+  // 取消上传
+  const onCancelCompress = () => {
+    setShowCompressConfirm(false);
+    setPendingUpload(null);
+    if (fileRef.current) fileRef.current.value = '';
   };
 
   const toggleCollagePick = useCallback((id) => {
@@ -721,6 +949,7 @@ const GalleryView = ({ onBack }) => {
         setCollageSelectedIds([]);
         await loadImages({ append: false });
         await loadTags();
+        showToast('拼图生成并入库成功', 'success');
       } else {
         setCollageMessage('拼图上传失败，请稍后重试');
       }
@@ -783,6 +1012,7 @@ const GalleryView = ({ onBack }) => {
         setCoverSelectedId(null);
         await loadImages({ append: false });
         await loadTags();
+        showToast('封面图生成并入库成功', 'success');
       } else {
         setCoverMessage('封面图上传失败，请稍后重试');
       }
@@ -850,16 +1080,20 @@ const GalleryView = ({ onBack }) => {
     });
     setPreviewAddTags([]);
     setPreviewRemoveTags([]);
+    showToast('标签更新成功', 'success');
   }, [previewImage, previewAddTags, previewRemoveTags, userId, loadTags, closePreview]);
 
   const deletePreviewImage = useCallback(async () => {
     if (!previewImage) return;
     const img = previewImage;
     const uid = userId || 'default';
-    await api.deleteGalleryImage(img.id, { userId: uid });
-    setImages((prev) => prev.filter((x) => x.id !== img.id));
-    closePreview();
-    await loadTags();
+    const res = await api.deleteGalleryImage(img.id, { userId: uid });
+    if (res?.ok) {
+      showToast(`图片 #${img.id} 已删除`, 'success');
+      setImages((prev) => prev.filter((x) => x.id !== img.id));
+      closePreview();
+      await loadTags();
+    }
   }, [previewImage, userId, closePreview, loadTags]);
 
   // Chat tab - render ChatBIView and return early
@@ -1385,6 +1619,44 @@ const GalleryView = ({ onBack }) => {
                 className="px-4 py-2 rounded-lg bg-black text-white hover:bg-slate-800 text-sm font-medium"
               >
                 创建
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compression Confirm Modal */}
+      {showCompressConfirm && pendingUpload && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+            <h3 className="text-lg font-bold mb-2 text-amber-600">图片尺寸过大</h3>
+            <p className="text-sm text-slate-600 mb-4">
+              以下图片尺寸超过 {MAX_UPLOAD_DIMENSION} 像素，可能导致上传失败（413 Payload Too Large）：
+            </p>
+            <div className="bg-slate-50 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto space-y-2">
+              {pendingUpload.largeFiles.map(({ file, width, height }, idx) => (
+                <div key={idx} className="text-xs text-slate-700 flex items-center gap-2">
+                  <span className="shrink-0 w-6 h-6 bg-amber-100 text-amber-700 rounded flex items-center justify-center text-[10px] font-bold">{idx + 1}</span>
+                  <span className="truncate flex-1" title={file.name}>{file.name}</span>
+                  <span className="text-slate-400 shrink-0">{width} × {height}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-sm text-slate-600 mb-4">
+              点击"压缩上传"将自动把图片最大边缩至 {MAX_UPLOAD_DIMENSION} 像素（高画质 JPEG），然后上传。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onCancelCompress}
+                className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium"
+              >
+                取消
+              </button>
+              <button
+                onClick={onConfirmCompress}
+                className="px-4 py-2 rounded-lg bg-amber-600 text-white hover:bg-amber-700 text-sm font-medium"
+              >
+                压缩上传
               </button>
             </div>
           </div>
