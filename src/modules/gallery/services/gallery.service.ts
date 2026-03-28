@@ -1,7 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { promises as fs } from 'fs';
+import { mkdirSync } from 'fs';
 import { Collection, Db, ObjectId } from 'mongodb';
-import { join, resolve } from 'path';
+import { randomUUID } from 'crypto';
+import { join, resolve, extname } from 'path';
 import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import type {
@@ -16,6 +18,7 @@ export class GalleryService {
   private readonly counters: Collection<{ _id: string; seq: number }>;
   private readonly VECTOR_INDEX_NAME = 'gallery_image_embedding_index';
   private isAtlasAvailable: boolean | null = null;
+  private jimpModulePromise: Promise<unknown> | null = null;
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
@@ -449,7 +452,7 @@ export class GalleryService {
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     return this.images
       .find(filter, { projection: { _id: 0 } })
-      .sort({ updatedAt: -1, id: -1 })
+      .sort({ id: -1 })
       .limit(lim)
       .toArray();
   }
@@ -756,5 +759,66 @@ export class GalleryService {
       apiKey: runtime.apiKey,
       baseUrl: runtime.baseUrl,
     };
+  }
+
+  /**
+   * @description 为已存在的图片文件生成缩略图，返回缩略图文件名和URL。
+   * @param {string} absPath - 图片绝对路径。
+   * @param {string} originalFileName - 原始文件名（用于提取扩展名）。
+   * @returns {Promise<{ thumbFileName: string; thumbUrl: string } | null>} 缩略图信息，失败返回null。
+   * @keyword gallery, thumbnail, generate
+   * @since 2026-03-28
+   */
+  async generateThumbnail(
+    absPath: string,
+    originalFileName: string,
+  ): Promise<{ thumbFileName: string; thumbUrl: string } | null> {
+    const src = String(absPath || '');
+    if (!src) return null;
+
+    const dir = join(process.cwd(), 'public', 'uploads_thumbs');
+    mkdirSync(dir, { recursive: true });
+
+    const rawExt = extname(String(originalFileName || '')).toLowerCase();
+    const ext = rawExt && rawExt.length <= 12 ? rawExt : '.jpg';
+    const thumbFileName = `${Date.now()}-${randomUUID()}${ext}`;
+    const outputPath = join(dir, thumbFileName);
+
+    try {
+      if (!this.jimpModulePromise) {
+        this.jimpModulePromise = import('jimp') as Promise<unknown>;
+      }
+      const mod = await this.jimpModulePromise;
+      const Jimp = (mod as Record<string, unknown>).Jimp as {
+        read: (path: string) => Promise<{
+          bitmap?: { width: number; height: number };
+          resize: (opts: { w: number; h: number }) => unknown;
+          write: (path: string, opts: { quality: number }) => Promise<void>;
+        }>;
+      };
+      if (!Jimp) return null;
+
+      const img = await Jimp.read(src);
+      const w = img?.bitmap?.width ?? 0;
+      const h = img?.bitmap?.height ?? 0;
+      if (w > 0 && h > 0) {
+        const maxW = 720;
+        const maxH = 720;
+        const ratio = Math.min(maxW / w, maxH / h, 1);
+        const nw = Math.max(1, Math.floor(w * ratio));
+        const nh = Math.max(1, Math.floor(h * ratio));
+        if (nw !== w || nh !== h) {
+          img.resize({ w: nw, h: nh });
+        }
+      }
+      await img.write(outputPath, { quality: 68 });
+      return {
+        thumbFileName,
+        thumbUrl: `/static/uploads_thumbs/${thumbFileName}`,
+      };
+    } catch (e) {
+      console.error('[GalleryService.generateThumbnail] failed:', e);
+      return null;
+    }
   }
 }

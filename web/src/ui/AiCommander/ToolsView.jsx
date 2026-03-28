@@ -640,6 +640,69 @@ function TagPicker({ label, value, onChange, allTags, placeholder, disabled }) {
   );
 }
 
+function TagFilterDropdown({ value, onChange, allTags }) {
+  const [input, setInput] = useState('');
+  const [open, setOpen] = useState(false);
+  const known = Array.isArray(allTags) ? allTags : [];
+
+  const suggestions = useMemo(() => {
+    const q = String(input || '').trim().toLowerCase();
+    const filtered = q ? known.filter((t) => t.toLowerCase().includes(q)) : known;
+    return filtered.slice(0, 12);
+  }, [input, known]);
+
+  const select = useCallback((tag) => {
+    onChange && onChange(tag);
+    setInput('');
+    setOpen(false);
+  }, [onChange]);
+
+  const clear = useCallback(() => {
+    onChange && onChange('');
+    setInput('');
+  }, [onChange]);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-1">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={value || input}
+            onChange={(e) => { setInput(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 200)}
+            placeholder="筛选标签"
+            className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-full sm:w-28 min-w-[100px] bg-white"
+          />
+          {open && suggestions.length > 0 && (
+            <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-30 max-h-48 overflow-y-auto">
+              {suggestions.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onMouseDown={() => select(t)}
+                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-100"
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {value && (
+          <button
+            onClick={clear}
+            className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /**
  * @description Gallery view component for managing images and groups
  * @keyword-en GalleryView
@@ -659,6 +722,7 @@ const GalleryView = ({ onBack }) => {
   
   // Tags
   const [allTags, setAllTags] = useState([]);
+  const [tagFilter, setTagFilter] = useState('');
   
   // Preview State
   const [previewImage, setPreviewImage] = useState(null);
@@ -737,6 +801,7 @@ const GalleryView = ({ onBack }) => {
       const data = await api.listGalleryImages({
         userId: userId || undefined,
         groupId: selectedGroupIdRef.current ?? undefined,
+        tag: tagFilter || undefined,
         cursorId,
         limit: pageSize,
       });
@@ -751,7 +816,7 @@ const GalleryView = ({ onBack }) => {
     } finally {
       if (reqId === imagesReqIdRef.current) setImagesLoading(false);
     }
-  }, [pageSize, userId]);
+  }, [pageSize, userId, tagFilter]);
 
   // Initial Load
   useEffect(() => {
@@ -764,6 +829,11 @@ const GalleryView = ({ onBack }) => {
   useEffect(() => {
     loadImages({ append: false });
   }, [selectedGroupId, loadImages]);
+
+  // Reload images when tag filter changes
+  useEffect(() => {
+    loadImages({ append: false });
+  }, [tagFilter, loadImages]);
 
   useEffect(() => {
     setCollageSelectedIds([]);
@@ -1460,7 +1530,12 @@ const GalleryView = ({ onBack }) => {
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-2 justify-between sm:justify-end w-full sm:w-auto overflow-x-auto px-1 pb-1 sm:p-0">
+        <div className="flex items-center gap-2 justify-end w-full sm:w-auto overflow-visible px-1 pb-1 sm:p-0">
+          <TagFilterDropdown
+            value={tagFilter}
+            onChange={(tag) => setTagFilter(tag)}
+            allTags={allTags}
+          />
           <input
             type="file"
             multiple

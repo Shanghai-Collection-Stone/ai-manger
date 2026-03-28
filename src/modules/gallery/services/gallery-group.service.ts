@@ -149,6 +149,69 @@ export class GalleryGroupService {
   }
 
   /**
+   * @description 按用户ID和租户隔离查找名为指定名称的图库组。
+   * @param {string} name - 组名称。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<GalleryGroupEntity | null>} 找到的组或null。
+   * @keyword gallery, groups, find-by-name
+   * @since 2026-03-28
+   */
+  async findByName(
+    name: string,
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<GalleryGroupEntity | null> {
+    const filter = this.buildTenantFilter(userId, tenantId);
+    filter.name = name;
+    return this.groups.findOne(filter, { projection: { _id: 0 } }) as Promise<GalleryGroupEntity | null>;
+  }
+
+  /**
+   * @description 查找或创建拼图/封面专用图库组。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<GalleryGroupEntity>} 找到或新建的组。
+   * @keyword gallery, groups, find-or-create-collage
+   * @since 2026-03-28
+   */
+  async findOrCreateCollageGroup(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<GalleryGroupEntity> {
+    const COLLAGE_GROUP_NAME = '拼图封面';
+    const existing = await this.findByName(COLLAGE_GROUP_NAME, userId, tenantId);
+    if (existing) return existing;
+
+    // 创建新组
+    const now = new Date();
+    const id = await this.nextId();
+    const tags = ['拼图', '封面', '自动生成'];
+    const embeddingText = this.buildEmbeddingText({
+      name: COLLAGE_GROUP_NAME,
+      description: '自动生成的拼图和封面图片',
+      tags,
+    });
+    const embedding = await this.embedding.embedText(embeddingText);
+
+    const doc: GalleryGroupEntity = {
+      _id: new ObjectId(),
+      id,
+      userId: userId ?? 'default',
+      scope: (tenantId ? 'tenant' : 'tenant') as 'platform' | 'tenant',
+      tenantId: tenantId,
+      name: COLLAGE_GROUP_NAME,
+      description: '自动生成的拼图和封面图片',
+      tags,
+      embedding,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.groups.insertOne(doc);
+    return doc;
+  }
+
+  /**
    * @description 按租户可见性列出图库组（租户隔离）
    * @param {string | undefined} userId - 用户ID
    * @param {string | undefined} tenantId - 租户ID

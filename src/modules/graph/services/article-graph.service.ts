@@ -14,6 +14,7 @@ import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { TextFormatService } from '../../format/services/format.service';
 import { CanvasService } from '../../canvas/services/canvas.service.js';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
+import { GalleryGroupService } from '../../gallery/services/gallery-group.service.js';
 import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
 import { McpFunctionCallService } from '../../function-call/mcp/services/mcp.service.js';
 import { McpAdaptersService } from '../../function-call/mcp/services/mcp-adapter.service.js';
@@ -89,6 +90,7 @@ export class ArticleGraphService {
     private readonly format: TextFormatService,
     private readonly canvas: CanvasService,
     private readonly gallery: GalleryService,
+    private readonly galleryGroups: GalleryGroupService,
     private readonly mcp: McpFunctionCallService,
     private readonly mcpAdapters: McpAdaptersService,
     private readonly analysisTools: AnalysisFunctionCallService,
@@ -1265,11 +1267,25 @@ export class ArticleGraphService {
     }
     const ext = extname(input.fileName).toLowerCase();
     const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+
+    // 为生成的图片（拼图/封面）生成缩略图
+    const thumb = await this.gallery.generateThumbnail(input.absPath, input.fileName);
+
+    // 拼图/封面图片使用专用分组
+    let finalGroupId = input.groupId;
+    if (input.isCollage === true) {
+      const collageGroup = await this.galleryGroups.findOrCreateCollageGroup(
+        input.userId,
+        input.tenantId,
+      );
+      finalGroupId = collageGroup.id;
+    }
+
     const docs = await this.gallery.createMany([
       {
         userId: input.userId,
         tenantId: input.tenantId,
-        groupId: input.groupId,
+        groupId: finalGroupId,
         originalName: input.fileName,
         fileName: input.fileName,
         absPath: input.absPath,
@@ -1287,6 +1303,8 @@ export class ArticleGraphService {
           input.isCollage === true
             ? { width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, dpi: COLLAGE_DPI }
             : undefined,
+        thumbFileName: thumb?.thumbFileName,
+        thumbUrl: thumb?.thumbUrl,
       },
     ]);
     return Array.isArray(docs) && docs.length > 0 ? docs[0] : null;
