@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   Optional,
@@ -280,6 +281,20 @@ export class MongoQueryService {
 
     const rawCollection = this.assertCollectionName(input.collection);
     const tenantPrefix = tenantId ? this.buildTenantPrefix(tenantId) : null;
+
+    // 子租户白名单校验：只允许访问 sass_schema 中注册的逻辑表
+    if (tenantId && tenantPrefix) {
+      const logicalName =
+        rawCollection.toLowerCase().startsWith(tenantPrefix + '_')
+          ? rawCollection.slice(tenantPrefix.length + 1)
+          : rawCollection;
+      const allowed = await this.db
+        .collection<{ table: string }>('sass_schema')
+        .countDocuments({ table: logicalName }, { limit: 1 });
+      if (allowed === 0) {
+        throw new ForbiddenException('COLLECTION_NOT_IN_TENANT_SCHEMA');
+      }
+    }
 
     // 租户用户：若集合名不含租户前缀，视为逻辑表名（如 "orders"），自动补全为物理表名（如 "69a9_orders"）
     const collection =

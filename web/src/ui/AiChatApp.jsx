@@ -2389,6 +2389,7 @@ const MessageBubble = ({
   decisionCards = [],
   onApplyDecision,
   onRefreshResources,
+  onImageClick,
 }) => {
   const isUser = message.role === 'user';
   const linkifyHashtags = (content) => {
@@ -2423,9 +2424,38 @@ const MessageBubble = ({
       },
     );
   };
-  const rawMarkup = (content) => ({
-    __html: DOMPurify.sanitize(marked.parse(linkifyHashtags(content || ''))),
-  });
+  const rawMarkup = (content) => {
+    // 1. 把所有图片 URL 直接转成 markdown 图片语法（无论是否独立成行）
+    const converted = String(content || '').replace(
+      /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi,
+      (url) => `![](${url})`,
+    );
+    const html = marked.parse(linkifyHashtags(converted));
+    // 2. 把 marked 生成的所有 <a href="图片url"> 链接转成 <img>
+    const linkToImg = String(html).replace(
+      /<a[^>]+href="(https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp))"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_, url, inner) => {
+        const alt = inner.trim().replace(/<[^>]+>/g, '');
+        return `<img src="${url}" alt="${alt}" />`;
+      },
+    );
+    // 3. 为所有 <img> 添加样式和点击事件
+    const withClick = linkToImg.replace(
+      /<img([^>]+)>/g,
+      (match, attrs) => {
+        const extra = ' style="max-height:220px;max-width:100%;width:auto;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;display:block;" onclick="window.__galleryImageClick(this)"';
+        return `<img${attrs}${extra}>`;
+      },
+    );
+    // 4. 把 2+ 个连续 <img> 用 flex 容器包裹，实现并排显示
+    const withImgGrid = withClick.replace(
+      /((?:<img[^>]+>\s*)+)/g,
+      (match) => `<div class="img-flex-row">${match}</div>`,
+    );
+    return {
+      __html: DOMPurify.sanitize(withImgGrid, { ADD_ATTR: ['onclick', 'style'] }),
+    };
+  };
   const [collapsedMap, setCollapsedMap] = useState({});
   const [uiFrameworkSel, setUiFrameworkSel] = useState('antd');
   const [chartLibrarySel, setChartLibrarySel] = useState('echarts');
@@ -3047,6 +3077,7 @@ export default function AiChatApp() {
   const fileInputRef = useRef(null);
   const [imageItems, setImageItems] = useState([]);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [lightboxImage, setLightboxImage] = useState(null);
   const messagesEndRef = useRef(null);
 
   const closeCanvasDrawer = () => {
@@ -3345,6 +3376,37 @@ export default function AiChatApp() {
     }
   }, [messages, autoScroll]);
 
+  // 注册全局图片点击处理，供 markdown img 的 onclick 调用
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    Object.defineProperty(window, '__galleryImageClick', {
+      configurable: true,
+      value: (el) => {
+        const src = el.getAttribute('src') || '';
+        const alt = el.getAttribute('alt') || '';
+        setLightboxImage({ url: src, alt });
+      },
+    });
+  }, []);
+
+  // 注入并排图片布局样式
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const styleId = 'gallery-img-flex-style';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = [
+      '.img-flex-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:4px 0; }',
+      '.img-flex-row img { flex:1 1 200px; max-height:220px; min-width:0; }',
+    ].join('');
+    document.head.appendChild(style);
+    return () => {
+      const el = document.getElementById(styleId);
+      if (el) el.remove();
+    };
+  }, []);
+
   const loadSessions = async () => {
     const list = await api.listSessions();
     setSessions(list);
@@ -3373,6 +3435,7 @@ export default function AiChatApp() {
 
   const handleSelectSession = async (sid) => {
     setSessionId(sid);
+    setAutoScroll(true);
     $currentSessionId.set(sid);
     setIsSidebarOpen(false);
     clearImages();
@@ -4445,6 +4508,7 @@ export default function AiChatApp() {
                     onExecuteCanvas={handleExecuteCanvas}
                     onOpenCanvas={openCanvasDrawer}
                     onRefreshResources={reloadResources}
+                    onImageClick={setLightboxImage}
                   />
                 ))}
 
@@ -5196,6 +5260,29 @@ export default function AiChatApp() {
       </main>
 
       <SettingsModal open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+
+      {/* 图片点击放大弹窗 */}
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div className="relative max-w-6xl max-h-full p-4">
+            <button
+              className="absolute -top-2 -right-2 w-8 h-8 bg-white rounded-full shadow flex items-center justify-center text-gray-600 hover:text-black z-10"
+              onClick={() => setLightboxImage(null)}
+            >
+              ✕
+            </button>
+            <img
+              src={lightboxImage.url}
+              alt={lightboxImage.alt || ''}
+              className="max-w-full max-h-[85vh] object-contain rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+      )}
     </div>
     </ToastContainer>
   );

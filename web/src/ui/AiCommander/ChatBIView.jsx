@@ -210,15 +210,33 @@ const ThinkingBubble = ({ toolCount, subagentCount }) => {
 
 /* ─── AI Message Component ─── */
 
-const AIMessage = ({ msg, onOpenCanvas, onOpenDecision }) => {
-  // Parse markdown securely
+const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
+  // Parse markdown securely with URL→image conversion
   const htmlContent = React.useMemo(() => {
     if (!msg.content) return { __html: '' };
-    let rawMarkup = marked.parse(msg.content);
-    // Wrap each <table> in a scrollable container so only the table scrolls, not the bubble
+    const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
+    // 1. 把纯 URL 转成 markdown 图片语法
+    let converted = String(msg.content).replace(imgPattern, (url) => `![](${url})`);
+    let rawMarkup = marked.parse(converted);
+    // 2. 把 <a href="图片url"> 链接转成 <img>
+    rawMarkup = String(rawMarkup).replace(
+      /<a[^>]+href="(https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp))"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_, url, inner) => `<img src="${url}" alt="${inner.trim()}" />`,
+    );
+    // 3. 为所有 <img> 添加样式和点击事件
+    rawMarkup = rawMarkup.replace(
+      /<img([^>]+)>/g,
+      (match, attrs) => `<img${attrs} style="max-height:220px;max-width:100%;width:auto;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;display:block;" onclick="window.__galleryImageClick(this)" />`,
+    );
+    // 4. 把连续 <img> 用 flex 容器包裹实现并排
+    rawMarkup = rawMarkup.replace(
+      /((?:<img[^>]+>\s*)+)/g,
+      (match) => `<div class="img-flex-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0;">${match.replace(/<img([^>]+)>/g, '<img$1 style="flex:1 1 200px;max-height:220px;min-width:0;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;">')}</div>`,
+    );
+    // Wrap each <table> in a scrollable container
     rawMarkup = rawMarkup.replace(/<table/g, '<div class="ai-table-scroll"><table');
     rawMarkup = rawMarkup.replace(/<\/table>/g, '</table></div>');
-    return { __html: DOMPurify.sanitize(rawMarkup) };
+    return { __html: DOMPurify.sanitize(rawMarkup, { ADD_ATTR: ['onclick', 'style'] }) };
   }, [msg.content]);
 
   return (
@@ -302,7 +320,7 @@ const AIMessage = ({ msg, onOpenCanvas, onOpenDecision }) => {
     )}
   </div>
   );
-};
+});
 
 const DecisionCardModal = ({ cardId, onClose }) => {
   const [loading, setLoading] = useState(false);
@@ -400,8 +418,23 @@ const ChatBIView = ({
   const [isSessionPickerOpen, setIsSessionPickerOpen] = useState(false);
   const [activeCanvasId, setActiveCanvasId] = useState(null);
   const [activeDecisionCardId, setActiveDecisionCardId] = useState('');
+  const [lightboxImage, setLightboxImage] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
+
+  // 注册全局图片点击弹窗函数
+  useEffect(() => {
+    Object.defineProperty(window, '__galleryImageClick', {
+      configurable: true,
+      value: (imgEl) => {
+        const src = imgEl?.src || '';
+        if (src) setLightboxImage(src);
+      },
+    });
+    return () => {
+      delete window.__galleryImageClick;
+    };
+  }, []);
 
   // Auto-resize textarea: grow with content up to MAX_HEIGHT, then scroll
   const MAX_LINES = 4;
@@ -487,6 +520,7 @@ const ChatBIView = ({
         toolCount: 0,
         subagentCount: 0,
       })));
+      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }), 50);
     } catch (e) {
       console.error(e);
       setMessages([]);
@@ -884,6 +918,56 @@ const ChatBIView = ({
           onClose={() => setActiveDecisionCardId('')}
         />
       ) : null}
+
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div className="relative max-w-5xl w-full flex flex-col items-center">
+            <div className="flex items-center gap-3 mb-4 w-full justify-center">
+              <button
+                className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm font-medium transition border border-white/20"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const a = document.createElement('a');
+                  a.href = lightboxImage;
+                  a.download = lightboxImage.split('/').pop() || 'image';
+                  a.target = '_blank';
+                  a.click();
+                }}
+              >
+                保存图片
+              </button>
+              <button
+                className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 text-white text-sm font-medium transition border border-white/20"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const win = window.open(lightboxImage, '_blank');
+                  if (win) win.focus();
+                }}
+              >
+                新窗口打开
+              </button>
+              <button
+                className="text-white/70 hover:text-white text-3xl font-light w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition ml-auto"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setLightboxImage(null);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <img
+              src={lightboxImage}
+              alt=""
+              className="max-h-[80vh] max-w-full object-contain rounded-lg shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+      )}
 
     </div>
   );

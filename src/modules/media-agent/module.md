@@ -15,9 +15,15 @@
 
 ### gallery-tools.service.ts
 图库工具服务，提供图库搜索和管理相关的 LangChain 工具。
-- **关键词**: gallery, tools, langchain, image-search
+- **关键词**: gallery, tools, langchain, image-search, groups
 - **函数**:
-  - `getHandle` - 获取图库工具列表
+  - `getHandle` - 获取图库工具列表（含 gallery_groups 工具）
+  - `createSearchImagesTool` - 图片搜索工具（支持 tag/group_id 过滤）
+  - `createListImagesTool` - 图片列表工具
+  - `createListTagsTool` - 标签列表工具
+  - `createRandomImagesTool` - 随机图片工具
+  - `createListGroupsTool` - 列出图库分组工具
+  - `createSearchGroupsTool` - 向量搜索图库分组工具
 
 ### xhs-tools.service.ts
 小红书工具服务，提供 Canvas 和批量发布相关的 LangChain 工具。

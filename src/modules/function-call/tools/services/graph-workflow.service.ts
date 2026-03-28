@@ -28,6 +28,47 @@ export class GraphWorkflowFunctionCallService {
     private readonly gallery: GalleryService,
   ) {}
 
+    /**
+     * @description 判定标签/描述是否包含封面语义。
+     * @param {string[]} tags - 标签数组。
+     * @param {string | undefined} description - 图片描述。
+     * @returns {boolean} 是否封面语义。
+     * @keyword-en detect cover-like semantics
+     */
+    private isCoverLike(tags: string[], description?: string): boolean {
+      const text = [
+        ...(Array.isArray(tags) ? tags : []),
+        typeof description === 'string' ? description : '',
+      ]
+        .map((x) => String(x ?? '').trim().toLowerCase())
+        .filter((x) => x.length > 0)
+        .join(' ');
+      if (!text) return false;
+      return /(封面|拼图封面|自动封面|canvas封面|cover)/i.test(text);
+    }
+
+    /**
+     * @description 按目标图片类型判断是否命中。
+     * @param {{ isCollage?: boolean; tags?: string[]; description?: string }} image - 图片对象。
+     * @param {'all' | 'regular' | 'collage' | undefined} type - 目标类型。
+     * @returns {boolean} 是否命中类型。
+     * @keyword-en classify image by type
+     */
+    private isMatchedImageType(
+      image: { isCollage?: boolean; tags?: string[]; description?: string },
+      type: 'all' | 'regular' | 'collage' | undefined,
+    ): boolean {
+      const resolvedType = type ?? 'regular';
+      const isCollage = image?.isCollage === true;
+      if (resolvedType === 'all') return true;
+      if (resolvedType === 'collage') {
+        return isCollage || this.isCoverLike(image.tags ?? [], image.description);
+      }
+      if (isCollage) return false;
+      if (this.isCoverLike(image.tags ?? [], image.description)) return false;
+      return true;
+    }
+
   private normalizeKeyString(v: unknown): string {
     if (typeof v === 'string') return v.trim().toLowerCase();
     if (typeof v === 'number' || typeof v === 'boolean') {
@@ -868,7 +909,7 @@ export class GraphWorkflowFunctionCallService {
     );
 
     const gallerySearchImages = tool(
-      async ({ userId, groupId, tags, limit, matchCollage }) => {
+      async ({ userId, groupId, tags, limit, matchCollage, image_type }) => {
         const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
@@ -879,6 +920,24 @@ export class GraphWorkflowFunctionCallService {
           typeof limit === 'number' && Number.isFinite(limit)
             ? Math.max(1, Math.min(200, Math.floor(limit)))
             : 12;
+        const imageType =
+          image_type === 'all' ||
+          image_type === 'regular' ||
+          image_type === 'collage'
+            ? image_type
+            : undefined;
+        const effectiveMatchCollage =
+          imageType === 'regular'
+            ? false
+            : imageType === 'collage' || imageType === 'all'
+              ? true
+              : typeof matchCollage === 'boolean'
+                ? matchCollage
+                : false;
+        const fetchLimit =
+          imageType === 'collage'
+            ? Math.max(lim, Math.min(200, lim * 4))
+            : lim;
         const tagList = Array.isArray(tags)
           ? tags.map((t) => String(t ?? '').trim()).filter((t) => t.length > 0)
           : [];
@@ -887,39 +946,42 @@ export class GraphWorkflowFunctionCallService {
           tenantId: tid,
           groupId: gid,
           tags: tagList,
-          limit: lim,
-          matchCollage: matchCollage !== false,
+          limit: fetchLimit,
+          matchCollage: effectiveMatchCollage,
         });
-        return JSON.stringify({
-          ok: true,
-          images: (images ?? []).map((img) => ({
-            id: img.id,
-            url: img.url,
-            thumbUrl: img.thumbUrl,
-            absPath: img.absPath,
-            fileName: img.fileName,
-            thumbFileName: img.thumbFileName,
-            userId: img.userId,
-            groupId: img.groupId,
-            tags: img.tags,
-            description: img.description,
-            isCollage: img.isCollage === true,
-            collageSourceImageIds: img.collageSourceImageIds,
-          })),
-        });
+        const finalImages = images
+          .filter((img) => this.isMatchedImageType(img, imageType))
+          .slice(0, lim);
+        if (!finalImages || finalImages.length === 0) {
+          return '未找到匹配的图片。';
+        }
+        // 只返回纯 markdown 图片语法，让 LLM 直接透传，不附加任何说明文字
+        return (finalImages ?? [])
+          .map((img) => {
+            const displayUrl = img.thumbUrl || img.url;
+            const desc = typeof img.description === 'string' && img.description.trim()
+              ? img.description.trim()
+              : '';
+            return `![${desc}](${displayUrl})`;
+          })
+          .join('\n');
       },
       {
         name: 'gallery_search_images',
         description:
-          'Gallery Search Tool. Searches images by tag list; typically call gallery_list_tags first, then provide selected tags.',
+          'Gallery Search Tool. Searches images by tag list; typically call gallery_list_tags first, then provide selected tags. IMPORTANT: Return image paths as-is — do NOT prepend any domain, hostname, or base URL. Output markdown image syntax exactly as provided, e.g. ![alt text](/static/uploads/xxx.jpg). Never convert relative paths to absolute URLs.',
         schema: z.object({
           userId: z.string().optional().describe('Gallery owner user id'),
           groupId: z.number().optional().describe('Gallery group id filter'),
           tags: z.array(z.string()).describe('Selected tags'),
+          image_type: z
+            .enum(['all', 'regular', 'collage'])
+            .optional()
+            .describe('Image type filter: regular (default), collage, all'),
           matchCollage: z
             .boolean()
             .optional()
-            .describe('Whether to include collage images (default true)'),
+            .describe('Deprecated: whether to include collage images (default false unless image_type overrides)'),
           limit: z
             .number()
             .optional()

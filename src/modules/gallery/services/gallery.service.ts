@@ -17,6 +17,9 @@ export class GalleryService {
   private readonly images: Collection<GalleryImageEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
   private readonly VECTOR_INDEX_NAME = 'gallery_image_embedding_index';
+  /** 精确封面标签枚举（系统写入的类型标记，非用户描述关键词） */
+  private readonly COVER_TAGS = ['封面', '拼图封面', '自动封面', 'canvas封面'];
+  private readonly coverTagSet = new Set(['封面', '拼图封面', '自动封面', 'canvas封面']);
   private isAtlasAvailable: boolean | null = null;
   private jimpModulePromise: Promise<unknown> | null = null;
 
@@ -263,20 +266,27 @@ export class GalleryService {
       cursorId?: number;
       limit?: number;
       includeCollage?: boolean;
+      imageType?: 'all' | 'regular' | 'collage';
     },
   ): Promise<GalleryImageEntity[]> {
-    const { groupId, tag, cursorId, limit = 50, includeCollage = true } =
+    const { groupId, tag, cursorId, limit = 50, includeCollage = true, imageType } =
       options ?? {};
-    const filter = this.buildTenantFilter(userId, tenantId);
-    if (groupId !== undefined) filter.groupId = groupId;
-    if (tag) filter.tags = tag;
-    if (!includeCollage) {
-      filter.isCollage = { $ne: true };
+    const clauses: Record<string, unknown>[] = [
+      this.buildTenantFilter(userId, tenantId),
+    ];
+    if (imageType && imageType !== 'all') {
+      clauses.push(this.buildImageTypeFilter(imageType));
+    } else if (!includeCollage) {
+      clauses.push({ isCollage: { $ne: true } });
     }
+    if (groupId !== undefined) clauses.push({ groupId });
+    if (tag) clauses.push({ tags: tag });
     if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
-      filter.id = { $lt: cursorId };
+      clauses.push({ id: { $lt: cursorId } });
     }
+    const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
+    console.log('findAccessibleImages filter:', JSON.stringify(filter), 'limit:', lim);
     return this.images
       .find(filter, { projection: { _id: 0 } })
       .sort({ id: -1 })
@@ -295,7 +305,7 @@ export class GalleryService {
   private buildTenantFilter(userId: string | undefined, tenantId?: string): Record<string, unknown> {
     const currentTenantId = tenantId?.trim();
     const base: Record<string, unknown> = {};
-    if (userId) base.userId = userId;
+    // if (userId) base.userId = userId;
     // 无 tenantId 时（母平台）：返回 tenantId 为空/null/不存在的母平台数据
     if (!currentTenantId) {
       return {
@@ -312,6 +322,42 @@ export class GalleryService {
       ...base,
       tenantId: currentTenantId,
     };
+  }
+
+  /**
+   * @description 构建图片类型 DB 过滤条件，使用精确枚举封面标签做 $in/$nin 匹配。
+   * @param {'regular' | 'collage'} imageType - 目标图片类型。
+   * @returns {Record<string, unknown>} MongoDB filter 对象。
+   * @keyword-en build image type filter for mongodb query
+   */
+  private buildImageTypeFilter(imageType: 'regular' | 'collage'): Record<string, unknown> {
+    if (imageType === 'regular') {
+      return {
+        isCollage: { $ne: true },
+        tags: { $nin: this.COVER_TAGS },
+      };
+    }
+    return {
+      $or: [
+        { isCollage: true },
+        { tags: { $in: this.COVER_TAGS } },
+      ],
+    };
+  }
+
+  /**
+   * @description 内存层图片类型匹配（Atlas 向量搜索结果后处理用）。
+   * @param {GalleryImageEntity} image - 图片对象。
+   * @param {'all' | 'regular' | 'collage'} imageType - 目标类型。
+   * @returns {boolean}
+   * @keyword-en in-memory image type match
+   */
+  private matchesImageType(image: GalleryImageEntity, imageType: 'all' | 'regular' | 'collage'): boolean {
+    if (imageType === 'all') return true;
+    const tags = Array.isArray(image.tags) ? image.tags : [];
+    const isCover = image.isCollage === true || tags.some((t) => this.coverTagSet.has(String(t ?? '').trim()));
+    if (imageType === 'regular') return !isCover;
+    return isCover;
   }
 
   /**
@@ -338,6 +384,7 @@ export class GalleryService {
     }
     out.sort((a, b) => a.localeCompare(b));
     const lim = Math.max(1, Math.min(5000, Math.floor(limit || 500)));
+    console.log(filter, raw);
     return out.slice(0, lim);
   }
 
@@ -436,19 +483,25 @@ export class GalleryService {
     tags: string[];
     limit?: number;
     matchCollage?: boolean;
+    imageType?: 'all' | 'regular' | 'collage';
   }): Promise<GalleryImageEntity[]> {
     const tags = Array.isArray(input?.tags)
       ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
       : [];
     if (tags.length === 0) return [];
-    const filter = this.buildTenantFilter(input.userId, input.tenantId);
-    filter.tags = { $in: tags };
+    const clauses: Record<string, unknown>[] = [
+      this.buildTenantFilter(input.userId, input.tenantId),
+      { tags: { $in: tags } },
+    ];
+    if (input.imageType && input.imageType !== 'all') {
+      clauses.push(this.buildImageTypeFilter(input.imageType));
+    } else if (input.matchCollage === false) {
+      clauses.push({ isCollage: { $ne: true } });
+    }
     if (typeof input.groupId === 'number' && Number.isFinite(input.groupId)) {
-      filter.groupId = input.groupId;
+      clauses.push({ groupId: input.groupId });
     }
-    if (input.matchCollage === false) {
-      filter.isCollage = { $ne: true };
-    }
+    const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     return this.images
       .find(filter, { projection: { _id: 0 } })
@@ -652,6 +705,7 @@ export class GalleryService {
     tenantId?: string,
     limit = 8,
     minScore = 0.5,
+    imageType?: 'all' | 'regular' | 'collage',
   ): Promise<GallerySearchResult[]> {
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
     const queryEmbedding = await this.embedding.embedText(
@@ -659,7 +713,7 @@ export class GalleryService {
       embeddingConfig,
     );
     if (this.isAtlasAvailable === false) {
-      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore, imageType);
     }
     try {
       const filter = this.buildTenantFilter(userId, tenantId);
@@ -683,11 +737,12 @@ export class GalleryService {
       this.isAtlasAvailable = true;
       return rows
         .filter((r) => r.score >= minScore)
+        .filter((r) => !imageType || this.matchesImageType(r, imageType))
         .slice(0, limit)
         .map((r) => ({ image: r, score: r.score }));
     } catch {
       if (this.isAtlasAvailable === null) this.isAtlasAvailable = false;
-      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
+      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore, imageType);
     }
   }
 
@@ -709,8 +764,15 @@ export class GalleryService {
     tenantId: string | undefined,
     limit: number,
     minScore: number,
+    imageType?: 'all' | 'regular' | 'collage',
   ): Promise<GallerySearchResult[]> {
-    const filter = this.buildTenantFilter(userId, tenantId);
+    const clauses: Record<string, unknown>[] = [
+      this.buildTenantFilter(userId, tenantId),
+    ];
+    if (imageType && imageType !== 'all') {
+      clauses.push(this.buildImageTypeFilter(imageType));
+    }
+    const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const rows = await this.images.find(filter).toArray();
     const scored = rows
       .filter(

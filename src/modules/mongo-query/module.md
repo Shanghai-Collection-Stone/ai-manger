@@ -21,13 +21,13 @@ Mongo 通用查询模块：提供一个“复杂 JSON filter + 可选关联查�
 - **关键词**: dto, validation, query
 
 ### services/mongo-query.service.ts
-查询服务，负责鉴权范围解析、filter DSL 解析、租户隔离注入、以及 `$lookup` 聚合管道构建。
-- **关键词**: service, filter dsl, lookup, aggregate, tenant isolation
+查询服务，负责鉴权范围解析、filter DSL 解析、租户隔离注入、`$lookup` 聚合管道构建，以及子租户 sass_schema 白名单校验。
+- **关键词**: service, filter dsl, lookup, aggregate, tenant isolation, sass_schema whitelist
 - **函数**:
   - `isObjectRecord`: 对象记录判断/check object record
   - `parseApiKey`: 解析API Key/parse api key header
   - `hashApiKey`: API key哈希/hash api key
-  - `execute`: 执行查询，自动识别集合前缀隔离/execute query with prefix isolation detection
+  - `execute`: 执行查询，子租户自动前缀+白名单校验，非法集合返回403/execute query with prefix isolation and sass_schema whitelist
   - `requireScope`: 要求范围/require scope
   - `resolveAuthScope`: 解析Bearer范围/resolve bearer scope
   - `resolveApiKeyScope`: 解析API key范围/resolve api key scope
