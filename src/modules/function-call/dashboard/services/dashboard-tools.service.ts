@@ -396,6 +396,10 @@ export class DashboardToolsService {
      */
     const tenantTables = tool(
       async () => {
+        // 母平台返回空，让 AI 自己判断
+        if (!tenantId) {
+          return JSON.stringify([]);
+        }
         const schemas = await this.db
           .collection('sass_schema')
           .find({})
@@ -412,7 +416,7 @@ export class DashboardToolsService {
       {
         name: 'tenant_tables',
         description:
-          'List all available tenant data table schemas with field definitions. Use this to understand what data is available before querying.',
+          '列出当前租户专属的 sass_schema 表数据（租户自己创建的表）。',
         schema: z.object({}),
       },
     );
@@ -423,7 +427,10 @@ export class DashboardToolsService {
      */
     const tenantQuery = tool(
       async ({ table, mode, where, limit, sort, pipeline }) => {
-        if (!tenantId) return JSON.stringify({ error: 'NO_TENANT_SCOPE' });
+        // 母平台返回空，让 AI 自己判断
+        if (!tenantId) {
+          return JSON.stringify({ rows: [], count: 0 });
+        }
         const prefix = this.buildTenantPrefix(tenantId);
         const collection = `${prefix}_${table}`;
         const filter: Record<string, unknown> =
@@ -452,11 +459,7 @@ export class DashboardToolsService {
       {
         name: 'tenant_query',
         description:
-          'Query data from a logical tenant table by table name (without prefix). ' +
-          'Use tenant_tables first to understand available tables and fields. ' +
-          'Modes: count=count matching docs; list=fetch rows; aggregate=run aggregation pipeline. ' +
-          'For aggregate mode, provide a "pipeline" array of MongoDB aggregation stages. ' +
-          'Table name is the logical name (e.g. "order_usages") — prefix is added automatically.',
+          '查询租户专属表数据（sass_schema 中的表，自动加前缀）。',
         schema: z.object({
           table: z
             .string()
@@ -691,9 +694,12 @@ export class DashboardToolsService {
       },
     );
 
+    // TODO: [统一搜索] tenant_tables 和 tenant_query 已注释
+    // 原因：统一使用 schema_search 工具搜索所有数据源，tenant-mongo 路由到 sass_schema
+    // 如果需要恢复，取消下方注释并确保 data_source_query 支持 tenant-mongo 路由
     return [
-      tenantTables,
-      tenantQuery,
+      // tenantTables,
+      // tenantQuery,
       dashboardMongoSearch,
       dashboardConfigView,
       dashboardConfigPatch,

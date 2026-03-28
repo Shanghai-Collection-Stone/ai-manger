@@ -29,6 +29,13 @@ export class AnalysisFunctionCallService {
   private getCalculatorTools(): CreateAgentParams['tools'] {
     const jsCalc = tool(
       ({ expression, precision }) => {
+        if (!expression || typeof expression !== 'string' || expression.trim().length === 0) {
+          return JSON.stringify({
+            ok: false,
+            error: 'EXPRESSION_REQUIRED',
+            message: 'expression 参数必填，需要传入数学表达式字符串',
+          });
+        }
         try {
           const value = this.evaluateMathExpression(expression);
           const normalized =
@@ -73,6 +80,13 @@ export class AnalysisFunctionCallService {
 
     const jsCalcBatch = tool(
       ({ expressions, precision }) => {
+        if (!Array.isArray(expressions) || expressions.length === 0) {
+          return JSON.stringify({
+            ok: false,
+            error: 'EXPRESSIONS_REQUIRED',
+            message: 'expressions 参数必填，需要传入非空数组',
+          });
+        }
         const results = expressions.map((expr) => {
           try {
             const value = this.evaluateMathExpression(expr);
@@ -152,33 +166,53 @@ export class AnalysisFunctionCallService {
   }): CreateAgentParams['tools'] {
     const decisionCardGenerate = tool(
       async ({ question, analysisData, capabilityBrief, sessionId }) => {
-        if (!this.shouldGenerateDecisionCard(question)) {
+        console.log('[decision_card_generate] Called with:', {
+          question,
+          analysisData,
+          capabilityBrief,
+          sessionId,
+          tenantId: scope?.tenantId,
+        });
+        try {
+          if (!this.shouldGenerateDecisionCard(question)) {
+            console.log('[decision_card_generate] Skipped - not a decision intent');
+            return JSON.stringify({
+              generated: false,
+              reason: 'DECISION_INTENT_NOT_MATCHED',
+            });
+          }
+          const res = await this.decisionCards.generateDecisionCard({
+            sessionId:
+              typeof sessionId === 'string' && sessionId.trim().length > 0
+                ? sessionId.trim()
+                : 'analysis',
+            question: question.trim(),
+            analysisData:
+              typeof analysisData === 'string' ? analysisData.trim() : undefined,
+            capabilityBrief:
+              typeof capabilityBrief === 'string'
+                ? capabilityBrief.trim()
+                : undefined,
+            tenantId: scope?.tenantId,
+            userId: scope?.userId,
+          });
+          console.log('[decision_card_generate] Success:', {
+            cardId: res.cardId,
+            summary: res.decisionSummary,
+          });
+          return JSON.stringify({
+            generated: true,
+            cardId: res.cardId,
+            decisionSummary: res.decisionSummary,
+            cardRenderPayload: res.cardRenderPayload,
+          });
+        } catch (err) {
+          console.error('[decision_card_generate] Error:', err);
           return JSON.stringify({
             generated: false,
-            reason: 'DECISION_INTENT_NOT_MATCHED',
+            error: err instanceof Error ? err.message : String(err),
           });
         }
-        const res = await this.decisionCards.generateDecisionCard({
-          sessionId:
-            typeof sessionId === 'string' && sessionId.trim().length > 0
-              ? sessionId.trim()
-              : 'analysis',
-          question: question.trim(),
-          analysisData:
-            typeof analysisData === 'string' ? analysisData.trim() : undefined,
-          capabilityBrief:
-            typeof capabilityBrief === 'string'
-              ? capabilityBrief.trim()
-              : undefined,
-          tenantId: scope?.tenantId,
-          userId: scope?.userId,
-        });
-        return JSON.stringify({
-          generated: true,
-          cardId: res.cardId,
-          decisionSummary: res.decisionSummary,
-          cardRenderPayload: res.cardRenderPayload,
-        });
       },
       {
         name: 'decision_card_generate',
@@ -257,7 +291,7 @@ export class AnalysisFunctionCallService {
   private shouldGenerateDecisionCard(question: string): boolean {
     const text = String(question || '').trim();
     if (!text) return false;
-    return /方案|决策|策略|建议|计划|怎么做|路径|评估|取舍|优先级|优化|改进|action/i.test(
+    return /方案|决策|策略|建议|计划|怎么做|如何|路径|评估|取舍|优先级|优化|改进|action/i.test(
       text,
     );
   }

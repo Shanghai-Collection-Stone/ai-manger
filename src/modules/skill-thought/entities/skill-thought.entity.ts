@@ -43,6 +43,10 @@ export interface SkillThoughtEntity {
    */
   usageCount: number;
   /**
+   * 状态：pending(待处理)/completed(已完成)/failed(失败)
+   */
+  status: 'pending' | 'completed' | 'failed';
+  /**
    * 创建时间
    */
   createdAt: Date;
@@ -58,13 +62,15 @@ export interface SkillThoughtEntity {
  */
 export interface SkillThoughtCreateInput {
   content: string;
-  summary: string;
-  keywords: string[];
+  summary?: string;
+  keywords?: string[];
+  embedding?: number[];
   tenantId?: string;
   userId?: string;
   sessionId?: string;
   toolsUsed?: string[];
   category?: string;
+  status?: 'pending' | 'completed' | 'failed';
 }
 
 /**

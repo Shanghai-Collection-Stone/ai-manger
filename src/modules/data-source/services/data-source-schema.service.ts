@@ -94,6 +94,8 @@ export class DataSourceSchemaService {
     );
 
     const visibleSourceCodes = await this.resolveVisibleSourceCodes(opts);
+    console.log('[searchAllSources] opts:', JSON.stringify(opts));
+    console.log('[searchAllSources] visibleSourceCodes:', visibleSourceCodes);
     if (visibleSourceCodes.length === 0) return [];
     if (
       opts?.sourceCode &&
@@ -105,28 +107,38 @@ export class DataSourceSchemaService {
       ? [opts.sourceCode.trim()]
       : visibleSourceCodes;
 
+    console.log('[searchAllSources] targetSourceCodes:', targetSourceCodes);
+    console.log('[searchAllSources] query tokens:', tokens);
+
     // 搜索所有可见数据源
+    const queryFilter = {
+      sourceCode: { $in: targetSourceCodes },
+      $or: [
+        { keywords: { $in: regexPatterns } },
+        {
+          collectionName: {
+            $regex: tokens.map((t) => this.escapeRegex(t)).join('|'),
+            $options: 'i',
+          },
+        },
+        {
+          nameCn: {
+            $regex: tokens.map((t) => this.escapeRegex(t)).join('|'),
+            $options: 'i',
+          },
+        },
+      ],
+    };
+    console.log('[searchAllSources] query filter:', JSON.stringify(queryFilter));
     const results = await this.collection
-      .find({
-        sourceCode: { $in: targetSourceCodes },
-        $or: [
-          { keywords: { $in: regexPatterns } },
-          {
-            collectionName: {
-              $regex: tokens.map((t) => this.escapeRegex(t)).join('|'),
-              $options: 'i',
-            },
-          },
-          {
-            nameCn: {
-              $regex: tokens.map((t) => this.escapeRegex(t)).join('|'),
-              $options: 'i',
-            },
-          },
-        ],
-      })
+      .find(queryFilter)
       .limit(limit * 2) // 获取更多结果以便排序
       .toArray();
+
+    console.log('[searchAllSources] raw results count:', results.length);
+    if (results.length > 0) {
+      console.log('[searchAllSources] sourceCodes in results:', [...new Set(results.map(r => r.sourceCode))]);
+    }
 
     // 计算匹配分数
     return results
@@ -232,14 +244,25 @@ export class DataSourceSchemaService {
     const rows = await this.dataSourceService.listAccessibleSources(
       opts?.tenantId,
     );
+    console.log('[resolveVisibleSourceCodes] tenantId:', opts?.tenantId);
+    console.log('[resolveVisibleSourceCodes] rows from listAccessibleSources:', rows.length, rows.map(r => ({ code: r.code, scope: r.scope, tenantId: r.tenantId })));
     const set = new Set(rows.map((row) => row.code));
     set.add(MAIN_DATA_SOURCE.code);
+    console.log('[resolveVisibleSourceCodes] after adding MAIN_DATA_SOURCE:', Array.from(set));
+
+    // 配置文件型数据源：这些数据源不在 data_sources 表注册，但有 schema 记录
+    // 需要确保它们的 schema 能被搜索到
+    const CONFIG_FILE_SOURCES = ['feishu-bitable', 'feishu-bitable-task'];
+    for (const code of CONFIG_FILE_SOURCES) {
+      set.add(code);
+    }
+    console.log('[resolveVisibleSourceCodes] after adding config file sources:', Array.from(set));
 
     // 租户上下文：过滤掉不可直接查询的平台专属服务（如 feishu-bitable）
     // feishu-bitable 是平台级配置，租户只能通过专属授权后的 scope=tenant 数据源访问
     // 若无对应 scope=tenant 的 feishu-bitable 记录，则不应出现在租户 schema 搜索中
     if (opts?.tenantId?.trim()) {
-      const PLATFORM_ONLY_SOURCES = new Set(['feishu-bitable']);
+      const PLATFORM_ONLY_SOURCES = new Set(['feishu-bitable', 'feishu-bitable-task']);
       for (const code of PLATFORM_ONLY_SOURCES) {
         // 仅当该 code 没有当前租户的专属记录时才移除
         const hasTenantRecord = rows.some(
@@ -247,6 +270,7 @@ export class DataSourceSchemaService {
         );
         if (!hasTenantRecord) set.delete(code);
       }
+      console.log('[resolveVisibleSourceCodes] after tenant filtering:', Array.from(set));
     }
 
     return Array.from(set);
@@ -606,6 +630,35 @@ export class DataSourceSchemaService {
       apiKey: runtime.apiKey,
       baseUrl: runtime.baseUrl,
     };
+  }
+
+  /**
+   * @title 列出所有Schema List All Schemas
+   * @description 获取所有可见数据源的Schema列表（不排序，用于清单展示）
+   */
+  async listAllSchemas(opts?: {
+    tenantId?: string;
+    limit?: number;
+  }): Promise<DataSourceSchemaSearchResult[]> {
+    const limit = opts?.limit ?? 200;
+    const visibleSourceCodes = await this.resolveVisibleSourceCodes(opts);
+
+    if (visibleSourceCodes.length === 0) {
+      return [];
+    }
+
+    const results = await this.collection
+      .find({
+        sourceCode: { $in: visibleSourceCodes },
+      })
+      .limit(limit)
+      .toArray();
+
+    return results.map((schema) => ({
+      schema,
+      score: 0,
+      matchType: 'keyword' as const,
+    }));
   }
 
   /**

@@ -35,37 +35,87 @@ export class SkillThoughtService {
 
   /**
    * @title 创建思维链 Create Thought
-   * @description 创建新的思维链记录。
+   * @description 创建新的思维链记录。支持同步和异步模式。
+   * @param input - 创建参数
+   * @param asyncMode - 是否异步模式（默认false），异步模式不会等待向量生成
    */
-  async create(input: SkillThoughtCreateInput): Promise<SkillThoughtEntity> {
+  async create(input: SkillThoughtCreateInput, asyncMode = false): Promise<SkillThoughtEntity> {
     const now = new Date();
-    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
-
-    // 生成向量嵌入（使用摘要+关键词组合）
-    const textForEmbedding = `${input.summary} ${input.keywords.join(' ')}`;
-    const embedding = await this.embeddingService.embedText(
-      textForEmbedding,
-      embeddingConfig,
-    );
-
     const entity: SkillThoughtEntity = {
       _id: new ObjectId(),
       tenantId: input.tenantId,
       userId: input.userId,
       content: input.content,
-      summary: input.summary,
-      keywords: input.keywords,
-      embedding,
+      summary: input.summary ?? '',
+      keywords: input.keywords ?? [],
+      embedding: input.embedding ?? [],
       sessionId: input.sessionId,
       toolsUsed: input.toolsUsed,
       category: input.category,
       usageCount: 0,
+      status: input.status ?? (asyncMode ? 'pending' : 'completed'),
       createdAt: now,
       updatedAt: now,
     };
-    console.log('开始创建');
-    await this.collection.insertOne(entity);
+
+    if (asyncMode) {
+      // 异步模式：直接插入，不等待向量生成
+      await this.collection.insertOne(entity);
+      // 异步处理摘要、关键词和向量生成
+      this.processThoughtAsync(entity._id.toString(), input).catch((err) =>
+        console.error('[SkillThoughtService] Async processing failed:', err),
+      );
+    } else {
+      // 同步模式：生成向量
+      const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+      const textForEmbedding = `${input.summary ?? input.content} ${(input.keywords ?? []).join(' ')}`;
+      entity.embedding = await this.embeddingService.embedText(textForEmbedding, embeddingConfig);
+      await this.collection.insertOne(entity);
+    }
+
     return entity;
+  }
+
+  /**
+   * @title 异步处理思维链 Process Thought Async
+   * @description 后台生成摘要、关键词和向量嵌入。
+   */
+  private async processThoughtAsync(
+    id: string,
+    input: SkillThoughtCreateInput,
+  ): Promise<void> {
+    try {
+      // 1. 生成摘要
+      const summary = await this.generateSummary(input.content);
+      // 2. 提取关键词
+      const keywords = await this.extractKeywords(input.content);
+
+      // 3. 生成向量
+      const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+      const textForEmbedding = `${summary} ${keywords.join(' ')}`;
+      const embedding = await this.embeddingService.embedText(textForEmbedding, embeddingConfig);
+
+      // 4. 更新记录
+      await this.collection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            summary,
+            keywords,
+            embedding,
+            status: 'completed',
+            updatedAt: new Date(),
+          },
+        },
+      );
+      console.log(`[SkillThoughtService] Thought ${id} async processing completed`);
+    } catch (error) {
+      console.error(`[SkillThoughtService] Thought ${id} async processing failed:`, error);
+      await this.collection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: 'failed', updatedAt: new Date() } },
+      );
+    }
   }
 
   /**

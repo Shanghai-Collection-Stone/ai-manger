@@ -20,6 +20,7 @@ import { Observable } from 'rxjs';
 import { AdminService } from '../../admin/services/admin.service.js';
 import type { ConversationSessionType } from '../../context/entities/conversation.entity.js';
 import { SassService } from '../../sass/services/sass.service.js';
+import { DataSourceSchemaService } from '../../data-source/services/data-source-schema.service.js';
 
 /**
  * @title 主对话服务 Chat-Main Service
@@ -41,6 +42,7 @@ export class ChatMainService {
     private readonly adminService: AdminService,
     private readonly analysisTools: AnalysisFunctionCallService,
     private readonly sass: SassService,
+    private readonly schemaService: DataSourceSchemaService,
   ) {}
 
   private readonly HITL_PLACEHOLDER = '##HITL_REQUIRED_FRONTEND##';
@@ -80,7 +82,7 @@ export class ChatMainService {
       `REQUEST_TIME_ISO:${now}`,
       ip ? `CLIENT_IP:${ip}` : 'CLIENT_IP:unknown',
       platformSupplement,
-      this.getSystemPromptCN(scope.sessionType),
+      await this.getSystemPromptCN(scope.sessionType, scope.tenantId),
     ].join('\n');
 
     // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
@@ -282,7 +284,7 @@ export class ChatMainService {
             `REQUEST_TIME_ISO:${nowStr}`,
             `CLIENT_IP:${ipStr}`,
             platformSupplement,
-            this.getSystemPromptCN(scope.sessionType),
+            await this.getSystemPromptCN(scope.sessionType, scope.tenantId),
           ].join('\n');
 
           const streamWriter = (msg: string) => {
@@ -778,13 +780,13 @@ export class ChatMainService {
    * @returns {string} 中文系统提示文本。
    * @keyword-en system-prompt, data-analysis, batch-publish
    */
-  private getDataAnalysisPromptCN(): string {
-    return [
-      '你是 AI 指挥官 "小集"，目标是用最少步骤完成用户当前需求。',
+  private async getDataAnalysisPromptCN(tenantId?: string): Promise<string> {
+    const base = [
+      '你是 AI 指挥官 “小集”，目标是用最少步骤完成用户当前需求。',
       '你能完成代码生成,看版替换,页面生成,数据分析等任务,但你不是执行者,只能调用工具/子代理来完成任务。',
       '优先直接回答；只有当信息不足或用户明确要求时再调用工具/子代理。',
       '当工具返回了 Canvas 信息（如 canvasId），回复中输出一个 ```canvas-it``` JSON 代码块（至少包含 canvasId）。',
-      '当用户诉求属于“方案/决策/策略/建议”，且已有可支撑的数据时，调用 decision_card_generate 生成决策卡,如果没有就进行复杂数据查询, 然后继续生成',
+      '当用户诉求属于”方案/决策/策略/建议”，且已有可支撑的数据时，调用 decision_card_generate 生成决策卡,如果没有就进行复杂数据查询, 然后继续生成',
       '当工具返回决策卡信息（如 cardId）时，回复中输出一个 ```decision-it``` JSON 代码块（至少包含 cardId）。',
       '涉及看板替换/改版时：先调用 dashboard_config_view 读取现状，再调用 dashboard_config_patch 增量修改；不要跳过读取步骤。',
       'dashboardCode 仅可使用字母/数字/_/-；若用户未明确给 code，则不要传 dashboardCode（默认 ai-commander），禁止编造无效 code。',
@@ -794,26 +796,82 @@ export class ChatMainService {
       '看板 query 支持 sourceType=mongo 或 sourceType=feishu-bitable（飞书可用 tableId 作为 collection）。',
       '当看板指标需要复杂过滤/聚合/格式重组时，可在 config.queries.<key>.transformJs 中定义前端 JS 数据处理逻辑。',
       '不要回显工具原始 JSON 长文本，只做简洁结论。',
-      '小红书流程：先生成示例内容 Canvas；用户明确“发布/执行”后再进入发布任务阶段。',
-      '批量发布通过 Todo 派单：创建/更新 Todo，并使用中文接单人名称“小红书发布机”（避免暴露内部代码）；type 只能为 auto_execute/offline_execute/other（发布场景必须 auto_execute），并写清关联资源（如 canvasId）与 count。',
+      '小红书流程：先生成示例内容 Canvas；用户明确”发布/执行”后再进入发布任务阶段。',
+      '批量发布通过 Todo 派单：创建/更新 Todo，并使用中文接单人名称”小红书发布机”（避免暴露内部代码）；type 只能为 auto_execute/offline_execute/other（发布场景必须 auto_execute），并写清关联资源（如 canvasId）与 count。',
       '调用 todo_create/todo_update 时不要手填 userId，统一由会话上下文注入。',
       '创建发布任务时，description 必须写入当前会话上下文摘要（用户目标、对象、资源、执行要求），不要留空。',
       '示例文章生成阶段会基于图库原始图片即时生成拼图与封面；不复用历史拼图或历史封面。',
-      '需要复杂数据分析时使用 analysis_subagent。',
+      '[重要]需要任何数据分析,数据查询,数据获取时使用 analysis_subagent, 如果有数据来源返回也要在回答生成中说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '涉及计算时必须调用 js_calc 或 js_calc_batch。',
-      '若工具失败或返回空，明确告知用户并给下一步选项。'
-    ].join('\n');
+      '若工具失败或返回空，明确告知用户并给下一步选项。',
+      '所有的数据查询都要带上数据表清单（schema catalog），说明数据来源和字段信息，确保查询结果可解释且可复用。',
+    ];
+
+    // 构建数据表清单（不超过5000字）
+    const schemaCatalog = await this.buildSchemaCatalog(tenantId);
+
+    return [...base, schemaCatalog].join('\n');
+  }
+
+  /**
+   * @description 构建数据表清单markdown
+   * @keyword-en build schema catalog markdown
+   */
+  private async buildSchemaCatalog(tenantId?: string): Promise<string> {
+    const MAX_CHARS = 5000;
+    const lines: string[] = [];
+    let totalChars = 0;
+
+    // 获取所有可见数据源的 schemas
+    const schemas = await this.schemaService.listAllSchemas({
+      tenantId,
+      limit: 200,
+    });
+
+    // 按 sourceCode 分组
+    const grouped: Record<string, typeof schemas> = {};
+    for (const item of schemas) {
+      const code = item.schema.sourceCode || 'unknown';
+      if (!grouped[code]) grouped[code] = [];
+      grouped[code].push(item);
+    }
+
+    // 标题
+    const header = '\n【数据表清单】\n| sourceCode | collectionName | nameCn |';
+    const headerSep = '|------------|----------------|--------|';
+
+    lines.push(header, headerSep);
+    totalChars += header.length + headerSep.length + 2;
+
+    for (const [sourceCode, items] of Object.entries(grouped)) {
+      for (const item of items) {
+        const collectionName = item.schema.collectionName || '';
+        const nameCn = item.schema.nameCn || collectionName;
+        const row = `| ${sourceCode} | ${collectionName} | ${nameCn} |`;
+        const rowChars = row.length + 1; // +1 for newline
+
+        // 超出限制时直接停止，不添加截断行
+        if (totalChars + rowChars > MAX_CHARS) {
+          return lines.join('\n');
+        }
+
+        lines.push(row);
+        totalChars += rowChars;
+      }
+    }
+
+    return lines.join('\n');
   }
 
   /**
    * @description 获取会话模式系统提示
    * @keyword-en resolve system prompt by session mode
    */
-  private getSystemPromptCN(sessionType: ConversationSessionType): string {
+  private async getSystemPromptCN(sessionType: ConversationSessionType, tenantId?: string): Promise<string> {
     if (sessionType === 'thought') return this.getThoughtPromptCN();
     if (sessionType === 'gallery-agent') return this.getGalleryAgentPromptCN();
     if (sessionType === 'xhs-specialist') return this.getXhsSpecialistPromptCN();
-    return this.getDataAnalysisPromptCN();
+    return this.getDataAnalysisPromptCN(tenantId);
   }
 
   /**
@@ -842,7 +900,7 @@ export class ChatMainService {
       '若信息不足先提问澄清，不得编造字段。',
       '【关键】当需要生成思维链时，必须：1. 先完成完整的数据分析 2. 存入经验时 content 必须包含：数据源、涉及的表/集合、核心字段（字段名+含义+业务用途）、典型查询条件、业务场景、查询示例、结果解读 3. 禁止只写入抽象性描述，必须写入具体分析过程和结论 4. category 使用具体业务场景标签',
     ].join('\n');
-  }
+  } 
 
   /**
    * @description 图库Agent专用提示词
@@ -998,11 +1056,16 @@ export class ChatMainService {
       '   - 不同数据源返回不同资源标识（见下方映射表）',
       '',
       '3. 【根据 sourceCode 选择工具】：',
-      '   | sourceCode      | 资源标识字段   | 查询工具                    |',
-      '   |-----------------|---------------|----------------------------|',
-      '   | main-mongo      | collectionName | data_source_query          |',
-      '   | super-party     | collectionName | super_party_query          |',
-      '   | feishu-bitable  | tableId        | feishu_bitable_list_records|',
+      '   | sourceCode           | 资源标识字段   | 查询工具                     |',
+      '   |---------------------|---------------|------------------------------|',
+      '   | main-mongo         | collectionName | data_source_query           |',
+      '   | tenant-mongo       | collectionName | data_source_query           |',
+      '   | super-party        | collectionName | super_party_query           |',
+      '   | feishu-bitable     | tableId       | feishu_bitable_list_records |',
+      '   | feishu-bitable-task| tableId       | feishu_bitable_list_records |',
+      '',
+      '   注意：schema_search 同时搜索 sass_schema（子租户表，sourceCode=tenant-mongo）',
+      '   和 data_source_schemas（飞书、main-mongo等），统一使用 data_source_query 查询。',
       '',
       '4. 【多数据源确认】若 schema_search 返回多个不同 sourceCode 的结果，',
       '   请与用户确认使用哪个数据源，不要自行选择。',
@@ -1014,6 +1077,7 @@ export class ChatMainService {
       '6. 【保存经验】仅在本次未通过 search_thought 找到可复用思维链时，才调用 generate_thought 保存本次 schema 经验：',
       '   - 请先检查最近一次 search_thought 的返回字段 shouldGenerateThought：仅当其为 true 时，才允许调用 generate_thought。',
       '   - 调用 generate_thought 时，必须显式传入 allowGenerate=true；若 shouldGenerateThought 为 false，则不得调用该工具。',
+      '   - 默认使用异步模式（asyncMode=true），立即返回不阻塞',
       '   - content: 必须记录完整、具体的经验内容，而非抽象概述。内容需包含以下部分：',
       '     【数据源】使用的具体数据源及 sourceCode（如 main-mongo、feishu-bitable）',
       '     【涉及的表/集合】具体的 schema 名称、collectionName 或 tableId',
@@ -1027,6 +1091,10 @@ export class ChatMainService {
       '   - toolsUsed: 使用的工具名列表（如 schema_search、data_source_query、feishu_bitable_list_records 等）',
       '   - category: 建议使用能表达具体业务场景的标签，如 "供应商订单汇总"、"月度销售统计"、"任务进度追踪" 等，避免泛泛的 "schema-knowledge"',
       '   - 如果当前调用中 search_thought 返回了结果，则不得调用 generate_thought，只需在回答中引用该历史思维链内容',
+      '【批量查询优化】',
+      '- 当需要查询多个表的结构时，使用 schema_batch_get 一次获取多个表的完整字段',
+      '- 当需要从多个表或多条件查询数据时，使用 data_source_batch_query 并发执行多个查询',
+      '- 批量查询返回时，若某个查询数据超量，会在 warning 中提示该查询条件和数据有误，请根据提示调整',
       '【约束】',
       '- 默认 limit = 50，最大 200',
       '- 避免不必要的多轮工具调用',

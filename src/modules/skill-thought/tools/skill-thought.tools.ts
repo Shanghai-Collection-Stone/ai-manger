@@ -139,10 +139,10 @@ export class SkillThoughtToolsService {
 
     /**
      * Tool 2: generate_thought
-     * 产生/更新思维链
+     * 产生/更新思维链 - 异步模式
      */
     const generateThought = tool(
-      async ({ content, sessionId, toolsUsed, category, allowGenerate }) => {
+      async ({ content, sessionId, toolsUsed, category, allowGenerate, asyncMode }) => {
         try {
           if (allowGenerate === false) {
             return JSON.stringify({
@@ -152,23 +152,11 @@ export class SkillThoughtToolsService {
                 'Thought generation is disabled in this context (allowGenerate=false).',
             });
           }
-          console.log(content);
+          console.log('[generate_thought] content length:', content.length);
 
-          // 1. 使用 AI 生成摘要和关键词
-          const summary = await this.thoughtService.generateSummary(content);
-          const keywords = await this.thoughtService.extractKeywords(content);
-
-          console.log(summary, keywords);
-          if (keywords.length === 0) {
-            console.error('Failed to extract keywords from content');
-            return JSON.stringify({
-              success: false,
-              error: 'Failed to extract keywords from content',
-            });
-          }
-
-          // 2. 搜索是否有强相关的已有思维链（相似度 > 0.85）
-          const searchQuery = `${summary} ${keywords.join(' ')}`;
+          // 1. 搜索是否有强相关的已有思维链（相似度 > 0.85）
+          // 使用内容摘要做预搜索
+          const searchQuery = content.slice(0, 200);
           const existingThought = await this.thoughtService.findStronglyRelated(
             searchQuery,
             undefined,
@@ -176,11 +164,11 @@ export class SkillThoughtToolsService {
           );
 
           if (existingThought) {
-            // 3. 若有强相关，则合并更新
+            // 2. 若有强相关，则合并更新（同步模式）
             const merged = await this.thoughtService.mergeIntoExisting(
               existingThought.thought._id.toString(),
               content,
-              keywords,
+              [], // 异步模式下不传关键词，后续异步更新
               toolsUsed,
               scope,
             );
@@ -189,34 +177,43 @@ export class SkillThoughtToolsService {
               return JSON.stringify({
                 success: true,
                 action: 'merged',
-                message: 'Content merged into existing thought',
+                message: 'Content merged into existing thought (async processing)',
                 thoughtId: merged._id.toString(),
-                summary: merged.summary,
-                keywords: merged.keywords,
+                status: 'pending',
                 similarityScore: existingThought.score,
+                note: 'Summary and keywords are being generated in background',
               });
             }
           }
 
-          // 4. 否则创建新记录
-          const newThought = await this.thoughtService.create({
-            content,
-            summary,
-            keywords,
-            tenantId: scope?.tenantId,
-            userId: scope?.userId,
-            sessionId,
-            toolsUsed,
-            category,
-          });
+          // 3. 否则创建新记录（异步模式）
+          const useAsync = asyncMode !== false; // 默认异步
+          const newThought = await this.thoughtService.create(
+            {
+              content,
+              tenantId: scope?.tenantId,
+              userId: scope?.userId,
+              sessionId,
+              toolsUsed,
+              category,
+            },
+            useAsync, // asyncMode
+          );
 
           return JSON.stringify({
             success: true,
             action: 'created',
-            message: 'New thought created',
+            message: useAsync
+              ? 'Thought created, summary/keywords being generated in background'
+              : 'Thought created with summary and keywords',
             thoughtId: newThought._id.toString(),
-            summary: newThought.summary,
-            keywords: newThought.keywords,
+            status: useAsync ? 'pending' : 'completed',
+            ...(useAsync
+              ? { note: 'Use get_thought_detail later to get full content' }
+              : {
+                  summary: newThought.summary,
+                  keywords: newThought.keywords,
+                }),
           });
         } catch (error) {
           console.error('Error in generate_thought:', error);
@@ -234,6 +231,7 @@ export class SkillThoughtToolsService {
           'If a strongly related thought exists (similarity > 0.85), the new content will be merged instead of creating duplicates.',
           'Use this tool AFTER completing a task when you want future calls to quickly know which schemas, fields, and conditions to use for similar questions.',
           'Only call this tool when the latest `search_thought` response has `shouldGenerateThought=true`, and pass `allowGenerate=true` explicitly; otherwise, avoid calling it.',
+          '默认使用异步模式创建，summary和keywords会在后台异步生成，不阻塞主流程。',
         ].join(' '),
         schema: z.object({
           content: z
@@ -247,6 +245,11 @@ export class SkillThoughtToolsService {
             .describe(
               'Set to false to explicitly disable creating or merging any thought in this context',
             ),
+          asyncMode: z
+            .boolean()
+            .optional()
+            .describe('异步模式：true=立即返回，后台生成摘要关键词(默认)；false=同步等待完成')
+            .default(true),
           sessionId: z
             .string()
             .optional()

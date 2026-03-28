@@ -1,8 +1,9 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { tool, CreateAgentParams } from 'langchain';
 import * as z from 'zod';
-import { Db } from 'mongodb';
+import { Db, ObjectId } from 'mongodb';
 import { DataSourceSchemaService } from '../../../data-source/services/data-source-schema.service.js';
+import { DataSourceSchemaSearchResult } from '../../../data-source/entities/data-source-schema.entity.js';
 
 /**
  * @title Schema 函数调用服务 Schema Function Call Service
@@ -91,17 +92,18 @@ export class SchemaFunctionCallService {
     tenantId?: string;
     userId?: string;
   }): CreateAgentParams['tools'] {
+    /**
+     * Schema 搜索工具 - 统一搜索所有数据源
+     * TODO: schema_search 同时搜索 sass_schema 和 data_source_schemas
+     * - sass_schema: 子租户专属表，sourceCode=tenant-mongo
+     * - data_source_schemas: 外部数据源（飞书、main-mongo、super-party等）
+     */
     const schemaSearch = tool(
       async ({ query, limit, sourceCode, tenantId }) => {
         const scopedTenantId = this.resolveTenantId(tenantId, scope);
         const effectiveLimit = limit ?? 10;
-        console.log('[schema_search] Searching all sources:', query, {
-          limit: effectiveLimit,
-          sourceCode,
-          tenantId: scopedTenantId,
-        });
 
-        // 跨所有数据源搜索（data_source_schemas，排除无 scope 的数据源租户泄漏已在 service 层控制）
+        // 1. 搜索 data_source_schemas（外部数据源）
         const dsResults = await this.schemaService.searchAllSources(
           query,
           effectiveLimit,
@@ -111,22 +113,15 @@ export class SchemaFunctionCallService {
           },
         );
 
-        // 租户上下文且未指定其他数据源时，额外搜 sass_schema（租户专属表）
+        // 2. 搜索 sass_schema（子租户专属表）
         const sassItems =
           scopedTenantId && (!sourceCode || sourceCode === 'tenant-mongo')
             ? await this.searchSassSchema(query, effectiveLimit)
             : [];
 
-        if (dsResults.length === 0 && sassItems.length === 0) {
-          return JSON.stringify({
-            query,
-            items: [],
-            message: '未找到匹配的 schema，请尝试其他关键词',
-          });
-        }
-
+        // 3. 合并结果
         const dsItems = dsResults.map((r) => ({
-          ...(r.schema.sourceCode === 'feishu-bitable'
+          ...(r.schema.sourceCode === 'feishu-bitable' || r.schema.sourceCode === 'feishu-bitable-task'
             ? { tableId: r.schema.collectionName }
             : { collectionName: r.schema.collectionName }),
           sourceCode: r.schema.sourceCode,
@@ -136,57 +131,205 @@ export class SchemaFunctionCallService {
           score: r.score,
         }));
 
-        const allItems = [
-          ...dsItems,
-          ...sassItems,
-        ];
+        const allItems = [...dsItems, ...sassItems];
+
+        if (allItems.length === 0) {
+          return JSON.stringify({
+            query,
+            items: [],
+            message: '未找到匹配的 schema，请尝试其他关键词',
+          });
+        }
 
         const sourceCodes = new Set(allItems.map((i) => i.sourceCode));
-        const hasMultipleSources = sourceCodes.size > 1;
-
-        console.log(
-          `[schema_search] Found ${allItems.length} schemas from ${sourceCodes.size} source(s)`,
-        );
 
         return JSON.stringify({
           query,
           items: allItems,
-          ...(hasMultipleSources
-            ? {
-                warning:
-                  '检测到多个数据源匹配，请与用户确认使用哪个数据源后再查询',
-              }
-            : {}),
+          sourceCodes: Array.from(sourceCodes),
           toolMapping: {
             'main-mongo': 'data_source_query',
-            'tenant-mongo': 'tenant_query（自动加租户前缀，传逻辑表名即可）',
+            'tenant-mongo': 'data_source_query',
             'super-party': 'super_party_query',
             'feishu-bitable': 'feishu_bitable_list_records',
+            'feishu-bitable-task': 'feishu_bitable_list_records',
           },
         });
       },
       {
         name: 'schema_search',
-        description: `搜索所有数据源的 schema（表/集合结构）。
+        description: `统一搜索所有数据源的 schema（表/集合结构）。
+同时搜索：sass_schema（子租户表）和 data_source_schemas（飞书、main-mongo等外部数据源）。
 返回结果包含 sourceCode 字段，根据 sourceCode 选择对应的查询工具：
-- tenant-mongo → tenant_query（租户专属表，传逻辑表名，前缀自动加）
-- main-mongo → data_source_query（使用 collectionName）
-- super-party → super_party_query（使用 collectionName）
-- feishu-bitable → feishu_bitable_list_records（使用 tableId）
-有租户上下文时优先查 sourceCode=tenant-mongo 的结果。
-若返回多个不同 sourceCode 的结果，请与用户确认使用哪个数据源。`,
+- tenant-mongo → data_source_query
+- main-mongo → data_source_query
+- super-party → super_party_query
+- feishu-bitable / feishu-bitable-task → feishu_bitable_list_records`,
         schema: z.object({
           query: z.string().describe('表的中文或英文关键词，多个用空格隔开'),
           limit: z.number().optional().default(10).describe('返回结果数量限制'),
           sourceCode: z
             .string()
             .optional()
-            .describe('数据源代码，建议显式传入'),
+            .describe('数据源代码，不传则搜索所有数据源'),
+          tenantId: z.string().optional().describe('租户ID'),
+        }),
+      },
+    );
+
+    /**
+     * 批量获取 Schema 结构 - 一次查询多个表的完整字段结构
+     * TODO: 同时支持 sass_schema 和 data_source_schemas
+     */
+    const schemaBatchGet = tool(
+      async ({ schemas, tenantId }) => {
+        const scopedTenantId = this.resolveTenantId(tenantId, scope);
+
+        if (!Array.isArray(schemas) || schemas.length === 0) {
+          return JSON.stringify({
+            success: false,
+            error: 'SCHEMAS_ARRAY_REQUIRED',
+            message: 'schemas 参数必须是非空数组',
+          });
+        }
+
+        if (schemas.length > 20) {
+          return JSON.stringify({
+            success: false,
+            error: 'SCHEMAS_TOO_MANY',
+            message: '单次最多支持 20 个 schema 查询',
+          });
+        }
+
+        // 批量并发查询所有 schema
+        const results = await Promise.all(
+          schemas.map(async (item) => {
+            try {
+              const { collectionName, sourceCode = 'main-mongo' } = item;
+              if (!collectionName || typeof collectionName !== 'string') {
+                return {
+                  success: false,
+                  collectionName,
+                  sourceCode,
+                  error: 'INVALID_COLLECTION_NAME',
+                };
+              }
+
+              // tenant-mongo 查 sass_schema，其他查 data_source_schemas
+              let searchResults: DataSourceSchemaSearchResult[] = [];
+              if (sourceCode === 'tenant-mongo' && scopedTenantId) {
+                // 从 sass_schema 查找
+                const sassDoc = await this.db.collection('sass_schema').findOne({ table: collectionName });
+                if (sassDoc) {
+                  searchResults = [{
+                    schema: {
+                      _id: new ObjectId(),
+                      collectionName: sassDoc.table,
+                      sourceCode: 'tenant-mongo',
+                      nameCn: sassDoc.tableDesc ?? sassDoc.table,
+                      keywords: [sassDoc.table, sassDoc.tableDesc].filter(Boolean),
+                      fields: Object.entries(sassDoc.tableField ?? {}).map(([name, desc]) => ({
+                        name,
+                        type: 'string',
+                        nameCn: name,
+                        description: String(desc ?? ''),
+                      })),
+                      version: 1,
+                      createdAt: new Date(),
+                      updatedAt: new Date(),
+                    },
+                    score: 1,
+                    matchType: 'keyword' as const,
+                  }];
+                }
+              } else {
+                searchResults = await this.schemaService.searchSchema(collectionName, sourceCode, 1);
+              }
+
+              if (searchResults.length === 0) {
+                return {
+                  success: false,
+                  collectionName,
+                  sourceCode,
+                  error: 'SCHEMA_NOT_FOUND',
+                  message: `未找到 ${collectionName} 的 schema，请先使用 schema_search 搜索`,
+                };
+              }
+
+              const schema = searchResults[0].schema as unknown as Record<string, unknown>;
+              return {
+                success: true,
+                collectionName: String(schema.collectionName),
+                sourceCode: String(schema.sourceCode),
+                nameCn: String(schema.nameCn ?? ''),
+                keywords: Array.isArray(schema.keywords) ? schema.keywords as string[] : [],
+                fields: Array.isArray(schema.fields) ? schema.fields : [],
+              };
+            } catch (err) {
+              return {
+                success: false,
+                collectionName: item.collectionName,
+                sourceCode: item.sourceCode || 'main-mongo',
+                error: err instanceof Error ? err.message : String(err),
+              };
+            }
+          }),
+        );
+
+        const successCount = results.filter((r) => r.success).length;
+        const failCount = results.length - successCount;
+
+        console.log(
+          `[schema_batch_get] Completed: ${successCount} success, ${failCount} failed`,
+        );
+
+        return JSON.stringify({
+          success: true,
+          total: results.length,
+          successCount,
+          failCount,
+          results,
+          ...(failCount > 0
+            ? {
+                warning: `${failCount} 个 schema 查询失败，请检查表名和数据源是否正确`,
+              }
+            : {}),
+        });
+      },
+      {
+        name: 'schema_batch_get',
+        description: `批量获取多个表的完整 schema 结构。
+用途：已知表名时，快速批量获取多个表的字段结构，用于联合分析或多表查询前的结构确认。
+支持同时查询不同数据源的表。
+
+返回结果包含每个表的完整字段信息（fields数组），包含：
+- name: 字段名
+- type: 字段类型
+- nameCn: 中文名
+- description: 字段描述
+
+如果某个表查询失败，会在 results 中标记 error 字段，不会影响其他表的结果。`,
+        schema: z.object({
+          schemas: z
+            .array(
+              z.object({
+                collectionName: z.string().describe('表/集合名称'),
+                sourceCode: z
+                  .string()
+                  .optional()
+                  .describe('数据源代码，默认 main-mongo')
+                  .default('main-mongo'),
+              }),
+            )
+            .min(1)
+            .max(20)
+            .describe('要查询的表列表，最多20个'),
           tenantId: z.string().optional().describe('租户ID，不传表示平台范围'),
         }),
       },
     );
-    return [schemaSearch];
+
+    return [schemaSearch, schemaBatchGet];
   }
 
   /**
