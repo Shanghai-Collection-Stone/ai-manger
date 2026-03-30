@@ -1253,7 +1253,7 @@ export class ArticleGraphService {
     absPath: string;
     fileName: string;
     url: string;
-    tags: string[];
+    tags?: string[];
     description: string;
     isCollage?: boolean;
     collageSourceImageIds?: number[];
@@ -1292,7 +1292,7 @@ export class ArticleGraphService {
         url: input.url,
         mimeType,
         size: statSize > 0 ? statSize : undefined,
-        tags: input.tags,
+        tags: input.tags ?? [],
         description: input.description,
         isCollage: input.isCollage === true,
         collageSourceImageIds:
@@ -1972,9 +1972,6 @@ export class ArticleGraphService {
             absPath: collageFile.absPath,
             fileName: collageFile.fileName,
             url: collageFile.url,
-            tags: Array.from(
-              new Set([...(Array.isArray(input.articleTags) ? input.articleTags : []), '拼图', '动态拼图']),
-            ).slice(0, 24),
             description: `Canvas动态拼图：#${coverSources[0]?.id ?? '-'} + #${coverSources[1]?.id ?? '-'}`,
             isCollage: true,
             collageSourceImageIds: [coverSources[0]?.id, coverSources[1]?.id].filter(
@@ -2027,9 +2024,6 @@ export class ArticleGraphService {
             absPath: file.absPath,
             fileName: file.fileName,
             url: file.url,
-            tags: Array.from(
-              new Set([...(Array.isArray(input.articleTags) ? input.articleTags : []), '拼图', '正文配图拼图']),
-            ).slice(0, 24),
             description: `Canvas正文拼图：#${pair.a?.id ?? '-'} + #${pair.b?.id ?? '-'}`,
             isCollage: true,
             collageSourceImageIds: [pair.a?.id, pair.b?.id].filter(
@@ -2085,16 +2079,6 @@ export class ArticleGraphService {
             absPath: coverFile.absPath,
             fileName: coverFile.fileName,
             url: coverFile.url,
-            tags: Array.from(
-              new Set([
-                ...(Array.isArray(input.articleTags) ? input.articleTags : []),
-                '封面',
-                '自动封面',
-                finalCoverTitle,
-                coverCopy.subtitle,
-                coverCopy.titleFromLlm ? '封面标题:LLM' : '封面标题:Fallback',
-              ]),
-            ).slice(0, 24),
             description: `Canvas封面：${finalCoverTitle}${
               coverCopy.subtitle ? `｜${coverCopy.subtitle}` : ''
             }（titleFromLlm=${coverCopy.titleFromLlm ? 'yes' : 'no'}）`,

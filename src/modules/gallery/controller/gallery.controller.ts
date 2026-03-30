@@ -300,6 +300,65 @@ async function compressUploadFiles(
 }
 
 /**
+ * @description 从图片文件获取尺寸信息。
+ * @param {string} filePath - 图片文件路径。
+ * @returns {Promise<{ width: number; height: number; isPortrait: boolean } | null>} 尺寸信息，失败返回null。
+ * @keyword gallery, image, dimensions, jimp
+ * @since 2026-03-30
+ */
+async function getImageDimensionsFromFile(
+  filePath: string,
+): Promise<{ width: number; height: number; isPortrait: boolean } | null> {
+  const src = String(filePath || '');
+  if (!src) return null;
+
+  if (!jimpModulePromise)
+    jimpModulePromise = import('jimp') as Promise<unknown>;
+  const mod = await jimpModulePromise;
+  const Jimp = isRecord(mod) ? mod.Jimp : undefined;
+  if (!isJimpLike(Jimp)) return null;
+
+  try {
+    const imgUnknown = await Jimp.read(src);
+    if (!isJimpImageLike(imgUnknown)) return null;
+    const w = typeof imgUnknown.bitmap?.width === 'number' ? imgUnknown.bitmap.width : 0;
+    const h = typeof imgUnknown.bitmap?.height === 'number' ? imgUnknown.bitmap.height : 0;
+    if (w <= 0 || h <= 0) return null;
+    return { width: w, height: h, isPortrait: h > w };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @description 批量提取上传文件的尺寸信息。
+ * @param {Express.Multer.File[]} files - 上传的文件数组。
+ * @returns {Promise<Map<string, { width: number; height: number; isPortrait: boolean }>>} key=原始filename。
+ * @keyword gallery, dimensions, batch
+ * @since 2026-03-30
+ */
+async function extractUploadFileDimensions(
+  files: Express.Multer.File[],
+): Promise<Map<string, { width: number; height: number; isPortrait: boolean }>> {
+  const list = Array.isArray(files) ? files : [];
+  const out = new Map<string, { width: number; height: number; isPortrait: boolean }>();
+  if (list.length === 0) return out;
+
+  const concurrency = 4;
+  await mapLimit(list, concurrency, async (f) => {
+    const key = String(f.filename || '');
+    const p = String(f.path || '');
+    if (!key || !p) return;
+    const dims = await getImageDimensionsFromFile(p);
+    if (dims) {
+      out.set(key, dims);
+    }
+  });
+
+  return out;
+}
+
+/**
  * @description 生成图片缩略图文件（写入到指定输出路径）。
  * @param {{ sourcePath: string; outputPath: string; maxWidth?: number; maxHeight?: number; quality?: number }} params - 缩略图生成参数。
  * @returns {Promise<{ ok: boolean; reason?: string }>} 生成结果。
@@ -542,35 +601,44 @@ export class GalleryController {
     const groupIdRaw = String(body?.groupId ?? '').trim();
     const groupId = groupIdRaw.length > 0 ? Number(groupIdRaw) : undefined;
 
+    // 提取图片尺寸（在压缩之前）
+    const dims = await extractUploadFileDimensions(files);
     await compressUploadFiles(files);
     const thumbs = await createUploadThumbnails(files);
 
-    const inputs = files.map((f) => ({
-      userId,
-      tenantId,
-      groupId:
-        typeof groupId === 'number' && Number.isFinite(groupId)
-          ? groupId
+    const inputs = files.map((f) => {
+      const key = String(f.filename || '');
+      const dim = dims.get(key);
+      return {
+        userId,
+        tenantId,
+        groupId:
+          typeof groupId === 'number' && Number.isFinite(groupId)
+            ? groupId
+            : undefined,
+        originalName: String(f.originalname || ''),
+        fileName: key,
+        absPath: String(f.path || ''),
+        url: `/static/uploads/${key}`,
+        ...(thumbs.get(key) ?? {}),
+        mimeType: String(f.mimetype || ''),
+        size: typeof f.size === 'number' ? f.size : undefined,
+        width: dim?.width,
+        height: dim?.height,
+        isPortrait: dim?.isPortrait,
+        tags,
+        description,
+        isCollage,
+        collageSourceImageIds: isCollage ? collageSourceImageIds : undefined,
+        collageMeta: isCollage
+          ? {
+              width: Number.isFinite(collageWidth) ? collageWidth : 640,
+              height: Number.isFinite(collageHeight) ? collageHeight : 853,
+              dpi: Number.isFinite(collageDpi) ? collageDpi : 96,
+            }
           : undefined,
-      originalName: String(f.originalname || ''),
-      fileName: String(f.filename || ''),
-      absPath: String(f.path || ''),
-      url: `/static/uploads/${String(f.filename || '')}`,
-      ...(thumbs.get(String(f.filename || '')) ?? {}),
-      mimeType: String(f.mimetype || ''),
-      size: typeof f.size === 'number' ? f.size : undefined,
-      tags,
-      description,
-      isCollage,
-      collageSourceImageIds: isCollage ? collageSourceImageIds : undefined,
-      collageMeta: isCollage
-        ? {
-            width: Number.isFinite(collageWidth) ? collageWidth : 640,
-            height: Number.isFinite(collageHeight) ? collageHeight : 853,
-            dpi: Number.isFinite(collageDpi) ? collageDpi : 96,
-          }
-        : undefined,
-    }));
+      };
+    });
 
     const docs = await this.gallery.createMany(inputs);
     return { images: docs.map((d) => ({ ...d, _id: undefined })) };
@@ -595,6 +663,7 @@ export class GalleryController {
     @Query('groupId') groupId?: string,
     @Query('tag') tag?: string,
     @Query('includeCollage') includeCollage?: string,
+    @Query('imageType') imageType?: string,
     @Query('cursorId') cursorId?: string,
     @Query('limit') limit?: string,
     @Req() req?: Request,
@@ -606,6 +675,10 @@ export class GalleryController {
     const gid = groupId ? Number(groupId) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
     const includeCollageFlag = parseBooleanFlag(includeCollage);
+    const resolvedImageType =
+      imageType === 'regular' || imageType === 'collage' || imageType === 'all'
+        ? (imageType as 'regular' | 'collage' | 'all')
+        : undefined;
     const rows = await this.gallery.findAccessibleImages(
       userId ?? 'default',
       tid,
@@ -613,6 +686,7 @@ export class GalleryController {
         groupId: typeof gid === 'number' && Number.isFinite(gid) ? gid : undefined,
         tag,
         includeCollage: includeCollageFlag !== false,
+        imageType: resolvedImageType,
         cursorId: typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
         limit: lim ?? 50,
       },

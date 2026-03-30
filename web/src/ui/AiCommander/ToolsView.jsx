@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import CanvasFeedView from './CanvasFeedView';
@@ -149,7 +149,7 @@ const api = {
    * @param {Object} [params]
    * @returns {Promise<Object>}
    */
-  async listGalleryImages({ userId, groupId, tag, includeCollage, cursorId, limit } = {}) {
+  async listGalleryImages({ userId, groupId, tag, includeCollage, imageType, cursorId, limit } = {}) {
     try {
       const params = new URLSearchParams();
       if (userId) params.set('userId', userId);
@@ -157,7 +157,9 @@ const api = {
         params.set('groupId', String(groupId));
       }
       if (tag) params.set('tag', tag);
-      if (typeof includeCollage === 'boolean') {
+      if (imageType) {
+        params.set('imageType', imageType);
+      } else if (typeof includeCollage === 'boolean') {
         params.set('includeCollage', includeCollage ? 'true' : 'false');
       }
       if (cursorId !== undefined && cursorId !== null && `${cursorId}` !== '') {
@@ -459,6 +461,19 @@ const compressImage = async (file, maxDim = MAX_UPLOAD_DIMENSION) => {
   return new File([blob], `${baseName}_${newW}x${newH}.jpg`, { type: 'image/jpeg' });
 };
 
+/**
+ * @description 从 URL 加载 Image 元素
+ * @param {string} url - 图片 URL
+ * @returns {Promise<HTMLImageElement>}
+ * @keyword-en load image element from url
+ */
+const loadImageElement = (url) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => resolve(img);
+  img.onerror = () => reject(new Error('LOAD_IMAGE_FAILED'));
+  img.src = url;
+});
+
 const drawCover = (ctx, img, x, y, width, height) => {
   const iw = Number(img?.naturalWidth || img?.width || 0);
   const ih = Number(img?.naturalHeight || img?.height || 0);
@@ -527,6 +542,67 @@ const createCoverFromCollageFile = async (collageUrl, text) => {
   const title = String(text || '').trim().slice(0, 16) || '示例文章';
   const centerX = COLLAGE_WIDTH / 2;
   const centerY = Math.floor(COLLAGE_HEIGHT * 0.52);
+  const fontSize = title.length > 8 ? 72 : 84;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.font = `900 ${fontSize}px Impact, 'Arial Black', sans-serif`;
+
+  ctx.lineWidth = 16;
+  ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+  ctx.strokeText(title, centerX, centerY);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(title, centerX, centerY);
+
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (b) resolve(b);
+      else reject(new Error('COVER_BLOB_FAILED'));
+    }, 'image/jpeg', 0.92);
+  });
+
+  return new File([blob], `cover-${Date.now()}.jpg`, { type: 'image/jpeg' });
+};
+
+/**
+ * @description 为竖图（Portrait）直接添加文字封面
+ * @param {string} imageUrl - 图片 URL
+ * @param {string} text - 封面文字
+ * @param {{ width: number, height: number }} [dims] - 图片原始尺寸（可选，用于裁剪中心区域）
+ * @returns {Promise<File>} 封面文件
+ * @keyword-en create portrait cover with text overlay
+ */
+const createCoverFromSingleImageFile = async (imageUrl, text, dims) => {
+  const img = await loadImageElement(imageUrl);
+  const iw = img.naturalWidth || img.width || 0;
+  const ih = img.naturalHeight || img.height || 0;
+  if (iw === 0 || ih === 0) throw new Error('INVALID_IMAGE_SIZE');
+
+  // 使用固定封面尺寸展示（裁剪中心区域适配）
+  const COVER_W = 640;
+  const COVER_H = 853;
+  const canvas = document.createElement('canvas');
+  canvas.width = COVER_W;
+  canvas.height = COVER_H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('COVER_CANVAS_CONTEXT_FAILED');
+
+  // 绘制图片（cover 模式填充）
+  drawCover(ctx, img, 0, 0, COVER_W, COVER_H);
+
+  // 添加文字遮罩和文字
+  const plateTop = Math.floor(COVER_H * 0.33);
+  const plateHeight = Math.floor(COVER_H * 0.35);
+  const gradient = ctx.createLinearGradient(0, plateTop, 0, plateTop + plateHeight);
+  gradient.addColorStop(0, 'rgba(0,0,0,0.52)');
+  gradient.addColorStop(1, 'rgba(0,0,0,0.36)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, plateTop, COVER_W, plateHeight);
+
+  const title = String(text || '').trim().slice(0, 16) || '示例文章';
+  const centerX = COVER_W / 2;
+  const centerY = Math.floor(COVER_H * 0.52);
   const fontSize = title.length > 8 ? 72 : 84;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -755,15 +831,18 @@ const GalleryView = ({ onBack }) => {
   const imagesReqIdRef = useRef(0);
   const imagesRef = useRef([]);
   const selectedGroupIdRef = useRef(selectedGroupId);
+  const tabRef = useRef(tab);
   const fileRef = useRef(null);
   const loadMoreRef = useRef(null);
 
   // Sync refs
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => { selectedGroupIdRef.current = selectedGroupId; }, [selectedGroupId]);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
 
+  // 拼图素材：必须是横图（isPortrait 不为 true）且非拼图戏图
   const collageSourceImages = useMemo(
-    () => (Array.isArray(images) ? images.filter((img) => img?.isCollage !== true) : []),
+    () => (Array.isArray(images) ? images.filter((img) => img?.isCollage !== true && img?.isPortrait !== true) : []),
     [images],
   );
 
@@ -771,6 +850,17 @@ const GalleryView = ({ onBack }) => {
     () => (Array.isArray(images) ? images.filter((img) => img?.isCollage === true) : []),
     [images],
   );
+
+  // Cover UI: show all images except cover-tagged ones (for cover generation source selection)
+  const coverSourceImages = useMemo(() => {
+    if (!Array.isArray(images)) return [];
+    const coverTags = new Set(['封面', '拼图封面', '自动封面', 'canvas封面']);
+    return images.filter((img) => {
+      const tags = Array.isArray(img?.tags) ? img.tags : [];
+      const hasCoverTag = tags.some((t) => coverTags.has(String(t ?? '').trim()));
+      return !hasCoverTag;
+    });
+  }, [images]);
 
   // Load Tags
   const loadTags = useCallback(async () => {
@@ -792,19 +882,23 @@ const GalleryView = ({ onBack }) => {
   }, [userId]);
 
   // Load Images
-  const loadImages = useCallback(async ({ append = false } = {}) => {
+  const loadImages = useCallback(async ({ append = false, imageType: explicitImageType } = {}) => {
     const reqId = (imagesReqIdRef.current += 1);
     setImagesLoading(true);
+    // 未显式指定时，依据当前 tab 自动推导: gallery/collage 只要 regular，cover 要 all
+    const imageType = explicitImageType ?? (tabRef.current === 'cover' ? 'all' : 'regular');
     try {
       const curImages = imagesRef.current;
       const cursorId = append && curImages.length > 0 ? curImages[curImages.length - 1]?.id : undefined;
-      const data = await api.listGalleryImages({
+      const params = {
         userId: userId || undefined,
         groupId: selectedGroupIdRef.current ?? undefined,
         tag: tagFilter || undefined,
         cursorId,
         limit: pageSize,
-      });
+      };
+      if (imageType) params.imageType = imageType;
+      const data = await api.listGalleryImages(params);
       if (reqId !== imagesReqIdRef.current) return;
       const list = Array.isArray(data?.images) ? data.images : [];
       setHasMoreImages(list.length >= pageSize);
@@ -834,6 +928,20 @@ const GalleryView = ({ onBack }) => {
   useEffect(() => {
     loadImages({ append: false });
   }, [tagFilter, loadImages]);
+
+  // Reload images when tab changes:
+  // - gallery: imageType='regular' — 只显示普通图片，过滤封面和拼图
+  // - collage: imageType='regular' — 拼图创作素材，只显示普通图片
+  // - cover: imageType='all' — 封面工具，显示普通图片和拼图
+  useEffect(() => {
+    if (tab === 'collage') {
+      loadImages({ append: false, imageType: 'regular' });
+    } else if (tab === 'cover') {
+      loadImages({ append: false, imageType: 'all' });
+    } else if (tab === 'gallery') {
+      loadImages({ append: false, imageType: 'regular' });
+    }
+  }, [tab, loadImages]);
 
   useEffect(() => {
     setCollageSelectedIds([]);
@@ -996,17 +1104,11 @@ const GalleryView = ({ onBack }) => {
         selected[0].url || selected[0].thumbUrl,
         selected[1].url || selected[1].thumbUrl,
       );
-      const mergedTags = Array.from(new Set([
-        ...((Array.isArray(selected[0].tags) ? selected[0].tags : [])),
-        ...((Array.isArray(selected[1].tags) ? selected[1].tags : [])),
-        '拼图',
-      ]));
       const desc = `双图拼图：#${selected[0].id} + #${selected[1].id}`;
       const uid = String(userId || '').trim() || 'default';
       const res = await api.uploadGalleryImages([file], {
         userId: uid,
         groupId: selectedGroupId,
-        tags: mergedTags.join(','),
         description: desc,
         isCollage: 'true',
         collageSourceImageIds: `${selected[0].id},${selected[1].id}`,
@@ -1017,7 +1119,7 @@ const GalleryView = ({ onBack }) => {
       if (Array.isArray(res?.images) && res.images.length > 0) {
         setCollageMessage('拼图已生成并入库');
         setCollageSelectedIds([]);
-        await loadImages({ append: false });
+        await loadImages({ append: false, imageType: 'regular' });
         await loadTags();
         showToast('拼图生成并入库成功', 'success');
       } else {
@@ -1042,12 +1144,12 @@ const GalleryView = ({ onBack }) => {
     if (coverGenerating) return;
     const targetId = Number(coverSelectedId);
     if (!Number.isFinite(targetId)) {
-      setCoverMessage('请先选择 1 张拼图素材');
+      setCoverMessage('请先选择 1 张素材');
       return;
     }
-    const source = collageImages.find((img) => img.id === targetId);
+    const source = coverSourceImages.find((img) => img.id === targetId);
     if (!source) {
-      setCoverMessage('拼图素材不存在，请刷新后重试');
+      setCoverMessage('素材不存在，请刷新后重试');
       return;
     }
 
@@ -1057,25 +1159,51 @@ const GalleryView = ({ onBack }) => {
       return;
     }
 
+    const isPortrait = source.isPortrait === true;
+    // 横图封面必须拼图：提前检查是否有第二张横图
+    if (!isPortrait) {
+      const anotherLandscape = coverSourceImages.find(
+        (img) => img.id !== targetId && img.isPortrait !== true && img.isCollage !== true,
+      );
+      if (!anotherLandscape) {
+        setCoverMessage('横图封面需要 2 张横图配合拼图，当前分组已有横图不足 2 张，请先上传更多横图');
+        return;
+      }
+    }
+
     setCoverGenerating(true);
     setCoverMessage('');
     try {
-      const file = await createCoverFromCollageFile(
-        source.url || source.thumbUrl,
-        text,
-      );
-      const mergedTags = Array.from(new Set([
-        ...((Array.isArray(source.tags) ? source.tags : [])),
-        '封面',
-        '拼图封面',
-        text,
-      ]));
+      let coverFile;
+      let coverType = 'single';
+
+      if (isPortrait) {
+        // 竖图：直接添加文字封面
+        coverFile = await createCoverFromSingleImageFile(
+          source.url || source.thumbUrl,
+          text,
+          source.width && source.height ? { width: source.width, height: source.height } : undefined,
+        );
+      } else {
+        // 横图：必须拼图（配对选定项目外第一张横图）
+        const anotherLandscape = coverSourceImages.find(
+          (img) => img.id !== targetId && img.isPortrait !== true && img.isCollage !== true,
+        );
+        const collageFile = await createTwoImageCollageFile(
+          source.url || source.thumbUrl,
+          anotherLandscape.url || anotherLandscape.thumbUrl,
+        );
+        const collageUrl = URL.createObjectURL(collageFile);
+        coverFile = await createCoverFromCollageFile(collageUrl, text);
+        URL.revokeObjectURL(collageUrl);
+        coverType = 'collage';
+      }
+
       const uid = String(userId || '').trim() || 'default';
-      const res = await api.uploadGalleryImages([file], {
+      const res = await api.uploadGalleryImages([coverFile], {
         userId: uid,
         groupId: selectedGroupId,
-        tags: mergedTags.join(','),
-        description: `封面图：基于拼图#${source.id}，文字=${text}`,
+        description: `封面图：${coverType === 'collage' ? '拼图+' : ''}素材#${source.id}，文字=${text}`,
       });
       if (Array.isArray(res?.images) && res.images.length > 0) {
         setCoverMessage('封面图已生成并入库');
@@ -1095,7 +1223,7 @@ const GalleryView = ({ onBack }) => {
     coverGenerating,
     coverSelectedId,
     coverText,
-    collageImages,
+    coverSourceImages,
     userId,
     selectedGroupId,
     loadImages,
@@ -1263,7 +1391,7 @@ const GalleryView = ({ onBack }) => {
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-semibold text-slate-800">双图拼图</div>
             <div className="text-xs text-slate-500 mt-1">
-              规则：必须选择 2 张图；生成成品固定 {COLLAGE_WIDTH}x{COLLAGE_HEIGHT}，分辨率 {COLLAGE_DPI} DPI。
+              规则：必须选择 2 张横图（竖图不参与拼图）。生成成品固定 {COLLAGE_WIDTH}x{COLLAGE_HEIGHT}，分辨率 {COLLAGE_DPI} DPI。
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
@@ -1416,10 +1544,10 @@ const GalleryView = ({ onBack }) => {
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-semibold text-slate-800 flex items-center gap-2">
-              <Type size={16} /> 拼图封面生成
+              <Type size={16} /> 封面生成
             </div>
             <div className="text-xs text-slate-500 mt-1">
-              规则：先选 1 张拼图素材，再输入文章类型文字，系统会生成“拼图 + 浮动文字”封面图并入库。
+              规则：竖图直接加文字；横图会自动找另一张横图配对拼图后再加文字。选择素材后输入文章类型文字即可。
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
@@ -1453,9 +1581,11 @@ const GalleryView = ({ onBack }) => {
             ) : null}
           </div>
 
+          {/* 图片网格：普通图片 + 拼图 grid */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {collageImages.map((img) => {
+            {coverSourceImages.map((img) => {
               const selected = Number(coverSelectedId) === Number(img.id);
+              const isCollage = img.isCollage === true;
               return (
                 <button
                   key={img.id}
@@ -1470,7 +1600,7 @@ const GalleryView = ({ onBack }) => {
                 >
                   <img
                     src={img.thumbUrl || img.url}
-                    alt={img.description || `collage-${img.id}`}
+                    alt={img.description || `img-${img.id}`}
                     className="w-full h-full object-cover"
                     loading="lazy"
                   />
@@ -1478,18 +1608,24 @@ const GalleryView = ({ onBack }) => {
                     {selected ? '✓' : ''}
                   </div>
                   <div className="absolute left-0 right-0 bottom-0 bg-black/55 text-white text-[10px] px-2 py-1 text-left truncate">
-                    拼图 #{img.id}
+                    {isCollage ? `拼图 #${img.id}` : `图片 #${img.id}`}
                   </div>
                 </button>
               );
             })}
           </div>
 
-          {collageImages.length === 0 && (
-            <div className="text-center text-xs text-slate-400 py-8 border border-dashed border-slate-200 rounded-xl">
-              当前分组暂无拼图素材，请先到“拼图”Tab生成后再制作封面。
+          {/* 空状态 empty state */}
+          {coverSourceImages.length === 0 && !imagesLoading && (
+            <div className='text-center text-xs text-slate-400 py-8 border border-dashed border-slate-200 rounded-xl'>
+              当前分组暂无可用于生成封面的素材（普通图片或拼图）。
             </div>
           )}
+
+          {/* 上拉加载 infinite scroll sentinel */}
+          <div ref={loadMoreRef} className="h-8 flex items-center justify-center">
+            {imagesLoading && <Loader2 size={16} className="animate-spin text-slate-400" />}
+          </div>
         </div>
       </div>
     );

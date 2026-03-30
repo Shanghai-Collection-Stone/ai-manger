@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { ContextService } from '../../context/services/context.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { ChatRequest, ChatResponse } from '../types/chat.types';
@@ -21,6 +21,7 @@ import { AdminService } from '../../admin/services/admin.service.js';
 import type { ConversationSessionType } from '../../context/entities/conversation.entity.js';
 import { SassService } from '../../sass/services/sass.service.js';
 import { DataSourceSchemaService } from '../../data-source/services/data-source-schema.service.js';
+import { MediaAgentService } from '../../media-agent/services/media-agent.service.js';
 
 /**
  * @title 主对话服务 Chat-Main Service
@@ -43,6 +44,7 @@ export class ChatMainService {
     private readonly analysisTools: AnalysisFunctionCallService,
     private readonly sass: SassService,
     private readonly schemaService: DataSourceSchemaService,
+    private readonly mediaAgent: MediaAgentService,
   ) {}
 
   private readonly HITL_PLACEHOLDER = '##HITL_REQUIRED_FRONTEND##';
@@ -801,10 +803,12 @@ export class ChatMainService {
       '调用 todo_create/todo_update 时不要手填 userId，统一由会话上下文注入。',
       '创建发布任务时，description 必须写入当前会话上下文摘要（用户目标、对象、资源、执行要求），不要留空。',
       '示例文章生成阶段会基于图库原始图片即时生成拼图与封面；不复用历史拼图或历史封面。',
+      '生成拼图/封面属于独立图库操作；除非用户明确要求生成文章/内容，否则禁止同时触发 Canvas 创建。',
       '[重要]需要任何数据分析,数据查询,数据获取时使用 analysis_subagent, 如果有数据来源返回也要在回答生成中说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '涉及计算时必须调用 js_calc 或 js_calc_batch。',
       '若工具失败或返回空，明确告知用户并给下一步选项。',
       '所有的数据查询都要带上数据表清单（schema catalog），说明数据来源和字段信息，确保查询结果可解释且可复用。',
+      '【重要】返回图片时：只输出 markdown 图片语法如 ![描述](/static/uploads/xxx.jpg)，禁止在路径前加任何域名、IP或 baseURL，禁止使用 HTML img 标签。',
     ];
 
     // 构建数据表清单（不超过5000字）
@@ -913,14 +917,14 @@ export class ChatMainService {
       '1. 搜索图片 - 通过文字描述搜索相似图片',
       '2. 列出标签 - 查看图库中已有的标签',
       '3. 列出图片 - 查看图库中的图片列表（包括普通图片和拼图/封面图片）',
-      '4. 生成拼图 - 必须严格选择 2 张图片，生成 640x853（96dpi）拼图并入图库。',
+      '4. 生成拼图 - 必须严格选择 2 张横图（isPortrait !== true），生成 640x853（96dpi）拼图并入图库。拼图是独立操作，无需先创建 Canvas，用户可直接命令生成拼图。',
       '',
       '【重要】图片检索规则：',
       '- 检索顺序必须是：先标签检索（gallery_list_tags + gallery_list_images / gallery_search_images 标签命中），再描述向量检索兜底；禁止一上来只做描述检索后就下结论。',
       '- 当用户需要搜索图片用于文章配图、素材参考等日常用途时：必须设置 image_type="regular"，这样会返回普通图片。',
       '- 普通图判定唯一依据：isCollage !== true。禁止因为 description 或 tags 包含“封面/自动封面”等字样就把 isCollage=false 的图片排除。',
       '- 当用户明确要求查找"拼图"或"封面"类图片时：设置 image_type="collage"。',
-      '- 当用户要求生成 canvas 内容或生成拼图时：必须使用拼图封面组（groupId 为拼图封面组的 ID）来生成成品图。',
+      '- 拼图规则：只能使用横图（isPortrait !== true）；竖图（isPortrait === true）禁止参与拼图。',
       '- 在宣称“没有普通图”前，必须至少执行一次标签检索并确认 image_type="regular" 的列表为空。',
       '',
       '简而言之：除非用户明确要"拼图"或"封面"，否则一律用 image_type="regular" 搜索普通图片。',
@@ -1173,6 +1177,26 @@ export class ChatMainService {
           .filter(Boolean)
           .join('\n'),
         tools: baseTools,
+      },
+      {
+        name: 'gallery_subagent',
+        description: '图库与图片管理子代理',
+        systemPrompt: [
+          envStr,
+          '你是图库与图片管理子代理。',
+          '当用户询问图片、图库、素材、搜索图片、生成图片、返回图片等需求时，必须委派给此代理。',
+          '你可以使用图库工具搜索、列出、随机获取图片，以及管理图库分组和标签。',
+          '搜索图片时优先使用 gallery_search_images（向量+标签检索），仅列出时使用 gallery_list_images。',
+          '重要：当你需要为用户返回图片时，直接返回图片 URL 即可，不需要经过 Canvas 或 topic_orchestrate。',
+          '返回图片结果时，必须包含图片的 URL（thumbUrl 或 url）、标签、描述等信息，以便用户查看。',
+          '如果用户要求"生成一张图片"或类似需求，应从图库中搜索匹配的图片并直接返回 URL，不需要创建 Canvas。',
+          '只有在用户明确要求生成"文章"或"多篇内容"时，才考虑委派给 topic_orchestrate_subagent。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        tools: this.normalizeSubagentTools(
+          this.mediaAgent.getGalleryToolsHandle(scope),
+        ),
       },
     ];
   }

@@ -671,7 +671,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     absPath: string;
     fileName: string;
     url: string;
-    tags: string[];
+    tags?: string[];
     description: string;
     isCollage?: boolean;
     collageSourceImageIds?: number[];
@@ -710,7 +710,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         url: input.url,
         mimeType,
         size: statSize > 0 ? statSize : undefined,
-        tags: input.tags,
+        tags: input.tags ?? [],
         description: input.description,
         isCollage: input.isCollage === true,
         collageSourceImageIds:
@@ -1976,7 +1976,6 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
                 absPath: collageFile.absPath,
                 fileName: collageFile.fileName,
                 url: collageFile.url,
-                tags: Array.from(new Set([...chosenTags, '拼图', '动态拼图'])).slice(0, 24),
                 description: `发文动态拼图：#${rawSources[0]?.id ?? '-'} + #${rawSources[1]?.id ?? '-'}`,
                 isCollage: true,
                 collageSourceImageIds: [rawSources[0]?.id, rawSources[1]?.id].filter(
@@ -2015,7 +2014,6 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
                 absPath: coverFile.absPath,
                 fileName: coverFile.fileName,
                 url: coverFile.url,
-                tags: Array.from(new Set([...chosenTags, '封面', '自动封面', coverText])).slice(0, 24),
                 description: `发文封面：${coverText}`,
               });
             } catch {

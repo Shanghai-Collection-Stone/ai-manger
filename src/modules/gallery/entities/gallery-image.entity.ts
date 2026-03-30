@@ -20,6 +20,12 @@ export interface GalleryImageEntity {
   absPath?: string;
   mimeType?: string;
   size?: number;
+  /** @description 图片宽度（像素） */
+  width?: number;
+  /** @description 图片高度（像素） */
+  height?: number;
+  /** @description 是否为竖图（高度大于宽度） */
+  isPortrait?: boolean;
   tags: string[];
   description?: string;
   /** @description 是否为两图拼图（640x853） */
@@ -52,6 +58,10 @@ export interface GalleryImageCreateInput {
   absPath?: string;
   mimeType?: string;
   size?: number;
+  /** @description 图片宽度（像素） */
+  width?: number;
+  /** @description 图片高度（像素） */
+  height?: number;
   tags?: string[];
   description?: string;
   isCollage?: boolean;

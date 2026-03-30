@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ChatMainService } from './services/chat.service';
 import { ChatMainController } from './controller/chat.controller';
 import { ContextModule } from '../context/context.module';
@@ -11,6 +11,7 @@ import { AdminModule } from '../admin/admin.module.js';
 import { AnalysisFunctionCallModule } from '../function-call/analysis/analysis.module.js';
 import { SassModule } from '../sass/sass.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
+import { MediaAgentModule } from '../media-agent/media-agent.module.js';
 
 /**
  * @title 主对话模块 Chat-Main Module
@@ -30,6 +31,7 @@ import { DataSourceModule } from '../data-source/data-source.module.js';
     AnalysisFunctionCallModule,
     SassModule,
     DataSourceModule,
+    forwardRef(() => MediaAgentModule),
   ],
   controllers: [ChatMainController],
   providers: [ChatMainService],

@@ -197,48 +197,56 @@ export class GalleryService {
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
     const embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
 
-    const docs: GalleryImageEntity[] = inputs.map((input, idx) => ({
-      _id: new ObjectId(),
-      id: ids[idx],
-      userId: input.userId,
-      scope: (input.scope ?? 'tenant') as 'platform' | 'tenant',
-      tenantId: input.tenantId,
-      groupId: input.groupId,
-      originalName: input.originalName,
-      fileName: input.fileName,
-      url: input.url,
-      thumbFileName: input.thumbFileName,
-      thumbUrl: input.thumbUrl,
-      absPath: input.absPath,
-      mimeType: input.mimeType,
-      size: input.size,
-      tags: Array.isArray(input.tags) ? input.tags : [],
-      description: input.description,
-      isCollage: input.isCollage === true,
-      collageSourceImageIds: Array.isArray(input.collageSourceImageIds)
-        ? input.collageSourceImageIds
-            .map((x) => Number(x))
-            .filter((x) => Number.isFinite(x))
-            .slice(0, 2)
-        : undefined,
-      collageMeta:
-        input.collageMeta &&
-        Number.isFinite(Number(input.collageMeta.width)) &&
-        Number.isFinite(Number(input.collageMeta.height)) &&
-        Number.isFinite(Number(input.collageMeta.dpi))
-          ? {
-              width: Math.max(1, Math.floor(Number(input.collageMeta.width))),
-              height: Math.max(
-                1,
-                Math.floor(Number(input.collageMeta.height)),
-              ),
-              dpi: Math.max(1, Math.floor(Number(input.collageMeta.dpi))),
-            }
+    const docs: GalleryImageEntity[] = inputs.map((input, idx) => {
+      const w = Number.isFinite(Number(input.width)) ? Math.floor(Number(input.width)) : undefined;
+      const h = Number.isFinite(Number(input.height)) ? Math.floor(Number(input.height)) : undefined;
+      const isPortrait = w !== undefined && h !== undefined ? h > w : undefined;
+      return {
+        _id: new ObjectId(),
+        id: ids[idx],
+        userId: input.userId,
+        scope: (input.scope ?? 'tenant') as 'platform' | 'tenant',
+        tenantId: input.tenantId,
+        groupId: input.groupId,
+        originalName: input.originalName,
+        fileName: input.fileName,
+        url: input.url,
+        thumbFileName: input.thumbFileName,
+        thumbUrl: input.thumbUrl,
+        absPath: input.absPath,
+        mimeType: input.mimeType,
+        size: input.size,
+        width: w,
+        height: h,
+        isPortrait,
+        tags: Array.isArray(input.tags) ? input.tags : [],
+        description: input.description,
+        isCollage: input.isCollage === true,
+        collageSourceImageIds: Array.isArray(input.collageSourceImageIds)
+          ? input.collageSourceImageIds
+              .map((x) => Number(x))
+              .filter((x) => Number.isFinite(x))
+              .slice(0, 2)
           : undefined,
-      embedding: embeddings[idx] ?? new Array<number>(768).fill(0),
-      createdAt: now,
-      updatedAt: now,
-    }));
+        collageMeta:
+          input.collageMeta &&
+          Number.isFinite(Number(input.collageMeta.width)) &&
+          Number.isFinite(Number(input.collageMeta.height)) &&
+          Number.isFinite(Number(input.collageMeta.dpi))
+            ? {
+                width: Math.max(1, Math.floor(Number(input.collageMeta.width))),
+                height: Math.max(
+                  1,
+                  Math.floor(Number(input.collageMeta.height)),
+                ),
+                dpi: Math.max(1, Math.floor(Number(input.collageMeta.dpi))),
+              }
+            : undefined,
+        embedding: embeddings[idx] ?? new Array<number>(768).fill(0),
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
 
     await this.images.insertMany(docs);
     return docs;
@@ -332,6 +340,7 @@ export class GalleryService {
    */
   private buildImageTypeFilter(imageType: 'regular' | 'collage'): Record<string, unknown> {
     if (imageType === 'regular') {
+      // Exclude: isCollage=true (actual collage images) AND cover-tagged images
       return {
         isCollage: { $ne: true },
         tags: { $nin: this.COVER_TAGS },

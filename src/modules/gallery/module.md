@@ -9,6 +9,11 @@
 ### gallery.controller.ts
 图库控制器。
 - **关键词**: gallery, image, group, groups, upload, pagination, cursor, embedding, vector-search, similarity, groupId, atlas, cosine, mongo, controller
+- **函数**:
+  - `upload`: 上传图片文件并写入图库记录（含压缩、缩略图生成、尺寸提取）
+  - `createUploadThumbnails`: 批量生成缩略图
+  - `extractUploadFileDimensions`: 提取上传文件尺寸
+  - `getImageDimensionsFromFile`: 使用 jimp 读取图片尺寸
 
 ### filters/gallery-upload-exception.filter.ts
 图库上传异常过滤器（拦截 Multer 上传错误并转换为前端可读消息）。
@@ -22,19 +27,22 @@
 - **关键词**: image, service
 - **函数**:
   - `ensureIndexes`: 初始化索引/ensure indexes
-  - `createMany`: 批量创建图片/create many images
+  - `createMany`: 批量创建图片（含 width/height/isPortrait）/create many images
   - `list`: 图片列表/list images
+  - `findAccessibleImages`: 按租户可见性查找图片
   - `searchSimilar`: 向量相似检索/search similar
   - `rebuildEmbeddings`: 批量重建向量/rebuild embeddings
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
+  - `generateThumbnail`: 生成缩略图
+  - `sampleRandom`: 随机获取图片
 
 ### gallery-group.service.ts
 图库组服务。
 - **关键词**: group, service
 
 ### gallery-image.entity.ts
-图片实体。
-- **关键词**: entity
+图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, isCollage, collageSourceImageIds, collageMeta, embedding, createdAt, updatedAt）。
+- **关键词**: entity, image, width, height, isPortrait
 
 ### gallery-group.entity.ts
 图库组实体。
