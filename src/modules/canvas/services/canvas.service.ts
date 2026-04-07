@@ -1,19 +1,26 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import type {
   CanvasAddArticlesInput,
   CanvasArticleEntity,
   CanvasCreateInput,
   CanvasEntity,
+  CanvasImageGroup,
+  CanvasImageGroupCreateInput,
   CanvasStatus,
 } from '../entities/canvas.entity.js';
+import { CanvasImageGroupService } from './canvas-image-group.service.js';
 
 @Injectable()
 export class CanvasService {
+  private readonly logger = new Logger(CanvasService.name);
   private readonly canvases: Collection<CanvasEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
 
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly imageGroupService: CanvasImageGroupService,
+  ) {
     this.canvases = db.collection<CanvasEntity>('canvases');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     void this.ensureIndexes();
@@ -309,5 +316,95 @@ export class CanvasService {
       { $set: upd },
     );
     return await this.get(canvasId, tenantId);
+  }
+
+  /**
+   * @description 创建图片组类型 Canvas，立即返回 generating 状态，后台异步生成图片组。
+   * @param {CanvasImageGroupCreateInput} input - 创建入参（articles 含 title+tags）。
+   * @returns {Promise<CanvasEntity>} 新建的 Canvas 实体（status=generating）。
+   * @keyword-en create image-group canvas async
+   * @since 2026-04-02
+   */
+  async createImageGroupCanvas(
+    input: CanvasImageGroupCreateInput,
+  ): Promise<CanvasEntity> {
+    const now = new Date();
+    const id = await this.nextId();
+    const doc: CanvasEntity = {
+      _id: new ObjectId(),
+      id,
+      userId: input.userId,
+      tenantId: input.tenantId,
+      topic: input.topic,
+      type: 'image-group',
+      status: 'generating',
+      articles: (input.articles ?? []).map((a, idx) => ({
+        id: idx + 1,
+        title: a.title,
+        tags: Array.isArray(a.tags) ? a.tags : [],
+        contentJson: {},
+        status: 'pending',
+      })),
+      imageGroups: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.canvases.insertOne(doc);
+    this.logger.debug(`[image-group] created canvasId=${id} topic=${input.topic ?? ''} articleCount=${doc.articles.length}`);
+
+    // 异步后台生成图片组，不阻塞接口返回
+    void this.runImageGroupGeneration(id, input);
+
+    return { ...doc, _id: doc._id };
+  }
+
+  /**
+   * @description 后台异步执行图片组生成并回写 Canvas。
+   * @param {number} canvasId - Canvas ID。
+   * @param {CanvasImageGroupCreateInput} input - 创建入参。
+   * @returns {Promise<void>}
+   * @keyword-en run image group generation in background
+   */
+  private async runImageGroupGeneration(
+    canvasId: number,
+    input: CanvasImageGroupCreateInput,
+  ): Promise<void> {
+    this.logger.debug(`[image-group] generation_start canvasId=${canvasId} articleCount=${input.articles?.length ?? 0}`);
+    try {
+      const groups = await this.imageGroupService.generateImageGroups(input);
+      const doneCount = groups.filter((g) => g.status === 'done').length;
+      const failedCount = groups.filter((g) => g.status === 'failed').length;
+      this.logger.debug(`[image-group] generation_done canvasId=${canvasId} groupsTotal=${groups.length} done=${doneCount} failed=${failedCount}`);
+      await this.updateImageGroups(canvasId, groups, input.tenantId);
+      await this.canvases.updateOne(
+        { id: canvasId },
+        { $set: { status: 'completed', updatedAt: new Date() } },
+      );
+    } catch (err) {
+      await this.canvases.updateOne(
+        { id: canvasId },
+        { $set: { status: 'failed', updatedAt: new Date() } },
+      );
+      this.logger.error(`[image-group] generation_failed canvasId=${canvasId}`, err);
+    }
+  }
+
+  /**
+   * @description 将生成好的图片组写入 Canvas。
+   * @param {number} id - Canvas ID。
+   * @param {CanvasImageGroup[]} imageGroups - 图片组列表。
+   * @param {string} [tenantId] - 租户ID。
+   * @returns {Promise<void>}
+   * @keyword-en update canvas image groups
+   */
+  async updateImageGroups(
+    id: number,
+    imageGroups: CanvasImageGroup[],
+    tenantId?: string,
+  ): Promise<void> {
+    await this.canvases.updateOne(
+      { id, ...this.buildTenantFilter(tenantId) },
+      { $set: { imageGroups, updatedAt: new Date() } },
+    );
   }
 }

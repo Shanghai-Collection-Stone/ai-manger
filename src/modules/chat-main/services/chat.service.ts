@@ -105,6 +105,8 @@ export class ChatMainService {
         ip: ip || 'unknown',
       },
     );
+    // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
+    const mainAgentTools = this.filterSubagentOnlyTools(tools, scope.sessionType);
     const checkpoint_id =
       (await this.ctx.getConversation(sid, scope))?.lastCheckpointId ?? 'root';
     let ai: AIMessage;
@@ -112,7 +114,7 @@ export class ChatMainService {
       ai = await this.agent.runWithMessages({
         config: {
           temperature: request.temperature ?? 0.5,
-          tools,
+          tools: mainAgentTools,
           subagents,
           system: sysContent,
           recursionLimit: 1000,
@@ -308,13 +310,15 @@ export class ChatMainService {
             scope,
             { sid, now: nowStr, ip: ipStr },
           );
+          // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
+          const mainAgentTools = this.filterSubagentOnlyTools(tools, scope.sessionType);
           const checkpoint_id = meta?.lastCheckpointId ?? 'root';
 
           // ─── 消费 agent stream 事件 ───
           const iterable = this.agent.stream({
             config: {
               temperature: request.temperature ?? 0.1,
-              tools,
+              tools: mainAgentTools,
               subagents,
               system: sysContent,
               recursionLimit: 1000,
@@ -806,6 +810,7 @@ export class ChatMainService {
       '生成拼图/封面属于独立图库操作；除非用户明确要求生成文章/内容，否则禁止同时触发 Canvas 创建。',
       '[重要]需要任何数据分析,数据查询,数据获取时使用 analysis_subagent, 如果有数据来源返回也要在回答生成中说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '涉及计算时必须调用 js_calc 或 js_calc_batch。',
+      '[搜索]当用户询问最新资讯、热门话题、竞品动态、实时数据，或在生成文章/Canvas 前需要参考素材时，优先调用 duckduckgo_search 检索；把搜索结果摘要作为 notes/参考资料传给后续工具或直接呈现给用户，禁止在没有检索意图的情况下强行调用搜索。',
       '若工具失败或返回空，明确告知用户并给下一步选项。',
       '所有的数据查询都要带上数据表清单（schema catalog），说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '【重要】返回图片时：只输出 markdown 图片语法如 ![描述](/static/uploads/xxx.jpg)，禁止在路径前加任何域名、IP或 baseURL，禁止使用 HTML img 标签。',
@@ -942,10 +947,18 @@ export class ChatMainService {
     return [
       '你是"小红书内容创作专家"，专注于帮助用户生成和管理小红书内容。',
       '你可以使用Canvas和图库工具来：',
-      '1. 查看Canvas列表 - 了解用户的内容集合',
-      '2. 获取Canvas详情 - 查看具体文章内容',
-      '3. 结合图库图片 - 为文章配图',
+      '1. 查看Canvas列表 - 使用 xhs_list_canvases 了解用户的内容集合',
+      '2. 获取Canvas详情 - 使用 xhs_get_canvas_detail 查看具体文章内容和图片组',
+      '3. 创建图片组Canvas - 使用 xhs_create_image_group_canvas 根据文章主题快速生成配图集合',
+      '   - 图片组Canvas会异步从图库中匹配图片，立即返回"生成中"状态',
+      '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
+      '   - 禁止多次调用 xhs_create_image_group_canvas；将所有文章合并到单次调用的 articles 数组，生成一个 Canvas',
+      '4. 结合图库图片 - 为文章配图',
       '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi），再用于内容链路。',
+      '【canvas-it 展示规则】每次创建 Canvas 后，工具返回 canvas-it 代码块，必须原样输出给用户：',
+      '```canvas-it',
+      '{"canvasId": <id>, "status": "generating", "type": "image-group", "topic": "<topic>", "articleCount": <n>}',
+      '```',
       '请根据用户需求，帮助他们创建高质量的小红书内容。',
     ].join('\n');
   }
@@ -1009,6 +1022,98 @@ export class ChatMainService {
   }
 
   /**
+   * @description 按职责映射各 subagent 专属工具集。每个 subagent 只持有完成其职责所需的工具，禁止传全量 baseTools。
+   * @keyword-en resolve per-subagent tool sets by responsibility
+   */
+  private resolveSubagentToolSets(
+    allTools: StructuredTool[],
+    scope?: { tenantId?: string; userId?: string },
+  ): {
+    analysis: StructuredTool[];
+    topicOrchestrate: StructuredTool[];
+    frontend: StructuredTool[];
+    ops: StructuredTool[];
+    gallery: StructuredTool[];
+  } {
+    const pick = (...names: string[]): StructuredTool[] => {
+      const set = new Set(names);
+      return allTools.filter((t) => set.has(t.name));
+    };
+    const pickPrefix = (...prefixes: string[]): StructuredTool[] =>
+      allTools.filter((t) => prefixes.some((p) => t.name.startsWith(p)));
+
+    return {
+      // 数据查询分析 — 独立来源（含 schema/data_source/js_calc/thought 等）
+      analysis: this.normalizeSubagentTools(
+        this.analysisTools.getAllDataSourceTools(scope),
+      ),
+      // 文章正文生成 — 仅 topic_orchestrate
+      topicOrchestrate: pick('topic_orchestrate'),
+      // 前端可视化 — HTML/图表生成 + 标题 + MCP 读取 + 看板只读查询
+      frontend: [
+        ...pick('frontend_plan', 'frontend_finalize', 'title_generate'),
+        ...pick(
+          'mcp_list_resources', 'mcp_read_resource', 'mcp_ingest_file',
+          'mcp_list_mcp_tools', 'mcp_list_mcp_resources',
+        ),
+        ...pick('tenant_tables', 'tenant_query', 'dashboard_mongo_search', 'dashboard_config_view'),
+      ],
+      // 执行编排 — Todo 管理 + 机器人 + MCP 适配器执行工具 + 看板写入
+      ops: [
+        ...pickPrefix('todo_'),
+        ...pick('robot_list'),
+        ...pick('dashboard_config_patch'),
+        // 剩余 MCP 适配器工具（非分析/前端/图库类），如自动化指令等
+        ...allTools.filter((t) => {
+          const n = t.name;
+          return (
+            !n.startsWith('todo_') &&
+            !n.startsWith('frontend_') &&
+            !n.startsWith('gallery_') &&
+            !n.startsWith('mcp_') &&
+            !n.startsWith('tenant_') &&
+            !n.startsWith('dashboard_') &&
+            !n.startsWith('xhs_') &&
+            ![
+              'robot_list', 'title_generate', 'topic_orchestrate',
+              'js_calc', 'js_calc_batch', 'decision_card_generate',
+            ].includes(n)
+          );
+        }),
+      ],
+      // 图库 + XHS Canvas — 完全独立来源
+      gallery: [
+        ...this.normalizeSubagentTools(this.mediaAgent.getGalleryToolsHandle(scope)),
+        ...this.normalizeSubagentTools(this.mediaAgent.getXhsToolsHandle(scope)),
+      ],
+    };
+  }
+
+  /**
+   * @description 从主 agent 工具列表中移除只给 subagent 使用的专属工具，强制走路由委派
+   * @keyword-en filter out subagent-only tools from main agent
+   */
+  private filterSubagentOnlyTools(
+    tools: CreateAgentParams['tools'],
+    mode: ConversationSessionType,
+  ): CreateAgentParams['tools'] {
+    if (mode === 'thought' || mode === 'gallery-agent' || mode === 'xhs-specialist') {
+      return tools;
+    }
+    // default 模式：主agent不直接持有这些工具，全部交给对应subagent
+    const subagentOnly = new Set([
+      'topic_orchestrate',             // → topic_orchestrate_subagent
+      'xhs_list_canvases',             // → gallery_subagent
+      'xhs_get_canvas_detail',         // → gallery_subagent
+      'xhs_create_image_group_canvas', // → gallery_subagent
+    ]);
+    return (tools ?? []).filter((t) => {
+      const name = (t as { name?: string }).name ?? '';
+      return !subagentOnly.has(name);
+    });
+  }
+
+  /**
    * @description 构建默认子代理配置
    * @keyword-en build default subagents
    */
@@ -1018,13 +1123,17 @@ export class ChatMainService {
     scope?: { tenantId?: string; userId?: string },
     env?: { sid: string; now: string; ip: string },
   ): DeepAgentSubAgent[] {
-    const baseTools = this.normalizeSubagentTools(tools);
+    const allTools = this.normalizeSubagentTools(tools);
+    const toolSets = this.resolveSubagentToolSets(allTools, scope);
     const envStr = env
       ? [
           `SESSION_ID:${env.sid}`,
           `REQUEST_TIME_ISO:${env.now}`,
           `CLIENT_IP:${env.ip}`,
-        ].join('\n')
+          scope?.userId ? `CURRENT_USER_ID:${scope.userId}` : '',
+        ]
+        .filter(Boolean)
+        .join('\n')
       : '';
 
     if (mode === 'thought') {
@@ -1035,17 +1144,44 @@ export class ChatMainService {
           systemPrompt: [envStr, this.getThoughtPromptCN()]
             .filter(Boolean)
             .join('\n\n'),
-          tools: baseTools,
+          tools: toolSets.analysis,
         },
       ];
     }
 
-    const dataSourceTools = this.normalizeSubagentTools(
-      this.analysisTools.getAllDataSourceTools(scope),
-    );
-    const topicOrchestrateTools = baseTools.filter(
-      (t) => (t as unknown as { name?: string }).name === 'topic_orchestrate',
-    );
+    if (mode === 'xhs-specialist') {
+      const xhsTools = this.normalizeSubagentTools(
+        this.mediaAgent.getXhsToolsHandle(scope),
+      );
+      const galleryTools = this.normalizeSubagentTools(
+        this.mediaAgent.getGalleryToolsHandle(scope),
+      );
+      return [
+        {
+          name: 'gallery_subagent',
+          description:
+            '⚡【图组Canvas(image-group)·图库·Canvas看板】「图组」「图片组」「image-group」「配图集合」关键词 → 必须委派此代理，优先级最高。搜图/查Canvas/创建图组Canvas 均来此。',
+          systemPrompt: [
+            envStr,
+            '你是图库与 Canvas 管理子代理，负责图片素材搜索和 Canvas 看板操作。',
+            '【图库工具】',
+            '- gallery_search_images：按向量+标签检索图片（优先使用）',
+            '- gallery_list_images：列出图片',
+            '- gallery_list_tags：列出标签',
+            '- gallery_random_images：随机取图',
+            '【Canvas 工具】',
+            '- xhs_list_canvases：列出 Canvas 列表',
+            '- xhs_get_canvas_detail：获取 Canvas 详情（含文章和图片组）',
+            '- xhs_create_image_group_canvas：创建图片组 Canvas（异步后台生成，立即返回 generating 状态）',
+            '调用 xhs_create_image_group_canvas 后，必须将工具结果里的 canvas_it hint 代码块原样输出给上层，让前端渲染看板入口。',
+            '返回图片路径时使用相对路径（如 /static/uploads/xxx.jpg），禁止拼接域名。',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          tools: [...xhsTools, ...galleryTools],
+        },
+      ];
+    }
 
     const analysisSys = [
       '你是一名严谨、务实的数据分析 Agent。',
@@ -1122,81 +1258,77 @@ export class ChatMainService {
       {
         name: 'analysis_subagent',
         description:
-          '数据分析与检索子代理。凡是需要查询数据、分析数据的情况都必须委派给此代理。',
+          '【数据查询·统计·趋势分析】查数据 / 统计聚合 / 趋势分析 / 筛选记录 → 必须委派此代理。不处理文章生成、图库、发布任务。',
         systemPrompt: analysisSys.join('\n'),
-        tools: dataSourceTools,
+        tools: toolSets.analysis,
       },
       {
         name: 'topic_orchestrate_subagent',
         description:
-          '示例文章生成子代理。凡是需要生成小红书等平台示例文章、批量内容、系列文章的情况都必须委派给此代理。',
+          '【仅限文章正文生成】用户要生成小红书/平台文章的「文字正文内容」→ 委派此代理。⛔ 含「图组」「图片组」「image-group」「配图集合」关键词时，转给 gallery_subagent，不要来此代理。',
         systemPrompt: [
           envStr,
-          '你是示例文章生成子代理，负责生成可直接发布的示例文章内容。',
-          '你是专项“文章生成代理”：所有文章产出都必须通过 Canvas 承载，禁止脱离 Canvas 直接返回文章正文。',
-          '你必须生成完整的、可以直接使用的小红书正文内容，而不是文章方向或大纲。',
-          '小红书文章要求：开头 1-2 句强钩子；全篇短句短段；多用要点列表；语气真实分享；不要像教科书。',
-          '文章长度要求：至少 200 字，确保内容充实。',
-          '必须包含具体数字化细节（人数、预算、时长、转化指标等）。',
-          '必须在末尾给 3-6 个话题标签（#标签）。',
-          '必须调用 topic_orchestrate 工具产出文章并写入 Canvas，禁止你自己直接写文章正文或大纲。',
-          '示例文章阶段除内容生成外，还会基于图库原始图片即时生成拼图与封面；不允许复用历史拼图或历史封面。',
-          '工具返回后，直接返回工具结果；不要自行改写成大纲或方向建议。',
-          '如果工具调用报错，必须把错误原文直接返回给用户，不要继续重试，不要换参数重复调用。',
-          '当出现 ARTICLE_DRAFT_INVALID 时，直接告知“本次生成未通过发布质量校验”，并建议用户调整话题后再试。',
-          '调用 topic_orchestrate 工具时，必须显式传入 userId（取当前会话上下文用户），禁止省略。',
-          '[重要约束] 调用 topic_orchestrate 工具时，只需要调用一次，不要重复调用。',
-          '[重要约束] 工具调用完成后，必须直接返回结果，不要再次调用任何工具。',
-          '[重要约束] 绝对不要在回复中重复相同的文字或问题。',
+          '你是专项文章生成代理。',
+          '【userId 来源】上方 CURRENT_USER_ID 字段即当前用户 ID，调用 topic_orchestrate 时必须把此值传给 userId 参数，禁止省略、禁止自造。',
+          '所有文章产出都必须通过 topic_orchestrate 工具写入 Canvas，禁止直接返回文章正文或大纲。',
+          '小红书正文要求：开头 1-2 句强钩子；短句短段；多要点列表；真实分享语气；末尾 3-6 个话题标签（#标签）；至少 200 字。',
+          '工具调用规则：',
+          '  - topic_orchestrate 只调用一次，禁止重复',
+          '  - 工具报错时原文返回用户，不重试',
+          '  - ARTICLE_DRAFT_INVALID → 告知"生成未通过质量校验"，建议调整话题',
+          '工具成功后直接返回结果，不再调用其他工具。',
         ]
           .filter(Boolean)
           .join('\n'),
-        tools: topicOrchestrateTools,
+        tools: toolSets.topicOrchestrate,
       },
       {
         name: 'frontend_subagent',
-        description: '前端页面生成子代理',
+        description:
+          '【图表·HTML·可视化页面】用户明确要求「生成图表」「HTML页面」「可视化报告」→ 委派此代理。',
         systemPrompt: [
           envStr,
-          '你是前端页面生成子代理。',
-          '只在用户明确要求图表/页面/可视化时工作。',
+          '你是前端页面生成子代理。只在用户明确要求图表/页面/可视化时工作。',
           '输出需严格遵循工具与系统提示的约束。',
         ]
           .filter(Boolean)
           .join('\n'),
-        tools: baseTools,
+        tools: toolSets.frontend,
       },
       {
         name: 'ops_subagent',
-        description: '发布与执行编排子代理',
+        description:
+          '【批量发布·任务执行·机器人指派】触发批量发布 / 指派 robot 执行任务 → 委派此代理。',
         systemPrompt: [
           envStr,
-          '你是执行编排子代理。',
-          '专注批量发布与流程执行，严格遵守工具调用规则。',
+          '你是执行编排子代理，专注批量发布与任务执行，严格遵守工具调用规则。',
         ]
           .filter(Boolean)
           .join('\n'),
-        tools: baseTools,
+        tools: toolSets.ops,
       },
       {
         name: 'gallery_subagent',
-        description: '图库与图片管理子代理',
+        description:
+          '⚡【图组Canvas(image-group)·图库搜图·素材】「图组」「图片组」「image-group」「配图集合」「图组Canvas」关键词 → 必须委派此代理，优先级高于文章生成。搜图/查标签/随机取图 也委派此代理。',
         systemPrompt: [
           envStr,
-          '你是图库与图片管理子代理。',
-          '当用户询问图片、图库、素材、搜索图片、生成图片、返回图片等需求时，必须委派给此代理。',
-          '你可以使用图库工具搜索、列出、随机获取图片，以及管理图库分组和标签。',
-          '搜索图片时优先使用 gallery_search_images（向量+标签检索），仅列出时使用 gallery_list_images。',
-          '重要：当你需要为用户返回图片时，直接返回图片 URL 即可，不需要经过 Canvas 或 topic_orchestrate。',
-          '返回图片结果时，必须包含图片的 URL（thumbUrl 或 url）、标签、描述等信息，以便用户查看。',
-          '如果用户要求"生成一张图片"或类似需求，应从图库中搜索匹配的图片并直接返回 URL，不需要创建 Canvas。',
-          '只有在用户明确要求生成"文章"或"多篇内容"时，才考虑委派给 topic_orchestrate_subagent。',
+          '你是图库与图片素材子代理，同时负责创建图片组 Canvas（image-group 类型）。',
+          '【图组Canvas创建步骤】用户要求"图组Canvas"或"image-group"或"图片组"时：',
+          '  1. 根据用户话题和数量要求，先自行拟定所有文章的标题和标签列表（无需调用其他工具）',
+          '  2. 禁止多次调用 xhs_create_image_group_canvas；将所有文章合并成一次调用：传入 groupCount（总组数）+ articles 数组（每组对应一篇，含 title/tags）',
+          '  3. 把工具结果里的 canvas-it 代码块原样返回，不要再做其他操作',
+          '【图库工具】',
+          '- gallery_search_images：向量+标签检索（优先使用）',
+          '- gallery_list_images：列出图片',
+          '- gallery_list_tags：列标签',
+          '- gallery_random_images：随机取图',
+          '返回图片路径使用相对路径（如 /static/uploads/xxx.jpg），禁止拼接域名。',
+          '不生成文章正文；若用户要生成正文文章，告知上层委派 topic_orchestrate_subagent。',
         ]
           .filter(Boolean)
           .join('\n'),
-        tools: this.normalizeSubagentTools(
-          this.mediaAgent.getGalleryToolsHandle(scope),
-        ),
+        tools: toolSets.gallery,
       },
     ];
   }
@@ -1248,6 +1380,7 @@ export class ChatMainService {
     platform?: string;
     articleCount?: number;
     needFields?: string[];
+    type?: string;
   }> {
     const out: Array<{
       canvasId: number;
@@ -1256,6 +1389,7 @@ export class ChatMainService {
       platform?: string;
       articleCount?: number;
       needFields?: string[];
+      type?: string;
     }> = [];
 
     const tryPush = (obj: Record<string, unknown>) => {
@@ -1307,6 +1441,12 @@ export class ChatMainService {
         platform,
         articleCount,
         needFields,
+        type:
+          typeof obj['type'] === 'string'
+            ? obj['type']
+            : typeof canvasRec?.['type'] === 'string'
+              ? canvasRec['type']
+              : undefined,
       });
     };
 
@@ -1337,6 +1477,18 @@ export class ChatMainService {
           void 0;
         }
       }
+      // Parse embedded canvas-it JSON blocks (tool returns string with ```canvas-it ... ```)
+      const canvasItRe = /```canvas-it\s*([\s\S]*?)```/gi;
+      let cim: RegExpExecArray | null;
+      while ((cim = canvasItRe.exec(s)) !== null) {
+        try {
+          const parsed: unknown = JSON.parse(cim[1].trim());
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            tryPush(parsed as Record<string, unknown>);
+          }
+        } catch { void 0; }
+      }
+      if (out.length > 0) return out;
       const m = s.match(/(?:canvasId|canvas_id|id)\s*[:=]\s*(\d+)/i);
       if (m && m[1]) {
         const cid = Number(m[1]);
@@ -1556,8 +1708,12 @@ export class ChatMainService {
     platform?: string;
     articleCount?: number;
     needFields?: string[];
+    type?: string;
   }): string {
     const payload: Record<string, unknown> = { canvasId: item.canvasId };
+    if (typeof item.type === 'string' && item.type.length > 0) {
+      payload['type'] = item.type;
+    }
     if (typeof item.status === 'string' && item.status.length > 0) {
       payload['status'] = item.status;
     }
@@ -1597,7 +1753,11 @@ export class ChatMainService {
     const unique: Array<{
       canvasId: number;
       status?: string;
+      topic?: string;
+      platform?: string;
+      articleCount?: number;
       needFields?: string[];
+      type?: string;
     }> = [];
     const seen = new Set<number>();
     for (const it of fromTools) {
@@ -1607,13 +1767,16 @@ export class ChatMainService {
       unique.push({
         canvasId: cid,
         status: it.status,
+        topic: it.topic,
+        platform: it.platform,
+        articleCount: it.articleCount,
         needFields: it.needFields,
+        type: it.type,
       });
     }
     if (unique.length === 0) return base;
 
-    const last = unique[unique.length - 1];
-    return cleaned + this.buildCanvasItBlock(last);
+    return cleaned + unique.map((it) => this.buildCanvasItBlock(it)).join('');
   }
 
   private extractDecisionItems(output: unknown): Array<{

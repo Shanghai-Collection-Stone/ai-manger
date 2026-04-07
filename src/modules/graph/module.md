@@ -15,12 +15,18 @@ Graph控制器。
 文章编排服务。
 - **关键词**: articles, canvas, gallery, service
 - **函数**:
-  - `generateToCanvas`: 生成Canvas示例文章/generate canvas articles
+  - `generateToCanvas`: 建立文章列表(blueprints)+预存根，立即返回 generating，后台并发生成正文+配图/async article canvas with pre-stub list
+  - `runArticleGeneration`: 后台异步执行正文+配图生成并回写状态/run article generation in background
+  - `planArticleTasks`: LLM规划文章蓝图列表/plan article blueprints
+  - `generateArticlesAndImages`: 一次拉取图片池，内容生成与配图解析真正并发，合并回写/parallel content gen + image resolve from shared pool
+  - `fetchArticleImagePool`: 按所有蓝图tag一次性拉取regular图片池/fetch article image pool by blueprint tags once
+  - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover
   - `generateToCanvasBySubAgent`: 子代理生成并逐篇写入/subagent canvas generation
   - `collectArticleDataBySubAgent`: 子代理采集数据/collect data by subagent
   - `planBlueprintsBySubAgent`: 子代理规划蓝图/plan blueprints by subagent
   - `appendOneArticleToCanvas`: 单篇写入Canvas/append one article
   - `generateOneArticleFromBlueprint`: 单篇文章生成/generate one article
+  - `saveGeneratedImageToGallery`: 本地生成图片写入图库/save generated image to gallery
   - `assignImagesForCanvasBySubAgent`: 子代理配图/assign images by subagent
   - `normalizeBlueprints`: 蓝图去机械化/normalize blueprints
   - `buildFallbackBlueprints`: 动态蓝图兜底/build fallback blueprints

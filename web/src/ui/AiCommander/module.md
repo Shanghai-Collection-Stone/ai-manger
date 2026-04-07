@@ -51,6 +51,15 @@ Dashboard 数据 API + 看板 JSON 配置获取接口 + 通用 Mongo 查询支�
 
 - **关键词**: DecisionFeedView, ActionCards, TaskList, EmptyState
 
+### ImageGroupCanvasView.jsx
+
+图片组 Canvas 专属视图，以文章为单位展示图组，支持选择和批量下载图片。
+- 每组展示3张图（封面+内页1+内页2），角色标签标注版式
+- 顶部操作栏：全选/取消全选、批量下载选中图组
+- 生成中状态：每5秒自动轮询，实时更新显示
+
+- **关键词**: ImageGroupCanvasView, image-group, canvas, layout, download, polling
+
 ### CanvasFeedView.jsx
 
 Canvas 文章看板视图，支持按 canvasId 加载文章列表与详情，提供小红书风格文章卡片阅读体验。
@@ -62,8 +71,10 @@ Canvas 文章看板视图，支持按 canvasId 加载文章列表与详情，提
 
 AI 助理对话视图，提供自然语言数据查询和指令交互。支持按 `sessionType` 运行普通会话或思维链路会话。
 支持在输入框上方显示“会话历史”按钮，并通过弹窗切换历史会话。
+canvas-it 代码块自动区分 article/image-group 两种类型，渲染对应标签和按钮。
+轮询：扫描消息中 generating 状态的 canvas-it，每5秒刷新状态，新会话时清空追踪。
 
-- **关键词**: ChatBIView, AIChat, DataQuery, RealtimeInteraction, SessionManagement, DrawerUI, thought-session, session-picker
+- **关键词**: ChatBIView, AIChat, DataQuery, RealtimeInteraction, SessionManagement, DrawerUI, thought-session, session-picker, canvas-polling, image-group
 
 ### ThoughtRouteView.jsx
 
@@ -76,16 +87,25 @@ AI 助理对话视图，提供自然语言数据查询和指令交互。支持�
 
 ### TaskCenterView.jsx
 
-执行指挥中心视图，提供任务管理、派单和工单状态追踪。包含快捷调度入口和任务列表。
+执行指挥中心视图，提供任务管理、派单和工单状态追踪。支持**列表**和**看板**两种视图模式。
 
-- 支持新建派单功能，通过模态框录入任务信息。
-- 支持分类筛选功能，点击快捷入口可过滤任务列表。
-- 任务类型统一为三分类：自动执行、线下执行、其他，并兼容历史类型映射。
-- 新建派单支持填写关联资源，任务详情支持弹窗查看关联资源。
-- 关联资源弹窗支持结构化解析：可点击打开链接、图片预览，Canvas 资源可在内置弹窗中直接查看。
-- 异常工单 Tab 显示实时数量，便于快速定位异常积压。
+- 顶部 Tab 切换列表视图（含统计卡片、分类筛选、状态 Tab）和看板视图（按状态横向泳道）。
+- 点击任务卡片跳转至 `TaskDetailPage` 全屏详情页（非弹窗）。
+- 新建派单弹窗支持填写标题、类型、指派人、关联资源、描述等信息。
+- KanbanBoard 组件：四列泳道（待接单/执行中/已完成/异常），横向可滚动。
 
-- **关键词**: TaskCenterView, TaskManagement, WorkOrder, QuickActions, TabFilter, CreateTaskModal, CategoryFilter
+- **关键词**: TaskCenterView, KanbanBoard, ViewModeTab, TaskManagement, WorkOrder, CreateTaskModal, CategoryFilter
+
+### TaskDetailPage.jsx
+
+任务详情全屏页面，替代原弹窗模式，提供两个子 Tab：任务详情和执行节点信息。
+
+- `TaskDetailPage`：主容器，管理 Tab 切换，头部显示任务标题/状态。
+- `TaskInfoTab`：任务详情 Tab，展示任务名称/描述/计划/负责人/接单人/资源，包含接单/完成/异常/返工操作按钮。
+- `TaskTimelineTab`：执行节点 Tab，以时间轴展示执行节点，点击节点弹出 `ItemDetailPopup`。
+- `ItemDetailPopup`：节点详情弹窗，限高可滚动显示完整节点信息。
+
+- **关键词**: TaskDetailPage, TaskInfoTab, TaskTimelineTab, ItemDetailPopup, FullPageDetail, Timeline, ActionButtons
 
 ### ToolsView.jsx
 

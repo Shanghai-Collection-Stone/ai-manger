@@ -108,6 +108,8 @@ const ALL_TABS = [
   { id: 'tenants', label: '租户管理', platformOnly: true },
   { id: 'keys', label: 'key管理' },
   { id: 'sources', label: '数据源管理' },
+  { id: 'claw_configs', label: 'Claw管理', platformOnly: true },
+  { id: 'agent_configs', label: 'Agent管理', platformOnly: true },
   { id: 'dashboard_configs', label: '看板配置' },
   { id: 'platform_info', label: '平台AI配置' },
 ];
@@ -136,12 +138,17 @@ const AdminApp = () => {
   const [sources, setSources] = useState([]);
   const [dashboardConfigs, setDashboardConfigs] = useState([]);
   const [platformInfo, setPlatformInfo] = useState(null);
+  const [clawConfigs, setClawConfigs] = useState([]);
+  const [agentConfigs, setAgentConfigs] = useState([]);
   const [editingUserId, setEditingUserId] = useState('');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
   const [editingKeyId, setEditingKeyId] = useState('');
   const [editingSourceCode, setEditingSourceCode] = useState('');
   const [editingDashboardConfigId, setEditingDashboardConfigId] = useState('');
+  const [editingClawConfigId, setEditingClawConfigId] = useState('');
+  const [pingLoadingId, setPingLoadingId] = useState('');
+  const [editingAgentConfigId, setEditingAgentConfigId] = useState('');
   const [filters, setFilters] = useState({
     users: { keyword: '', tenantId: '' },
     providers: { keyword: '' },
@@ -149,6 +156,8 @@ const AdminApp = () => {
     keys: { keyword: '', tenantId: '' },
     sources: { keyword: '', status: '' },
     dashboardConfigs: { keyword: '', tenantId: '' },
+    clawConfigs: { keyword: '' },
+    agentConfigs: { keyword: '' },
   });
   const [pages, setPages] = useState({
     users: 1,
@@ -157,6 +166,8 @@ const AdminApp = () => {
     keys: 1,
     sources: 1,
     dashboardConfigs: 1,
+    clawConfigs: 1,
+    agentConfigs: 1,
   });
   const [forms, setForms] = useState({
     user: {
@@ -204,6 +215,20 @@ const AdminApp = () => {
     platformInfo: {
       aiPromptSupplement: '',
     },
+    clawConfig: {
+      name: '',
+      description: '',
+      token: '',
+      serviceUrl: '',
+    },
+    agentConfig: {
+      name: '',
+      module: 'xhs_publisher',
+      clawConfigId: '',
+      clawAgentId: 'main',
+      prompt: '',
+      enabled: true,
+    },
   });
 
   const loadData = async () => {
@@ -235,6 +260,19 @@ const AdminApp = () => {
       setKeys(k.keys || []);
       setSources(s.sources || []);
       setDashboardConfigs(dc.rows || []);
+      // 加载 Claw 和 Agent 配置（仅超级管理员）
+      if (isSA) {
+        try {
+          const [cc, ac] = await Promise.all([
+            adminApi.listClawConfigs(),
+            adminApi.listAgentConfigs(),
+          ]);
+          setClawConfigs(cc.clawConfigs || []);
+          setAgentConfigs(ac.agentConfigs || []);
+        } catch {
+          // 忽略加载失败
+        }
+      }
       // 加载平台AI配置（租户级）
       try {
         const pi = await adminApi.getPlatformInfo();
@@ -382,6 +420,112 @@ const AdminApp = () => {
       },
     }));
     setNotice('平台AI配置已保存');
+  };
+
+  /**
+   * @description 提交 Claw 配置（创建/更新）
+   * @keyword-en submit claw config
+   * @returns {Promise<void>}
+   */
+  const onSubmitClawConfig = async () => {
+    const payload = {
+      name: toText(forms.clawConfig.name).trim(),
+      description: toText(forms.clawConfig.description).trim() || undefined,
+      token: toText(forms.clawConfig.token).trim(),
+      serviceUrl: toText(forms.clawConfig.serviceUrl).trim(),
+    };
+    if (editingClawConfigId) {
+      const res = await adminApi.updateClawConfig(editingClawConfigId, payload);
+      setClawConfigs((prev) =>
+        prev.map((item) => (item._id === editingClawConfigId ? res.clawConfig : item)),
+      );
+      setNotice('Claw配置已更新');
+    } else {
+      const res = await adminApi.createClawConfig(payload);
+      setClawConfigs((prev) => [res.clawConfig, ...prev]);
+      setEditingClawConfigId(toText(res.clawConfig._id));
+      setNotice('Claw配置已创建');
+    }
+  };
+
+  /**
+   * @description 删除 Claw 配置
+   * @keyword-en delete claw config
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onDeleteClawConfig = async (id) => {
+    await adminApi.deleteClawConfig(id);
+    setClawConfigs((prev) => prev.filter((item) => item._id !== id));
+    if (editingClawConfigId === id) setEditingClawConfigId('');
+    setNotice('Claw配置已删除');
+  };
+
+  /**
+   * @description 测试 Claw 连通性
+   * @keyword-en ping claw config, test connectivity
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onPingClawConfig = async (id) => {
+    setPingLoadingId(id);
+    try {
+      const res = await adminApi.pingClawConfig(id);
+      setClawConfigs((prev) =>
+        prev.map((item) =>
+          item._id === id
+            ? { ...item, connectStatus: res.status, connectCheckedAt: new Date().toISOString() }
+            : item,
+        ),
+      );
+      const label = res.status === 'full' ? '完全通畅' : res.status === 'api_only' ? '接口通畅, skill未接' : '连接失败';
+      setNotice(`连通测试完成：${label}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPingLoadingId('');
+    }
+  };
+
+  /**
+   * @description 提交 Agent 配置（创建/更新）
+   * @keyword-en submit agent config
+   * @returns {Promise<void>}
+   */
+  const onSubmitAgentConfig = async () => {
+    const payload = {
+      name: toText(forms.agentConfig.name).trim(),
+      module: toText(forms.agentConfig.module).trim(),
+      clawConfigId: toText(forms.agentConfig.clawConfigId).trim() || undefined,
+      clawAgentId: toText(forms.agentConfig.clawAgentId).trim() || undefined,
+      prompt: toText(forms.agentConfig.prompt) || undefined,
+      enabled: Boolean(forms.agentConfig.enabled),
+    };
+    if (editingAgentConfigId) {
+      const res = await adminApi.updateAgentConfig(editingAgentConfigId, payload);
+      setAgentConfigs((prev) =>
+        prev.map((item) => (item._id === editingAgentConfigId ? res.agentConfig : item)),
+      );
+      setNotice('Agent配置已更新');
+    } else {
+      const res = await adminApi.createAgentConfig(payload);
+      setAgentConfigs((prev) => [res.agentConfig, ...prev]);
+      setEditingAgentConfigId(toText(res.agentConfig._id));
+      setNotice('Agent配置已创建');
+    }
+  };
+
+  /**
+   * @description 删除 Agent 配置
+   * @keyword-en delete agent config
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onDeleteAgentConfig = async (id) => {
+    await adminApi.deleteAgentConfig(id);
+    setAgentConfigs((prev) => prev.filter((item) => item._id !== id));
+    if (editingAgentConfigId === id) setEditingAgentConfigId('');
+    setNotice('Agent配置已删除');
   };
 
   const onLogout = async () => {
@@ -632,6 +776,25 @@ const AdminApp = () => {
     return hitKeyword && item.tenantId === tenantFilter;
   });
 
+  const filteredClawConfigs = clawConfigs.filter((item) => {
+    const keyword = toLower(filters.clawConfigs.keyword.trim());
+    if (!keyword) return true;
+    return (
+      toLower(item.name).includes(keyword) ||
+      toLower(item.description ?? '').includes(keyword) ||
+      toLower(item.serviceUrl).includes(keyword)
+    );
+  });
+
+  const filteredAgentConfigs = agentConfigs.filter((item) => {
+    const keyword = toLower(filters.agentConfigs.keyword.trim());
+    if (!keyword) return true;
+    return (
+      toLower(item.name).includes(keyword) ||
+      toLower(item.module).includes(keyword)
+    );
+  });
+
   const pagedUsers = buildPagedRows(filteredUsers, pages.users);
   const pagedProviders = buildPagedRows(filteredProviders, pages.providers);
   const pagedTenants = buildPagedRows(filteredTenants, pages.tenants);
@@ -641,6 +804,8 @@ const AdminApp = () => {
     filteredDashboardConfigs,
     pages.dashboardConfigs,
   );
+  const pagedClawConfigs = buildPagedRows(filteredClawConfigs, pages.clawConfigs);
+  const pagedAgentConfigs = buildPagedRows(filteredAgentConfigs, pages.agentConfigs);
 
   if (loading) {
     return (
@@ -1096,6 +1261,325 @@ const AdminApp = () => {
                 pagedSources,
                 () => gotoPage('sources', pages.sources - 1),
                 () => gotoPage('sources', pages.sources + 1),
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Claw管理 | @keyword-en claw config management */}
+        {activeTab === 'claw_configs' ? (
+          <div className="grid lg:grid-cols-2 gap-4 pb-8">
+            {/* Claw 配置表单区域 | @keyword-en claw config form area */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <h2 className="font-semibold text-slate-900">
+                {editingClawConfigId ? '编辑 Claw 配置' : '新增 Claw 配置'}
+              </h2>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="名称（必填）"
+                value={forms.clawConfig.name}
+                onChange={(e) => updateForm('clawConfig', 'name', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="描述（选填）"
+                value={forms.clawConfig.description}
+                onChange={(e) => updateForm('clawConfig', 'description', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm font-mono"
+                placeholder="Service URL（如 http://127.0.0.1:18789）"
+                value={forms.clawConfig.serviceUrl}
+                onChange={(e) => updateForm('clawConfig', 'serviceUrl', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm font-mono"
+                placeholder="Token（Bearer 令牌，必填）"
+                type="password"
+                value={forms.clawConfig.token}
+                onChange={(e) => updateForm('clawConfig', 'token', e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() =>
+                    onSubmitClawConfig().catch((err) => setError(err.message))
+                  }
+                  className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                >
+                  {editingClawConfigId ? '更新' : '创建'}
+                </button>
+                {editingClawConfigId ? (
+                  <button
+                    onClick={() => {
+                      setEditingClawConfigId('');
+                      setForms((prev) => ({
+                        ...prev,
+                        clawConfig: { name: '', description: '', token: '', serviceUrl: '' },
+                      }));
+                    }}
+                    className="px-3 py-2 text-sm border rounded"
+                  >
+                    取消编辑
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {/* Claw 配置列表区域 | @keyword-en claw config list area */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-slate-900">Claw 配置列表</h2>
+                <span className="text-xs text-slate-400">{filteredClawConfigs.length} 条</span>
+              </div>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="搜索..."
+                value={filters.clawConfigs.keyword}
+                onChange={(e) => updateFilter('clawConfigs', 'keyword', e.target.value)}
+              />
+              {pagedClawConfigs.rows.map((item) => (
+                <div
+                  key={item._id}
+                  className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
+                    editingClawConfigId === item._id ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                  }`}
+                  onClick={() => {
+                    setEditingClawConfigId(toText(item._id));
+                    setForms((prev) => ({
+                      ...prev,
+                      clawConfig: {
+                        name: item.name || '',
+                        description: item.description || '',
+                        token: item.token || '',
+                        serviceUrl: item.serviceUrl || '',
+                      },
+                    }));
+                  }}
+                >
+                  <div className="font-medium text-slate-900">{item.name}</div>
+                  {item.description ? (
+                    <div className="text-slate-500 text-xs">{item.description}</div>
+                  ) : null}
+                  <div className="text-slate-400 text-xs font-mono truncate">{item.serviceUrl}</div>
+                  {/* 连通状态 | @keyword-en connect status badge */}
+                  {item.connectStatus ? (
+                    <div className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${
+                      item.connectStatus === 'full'
+                        ? 'text-emerald-600 border-emerald-200 bg-emerald-50'
+                        : item.connectStatus === 'api_only'
+                        ? 'text-amber-600 border-amber-200 bg-amber-50'
+                        : 'text-rose-500 border-rose-200 bg-rose-50'
+                    }`}>
+                      {item.connectStatus === 'full' && '完全通畅'}
+                      {item.connectStatus === 'api_only' && '接口通畅, skill未接'}
+                      {item.connectStatus === 'error' && '连接失败'}
+                    </div>
+                  ) : null}
+                  {/* 操作按钮区域 | @keyword-en action buttons */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPingClawConfig(toText(item._id)).catch((err) => setError(err.message));
+                      }}
+                      disabled={pingLoadingId === toText(item._id)}
+                      className="text-xs text-blue-600 px-2 py-1 border border-blue-200 rounded disabled:opacity-50"
+                    >
+                      {pingLoadingId === toText(item._id) ? '测试中...' : '测试连接'}
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!window.confirm('确认删除该 Claw 配置？')) return;
+                        onDeleteClawConfig(toText(item._id)).catch((err) => setError(err.message));
+                      }}
+                      className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {renderPager(
+                pagedClawConfigs,
+                () => gotoPage('clawConfigs', pages.clawConfigs - 1),
+                () => gotoPage('clawConfigs', pages.clawConfigs + 1),
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Agent管理 | @keyword-en agent config management */}
+        {activeTab === 'agent_configs' ? (
+          <div className="grid lg:grid-cols-2 gap-4 pb-8">
+            {/* Agent 配置表单区域 | @keyword-en agent config form area */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <h2 className="font-semibold text-slate-900">
+                {editingAgentConfigId ? '编辑 Agent 配置' : '新增 Agent 配置'}
+              </h2>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="Agent 名称（必填）"
+                value={forms.agentConfig.name}
+                onChange={(e) => updateForm('agentConfig', 'name', e.target.value)}
+              />
+              {/* Agent 所属模块选择 | @keyword-en agent module select */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">所属模块（来自 auto-task-robot）</label>
+                <select
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  value={forms.agentConfig.module}
+                  onChange={(e) => updateForm('agentConfig', 'module', e.target.value)}
+                >
+                  <option value="xhs_publisher">小红书发布机（xhs_publisher）</option>
+                  <option value="claw">OpenClaw 智能体（claw）</option>
+                </select>
+              </div>
+              {/* Claw 配置选择（仅当 module=claw 时显示）| @keyword-en claw config selector when module is claw */}
+              {forms.agentConfig.module === 'claw' ? (
+                <>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">选择 Claw 配置</label>
+                    <select
+                      className="w-full border rounded px-3 py-2 text-sm"
+                      value={forms.agentConfig.clawConfigId}
+                      onChange={(e) => updateForm('agentConfig', 'clawConfigId', e.target.value)}
+                    >
+                      <option value="">-- 请选择 --</option>
+                      {clawConfigs.map((cc) => (
+                        <option key={cc._id} value={cc._id}>
+                          {cc.name} ({cc.serviceUrl})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="Claw Agent ID（默认 main）"
+                    value={forms.agentConfig.clawAgentId}
+                    onChange={(e) => updateForm('agentConfig', 'clawAgentId', e.target.value)}
+                  />
+                </>
+              ) : null}
+              {/* Agent 启用状态 | @keyword-en agent enabled toggle */}
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={Boolean(forms.agentConfig.enabled)}
+                  onChange={(e) => updateForm('agentConfig', 'enabled', e.target.checked)}
+                />
+                启用
+              </label>
+              {/* Agent 提示词编辑区域（Markdown）| @keyword-en agent prompt markdown editor */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Agent 提示词（Markdown）</label>
+                <div className="w-full" data-color-mode="light">
+                  <MDEditor
+                    height={300}
+                    value={forms.agentConfig.prompt}
+                    onChange={(val) => updateForm('agentConfig', 'prompt', val || '')}
+                    preview="edit"
+                    textareaProps={{ placeholder: '在这里输入 Agent 的系统提示词...' }}
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() =>
+                    onSubmitAgentConfig().catch((err) => setError(err.message))
+                  }
+                  className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                >
+                  {editingAgentConfigId ? '更新' : '创建'}
+                </button>
+                {editingAgentConfigId ? (
+                  <button
+                    onClick={() => {
+                      setEditingAgentConfigId('');
+                      setForms((prev) => ({
+                        ...prev,
+                        agentConfig: {
+                          name: '',
+                          module: 'xhs_publisher',
+                          clawConfigId: '',
+                          clawAgentId: 'main',
+                          prompt: '',
+                          enabled: true,
+                        },
+                      }));
+                    }}
+                    className="px-3 py-2 text-sm border rounded"
+                  >
+                    取消编辑
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {/* Agent 配置列表区域 | @keyword-en agent config list area */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-slate-900">Agent 配置列表</h2>
+                <span className="text-xs text-slate-400">{filteredAgentConfigs.length} 条</span>
+              </div>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="搜索..."
+                value={filters.agentConfigs.keyword}
+                onChange={(e) => updateFilter('agentConfigs', 'keyword', e.target.value)}
+              />
+              {pagedAgentConfigs.rows.map((item) => (
+                <div
+                  key={item._id}
+                  className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
+                    editingAgentConfigId === item._id ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                  }`}
+                  onClick={() => {
+                    setEditingAgentConfigId(toText(item._id));
+                    setForms((prev) => ({
+                      ...prev,
+                      agentConfig: {
+                        name: item.name || '',
+                        module: item.module || 'xhs_publisher',
+                        clawConfigId: item.clawConfigId || '',
+                        clawAgentId: item.clawAgentId || 'main',
+                        prompt: item.prompt || '',
+                        enabled: item.enabled !== false,
+                      },
+                    }));
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-slate-900">{item.name}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded border ${item.enabled ? 'text-emerald-600 border-emerald-200 bg-emerald-50' : 'text-slate-400 border-slate-200 bg-slate-50'}`}>
+                      {item.enabled ? '启用' : '停用'}
+                    </span>
+                  </div>
+                  <div className="text-slate-400 text-xs">
+                    模块：{item.module}
+                    {item.clawConfigId ? (
+                      <span className="ml-2">
+                        · Claw：{clawConfigs.find((c) => c._id === item.clawConfigId)?.name || item.clawConfigId}
+                      </span>
+                    ) : null}
+                  </div>
+                  {item.prompt ? (
+                    <div className="text-slate-500 text-xs line-clamp-2">{item.prompt.slice(0, 100)}</div>
+                  ) : null}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!window.confirm('确认删除该 Agent 配置？')) return;
+                      onDeleteAgentConfig(toText(item._id)).catch((err) => setError(err.message));
+                    }}
+                    className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
+                  >
+                    删除
+                  </button>
+                </div>
+              ))}
+              {renderPager(
+                pagedAgentConfigs,
+                () => gotoPage('agentConfigs', pages.agentConfigs - 1),
+                () => gotoPage('agentConfigs', pages.agentConfigs + 1),
               )}
             </div>
           </div>

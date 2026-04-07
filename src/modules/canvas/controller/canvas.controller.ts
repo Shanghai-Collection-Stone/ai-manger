@@ -15,6 +15,7 @@ import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   CanvasAddArticlesInput,
   CanvasCreateInput,
+  CanvasImageGroupCreateInput,
   CanvasUpdateStatusInput,
   CanvasUpdateArticleInput,
 } from '../entities/canvas.entity.js';
@@ -110,6 +111,27 @@ export class CanvasController {
     const lim = limit ? Number(limit) : 50;
     const rows = await this.canvas.list(userId, authScope.tenantId, lim);
     return { canvases: rows };
+  }
+
+  /**
+   * @description 创建图片组类型 Canvas，异步生成 imageGroups，立即返回 generating 状态。
+   * @param {CanvasImageGroupCreateInput} input - 图片组 canvas 创建参数。
+   * @returns {Promise<Record<string, unknown>>} 包含 canvas 的响应对象（status=generating）。
+   * @keyword canvas, image-group, create, async
+   * @since 2026-04-02
+   */
+  @Post('image-group')
+  async createImageGroup(
+    @Body() input: CanvasImageGroupCreateInput,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.createImageGroupCanvas({
+      ...input,
+      userId: authScope.userId ?? input.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+    });
+    return { canvas: { ...doc, _id: undefined } };
   }
 
   /**

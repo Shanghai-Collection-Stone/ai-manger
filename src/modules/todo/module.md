@@ -32,8 +32,23 @@ Todo服务。
 Todo模块定义。
 - **关键词**: module
 
+### todo-task.controller.ts
+任务专项接口控制器，供 claw skill 通过 taskToken 鉴权后操作任务和执行节点（无需管理员登录态）。
+- **路由前缀**: `/task-api`
+- **关键词**: task-api, task-token, claw-skill, todo-item, callback, canvas
+- **函数**:
+  - `getTask`: 获取任务详情/get task by token
+  - `updateTask`: 更新任务字段/update task via token
+  - `deleteTask`: 删除任务/delete task via token
+  - `listItems`: 获取执行节点列表/list items by token
+  - `getItem`: 获取单个执行节点/get item by token
+  - `createItem`: 新增执行节点/create item via token
+  - `updateItem`: 更新执行节点/update item via token
+  - `deleteItem`: 删除执行节点/delete item via token
+  - `getCanvasArticles`: 获取专项 Canvas 下所有文章（含图片完整路径）/get canvas articles by token
+
 ### todo.entity.ts
-Todo实体。
+Todo实体。新增 `taskToken` 字段（任务专属token）。
 - **关键词**: entity
 
 ### todo-item.entity.ts

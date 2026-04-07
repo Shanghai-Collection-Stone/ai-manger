@@ -58,6 +58,50 @@ export interface AdminAiProviderEntity {
 }
 
 /**
+ * @description Claw 连通状态枚举
+ * @keyword-en claw connect status
+ */
+export type ClawConnectStatus = 'unknown' | 'full' | 'api_only' | 'error';
+
+/**
+ * @description Claw 接入配置实体（OpenClaw 网关）
+ * @keyword-en claw config entity, openclaw gateway
+ */
+export interface AdminClawConfigEntity {
+  _id: ObjectId;
+  name: string;
+  description?: string;
+  token: string;
+  serviceUrl: string;
+  /** 连通状态：unknown=未检测, full=完全通畅, api_only=接口通畅但skill未接, error=连接失败 */
+  connectStatus?: ClawConnectStatus;
+  /** 最近一次连通测试时间 */
+  connectCheckedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * @description Agent 管理配置实体
+ * @keyword-en agent config entity, admin agent management
+ */
+export interface AdminAgentConfigEntity {
+  _id: ObjectId;
+  name: string;
+  /** 对应 auto-task-robot 中的 robot code（如 xhs_publisher / claw） */
+  module: string;
+  /** 当 module=claw 时指向 AdminClawConfigEntity._id */
+  clawConfigId?: string;
+  /** 当 module=claw 时指定 openclaw 的 agentId（默认 main） */
+  clawAgentId?: string;
+  /** Agent 提示词（markdown 格式） */
+  prompt?: string;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
  * @description 后台JWT载荷
  * @keyword-en admin jwt payload
  */

@@ -159,6 +159,25 @@ export const chatService = {
     }
   },
 
+  /**
+   * 创建图片组 Canvas（返回 generating 状态，后台异步生成）
+   * @param {{ topic?: string, articles: Array<{title: string, tags: string[]}> }} input
+   * @returns {Promise<{canvas: object|null}>}
+   */
+  async createImageGroupCanvas(input) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/image-group`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
   // --- Remote Session Management ---
 
   /**

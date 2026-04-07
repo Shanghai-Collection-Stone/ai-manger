@@ -193,11 +193,11 @@ export class ToolsService {
    * @description 获取小红书专家专用工具集（以XHS工具为主）
    * @keyword-en XHS specialist tools
    */
-  private getXhsSpecialistTools(scope?: {
+  private getXhsSpecialistTools(_scope?: {
     tenantId?: string;
     userId?: string;
   }): CreateAgentParams['tools'] {
-    const tXhs = this.mediaAgent.getXhsToolsHandle(scope) ?? [];
-    return tXhs;
+    // xhs-specialist 所有 Canvas/图库操作通过 subagents 路由，主 agent 无直接工具
+    return [];
   }
 }

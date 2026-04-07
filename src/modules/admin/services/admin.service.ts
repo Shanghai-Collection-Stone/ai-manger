@@ -25,10 +25,13 @@ import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js
 import { SassService } from '../../sass/services/sass.service.js';
 import type {
   AdminAiProviderEntity,
+  AdminAgentConfigEntity,
+  AdminClawConfigEntity,
   AdminJwtPayload,
   AdminSessionEntity,
   AdminUserEntity,
   AdminUserRole,
+  ClawConnectStatus,
 } from '../entities/admin.entity.js';
 
 type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & { id: string };
@@ -42,6 +45,8 @@ export class AdminService {
   private readonly users: Collection<AdminUserEntity>;
   private readonly sessions: Collection<AdminSessionEntity>;
   private readonly aiProviders: Collection<AdminAiProviderEntity>;
+  private readonly clawConfigs: Collection<AdminClawConfigEntity>;
+  private readonly agentConfigs: Collection<AdminAgentConfigEntity>;
   private readonly sassTenants: Collection<SassTenantEntity>;
   private readonly sassApiKeys: Collection<SassApiKeyEntity>;
   private readonly dataSources: Collection<DataSourceEntity>;
@@ -57,6 +62,10 @@ export class AdminService {
     this.sessions = db.collection<AdminSessionEntity>('admin_sessions');
     this.aiProviders =
       db.collection<AdminAiProviderEntity>('admin_ai_providers');
+    this.clawConfigs =
+      db.collection<AdminClawConfigEntity>('admin_claw_configs');
+    this.agentConfigs =
+      db.collection<AdminAgentConfigEntity>('admin_agent_configs');
     this.sassTenants = db.collection<SassTenantEntity>('sass_tenants');
     this.sassApiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.dataSources = db.collection<DataSourceEntity>('data_sources');
@@ -1108,6 +1117,255 @@ export class AdminService {
     };
     await ensureDefaultForCategory('llm');
     await ensureDefaultForCategory('em');
+  }
+
+  // ─── Claw Config CRUD ───────────────────────────────────────────────────────
+
+  /**
+   * @description 列出所有 Claw 接入配置
+   * @keyword-en list claw configs
+   */
+  async listClawConfigs(): Promise<AdminClawConfigEntity[]> {
+    return this.clawConfigs.find({}).sort({ createdAt: -1 }).toArray();
+  }
+
+  /**
+   * @description 根据ID获取 Claw 配置
+   * @keyword-en get claw config by id
+   */
+  async getClawConfigById(id: string): Promise<AdminClawConfigEntity | null> {
+    if (!ObjectId.isValid(id)) return null;
+    return this.clawConfigs.findOne({ _id: new ObjectId(id) });
+  }
+
+  /**
+   * @description 创建 Claw 接入配置
+   * @keyword-en create claw config
+   */
+  async createClawConfig(input: {
+    name: string;
+    description?: string;
+    token: string;
+    serviceUrl: string;
+  }): Promise<AdminClawConfigEntity> {
+    const now = new Date();
+    const doc: AdminClawConfigEntity = {
+      _id: new ObjectId(),
+      name: input.name.trim(),
+      description: input.description?.trim(),
+      token: input.token.trim(),
+      serviceUrl: input.serviceUrl.trim(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.clawConfigs.insertOne(doc);
+    return doc;
+  }
+
+  /**
+   * @description 更新 Claw 接入配置
+   * @keyword-en update claw config
+   */
+  async updateClawConfig(
+    id: string,
+    input: {
+      name?: string;
+      description?: string;
+      token?: string;
+      serviceUrl?: string;
+    },
+  ): Promise<AdminClawConfigEntity | null> {
+    if (!ObjectId.isValid(id)) return null;
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof input.name === 'string' && input.name.trim())
+      updates.name = input.name.trim();
+    if (typeof input.description === 'string')
+      updates.description = input.description.trim() || undefined;
+    if (typeof input.token === 'string' && input.token.trim())
+      updates.token = input.token.trim();
+    if (typeof input.serviceUrl === 'string' && input.serviceUrl.trim())
+      updates.serviceUrl = input.serviceUrl.trim();
+    const res = await this.clawConfigs.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: updates },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
+  }
+
+  /**
+   * @description 删除 Claw 接入配置
+   * @keyword-en delete claw config
+   */
+  async deleteClawConfig(id: string): Promise<boolean> {
+    if (!ObjectId.isValid(id)) return false;
+    const res = await this.clawConfigs.deleteOne({ _id: new ObjectId(id) });
+    return res.deletedCount === 1;
+  }
+
+  /**
+   * @description 测试 Claw 连通性，向服务地址发送 skill-new-ping 并更新连通状态
+   * @keyword-en ping claw config, test connectivity, skill-new-ping
+   */
+  async pingClawConfig(id: string): Promise<{ status: ClawConnectStatus }> {
+    if (!ObjectId.isValid(id))
+      throw new BadRequestException('Invalid claw config id');
+    const config = await this.getClawConfigById(id);
+    if (!config) throw new BadRequestException('Claw config not found');
+
+    let status: ClawConnectStatus = 'error';
+    try {
+      const baseUrl = config.serviceUrl.replace(/\/$/, '');
+      const endpoint = `${baseUrl}/v1/chat/completions`;
+      const reqBody = JSON.stringify({
+        model: 'openclaw',
+        messages: [{ role: 'user', content: JSON.stringify({ type: 'skill-new-ping' }) }],
+      });
+      console.log('[PingClaw] →', endpoint, reqBody);
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.token}`,
+          'x-openclaw-agent-id': 'main',
+          'x-openclaw-scopes': 'operator.read,operator.write',
+        },
+        body: reqBody,
+        signal: AbortSignal.timeout(60000),
+      });
+      let body: unknown;
+      let rawText = '';
+      try {
+        rawText = await response.text();
+        body = JSON.parse(rawText);
+      } catch {
+        /* non-JSON response */
+      }
+      console.log('[PingClaw] ←', response.status, rawText.slice(0, 500));
+      if (!response.ok) {
+        status = 'error';
+      } else {
+        // 从 choices[0].message.content 中提取 skill-ping-res
+        const content = (body as any)?.choices?.[0]?.message?.content ?? '';
+        let replyJson: unknown;
+        try {
+          replyJson = JSON.parse(content);
+        } catch {
+          /* not JSON */
+        }
+        if (
+          replyJson &&
+          typeof replyJson === 'object' &&
+          (replyJson as Record<string, unknown>)['type'] === 'skill-ping-res'
+        ) {
+          status = 'full';
+        } else {
+          status = 'api_only';
+        }
+      }
+    } catch (err) {
+      console.log('[PingClaw] error', err instanceof Error ? err.message : String(err));
+      status = 'error';
+    }
+
+    await this.clawConfigs.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { connectStatus: status, connectCheckedAt: new Date(), updatedAt: new Date() } },
+    );
+    return { status };
+  }
+
+  // ─── Agent Config CRUD ───────────────────────────────────────────────────────
+
+  /**
+   * @description 列出所有 Agent 配置
+   * @keyword-en list agent configs
+   */
+  async listAgentConfigs(): Promise<AdminAgentConfigEntity[]> {
+    return this.agentConfigs.find({}).sort({ createdAt: -1 }).toArray();
+  }
+
+  /**
+   * @description 根据ID获取 Agent 配置
+   * @keyword-en get agent config by id
+   */
+  async getAgentConfigById(id: string): Promise<AdminAgentConfigEntity | null> {
+    if (!ObjectId.isValid(id)) return null;
+    return this.agentConfigs.findOne({ _id: new ObjectId(id) });
+  }
+
+  /**
+   * @description 创建 Agent 配置
+   * @keyword-en create agent config
+   */
+  async createAgentConfig(input: {
+    name: string;
+    module: string;
+    clawConfigId?: string;
+    clawAgentId?: string;
+    prompt?: string;
+    enabled?: boolean;
+  }): Promise<AdminAgentConfigEntity> {
+    const now = new Date();
+    const doc: AdminAgentConfigEntity = {
+      _id: new ObjectId(),
+      name: input.name.trim(),
+      module: input.module.trim(),
+      clawConfigId: input.clawConfigId?.trim() || undefined,
+      clawAgentId: input.clawAgentId?.trim() || undefined,
+      prompt: input.prompt ?? undefined,
+      enabled: input.enabled !== false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.agentConfigs.insertOne(doc);
+    return doc;
+  }
+
+  /**
+   * @description 更新 Agent 配置
+   * @keyword-en update agent config
+   */
+  async updateAgentConfig(
+    id: string,
+    input: {
+      name?: string;
+      module?: string;
+      clawConfigId?: string;
+      clawAgentId?: string;
+      prompt?: string;
+      enabled?: boolean;
+    },
+  ): Promise<AdminAgentConfigEntity | null> {
+    if (!ObjectId.isValid(id)) return null;
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof input.name === 'string' && input.name.trim())
+      updates.name = input.name.trim();
+    if (typeof input.module === 'string' && input.module.trim())
+      updates.module = input.module.trim();
+    if (typeof input.clawConfigId === 'string')
+      updates.clawConfigId = input.clawConfigId.trim() || undefined;
+    if (typeof input.clawAgentId === 'string')
+      updates.clawAgentId = input.clawAgentId.trim() || undefined;
+    if (typeof input.prompt === 'string')
+      updates.prompt = input.prompt || undefined;
+    if (typeof input.enabled === 'boolean') updates.enabled = input.enabled;
+    const res = await this.agentConfigs.findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: updates },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
+  }
+
+  /**
+   * @description 删除 Agent 配置
+   * @keyword-en delete agent config
+   */
+  async deleteAgentConfig(id: string): Promise<boolean> {
+    if (!ObjectId.isValid(id)) return false;
+    const res = await this.agentConfigs.deleteOne({ _id: new ObjectId(id) });
+    return res.deletedCount === 1;
   }
 
   /**

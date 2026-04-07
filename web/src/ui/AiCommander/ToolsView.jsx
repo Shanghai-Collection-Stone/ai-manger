@@ -3,7 +3,6 @@ import {
   FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
-import CanvasFeedView from './CanvasFeedView';
 import XhsSpecialistView from './XhsSpecialistView';
 import ChatBIView from './ChatBIView';
 import { showToast } from './blocks/shared';
@@ -2008,7 +2007,6 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   const [canvases, setCanvases] = useState([]);
   const [canvasLoading, setCanvasLoading] = useState(false);
   const [canvasQuery, setCanvasQuery] = useState('');
-  const [activeCanvasId, setActiveCanvasId] = useState(null);
 
   const loadCanvases = useCallback(async () => {
     setCanvasLoading(true);
@@ -2048,16 +2046,6 @@ const ToolsView = ({ onThoughtRouteChange }) => {
     return <XhsSpecialistView onBack={() => setView('list')} />;
   }
   if (view === 'canvas') {
-    if (Number.isFinite(activeCanvasId)) {
-      return (
-        <div className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh]">
-          <CanvasFeedView
-            canvasId={activeCanvasId}
-            onClose={() => setActiveCanvasId(null)}
-          />
-        </div>
-      );
-    }
     
     const normalizedQuery = String(canvasQuery || '').trim().toLowerCase();
     const filtered = (Array.isArray(canvases) ? canvases : []).filter((c) => {
@@ -2110,7 +2098,9 @@ const ToolsView = ({ onThoughtRouteChange }) => {
                     key={String(c?.id ?? Math.random())}
                     onClick={() => {
                       const id = Number(c?.id);
-                      if (Number.isFinite(id)) setActiveCanvasId(id);
+                      if (Number.isFinite(id)) {
+                        window.location.hash = '#canvas-' + id;
+                      }
                     }}
                     className="w-full flex items-center justify-between text-left p-3 rounded-xl border border-slate-100 bg-white hover:border-indigo-200 hover:bg-indigo-50/30 transition shadow-sm"
                   >

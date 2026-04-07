@@ -21,12 +21,16 @@ import type { AdminRequest } from '../types/admin-request.types.js';
 import {
   AdminLoginDto,
   CreateAdminUserDto,
+  CreateAgentConfigDto,
   CreateApiKeyByAdminDto,
+  CreateClawConfigDto,
   CreateDataSourceByAdminDto,
   CreateTenantByAdminDto,
+  UpdateAgentConfigDto,
   UpdateAiProviderDto,
   UpdateAdminUserDto,
   UpdateApiKeyByAdminDto,
+  UpdateClawConfigDto,
   UpdateDataSourceByAdminDto,
   UpdateTenantByAdminDto,
   UpsertAiProviderDto,
@@ -403,6 +407,114 @@ export class AdminController {
       this.requireUser(req),
       body.aiPromptSupplement,
     );
+  }
+
+  // ─── Claw 管理 ─────────────────────────────────────────────────────────────
+
+  /**
+   * @description Claw 配置列表
+   * @keyword-en admin claw configs list endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Get('claw-configs')
+  async listClawConfigs() {
+    const rows = await this.adminService.listClawConfigs();
+    return { clawConfigs: rows };
+  }
+
+  /**
+   * @description 创建 Claw 配置
+   * @keyword-en admin claw configs create endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Post('claw-configs')
+  async createClawConfig(@Body() body: CreateClawConfigDto) {
+    const config = await this.adminService.createClawConfig(body);
+    return { clawConfig: config };
+  }
+
+  /**
+   * @description 更新 Claw 配置
+   * @keyword-en admin claw configs update endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Patch('claw-configs/:id')
+  async updateClawConfig(
+    @Param('id') id: string,
+    @Body() body: UpdateClawConfigDto,
+  ) {
+    const config = await this.adminService.updateClawConfig(id, body);
+    return { clawConfig: config };
+  }
+
+  /**
+   * @description 删除 Claw 配置
+   * @keyword-en admin claw configs delete endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Delete('claw-configs/:id')
+  async deleteClawConfig(@Param('id') id: string) {
+    const ok = await this.adminService.deleteClawConfig(id);
+    return { ok };
+  }
+
+  /**
+   * @description 测试 Claw 连通性
+   * @keyword-en admin claw configs ping endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Post('claw-configs/:id/ping')
+  async pingClawConfig(@Param('id') id: string) {
+    return this.adminService.pingClawConfig(id);
+  }
+
+  // ─── Agent 管理 ─────────────────────────────────────────────────────────────
+
+  /**
+   * @description Agent 配置列表
+   * @keyword-en admin agent configs list endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Get('agent-configs')
+  async listAgentConfigs() {
+    const rows = await this.adminService.listAgentConfigs();
+    return { agentConfigs: rows };
+  }
+
+  /**
+   * @description 创建 Agent 配置
+   * @keyword-en admin agent configs create endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Post('agent-configs')
+  async createAgentConfig(@Body() body: CreateAgentConfigDto) {
+    const config = await this.adminService.createAgentConfig(body);
+    return { agentConfig: config };
+  }
+
+  /**
+   * @description 更新 Agent 配置
+   * @keyword-en admin agent configs update endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Patch('agent-configs/:id')
+  async updateAgentConfig(
+    @Param('id') id: string,
+    @Body() body: UpdateAgentConfigDto,
+  ) {
+    const config = await this.adminService.updateAgentConfig(id, body);
+    return { agentConfig: config };
+  }
+
+  /**
+   * @description 删除 Agent 配置
+   * @keyword-en admin agent configs delete endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Delete('agent-configs/:id')
+  async deleteAgentConfig(@Param('id') id: string) {
+    const ok = await this.adminService.deleteAgentConfig(id);
+    return { ok };
   }
 
   /**

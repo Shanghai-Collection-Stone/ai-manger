@@ -302,12 +302,25 @@
 .markdown-preview hr {
   @apply border-t border-slate-200 my-4;
 }
-.markdown-preview table {
-  @apply w-full border-collapse text-sm mb-3;
+/* 表格样式 */
+.markdown-preview table,
+.prose table {
+  @apply w-full border-collapse text-sm mb-4 rounded-lg overflow-hidden shadow-sm;
 }
-.markdown-preview th {
-  @apply bg-slate-100 border border-slate-200 px-3 py-2 text-left font-semibold text-slate-900;
+.markdown-preview th,
+.prose th {
+  @apply bg-slate-100 border border-slate-200 px-4 py-2.5 text-left font-semibold text-slate-800;
 }
-.markdown-preview td {
-  @apply border border-slate-200 px-3 py-2 text-slate-700;
+.markdown-preview td,
+.prose td {
+  @apply border border-slate-200 px-4 py-2.5 text-slate-700;
+}
+.markdown-preview tr:hover td,
+.prose tr:hover td {
+  @apply bg-slate-50;
+}
+/* 斑马纹 */
+.markdown-preview tbody tr:nth-child(even) td,
+.prose tbody tr:nth-child(even) td {
+  @apply bg-slate-50/60;
 }

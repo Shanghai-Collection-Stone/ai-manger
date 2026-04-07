@@ -26,10 +26,13 @@
   - `createSearchGroupsTool` - 向量搜索图库分组工具
 
 ### xhs-tools.service.ts
-小红书工具服务，提供 Canvas 和批量发布相关的 LangChain 工具。
-- **关键词**: xhs, canvas, tools, langchain
+小红书工具服务，提供 Canvas 和批量发布相关的 LangChain 工具。注入 `CanvasService` 实现真实数据读写。
+- **关键词**: xhs, canvas, tools, langchain, image-group
 - **函数**:
-  - `getHandle` - 获取 XHS 工具列表
+  - `getHandle` - 获取 XHS 工具列表（list、detail、create-image-group）
+  - `createListCanvasesTool` - 列出 Canvas 列表（xhs_list_canvases）
+  - `createGetCanvasDetailTool` - 获取 Canvas 详情（xhs_get_canvas_detail）
+  - `createImageGroupCanvasTool` - 创建图片组 Canvas 异步生成（xhs_create_image_group_canvas）
 
 ### media-agent.module.ts
 模块定义。

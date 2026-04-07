@@ -1,5 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Db, Collection, ObjectId } from 'mongodb';
+import { randomUUID } from 'crypto';
 import {
   TodoEntity,
   TodoCreateInput,
@@ -20,6 +21,7 @@ import type {
  */
 @Injectable()
 export class TodoService {
+  private readonly logger = new Logger(TodoService.name);
   private readonly todos: Collection<TodoEntity>;
   private readonly todoItems: Collection<TodoItemEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
@@ -44,6 +46,7 @@ export class TodoService {
     await this.todos.createIndex({ status: 1 });
     await this.todos.createIndex({ type: 1 });
     await this.todos.createIndex({ assignee: 1 });
+    await this.todos.createIndex({ taskToken: 1 }, { unique: true, sparse: true });
     await this.todoItems.createIndex({ id: 1 }, { unique: true });
     await this.todoItems.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     await this.todoItems.createIndex({ todoId: 1 });
@@ -55,6 +58,33 @@ export class TodoService {
     const existsItems = await this.counters.findOne({ _id: 'todo_items' });
     if (!existsItems)
       await this.counters.insertOne({ _id: 'todo_items', seq: 0 });
+  }
+
+  /**
+   * @description 确保任务有 taskToken，如果不存在则生成并写入
+   * @keyword-en ensure task token exists, generate if absent
+   */
+  async ensureTaskToken(id: number, tenantId?: string): Promise<string> {
+    const existing = await this.todos.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
+    if (!existing) throw new Error('TODO_NOT_FOUND');
+    if (existing.taskToken) return existing.taskToken;
+    const token = randomUUID().replace(/-/g, '');
+    await this.todos.updateOne(
+      { id, ...this.buildTenantFilter(tenantId) },
+      { $set: { taskToken: token, updatedAt: new Date() } },
+    );
+    return token;
+  }
+
+  /**
+   * @description 通过 taskToken 查找对应任务
+   * @keyword-en get todo by task token
+   */
+  async getByTaskToken(token: string): Promise<TodoEntity | null> {
+    return (await this.todos.findOne({ taskToken: token })) ?? null;
   }
 
   /**
@@ -131,7 +161,23 @@ export class TodoService {
       id: input.id,
       ...this.buildTenantFilter(input.tenantId),
     });
-    if (!existing) return null;
+    if (!existing) {
+      this.logger.warn(
+        `[update] todo not found: id=${input.id} tenantId=${String(input.tenantId ?? '')}`,
+      );
+      return null;
+    }
+
+    // 状态变更日志
+    if (input.status !== undefined && input.status !== existing.status) {
+      this.logger.log(
+        `[update] STATUS CHANGE id=${input.id}: '${existing.status}' → '${input.status}'`,
+      );
+    } else if (input.status !== undefined) {
+      this.logger.log(
+        `[update] status unchanged id=${input.id}: '${existing.status}'`,
+      );
+    }
 
     const now = new Date();
     const upd: Record<string, unknown> = { updatedAt: now };
@@ -266,6 +312,21 @@ export class TodoService {
   async updateItem(input: TodoItemUpdateInput): Promise<TodoItemEntity | null> {
     const now = new Date();
     const upd: Record<string, unknown> = { updatedAt: now };
+
+    // 节点状态变更前日志
+    if (input.status !== undefined) {
+      const existingItem = await this.todoItems.findOne({
+        id: input.id,
+        ...this.buildTenantFilter(input.tenantId),
+      });
+      const prevStatus = existingItem?.status ?? 'unknown';
+      if (prevStatus !== input.status) {
+        this.logger.log(
+          `[updateItem] STATUS CHANGE id=${input.id}: '${prevStatus}' → '${input.status}'`,
+        );
+      }
+    }
+
     for (const [k, v] of Object.entries(input)) {
       if (k === 'id') continue;
       if (typeof v !== 'undefined') upd[k] = v;

@@ -293,4 +293,98 @@ export const adminApi = {
       body: JSON.stringify({ aiPromptSupplement }),
     });
   },
+
+  // ─── Claw 管理 ───────────────────────────────────────────────────────────────
+
+  /**
+   * @description 获取 Claw 配置列表
+   * @keyword-en list claw configs
+   */
+  async listClawConfigs() {
+    return request('/claw-configs');
+  },
+
+  /**
+   * @description 创建 Claw 配置
+   * @keyword-en create claw config
+   */
+  async createClawConfig(payload) {
+    return request('/claw-configs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 更新 Claw 配置
+   * @keyword-en update claw config
+   */
+  async updateClawConfig(id, payload) {
+    return request(`/claw-configs/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除 Claw 配置
+   * @keyword-en delete claw config
+   */
+  async deleteClawConfig(id) {
+    return request(`/claw-configs/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * @description 测试 Claw 连通性
+   * @keyword-en ping claw config, test connectivity
+   */
+  async pingClawConfig(id) {
+    return request(`/claw-configs/${encodeURIComponent(id)}/ping`, {
+      method: 'POST',
+    });
+  },
+
+  // ─── Agent 管理 ──────────────────────────────────────────────────────────────
+
+  /**
+   * @description 获取 Agent 配置列表
+   * @keyword-en list agent configs
+   */
+  async listAgentConfigs() {
+    return request('/agent-configs');
+  },
+
+  /**
+   * @description 创建 Agent 配置
+   * @keyword-en create agent config
+   */
+  async createAgentConfig(payload) {
+    return request('/agent-configs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 更新 Agent 配置
+   * @keyword-en update agent config
+   */
+  async updateAgentConfig(id, payload) {
+    return request(`/agent-configs/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除 Agent 配置
+   * @keyword-en delete agent config
+   */
+  async deleteAgentConfig(id) {
+    return request(`/agent-configs/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
 };

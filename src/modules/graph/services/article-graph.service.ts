@@ -535,16 +535,19 @@ export class ArticleGraphService {
         system: sys,
       });
       const structured = llm.withStructuredOutput(ZCoverCopy);
-      const output = await structured.invoke([
-        new SystemMessage(sys),
-        new HumanMessage(
-          JSON.stringify({
-            articleTitle: input.articleTitle,
-            articleTags: input.articleTags,
-            imageQuery: input.imageQuery,
-          }),
-        ),
-      ]);
+      const output = await structured.invoke(
+        [
+          new SystemMessage(sys),
+          new HumanMessage(
+            JSON.stringify({
+              articleTitle: input.articleTitle,
+              articleTags: input.articleTags,
+              imageQuery: input.imageQuery,
+            }),
+          ),
+        ],
+        { callbacks: [] },
+      );
       const parsed = ZCoverCopy.safeParse(output);
       if (parsed.success) {
         const rawTitle = String(parsed.data.title ?? '').trim();
@@ -1246,6 +1249,7 @@ export class ArticleGraphService {
    * @returns {Promise<GalleryImageEntity | null>} 图库实体。
    * @keyword-en save generated image to gallery
    */
+
   private async saveGeneratedImageToGallery(input: {
     userId: string;
     tenantId?: string;
@@ -1384,17 +1388,44 @@ export class ArticleGraphService {
       langchainContext,
     });
 
-    await this.canvas.updateMeta(
+    // 批量预写文章存根（生成前先建列表，保证 ID 预分配），不阻塞接口返回
+    await this.canvas.addArticles(
       canvas.id,
       {
-      topic,
-      outline: { topic, platform, articleCount: count, blueprints },
+        articles: blueprints.map((bp) => ({
+          title: bp.title,
+          tags: bp.tags ?? [],
+          contentJson: {},
+        })),
       },
       tenantId,
     );
 
-    await this.generateArticlesAndImages({
-      canvasId: canvas.id,
+    await this.canvas.updateMeta(
+      canvas.id,
+      {
+        topic,
+        outline: { topic, platform, articleCount: count, blueprints },
+      },
+      tenantId,
+    );
+
+    // 从选题蓝图提取标签，立即可用，无需等待全文生成
+    const canvasTags = Array.from(
+      new Set(
+        blueprints
+          .flatMap((bp) => bp.tags ?? [])
+          .map((t) => String(t ?? '').trim())
+          .filter((t) => t.length > 0),
+      ),
+    ).slice(0, 50);
+
+    this.logger.debug(
+      `[article-gen] canvas_ready canvasId=${canvas.id} blueprints=${blueprints.length} tags=${canvasTags.length}`,
+    );
+
+    // 后台异步生成文章正文与配图，立即返回 generating 状态
+    void this.runArticleGeneration(canvas.id, {
       blueprints,
       provider,
       model,
@@ -1408,20 +1439,6 @@ export class ArticleGraphService {
       langchainContext,
     });
 
-    const after = await this.canvas.get(canvas.id, tenantId);
-    if (!after) throw new BadRequestException('CANVAS_NOT_FOUND');
-
-    const canvasTags = Array.from(
-      new Set(
-        (after.articles ?? [])
-          .flatMap((a) => (Array.isArray(a.tags) ? a.tags : []))
-          .map((x) => String(x ?? '').trim())
-          .filter((x) => x.length > 0),
-      ),
-    ).slice(0, 50);
-
-    await this.canvas.updateStatus(canvas.id, 'completed', tenantId);
-
     return {
       canvasId: canvas.id,
       canvas: {
@@ -1429,11 +1446,57 @@ export class ArticleGraphService {
         userId: input.userId,
         topic,
         platform,
-        status: 'completed',
-        articleCount: Array.isArray(after.articles) ? after.articles.length : 0,
+        status: 'generating',
+        articleCount: blueprints.length,
       },
       canvasTags,
     };
+  }
+
+  /**
+   * @description 后台异步执行文章正文+配图生成并回写 Canvas 状态。
+   * @param {number} canvasId - Canvas ID。
+   * @param {object} input - 生成参数（蓝图列表、LLM配置、图库配置等）。
+   * @returns {Promise<void>}
+   * @keyword-en run article generation in background
+   */
+  private async runArticleGeneration(
+    canvasId: number,
+    input: {
+      blueprints: Array<{
+        index: number;
+        title: string;
+        tags?: string[];
+        angle?: string;
+        imageQuery?: string;
+        notes?: string[];
+      }>;
+      provider?: 'gemini' | 'deepseek';
+      model?: string;
+      temperature: number;
+      platform: string;
+      topic?: string;
+      tenantId?: string;
+      galleryUserId: string;
+      galleryGroupId?: number;
+      minImageScore: number;
+      langchainContext: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    this.logger.debug(
+      `[article-gen] generation_start canvasId=${canvasId} blueprints=${input.blueprints.length}`,
+    );
+    try {
+      await this.generateArticlesAndImages({ canvasId, ...input });
+      await this.canvas.updateStatus(canvasId, 'completed', input.tenantId);
+      this.logger.debug(`[article-gen] generation_done canvasId=${canvasId}`);
+    } catch (err) {
+      await this.canvas.updateStatus(canvasId, 'failed', input.tenantId);
+      this.logger.error(
+        `[article-gen] generation_failed canvasId=${canvasId}`,
+        err,
+      );
+    }
   }
 
   private async planArticleTasks(input: {
@@ -1463,6 +1526,7 @@ export class ArticleGraphService {
       `输出 schema：{{ "items": [{{ "index": number, "title": string, "tags"?: string[], "angle"?: string, "imageQuery"?: string, "notes"?: string[] }}] }}。`,
       `items 数组长度必须等于 ${input.count}，index 从 0 开始连续递增。`,
       '每篇文章必须是独立主题，不允许“第1篇/第2篇/上篇/下篇/续篇/连载”这类连续表达。',
+      '若 human message context 中包含搜索结果或热点资讯，必须优先基于这些内容规划选题，确保标题与当前热点/趋势匹配。',
       isXhs
         ? '平台是小红书：title 要像真实分享，避免过于论文/教科书。'
         : undefined,
@@ -1645,21 +1709,72 @@ export class ArticleGraphService {
     minImageScore: number;
     langchainContext: Record<string, unknown>;
   }): Promise<void> {
-    for (const bp of input.blueprints) {
-      const article = await this.generateOneArticle({
-        provider: input.provider,
-        model: input.model,
-        temperature: input.temperature,
-        platform: input.platform,
-        topic: input.topic,
-        blueprint: bp,
-        langchainContext: input.langchainContext,
-      });
+    const total = input.blueprints.length;
+    const startAt = Date.now();
+    this.logger.log(
+      `[article-gen] parallel_start canvasId=${input.canvasId} total=${total} platform=${input.platform}`,
+    );
 
-      await this.canvas.addArticles(
-        input.canvasId,
-        {
-          articles: [
+    // 1. 收集所有蓝图 tag，一次性拉取图片池（与文章生成并行）
+    const allTags: string[] = [];
+    const tagSeen = new Set<string>();
+    for (const bp of input.blueprints) {
+      for (const t of bp.tags ?? []) {
+        const s = t.trim();
+        if (s && !tagSeen.has(s)) { tagSeen.add(s); allTags.push(s); }
+      }
+    }
+    // 1. 先 await 图片池（DB 查询，通常 < 200ms），再批次预分配，避免并行时各自重复选图
+    const imagePool = await this.fetchArticleImagePool({
+      userId: input.galleryUserId,
+      tenantId: input.tenantId,
+      tags: allTags,
+    });
+
+    // 2. 批次级别贪心预分配图片 slice，全局 usedIds 去重，各篇文章用独立来源
+    const imageSlices = this.preAssignImageSlices(imagePool, input.blueprints.length);
+
+    // 3. 每篇文章：内容生成 与 配图渲染 真正并发（各有独立预分配来源）
+    await Promise.all(
+      input.blueprints.map(async (bp, bpIdx) => {
+        const articleId = bp.index + 1;
+        const t0 = Date.now();
+        this.logger.log(
+          `[article-gen] article_start canvasId=${input.canvasId} articleId=${articleId}/${total} title="${bp.title.slice(0, 30)}"`,
+        );
+        try {
+          const [article, imageData] = await Promise.all([
+            // 内容生成分支
+            this.generateOneArticle({
+              provider: input.provider,
+              model: input.model,
+              temperature: input.temperature,
+              platform: input.platform,
+              topic: input.topic,
+              blueprint: bp,
+              langchainContext: input.langchainContext,
+            }),
+            // 配图分支：使用预分配的图片 slice（已全局去重），与内容生成并行
+            this.resolveArticleImages({
+              articleTitle: bp.title,
+              articleTags: bp.tags,
+              imageQuery: bp.imageQuery,
+              tenantId: input.tenantId,
+              galleryUserId: input.galleryUserId,
+              galleryGroupId: input.galleryGroupId,
+              imagePool,
+              preAssignedSources: imageSlices[bpIdx],
+            }),
+          ]);
+
+          this.logger.log(
+            `[article-gen] article_written canvasId=${input.canvasId} articleId=${articleId}/${total} elapsed=${Date.now() - t0}ms`,
+          );
+
+          // 3. 合并回写：正文 + 配图 + 最终状态
+          await this.canvas.updateArticle(
+            input.canvasId,
+            articleId,
             {
               title: article.title,
               tags: article.tags,
@@ -1671,28 +1786,43 @@ export class ArticleGraphService {
                 imageQuery: article.imageQuery,
               },
             },
-          ],
-        },
-        input.tenantId,
-      );
+            input.tenantId,
+          );
+          await this.canvas.updateArticleImages(
+            input.canvasId,
+            articleId,
+            {
+              imageIds: imageData.imageIds.length > 0 ? imageData.imageIds : undefined,
+              imageUrls: imageData.imageUrls.length > 0 ? imageData.imageUrls : undefined,
+              status: imageData.status,
+              doneNote: imageData.doneNote,
+            },
+            input.tenantId,
+          );
 
-      const updatedCanvas = await this.canvas.get(input.canvasId, input.tenantId);
-      if (!updatedCanvas) continue;
-      const latestArticle =
-        updatedCanvas.articles[updatedCanvas.articles.length - 1];
+          this.logger.log(
+            `[article-gen] article_done canvasId=${input.canvasId} articleId=${articleId}/${total} elapsed=${Date.now() - t0}ms`,
+          );
+        } catch (err) {
+          this.logger.error(
+            `[article-gen] article_failed canvasId=${input.canvasId} articleId=${articleId}/${total} elapsed=${Date.now() - t0}ms`,
+            err,
+          );
+          await this.canvas
+            .updateArticle(
+              input.canvasId,
+              articleId,
+              { status: 'failed' },
+              input.tenantId,
+            )
+            .catch(() => void 0);
+        }
+      }),
+    );
 
-      await this.assignImageToArticle({
-        canvasId: input.canvasId,
-        articleId: latestArticle.id,
-        articleTitle: article.title,
-        articleTags: article.tags,
-        imageQuery: article.imageQuery,
-        tenantId: input.tenantId,
-        galleryUserId: input.galleryUserId,
-        galleryGroupId: input.galleryGroupId,
-        minImageScore: input.minImageScore,
-      });
-    }
+    this.logger.log(
+      `[article-gen] parallel_done canvasId=${input.canvasId} total=${total} elapsed=${Date.now() - startAt}ms`,
+    );
   }
 
   private async generateOneArticle(input: {
@@ -1727,6 +1857,7 @@ export class ArticleGraphService {
       '正文至少 120 字。',
       'imageQuery 必须返回用于配图检索。',
       '若文章适合做“前后对比/双场景展示”，在 imageQuery 中明确两类元素，便于生成阶段即时完成拼图与封面处理。',
+      '若 human message context 中包含搜索摘要或参考资料，务必将其融入文章正文，增强内容的时效性与真实感；禁止直接抄录原文，需改写融合。',
       isXhs
         ? [
             '平台是小红书：markdown 必须是“小红书可发”的正文风格。',
@@ -1832,109 +1963,185 @@ export class ArticleGraphService {
     };
   }
 
-  private async assignImageToArticle(input: {
-    canvasId: number;
-    articleId: number;
+  /**
+   * @description 按所有蓝图 tag 一次性拉取图片池（regular 类型），供文章配图并发复用。
+   * 优先 tag 匹配，不足则补全量 accessible 图片。
+   * @keyword-en fetch article image pool by blueprint tags once for all articles
+   */
+  private async fetchArticleImagePool(input: {
+    userId: string;
+    tenantId?: string;
+    tags: string[];
+  }): Promise<GalleryImageEntity[]> {
+    const wantCount = 60;
+    const seen = new Set<string | number>();
+    const pool: GalleryImageEntity[] = [];
+    const dedup = (imgs: GalleryImageEntity[]) => {
+      for (const img of imgs) {
+        const key = img.id ?? img.url;
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        pool.push(img);
+      }
+    };
+    if (input.tags.length > 0) {
+      const byTags = await this.gallery.searchByTags({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        tags: input.tags,
+        limit: wantCount,
+        imageType: 'regular',
+      });
+      dedup(byTags);
+    }
+    if (pool.length < wantCount) {
+      const more = await this.gallery.findAccessibleImages(input.userId, input.tenantId, {
+        imageType: 'regular',
+        limit: wantCount,
+      });
+      dedup(more);
+    }
+    this.logger.debug(
+      `[article-gen] image_pool_ready tags=${input.tags.length} pool=${pool.length}`,
+    );
+    return pool;
+  }
+
+  /**
+   * @description 批次级别为每篇文章贪心预分配图片 slice。
+   * 维护全局 usedIds，保证跨文章不重复使用同一张图；每个 slice 前两张是多样性最高的 pair，
+   * 后续补足到 sliceSize，与图组生成（batch-task-graph）的 usedSet 逻辑一致。
+   * @param {GalleryImageEntity[]} pool - 全量图片池。
+   * @param {number} count - 文章数量。
+   * @returns {GalleryImageEntity[][]} 每篇文章的预分配图片列表。
+   * @keyword-en pre-assign diverse image slices per article global dedup usedIds
+   */
+  private preAssignImageSlices(
+    pool: GalleryImageEntity[],
+    count: number,
+  ): Array<GalleryImageEntity[]> {
+    const sliceSize = 6;
+    const usedIds = new Set<number>();
+    const result: Array<GalleryImageEntity[]> = [];
+    const candidates = pool.filter(
+      (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
+    );
+
+    for (let i = 0; i < count; i++) {
+      const remaining = candidates.filter((img) => {
+        const id = Number(img.id ?? 0);
+        return !(Number.isFinite(id) && id > 0 && usedIds.has(id));
+      });
+
+      if (remaining.length === 0) {
+        result.push([]);
+        continue;
+      }
+
+      // 贪心：在前 cap 张中找多样性最高的 pair 作为前两张
+      const cap = Math.min(remaining.length, Math.max(sliceSize * 2, 12));
+      let bestA: GalleryImageEntity | null = null;
+      let bestB: GalleryImageEntity | null = null;
+      let bestScore = -Infinity;
+      for (let a = 0; a < cap; a++) {
+        for (let b = a + 1; b < cap; b++) {
+          const score = this.scoreImagePairDiversity(remaining[a], remaining[b]);
+          if (score > bestScore) {
+            bestScore = score;
+            bestA = remaining[a];
+            bestB = remaining[b];
+          }
+        }
+      }
+
+      const slice: GalleryImageEntity[] = [];
+      const pairSet = new Set<GalleryImageEntity>();
+      if (bestA) { slice.push(bestA); pairSet.add(bestA); }
+      if (bestB) { slice.push(bestB); pairSet.add(bestB); }
+      // 补足到 sliceSize（用于正文拼图候选）
+      for (const img of remaining) {
+        if (slice.length >= sliceSize) break;
+        if (!pairSet.has(img)) slice.push(img);
+      }
+
+      for (const img of slice) {
+        const id = Number(img.id ?? 0);
+        if (Number.isFinite(id) && id > 0) usedIds.add(id);
+      }
+      result.push(slice);
+    }
+
+    this.logger.debug(
+      `[article-gen] pre_assign_slices count=${count} poolSize=${candidates.length} assigned=${result.filter((s) => s.length > 0).length}`,
+    );
+    return result;
+  }
+
+  /**
+   * @description 从预拉取图片池中为单篇文章选图、生成拼图/封面，返回配图数据（不写库）。
+   * 先按文章 tag 在池中优先筛选，不足则降级到全池；后续拼图/封面生成与 image-group 逻辑一致。
+   * @keyword-en resolve article images from shared pool tag-priority collage cover
+   */
+  private async resolveArticleImages(input: {
     articleTitle: string;
     articleTags?: string[];
     imageQuery?: string;
     tenantId?: string;
     galleryUserId: string;
     galleryGroupId?: number;
-    minImageScore: number;
-  }): Promise<void> {
+    imagePool: GalleryImageEntity[];
+    /** 批次预分配的图片来源，若提供则直接使用，跳过池内随机选取 */
+    preAssignedSources?: GalleryImageEntity[];
+  }): Promise<{ imageIds: number[]; imageUrls: string[]; doneNote: string; status: 'done' | 'requires_human' }> {
     const queryText = input.imageQuery?.trim() || input.articleTitle;
     const targetImageCount = this.randomInt(1, 3);
-    this.logger.debug(
-      `[assign-image] start canvasId=${input.canvasId} articleId=${input.articleId} queryLen=${queryText.length} targetImageCount=${targetImageCount}`,
-    );
-    const allImageKeys = new Set<string>();
-    const pickedImages: GalleryImageEntity[] = [];
     const needRawSourceCount = 2;
     const maxPickedImages = Math.max(6, targetImageCount * 4);
-    const ownerCandidates = Array.from(
-      new Set(
-        [input.galleryUserId, 'default']
-          .map((x) => String(x ?? '').trim())
-          .filter((x) => x.length > 0),
-      ),
-    );
-    let usedFallbackOwner = false;
 
-    const tryAddPicked = (img: GalleryImageEntity, ownerId: string) => {
-      if (!img || typeof img !== 'object') return false;
-      if (img.isCollage === true) return false;
-      if (this.isGeneratedCoverImage(img)) return false;
+    // 从共享池选图：优先匹配文章 tag，再降级全池
+    const allImageKeys = new Set<string>();
+    const pickedImages: GalleryImageEntity[] = [];
+    const tryAdd = (img: GalleryImageEntity) => {
+      if (!img || typeof img !== 'object') return;
+      if (img.isCollage === true) return;
+      if (this.isGeneratedCoverImage(img)) return;
       const keyId = img.id ? `id:${img.id}` : undefined;
       const keyUrl = img.url ? `url:${img.url}` : undefined;
-      if (keyId && allImageKeys.has(keyId)) return false;
-      if (keyUrl && allImageKeys.has(keyUrl)) return false;
+      if (keyId && allImageKeys.has(keyId)) return;
+      if (keyUrl && allImageKeys.has(keyUrl)) return;
       if (keyId) allImageKeys.add(keyId);
       if (keyUrl) allImageKeys.add(keyUrl);
       pickedImages.push(img);
-      if (ownerId !== input.galleryUserId) usedFallbackOwner = true;
-      return true;
     };
-
-    for (const ownerId of ownerCandidates) {
-      if (pickedImages.length >= maxPickedImages) break;
-      const byQuery = await this.gallery.searchSimilar(
-        queryText,
-        ownerId,
-        input.tenantId,
-        24,
-        input.minImageScore,
-      );
-      for (const r of byQuery) {
+    if (input.articleTags && input.articleTags.length > 0) {
+      const tagSet = new Set(input.articleTags.map((t) => t.toLowerCase()));
+      for (const img of input.imagePool) {
         if (pickedImages.length >= maxPickedImages) break;
-        tryAddPicked(r.image, ownerId);
-      }
-
-      if (
-        pickedImages.length < maxPickedImages &&
-        input.articleTags &&
-        input.articleTags.length > 0
-      ) {
-        const validTags = input.articleTags
-          .map((t) => String(t ?? '').trim())
-          .filter((t) => t.length > 0)
-          .slice(0, 3);
-        const byTags = await this.gallery.searchByTags({
-          userId: ownerId,
-          tenantId: input.tenantId,
-          groupId: input.galleryGroupId,
-          tags: validTags,
-          limit: 48,
-          matchCollage: false,
-        });
-        for (const img of byTags) {
-          if (pickedImages.length >= maxPickedImages) break;
-          tryAddPicked(img, ownerId);
-        }
-      }
-
-      if (pickedImages.length < maxPickedImages) {
-        const needed = maxPickedImages - pickedImages.length;
-        const randomList = await this.gallery.sampleRandom({
-          userId: ownerId,
-          tenantId: input.tenantId,
-          groupId: input.galleryGroupId,
-          limit: needed + 12,
-        });
-        for (const img of randomList) {
-          if (pickedImages.length >= maxPickedImages) break;
-          tryAddPicked(img, ownerId);
-        }
+        if ((img.tags ?? []).some((t) => tagSet.has(t.toLowerCase()))) tryAdd(img);
       }
     }
+    for (const img of input.imagePool) {
+      if (pickedImages.length >= maxPickedImages) break;
+      tryAdd(img);
+    }
 
-    const rawSources = this.shuffleArray(
-      pickedImages.filter(
-        (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
-      ),
-    ).slice(0, Math.max(6, targetImageCount * 3));
     this.logger.debug(
-      `[assign-image] source_pool picked=${pickedImages.length} rawSources=${rawSources.length}`,
+      `[assign-image] start title="${input.articleTitle.slice(0, 30)}" picked=${pickedImages.length} targetImageCount=${targetImageCount}`,
+    );
+
+    // 优先使用批次预分配来源（已全局去重），否则从 pool 独立随机选取
+    const rawSources =
+      input.preAssignedSources && input.preAssignedSources.length > 0
+        ? input.preAssignedSources.filter(
+            (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
+          )
+        : this.shuffleArray(
+            pickedImages.filter(
+              (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
+            ),
+          ).slice(0, Math.max(6, targetImageCount * 3));
+    this.logger.debug(
+      `[assign-image] source_pool picked=${pickedImages.length} rawSources=${rawSources.length} preAssigned=${input.preAssignedSources ? 'yes' : 'no'}`,
     );
     let collageImage: GalleryImageEntity | null = null;
     let coverImage: GalleryImageEntity | null = null;
@@ -2010,8 +2217,14 @@ export class ArticleGraphService {
       const orderedPairs = pairs
         .sort((x, y) => y.diversity - x.diversity)
         .slice(0, Math.max(needContentCollageCount * 4, needContentCollageCount));
+      const usedContentSourceIds = new Set<number>();
       for (const pair of this.shuffleArray(orderedPairs)) {
         if (contentCollageImages.length >= needContentCollageCount) break;
+        const aId = Number(pair.a?.id ?? 0);
+        const bId = Number(pair.b?.id ?? 0);
+        // 跳过：任一源图已在本轮内容拼图中使用（跨拼图去重）
+        if (Number.isFinite(aId) && aId > 0 && usedContentSourceIds.has(aId)) continue;
+        if (Number.isFinite(bId) && bId > 0 && usedContentSourceIds.has(bId)) continue;
         const pa = pair.a.absPath || this.resolveLocalPathFromGalleryUrl(pair.a.url);
         const pb = pair.b.absPath || this.resolveLocalPathFromGalleryUrl(pair.b.url);
         if (!pa || !pb) continue;
@@ -2032,6 +2245,8 @@ export class ArticleGraphService {
           });
           if (img) {
             contentCollageImages.push(img);
+            if (Number.isFinite(aId) && aId > 0) usedContentSourceIds.add(aId);
+            if (Number.isFinite(bId) && bId > 0) usedContentSourceIds.add(bId);
             this.logger.debug(
               `[assign-image] content_collage_generated collageId=${String(img?.id ?? '')} sourceA=${String(pair.a?.id ?? '')} sourceB=${String(pair.b?.id ?? '')} diversity=${pair.diversity.toFixed(2)}`,
             );
@@ -2125,30 +2340,18 @@ export class ArticleGraphService {
         doneNote = 'AUTO_CANVAS_COVER_TITLE_FALLBACK';
       } else if (collageImage) {
         doneNote = 'AUTO_CANVAS_DYNAMIC_COLLAGE_IMAGE';
-      } else if (!imageIds.some(() => true)) {
-        doneNote = 'AUTO_RANDOM_IMAGE';
       } else if (finalImages.length < 2) {
         doneNote = 'AUTO_PARTIAL_IMAGE';
-      } else if (usedFallbackOwner) {
-        doneNote = 'AUTO_FALLBACK_DEFAULT_GALLERY';
       }
-      await this.canvas.updateArticleImages(input.canvasId, input.articleId, {
-        imageIds: imageIds.length > 0 ? imageIds : undefined,
-        imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
-        status: 'done',
-        doneNote,
-      }, input.tenantId);
       this.logger.debug(
-        `[assign-image] done canvasId=${input.canvasId} articleId=${input.articleId} doneNote=${doneNote} imageCount=${imageUrls.length}`,
+        `[assign-image] done title="${input.articleTitle.slice(0, 30)}" doneNote=${doneNote} imageCount=${imageUrls.length}`,
       );
+      return { imageIds, imageUrls, doneNote, status: 'done' };
     } else {
-      await this.canvas.updateArticleImages(input.canvasId, input.articleId, {
-        status: 'requires_human',
-        doneNote: 'NO_GALLERY_IMAGE',
-      }, input.tenantId);
       this.logger.warn(
-        `[assign-image] no_image canvasId=${input.canvasId} articleId=${input.articleId}`,
+        `[assign-image] no_image title="${input.articleTitle.slice(0, 30)}"`,
       );
+      return { imageIds: [], imageUrls: [], doneNote: 'NO_GALLERY_IMAGE', status: 'requires_human' };
     }
   }
 }

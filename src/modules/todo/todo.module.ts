@@ -4,6 +4,7 @@ import { AutoTaskRobotModule } from '../auto-task-robot/auto-task-robot.module.j
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { TodoService } from './services/todo.service.js';
 import { TodoController } from './controller/todo.controller.js';
+import { TodoTaskController } from './controller/todo-task.controller.js';
 
 /**
  * @description 待办模块，提供待办CRUD与控制器
@@ -12,7 +13,7 @@ import { TodoController } from './controller/todo.controller.js';
  */
 @Module({
   imports: [DataSourceModule, AdminModule, AutoTaskRobotModule],
-  controllers: [TodoController],
+  controllers: [TodoController, TodoTaskController],
   providers: [TodoService],
   exports: [TodoService],
 })

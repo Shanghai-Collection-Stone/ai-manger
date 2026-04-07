@@ -174,18 +174,30 @@ export class GraphWorkflowFunctionCallService {
     streamWriter?: (msg: string) => void,
     scope?: { tenantId?: string; userId?: string },
   ): CreateAgentParams['tools'] {
+    /** LLM 有时将 outline/style 序列化为 JSON 字符串，此处统一反序列化 */
+    const coerceRecord = (v: unknown): Record<string, unknown> | undefined => {
+      if (!v) return undefined;
+      if (typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+      if (typeof v === 'string') {
+        try { const p = JSON.parse(v); if (p && typeof p === 'object' && !Array.isArray(p)) return p as Record<string, unknown>; } catch { /* ignore */ }
+      }
+      return undefined;
+    };
+
     const topicOrchestrate = tool(
       async ({
         userId,
         platform,
         topic,
-        outline,
-        style,
+        outline: outlineRaw,
+        style: styleRaw,
         count,
         galleryUserId,
         galleryGroupId,
         minImageScore,
       }) => {
+        const outline = coerceRecord(outlineRaw);
+        const style = coerceRecord(styleRaw);
         if (streamWriter) streamWriter('[Graph] Orchestrating topic workflow');
         const finalUserId = this.resolveScopedUserId(userId, scope);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
@@ -295,15 +307,15 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Topic Orchestration Tool. Generates up to 5 sample articles with images in Canvas based on user requirements and provided data.',
         schema: z.object({
-          userId: z.string().describe('Target user id (required)'),
+          userId: z.string().optional().describe('Target user id (injected from session scope if omitted)'),
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
           outline: z
-            .record(z.string(), z.any())
+            .union([z.record(z.string(), z.any()), z.string()])
             .optional()
             .describe('Outline object (optional; auto-generated if omitted)'),
           style: z
-            .record(z.string(), z.any())
+            .union([z.record(z.string(), z.any()), z.string()])
             .optional()
             .describe('Style object (optional; auto-generated if omitted)'),
           count: z
@@ -684,11 +696,11 @@ export class GraphWorkflowFunctionCallService {
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
           outline: z
-            .record(z.string(), z.any())
+            .union([z.record(z.string(), z.any()), z.string()])
             .optional()
             .describe('Outline object (optional; auto-generated if omitted)'),
           style: z
-            .record(z.string(), z.any())
+            .union([z.record(z.string(), z.any()), z.string()])
             .optional()
             .describe('Style object (optional; auto-generated if omitted)'),
           count: z

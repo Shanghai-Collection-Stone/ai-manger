@@ -20,6 +20,12 @@ export interface TodoEntity {
   aiConsideration: string;
   decisionReason: string;
   aiPlan: string;
+  /** 关联会话上下文键（用于 Claw 等需要持久化会话的场景） */
+  sessionKey?: string;
+  /** 任务专属token，用于skill回调接口鉴权 */
+  taskToken?: string;
+  /** 任务成果，由claw api最终返回的markdown内容 */
+  taskResult?: string;
   status: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
   createdAt: Date;
   updatedAt: Date;
@@ -57,5 +63,8 @@ export interface TodoUpdateInput {
   aiConsideration?: string;
   decisionReason?: string;
   aiPlan?: string;
+  sessionKey?: string;
+  taskToken?: string;
+  taskResult?: string;
   status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
 }

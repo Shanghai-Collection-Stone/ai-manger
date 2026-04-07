@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
+import { CanvasModule } from '../canvas/canvas.module.js';
 import { MediaAgentService } from './services/media-agent.service.js';
 import { GalleryToolsService } from './services/gallery-tools.service.js';
 import { XhsToolsService } from './services/xhs-tools.service.js';
@@ -12,7 +13,7 @@ import { XhsToolsService } from './services/xhs-tools.service.js';
  * @keywords-en media-agent, gallery, xhs, langchain
  */
 @Module({
-  imports: [forwardRef(() => AiAgentModule), GalleryModule],
+  imports: [forwardRef(() => AiAgentModule), GalleryModule, CanvasModule],
   providers: [MediaAgentService, GalleryToolsService, XhsToolsService],
   exports: [MediaAgentService],
 })

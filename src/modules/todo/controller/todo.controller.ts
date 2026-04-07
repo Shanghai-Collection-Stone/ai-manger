@@ -114,11 +114,10 @@ export class TodoController {
       ...input,
       tenantId: authUser?.tenantId,
     });
-    const robotTrigger = await this.triggerRobotIfNeeded(doc);
-    return {
-      todo: this.toApiTodo(doc),
-      robotTrigger,
-    };
+    void this.triggerRobotIfNeeded(doc).catch((err) => {
+      console.error('[TodoController] robot trigger failed', err instanceof Error ? err.message : String(err));
+    });
+    return { todo: await this.toApiTodo(doc) };
   }
 
   /**
@@ -132,7 +131,6 @@ export class TodoController {
   ): Promise<Record<string, unknown>> {
     const authUser = await this.resolveAuthUser(req);
     const canViewAll = this.canViewAllTasks(authUser?.role);
-    // 如果指定了 assignee，优先使用指定的 assignee 进行过滤
     const filterAssignee = assignee ?? (canViewAll ? undefined : authUser?.displayName);
     const rows = await this.todo.listByScope({
       canViewAll,
@@ -140,7 +138,9 @@ export class TodoController {
       userId: canViewAll ? userId : authUser?.username,
       assignee: filterAssignee,
     });
-    return { todos: rows.map((x) => this.toApiTodo(x)) };
+    const agentConfigs = await this.adminService.listAgentConfigs();
+    const agentMap = new Map<string, string>(agentConfigs.map((a) => [String(a._id), a.name]));
+    return { todos: await Promise.all(rows.map((x) => this.toApiTodo(x, agentMap))) };
   }
 
   /**
@@ -174,15 +174,21 @@ export class TodoController {
         };
       })
       .filter((x) => !!x);
-    const robots = this.robots.listRobots().map((r) => ({
-      value: `robot:${r.code}`,
-      label: r.name,
-      type: 'robot',
-      code: r.code,
-      description: r.description,
-    }));
+    // 使用后台 agent 管理数据，替代直接从 auto-task-robot 获取
+    const agentConfigs = await this.adminService.listAgentConfigs();
+    const agentTargets = agentConfigs
+      .filter((a) => a.enabled)
+      .map((a) => ({
+        value: `agent:${String(a._id)}`,
+        label: a.name,
+        type: 'agent',
+        agentId: String(a._id),
+        module: a.module,
+      }));
     return {
-      targets: [...userTargets, ...robots],
+      targets: [...userTargets, ...agentTargets],
+      // 保留 assignees 字段兼容旧协议
+      assignees: agentTargets,
     };
   }
 
@@ -201,11 +207,10 @@ export class TodoController {
       body.assignee,
       authUser?.tenantId,
     );
-    const robotTrigger = await this.triggerRobotIfNeeded(doc);
-    return {
-      todo: doc ? this.toApiTodo(doc) : null,
-      robotTrigger,
-    };
+    void this.triggerRobotIfNeeded(doc).catch((err) => {
+      console.error('[TodoController] robot trigger failed', err instanceof Error ? err.message : String(err));
+    });
+    return { todo: doc ? await this.toApiTodo(doc) : null };
   }
 
   /**
@@ -222,7 +227,7 @@ export class TodoController {
   ): Promise<Record<string, unknown>> {
     const authUser = await this.resolveAuthUser(req);
     const doc = await this.todo.get(Number(id), authUser?.tenantId);
-    return { todo: doc ? this.toApiTodo(doc) : null };
+    return { todo: doc ? await this.toApiTodo(doc) : null };
   }
 
   /**
@@ -245,8 +250,10 @@ export class TodoController {
       id: Number(id),
       tenantId: authUser?.tenantId,
     });
-    const robotTrigger = await this.triggerRobotIfNeeded(doc);
-    return { todo: doc ? this.toApiTodo(doc) : null, robotTrigger };
+    void this.triggerRobotIfNeeded(doc).catch((err) => {
+      console.error('[TodoController] robot trigger failed', err instanceof Error ? err.message : String(err));
+    });
+    return { todo: doc ? await this.toApiTodo(doc) : null };
   }
 
   /**
@@ -310,17 +317,32 @@ export class TodoController {
     return this.robots.listRobots().find((r) => r.code === code)?.name;
   }
 
-  private toApiTodo(
+  private async toApiTodo(
     todo: TodoEntity | (TodoEntity & { _id?: unknown }),
-  ): Record<string, unknown> {
+    agentMap?: Map<string, string>,
+  ): Promise<Record<string, unknown>> {
     const assignee = String(todo.assignee ?? '').trim();
     const robotName = this.getRobotDisplayName(assignee);
+    let displayName: string | undefined = robotName;
+
+    if (!displayName) {
+      const m = /^agent:([a-f0-9]{24})$/i.exec(assignee);
+      if (m) {
+        const agentId = m[1] ?? '';
+        displayName = agentMap?.get(agentId);
+        if (!displayName) {
+          const config = await this.adminService.getAgentConfigById(agentId);
+          displayName = config?.name;
+        }
+      }
+    }
+
     const rec = todo as TodoEntity & { _id?: unknown };
     const { _id, ...rest } = rec;
     void _id;
     return {
       ...rest,
-      assigneeDisplayName: robotName || (assignee || undefined),
+      assigneeDisplayName: displayName || (assignee || undefined),
     };
   }
 }

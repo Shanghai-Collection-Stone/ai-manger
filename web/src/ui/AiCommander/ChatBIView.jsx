@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Sparkles, Zap, History, Plus, MessageSquare, X, 
-  AlertCircle, Loader2, BrainCircuit
+  AlertCircle, Loader2, BrainCircuit, Images, Download
 } from 'lucide-react';
 import { chatService } from './chatService';
 import { $currentSessionId } from './store';
 import CanvasFeedView from './CanvasFeedView';
+import ImageGroupCanvasView from './ImageGroupCanvasView';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
@@ -20,6 +21,8 @@ renderer.code = function({ text, lang }) {
     try {
       const parsed = JSON.parse(text);
       const canvasId = Number(parsed?.canvasId);
+      const canvasType = typeof parsed?.type === 'string' ? parsed.type : 'article';
+      const isImageGroup = canvasType === 'image-group';
       const status = typeof parsed?.status === 'string' ? parsed.status : '';
       const platform = typeof parsed?.platform === 'string' ? parsed.platform : '';
       const topic = typeof parsed?.topic === 'string' ? parsed.topic : '';
@@ -32,22 +35,35 @@ renderer.code = function({ text, lang }) {
           .replace(/&/g, '&amp;')
           .replace(/</g, '&lt;')
           .replace(/>/g, '&gt;');
+      // 状态文案
+      const statusLabel = status === 'generating' ? '生成中…' : status;
       const lines = [
         Number.isFinite(canvasId) ? `Canvas#${canvasId}` : 'Canvas',
         platform ? `平台：${platform}` : '',
         Number.isFinite(articleCount) ? `篇数：${articleCount}` : '',
-        status ? `状态：${status}` : '',
+        statusLabel ? `状态：${esc(statusLabel)}` : '',
       ].filter((x) => x.length > 0);
       const needFieldsHtml =
         needFields.length > 0
           ? `<p class="text-[11px] text-amber-600 mt-2">待补充：${needFields.map((x) => esc(x)).join('、')}</p>`
           : '';
-      return `<section class="my-3 rounded-xl border border-sky-100 bg-sky-50/50 p-3">
-<div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-sky-200 text-sky-600 bg-white">内容看板</div>
+      // 版式差异：图组看板 vs 内容看板
+      const labelText = isImageGroup ? '图组看板' : '内容看板';
+      const btnText = isImageGroup ? '查看图组详情' : '查看文章详情';
+      const borderColor = isImageGroup ? 'border-violet-100' : 'border-sky-100';
+      const bgColor = isImageGroup ? 'bg-violet-50/50' : 'bg-sky-50/50';
+      const tagBorderColor = isImageGroup ? 'border-violet-200' : 'border-sky-200';
+      const tagTextColor = isImageGroup ? 'text-violet-600' : 'text-sky-600';
+      const btnBgColor = isImageGroup ? 'bg-violet-600 hover:bg-violet-700' : 'bg-sky-600 hover:bg-sky-700';
+      const hintText = isImageGroup
+        ? '图组生成后可选择下载，每组图片对应一篇文章。'
+        : '先在 Canvas 看板确认与修改内容，再决定是否发布。';
+      return `<section class="my-3 rounded-xl border ${borderColor} ${bgColor} p-3">
+<div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border ${tagBorderColor} ${tagTextColor} bg-white">${labelText}</div>
 <h4 class="mt-2 mb-1 text-sm font-semibold text-slate-800">${esc(lines.join(' | '))}</h4>
 ${topic ? `<p class="text-xs text-slate-600">${esc(topic)}</p>` : ''}
-<p class="text-xs text-slate-500 mt-1">先在 Canvas 看板确认与修改内容，再决定是否发布。</p>
-${Number.isFinite(canvasId) ? `<button type="button" data-canvas-id="${encodeURIComponent(String(canvasId))}" class="js-open-canvas-card mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-sky-600 text-white hover:bg-sky-700">查看文章详情</button>` : ''}
+<p class="text-xs text-slate-500 mt-1">${hintText}</p>
+${Number.isFinite(canvasId) ? `<button type="button" data-canvas-id="${encodeURIComponent(String(canvasId))}" data-canvas-type="${esc(canvasType)}" class="js-open-canvas-card mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium ${btnBgColor} text-white">${btnText}</button>` : ''}
 ${needFieldsHtml}
 </section>`;
     } catch {
@@ -125,7 +141,7 @@ function parseSSEChunk(buffer) {
 
 function appendCanvasItIfNeeded(text, toolResults) {
   const inputText = typeof text === 'string' ? text : '';
-  if (inputText.includes('```canvas-it')) return inputText;
+  if (inputText.includes('```canvas-it') || inputText.includes('```canvas_it')) return inputText;
   if (!Array.isArray(toolResults)) return inputText;
   for (const tr of toolResults) {
     const out = tr && typeof tr === 'object' ? tr.output : undefined;
@@ -140,6 +156,7 @@ function appendCanvasItIfNeeded(text, toolResults) {
     if (!Number.isFinite(canvasId)) continue;
     const payload = {
       canvasId: Number(canvasId),
+      type: typeof obj?.type === 'string' ? obj.type : undefined,
       status: typeof obj?.status === 'string' ? obj.status : undefined,
       articleCount:
         typeof obj?.articleCount === 'number' ? obj.articleCount : undefined,
@@ -190,6 +207,189 @@ function appendDecisionItIfNeeded(text, toolResults) {
   return inputText;
 }
 
+/* ─── Canvas-it Block Extractor ─── */
+
+/**
+ * @description 从消息文本中提取所有 canvas-it JSON 块
+ * @keyword-en extract canvas-it blocks
+ */
+function extractAllCanvasItBlocks(text) {
+  if (!text) return [];
+  const blocks = [];
+  const re = /```canvas-it\s*([\s\S]*?)```/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const payload = JSON.parse(m[1].trim());
+      const canvasId = Number(payload?.canvasId);
+      if (Number.isFinite(canvasId)) blocks.push({ ...payload, canvasId });
+    } catch { /* skip */ }
+  }
+  return blocks;
+}
+
+/* ─── Canvas-it Inline Card ─── */
+
+/**
+ * @description Canvas-it 内联卡片：自动加载 canvas 状态，展示图组缩略图和操作入口
+ * @keyword-en CanvasItCard inline preview auto-load polling
+ */
+const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
+  const [canvas, setCanvas] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  /* 加载 canvas 数据 */
+  const loadCanvas = useCallback(async () => {
+    const cid = Number(canvasId);
+    if (!Number.isFinite(cid)) return null;
+    try {
+      const res = await chatService.getCanvas(cid);
+      const c = res?.canvas && typeof res.canvas === 'object' ? res.canvas : null;
+      setCanvas(c);
+      return c;
+    } catch {
+      return null;
+    }
+  }, [canvasId]);
+
+  /* 初始加载 */
+  useEffect(() => {
+    loadCanvas().finally(() => setLoading(false));
+  }, [loadCanvas]);
+
+  /* generating 时每 5 秒轮询一次 */
+  useEffect(() => {
+    if (canvas?.status !== 'generating') return;
+    const timer = setInterval(async () => {
+      const next = await loadCanvas();
+      if (next?.status !== 'generating') clearInterval(timer);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [canvas?.status, loadCanvas]);
+
+  const isImageGroup = (canvas?.type || initialPayload?.type) === 'image-group';
+  const status = canvas?.status || initialPayload?.status || '';
+  const isGenerating = status === 'generating';
+  const topic = canvas?.topic || initialPayload?.topic || '';
+  const groups = Array.isArray(canvas?.imageGroups) ? canvas.imageGroups : [];
+  const doneGroups = groups.filter(g => g.status === 'done');
+
+  /* article 类型进度统计 */
+  const articleList = !isImageGroup ? (Array.isArray(canvas?.articles) ? canvas.articles : []) : [];
+  const articleTotal = articleList.length || initialPayload?.articleCount || 0;
+  const articleDone = articleList.filter(a => a.status === 'done' || a.status === 'requires_human').length;
+  const articleFailed = articleList.filter(a => a.status === 'failed').length;
+  /* 已完成文章的第一张封面图 */
+  const doneArticleThumbs = articleList
+    .filter(a => (a.status === 'done' || a.status === 'requires_human') && Array.isArray(a.imageUrls) && a.imageUrls[0])
+    .map(a => a.imageUrls[0])
+    .slice(0, 6);
+
+  /* ── 加载中：中性骨架，不预设颜色 ── */
+  if (loading) {
+    return (
+      <div className="mt-3 rounded-xl border border-slate-150 bg-white overflow-hidden animate-pulse">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+          <div className="h-4 w-14 rounded-full bg-slate-200" />
+          <div className="h-4 flex-1 rounded bg-slate-200" />
+          <Loader2 size={13} className="animate-spin text-slate-300 shrink-0" />
+        </div>
+        <div className="flex gap-1.5 px-3 py-2">
+          {[1,2,3,4].map(i => (
+            <div key={i} className="h-14 w-14 rounded-lg bg-slate-100 shrink-0" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    /* 卡片外层容器 */
+    <div className={`mt-3 rounded-xl border overflow-hidden ${isImageGroup ? 'border-violet-100' : 'border-sky-100'}`}>
+      {/* 头部：类型标签 + 标题 + 状态 */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-white border-b border-slate-100">
+        <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-medium bg-white ${
+          isImageGroup ? 'border-violet-200 text-violet-600' : 'border-sky-200 text-sky-600'
+        }`}>
+          {isImageGroup ? '图组看板' : '内容看板'}
+        </span>
+        <span className="text-xs font-semibold text-slate-800 flex-1 truncate">
+          Canvas#{canvasId}{topic ? ` · ${topic}` : ''}
+        </span>
+        {/* 状态指示 */}
+        {isGenerating ? (
+          <span className="flex items-center gap-1 text-[11px] text-amber-600 shrink-0">
+            <Loader2 size={11} className="animate-spin" />
+            {!isImageGroup && articleTotal > 0
+              ? `${articleDone}/${articleTotal} 篇${articleFailed > 0 ? ` · ${articleFailed}失败` : ''}`
+              : '生成中...'}
+          </span>
+        ) : (
+          <span className="text-[11px] text-green-600 shrink-0">
+            {isImageGroup && doneGroups.length > 0 ? `${doneGroups.length}组` : `${articleDone || articleTotal || ''}篇完成`}
+          </span>
+        )}
+      </div>
+
+      {/* 图组封面缩略图列 */}
+      {!isGenerating && isImageGroup && doneGroups.length > 0 && (
+        <div className="flex gap-1.5 px-3 py-2 overflow-x-auto bg-slate-50/50">
+          {doneGroups.slice(0, 6).map((g, i) => {
+            const imgs = Array.isArray(g.images) ? g.images : [];
+            const cover = imgs.find(img => img.role === 'cover');
+            return cover?.thumbUrl ? (
+              <img key={g.id ?? i} src={cover.thumbUrl} className="h-16 w-16 object-cover rounded-lg shrink-0" alt="" />
+            ) : (
+              <div key={g.id ?? i} className="h-16 w-16 rounded-lg bg-slate-200 flex items-center justify-center shrink-0">
+                <Images size={14} className="text-slate-400" />
+              </div>
+            );
+          })}
+          {doneGroups.length > 6 && (
+            <div className="h-16 w-16 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 text-[11px] text-slate-500 font-medium">
+              +{doneGroups.length - 6}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 生成中缩略图区：有已完成图时展示，否则骨架 */}
+      {isGenerating && (
+        <div className="flex gap-1.5 px-3 py-2 bg-slate-50/30">
+          {doneArticleThumbs.length > 0
+            ? doneArticleThumbs.map((url, i) => (
+                <img key={i} src={url} className="h-16 w-16 object-cover rounded-lg shrink-0" alt="" />
+              ))
+            : [1,2,3,4].map(i => (
+                <div key={i} className="h-16 w-16 rounded-lg bg-slate-200/60 animate-pulse shrink-0" />
+              ))}
+          {/* 剩余待生成格子 */}
+          {doneArticleThumbs.length > 0 && doneArticleThumbs.length < articleTotal &&
+            Array.from({ length: Math.min(4, articleTotal - doneArticleThumbs.length) }).map((_, i) => (
+              <div key={`pending-${i}`} className="h-16 w-16 rounded-lg bg-slate-200/60 animate-pulse shrink-0" />
+            ))}
+        </div>
+      )}
+
+      {/* 操作按鈕区 */}
+      {!isGenerating && (
+        <div className="px-3 pb-2 pt-1">
+          <button
+            type="button"
+            onClick={() => onOpenFull && onOpenFull(Number(canvasId), canvas?.type || initialPayload?.type || 'article')}
+            className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-medium text-white ${
+              isImageGroup ? 'bg-violet-600 hover:bg-violet-700' : 'bg-sky-600 hover:bg-sky-700'
+            }`}
+          >
+            <Download size={11} />
+            {isImageGroup ? '选择/下载图组' : '查看文章详情'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
+
 /* ─── Thinking Indicator (replaces tool call cards) ─── */
 
 const ThinkingBubble = ({ toolCount, subagentCount }) => {
@@ -211,12 +411,17 @@ const ThinkingBubble = ({ toolCount, subagentCount }) => {
 /* ─── AI Message Component ─── */
 
 const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
+  // 提取 canvas-it 块，渲染为 React 卡片
+  const canvasItBlocks = useMemo(() => extractAllCanvasItBlocks(msg.content), [msg.content]);
+
   // Parse markdown securely with URL→image conversion
   const htmlContent = React.useMemo(() => {
     if (!msg.content) return { __html: '' };
     const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
+    // 移除 canvas-it 块（已由 CanvasItCard 渲染）
+    const stripped = String(msg.content).replace(/```canvas-it[\s\S]*?```/gi, '').trim();
     // 1. 把纯 URL 转成 markdown 图片语法
-    let converted = String(msg.content).replace(imgPattern, (url) => `![](${url})`);
+    let converted = stripped.replace(imgPattern, (url) => `![](${url})`);
     let rawMarkup = marked.parse(converted);
     // 2. 把 <a href="图片url"> 链接转成 <img>
     rawMarkup = String(rawMarkup).replace(
@@ -249,7 +454,7 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
         />
       )}
 
-      {/* Text content */}
+    {/* Text content */}
       {(msg.content || msg.isStreaming) && (
         <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-hidden">
           {msg.content ? (
@@ -274,8 +479,9 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
                     String(canvasBtn.getAttribute('data-canvas-id') || '').trim(),
                   );
                   const id = Number(raw);
+                  const canvasType = String(canvasBtn.getAttribute('data-canvas-type') || 'article');
                   if (Number.isFinite(id) && typeof onOpenCanvas === 'function') {
-                    onOpenCanvas(id);
+                    onOpenCanvas(id, canvasType);
                   }
                   return;
                 }
@@ -301,6 +507,16 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
           )}
         </div>
       )}
+
+      {/* Canvas-it 内联卡片（自动加载 + 实时状态） */}
+      {canvasItBlocks.map(payload => (
+        <CanvasItCard
+          key={payload.canvasId}
+          canvasId={payload.canvasId}
+          initialPayload={payload}
+          onOpenFull={onOpenCanvas}
+        />
+      ))}
 
     {/* Show empty placeholder while loading, no content yet, no error */}
     {!msg.content && !msg.isStreaming && !msg.errorText && (
@@ -417,7 +633,12 @@ const ChatBIView = ({
   const [sessions, setSessions] = useState([]);
   const [isSessionPickerOpen, setIsSessionPickerOpen] = useState(false);
   const [activeCanvasId, setActiveCanvasId] = useState(null);
+  /** @type {'article'|'image-group'|null} */
+  const [activeCanvasType, setActiveCanvasType] = useState(null);
   const [activeDecisionCardId, setActiveDecisionCardId] = useState('');
+  /** @description generating 状态 canvas id->type 映射，用于后台轮询 */
+  const generatingCanvasRef = React.useRef(new Map());
+  const pollingTimerRef = React.useRef(null);
   const [lightboxImage, setLightboxImage] = useState(null);
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
@@ -478,10 +699,58 @@ const ChatBIView = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // --- 轮询 generating canvas 状态 ---
+  // 扫描消息提取生成中的 canvas id
+  const scanGeneratingCanvases = React.useCallback((msgs) => {
+    const map = generatingCanvasRef.current;
+    map.clear();
+    for (const msg of msgs) {
+      if (msg.role !== 'assistant' || !msg.content) continue;
+      const matches = [...msg.content.matchAll(/```canvas-it\n([\s\S]*?)```/g)];
+      for (const m of matches) {
+        try {
+          const p = JSON.parse(m[1]);
+          const id = Number(p?.canvasId);
+          if (Number.isFinite(id) && p?.status === 'generating') {
+            map.set(id, typeof p.type === 'string' ? p.type : 'article');
+          }
+        } catch { /* skip */ }
+      }
+    }
+  }, []);
+
+  // 每次 messages 变化时重新扫描
+  useEffect(() => {
+    scanGeneratingCanvases(messages);
+  }, [messages, scanGeneratingCanvases]);
+
+  // 轮询 effect：每 5s 检查一次 generating canvases
+  useEffect(() => {
+    const run = async () => {
+      const map = generatingCanvasRef.current;
+      if (map.size === 0) return;
+      for (const [id] of Array.from(map.entries())) {
+        try {
+          const res = await chatService.getCanvas(id);
+          const status = res?.canvas?.status;
+          if (status && status !== 'generating') {
+            map.delete(id);
+          }
+        } catch { /* ignore */ }
+      }
+    };
+    if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    pollingTimerRef.current = setInterval(run, 5000);
+    return () => {
+      if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    };
+  }, [sessionId]); // sessionId 变化时重启轮询
+
   const handleNewSession = () => {
     const newId = 'local-' + Date.now();
     setSessionId(newId);
     setMessages([]);
+    generatingCanvasRef.current.clear();
     localStorage.setItem(sessionStorageKey, newId);
     $currentSessionId.set(null);
     if (onDrawerToggle) onDrawerToggle(false);
@@ -850,7 +1119,10 @@ const ChatBIView = ({
                 ) : (
                   <AIMessage
                     msg={msg}
-                    onOpenCanvas={(id) => setActiveCanvasId(id)}
+                    onOpenCanvas={(id, type) => {
+                      setActiveCanvasId(id);
+                      setActiveCanvasType(type || 'article');
+                    }}
                     onOpenDecision={(id) => setActiveDecisionCardId(id)}
                   />
                 )}
@@ -904,12 +1176,20 @@ const ChatBIView = ({
         </div>
       </div>
 
+      {/* canvas 详情弹层：根据类型显示不同视图 */}
       {Number.isFinite(activeCanvasId) && (
         <div className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh]">
-          <CanvasFeedView
-            canvasId={activeCanvasId}
-            onClose={() => setActiveCanvasId(null)}
-          />
+          {activeCanvasType === 'image-group' ? (
+            <ImageGroupCanvasView
+              canvasId={activeCanvasId}
+              onClose={() => { setActiveCanvasId(null); setActiveCanvasType(null); }}
+            />
+          ) : (
+            <CanvasFeedView
+              canvasId={activeCanvasId}
+              onClose={() => { setActiveCanvasId(null); setActiveCanvasType(null); }}
+            />
+          )}
         </div>
       )}
       {activeDecisionCardId ? (

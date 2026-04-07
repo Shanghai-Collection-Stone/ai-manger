@@ -347,3 +347,128 @@ export class UpdateDataSourceByAdminDto {
   @IsIn(['active', 'inactive'])
   status?: DataSourceStatus;
 }
+
+/**
+ * @description 创建 Claw 接入配置请求体
+ * @keyword-en create claw config dto
+ */
+export class CreateClawConfigDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  description?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  token!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  serviceUrl!: string;
+}
+
+/**
+ * @description 更新 Claw 接入配置请求体
+ * @keyword-en update claw config dto
+ */
+export class UpdateClawConfigDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  token?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  serviceUrl?: string;
+}
+
+/**
+ * @description 创建 Agent 管理配置请求体
+ * @keyword-en create agent config dto
+ */
+export class CreateAgentConfigDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  module!: string;
+
+  @IsOptional()
+  @IsMongoId()
+  clawConfigId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  clawAgentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  prompt?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+}
+
+/**
+ * @description 更新 Agent 管理配置请求体
+ * @keyword-en update agent config dto
+ */
+export class UpdateAgentConfigDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  module?: string;
+
+  @IsOptional()
+  @IsMongoId()
+  clawConfigId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  clawAgentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  prompt?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
+}
