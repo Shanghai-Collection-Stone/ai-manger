@@ -495,16 +495,31 @@ const createTwoImageCollageFile = async (urlA, urlB) => {
   canvas.height = COLLAGE_HEIGHT;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('COLLAGE_CANVAS_CONTEXT_FAILED');
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, COLLAGE_WIDTH, COLLAGE_HEIGHT);
 
   const topH = Math.floor(COLLAGE_HEIGHT / 2);
   const bottomH = COLLAGE_HEIGHT - topH;
-  drawCover(ctx, imgA, 0, 0, COLLAGE_WIDTH, topH);
-  drawCover(ctx, imgB, 0, topH, COLLAGE_WIDTH, bottomH);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  ctx.fillRect(0, topH - 1, COLLAGE_WIDTH, 2);
+  // 上图：等比缩到 topH 高度，居中放置（超宽则两侧自然裁剪，不足则黑边）
+  const iwA = Number(imgA?.naturalWidth || imgA?.width || 0);
+  const ihA = Number(imgA?.naturalHeight || imgA?.height || 0);
+  if (iwA > 0 && ihA > 0) {
+    const scaleA = topH / ihA;
+    const drawWA = Math.round(iwA * scaleA);
+    const drawXA = Math.floor((COLLAGE_WIDTH - drawWA) / 2);
+    ctx.drawImage(imgA, drawXA, 0, drawWA, topH);
+  }
+
+  // 下图：等比缩到 bottomH 高度，居中放置
+  const iwB = Number(imgB?.naturalWidth || imgB?.width || 0);
+  const ihB = Number(imgB?.naturalHeight || imgB?.height || 0);
+  if (iwB > 0 && ihB > 0) {
+    const scaleB = bottomH / ihB;
+    const drawWB = Math.round(iwB * scaleB);
+    const drawXB = Math.floor((COLLAGE_WIDTH - drawWB) / 2);
+    ctx.drawImage(imgB, drawXB, topH, drawWB, bottomH);
+  }
 
   const blob = await new Promise((resolve, reject) => {
     canvas.toBlob((b) => {
@@ -826,6 +841,15 @@ const GalleryView = ({ onBack }) => {
   const [coverGenerating, setCoverGenerating] = useState(false);
   const [coverMessage, setCoverMessage] = useState('');
 
+  // Batch Select State (gallery tab)
+  const [batchSelectMode, setBatchSelectMode] = useState(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState([]);
+  const [batchSelectAllActive, setBatchSelectAllActive] = useState(false);
+  const [showBatchTagModal, setShowBatchTagModal] = useState(false);
+  const [batchAddTags, setBatchAddTags] = useState([]);
+  const [batchRemoveTags, setBatchRemoveTags] = useState([]);
+  const [batchTagSaving, setBatchTagSaving] = useState(false);
+
   // Refs
   const imagesReqIdRef = useRef(0);
   const imagesRef = useRef([]);
@@ -860,6 +884,48 @@ const GalleryView = ({ onBack }) => {
       return !hasCoverTag;
     });
   }, [images]);
+
+  // Batch selection helpers (respect current filter/group result set)
+  const visibleImageIds = useMemo(
+    () =>
+      (Array.isArray(images) ? images : [])
+        .map((img) => Number(img?.id))
+        .filter((id) => Number.isFinite(id)),
+    [images],
+  );
+  const visibleImageIdSet = useMemo(
+    () => new Set(visibleImageIds),
+    [visibleImageIds],
+  );
+  const visibleSelectedCount = useMemo(
+    () => batchSelectedIds.filter((id) => visibleImageIdSet.has(id)).length,
+    [batchSelectedIds, visibleImageIdSet],
+  );
+  const hasVisibleImages = visibleImageIds.length > 0;
+  const allVisibleSelected =
+    hasVisibleImages && visibleSelectedCount === visibleImageIds.length;
+
+  const toggleSelectAllVisible = useCallback(() => {
+    if (!hasVisibleImages) return;
+    if (allVisibleSelected) {
+      setBatchSelectedIds((prev) =>
+        prev.filter((id) => !visibleImageIdSet.has(id)),
+      );
+      setBatchSelectAllActive(false);
+      return;
+    }
+    setBatchSelectedIds((prev) => {
+      const next = new Set(prev);
+      visibleImageIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+    setBatchSelectAllActive(true);
+  }, [
+    allVisibleSelected,
+    hasVisibleImages,
+    visibleImageIdSet,
+    visibleImageIds,
+  ]);
 
   // Load Tags
   const loadTags = useCallback(async () => {
@@ -948,6 +1014,33 @@ const GalleryView = ({ onBack }) => {
     setCoverSelectedId(null);
     setCoverMessage('');
   }, [selectedGroupId, tab]);
+
+  // 过滤条件变化后，只保留当前可见结果中的选中项，避免跨筛选误操作
+  useEffect(() => {
+    if (!batchSelectMode) return;
+    setBatchSelectedIds((prev) => prev.filter((id) => visibleImageIdSet.has(id)));
+  }, [batchSelectMode, visibleImageIdSet]);
+
+  // 切换筛选条件时，退出“全选当前筛选”态（避免跨筛选继续自动全选）
+  useEffect(() => {
+    if (!batchSelectMode) return;
+    setBatchSelectAllActive(false);
+  }, [batchSelectMode, selectedGroupId, tagFilter, tab]);
+
+  // “全选当前筛选”激活时，滚动加载更多结果后自动纳入选中
+  useEffect(() => {
+    if (!batchSelectMode || !batchSelectAllActive || !hasVisibleImages) return;
+    setBatchSelectedIds((prev) => {
+      const next = new Set(prev);
+      visibleImageIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
+  }, [
+    batchSelectMode,
+    batchSelectAllActive,
+    hasVisibleImages,
+    visibleImageIds,
+  ]);
 
   // Infinite Scroll
   useEffect(() => {
@@ -1230,6 +1323,34 @@ const GalleryView = ({ onBack }) => {
   ]);
 
   const currentGroup = groups.find(g => g.id === selectedGroupId);
+
+  /**
+   * @description 批量保存标签（添加/移除）
+   * @keyword-en batch save tags for selected images
+   */
+  const onBatchSaveTags = useCallback(async () => {
+    if (batchSelectedIds.length === 0) return;
+    setBatchTagSaving(true);
+    try {
+      const uid = String(userId || '').trim() || 'default';
+      const res = await api.batchUpdateGalleryImageTags({
+        userId: uid,
+        ids: batchSelectedIds,
+        addTags: batchAddTags.length > 0 ? batchAddTags : undefined,
+        removeTags: batchRemoveTags.length > 0 ? batchRemoveTags : undefined,
+      });
+      showToast(`已更新 ${res.modified ?? 0} 张图片的标签`, 'success');
+      setShowBatchTagModal(false);
+      setBatchSelectedIds([]);
+      setBatchSelectMode(false);
+      setBatchAddTags([]);
+      setBatchRemoveTags([]);
+      await loadImages({ append: false });
+      await loadTags();
+    } finally {
+      setBatchTagSaving(false);
+    }
+  }, [batchSelectedIds, batchAddTags, batchRemoveTags, userId, loadImages, loadTags]);
 
   // Preview handlers
   const openPreview = useCallback((img) => {
@@ -1679,21 +1800,58 @@ const GalleryView = ({ onBack }) => {
             ref={fileRef}
             onChange={onUploadFiles}
           />
-          <input
-            type="text"
-            value={uploadDraft.tags}
-            onChange={(e) => setUploadDraft({ ...uploadDraft, tags: e.target.value })}
-            placeholder="标签(逗号分隔)"
-            className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-full sm:w-32 min-w-[120px]"
-          />
-          <button 
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className="shrink-0 flex items-center justify-center gap-1.5 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-slate-800 transition shadow-lg shadow-slate-200 disabled:opacity-50 disabled:shadow-none whitespace-nowrap"
-          >
-            {uploading ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
-            <span>上传</span>
-          </button>
+          {/* 批量选择模式：显示操作栏 */}
+          {batchSelectMode ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500 whitespace-nowrap">
+                已选 {visibleSelectedCount}/{visibleImageIds.length} 张
+              </span>
+              <button
+                onClick={toggleSelectAllVisible}
+                disabled={!hasVisibleImages}
+                className="px-3 py-2 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {allVisibleSelected ? '取消全选(当前筛选)' : '全选当前筛选'}
+              </button>
+              <button
+                onClick={() => { setShowBatchTagModal(true); setBatchAddTags([]); setBatchRemoveTags([]); }}
+                disabled={batchSelectedIds.length === 0}
+                className="px-3 py-2 text-xs rounded-full bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                批量改标签
+              </button>
+              <button
+                onClick={() => { setBatchSelectMode(false); setBatchSelectedIds([]); setBatchSelectAllActive(false); }}
+                className="px-3 py-2 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
+              >
+                取消
+              </button>
+            </div>
+          ) : (
+            <>
+              <input
+                type="text"
+                value={uploadDraft.tags}
+                onChange={(e) => setUploadDraft({ ...uploadDraft, tags: e.target.value })}
+                placeholder="标签(逗号分隔)"
+                className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-full sm:w-32 min-w-[120px]"
+              />
+              <button
+                onClick={() => { setBatchSelectMode(true); setBatchSelectedIds([]); setBatchSelectAllActive(false); }}
+                className="shrink-0 px-4 py-2 rounded-full text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
+              >
+                批量选择
+              </button>
+              <button 
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                className="shrink-0 flex items-center justify-center gap-1.5 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-slate-800 transition shadow-lg shadow-slate-200 disabled:opacity-50 disabled:shadow-none whitespace-nowrap"
+              >
+                {uploading ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
+                <span>上传</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -1761,36 +1919,58 @@ const GalleryView = ({ onBack }) => {
 
            {/* Images Grid */}
            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {images.map(img => (
-                <div key={img.id} onClick={() => openPreview(img)} className="aspect-square bg-slate-100 rounded-xl overflow-hidden relative group cursor-pointer">
-                  <img 
-                    src={img.thumbUrl || img.url} 
-                    alt={img.description || 'Image'} 
-                    className="w-full h-full object-cover transition transform group-hover:scale-105"
-                    loading="lazy"
-                  />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition" />
-                  {img?.isCollage === true && (
-                    <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-blue-600/85 text-white text-[10px]">
-                      拼图
-                    </div>
-                  )}
-                  {Array.isArray(img.tags) && img.tags.length > 0 && (
-                    <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-0.5">
-                      {img.tags.slice(0, 3).map((t) => (
-                        <span key={t} className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] truncate max-w-full">
-                          {t}
-                        </span>
-                      ))}
-                      {img.tags.length > 3 && (
-                        <span className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">
-                          +{img.tags.length - 3}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+              {images.map(img => {
+                const isBatchSelected = batchSelectMode && batchSelectedIds.includes(img.id);
+                return (
+                  <div
+                    key={img.id}
+                    onClick={() => {
+                      if (batchSelectMode) {
+                        setBatchSelectAllActive(false);
+                        setBatchSelectedIds(prev =>
+                          prev.includes(img.id) ? prev.filter(x => x !== img.id) : [...prev, img.id]
+                        );
+                      } else {
+                        openPreview(img);
+                      }
+                    }}
+                    className={`aspect-square bg-slate-100 rounded-xl overflow-hidden relative group cursor-pointer ${batchSelectMode && isBatchSelected ? 'ring-2 ring-blue-500' : ''}`}
+                  >
+                    <img 
+                      src={img.thumbUrl || img.url} 
+                      alt={img.description || 'Image'} 
+                      className="w-full h-full object-cover transition transform group-hover:scale-105"
+                      loading="lazy"
+                    />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition" />
+                    {/* 批量选择模式：复选框 */}
+                    {batchSelectMode && (
+                      <div className={`absolute top-2 right-2 w-5 h-5 rounded-full border-2 flex items-center justify-center transition ${isBatchSelected ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white/80 border-slate-300'}`}>
+                        {isBatchSelected && <span className="text-[10px] font-bold">✓</span>}
+                      </div>
+                    )}
+                    {img?.isCollage === true && (
+                      <div className="absolute top-1 left-1 px-1.5 py-0.5 rounded bg-blue-600/85 text-white text-[10px]">
+                        拼图
+                      </div>
+                    )}
+                    {Array.isArray(img.tags) && img.tags.length > 0 && (
+                      <div className="absolute bottom-1 left-1 right-1 flex flex-wrap gap-0.5">
+                        {img.tags.slice(0, 3).map((t) => (
+                          <span key={t} className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] truncate max-w-full">
+                            {t}
+                          </span>
+                        ))}
+                        {img.tags.length > 3 && (
+                          <span className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">
+                            +{img.tags.length - 3}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
            </div>
            
            {/* Load More Trigger */}
@@ -1994,6 +2174,58 @@ const GalleryView = ({ onBack }) => {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批量改标签 Modal */}
+      {showBatchTagModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setShowBatchTagModal(false)} />
+          <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-200">
+            {/* Modal 标题区域 */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-base font-semibold text-gray-900">批量改标签</div>
+              <span className="text-xs text-gray-400">共 {batchSelectedIds.length} 张图片</span>
+            </div>
+            {/* 标签选择区域 */}
+            <div className="space-y-4">
+              <TagPicker
+                label="添加标签"
+                value={batchAddTags}
+                onChange={setBatchAddTags}
+                allTags={allTags}
+                placeholder="输入或选择，回车添加"
+                disabled={batchTagSaving}
+              />
+              <TagPicker
+                label="移除标签"
+                value={batchRemoveTags}
+                onChange={setBatchRemoveTags}
+                allTags={allTags}
+                placeholder="输入或选择，回车添加"
+                disabled={batchTagSaving}
+              />
+            </div>
+            {/* 操作按钮区域 */}
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                type="button"
+                onClick={() => setShowBatchTagModal(false)}
+                disabled={batchTagSaving}
+                className="h-9 px-4 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void onBatchSaveTags()}
+                disabled={batchTagSaving || (batchAddTags.length === 0 && batchRemoveTags.length === 0)}
+                className="h-9 px-5 text-sm bg-black text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+              >
+                {batchTagSaving ? '保存中...' : '确认'}
+              </button>
             </div>
           </div>
         </div>

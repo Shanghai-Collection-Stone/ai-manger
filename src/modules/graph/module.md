@@ -20,7 +20,7 @@ Graph控制器。
   - `planArticleTasks`: LLM规划文章蓝图列表/plan article blueprints
   - `generateArticlesAndImages`: 一次拉取图片池，内容生成与配图解析真正并发，合并回写/parallel content gen + image resolve from shared pool
   - `fetchArticleImagePool`: 按所有蓝图tag一次性拉取regular图片池/fetch article image pool by blueprint tags once
-  - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover
+  - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover（**拼图必须使用横图 isPortrait !== true**）
   - `generateToCanvasBySubAgent`: 子代理生成并逐篇写入/subagent canvas generation
   - `collectArticleDataBySubAgent`: 子代理采集数据/collect data by subagent
   - `planBlueprintsBySubAgent`: 子代理规划蓝图/plan blueprints by subagent
@@ -33,11 +33,14 @@ Graph控制器。
   - `evaluateArticleQuality`: 文章质量分层校验/evaluate article quality
   - `polishArticleMarkdown`: 文章自动润色/polish markdown
   - `buildFallbackStandaloneMarkdown`: 独立软文兜底/build standalone fallback markdown
+  - `createDynamicCollageFile`: 生成双图动态拼图（640x853，上下拼图，横图等比缩放，不裁切）/create dynamic collage file
+  - `pickMostDiversePair`: 在候选图中挑选差异度最高的一组拼图对（来源图必须为横图）/pick best diverse collage pair
 
 ### batch-task-graph.service.ts
 批量发布图服务。
 - **关键词**: batch-task, publishing, mcp, task-it, todo-summary, service
 - 发布封面渲染支持项目内自定义字体：默认读取 `public/fonts/cover-cjk.ttf`，并兼容 `dist/public/fonts/cover-cjk.ttf` 与 `web/public/fonts/cover-cjk.ttf`；也可通过环境变量 `COVER_FONT_PATH` 指定绝对/相对路径。若封面文案包含中文且字体文件不存在，则直接抛错（不再降级为豆腐块或随机回退）。
+- **拼图来源过滤**：动态拼图（发文/内容拼图）必须使用横图（isPortrait !== true），不允许竖图参与。
 
 ### graph.module.ts
 Graph模块定义。

@@ -58,7 +58,7 @@ renderer.code = function({ text, lang }) {
       const hintText = isImageGroup
         ? '图组生成后可选择下载，每组图片对应一篇文章。'
         : '先在 Canvas 看板确认与修改内容，再决定是否发布。';
-      return `<section class="my-3 rounded-xl border ${borderColor} ${bgColor} p-3">
+      return `<section class="my-3 rounded-xl border ${borderColor} ${bgColor} p-3 pb-4">
 <div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border ${tagBorderColor} ${tagTextColor} bg-white">${labelText}</div>
 <h4 class="mt-2 mb-1 text-sm font-semibold text-slate-800">${esc(lines.join(' | '))}</h4>
 ${topic ? `<p class="text-xs text-slate-600">${esc(topic)}</p>` : ''}
@@ -456,7 +456,7 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
 
     {/* Text content */}
       {(msg.content || msg.isStreaming) && (
-        <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-hidden">
+        <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-x-hidden">
           {msg.content ? (
             <div 
               className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words

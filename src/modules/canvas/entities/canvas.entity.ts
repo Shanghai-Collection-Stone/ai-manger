@@ -12,11 +12,12 @@ export type CanvasType = 'article' | 'image-group';
 /**
  * @description 图片组版式类型
  * - portrait-cover-2inner-collage: 1竖封面单图 + 2内页拼图
- * - collage-cover-2portrait-inner: 1横拼图封面 + 2竖内页单图
+ * - portrait-cover-5inner: 1竖封面 + 5内页（拼图+竖图混合）
+ * - collage-cover-5inner: 1横拼图封面 + 5竖内页单图
  */
 export type ImageGroupLayout =
-  | 'portrait-cover-2inner-collage'
-  | 'collage-cover-2portrait-inner';
+  | 'portrait-cover-5inner'
+  | 'collage-cover-5inner';
 
 /** @description 图片组内单张图片信息（含版式角色） */
 export interface CanvasGroupImage {
@@ -27,9 +28,11 @@ export interface CanvasGroupImage {
   isPortrait?: boolean;
   tags: string[];
   /** @description 该图在版式中的角色 */
-  role: 'cover' | 'inner-1' | 'inner-2';
-  /** @description 封面文字叠加文案（仅 role=cover 时有值，每组不同） */
+  role: 'cover' | 'inner-1' | 'inner-2' | 'inner-3' | 'inner-4' | 'inner-5';
+  /** @description 封面主标题文案（仅 role=cover 时有值） */
   text?: string;
+  /** @description 封面副标题文案（仅 role=cover 时有值） */
+  subtitle?: string;
 }
 
 /** @description canvas 图片组实体（一组对应一篇文章） */

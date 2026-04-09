@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+﻿import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { mkdirSync } from 'fs';
 import { promises as fs } from 'fs';
@@ -984,7 +984,6 @@ export class ArticleGraphService {
       read: (input: string) => Promise<{
         bitmap: { width: number; height: number };
         resize: (opts: { w: number; h: number }) => unknown;
-        crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
       }>;
       new (args: { width: number; height: number; color: number }): {
         composite: (img: unknown, x: number, y: number) => unknown;
@@ -994,113 +993,35 @@ export class ArticleGraphService {
     };
 
     const [imgA, imgB] = await Promise.all([JimpCtor.read(pathA), JimpCtor.read(pathB)]);
+
+    const topH = Math.floor(COLLAGE_HEIGHT / 2);
+    const bottomH = COLLAGE_HEIGHT - topH;
+
+    // 上图：等比缩到 topH 高度，不裁剪
+    const bitmapA = (imgA as unknown as { bitmap: { width: number; height: number } }).bitmap;
+    const iwA = Math.max(1, Number(bitmapA?.width ?? 1));
+    const ihA = Math.max(1, Number(bitmapA?.height ?? 1));
+    const drawWA = Math.max(1, Math.round(iwA * (topH / ihA)));
+    imgA.resize({ w: drawWA, h: topH });
+
+    // 下图：等比缩到 bottomH 高度，不裁剪
+    const bitmapB = (imgB as unknown as { bitmap: { width: number; height: number } }).bitmap;
+    const iwB = Math.max(1, Number(bitmapB?.width ?? 1));
+    const ihB = Math.max(1, Number(bitmapB?.height ?? 1));
+    const drawWB = Math.max(1, Math.round(iwB * (bottomH / ihB)));
+    imgB.resize({ w: drawWB, h: bottomH });
+
     const black =
       typeof JimpCtor.rgbaToInt === 'function'
         ? JimpCtor.rgbaToInt(0, 0, 0, 255)
         : 0x000000ff;
     const out = new JimpCtor({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, color: black });
 
-    /**
-     * 将图片缩放裁剪至整图尺寸（cover 填充），用于像素级双图混合。
-     * @keyword-en fit-to-collage cover-crop resize
-     */
-    const fitToCollage = (img: {
-      bitmap: { width: number; height: number };
-      resize: (opts: { w: number; h: number }) => unknown;
-      crop: (opts: { x: number; y: number; w: number; h: number }) => unknown;
-    }) => {
-      const iw = Math.max(1, Number(img.bitmap?.width ?? 1));
-      const ih = Math.max(1, Number(img.bitmap?.height ?? 1));
-      const scale = Math.max(COLLAGE_WIDTH / iw, COLLAGE_HEIGHT / ih);
-      const rw = Math.max(COLLAGE_WIDTH, Math.ceil(iw * scale));
-      const rh = Math.max(COLLAGE_HEIGHT, Math.ceil(ih * scale));
-      img.resize({ w: rw, h: rh });
-      const cx = Math.max(0, Math.floor((rw - COLLAGE_WIDTH) / 2));
-      const cy = Math.max(0, Math.floor((rh - COLLAGE_HEIGHT) / 2));
-      img.crop({ x: cx, y: cy, w: COLLAGE_WIDTH, h: COLLAGE_HEIGHT });
-    };
-
-    // 两张图都缩放到完整画布大小，imgA 作为底层铺满
-    fitToCollage(imgA);
-    fitToCollage(imgB);
-    out.composite(imgA, 0, 0);
-
-    const outAny = out as unknown as {
-      getPixelColor?: (x: number, y: number) => number;
-      setPixelColor?: (color: number, x: number, y: number) => void;
-      composite: (img: unknown, x: number, y: number) => unknown;
-    };
-    const intToRgba = (JimpCtor as unknown as { intToRGBA?: (value: number) => { r: number; g: number; b: number; a: number } }).intToRGBA;
-    if (
-      typeof outAny.getPixelColor === 'function' &&
-      typeof outAny.setPixelColor === 'function' &&
-      typeof intToRgba === 'function' &&
-      typeof JimpCtor.rgbaToInt === 'function'
-    ) {
-      const clamp8 = (v: number): number => Math.max(0, Math.min(255, v));
-      const smoothstep = (v: number): number => {
-        const x = Math.max(0, Math.min(1, v));
-        return x * x * (3 - 2 * x);
-      };
-      // 融合带: 约占总高 16%，仅用于中缝渐变过渡
-      const blendBand = Math.max(72, Math.floor(COLLAGE_HEIGHT * 0.16));
-      const topH = Math.floor(COLLAGE_HEIGHT / 2);
-      const startY = Math.max(0, topH - Math.floor(blendBand * 0.45));
-      const endY = Math.min(COLLAGE_HEIGHT - 1, topH + Math.ceil(blendBand * 0.55));
-      const span = Math.max(1, endY - startY);
-      // imgB 已按 fitToCollage 缩放裁剪至整图尺寸，可直接读取任意坐标像素
-      const imgBAny = imgB as unknown as { getPixelColor: (x: number, y: number) => number };
-      const imgAAny = imgA as unknown as { getPixelColor: (x: number, y: number) => number };
-      // Pass 1: 先明确上下拼图结构（上半固定用 A，下半固定用 B）
-      for (let y = 0; y < COLLAGE_HEIGHT; y++) {
-        for (let x = 0; x < COLLAGE_WIDTH; x++) {
-          const src = y < topH
-            ? intToRgba(imgAAny.getPixelColor(x, y))
-            : intToRgba(imgBAny.getPixelColor(x, y));
-          outAny.setPixelColor!(
-            JimpCtor.rgbaToInt(clamp8(src.r), clamp8(src.g), clamp8(src.b), 255),
-            x,
-            y,
-          );
-        }
-      }
-
-      // Pass 1.5: 渐变透明混合——过渡带内上层透明度平滑变化，下层图片隐约透出
-      for (let y = startY; y <= endY; y++) {
-        const rawT = (y - startY) / span;
-        const t = smoothstep(rawT);
-        // 上半带 (y < topH)：A 透明度从 1 降到 0，B 从 0 升到 1
-        // 下半带 (y >= topH)：A 透明度 0，B 透明度从 t 升到 1
-        for (let x = 0; x < COLLAGE_WIDTH; x++) {
-          const cA = intToRgba(imgAAny.getPixelColor(x, y));
-          const cB = intToRgba(imgBAny.getPixelColor(x, y));
-          let finalR: number, finalG: number, finalB: number, finalA: number;
-          if (y < topH) {
-            // 上半带：AB 混合，B 隐约透出，A 透明度渐降
-            const alphaA = clamp8(Math.round(255 * (1 - t)));
-            finalR = clamp8(Math.round((cA.r * alphaA + cB.r * (255 - alphaA)) / 255));
-            finalG = clamp8(Math.round((cA.g * alphaA + cB.g * (255 - alphaA)) / 255));
-            finalB = clamp8(Math.round((cA.b * alphaA + cB.b * (255 - alphaA)) / 255));
-            finalA = 255;
-          } else {
-            // 下半带：B 为主导，A 继续淡出
-            const alphaB = clamp8(Math.round(255 * t));
-            finalR = clamp8(Math.round((cB.r * alphaB + cA.r * (255 - alphaB)) / 255));
-            finalG = clamp8(Math.round((cB.g * alphaB + cA.g * (255 - alphaB)) / 255));
-            finalB = clamp8(Math.round((cB.b * alphaB + cA.b * (255 - alphaB)) / 255));
-            finalA = 255;
-          }
-          outAny.setPixelColor!(JimpCtor.rgbaToInt(finalR, finalG, finalB, finalA), x, y);
-        }
-      }
-
-      // 不叠加额外风格化效果，保持”上下双图 + 中缝渐变”纯拼图语义。
-    } else {
-      // Fallback: 像素级混合不可用时，使用简单的上下分区合成
-      const topH = Math.floor(COLLAGE_HEIGHT / 2);
-      out.composite(imgA, 0, 0);
-      out.composite(imgB, 0, topH);
-    }
+    // 水平居中合成：超出画布宽度时两侧自然溢出，不足时两侧留黑边
+    const xA = Math.floor((COLLAGE_WIDTH - drawWA) / 2);
+    const xB = Math.floor((COLLAGE_WIDTH - drawWB) / 2);
+    out.composite(imgA, xA, 0);
+    out.composite(imgB, xB, topH);
 
     const uploadsDir = join(process.cwd(), 'public', 'uploads');
     mkdirSync(uploadsDir, { recursive: true });
@@ -2130,14 +2051,15 @@ export class ArticleGraphService {
     );
 
     // 优先使用批次预分配来源（已全局去重），否则从 pool 独立随机选取
+    // 拼图必须使用横图（isPortrait !== true），不允许竖图参与拼图
     const rawSources =
       input.preAssignedSources && input.preAssignedSources.length > 0
         ? input.preAssignedSources.filter(
-            (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
+            (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x) && x?.isPortrait !== true,
           )
         : this.shuffleArray(
             pickedImages.filter(
-              (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x),
+              (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x) && x?.isPortrait !== true,
             ),
           ).slice(0, Math.max(6, targetImageCount * 3));
     this.logger.debug(

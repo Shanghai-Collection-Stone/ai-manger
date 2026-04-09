@@ -952,7 +952,7 @@ export class ChatMainService {
       '3. 创建图片组Canvas - 使用 xhs_create_image_group_canvas 根据文章主题快速生成配图集合',
       '   - 图片组Canvas会异步从图库中匹配图片，立即返回"生成中"状态',
       '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
-      '   - 禁止多次调用 xhs_create_image_group_canvas；将所有文章合并到单次调用的 articles 数组，生成一个 Canvas',
+      '   - 严格禁止多次调用 xhs_create_image_group_canvas（这是高频错误！）**核心原则**："生成 N 组图片"=1个Canvas含N个imageGroup=articles数组传N个元素，**不是**创建N个Canvas。例如用户要3组图组，应该一次调用传入 articles:[{title:"第1组",tags}, {title:"第2组",tags}, {title:"第3组",tags}]，groupCount:3，创建出1个Canvas（ID=xxx），articleCount=3，而不是创建3个Canvas',
       '4. 结合图库图片 - 为文章配图',
       '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi），再用于内容链路。',
       '【canvas-it 展示规则】每次创建 Canvas 后，工具返回 canvas-it 代码块，必须原样输出给用户：',
@@ -1276,7 +1276,7 @@ export class ChatMainService {
           '  - topic_orchestrate 只调用一次，禁止重复',
           '  - 工具报错时原文返回用户，不重试',
           '  - ARTICLE_DRAFT_INVALID → 告知"生成未通过质量校验"，建议调整话题',
-          '工具成功后直接返回结果，不再调用其他工具。',
+          '【重要】工具调用成功后，必须将工具返回结果中的 canvas-it 代码块原样输出给上层，让前端立即渲染 Canvas 入口卡片。不再调用其他工具。',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -1315,8 +1315,8 @@ export class ChatMainService {
           envStr,
           '你是图库与图片素材子代理，同时负责创建图片组 Canvas（image-group 类型）。',
           '【图组Canvas创建步骤】用户要求"图组Canvas"或"image-group"或"图片组"时：',
-          '  1. 根据用户话题和数量要求，先自行拟定所有文章的标题和标签列表（无需调用其他工具）',
-          '  2. 禁止多次调用 xhs_create_image_group_canvas；将所有文章合并成一次调用：传入 groupCount（总组数）+ articles 数组（每组对应一篇，含 title/tags）',
+          '  1. 根据用户话题和数量要求，先自行拟定所有文章的标题和标签列表（无需调用其他工具）；除非用户明确指定数量，否则默认生成 1 个 Canvas 包含 6-8 个 imageGroup',
+          '  2. 严格禁止多次调用 xhs_create_image_group_canvas（这是高频错误！）**核心原则**："生成 N 组图片"=1个Canvas含N个imageGroup=articles数组传N个元素，**不是**创建N个Canvas。例如用户要3组图组，应该一次调用传入 articles:[{title:"第1组",tags}, {title:"第2组",tags}, {title:"第3组",tags}]，groupCount:3，创建出1个Canvas（ID=xxx），articleCount=3，而不是创建3个Canvas',
           '  3. 把工具结果里的 canvas-it 代码块原样返回，不要再做其他操作',
           '【图库工具】',
           '- gallery_search_images：向量+标签检索（优先使用）',

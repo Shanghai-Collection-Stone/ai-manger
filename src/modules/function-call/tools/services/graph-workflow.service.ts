@@ -291,7 +291,17 @@ export class GraphWorkflowFunctionCallService {
             needFields,
           };
 
-          return JSON.stringify(base);
+          // 拼接 canvas-it 代码块（与 xhs_create_image_group_canvas 保持一致），让子代理原样透传给上层，前端立即渲染看板入口
+          const cid = typeof canvasId === 'number' ? canvasId : Number(canvasId);
+          const canvasBlock =
+            Number.isFinite(cid)
+              ? `\`\`\`canvas-it\n${JSON.stringify({ canvasId: cid, status: base.status ?? 'generating', type: 'article', topic: String(topic ?? ''), articleCount: base.articleCount ?? 0 })}\n\`\`\``
+              : '';
+          return [
+            JSON.stringify(base),
+            canvasBlock ? `请将以下代码块原样输出给用户（**必须输出，不可省略**）：` : '',
+            canvasBlock,
+          ].filter(Boolean).join('\n');
         })();
         this.orchestrateInFlight.set(dedupKey, runPromise);
         try {
@@ -305,7 +315,7 @@ export class GraphWorkflowFunctionCallService {
       {
         name: 'topic_orchestrate',
         description:
-          'Topic Orchestration Tool. Generates up to 5 sample articles with images in Canvas based on user requirements and provided data.',
+          'Topic Orchestration Tool. Generates 6-8 articles with images in Canvas based on user requirements. Default count is 6, max 8.',
         schema: z.object({
           userId: z.string().optional().describe('Target user id (injected from session scope if omitted)'),
           platform: z.string().optional().describe('Publishing platform label'),
@@ -321,7 +331,7 @@ export class GraphWorkflowFunctionCallService {
           count: z
             .number()
             .optional()
-            .describe('Article count (max 5, default 3)'),
+            .describe('Article count (default 6, max 8)'),
           galleryUserId: z
             .string()
             .optional()

@@ -161,11 +161,11 @@ export class XhsToolsService {
       {
         name: 'xhs_create_image_group_canvas',
         description:
-          '创建图片组 Canvas（image-group 类型）。根据文章列表（标题+标签）从图库中匹配图片，自动生成固定布局的图片组。立即返回生成中状态，后台异步完成。用户要“生成 N 组图片”时，传入 groupCount，同时在 articles 里写入每组的标题和标签，让图片匹配更准确。',
+          '创建图片组 Canvas（image-group 类型，一次调用生成一个 Canvas）。根据文章列表（标题+标签）从图库中匹配图片，自动生成固定布局的图片组。**重要**：一个 Canvas 的 articles 数组可以包含多个文章（对应多个 imageGroup），**"生成 N 组图片"是指一个 Canvas 包含 N 个 imageGroup，不是创建 N 个 Canvas**。立即返回生成中状态，后台异步完成。',
         schema: z.object({
           topic: z.string().optional().describe('Canvas 主题，可选'),
           groupCount: z.number().int().min(1).max(20).optional()
-            .describe('要生成的图片组数量（默认等于 articles 数量）。若指定此值且大于 articles 数量，后端自动补充展位文章'),
+            .describe('图片组数量（作为 articles 数组的目标长度参考）'),
           articles: z
             .array(
               z.object({
@@ -173,7 +173,7 @@ export class XhsToolsService {
                 tags: z.array(z.string()).optional().describe('标签列表，用于图片匹配（标签越准确匹配越好）'),
               }),
             )
-            .describe('文章列表，每篇对应一个图片组。建议尽量填写 title 和 tags'),
+            .describe('文章列表，每篇对应一个 imageGroup。注意："生成 3 组图片"是指在 articles 数组里放 3 个元素，创建 1 个 Canvas（包含 3 个 imageGroup），而不是创建 3 个 Canvas'),
         }),
       },
     );

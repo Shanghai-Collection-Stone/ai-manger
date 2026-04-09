@@ -7,9 +7,14 @@
 
 文件路径: `src/modules/canvas`
 
-## 固定版式
-- **portrait-cover-2inner-collage**: 1竖封面单图 + 2内页拼图
-- **collage-cover-2portrait-inner**: 1横拼图封面 + 2竖内页单图
+## 固定版式（每组 6 张：1 封面 + 5 内页）
+- **portrait-cover-5inner**: 1竖封面单图 + 5内页（拼图/竖图交替）
+- **collage-cover-5inner**: 1横拼图封面 + 5竖内页单图
+
+## 封面文案风格
+- LLM 生成主标题（6-16汉字）+ 副标题（10-24汉字）
+- 无黑色背景框，白色文字 + 黑色描边（paint-order:stroke）
+- 主标题 ~41% 高度，副标题 ~54% 高度
 
 ## 功能描述及关键词
 
@@ -19,7 +24,7 @@ Canvas控制器。
 - `POST /canvas/image-group` — 创建图片组 Canvas（异步，立即返回 generating）
 - `GET /canvas/:id` — 获取单个 Canvas
 - `GET /canvas` — 列表 Canvas
-- `POST /canvas/:id/articles` — 追加文章
+- `POST /canvas/:id/articles` — 追加文章 
 - `PATCH /canvas/:id/status` — 更新状态
 - `PATCH /canvas/:id/articles/:articleId` — 更新文章
 - **关键词**: canvas, articles, image-group, outline, style, content-json, image-ids, status, mongo, controller
@@ -27,7 +32,7 @@ Canvas控制器。
 ### canvas.service.ts
 Canvas服务。
 - `create` — 创建图文 Canvas
-- `createImageGroupCanvas` — 创建图片组 Canvas（异步生成）
+- `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）
 - `runImageGroupGeneration` — 后台异步生成图片组并回写
 - `updateImageGroups` — 回写图片组到 Canvas
 - `get` / `list` / `addArticles` / `updateStatus` / `updateArticle` — 常用crud
@@ -36,17 +41,24 @@ Canvas服务。
 ### canvas-image-group.service.ts
 图片组生成服务。
 - `generateImageGroups` — 根据文章 tag 批量匹配图库配图，按版式分配图片组
+- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]）
 - `fetchImagePool` — tag匹配+随机补充图片池
-- `pickImage` — 从池中按类型选未用图片
-- `toGroupImage` — 图库实体转图组图片
-- **关键词**: image-group, layout, tag-match, gallery, collage
+- `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
+- `pickPortrait` — 从池中选竖图（优先未使用，其次降级复用）
+- `pickAndMakeCollage` — 选 2 张横图动态合成拼图（上下拼，640x853，等比缩放不裁切）
+- `createDynamicCollageFile` — 动态合成双图拼图（使用 sharp）
+- `burnCoverText` — 使用 sharp+SVG 将主副标题烧录到封面图（无背景框，白色描边文字）
+- `loadCoverFontFaceCss` — 加载封面字体 base64 缓存（支持 public/dist/web 三条路径）
+- `ensureFontconfigSetup` — 写入 /tmp/cover-fonts 并设置 FONTCONFIG_FILE，解决 Alpine/Linux 无字体问题
+- `toGroupImage` — 图库实体转图组图片（含封面主/副标题）
+- **关键词**: image-group, layout, tag-match, gallery, collage, font, linux-compat
 
 ### canvas.entity.ts
 Canvas实体，含新类型定义。
 - `CanvasType` — 'article' | 'image-group'
-- `ImageGroupLayout` — 两种固定版式枚举
+- `ImageGroupLayout` — 两种固定版式枚举（portrait-cover-5inner / collage-cover-5inner）
 - `CanvasImageGroup` — 单个图片组实体
-- `CanvasGroupImage` — 图组内单张图片（含版式角色）
+- `CanvasGroupImage` — 图组内单张图片（含版式角色 cover/inner-1~5、主副标题 text/subtitle）
 - `CanvasImageGroupCreateInput` — 创建图片组入参
 - **关键词**: entity
 

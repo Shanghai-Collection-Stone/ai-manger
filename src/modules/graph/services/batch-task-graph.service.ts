@@ -1960,7 +1960,8 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         };
 
         const pickedBase = takeUnique(basePool);
-        const rawSources = pickedBase.filter((x) => x?.isCollage !== true).slice(0, 2);
+        // 拼图必须使用横图（isPortrait !== true），不允许竖图参与拼图
+        const rawSources = pickedBase.filter((x) => x?.isCollage !== true && x?.isPortrait !== true).slice(0, 2);
 
         let publishCollage: GalleryImageEntity | null = null;
         if (!wantsHistoricalCollage && rawSources.length === 2) {
