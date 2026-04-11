@@ -111,6 +111,23 @@ jobs:
           echo "Runner base dir: $BASE_DIR"
           echo "Deploy path: $DP"
 
+      - name: Normalize deploy path permissions
+        run: |
+          DP="$DEPLOY_PATH"
+          mkdir -p "$DP"
+
+          if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+            sudo -n chown -R "$(id -un):$(id -gn)" "$DP" || true
+          fi
+
+          if [ ! -w "$DP" ]; then
+            echo "Deploy path is not writable: $DP"
+            echo "Please grant write permission to runner user or enable passwordless sudo."
+            exit 1
+          fi
+
+          chmod -R u+rwX "$DP" || true
+
       - name: Sync source code to deploy path
         run: |
           DP="$DEPLOY_PATH"
@@ -130,9 +147,9 @@ jobs:
             esac
 
             if command -v rsync >/dev/null 2>&1; then
-              rsync -a "$GITHUB_WORKSPACE"/ "$DP"/
+              rsync -a --exclude '.git/' "$GITHUB_WORKSPACE"/ "$DP"/
             else
-              cp -a "$GITHUB_WORKSPACE"/. "$DP"/
+              tar --exclude='.git' -C "$GITHUB_WORKSPACE" -cf - . | tar -xf - -C "$DP"
             fi
             echo "Source code synced: $DP"
           fi
@@ -204,27 +221,45 @@ jobs:
           export APP_PORT
           export APP_ROOT="$DP"
 
-          if command -v docker >/dev/null 2>&1; then
-            if [ -f "$DP/docker-compose.yml" ]; then
-              if docker compose version >/dev/null 2>&1; then
-                docker compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
-              elif command -v docker-compose >/dev/null 2>&1; then
-                docker-compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
-              else
-                echo "docker compose not available"
-                exit 1
-              fi
-            else
-              echo "docker-compose.yml missing in deploy path"
-              exit 1
-            fi
-          else
+          if ! command -v docker >/dev/null 2>&1; then
             echo "docker not found"
             exit 1
           fi
 
+          if docker info >/dev/null 2>&1; then
+            DOCKER_BIN=(docker)
+          elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+            DOCKER_BIN=(sudo -n docker)
+          else
+            echo "No permission to access Docker daemon socket."
+            echo "Current user: $(id -un)"
+            echo "Current groups: $(id -Gn)"
+            echo "Fix option A: add runner user to docker group and restart runner service."
+            echo "Fix option B: allow passwordless sudo for docker commands."
+            exit 1
+          fi
+
+          if [ ! -f "$DP/docker-compose.yml" ]; then
+            echo "docker-compose.yml missing in deploy path"
+            exit 1
+          fi
+
+          if "${DOCKER_BIN[@]}" compose version >/dev/null 2>&1; then
+            "${DOCKER_BIN[@]}" compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
+          elif command -v docker-compose >/dev/null 2>&1; then
+            if [ "${DOCKER_BIN[0]}" = "sudo" ]; then
+              COMPOSE_BIN=(sudo -n docker-compose)
+            else
+              COMPOSE_BIN=(docker-compose)
+            fi
+            "${COMPOSE_BIN[@]}" -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
+          else
+            echo "docker compose not available"
+            exit 1
+          fi
+
           echo "=== Container logs ==="
-          docker logs ai_mvp_app 2>&1 | tail -80 || true
+          "${DOCKER_BIN[@]}" logs ai_mvp_app 2>&1 | tail -80 || true
 
       - name: Cleanup local artifact
         run: rm -rf ./artifact
