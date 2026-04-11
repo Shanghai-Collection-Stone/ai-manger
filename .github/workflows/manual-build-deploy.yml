@@ -96,12 +96,7 @@ jobs:
       - name: Resolve deploy path
         run: |
           INPUT_DP="${{ inputs.deploy_path }}"
-
-          if [ -n "${RUNNER_WORKSPACE:-}" ]; then
-            BASE_DIR="$RUNNER_WORKSPACE"
-          else
-            BASE_DIR="$(cd "$GITHUB_WORKSPACE/../.." && pwd -P)"
-          fi
+          BASE_DIR="$(cd "$GITHUB_WORKSPACE/../.." && pwd -P)"
 
           case "$INPUT_DP" in
             /*) DP="$INPUT_DP" ;;
@@ -124,22 +119,26 @@ jobs:
           mkdir -p "$DP"
           DP_REAL="$(cd "$DP" && pwd -P)"
 
-          case "$DP_REAL" in
-            "$WS_REAL"/*)
-              echo "Deploy path cannot be inside GITHUB_WORKSPACE: $DP_REAL"
-              exit 1
-              ;;
-          esac
-
-          if command -v rsync >/dev/null 2>&1; then
-            rsync -a "$GITHUB_WORKSPACE"/ "$DP"/
+          if [ "$DP_REAL" = "$WS_REAL" ]; then
+            echo "Deploy path equals checkout workspace, skip source sync."
           else
-            cp -a "$GITHUB_WORKSPACE"/. "$DP"/
+            case "$DP_REAL" in
+              "$WS_REAL"/*)
+                echo "Deploy path cannot be inside GITHUB_WORKSPACE: $DP_REAL"
+                exit 1
+                ;;
+            esac
+
+            if command -v rsync >/dev/null 2>&1; then
+              rsync -a "$GITHUB_WORKSPACE"/ "$DP"/
+            else
+              cp -a "$GITHUB_WORKSPACE"/. "$DP"/
+            fi
+            echo "Source code synced: $DP"
           fi
 
           echo "$GITHUB_SHA" > "$DP/.deploy-commit"
 
-          echo "Source code synced: $DP"
           echo "Deploy commit: $GITHUB_SHA"
 
       - name: Prepare target directory
