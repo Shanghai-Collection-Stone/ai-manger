@@ -1,6 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import {
   AgentRunInput,
   AgentConfig,
@@ -49,6 +51,7 @@ type InteropZodObject =
  */
 @Injectable()
 export class AgentService {
+  private readonly logger = new Logger(AgentService.name);
   private readonly checkpointer: MongoDBSaver;
 
   constructor(
@@ -185,6 +188,1089 @@ export class AgentService {
       throw new Error('AI_BASE_URL_NOT_CONFIGURED');
 
     return { providerCode, model, apiKey, baseUrl };
+  }
+
+  /**
+   * @description 解析默认生图运行时配置。
+   * @keyword-en resolve default image runtime config
+   */
+  private async resolveDefaultImageRuntime(): Promise<{
+    providerCode: string;
+    model: string;
+    apiKey: string;
+    baseUrl?: string;
+  }> {
+    const runtime = await this.adminService.getDefaultImageProviderRuntime();
+    const providerCode = String(runtime?.providerCode ?? '').trim();
+    const model = String(runtime?.model ?? '').trim();
+    const apiKey = String(runtime?.apiKey ?? '').trim();
+    const baseUrl = String(runtime?.baseUrl ?? '').trim() || undefined;
+
+    if (!providerCode) throw new Error('IMAGE_PROVIDER_RUNTIME_NOT_CONFIGURED');
+    if (!model) throw new Error('IMAGE_MODEL_NOT_CONFIGURED');
+    if (!apiKey) throw new Error('IMAGE_API_KEY_NOT_CONFIGURED');
+
+    return { providerCode, model, apiKey, baseUrl };
+  }
+
+  /**
+   * @description 解析可用的默认生图运行时；缺失关键配置时返回 null。
+   * @returns {Promise<{ providerCode: string; model: string; apiKey: string; baseUrl?: string } | null>} 运行时或 null。
+   * @keyword-en resolve available default image runtime
+   */
+  private async resolveAvailableDefaultImageRuntime(): Promise<{
+    providerCode: string;
+    model: string;
+    apiKey: string;
+    baseUrl?: string;
+  } | null> {
+    const runtime = await this.adminService.getDefaultImageProviderRuntime();
+    const providerCode = String(runtime?.providerCode ?? '').trim();
+    const model = String(runtime?.model ?? '').trim();
+    const apiKey = String(runtime?.apiKey ?? '').trim();
+    const baseUrl = String(runtime?.baseUrl ?? '').trim() || undefined;
+    if (!providerCode || !model || !apiKey) return null;
+    return { providerCode, model, apiKey, baseUrl };
+  }
+
+  /**
+   * @description 根据 mimeType 解析图片扩展名。
+   * @param {string | undefined} mimeType - 媒体类型。
+   * @returns {string} 扩展名。
+   * @keyword-en resolve image extension from mime type
+   */
+  private resolveImageExtFromMimeType(mimeType?: string): string {
+    const mt = String(mimeType ?? '').toLowerCase();
+    if (mt.includes('png')) return '.png';
+    if (mt.includes('webp')) return '.webp';
+    if (mt.includes('gif')) return '.gif';
+    if (mt.includes('bmp')) return '.bmp';
+    if (mt.includes('jpg') || mt.includes('jpeg')) return '.jpg';
+    return '.png';
+  }
+
+  /**
+   * @description 根据图片路径/URL推断 mimeType。
+   * @param {string} fileLikePath - 路径或URL。
+   * @returns {string} mimeType。
+   * @keyword-en resolve image mime type by path
+   */
+  private resolveImageMimeTypeByPath(fileLikePath: string): string {
+    const target = String(fileLikePath ?? '').trim();
+    const lower = target.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    return 'image/png';
+  }
+
+  /**
+   * @description 读取运行时图片编辑输入，返回二进制与mime信息。
+   * @param {string} imageInput - 本地路径或URL。
+   * @returns {Promise<{ buffer: Buffer; mimeType: string; fileName: string }>} 输入图片信息。
+   * @keyword-en load runtime edit image input
+   */
+  private async loadRuntimeEditImageInput(imageInput: string): Promise<{
+    buffer: Buffer;
+    mimeType: string;
+    fileName: string;
+  }> {
+    const source = String(imageInput ?? '').trim();
+    if (!source) throw new Error('IMAGE_EDIT_BASE_IMAGE_REQUIRED');
+
+    if (/^https?:\/\//i.test(source)) {
+      const response = await fetch(source);
+      if (!response.ok) {
+        throw new Error(`IMAGE_EDIT_BASE_IMAGE_DOWNLOAD_FAILED:${response.status}`);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      const headerMime = String(response.headers.get('content-type') ?? '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      const urlObj = (() => {
+        try {
+          return new URL(source);
+        } catch {
+          return null;
+        }
+      })();
+      const pathname = String(urlObj?.pathname ?? '').trim();
+      const fallbackName = `runtime-edit${this.resolveImageExtFromMimeType(headerMime || this.resolveImageMimeTypeByPath(pathname))}`;
+      const fileName = path.basename(pathname || fallbackName) || fallbackName;
+      return {
+        buffer: Buffer.from(arrayBuffer),
+        mimeType:
+          headerMime || this.resolveImageMimeTypeByPath(pathname || fileName),
+        fileName,
+      };
+    }
+
+    const absPath = path.isAbsolute(source)
+      ? source
+      : path.resolve(process.cwd(), source);
+    if (!fs.existsSync(absPath)) {
+      throw new Error(`IMAGE_EDIT_BASE_IMAGE_NOT_FOUND:${absPath}`);
+    }
+    const buffer = await readFile(absPath);
+    return {
+      buffer,
+      mimeType: this.resolveImageMimeTypeByPath(absPath),
+      fileName: path.basename(absPath),
+    };
+  }
+
+  /**
+   * @description 将二进制图片保存到本地 uploads 目录并返回静态路径。
+   * @param {Buffer} buffer - 图片二进制。
+   * @param {string | undefined} mimeType - 图片 mimeType。
+   * @returns {Promise<string>} 静态访问路径。
+   * @keyword-en persist generated image buffer to local upload
+   */
+  private async saveGeneratedImageBuffer(
+    buffer: Buffer,
+    mimeType?: string,
+  ): Promise<string> {
+    const ext = this.resolveImageExtFromMimeType(mimeType);
+    const dir = path.join(process.cwd(), 'public', 'uploads', 'ai-generated');
+    await mkdir(dir, { recursive: true });
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+    const absPath = path.join(dir, fileName);
+    await writeFile(absPath, buffer);
+    return `/static/uploads/ai-generated/${fileName}`;
+  }
+
+  /**
+   * @description 保存 base64 图片并返回静态路径。
+   * @param {string} base64 - base64 字符串。
+   * @param {string | undefined} mimeType - 图片 mimeType。
+   * @returns {Promise<string>} 静态路径。
+   * @keyword-en persist base64 image to local upload
+   */
+  private async saveGeneratedImageBase64(
+    base64: string,
+    mimeType?: string,
+  ): Promise<string> {
+    const clean = String(base64 ?? '')
+      .replace(/^data:[^;]+;base64,/i, '')
+      .replace(/\s+/g, '');
+    if (!clean) throw new Error('IMAGE_BASE64_EMPTY');
+    const buf = Buffer.from(clean, 'base64');
+    if (!buf || buf.length === 0) throw new Error('IMAGE_BASE64_INVALID');
+    return this.saveGeneratedImageBuffer(buf, mimeType);
+  }
+
+  /**
+   * @description 下载远端图片到本地并返回静态路径。
+   * @param {string} url - 图片 URL。
+   * @returns {Promise<string>} 静态路径。
+   * @keyword-en download remote generated image
+   */
+  private async downloadGeneratedImage(url: string): Promise<string> {
+    const target = String(url ?? '').trim();
+    if (!target) throw new Error('IMAGE_URL_EMPTY');
+    const response = await fetch(target);
+    if (!response.ok) {
+      throw new Error(`IMAGE_DOWNLOAD_FAILED:${response.status}`);
+    }
+    const mimeType = response.headers.get('content-type') ?? undefined;
+    const arrayBuffer = await response.arrayBuffer();
+    return this.saveGeneratedImageBuffer(Buffer.from(arrayBuffer), mimeType);
+  }
+
+  /**
+   * @description 使用指定默认生图运行时发送提示词并返回本地图片路径。
+   * @param {{ providerCode: string; model: string; apiKey: string; baseUrl?: string }} runtime - 生图运行时。
+    * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
+   * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
+   * @keyword-en generate image by configured provider runtime
+   */
+  private async generateImageByRuntime(
+    runtime: {
+      providerCode: string;
+      model: string;
+      apiKey: string;
+      baseUrl?: string;
+    },
+    input: {
+      prompt: string;
+      size?: string;
+      baseImagePath?: string;
+      baseImageCandidates?: string[];
+    },
+  ): Promise<{
+    providerCode: string;
+    model: string;
+    imagePath: string;
+  }> {
+    const prompt = String(input.prompt ?? '').trim();
+    if (!prompt) throw new Error('IMAGE_PROMPT_REQUIRED');
+    const hasRuntimeEditInput =
+      String(input.baseImagePath ?? '').trim().length > 0 ||
+      (Array.isArray(input.baseImageCandidates) &&
+        input.baseImageCandidates.some((x) => String(x ?? '').trim().length > 0));
+    const runtimeBaseImage = hasRuntimeEditInput
+      ? this.resolveMeituEditableBaseImage({
+          baseImagePath: input.baseImagePath,
+          baseImageCandidates: input.baseImageCandidates,
+        })
+      : null;
+    const runtimeEditImage = runtimeBaseImage
+      ? await this.loadRuntimeEditImageInput(runtimeBaseImage)
+      : null;
+
+    const provider = runtime.providerCode.toLowerCase();
+
+    if (provider === 'gemini') {
+      const endpointBase = runtime.baseUrl?.trim() || 'https://generativelanguage.googleapis.com';
+      const endpoint = `${endpointBase.replace(/\/$/, '')}/v1beta/models/${encodeURIComponent(runtime.model)}:generateContent?key=${encodeURIComponent(runtime.apiKey)}`;
+      const parts: Array<Record<string, unknown>> = runtimeEditImage
+        ? [
+            {
+              inlineData: {
+                mimeType: runtimeEditImage.mimeType,
+                data: runtimeEditImage.buffer.toString('base64'),
+              },
+            },
+            { text: prompt },
+          ]
+        : [{ text: prompt }];
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
+          },
+        }),
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        const requestType = runtimeEditImage ? 'EDIT' : 'REQUEST';
+        throw new Error(
+          `IMAGE_GEMINI_${requestType}_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+        );
+      }
+      const json = (await response.json()) as Record<string, unknown>;
+      const candidates = Array.isArray(json['candidates'])
+        ? (json['candidates'] as unknown[])
+        : [];
+      for (const candidate of candidates) {
+        const content =
+          candidate && typeof candidate === 'object'
+            ? (candidate as Record<string, unknown>)['content']
+            : undefined;
+        const parts =
+          content &&
+          typeof content === 'object' &&
+          Array.isArray((content as Record<string, unknown>)['parts'])
+            ? ((content as Record<string, unknown>)['parts'] as unknown[])
+            : [];
+        for (const part of parts) {
+          if (!part || typeof part !== 'object') continue;
+          const rec = part as Record<string, unknown>;
+          const inlineData =
+            rec['inlineData'] && typeof rec['inlineData'] === 'object'
+              ? (rec['inlineData'] as Record<string, unknown>)
+              : rec['inline_data'] && typeof rec['inline_data'] === 'object'
+                ? (rec['inline_data'] as Record<string, unknown>)
+                : undefined;
+          const data = inlineData?.['data'];
+          if (typeof data !== 'string' || data.trim().length === 0) continue;
+          const mimeType =
+            typeof inlineData?.['mimeType'] === 'string'
+              ? (inlineData['mimeType'] as string)
+              : typeof inlineData?.['mime_type'] === 'string'
+                ? (inlineData['mime_type'] as string)
+                : 'image/png';
+          const imagePath = await this.saveGeneratedImageBase64(data, mimeType);
+          return {
+            providerCode: runtime.providerCode,
+            model: runtime.model,
+            imagePath,
+          };
+        }
+      }
+      throw new Error('IMAGE_GEMINI_RESULT_EMPTY');
+    }
+
+    if (provider === 'doubao' || provider === 'volcengine' || provider === 'ark') {
+      const endpointBase = runtime.baseUrl?.trim() || 'https://ark.cn-beijing.volces.com/api/v3';
+      const normalizedSize =
+        typeof input.size === 'string' && input.size.trim().length > 0
+          ? input.size.trim()
+          : '1024x1024';
+      let response: Response;
+      if (runtimeEditImage) {
+        const endpoint = `${endpointBase.replace(/\/$/, '')}/images/edits`;
+        const formData = new FormData();
+        formData.append('model', runtime.model);
+        formData.append('prompt', prompt);
+        formData.append('size', normalizedSize);
+        formData.append('response_format', 'b64_json');
+        const imageBytes = Uint8Array.from(runtimeEditImage.buffer);
+        formData.append(
+          'image',
+          new Blob([imageBytes], {
+            type: runtimeEditImage.mimeType || 'image/png',
+          }) as any,
+          runtimeEditImage.fileName || 'runtime-edit-input.png',
+        );
+
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${runtime.apiKey}`,
+          },
+          body: formData,
+        });
+      } else {
+        const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${runtime.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: runtime.model,
+            prompt,
+            size: normalizedSize,
+            response_format: 'b64_json',
+          }),
+        });
+      }
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        const requestType = runtimeEditImage ? 'EDIT' : 'REQUEST';
+        throw new Error(
+          `IMAGE_DOUBAO_${requestType}_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+        );
+      }
+      const json = (await response.json()) as Record<string, unknown>;
+      const dataArr = Array.isArray(json['data'])
+        ? (json['data'] as unknown[])
+        : [];
+      const first =
+        dataArr.length > 0 && dataArr[0] && typeof dataArr[0] === 'object'
+          ? (dataArr[0] as Record<string, unknown>)
+          : undefined;
+      if (typeof first?.['b64_json'] === 'string') {
+        const imagePath = await this.saveGeneratedImageBase64(
+          first['b64_json'] as string,
+          typeof first['mime_type'] === 'string'
+            ? (first['mime_type'] as string)
+            : 'image/png',
+        );
+        return {
+          providerCode: runtime.providerCode,
+          model: runtime.model,
+          imagePath,
+        };
+      }
+      if (typeof first?.['url'] === 'string') {
+        const imagePath = await this.downloadGeneratedImage(first['url'] as string);
+        return {
+          providerCode: runtime.providerCode,
+          model: runtime.model,
+          imagePath,
+        };
+      }
+      throw new Error('IMAGE_DOUBAO_RESULT_EMPTY');
+    }
+
+    throw new Error(`IMAGE_PROVIDER_NOT_SUPPORTED:${runtime.providerCode}`);
+  }
+
+  /**
+   * @description 为 meitu image-edit 构建封面编辑提示词，显式注入标题、类型与小红书风格约束。
+   * @param {{ prompt: string; size?: string }} input - 编辑上下文。
+   * @returns {string} 增强后的编辑提示词。
+   * @keyword-en build meitu image edit prompt
+   */
+  private buildMeituEditPrompt(input: {
+    prompt: string;
+    size?: string;
+  }): string {
+    const basePrompt = String(input.prompt ?? '').replace(/\s+/g, ' ').trim();
+    const size = String(input.size ?? '').trim();
+
+    return [
+      basePrompt,
+      '任务:基于提供底图做二次编辑，输出小红书风格封面图',
+      '要求:保留底图主体与核心元素，优化构图层次、视觉焦点与画面氛围',
+      '文案呈现:请将主标题与副标题以清晰可读的浮动文字排版展示在画面中，主标题更突出，避免被人物或背景遮挡',
+      '装饰元素:可加入动画感物件与贴纸元素（如光斑、彩带、箭头、气泡、星芒）提升封面活力与点击吸引力',
+      '风格:清晰明快、生活方式感、平台封面质感、适合移动端浏览',
+      size && /^\d{2,5}x\d{2,5}$/i.test(size)
+        ? `尺寸:竖版封面 ${size}`
+        : '尺寸:竖版封面',
+    ]
+      .filter((x) => x.length > 0)
+      .join('；');
+  }
+
+  /**
+   * @description 将 WxH 尺寸映射为 meitu image-edit ratio 参数。
+   * @param {string | undefined} size - 尺寸（如 640x853）。
+   * @returns {string | undefined} ratio（如 3:4）。
+   * @keyword-en resolve meitu ratio by size
+   */
+  private resolveMeituRatioBySize(size?: string): string | undefined {
+    const s = String(size ?? '').trim();
+    if (!/^\d{2,5}x\d{2,5}$/i.test(s)) return undefined;
+    const [wRaw, hRaw] = s.toLowerCase().split('x');
+    const width = Number(wRaw);
+    const height = Number(hRaw);
+    if (
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      return undefined;
+    }
+    const target = width / height;
+    const ratioCandidates: Array<{ name: string; value: number }> = [
+      { name: '1:1', value: 1 },
+      { name: '2:3', value: 2 / 3 },
+      { name: '3:2', value: 3 / 2 },
+      { name: '3:4', value: 3 / 4 },
+      { name: '4:3', value: 4 / 3 },
+      { name: '4:5', value: 4 / 5 },
+      { name: '5:4', value: 5 / 4 },
+      { name: '9:16', value: 9 / 16 },
+      { name: '16:9', value: 16 / 9 },
+      { name: '21:9', value: 21 / 9 },
+    ];
+
+    let best = ratioCandidates[0];
+    let minDiff = Math.abs(target - best.value);
+    for (const candidate of ratioCandidates) {
+      const diff = Math.abs(target - candidate.value);
+      if (diff < minDiff) {
+        best = candidate;
+        minDiff = diff;
+      }
+    }
+    return minDiff <= 0.12 ? best.name : undefined;
+  }
+
+  /**
+   * @description 将输入图片候选转换为 meitu 可识别的路径或 URL。
+   * @param {string} candidate - 图片候选（URL、静态路径或本地路径）。
+   * @returns {string} 规范化后的图片输入。
+   * @keyword-en normalize meitu image input candidate
+   */
+  private normalizeMeituImageInputCandidate(candidate: string): string {
+    const raw = String(candidate ?? '').trim();
+    if (!raw) return '';
+    if (/^https?:\/\//i.test(raw)) return raw;
+
+    const normalized = raw.replace(/\\/g, '/');
+    if (normalized.startsWith('/static/uploads/')) {
+      return path.join(
+        process.cwd(),
+        'public',
+        'uploads',
+        normalized.slice('/static/uploads/'.length),
+      );
+    }
+    if (normalized.startsWith('/uploads/')) {
+      return path.join(process.cwd(), 'public', normalized.slice(1));
+    }
+    if (normalized.startsWith('/')) {
+      return path.join(process.cwd(), 'public', normalized.slice(1));
+    }
+    return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+  }
+
+  /**
+   * @description 从候选图中匹配可用底图，供 meitu image-edit 使用。
+   * @param {{ baseImagePath?: string; baseImageCandidates?: string[] }} input - 底图候选输入。
+   * @returns {string} 可用底图路径或 URL。
+   * @keyword-en resolve meitu editable base image
+   */
+  private resolveMeituEditableBaseImage(input: {
+    baseImagePath?: string;
+    baseImageCandidates?: string[];
+  }): string {
+    const direct = String(input.baseImagePath ?? '').trim();
+    const fromList = Array.isArray(input.baseImageCandidates)
+      ? input.baseImageCandidates
+          .map((x) => String(x ?? '').trim())
+          .filter((x) => x.length > 0)
+      : [];
+    const candidates = [direct, ...fromList].filter((x) => x.length > 0);
+
+    for (const candidate of candidates) {
+      const normalized = this.normalizeMeituImageInputCandidate(candidate);
+      if (!normalized) continue;
+      if (/^https?:\/\//i.test(normalized)) return normalized;
+      if (fs.existsSync(normalized)) return normalized;
+    }
+
+    const summary = candidates.join('|').slice(0, 260);
+    throw new Error(`MEITU_BASE_IMAGE_NOT_FOUND:${summary}`);
+  }
+
+  /**
+   * @description 从文本中尽力提取 JSON 对象。
+   * @param {string} text - CLI 输出文本。
+   * @returns {Record<string, unknown> | null} 解析结果。
+   * @keyword-en parse loose json object from text
+   */
+  private tryParseJsonObject(text: string): Record<string, unknown> | null {
+    const raw = String(text ?? '').trim();
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      void 0;
+    }
+    const lines = raw
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .reverse();
+    for (const line of lines) {
+      if (!line.startsWith('{') || !line.endsWith('}')) continue;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        void 0;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * @description 从 meitu 返回对象里提取首个本地下载文件路径。
+   * @param {Record<string, unknown>} payload - meitu JSON 响应。
+   * @returns {string | null} 本地文件路径。
+   * @keyword-en resolve meitu downloaded file path
+   */
+  private resolveMeituDownloadedPath(payload: Record<string, unknown>): string | null {
+    const roots: Record<string, unknown>[] = [payload];
+    const data = payload['data'];
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      roots.push(data as Record<string, unknown>);
+    }
+    const result = payload['result'];
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      roots.push(result as Record<string, unknown>);
+    }
+    for (const root of roots) {
+      const downloadedFiles = root['downloaded_files'];
+      if (Array.isArray(downloadedFiles)) {
+        for (const item of downloadedFiles) {
+          if (!item || typeof item !== 'object') continue;
+          const rec = item as Record<string, unknown>;
+          const candidates = [
+            rec['saved_path'],
+            rec['savedPath'],
+            rec['file_path'],
+            rec['filePath'],
+            rec['local_path'],
+            rec['localPath'],
+            rec['path'],
+          ];
+          const p = candidates.find((x) => typeof x === 'string') as
+            | string
+            | undefined;
+          if (p && p.trim().length > 0) return p.trim();
+        }
+      }
+      const topPathCandidates = [
+        root['saved_path'],
+        root['savedPath'],
+        root['file_path'],
+        root['filePath'],
+        root['local_path'],
+        root['localPath'],
+      ];
+      const topPath = topPathCandidates.find((x) => typeof x === 'string') as
+        | string
+        | undefined;
+      if (topPath && topPath.trim().length > 0) return topPath.trim();
+    }
+    return null;
+  }
+
+  /**
+   * @description 从 meitu 返回对象里提取首个输出 URL。
+   * @param {Record<string, unknown>} payload - meitu JSON 响应。
+   * @returns {string | null} URL。
+   * @keyword-en resolve meitu media url
+   */
+  private resolveMeituMediaUrl(payload: Record<string, unknown>): string | null {
+    const roots: Record<string, unknown>[] = [payload];
+    const data = payload['data'];
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      roots.push(data as Record<string, unknown>);
+    }
+    const result = payload['result'];
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      roots.push(result as Record<string, unknown>);
+    }
+    for (const root of roots) {
+      const mediaUrls = root['media_urls'];
+      if (Array.isArray(mediaUrls)) {
+        const first = mediaUrls.find((x) => typeof x === 'string') as
+          | string
+          | undefined;
+        if (first && first.trim().length > 0) return first.trim();
+      }
+      const directCandidates = [
+        root['media_url'],
+        root['mediaUrl'],
+        root['image_url'],
+        root['imageUrl'],
+        root['output_url'],
+        root['outputUrl'],
+        root['url'],
+      ];
+      const direct = directCandidates.find((x) => typeof x === 'string') as
+        | string
+        | undefined;
+      if (direct && direct.trim().length > 0) return direct.trim();
+    }
+    return null;
+  }
+
+  /**
+   * @description 将 meitu 生成的本地文件复制入统一上传目录并返回静态路径。
+   * @param {string} filePath - 本地文件路径。
+   * @returns {Promise<string>} 静态路径。
+   * @keyword-en persist meitu local file to upload
+   */
+  private async persistMeituGeneratedFile(filePath: string): Promise<string> {
+    const p = String(filePath ?? '').trim();
+    if (!p) throw new Error('MEITU_OUTPUT_FILE_EMPTY');
+    const absPath = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
+    if (!fs.existsSync(absPath)) {
+      throw new Error('MEITU_OUTPUT_FILE_NOT_FOUND');
+    }
+    const ext = path.extname(absPath).toLowerCase();
+    const mimeType =
+      ext === '.jpg' || ext === '.jpeg'
+        ? 'image/jpeg'
+        : ext === '.webp'
+          ? 'image/webp'
+          : ext === '.gif'
+            ? 'image/gif'
+            : ext === '.bmp'
+              ? 'image/bmp'
+              : 'image/png';
+    const buffer = await readFile(absPath);
+    return this.saveGeneratedImageBuffer(buffer, mimeType);
+  }
+
+  /**
+   * @description 构建 meitu 可执行命令候选列表（兼容 Windows 全局安装路径）。
+   * @returns {string[]} 可执行命令候选。
+   * @keyword-en build meitu cli candidates
+   */
+  private buildMeituCliCandidates(): string[] {
+    const configured = String(process.env.MEITU_CLI_BIN ?? '').trim();
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (raw: string | undefined): void => {
+      const val = String(raw ?? '').trim();
+      if (!val) return;
+      const key = process.platform === 'win32' ? val.toLowerCase() : val;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(val);
+    };
+
+    if (configured) {
+      push(configured);
+      if (process.platform === 'win32' && !/\.(cmd|exe|bat)$/i.test(configured)) {
+        push(`${configured}.cmd`);
+      }
+    }
+
+    push('meitu');
+    if (process.platform === 'win32') {
+      push('meitu.cmd');
+
+      const pnpmHome = String(process.env.PNPM_HOME ?? '').trim();
+      if (pnpmHome) {
+        push(path.join(pnpmHome, 'meitu.cmd'));
+        push(path.join(pnpmHome, 'meitu'));
+      }
+
+      const appData = String(process.env.APPDATA ?? '').trim();
+      if (appData) {
+        push(path.join(appData, 'npm', 'meitu.cmd'));
+        push(path.join(appData, 'npm', 'meitu'));
+      }
+
+      const userProfile = String(process.env.USERPROFILE ?? '').trim();
+      if (userProfile) {
+        push(path.join(userProfile, 'AppData', 'Roaming', 'npm', 'meitu.cmd'));
+        push(path.join(userProfile, 'AppData', 'Roaming', 'npm', 'meitu'));
+      }
+    }
+
+    return out;
+  }
+
+  /**
+   * @description 执行 meitu CLI 命令并返回 stdout/stderr（Windows 使用 shell 兼容 .cmd）。
+   * @param {string} cliBin - 可执行命令。
+   * @param {string[]} args - 参数列表。
+    * @returns {Promise<{ stdout: string; stderr: string; exitCode: number }>} 输出结果。
+   * @keyword-en run meitu cli command
+   */
+  private async runMeituCli(
+    cliBin: string,
+    args: string[],
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
+      (resolve, reject) => {
+        const child = spawn(cliBin, args, {
+          shell: process.platform === 'win32',
+          env: process.env,
+          windowsHide: true,
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        const timer = setTimeout(() => {
+          try {
+            child.kill('SIGTERM');
+          } catch {
+            void 0;
+          }
+          reject(new Error('MEITU_CLI_TIMEOUT'));
+        }, 120_000);
+
+        child.stdout.on('data', (chunk: Buffer | string) => {
+          const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+          stdout += s;
+        });
+
+        child.stderr.on('data', (chunk: Buffer | string) => {
+          const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+          stderr += s;
+        });
+
+        child.on('error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve({
+            stdout,
+            stderr,
+            exitCode:
+              typeof code === 'number' && Number.isFinite(code) ? code : -1,
+          });
+        });
+      },
+    );
+  }
+
+  /**
+   * @description 使用 meitu skill（meitu-cli）执行 image-edit 并返回静态路径。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 编辑请求。
+   * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
+   * @keyword-en generate image by meitu image-edit fallback
+   */
+  private async generateImageByMeituSkill(input: {
+    prompt: string;
+    size?: string;
+    baseImagePath?: string;
+    baseImageCandidates?: string[];
+  }): Promise<{
+    providerCode: string;
+    model: string;
+    imagePath: string;
+  }> {
+    const prompt = String(input.prompt ?? '').trim();
+    if (!prompt) throw new Error('IMAGE_PROMPT_REQUIRED');
+    const baseImage = this.resolveMeituEditableBaseImage({
+      baseImagePath: input.baseImagePath,
+      baseImageCandidates: input.baseImageCandidates,
+    });
+
+    const cliCandidates = this.buildMeituCliCandidates();
+    const outputDir = path.join(process.cwd(), 'public', 'uploads', 'ai-generated', 'meitu');
+    await mkdir(outputDir, { recursive: true });
+
+    const finalPrompt = prompt;
+    const ratio = this.resolveMeituRatioBySize(input.size);
+    this.logger.log(
+      `[ai-cover][meitu] start candidates=${cliCandidates.join('|')} promptLen=${finalPrompt.length} size=${String(input.size ?? '') || 'default'} ratio=${ratio ?? 'auto'} baseImage=${baseImage} outputDir=${outputDir}`,
+    );
+    let stdoutText = '';
+    let stderrText = '';
+    let executedCli = '';
+    let lastEnoent = false;
+    for (const cliBin of cliCandidates) {
+      let commandForLog = cliBin;
+      try {
+        const quoteWinPathArg = (value: string): string => {
+          const raw = String(value ?? '').trim();
+          if (process.platform !== 'win32') return raw;
+          const escaped = raw.replace(/"/g, '\\"');
+          return `"${escaped}"`;
+        };
+        const imageArg = quoteWinPathArg(baseImage);
+        const downloadDirArg = quoteWinPathArg(outputDir);
+
+        const args = ['image-edit', '--image', imageArg, '--prompt', finalPrompt];
+        if (ratio) args.push('--ratio', ratio);
+        args.push('--json', '--download-dir', downloadDirArg);
+        const quoteArg = (value: string): string => {
+          const s = String(value ?? '');
+          if (s.length === 0) return '""';
+          if (s.startsWith('"') && s.endsWith('"')) return s;
+          if (/^[^\s"'`]+$/.test(s)) return s;
+          return `"${s.replace(/"/g, '\\"')}"`;
+        };
+        commandForLog = [cliBin, ...args].map((x) => quoteArg(x)).join(' ');
+        this.logger.log(`[ai-cover][meitu] cli_exec command=${commandForLog}`);
+
+        const result = await this.runMeituCli(cliBin, args);
+        stdoutText = String(result.stdout ?? '');
+        stderrText = String(result.stderr ?? '');
+
+        if (result.exitCode !== 0) {
+          const payload =
+            this.tryParseJsonObject(stdoutText) ??
+            this.tryParseJsonObject(stderrText);
+          if (payload) {
+            const errName =
+              typeof payload['error_name'] === 'string'
+                ? payload['error_name']
+                : typeof payload['errorName'] === 'string'
+                  ? payload['errorName']
+                  : '';
+            const errMsg =
+              typeof payload['message'] === 'string'
+                ? payload['message']
+                : typeof payload['error_message'] === 'string'
+                  ? payload['error_message']
+                  : '';
+            this.logger.error(
+              `[ai-cover][meitu] cli_failed cli=${cliBin} code=${result.exitCode} command=${commandForLog} errorName=${errName} message=${String(errMsg).slice(0, 220)}`,
+            );
+            if (errName === 'CONFIGURATION_ERROR') {
+              throw new Error(
+                `MEITU_CREDENTIALS_NOT_CONFIGURED:${String(errMsg || 'credentials not configured')}`,
+              );
+            }
+            if (errName || errMsg) {
+              throw new Error(
+                `MEITU_SKILL_FAILED:${errName}:${String(errMsg).slice(0, 220)}`,
+              );
+            }
+          }
+
+          const stdoutSnippet = stdoutText.replace(/\s+/g, ' ').trim().slice(0, 220);
+          const stderrSnippet = stderrText.replace(/\s+/g, ' ').trim().slice(0, 220);
+          this.logger.error(
+            `[ai-cover][meitu] cli_failed cli=${cliBin} code=${result.exitCode} command=${commandForLog} stdout=${stdoutSnippet} stderr=${stderrSnippet}`,
+          );
+          throw new Error(
+            `MEITU_SKILL_CALL_FAILED:MEITU_CLI_EXIT_NON_ZERO:${result.exitCode}:${stderrSnippet || stdoutSnippet}`,
+          );
+        }
+
+        executedCli = cliBin;
+        this.logger.log(
+          `[ai-cover][meitu] cli_done cli=${executedCli} command=${commandForLog} stdoutLen=${stdoutText.length} stderrLen=${stderrText.length}`,
+        );
+        lastEnoent = false;
+        break;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const isEnoent = msg.includes('ENOENT');
+        if (isEnoent) {
+          lastEnoent = true;
+          this.logger.warn(
+            `[ai-cover][meitu] cli_not_found candidate=${cliBin} command=${commandForLog}`,
+          );
+          continue;
+        }
+        this.logger.error(
+          `[ai-cover][meitu] cli_failed cli=${cliBin} command=${commandForLog} message=${msg.slice(0, 300)}`,
+        );
+        throw new Error(`${msg.slice(0, 300)}`);
+      }
+    }
+
+    if (!executedCli) {
+      if (lastEnoent) {
+        throw new Error(
+          `MEITU_CLI_NOT_FOUND:Install meitu-cli and configure credentials first (candidates=${cliCandidates.join('|')})`,
+        );
+      }
+      throw new Error('MEITU_SKILL_CALL_FAILED:NO_CLI_EXECUTED');
+    }
+
+    const payload =
+      this.tryParseJsonObject(stdoutText) ?? this.tryParseJsonObject(stderrText);
+    if (!payload) {
+      this.logger.error('[ai-cover][meitu] result_invalid_json');
+      throw new Error('MEITU_SKILL_RESULT_INVALID_JSON');
+    }
+
+    const savedPath = this.resolveMeituDownloadedPath(payload);
+    if (savedPath) {
+      const imagePath = await this.persistMeituGeneratedFile(savedPath);
+      this.logger.log(
+        `[ai-cover][meitu] success_by_saved_path source=${savedPath} imagePath=${imagePath}`,
+      );
+      return {
+        providerCode: 'meitu-skill',
+        model: 'meitu-image-edit',
+        imagePath,
+      };
+    }
+
+    const mediaUrl = this.resolveMeituMediaUrl(payload);
+    if (mediaUrl) {
+      const imagePath = await this.downloadGeneratedImage(mediaUrl);
+      this.logger.log(
+        `[ai-cover][meitu] success_by_media_url imagePath=${imagePath}`,
+      );
+      return {
+        providerCode: 'meitu-skill',
+        model: 'meitu-image-edit',
+        imagePath,
+      };
+    }
+
+    const errName =
+      typeof payload['error_name'] === 'string'
+        ? payload['error_name']
+        : typeof payload['errorName'] === 'string'
+          ? payload['errorName']
+          : '';
+    const errMsg =
+      typeof payload['error_message'] === 'string'
+        ? payload['error_message']
+        : typeof payload['message'] === 'string'
+          ? payload['message']
+          : '';
+    if (errName || errMsg) {
+      this.logger.error(
+        `[ai-cover][meitu] result_failed errorName=${errName} errorMsg=${String(errMsg).slice(0, 200)}`,
+      );
+      throw new Error(`MEITU_SKILL_FAILED:${errName}:${errMsg}`);
+    }
+    this.logger.error('[ai-cover][meitu] result_empty');
+    throw new Error('MEITU_SKILL_RESULT_EMPTY');
+  }
+
+  /**
+   * @description AI封面生成工具：优先本地默认 image 运行时；无可用配置时回退 meitu skill。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
+   * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
+   * @keyword-en ai cover generate tool
+   */
+  private async runAiCoverGenerateTool(input: {
+    prompt: string;
+    size?: string;
+    baseImagePath?: string;
+    baseImageCandidates?: string[];
+  }): Promise<{
+    providerCode: string;
+    model: string;
+    imagePath: string;
+  }> {
+    const finalPrompt = this.buildMeituEditPrompt({
+      prompt: input.prompt,
+      size: input.size,
+    });
+
+    const runtime = await this.resolveAvailableDefaultImageRuntime();
+    const hasEditBaseImage =
+      String(input.baseImagePath ?? '').trim().length > 0 ||
+      (Array.isArray(input.baseImageCandidates) &&
+        input.baseImageCandidates.some((x) => String(x ?? '').trim().length > 0));
+    if (runtime) {
+      this.logger.log(
+        `[ai-cover][tool] use_default_runtime provider=${runtime.providerCode} model=${runtime.model}`,
+      );
+      try {
+        return await this.generateImageByRuntime(runtime, {
+          prompt: finalPrompt,
+          size: input.size,
+          baseImagePath: input.baseImagePath,
+          baseImageCandidates: input.baseImageCandidates,
+        });
+      } catch (error) {
+        const msg =
+          error instanceof Error ? error.message : String(error ?? '');
+        if (msg.includes('IMAGE_PROVIDER_NOT_SUPPORTED')) {
+          if (hasEditBaseImage) {
+            throw new Error(
+              `IMAGE_EDIT_PROVIDER_NOT_SUPPORTED:${runtime.providerCode}`,
+            );
+          }
+          this.logger.warn(
+            `[ai-cover][tool] runtime_provider_not_supported provider=${runtime.providerCode}, fallback=meitu`,
+          );
+          return this.generateImageByMeituSkill({
+            prompt: finalPrompt,
+            size: input.size,
+            baseImagePath: input.baseImagePath,
+            baseImageCandidates: input.baseImageCandidates,
+          });
+        }
+        throw error;
+      }
+    }
+    this.logger.warn('[ai-cover][tool] default_image_runtime_missing, fallback=meitu');
+    return this.generateImageByMeituSkill({
+      prompt: finalPrompt,
+      size: input.size,
+      baseImagePath: input.baseImagePath,
+      baseImageCandidates: input.baseImageCandidates,
+    });
+  }
+
+  /**
+   * @description 使用 AI 封面生成工具发送提示词并返回本地图片路径。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
+   * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
+   * @keyword-en send prompt for image generation
+   */
+  async sendPrompt(input: {
+    prompt: string;
+    size?: string;
+    baseImagePath?: string;
+    baseImageCandidates?: string[];
+  }): Promise<{
+    providerCode: string;
+    model: string;
+    imagePath: string;
+  }> {
+    const prompt = String(input.prompt ?? '').trim();
+    if (!prompt) throw new Error('IMAGE_PROMPT_REQUIRED');
+    return this.runAiCoverGenerateTool({
+      prompt,
+      size: input.size,
+      baseImagePath: input.baseImagePath,
+      baseImageCandidates: input.baseImageCandidates,
+    });
   }
 
   /**
@@ -355,6 +1441,20 @@ export class AgentService {
   }
 
   /**
+   * @description 解析流式模式配置，默认同时开启 messages+updates。
+   * @param {AgentConfig['streamMode']} streamMode - 流模式配置。
+   * @returns {Array<'messages' | 'updates'>} 可传给 LangChain 的 streamMode 列表。
+   * @keyword-en resolve stream modes
+   */
+  private resolveStreamModes(
+    streamMode?: AgentConfig['streamMode'],
+  ): Array<'messages' | 'updates'> {
+    if (streamMode === 'messages') return ['messages'];
+    if (streamMode === 'updates') return ['updates'];
+    return ['messages', 'updates'];
+  }
+
+  /**
    * @title 流式运行Agent Stream Agent
    * @description 以双模式流(messages+updates)返回 token、tool、subagent 等完整事件流。
    * @keywords-cn 流式, 令牌, 事件, 深度思考, 函数调用, 子代理
@@ -402,9 +1502,10 @@ export class AgentService {
     const toolResults: { name?: unknown; output?: unknown }[] = [];
 
     try {
+      const streamModes = this.resolveStreamModes(input.config.streamMode);
       const stream = await agent.stream(
         { messages: extracted.messages },
-        { ...callOption, streamMode: ['messages', 'updates'] },
+        { ...callOption, streamMode: streamModes },
       );
 
       const logFilePath = path.join(process.cwd(), 'llm-chunk.log');
@@ -419,12 +1520,35 @@ export class AgentService {
        * - mode='messages': data=[message, metadata] — LLM token / tool result
        * - mode='updates':  data={nodeName: nodeData}  — 子代理生命周期
        */
+      const isStreamMode = (
+        value: unknown,
+      ): value is 'messages' | 'updates' =>
+        value === 'messages' || value === 'updates';
+
       for await (const tuple of stream) {
-        const arr = tuple as unknown[];
-        if (!Array.isArray(arr) || arr.length < 3) continue;
-        const namespace = Array.isArray(arr[0]) ? (arr[0] as string[]) : [];
-        const mode = typeof arr[1] === 'string' ? arr[1] : '';
-        const data = arr[2];
+        const rawTuple: unknown = tuple;
+        if (!Array.isArray(rawTuple) || rawTuple.length < 2) continue;
+
+        let namespace: string[] = [];
+        let mode: 'messages' | 'updates' | null = null;
+        let data: unknown = undefined;
+
+        const first = rawTuple[0];
+        const second = rawTuple[1];
+
+        // 兼容 [mode, data] 与 [namespace, mode, data] 两种返回形态
+        if (isStreamMode(first)) {
+          mode = first;
+          data = second;
+        } else if (isStreamMode(second)) {
+          mode = second;
+          namespace = Array.isArray(first)
+            ? first.filter((item): item is string => typeof item === 'string')
+            : [];
+          data = rawTuple[2];
+        } else {
+          continue;
+        }
 
         // 命名空间里如果包含典型的子代理标记，或者层级深入且包含子代名字，则认为是 subagent
         // 比如可能出现 'task', 'analysis_subagent' 等，或者存在多次 'tools'
@@ -583,6 +1707,23 @@ export class AgentService {
                     data: { id: toolCallId, name, output: content },
                   };
                 }
+              }
+            }
+
+            // 子代理 tools 节点 — 透传同时汇总真实工具输出（用于上层后处理）
+            if (isSubagent && nodeName === 'tools') {
+              const nd = nodeData as { messages?: unknown[] } | undefined;
+              for (const msg of nd?.messages ?? []) {
+                const m = msg as Record<string, unknown>;
+                if (m['type'] !== 'tool') continue;
+                const toolCallId = (m['tool_call_id'] ?? '') as string;
+                const name = (m['name'] ?? '') as string;
+                const content = m['content'] ?? '';
+                toolResults.push({ name, output: content });
+                yield {
+                  type: 'tool_end',
+                  data: { id: toolCallId, name, output: content },
+                };
               }
             }
 

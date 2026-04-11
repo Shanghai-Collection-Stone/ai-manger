@@ -249,6 +249,56 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * @description 读取本地图片尺寸。
+   * @param {string} absPath - 图片绝对路径。
+   * @returns {Promise<{ width: number; height: number; isPortrait: boolean } | null>} 尺寸信息。
+   * @keyword-en read image dimensions from local file
+   */
+  private async getImageDimensionsFromAbsPath(absPath: string): Promise<{
+    width: number;
+    height: number;
+    isPortrait: boolean;
+  } | null> {
+    const src = String(absPath || '').trim();
+    if (!src) return null;
+    try {
+      const mod = await this.getJimpModule();
+      const JimpCtor = mod.Jimp as unknown as {
+        read: (input: string) => Promise<{ bitmap?: { width?: number; height?: number } }>;
+      };
+      const img = await JimpCtor.read(src);
+      const w = Number(img?.bitmap?.width ?? 0);
+      const h = Number(img?.bitmap?.height ?? 0);
+      if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+        return null;
+      }
+      const width = Math.floor(w);
+      const height = Math.floor(h);
+      return {
+        width,
+        height,
+        isPortrait: height > width,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * @description 获取默认动态分组ID（动态封面/动态拼图），用于生成时过滤来源图。
+   * @param {string} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<number[]>} 默认动态分组ID。
+   * @keyword-en get default generated group ids
+   */
+  private async getGeneratedAssetDefaultGroupIds(
+    userId: string,
+    tenantId?: string,
+  ): Promise<number[]> {
+    return this.galleryGroups.getDefaultDynamicGroupIds(userId, tenantId);
+  }
+
+  /**
    * @description 读取 Jimp 模块。
    * @returns {Promise<JimpModuleLike>} Jimp 模块。
    * @keyword-en load jimp module
@@ -667,7 +717,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   private async saveGeneratedImageToGallery(input: {
     userId: string;
     tenantId?: string;
-    groupId?: number;
+    groupId?: string | number;
     absPath: string;
     fileName: string;
     url: string;
@@ -675,6 +725,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     description: string;
     isCollage?: boolean;
     collageSourceImageIds?: number[];
+    generatedKind?: 'cover' | 'collage';
   }): Promise<GalleryImageEntity | null> {
     let statSize = 0;
     try {
@@ -685,19 +736,49 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     }
     const ext = extname(input.fileName).toLowerCase();
     const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+    const dimensions = await this.getImageDimensionsFromAbsPath(input.absPath);
+    const generatedKind = input.generatedKind;
+    const markAsCollage =
+      input.isCollage === true ||
+      generatedKind === 'cover' ||
+      generatedKind === 'collage';
 
     // 为生成的图片（拼图/封面）生成缩略图
     const thumb = await this.gallery.generateThumbnail(input.absPath, input.fileName);
 
     // 拼图/封面图片使用专用分组
     let finalGroupId = input.groupId;
-    if (input.isCollage === true) {
-      const collageGroup = await this.galleryGroups.findOrCreateCollageGroup(
+    if (generatedKind === 'cover') {
+      const coverGroup = await this.galleryGroups.findOrCreateDynamicCoverGroup(
+        input.userId,
+        input.tenantId,
+      );
+      finalGroupId = coverGroup.id;
+    } else if (generatedKind === 'collage' || input.isCollage === true) {
+      const collageGroup = await this.galleryGroups.findOrCreateDynamicCollageGroup(
         input.userId,
         input.tenantId,
       );
       finalGroupId = collageGroup.id;
     }
+
+    const width =
+      dimensions?.width ?? (markAsCollage ? COLLAGE_WIDTH : undefined);
+    const height =
+      dimensions?.height ?? (markAsCollage ? COLLAGE_HEIGHT : undefined);
+    const sourceIds = Array.isArray(input.collageSourceImageIds)
+      ? input.collageSourceImageIds
+          .map((x) => Number(x))
+          .filter((x) => Number.isFinite(x))
+          .slice(0, 2)
+      : [];
+    const mergedTags = Array.from(
+      new Set([
+        ...(input.tags ?? []),
+        ...(generatedKind === 'cover' ? ['自动封面', '动态封面'] : []),
+        ...(generatedKind === 'collage' ? ['自动拼图', '动态拼图'] : []),
+      ]),
+    );
 
     const docs = await this.gallery.createMany([
       {
@@ -710,16 +791,20 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         url: input.url,
         mimeType,
         size: statSize > 0 ? statSize : undefined,
-        tags: input.tags ?? [],
+        width,
+        height,
+        tags: mergedTags,
         description: input.description,
-        isCollage: input.isCollage === true,
+        isCollage: markAsCollage,
         collageSourceImageIds:
-          input.isCollage === true
-            ? (input.collageSourceImageIds ?? []).slice(0, 2)
-            : undefined,
+          sourceIds.length > 0 ? sourceIds : undefined,
         collageMeta:
-          input.isCollage === true
-            ? { width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, dpi: COLLAGE_DPI }
+          markAsCollage
+            ? {
+                width: typeof width === 'number' ? width : COLLAGE_WIDTH,
+                height: typeof height === 'number' ? height : COLLAGE_HEIGHT,
+                dpi: COLLAGE_DPI,
+              }
             : undefined,
         thumbFileName: thumb?.thumbFileName,
         thumbUrl: thumb?.thumbUrl,
@@ -876,9 +961,16 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       Number.isFinite(input.galleryGroupId)
         ? input.galleryGroupId
         : undefined;
+    const tenantId =
+      typeof c.tenantId === 'string' && c.tenantId.trim().length > 0
+        ? c.tenantId.trim()
+        : undefined;
+    const excludedGroupIdSet = new Set(
+      await this.getGeneratedAssetDefaultGroupIds(galleryUserId, tenantId),
+    );
 
     const tags =
-      typeof groupId === 'number'
+      groupId !== undefined
         ? await this.gallery.listDistinctTagsByGroup(
             galleryUserId,
             groupId,
@@ -937,15 +1029,20 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const chosen = (tagMap.get(i) ?? []).filter((t) => tags.includes(t));
       const useTags = chosen.length > 0 ? chosen : fallbackTags;
 
-      const byTags =
+      const byTagsRaw =
         useTags.length > 0
           ? await this.gallery.searchByTags({
               userId: galleryUserId,
+              tenantId,
               groupId,
               tags: useTags,
               limit: 24,
             })
           : [];
+      const byTags = byTagsRaw.filter((img) => {
+        const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
+        return !(Number.isFinite(gid) && excludedGroupIdSet.has(gid));
+      });
 
       const tryPick = (imgs: Array<{ id?: unknown; url?: unknown }>) => {
         for (const it of imgs) {
@@ -970,10 +1067,16 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const pickedFromTags = tryPick(byTags);
       const randomList = pickedFromTags
         ? []
-        : await this.gallery.sampleRandom({
-            userId: galleryUserId,
-            groupId,
-            limit: 24,
+        : (
+            await this.gallery.sampleRandom({
+              userId: galleryUserId,
+              tenantId,
+              groupId,
+              limit: 24,
+            })
+          ).filter((img) => {
+            const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
+            return !(Number.isFinite(gid) && excludedGroupIdSet.has(gid));
           });
       const pickedFromRandom = pickedFromTags ? undefined : tryPick(randomList);
       const picked = pickedFromTags ?? pickedFromRandom;
@@ -1917,6 +2020,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           .join('\n');
         const wantsHistoricalCollage =
           this.shouldUseHistoricalCollage(intentText);
+        const excludedGeneratedGroupIdSet = new Set(
+          await this.getGeneratedAssetDefaultGroupIds(
+            state.galleryUserId,
+            state.tenantId,
+          ),
+        );
 
         const usedSet = new Set<string>(state.usedImageKeys ?? []);
         const byTagsRaw =
@@ -1930,14 +2039,22 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
                 matchCollage: wantsHistoricalCollage,
               })
             : [];
+        const byTags = byTagsRaw.filter((img) => {
+          const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
+          return !(Number.isFinite(gid) && excludedGeneratedGroupIdSet.has(gid));
+        });
         const randomRaw = await this.gallery.sampleRandom({
           userId: state.galleryUserId,
           tenantId: state.tenantId,
           groupId: state.galleryGroupId,
           limit: 48,
         });
+        const randomPool = randomRaw.filter((img) => {
+          const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
+          return !(Number.isFinite(gid) && excludedGeneratedGroupIdSet.has(gid));
+        });
 
-        const basePool = [...byTagsRaw, ...randomRaw].filter((img) => {
+        const basePool = [...byTags, ...randomPool].filter((img) => {
           if (!wantsHistoricalCollage && img?.isCollage === true) return false;
           return true;
         });
@@ -1982,6 +2099,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
                 collageSourceImageIds: [rawSources[0]?.id, rawSources[1]?.id].filter(
                   (x): x is number => typeof x === 'number' && Number.isFinite(x),
                 ),
+                generatedKind: 'collage',
               });
             } catch {
               publishCollage = null;
@@ -1992,7 +2110,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         if (wantsHistoricalCollage) {
           publishCollage =
             pickedBase.find((x) => x?.isCollage === true) ||
-            byTagsRaw.find((x) => x?.isCollage === true) ||
+            byTags.find((x) => x?.isCollage === true) ||
             null;
         }
 
@@ -2016,6 +2134,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
                 fileName: coverFile.fileName,
                 url: coverFile.url,
                 description: `发文封面：${coverText}`,
+                generatedKind: 'cover',
               });
             } catch {
               publishCover = null;

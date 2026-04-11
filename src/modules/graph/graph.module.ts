@@ -6,6 +6,7 @@ import { FormatModule } from '../format/format.module';
 import { AnalysisFunctionCallModule } from '../function-call/analysis/analysis.module.js';
 import { McpFunctionCallModule } from '../function-call/mcp/mcp.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
+import { SassModule } from '../sass/sass.module.js';
 import { GraphController } from './controller/graph.controller.js';
 import { ArticleGraphService } from './services/article-graph.service.js';
 import { BatchTaskGraphService } from './services/batch-task-graph.service.js';
@@ -16,6 +17,7 @@ import { BatchTaskGraphService } from './services/batch-task-graph.service.js';
     FormatModule,
     CanvasModule,
     GalleryModule,
+    SassModule,
     BatchTaskModule,
     AnalysisFunctionCallModule,
     McpFunctionCallModule,

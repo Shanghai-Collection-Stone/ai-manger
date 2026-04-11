@@ -8,7 +8,7 @@
 
 ### controller/admin.controller.ts
 后台管理控制器。
-- **关键词**: admin, auth, login, jwt, tenants, providers, users, keys, controller, claw, agent
+- **关键词**: admin, auth, login, jwt, tenants, providers, users, keys, controller, claw, agent, llm settings
 - **函数**:
   - `login`: 登录/login
   - `listLoginTenants`: 登录租户选项/list login tenants
@@ -31,10 +31,13 @@
   - `createAgentConfig`: 创建Agent配置/create agent config
   - `updateAgentConfig`: 更新Agent配置/update agent config
   - `deleteAgentConfig`: 删除Agent配置/delete agent config
+  - `getLlmSetting`: 获取LLM设置/get llm setting
+  - `upsertLlmSetting`: 创建或更新LLM设置/upsert llm setting
+  - `updateLlmSetting`: 更新LLM设置/update llm setting
 
 ### services/admin.service.ts
 后台管理服务。
-- **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, api-key, default, claw config, agent config
+- **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings
 - **函数**:
   - `ensureIndexes`: 索引初始化/ensure indexes
   - `login`: 登录签发JWT/login issue jwt
@@ -59,6 +62,9 @@
   - `createAgentConfig`: 创建Agent配置/create agent config
   - `updateAgentConfig`: 更新Agent配置/update agent config
   - `deleteAgentConfig`: 删除Agent配置/delete agent config
+  - `getLlmSetting`: 获取LLM设置/get llm setting
+  - `upsertLlmSetting`: 创建或更新LLM设置/upsert llm setting
+  - `updateLlmSetting`: 更新LLM设置/update llm setting
   - `ensureProvidersFromEnv`: 环境迁移提供商/migrate providers from env
 
 ### guards/admin-auth.guard.ts
@@ -69,11 +75,11 @@
 
 ### entities/admin.entity.ts
 后台实体定义。
-- **关键词**: user entity, session entity, provider entity, claw config entity, agent config entity, jwt payload
+- **关键词**: user entity, session entity, provider entity, claw config entity, agent config entity, llm setting entity, jwt payload
 
 ### controller/admin.dto.ts
 后台请求体定义。
-- **关键词**: dto, login dto, tenant, provider default, claw config dto, agent config dto
+- **关键词**: dto, login dto, tenant, provider default, claw config dto, agent config dto, llm setting dto
 
 ### types/admin-request.types.ts
 后台请求上下文定义。

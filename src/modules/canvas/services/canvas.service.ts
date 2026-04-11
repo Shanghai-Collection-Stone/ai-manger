@@ -359,6 +359,29 @@ export class CanvasService {
   }
 
   /**
+   * @description 在指定 Canvas 上按图片组规则生成 imageGroups，并回写到同一 Canvas。
+   * @param {{ canvasId: number; userId: string; tenantId?: string; topic?: string; articles: CanvasImageGroupCreateInput['articles']; }} input - 生成参数。
+   * @returns {Promise<CanvasImageGroup[]>} 生成后的图片组列表。
+   * @keyword-en generate image groups for existing canvas
+   */
+  async generateImageGroupsForCanvas(input: {
+    canvasId: number;
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articles: CanvasImageGroupCreateInput['articles'];
+  }): Promise<CanvasImageGroup[]> {
+    const groups = await this.imageGroupService.generateImageGroups({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      topic: input.topic,
+      articles: input.articles,
+    });
+    await this.updateImageGroups(input.canvasId, groups, input.tenantId);
+    return groups;
+  }
+
+  /**
    * @description 后台异步执行图片组生成并回写 Canvas。
    * @param {number} canvasId - Canvas ID。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
@@ -371,11 +394,16 @@ export class CanvasService {
   ): Promise<void> {
     this.logger.debug(`[image-group] generation_start canvasId=${canvasId} articleCount=${input.articles?.length ?? 0}`);
     try {
-      const groups = await this.imageGroupService.generateImageGroups(input);
+      const groups = await this.generateImageGroupsForCanvas({
+        canvasId,
+        userId: input.userId,
+        tenantId: input.tenantId,
+        topic: input.topic,
+        articles: input.articles,
+      });
       const doneCount = groups.filter((g) => g.status === 'done').length;
       const failedCount = groups.filter((g) => g.status === 'failed').length;
       this.logger.debug(`[image-group] generation_done canvasId=${canvasId} groupsTotal=${groups.length} done=${doneCount} failed=${failedCount}`);
-      await this.updateImageGroups(canvasId, groups, input.tenantId);
       await this.canvases.updateOne(
         { id: canvasId },
         { $set: { status: 'completed', updatedAt: new Date() } },

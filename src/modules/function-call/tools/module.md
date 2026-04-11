@@ -15,8 +15,10 @@
 
 ### services/graph-workflow.service.ts
 图工作流工具服务，负责 Canvas 生成、单篇写入、发布编排。
-- **关键词**: graph-workflow, topic_orchestrate, canvas_append_article, canvas_execute, xhs_batch_publish
+- **关键词**: graph-workflow, topic_orchestrate, canvas_append_article, canvas_execute, xhs_batch_publish, image-group
 - **函数**:
+  - `normalizeRequestedArticleCount`: 归一化请求篇数（不强制 6-8）
+  - `buildTopicOrchestrateDedupKey`: 选题编排去重键（含 userPrompt/dataSummary）
   - `getHandle`: 获取图工作流工具/get graph workflow tools
 
 ### tools.module.ts

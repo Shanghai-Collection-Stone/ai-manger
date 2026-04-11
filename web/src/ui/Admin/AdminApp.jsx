@@ -53,6 +53,7 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'gemini', label: 'Google Gemini' },
+  { value: 'doubao', label: '豆包 Doubao' },
   { value: 'nvidia', label: 'NVIDIA' },
   { value: 'minimax', label: 'MiniMax' },
 ];
@@ -214,6 +215,7 @@ const AdminApp = () => {
     },
     platformInfo: {
       aiPromptSupplement: '',
+      enableAiCover: false,
     },
     clawConfig: {
       name: '',
@@ -281,6 +283,7 @@ const AdminApp = () => {
           ...prev,
           platformInfo: {
             aiPromptSupplement: pi.platformInfo?.aiPromptSupplement || '',
+            enableAiCover: Boolean(pi.platformInfo?.enableAiCover),
           },
         }));
       } catch {
@@ -411,12 +414,16 @@ const AdminApp = () => {
    * @returns {Promise<void>}
    */
   const onSubmitPlatformInfo = async () => {
-    const res = await adminApi.upsertPlatformInfo(forms.platformInfo.aiPromptSupplement);
+    const res = await adminApi.upsertPlatformInfo(
+      forms.platformInfo.aiPromptSupplement,
+      forms.platformInfo.enableAiCover,
+    );
     setPlatformInfo(res.platformInfo || null);
     setForms((prev) => ({
       ...prev,
       platformInfo: {
         aiPromptSupplement: res.platformInfo?.aiPromptSupplement || '',
+        enableAiCover: Boolean(res.platformInfo?.enableAiCover),
       },
     }));
     setNotice('平台AI配置已保存');
@@ -969,8 +976,9 @@ const AdminApp = () => {
               <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.modelCategory} onChange={(e) => updateForm('provider', 'modelCategory', e.target.value)}>
                 <option value="llm">类别: 非EM模型（LLM/关键词/任务）</option>
                 <option value="em">类别: EM模型（向量计算）</option>
+                <option value="image">类别: 生图模型（Image）</option>
               </select>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder={forms.provider.modelCategory === 'em' ? '请输入EM模型（向量模型）' : '请输入非EM模型（LLM模型）'} value={forms.provider.model} onChange={(e) => updateForm('provider', 'model', e.target.value)} />
+              <input className="w-full border rounded px-3 py-2 text-sm" placeholder={forms.provider.modelCategory === 'em' ? '请输入EM模型（向量模型）' : forms.provider.modelCategory === 'image' ? '请输入生图模型（Image模型）' : '请输入非EM模型（LLM模型）'} value={forms.provider.model} onChange={(e) => updateForm('provider', 'model', e.target.value)} />
               <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入API Key（可修改）" value={forms.provider.apiKey} onChange={(e) => updateForm('provider', 'apiKey', e.target.value)} />
               <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.enabled ? '1' : '0'} onChange={(e) => updateForm('provider', 'enabled', e.target.value === '1')}>
                 <option value="1">启用</option>
@@ -1002,9 +1010,9 @@ const AdminApp = () => {
                     <div>
                       <div className="font-medium">{item.name}</div>
                       <div className="text-slate-500">{item.providerCode}</div>
-                      <div className="text-xs text-slate-500">类别：{item.modelCategory === 'em' ? 'EM模型' : '非EM模型'}</div>
+                      <div className="text-xs text-slate-500">类别：{item.modelCategory === 'em' ? 'EM模型' : item.modelCategory === 'image' ? '生图模型' : '非EM模型'}</div>
                       <div className="text-xs text-slate-500">模型：{item.model || '-'}</div>
-                      <div className="text-xs text-slate-500">{item.isDefault ? `${item.modelCategory === 'em' ? 'EM' : '非EM'}默认` : '候选提供商'}</div>
+                      <div className="text-xs text-slate-500">{item.isDefault ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : '非EM'}默认` : '候选提供商'}</div>
                     </div>
                     <div className="flex flex-col gap-1">
                       <button onClick={() => {
@@ -1773,6 +1781,29 @@ const AdminApp = () => {
               </div>
               {/* Markdown编辑器区域 | @keyword-en markdown editor area */}
               <div className="w-full" data-color-mode="light">
+                {/* AI封面开关区域 | @keyword-en ai cover toggle area */}
+                <div className="mb-3 rounded-lg border border-slate-200 p-3 flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-slate-800">是否开启AI封面</div>
+                    <div className="text-xs text-slate-500 mt-1">开启后，生成图文/图组时会优先走生图模型生成封面并入图库。</div>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(forms.platformInfo.enableAiCover)}
+                      onChange={(e) =>
+                        setForms((prev) => ({
+                          ...prev,
+                          platformInfo: {
+                            ...prev.platformInfo,
+                            enableAiCover: e.target.checked,
+                          },
+                        }))
+                      }
+                    />
+                    <span>{forms.platformInfo.enableAiCover ? '已开启' : '已关闭'}</span>
+                  </label>
+                </div>
                 <MDEditor
                   height={500}
                   value={forms.platformInfo.aiPromptSupplement}

@@ -10,7 +10,8 @@
 图库控制器。
 - **关键词**: gallery, image, group, groups, upload, pagination, cursor, embedding, vector-search, similarity, groupId, atlas, cosine, mongo, controller
 - **函数**:
-  - `upload`: 上传图片文件并写入图库记录（含压缩、缩略图生成、尺寸提取）
+  - `upload`: 上传图片文件并写入图库记录（含压缩、缩略图生成、尺寸提取、cover/collage 自动识别）
+  - `listGroups`: 自动确保并置顶默认分组“动态封面/动态拼图”
   - `createUploadThumbnails`: 批量生成缩略图
   - `extractUploadFileDimensions`: 提取上传文件尺寸
   - `getImageDimensionsFromFile`: 使用 jimp 读取图片尺寸
@@ -39,6 +40,11 @@
 ### gallery-group.service.ts
 图库组服务。
 - **关键词**: group, service
+- **函数**:
+  - `findOrCreateDynamicCoverGroup`: 查找或创建“动态封面”默认分组
+  - `findOrCreateDynamicCollageGroup`: 查找或创建“动态拼图”默认分组（兼容升级旧“拼图封面”）
+  - `ensureDefaultDynamicGroups`: 确保默认动态分组存在
+  - `getDefaultDynamicGroupIds`: 返回默认动态分组 ID（用于生成流程过滤）
 
 ### gallery-image.entity.ts
 图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, isCollage, collageSourceImageIds, collageMeta, embedding, createdAt, updatedAt）。

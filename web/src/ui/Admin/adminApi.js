@@ -287,10 +287,10 @@ export const adminApi = {
    * @description 更新平台信息（AI补充说明）
    * @keyword-en upsert platform info
    */
-  async upsertPlatformInfo(aiPromptSupplement) {
+  async upsertPlatformInfo(aiPromptSupplement, enableAiCover = false) {
     return request('/platform-info', {
       method: 'PUT',
-      body: JSON.stringify({ aiPromptSupplement }),
+      body: JSON.stringify({ aiPromptSupplement, enableAiCover }),
     });
   },
 

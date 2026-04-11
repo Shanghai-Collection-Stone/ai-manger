@@ -483,33 +483,72 @@ export class DataSourceSearchToolsService {
       },
     );
 
+    const batchQueryItemSchema = z.object({
+      queryName: z.string().optional().describe('查询名称标识，用于结果匹配'),
+      sourceCode: z.string().optional().describe('数据源代码，默认 main-mongo'),
+      collection: z.string().describe('Collection name to query'),
+      type: z
+        .enum(['find', 'count', 'aggregate', 'distinct', 'min', 'max', 'sum', 'avg'])
+        .optional()
+        .default('find')
+        .describe('Operation type'),
+      filter: z.record(z.string(), z.unknown()).optional().describe('Query filter'),
+      projection: z
+        .record(z.string(), z.union([z.literal(0), z.literal(1)]))
+        .optional()
+        .describe('Projection for find'),
+      limit: z.number().optional().describe('Max results'),
+      sort: z
+        .union([
+          z.record(z.string(), z.union([z.literal(1), z.literal(-1)])).describe('Sort as record'),
+          z.array(z.string()).describe('Sort as array like ["field ASC", "field2 DESC"]'),
+        ])
+        .optional()
+        .describe('Sort order'),
+      pipeline: z
+        .union([
+          z.string().describe('JSON string of pipeline array'),
+          z.array(z.record(z.string(), z.unknown())).describe('Pipeline array'),
+        ])
+        .optional()
+        .describe('Pipeline for aggregate'),
+      key: z.string().optional().describe('Field for distinct/min/max/sum/avg'),
+    });
+
+    const batchQueriesSchema = z.array(batchQueryItemSchema).min(1).max(10);
+
     /**
      * 批量数据源查询 - 一次执行多个查询
      * 用于需要从多个表或多条件查询数据的场景，减少工具调用次数
      */
     const dataSourceBatchQuery = tool(
       async ({ queries, tenantId }) => {
-        console.log('[data_source_batch_query] Batch queries:', queries.length);
-
-        if (!Array.isArray(queries) || queries.length === 0) {
+        const normalizedInput = this.normalizeBatchQueriesInput(queries);
+        if (!normalizedInput.success) {
           return JSON.stringify({
             success: false,
-            error: 'QUERIES_ARRAY_REQUIRED',
-            message: 'queries 参数必须是非空数组',
+            error: normalizedInput.error,
+            message: normalizedInput.message,
+            hint: normalizedInput.hint,
           });
         }
 
-        if (queries.length > 10) {
+        const parsedQueries = batchQueriesSchema.safeParse(normalizedInput.queries);
+        if (!parsedQueries.success) {
           return JSON.stringify({
             success: false,
-            error: 'QUERIES_TOO_MANY',
-            message: '单次最多支持 10 个并发查询',
+            error: 'INVALID_QUERIES_SCHEMA',
+            message: 'queries 数组项格式不正确，请根据 issues 修正后重试',
+            issues: this.formatZodIssues(parsedQueries.error.issues),
           });
         }
+
+        const validatedQueries = parsedQueries.data;
+        console.log('[data_source_batch_query] Batch queries:', validatedQueries.length);
 
         // 并发执行所有查询
         const results = await Promise.all(
-          queries.map((q, index) =>
+          validatedQueries.map((q, index) =>
             this.executeSingleQuery({
               sourceCode: q.sourceCode || MAIN_DATA_SOURCE.code,
               tenantId,
@@ -587,57 +626,75 @@ export class DataSourceSearchToolsService {
 此时应该根据 warning 提示调整该查询的 filter 条件或 limit 限制。`,
         schema: z.object({
           queries: z
-            .array(
-              z.object({
-                queryName: z
-                  .string()
-                  .optional()
-                  .describe('查询名称标识，用于结果匹配'),
-                sourceCode: z
-                  .string()
-                  .optional()
-                  .describe('数据源代码，默认 main-mongo'),
-                collection: z.string().describe('Collection name to query'),
-                type: z
-                  .enum(['find', 'count', 'aggregate', 'distinct', 'min', 'max', 'sum', 'avg'])
-                  .optional()
-                  .default('find')
-                  .describe('Operation type'),
-                filter: z
-                  .record(z.string(), z.unknown())
-                  .optional()
-                  .describe('Query filter'),
-                projection: z
-                  .record(z.string(), z.union([z.literal(0), z.literal(1)]))
-                  .optional()
-                  .describe('Projection for find'),
-                limit: z.number().optional().describe('Max results'),
-                sort: z
-                  .union([
-                    z.record(z.string(), z.union([z.literal(1), z.literal(-1)])).describe('Sort as record'),
-                    z.array(z.string()).describe('Sort as array like ["field ASC", "field2 DESC"]'),
-                  ])
-                  .optional()
-                  .describe('Sort order'),
-                pipeline: z
-                  .union([
-                    z.string().describe('JSON string of pipeline array'),
-                    z.array(z.record(z.string(), z.unknown())).describe('Pipeline array'),
-                  ])
-                  .optional()
-                  .describe('Pipeline for aggregate'),
-                key: z.string().optional().describe('Field for distinct/min/max/sum/avg'),
-              }),
-            )
-            .min(1)
-            .max(10)
-            .describe('查询列表，最多10个'),
+            .unknown()
+            .describe('查询列表。必须是数组（不要传 JSON 字符串）。若参数不合法，工具会返回可纠错的结构化错误。'),
           tenantId: z.string().optional().describe('租户ID'),
         }),
       },
     );
 
     return [dataSourceQuery, dataSourceBatchQuery];
+  }
+
+  /**
+   * @description 规范化批量查询入参，避免参数类型错误导致工具直接失败。
+   * @keyword-en normalize batch query input
+   */
+  private normalizeBatchQueriesInput(input: unknown):
+    | { success: true; queries: unknown[] }
+    | { success: false; error: string; message: string; hint?: string } {
+    if (Array.isArray(input)) {
+      return { success: true, queries: input };
+    }
+
+    if (typeof input === 'string') {
+      try {
+        const parsed = JSON.parse(input);
+        if (Array.isArray(parsed)) {
+          return {
+            success: false,
+            error: 'QUERIES_STRINGIFIED_ARRAY',
+            message:
+              'queries 收到字符串化数组。请直接传数组，不要对 queries 使用 JSON.stringify。',
+            hint: '将 queries 从字符串改成原生数组后重试。',
+          };
+        }
+
+        return {
+          success: false,
+          error: 'QUERIES_STRING_NOT_ARRAY',
+          message: 'queries 字符串解析后不是数组。请传数组。',
+          hint: '示例：{"queries":[{"collection":"users","type":"find","filter":{},"limit":20}]}',
+        };
+      } catch {
+        return {
+          success: false,
+          error: 'QUERIES_STRING_INVALID_JSON',
+          message: 'queries 收到字符串且不是合法 JSON。请传数组，不要传字符串。',
+          hint: '示例：{"queries":[{"collection":"users","type":"find","filter":{},"limit":20}]}',
+        };
+      }
+    }
+
+    return {
+      success: false,
+      error: 'QUERIES_ARRAY_REQUIRED',
+      message: 'queries 参数必须是数组。',
+      hint: '示例：{"queries":[{"collection":"users","type":"find","filter":{},"limit":20}]}',
+    };
+  }
+
+  /**
+   * @description 将 Zod 校验错误格式化为可读结构，供 LLM 依据错误进行重试。
+   * @keyword-en format zod issues for llm retry
+   */
+  private formatZodIssues(
+    issues: z.ZodIssue[],
+  ): Array<{ path: string; message: string }> {
+    return issues.map((issue) => ({
+      path: issue.path.length > 0 ? issue.path.join('.') : '(root)',
+      message: issue.message,
+    }));
   }
 
   private buildSchemaMap(

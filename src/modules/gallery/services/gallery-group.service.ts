@@ -13,6 +13,11 @@ export class GalleryGroupService {
   private readonly groups: Collection<GalleryGroupEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
   private readonly VECTOR_INDEX_NAME = 'gallery_group_embedding_index';
+  private readonly DYNAMIC_COVER_GROUP_NAME = '动态封面';
+  private readonly DYNAMIC_COLLAGE_GROUP_NAME = '动态拼图';
+  private readonly DYNAMIC_COVER_ID = 'default_group_image';
+  private readonly DYNAMIC_COLLAGE_ID = 'default_collage_image';
+  private readonly LEGACY_COLLAGE_GROUP_NAME = '拼图封面';
   private isAtlasAvailable: boolean | null = null;
 
   constructor(
@@ -80,6 +85,25 @@ export class GalleryGroupService {
   }
 
   /**
+   * @description 安全生成文本向量，失败时回退零向量，避免分组创建中断。
+   * @param {string} text - 待向量化文本。
+   * @returns {Promise<number[]>} 向量数组。
+   * @keyword-en safe embed text with fallback
+   */
+  private async safeEmbedText(text: string): Promise<number[]> {
+    try {
+      const vec = await this.embedding.embedText(text);
+      if (Array.isArray(vec) && vec.length > 0) return vec;
+    } catch (error) {
+      console.warn(
+        '[GalleryGroupService.safeEmbedText] embedText failed, fallback to zero vector:',
+        error,
+      );
+    }
+    return new Array<number>(768).fill(0);
+  }
+
+  /**
    * @description 创建图库组（含 embedding 向量）。
    * @param {GalleryGroupCreateInput} input - 创建参数。
    * @returns {Promise<GalleryGroupEntity>} 新建的图库组实体。
@@ -96,7 +120,7 @@ export class GalleryGroupService {
       description: input.description,
       tags,
     });
-    const embedding = await this.embedding.embedText(embeddingText);
+    const embedding = await this.safeEmbedText(embeddingText);
 
     const doc: GalleryGroupEntity = {
       _id: new ObjectId(),
@@ -168,47 +192,214 @@ export class GalleryGroupService {
   }
 
   /**
-   * @description 查找或创建拼图/封面专用图库组。
-   * @param {string | undefined} userId - 用户ID。
-   * @param {string | undefined} tenantId - 租户ID。
-   * @returns {Promise<GalleryGroupEntity>} 找到或新建的组。
-   * @keyword gallery, groups, find-or-create-collage
-   * @since 2026-03-28
+   * @description 创建动态生成图片默认分组（封面/拼图）。
+   * @param {object} input - 分组创建参数。
+   * @returns {Promise<GalleryGroupEntity>} 新建分组实体。
+   * @keyword-en create default generated image group
    */
-  async findOrCreateCollageGroup(
-    userId: string | undefined,
-    tenantId?: string,
-  ): Promise<GalleryGroupEntity> {
-    const COLLAGE_GROUP_NAME = '拼图封面';
-    const existing = await this.findByName(COLLAGE_GROUP_NAME, userId, tenantId);
-    if (existing) return existing;
-
-    // 创建新组
+  private async createGeneratedGroup(input: {
+    name: string;
+    description: string;
+    tags: string[];
+    userId?: string;
+    tenantId?: string;
+  }): Promise<GalleryGroupEntity> {
     const now = new Date();
     const id = await this.nextId();
-    const tags = ['拼图', '封面', '自动生成'];
     const embeddingText = this.buildEmbeddingText({
-      name: COLLAGE_GROUP_NAME,
-      description: '自动生成的拼图和封面图片',
-      tags,
+      name: input.name,
+      description: input.description,
+      tags: input.tags,
     });
-    const embedding = await this.embedding.embedText(embeddingText);
+    const embedding = await this.safeEmbedText(embeddingText);
 
     const doc: GalleryGroupEntity = {
       _id: new ObjectId(),
       id,
-      userId: userId ?? 'default',
-      scope: (tenantId ? 'tenant' : 'tenant') as 'platform' | 'tenant',
-      tenantId: tenantId,
-      name: COLLAGE_GROUP_NAME,
-      description: '自动生成的拼图和封面图片',
-      tags,
+      userId: input.userId ?? 'default',
+      scope: 'tenant',
+      tenantId: input.tenantId,
+      name: input.name,
+      description: input.description,
+      tags: input.tags,
       embedding,
       createdAt: now,
       updatedAt: now,
     };
     await this.groups.insertOne(doc);
     return doc;
+  }
+
+  /**
+   * @description 查找或创建“动态封面”默认分组。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<GalleryGroupEntity>} 找到或新建的分组。
+   * @keyword-en find or create dynamic cover group
+   */
+  async findOrCreateDynamicCoverGroup(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<GalleryGroupEntity> {
+    // First check by name (with tenant filter)
+    const existing = await this.findByName(
+      this.DYNAMIC_COVER_GROUP_NAME,
+      userId,
+      tenantId,
+    );
+    if (existing) return existing;
+
+    // Also check by fixed ID to avoid duplicate key error
+    const byId = await this.groups.findOne(
+      { id: this.DYNAMIC_COVER_ID },
+      { projection: { _id: 0 } },
+    );
+    if (byId) return byId as GalleryGroupEntity;
+
+    // Use fixed string ID for dynamic cover group
+    const now = new Date();
+    const doc: GalleryGroupEntity = {
+      _id: new ObjectId(),
+      id: this.DYNAMIC_COVER_ID,
+      userId: userId ?? 'default',
+      scope: 'tenant',
+      tenantId,
+      name: this.DYNAMIC_COVER_GROUP_NAME,
+      description: 'auto generated cover image',
+      tags: ['封面', '自动生成', '动态封面'],
+      embedding: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.groups.insertOne(doc);
+    return doc;
+  }
+
+  /**
+   * @description 查找或创建”default collage image”默认分组；若命中历史”拼图封面”组则自动升级为新名称。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<GalleryGroupEntity>} 找到或新建的分组。
+   * @keyword-en find or create dynamic collage group
+   */
+  async findOrCreateDynamicCollageGroup(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<GalleryGroupEntity> {
+    // First check by name (with tenant filter)
+    const existing = await this.findByName(
+      this.DYNAMIC_COLLAGE_GROUP_NAME,
+      userId,
+      tenantId,
+    );
+    if (existing) return existing;
+
+    // Also check by fixed ID to avoid duplicate key error
+    const byId = await this.groups.findOne(
+      { id: this.DYNAMIC_COLLAGE_ID },
+      { projection: { _id: 0 } },
+    );
+    if (byId) return byId as GalleryGroupEntity;
+
+    const legacy = await this.findByName(
+      this.LEGACY_COLLAGE_GROUP_NAME,
+      userId,
+      tenantId,
+    );
+    if (legacy) {
+      await this.groups.updateOne(
+        { id: legacy.id },
+        {
+          $set: {
+            id: this.DYNAMIC_COLLAGE_ID,
+            name: this.DYNAMIC_COLLAGE_GROUP_NAME,
+            description: '自动生成的动态拼图图片',
+            tags: ['拼图', '自动生成', '动态拼图'],
+            updatedAt: new Date(),
+          },
+        },
+      );
+      const upgraded = await this.groups.findOne(
+        { id: this.DYNAMIC_COLLAGE_ID },
+        { projection: { _id: 0 } },
+      );
+      if (upgraded) return upgraded as GalleryGroupEntity;
+    }
+
+    // Use fixed string ID for dynamic collage group
+    const now = new Date();
+    const doc: GalleryGroupEntity = {
+      _id: new ObjectId(),
+      id: this.DYNAMIC_COLLAGE_ID,
+      userId: userId ?? 'default',
+      scope: 'tenant',
+      tenantId,
+      name: this.DYNAMIC_COLLAGE_GROUP_NAME,
+      description: '自动生成的动态拼图图片',
+      tags: ['拼图', '自动生成', '动态拼图'],
+      embedding: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.groups.insertOne(doc);
+    return doc;
+  }
+
+  /**
+   * @description 确保默认动态分组存在（动态封面、动态拼图）。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<{ coverGroup: GalleryGroupEntity; collageGroup: GalleryGroupEntity }>} 默认分组。
+   * @keyword-en ensure default generated groups
+   */
+  async ensureDefaultDynamicGroups(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<{ coverGroup: GalleryGroupEntity; collageGroup: GalleryGroupEntity }> {
+    const [coverGroup, collageGroup] = await Promise.all([
+      this.findOrCreateDynamicCoverGroup(userId, tenantId),
+      this.findOrCreateDynamicCollageGroup(userId, tenantId),
+    ]);
+    return { coverGroup, collageGroup };
+  }
+
+  /**
+   * @description 获取默认动态分组 ID（自动确保存在）。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<number[]>} 默认分组 ID 数组。
+   * @keyword-en get default generated group ids
+   */
+  async getDefaultDynamicGroupIds(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<number[]> {
+    const { coverGroup, collageGroup } = await this.ensureDefaultDynamicGroups(
+      userId,
+      tenantId,
+    );
+    return Array.from(
+      new Set(
+        [coverGroup.id, collageGroup.id].filter(
+          (id): id is number => typeof id === 'number' && Number.isFinite(id),
+        ),
+      ),
+    );
+  }
+
+  /**
+   * @description 兼容旧接口：查找或创建“动态拼图”默认分组。
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<GalleryGroupEntity>} 找到或新建的组。
+   * @keyword-en find or create collage group (compat)
+   * @since 2026-03-28
+   */
+  async findOrCreateCollageGroup(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<GalleryGroupEntity> {
+    return this.findOrCreateDynamicCollageGroup(userId, tenantId);
   }
 
   /**
@@ -285,7 +476,7 @@ export class GalleryGroupService {
         : cur.description;
     const tags = Array.isArray(input.tags) ? input.tags : cur.tags;
     const embeddingText = this.buildEmbeddingText({ name, description, tags });
-    const embedding = await this.embedding.embedText(embeddingText);
+    const embedding = await this.safeEmbedText(embeddingText);
 
     const upd: Record<string, unknown> = { updatedAt: new Date() };
     if (typeof input.name === 'string') upd.name = input.name;

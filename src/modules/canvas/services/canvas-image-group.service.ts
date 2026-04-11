@@ -1,10 +1,12 @@
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import { readFile, mkdir, access, copyFile, writeFile } from 'node:fs/promises';
+import { readFile, mkdir, access, copyFile, writeFile, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
+import { GalleryGroupService } from '../../gallery/services/gallery-group.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import { SassService } from '../../sass/services/sass.service.js';
 import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
 import type {
   CanvasImageGroup,
@@ -60,7 +62,9 @@ export class CanvasImageGroupService {
   private fontconfigSetupDone = false;
   constructor(
     private readonly gallery: GalleryService,
+    private readonly galleryGroups: GalleryGroupService,
     private readonly agentService: AgentService,
+    private readonly sassService: SassService,
   ) {}
 
   /**
@@ -95,14 +99,47 @@ export class CanvasImageGroupService {
     // 竖图需求最大 = articles * 6
     // 估算需要图片数 = articles * 12 + 20 张冗余
     const poolSize = Math.max(80, articles.length * 12 + 20);
-    let pool = await this.fetchImagePool(input, allTags, poolSize, 'regular');
+    const defaultGeneratedGroups =
+      await this.galleryGroups.ensureDefaultDynamicGroups(
+        input.userId,
+        input.tenantId,
+      );
+    const dynamicCoverGroupId = defaultGeneratedGroups.coverGroup.id;
+    const dynamicCollageGroupId = defaultGeneratedGroups.collageGroup.id;
+    const aiCoverEnabled = await this.isAiCoverEnabled(input.tenantId);
+    const excludedGeneratedGroupIds: (string | number)[] = [
+      dynamicCoverGroupId,
+      dynamicCollageGroupId,
+    ].filter(
+      (id): id is string | number =>
+        (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string',
+    );
+    let pool = await this.fetchImagePool(
+      input,
+      allTags,
+      poolSize,
+      'regular',
+      excludedGeneratedGroupIds,
+    );
+    pool = await this.supplementPoolWithRelatedTags(
+      pool,
+      input,
+      allTags,
+      poolSize,
+      'regular',
+      excludedGeneratedGroupIds,
+    );
+    pool = await this.supplementPoolWithRandom(
+      pool,
+      input,
+      poolSize,
+      excludedGeneratedGroupIds,
+    );
     // 对图片池进行随机打乱，避免封面和内页出现顺序性重复
     this.shuffleArray(pool);
     this.logger.debug(`[image-group] pool_ready pool=${pool.length} tags=${allTags.length}`);
 
-    // --- 3. 批量 LLM 生成封面文案（异步，失败则退回标题截短） ---
-    const coverTexts = await this.generateCoverTexts(input.topic, articles);
-
+    // --- 3. 全局去重集合 ---
     // 全局已使用图片 ID 集合（跨图组去重）
     const globalUsedIds = new Set<number>();
     // 全局已使用横图 ID 集合（拼图去重：避免同一张横图用于多个拼图）
@@ -121,21 +158,44 @@ export class CanvasImageGroupService {
       // 当前图组内已使用图片 ID（组内去重）
       const localUsedIds = new Set<number>();
       const groupImages: CanvasGroupImage[] = [];
+      const contextImages: GalleryImageEntity[] = [];
+      const contextImageIds = new Set<number>();
+      const collectContextImage = (img: GalleryImageEntity | null | undefined): void => {
+        if (!img) return;
+        if (contextImageIds.has(img.id)) return;
+        contextImageIds.add(img.id);
+        contextImages.push(img);
+      };
       let ok = true;
 
       // 封面
-      let coverResult: { img: GalleryImageEntity; text?: { title: string; subtitle: string } } | null = null;
+      let coverPlan:
+        | { kind: 'collage'; image: GalleryImageEntity; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string }
+        | { kind: 'portrait'; image: GalleryImageEntity; alreadyDesigned: boolean }
+        | null = null;
       if (spec.cover === 'collage') {
         // 动态拼图封面：选 2 张横图合成
-        const collageResult = await this.pickAndMakeCollage(pool, localUsedIds, globalUsedIds, globalUsedLandscapeIds, input);
+        const collageResult = await this.pickAndMakeCollage(
+          pool,
+          localUsedIds,
+          globalUsedIds,
+          globalUsedLandscapeIds,
+          input,
+          excludedGeneratedGroupIds,
+          art.tags,
+          dynamicCoverGroupId,
+          'cover',
+        );
         if (collageResult) {
-          const coverText = coverTexts[i] ?? this.buildCoverText(art.title, i);
-          const burnedUrl = await this.burnCollageCoverText({ imgA: collageResult.imgA, imgB: collageResult.imgB }, coverText);
-          const finalUrl = burnedUrl ?? collageResult.collageUrl;
-          coverResult = {
-            img: { ...collageResult.image, url: finalUrl, thumbUrl: finalUrl },
-            text: coverText,
+          coverPlan = {
+            kind: 'collage',
+            image: collageResult.image,
+            imgA: collageResult.imgA,
+            imgB: collageResult.imgB,
+            collageUrl: collageResult.collageUrl,
           };
+          collectContextImage(collageResult.imgA);
+          collectContextImage(collageResult.imgB);
           // 拼图来源图加入全局去重
           for (const sid of collageResult.sourceIds) {
             localUsedIds.add(sid);
@@ -148,24 +208,18 @@ export class CanvasImageGroupService {
         const coverImg = this.pickPortrait(pool, localUsedIds, globalUsedIds, globalUsedPortraitIds);
         if (coverImg) {
           const alreadyDesigned = this.hasCoverTag(coverImg);
-          const coverText = coverTexts[i] ?? this.buildCoverText(art.title, i);
-          // 原图已有封面tag → 自带文字设计，跳过文字合成
-          const burnedUrl = alreadyDesigned ? null : await this.burnCoverText(coverImg, coverText);
-          const finalImg = burnedUrl ? { ...coverImg, url: burnedUrl, thumbUrl: burnedUrl } : coverImg;
-          coverResult = {
-            img: finalImg,
-            text: alreadyDesigned ? undefined : coverText,
+          coverPlan = {
+            kind: 'portrait',
+            image: coverImg,
+            alreadyDesigned,
           };
+          collectContextImage(coverImg);
           localUsedIds.add(coverImg.id);
           globalUsedIds.add(coverImg.id);
           globalUsedPortraitIds.add(coverImg.id);
         }
       }
-      if (coverResult) {
-        groupImages.push(this.toGroupImage(coverResult.img, 'cover', coverResult.text));
-      } else {
-        ok = false;
-      }
+      if (!coverPlan) ok = false;
 
       // 内页
       const roleTypes: Array<'cover' | 'inner-1' | 'inner-2' | 'inner-3' | 'inner-4' | 'inner-5'> = ['inner-1', 'inner-2', 'inner-3', 'inner-4', 'inner-5'];
@@ -173,9 +227,21 @@ export class CanvasImageGroupService {
         const role = spec.inner[r];
         if (role === 'collage') {
           // 动态合成拼图：选 2 张横图合成
-          const collageResult = await this.pickAndMakeCollage(pool, localUsedIds, globalUsedIds, globalUsedLandscapeIds, input);
+          const collageResult = await this.pickAndMakeCollage(
+            pool,
+            localUsedIds,
+            globalUsedIds,
+            globalUsedLandscapeIds,
+            input,
+            excludedGeneratedGroupIds,
+            art.tags,
+            dynamicCollageGroupId,
+            'collage',
+          );
           if (collageResult) {
             groupImages.push(this.toGroupImage(collageResult.image, roleTypes[r]));
+            collectContextImage(collageResult.imgA);
+            collectContextImage(collageResult.imgB);
             // 合成图本身 ID=0 不加入任何集合，但要把来源图 ID 加入组内和全局去重集合
             for (const sid of collageResult.sourceIds) {
               localUsedIds.add(sid);
@@ -190,12 +256,101 @@ export class CanvasImageGroupService {
           const portraitImg = this.pickPortrait(pool, localUsedIds, globalUsedIds, globalUsedPortraitIds);
           if (portraitImg) {
             groupImages.push(this.toGroupImage(portraitImg, roleTypes[r]));
+            collectContextImage(portraitImg);
             localUsedIds.add(portraitImg.id);
             globalUsedIds.add(portraitImg.id);
             globalUsedPortraitIds.add(portraitImg.id);
           } else {
             ok = false;
           }
+        }
+      }
+
+      // 封面文案：按“本组最终配图”语义生成（tags + description 汇总）
+      if (coverPlan) {
+        const imageContext = this.summarizeImageContext(contextImages);
+        const coverText =
+          (await this.generateCoverTexts(input.topic, [art], [imageContext]))[0] ??
+          this.buildCoverText(art.title, i);
+
+        const aiCover = aiCoverEnabled
+          ? await this.tryGenerateAiCoverToGallery({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: input.topic,
+              articleTitle: art.title,
+              articleTags: art.tags,
+              imageContext,
+              coverText,
+              coverType: coverPlan.kind,
+              sourceImages:
+                coverPlan.kind === 'collage'
+                  ? [coverPlan.imgA, coverPlan.imgB]
+                  : [coverPlan.image],
+              dynamicCoverGroupId,
+            })
+          : null;
+
+        if (aiCover) {
+          groupImages.unshift(this.toGroupImage(aiCover, 'cover', coverText));
+          groups.push({
+            id: i + 1,
+            articleId: art.title ? undefined : undefined,
+            articleTitle: art.title,
+            layout,
+            images: groupImages,
+            status: ok ? 'done' : 'failed',
+          });
+          this.logger.debug(
+            `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'} cover=ai`,
+          );
+          continue;
+        }
+
+        if (coverPlan.kind === 'collage') {
+          const burnedUrl = await this.burnCollageCoverText(
+            { imgA: coverPlan.imgA, imgB: coverPlan.imgB },
+            coverText,
+          );
+          const finalUrl = burnedUrl ?? coverPlan.collageUrl;
+          const persistedCover = finalUrl === coverPlan.image.url
+            ? coverPlan.image
+            : await this.persistGeneratedAssetToGallery({
+                userId: input.userId,
+                tenantId: input.tenantId,
+                url: finalUrl,
+                generatedKind: 'cover',
+                groupId: dynamicCoverGroupId,
+                sourceImageIds: [coverPlan.imgA.id, coverPlan.imgB.id],
+                sourceImages: [coverPlan.imgA, coverPlan.imgB],
+                description: burnedUrl
+                  ? '画布拼图封面（已烧录文案）'
+                  : '画布拼图封面',
+              });
+          const finalCover = persistedCover ?? coverPlan.image;
+          groupImages.unshift(this.toGroupImage(finalCover, 'cover', coverText));
+        } else {
+          const burnedUrl = coverPlan.alreadyDesigned
+            ? null
+            : await this.burnCoverText(coverPlan.image, coverText);
+          const persistedCover = burnedUrl
+            ? await this.persistGeneratedAssetToGallery({
+                userId: input.userId,
+                tenantId: input.tenantId,
+                url: burnedUrl,
+                generatedKind: 'cover',
+                groupId: dynamicCoverGroupId,
+                sourceImageIds: [coverPlan.image.id],
+                sourceImages: [coverPlan.image],
+                description: '画布单图封面（已烧录文案）',
+              })
+            : null;
+          const finalCover = persistedCover ?? coverPlan.image;
+          const coverCopy =
+            coverPlan.alreadyDesigned || !persistedCover ? undefined : coverText;
+          groupImages.unshift(
+            this.toGroupImage(finalCover, 'cover', coverCopy),
+          );
         }
       }
 
@@ -207,7 +362,7 @@ export class CanvasImageGroupService {
         images: groupImages,
         status: ok ? 'done' : 'failed',
       });
-      this.logger.debug(`[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok && groupImages.length >= 2 ? 'done' : 'failed'}`);
+      this.logger.debug(`[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`);
     }
 
     return groups;
@@ -220,6 +375,10 @@ export class CanvasImageGroupService {
    * @param {Set<number>} globalUsedIds - 全局已使用 ID
    * @param {Set<number>} globalLandscapeIds - 全局已使用横图 ID
    * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 用户信息
+  * @param {number[]} [excludedGroupIds] - 需排除的默认动态分组ID
+  * @param {string[]} [relatedTags] - 本篇文章相关标签（用于相近标签补池）
+  * @param {string | number} [targetGroupId] - 生成图入库目标分组ID
+  * @param {'cover'|'collage'} [generatedKind='collage'] - 生成图类型
    * @returns {Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string } | null>}
    * @keyword-en pick two landscape images and make collage
    */
@@ -229,96 +388,300 @@ export class CanvasImageGroupService {
     globalUsedIds: Set<number>,
     globalLandscapeIds: Set<number>,
     userInput: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>,
+    excludedGroupIds?: (string | number)[],
+    relatedTags?: string[],
+    targetGroupId?: string | number,
+    generatedKind: 'cover' | 'collage' = 'collage',
   ): Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string } | null> {
-    // 优先：从横图中选 2 张都未在全局使用过的
-    const landscapeAvailable = pool.filter(
-      (img) =>
-        !localUsedIds.has(img.id) &&
-        !globalUsedIds.has(img.id) &&
-        img.isPortrait !== true,
-    );
-    let pickA: GalleryImageEntity | null = null;
-    let pickB: GalleryImageEntity | null = null;
-    // 优先1：两张横图都未使用
-    for (let i = 0; i < landscapeAvailable.length; i++) {
-      for (let j = i + 1; j < landscapeAvailable.length; j++) {
-        const a = landscapeAvailable[i];
-        const b = landscapeAvailable[j];
-        if (!globalLandscapeIds.has(a.id) && !globalLandscapeIds.has(b.id)) {
-          pickA = a; pickB = b; break;
-        }
-      }
-      if (pickA) break;
-    }
-    // 优先2：降级——允许一张已使用
-    if (!pickA) {
-      for (let i = 0; i < landscapeAvailable.length; i++) {
-        for (let j = i + 1; j < landscapeAvailable.length; j++) {
-          const a = landscapeAvailable[i];
-          const b = landscapeAvailable[j];
-          const aUsed = globalLandscapeIds.has(a.id);
-          const bUsed = globalLandscapeIds.has(b.id);
-          if (aUsed && !bUsed) { pickA = b; pickB = a; break; }
-          if (!aUsed && bUsed) { pickA = a; pickB = b; break; }
-        }
-        if (pickA) break;
-      }
-    }
-    // 降级3：横图不够时，从图库补充随机横图（不能是拼图或封面）
-    if (!pickA) {
-      try {
-        // 从图库获取随机图片，在内存中过滤横图
-        const randomImages = await this.gallery.sampleRandom({
-          userId: userInput.userId,
-          tenantId: userInput.tenantId,
-          limit: 20,
-        });
-        const randomLandscape = randomImages.filter(
-          (img) =>
-            !localUsedIds.has(img.id) &&
-            !globalUsedIds.has(img.id) &&
-            img.isPortrait !== true,
-        );
-        if (randomLandscape.length >= 2) {
-          pickA = randomLandscape[0];
-          pickB = randomLandscape[1];
-        } else if (randomLandscape.length === 1) {
-          // 只有 1 张随机横图，再从池子里找 1 张
-          const remaining = landscapeAvailable.filter(
-            (img) => !localUsedIds.has(img.id) && !globalUsedIds.has(img.id),
-          );
-          if (remaining.length > 0) {
-            pickA = remaining[0];
-            pickB = randomLandscape[0];
+    const pairKey = (a: GalleryImageEntity, b: GalleryImageEntity): string =>
+      a.id < b.id ? `${a.id}-${b.id}` : `${b.id}-${a.id}`;
+
+    const pickPair = (
+      candidates: GalleryImageEntity[],
+      options: {
+        requireBothFreshLandscape?: boolean;
+        requireAtLeastOneFreshLandscape?: boolean;
+      } = {},
+      tried: Set<string>,
+    ): [GalleryImageEntity, GalleryImageEntity] | null => {
+      if (candidates.length < 2) return null;
+      for (let i = 0; i < candidates.length; i++) {
+        for (let j = i + 1; j < candidates.length; j++) {
+          const a = candidates[i];
+          const b = candidates[j];
+          if (a.id === b.id) continue;
+          const k = pairKey(a, b);
+          if (tried.has(k)) continue;
+
+          if (options.requireBothFreshLandscape) {
+            if (globalLandscapeIds.has(a.id) || globalLandscapeIds.has(b.id)) continue;
           }
+          if (options.requireAtLeastOneFreshLandscape) {
+            if (globalLandscapeIds.has(a.id) && globalLandscapeIds.has(b.id)) continue;
+          }
+          return [a, b];
         }
-      } catch (err) {
-        this.logger.warn(`[image-group] failed to fetch random landscape images: ${err}`);
       }
-    }
-    if (!pickA || !pickB) {
-      this.logger.warn(`[image-group] not enough landscape images for collage`);
       return null;
+    };
+
+    const buildCandidates = (
+      allowGlobalReuse: boolean,
+    ): { landscape: GalleryImageEntity[]; any: GalleryImageEntity[] } => {
+      const any = pool.filter((img) => {
+        if (localUsedIds.has(img.id)) return false;
+        if (!allowGlobalReuse && globalUsedIds.has(img.id)) return false;
+        return this.isLocalImageReadable(img);
+      });
+      const landscape = any.filter((img) => img.isPortrait !== true);
+      return { landscape, any };
+    };
+
+    const triedPairs = new Set<string>();
+    pool = await this.supplementPoolWithRelatedTags(
+      pool,
+      userInput,
+      Array.isArray(relatedTags) ? relatedTags : [],
+      Math.max(120, pool.length + 40),
+      'regular',
+      excludedGroupIds,
+    );
+    // 先拉一次补充池，优先保证有足够可读本地图可用于拼图
+    pool = await this.supplementPoolWithRandom(
+      pool,
+      userInput,
+      Math.max(120, pool.length + 40),
+      excludedGroupIds,
+    );
+
+    const attemptPick = (): [GalleryImageEntity, GalleryImageEntity] | null => {
+      // 1) 横图 + 两张都未占用（全局唯一优先）
+      {
+        const { landscape } = buildCandidates(false);
+        const pair = pickPair(landscape, { requireBothFreshLandscape: true }, triedPairs);
+        if (pair) return pair;
+      }
+      // 2) 横图 + 至少一张未占用
+      {
+        const { landscape } = buildCandidates(false);
+        const pair = pickPair(landscape, { requireAtLeastOneFreshLandscape: true }, triedPairs);
+        if (pair) return pair;
+      }
+      // 3) 任意方向 + 两张都未占用（仍保持全局唯一）
+      {
+        const { any } = buildCandidates(false);
+        const pair = pickPair(any, {}, triedPairs);
+        if (pair) return pair;
+      }
+      // 4) 最后降级：允许跨组复用，但仍要求组内不重复，且绝不允许同图双拼
+      {
+        const { any } = buildCandidates(true);
+        const pair = pickPair(any, {}, triedPairs);
+        if (pair) return pair;
+      }
+      return null;
+    };
+
+    // 多轮尝试：合成失败就换一对继续尝试
+    for (let round = 0; round < 8; round++) {
+      const pair = attemptPick();
+      if (!pair) break;
+      const [pickA, pickB] = pair;
+      triedPairs.add(pairKey(pickA, pickB));
+      const collageUrl = await this.createDynamicCollageFile(pickA, pickB);
+      if (!collageUrl) continue;
+
+      const sourceIds = [pickA.id, pickB.id];
+      const persisted = await this.persistGeneratedAssetToGallery({
+        userId: userInput.userId,
+        tenantId: userInput.tenantId,
+        url: collageUrl,
+        generatedKind,
+        groupId: targetGroupId,
+        sourceImageIds: sourceIds,
+        sourceImages: [pickA, pickB],
+        description:
+          generatedKind === 'cover' ? '画布动态拼图封面' : '画布动态拼图内页',
+      });
+      if (!persisted) {
+        this.logger.warn(
+          `[image-group] generated collage not persisted, skip pair a=${pickA.id} b=${pickB.id}`,
+        );
+        continue;
+      }
+      return {
+        image: persisted,
+        sourceIds,
+        imgA: pickA,
+        imgB: pickB,
+        collageUrl: persisted.url,
+      };
     }
 
-    const sourceIds = [pickA!.id, pickB!.id];
-    // 动态合成拼图
-    const collageUrl = await this.createDynamicCollageFile(pickA!, pickB!);
-    if (!collageUrl) {
-      this.logger.warn(`[image-group] collage synthesis failed`);
+    this.logger.warn(`[image-group] collage synthesis failed after retries`);
+    return null;
+  }
+
+  /**
+   * @description 判断当前租户是否开启 AI 封面。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<boolean>} 是否开启。
+   * @keyword-en resolve ai cover toggle by tenant
+   */
+  private async isAiCoverEnabled(tenantId?: string): Promise<boolean> {
+    try {
+      const info = await this.sassService.getPlatformInfo(tenantId);
+      return info?.enableAiCover === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * @description 推演封面生图提示词（优先LLM，失败回退模板）。
+   * @param {object} input - 提示词上下文。
+   * @returns {Promise<string>} 生图提示词。
+   * @keyword-en infer ai cover prompt by llm
+   */
+  private async buildAiCoverPrompt(input: {
+    topic?: string;
+    articleTitle?: string;
+    articleTags?: string[];
+    imageContext: { tags: string[]; descriptions: string[] };
+    coverText: { title: string; subtitle: string };
+    coverType: 'portrait' | 'collage';
+  }): Promise<string> {
+    const appendCoverTextDirectives = (rawPrompt: string): string => {
+      const core = String(rawPrompt ?? '').replace(/\s+/g, ' ').trim();
+      return [
+        core,
+        input.coverText.title ? `封面主标题:${input.coverText.title}` : '',
+        input.coverText.subtitle ? `封面副标题:${input.coverText.subtitle}` : '',
+        '文案呈现:请将封面主标题与副标题以浮动文字形式显示在画面中，确保清晰可读且不被遮挡',
+      ]
+        .filter((x) => x.length > 0)
+        .join('；');
+    };
+
+    const fallback = [
+      '小红书封面图',
+      input.coverType === 'collage' ? '拼图风格' : '单图风格',
+      input.topic ? `主题:${input.topic}` : '',
+      input.articleTitle ? `标题:${input.articleTitle}` : '',
+      input.coverText.title ? `主文案:${input.coverText.title}` : '',
+      input.coverText.subtitle ? `副文案:${input.coverText.subtitle}` : '',
+      input.imageContext.tags.length > 0
+        ? `视觉元素:${input.imageContext.tags.slice(0, 10).join(',')}`
+        : '',
+      '竖版 640x853，清晰，高对比，适合移动端封面',
+    ]
+      .filter((x) => x.length > 0)
+      .join('；');
+
+    try {
+      const llm = await this.agentService.buildLLM({
+        nonStreaming: true,
+        temperature: 0.4,
+      });
+      const msg = [
+        '你是一名封面视觉提示词工程师。',
+        '请根据输入信息输出 1 条中文生图提示词。',
+        '要求：不超过 180 字，必须可直接用于图片生成；包含主体、风格、构图、光线、质感。',
+        '禁止输出 markdown、代码块、解释性文字。',
+        JSON.stringify({
+          topic: input.topic,
+          articleTitle: input.articleTitle,
+          articleTags: input.articleTags,
+          coverType: input.coverType,
+          coverText: input.coverText,
+          imageContext: input.imageContext,
+        }),
+      ].join('\n');
+      const result = await llm.invoke(msg);
+      const content = result?.content;
+      let text = '';
+      if (typeof content === 'string') {
+        text = content;
+      } else if (Array.isArray(content)) {
+        text = content
+          .map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+              const rec = item as Record<string, unknown>;
+              if (typeof rec['text'] === 'string') return rec['text'];
+              if (typeof rec['content'] === 'string') return rec['content'];
+            }
+            return '';
+          })
+          .join(' ');
+      }
+      const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
+      if (normalized.length >= 8) {
+        return appendCoverTextDirectives(normalized.slice(0, 240));
+      }
+      return appendCoverTextDirectives(fallback);
+    } catch {
+      return appendCoverTextDirectives(fallback);
+    }
+  }
+
+  /**
+   * @description 调用生图模型生成封面并落图库。
+   * @param {object} input - 生图输入。
+   * @returns {Promise<GalleryImageEntity | null>} 生成并入库后的封面图。
+   * @keyword-en generate ai cover and persist to gallery
+   */
+  private async tryGenerateAiCoverToGallery(input: {
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articleTitle?: string;
+    articleTags?: string[];
+    imageContext: { tags: string[]; descriptions: string[] };
+    coverText: { title: string; subtitle: string };
+    coverType: 'portrait' | 'collage';
+    sourceImages: GalleryImageEntity[];
+    dynamicCoverGroupId: string | number;
+  }): Promise<GalleryImageEntity | null> {
+    try {
+      const prompt = await this.buildAiCoverPrompt({
+        topic: input.topic,
+        articleTitle: input.articleTitle,
+        articleTags: input.articleTags,
+        imageContext: input.imageContext,
+        coverText: input.coverText,
+        coverType: input.coverType,
+      });
+      const baseImageCandidates = input.sourceImages
+        .map((img) => this.resolveLocalPath(img) ?? String(img.url ?? '').trim())
+        .filter((x): x is string => String(x ?? '').trim().length > 0)
+        .slice(0, 6);
+
+      const generated = await this.agentService.sendPrompt({
+        prompt,
+        size: '640x853',
+        baseImageCandidates,
+      });
+
+      const sourceImageIds = input.sourceImages
+        .map((img) => Number(img?.id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .slice(0, 2);
+
+      return await this.persistGeneratedAssetToGallery({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        url: generated.imagePath,
+        generatedKind: 'cover',
+        groupId: input.dynamicCoverGroupId,
+        sourceImageIds,
+        sourceImages: input.sourceImages,
+        description: `AI生成封面（${generated.providerCode}:${generated.model}）`,
+      });
+    } catch (err) {
+      this.logger.warn(`[image-group] ai_cover_generate_failed: ${err}`);
       return null;
     }
-    // 构造一个合成图的虚拟 entity（isCollage=true，collageSourceImageIds 记录来源）
-    const collageImage = {
-      id: 0, // 临时 ID，实际不会用
-      url: collageUrl,
-      thumbUrl: collageUrl,
-      isCollage: true,
-      isPortrait: false,
-      collageSourceImageIds: sourceIds,
-      tags: [],
-    } as unknown as GalleryImageEntity;
-    return { image: collageImage, sourceIds, imgA: pickA!, imgB: pickB!, collageUrl };
   }
 
   /**
@@ -523,6 +886,7 @@ export class CanvasImageGroupService {
     tags: string[],
     wantCountOrType: number | 'regular' | 'collage',
     imageType?: 'regular' | 'collage',
+    excludedGroupIds?: (string | number)[],
   ): Promise<GalleryImageEntity[]> {
     let wantCount = 60;
     let imgType: 'regular' | 'collage' = 'regular';
@@ -545,7 +909,7 @@ export class CanvasImageGroupService {
     }
 
     // 去重
-    const deduped = this.dedup(images);
+    const deduped = this.dedup(this.filterOutExcludedGroups(images, excludedGroupIds));
     if (deduped.length >= wantCount) return deduped;
 
     // 不足时补随机
@@ -554,7 +918,10 @@ export class CanvasImageGroupService {
       input.tenantId,
       { imageType: imgType, limit: wantCount },
     );
-    const merged = this.dedup([...deduped, ...more]);
+    const merged = this.dedup([
+      ...deduped,
+      ...this.filterOutExcludedGroups(more, excludedGroupIds),
+    ]);
     return merged;
   }
 
@@ -569,32 +936,76 @@ export class CanvasImageGroupService {
   }
 
   /**
+   * @description 汇总一组配图的语义上下文（标签 + 描述），用于生成相关封面文案
+   * @param {GalleryImageEntity[]} images - 本组配图来源图（去重后）
+   * @returns {{ tags: string[]; descriptions: string[] }}
+   * @keyword-en summarize image semantic context for cover copy
+   */
+  private summarizeImageContext(
+    images: GalleryImageEntity[],
+  ): { tags: string[]; descriptions: string[] } {
+    const tagSet = new Set<string>();
+    const descSet = new Set<string>();
+
+    for (const img of images) {
+      for (const t of Array.isArray(img.tags) ? img.tags : []) {
+        const s = String(t ?? '').trim();
+        if (!s) continue;
+        tagSet.add(s);
+      }
+      const d = String(img.description ?? '').trim();
+      if (d.length > 0) descSet.add(d);
+    }
+
+    return {
+      tags: Array.from(tagSet).slice(0, 40),
+      descriptions: Array.from(descSet).slice(0, 10),
+    };
+  }
+
+  /**
    * @description 批量生成封面文案（主标题+副标题）：优先 LLM 生成，失败则退回标题截短
    * @param {string | undefined} topic - 主题
    * @param {Array<{ title: string; tags: string[] }>} articles - 文章列表
+   * @param {Array<{ tags: string[]; descriptions: string[] }>} [imageContexts] - 每篇文章对应的配图语义上下文
    * @returns {Promise<Array<{title: string; subtitle: string}>>} 每篇文章对应的封面主副标题
    * @keyword-en batch generate cover title and subtitle via LLM with fallback
    */
   private async generateCoverTexts(
     topic: string | undefined,
     articles: Array<{ title: string; tags: string[] }>,
+    imageContexts?: Array<{ tags: string[]; descriptions: string[] }>,
   ): Promise<Array<{ title: string; subtitle: string }>> {
     const fallback = articles.map((a, i) => this.buildCoverText(a.title, i));
     try {
       const llm = await this.agentService.buildLLM({ nonStreaming: true, temperature: 0.8 });
       const titlesBlock = articles
-        .map((a, i) => `${i + 1}. ${a.title}`)
+        .map((a, i) => {
+          const articleTags = Array.isArray(a.tags) ? a.tags.filter((t) => String(t ?? '').trim().length > 0) : [];
+          const ctx = imageContexts?.[i];
+          const ctxTags = Array.isArray(ctx?.tags) ? ctx!.tags.slice(0, 24) : [];
+          const ctxDescs = Array.isArray(ctx?.descriptions) ? ctx!.descriptions.slice(0, 6) : [];
+          const parts = [
+            `${i + 1}. 文章标题：${a.title}`,
+            articleTags.length > 0 ? `   文章标签：${articleTags.join('、')}` : '',
+            ctxTags.length > 0 ? `   配图标签汇总：${ctxTags.join('、')}` : '',
+            ctxDescs.length > 0 ? `   配图描述汇总：${ctxDescs.join('；')}` : '',
+          ].filter((x) => x.length > 0);
+          return parts.join('\n');
+        })
         .join('\n');
       const topicCtx = topic ? `主题：${topic}\n` : '';
       const prompt = [
-        '你是一名小红书封面文案专家。根据以下文章标题列表，为每篇文章生成封面主标题和副标题。',
+        '你是一名小红书封面文案专家。根据以下文章与配图语义信息，为每篇文章生成封面主标题和副标题。',
         '要求：',
         '- 主标题：6-16 个汉字，简洁有力、吸引点击',
         '- 副标题：10-24 个汉字，补充描述或引发兴趣',
+        '- 文案必须与配图标签和配图描述强相关，不得脱离配图语义凭空发挥',
+        '- 若文章标题与配图语义冲突，优先以配图语义为准，并尽量兼顾文章主题',
         '- 每条唯一不重复，不加引号、序号或多余标点，特别是禁止使用破折号（——或--）和省略号（…或...）',
         '',
         topicCtx,
-        '文章标题列表：',
+        '文章与配图信息列表：',
         titlesBlock,
         '',
         `请严格用 JSON 数组格式回复，数量等于 ${articles.length}。示例：[{"title":"主标题1","subtitle":"副标题1"},{"title":"主标题2","subtitle":"副标题2"}]`,
@@ -944,6 +1355,402 @@ export class CanvasImageGroupService {
       if (!map.has(img.id)) map.set(img.id, img);
     }
     return Array.from(map.values());
+  }
+
+  /**
+   * @description 过滤掉指定分组中的图片（用于排除动态封面/动态拼图来源图）。
+   * @param {GalleryImageEntity[]} list - 原始图片列表。
+   * @param {number[]} [excludedGroupIds] - 需排除的分组ID。
+   * @returns {GalleryImageEntity[]} 过滤后列表。
+   * @keyword-en filter out excluded group images
+   */
+  private filterOutExcludedGroups(
+    list: GalleryImageEntity[],
+    excludedGroupIds?: (string | number)[],
+  ): GalleryImageEntity[] {
+    const excluded = new Set(
+      (excludedGroupIds ?? []).filter(
+        (id): id is number => typeof id === 'number' && Number.isFinite(id),
+      ),
+    );
+    if (excluded.size === 0) return Array.isArray(list) ? list : [];
+    return (Array.isArray(list) ? list : []).filter((img) => {
+      const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
+      return !(Number.isFinite(gid) && excluded.has(gid));
+    });
+  }
+
+  /**
+   * @description 通过随机样本补充图片池到目标规模（尽量去重）
+   * @param {GalleryImageEntity[]} pool - 当前池
+   * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 用户作用域
+   * @param {number} targetSize - 目标数量
+   * @returns {Promise<GalleryImageEntity[]>}
+   * @keyword-en supplement image pool by random samples
+   */
+  private async supplementPoolWithRandom(
+    pool: GalleryImageEntity[],
+    input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>,
+    targetSize: number,
+    excludedGroupIds?: (string | number)[],
+  ): Promise<GalleryImageEntity[]> {
+    let merged = this.dedup(this.filterOutExcludedGroups(pool, excludedGroupIds));
+    if (merged.length >= targetSize) return merged;
+    for (let i = 0; i < 4 && merged.length < targetSize; i++) {
+      try {
+        const random = await this.gallery.sampleRandom({
+          userId: input.userId,
+          tenantId: input.tenantId,
+          limit: 60,
+        });
+        const next = this.dedup([
+          ...merged,
+          ...this.filterOutExcludedGroups(random, excludedGroupIds),
+        ]);
+        if (next.length === merged.length) break;
+        merged = next;
+      } catch {
+        break;
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * @description 构造相近标签集合：保留原标签并提取关键词，供图片不足时做相近补池。
+   * @param {string[]} tags - 原始标签。
+   * @returns {string[]} 扩展后的相近标签列表。
+   * @keyword-en build related tags for fallback search
+   */
+  private buildRelatedTags(tags: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (raw: unknown): void => {
+      const t = String(raw ?? '').trim();
+      if (!t) return;
+      if (seen.has(t)) return;
+      seen.add(t);
+      out.push(t);
+    };
+
+    for (const raw of Array.isArray(tags) ? tags : []) {
+      const tag = String(raw ?? '').trim();
+      if (!tag) continue;
+      push(tag);
+
+      const normalized = tag
+        .replace(/^#+/g, '')
+        .replace(/[【】\[\]()（）]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      push(normalized);
+
+      const tokens = normalized
+        .split(/[,\s，、/|_\\-]+/g)
+        .map((x) => x.trim())
+        .filter((x) => x.length >= 2);
+      for (const token of tokens) push(token);
+
+      if (normalized.length >= 4) {
+        push(normalized.slice(0, 4));
+        push(normalized.slice(-4));
+      }
+      if (normalized.length >= 6) {
+        const midStart = Math.floor((normalized.length - 4) / 2);
+        push(normalized.slice(midStart, midStart + 4));
+      }
+    }
+
+    return out.slice(0, 80);
+  }
+
+  /**
+   * @description 使用相近标签补充图片池，避免仅随机补图导致语义漂移。
+   * @param {GalleryImageEntity[]} pool - 当前图片池。
+   * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 用户作用域。
+   * @param {string[]} seedTags - 原始标签。
+   * @param {number} targetSize - 目标池大小。
+   * @param {'regular'|'collage'} imageType - 目标图片类型。
+   * @param {number[]} [excludedGroupIds] - 需排除分组。
+   * @returns {Promise<GalleryImageEntity[]>} 补充后的图片池。
+   * @keyword-en supplement pool with semantically related tags
+   */
+  private async supplementPoolWithRelatedTags(
+    pool: GalleryImageEntity[],
+    input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>,
+    seedTags: string[],
+    targetSize: number,
+    imageType: 'regular' | 'collage',
+    excludedGroupIds?: (string | number)[],
+  ): Promise<GalleryImageEntity[]> {
+    let merged = this.dedup(this.filterOutExcludedGroups(pool, excludedGroupIds));
+    if (merged.length >= targetSize) return merged;
+
+    const relatedTags = this.buildRelatedTags(seedTags);
+    if (relatedTags.length === 0) return merged;
+
+    const chunkSize = 24;
+    for (let i = 0; i < 4 && merged.length < targetSize; i++) {
+      const chunk = relatedTags.slice(i * chunkSize, (i + 1) * chunkSize);
+      if (chunk.length === 0) break;
+      try {
+        const fetched = await this.gallery.searchByTags({
+          userId: input.userId,
+          tenantId: input.tenantId,
+          tags: chunk,
+          limit: Math.max(40, Math.min(120, targetSize - merged.length + 20)),
+          imageType,
+        });
+        const next = this.dedup([
+          ...merged,
+          ...this.filterOutExcludedGroups(fetched, excludedGroupIds),
+        ]);
+        if (next.length === merged.length) continue;
+        merged = next;
+      } catch {
+        break;
+      }
+    }
+    return merged;
+  }
+
+  /**
+   * @description 从上传URL解析图库落库所需的文件名与绝对路径。
+   * @param {string} url - 图片URL。
+   * @returns {{ fileName: string; absPath: string; normalizedUrl: string } | null} 解析结果。
+   * @keyword-en resolve generated upload file info from url
+   */
+  private resolveGeneratedUploadFileInfo(
+    url: string,
+  ): { fileName: string; absPath: string; normalizedUrl: string } | null {
+    const raw = String(url ?? '').trim().replace(/\\/g, '/');
+    if (!raw || /^https?:\/\//i.test(raw)) return null;
+
+    const staticPrefix = '/static/uploads/';
+    const uploadPrefix = '/uploads/';
+    let rel = '';
+
+    if (raw.startsWith(staticPrefix)) {
+      rel = raw.slice(staticPrefix.length);
+    } else if (raw.startsWith(uploadPrefix)) {
+      rel = raw.slice(uploadPrefix.length);
+    } else if (raw.startsWith('/')) {
+      rel = raw.replace(/^\/+/, '');
+      if (rel.startsWith('static/uploads/')) rel = rel.slice('static/uploads/'.length);
+      if (rel.startsWith('uploads/')) rel = rel.slice('uploads/'.length);
+    } else {
+      rel = raw;
+    }
+
+    const safeRel = rel
+      .split('/')
+      .map((seg) => seg.trim())
+      .filter((seg) => seg.length > 0 && seg !== '.' && seg !== '..')
+      .join('/');
+    if (!safeRel) return null;
+
+    return {
+      fileName: safeRel,
+      absPath: join(process.cwd(), 'public', 'uploads', safeRel),
+      normalizedUrl: `${staticPrefix}${safeRel}`,
+    };
+  }
+
+  /**
+   * @description 读取图片尺寸信息（宽/高/是否竖图）。
+   * @param {string} absPath - 图片绝对路径。
+   * @returns {Promise<{ width: number; height: number; isPortrait: boolean } | null>} 尺寸信息。
+   * @keyword-en read local image dimensions
+   */
+  private async getImageDimensionsFromAbsPath(
+    absPath: string,
+  ): Promise<{ width: number; height: number; isPortrait: boolean } | null> {
+    const sharp = await this.loadSharp();
+    if (!sharp) return null;
+    try {
+      const meta = await sharp(absPath).metadata();
+      const width = Number(meta.width);
+      const height = Number(meta.height);
+      if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+      if (width <= 0 || height <= 0) return null;
+      return {
+        width: Math.floor(width),
+        height: Math.floor(height),
+        isPortrait: height > width,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * @description 组装生成图片标签（保留来源语义并打上动态封面/拼图类型标签）。
+   * @param {'cover'|'collage'} generatedKind - 生成类型。
+   * @param {GalleryImageEntity[]} [sourceImages] - 来源图片。
+   * @returns {string[]} 标签列表。
+   * @keyword-en build generated asset tags
+   */
+  private buildGeneratedAssetTags(
+    generatedKind: 'cover' | 'collage',
+    sourceImages?: GalleryImageEntity[],
+  ): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const push = (raw: unknown): void => {
+      const t = String(raw ?? '').trim();
+      if (!t) return;
+      if (seen.has(t)) return;
+      seen.add(t);
+      out.push(t);
+    };
+
+    for (const img of Array.isArray(sourceImages) ? sourceImages : []) {
+      for (const t of Array.isArray(img.tags) ? img.tags : []) {
+        push(t);
+      }
+    }
+
+    if (generatedKind === 'cover') {
+      ['封面', 'canvas封面', '自动封面', '动态封面', '自动生成'].forEach(push);
+    } else {
+      ['拼图', '拼图封面', '动态拼图', '自动拼图', '自动生成'].forEach(push);
+    }
+    return out.slice(0, 40);
+  }
+
+  /**
+   * @description 将画布生成出的拼图/封面文件持久化到图库，确保返回真实 imageId。
+   * @param {{ userId: string; tenantId?: string; url: string; generatedKind: 'cover'|'collage'; groupId?: string | number; sourceImageIds?: number[]; sourceImages?: GalleryImageEntity[]; description?: string }} input - 持久化入参。
+   * @returns {Promise<GalleryImageEntity | null>} 入库后的图库实体。
+   * @keyword-en persist generated canvas asset to gallery
+   */
+  private async persistGeneratedAssetToGallery(input: {
+    userId: string;
+    tenantId?: string;
+    url: string;
+    generatedKind: 'cover' | 'collage';
+    groupId?: string | number;
+    sourceImageIds?: number[];
+    sourceImages?: GalleryImageEntity[];
+    description?: string;
+  }): Promise<GalleryImageEntity | null> {
+    const file = this.resolveGeneratedUploadFileInfo(input.url);
+    if (!file) {
+      this.logger.warn(
+        `[image-group] persistGeneratedAssetToGallery skip: invalid url=${input.url}`,
+      );
+      return null;
+    }
+    if (!existsSync(file.absPath)) {
+      this.logger.warn(
+        `[image-group] persistGeneratedAssetToGallery skip: file not found path=${file.absPath}`,
+      );
+      return null;
+    }
+
+    const isValidGroupId = (id: unknown): id is string | number =>
+      (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string';
+    let finalGroupId = isValidGroupId(input.groupId) ? input.groupId : undefined;
+    if (finalGroupId === undefined) {
+      if (input.generatedKind === 'cover') {
+        const coverGroup = await this.galleryGroups.findOrCreateDynamicCoverGroup(
+          input.userId,
+          input.tenantId,
+        );
+        finalGroupId = coverGroup.id;
+      } else {
+        const collageGroup =
+          await this.galleryGroups.findOrCreateDynamicCollageGroup(
+            input.userId,
+            input.tenantId,
+          );
+        finalGroupId = collageGroup.id;
+      }
+    }
+
+    let size: number | undefined;
+    try {
+      const st = await stat(file.absPath);
+      if (Number.isFinite(st.size) && st.size > 0) {
+        size = Math.floor(st.size);
+      }
+    } catch {
+      size = undefined;
+    }
+
+    const dimensions = await this.getImageDimensionsFromAbsPath(file.absPath);
+    const width = dimensions?.width ?? COLLAGE_WIDTH;
+    const height = dimensions?.height ?? COLLAGE_HEIGHT;
+    const isPortrait = dimensions?.isPortrait ?? height > width;
+
+    const ext = extname(file.fileName).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+    const thumb = await this.gallery.generateThumbnail(file.absPath, file.fileName);
+
+    const sourceIds = Array.isArray(input.sourceImageIds)
+      ? input.sourceImageIds
+          .map((x) => Number(x))
+          .filter((x) => Number.isFinite(x))
+          .slice(0, 2)
+      : [];
+
+    const tags = this.buildGeneratedAssetTags(input.generatedKind, input.sourceImages);
+    const originalName = file.fileName.includes('/')
+      ? file.fileName.slice(file.fileName.lastIndexOf('/') + 1)
+      : file.fileName;
+
+    try {
+      const docs = await this.gallery.createMany([
+        {
+          userId: input.userId,
+          tenantId: input.tenantId,
+          groupId: finalGroupId,
+          originalName,
+          fileName: file.fileName,
+          url: file.normalizedUrl,
+          absPath: file.absPath,
+          thumbFileName: thumb?.thumbFileName,
+          thumbUrl: thumb?.thumbUrl,
+          mimeType,
+          size,
+          width,
+          height,
+          tags,
+          description:
+            input.description ??
+            (input.generatedKind === 'cover' ? '画布动态封面' : '画布动态拼图'),
+          isCollage: true,
+          collageSourceImageIds: sourceIds.length > 0 ? sourceIds : undefined,
+          collageMeta: {
+            width,
+            height,
+            dpi: 96,
+          },
+        },
+      ]);
+      const first = Array.isArray(docs) && docs.length > 0 ? docs[0] : null;
+      if (!first) return null;
+      return {
+        ...first,
+        isPortrait,
+      } as GalleryImageEntity;
+    } catch (error) {
+      this.logger.warn(
+        `[image-group] persistGeneratedAssetToGallery failed url=${file.normalizedUrl} err=${error}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * @description 判断图片是否可作为拼图源图（可解析到本地且文件存在）
+   * @param {GalleryImageEntity} img - 图片实体
+   * @returns {boolean}
+   * @keyword-en check collage source local readability
+   */
+  private isLocalImageReadable(img: GalleryImageEntity): boolean {
+    const p = this.resolveLocalPath(img);
+    return !!p && existsSync(p);
   }
 
   /**

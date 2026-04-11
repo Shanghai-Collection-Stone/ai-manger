@@ -4,7 +4,7 @@ services:
     image: node:20-alpine
     container_name: ai_mvp_app
     working_dir: /app
-    command: sh -lc "npm i -g pnpm && pnpm install --prod --frozen-lockfile && if [ -f web/package.json ]; then cd web && pnpm install --frozen-lockfile && pnpm run build && cd ..; fi; node dist/main.js"
+    command: sh -lc "npm i -g pnpm && pnpm install --prod --frozen-lockfile && if [ ! -d public/pages ] && [ -f web/package.json ]; then cd web && pnpm install --frozen-lockfile && pnpm run build && cd ..; fi; node dist/main.js"
     env_file:
       - .env
     environment:
@@ -13,7 +13,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - /www/ace.c/ai-manger:/app
+      - ${APP_ROOT:-/www/ace.c/ai-manger}:/app
     ports:
       - ${APP_PORT:-3011}:3011
     restart: unless-stopped

@@ -1,6 +1,0 @@
-# Module: graph
-Purpose: 负责编排文章生成工作流，通过4个简单阶段完成：创建Canvas → LLM编排生文任务 → 生成文章和配图搜索 → 返回canvasId。
-Description: 该模块通过 article-graph 服务实现文章批量生成。流程简化为4个阶段：(1) 创建Canvas画布 (2) LLM根据话题编排1-5篇生文任务 (3) 根据任务调用LLM生成文章并搜索配图 (4) 工作流完成返回canvasId。不包含质量评估、降级兜底或复杂的两轮修复逻辑，错误直接抛出。
-Keywords: graph-workflow, article-generation, canvas, image-assignment, 4-stage-pipeline
-Dependencies: @nestjs/common, @langchain/core/messages, langchain, zod, AgentService, TextFormatService, CanvasService, GalleryService, McpFunctionCallService, McpAdaptersService, AnalysisFunctionCallService
-Last Updated: 2026-03-17

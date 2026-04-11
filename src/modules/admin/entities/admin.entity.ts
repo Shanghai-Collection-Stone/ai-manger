@@ -48,7 +48,7 @@ export interface AdminAiProviderEntity {
   providerCode: string;
   name: string;
   baseUrl?: string;
-  modelCategory: 'llm' | 'em';
+  modelCategory: 'llm' | 'em' | 'image';
   model?: string;
   apiKey?: string;
   enabled: boolean;
@@ -97,6 +97,20 @@ export interface AdminAgentConfigEntity {
   /** Agent 提示词（markdown 格式） */
   prompt?: string;
   enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * @description LLM 设置实体
+ * @keyword-en llm setting entity
+ */
+export interface AdminLlmSettingEntity {
+  _id: ObjectId;
+  /** 配图数量（默认6张） */
+  imageCount: number;
+  /** 封面是否使用 LLM */
+  coverUseLlm: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

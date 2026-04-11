@@ -195,7 +195,18 @@ export class GalleryService {
     const ids = await Promise.all(inputs.map(() => this.nextId()));
     const texts = inputs.map((i) => this.buildEmbeddingText(i));
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
-    const embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
+    let embeddings: number[][] = [];
+    try {
+      embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
+    } catch (error) {
+      console.warn(
+        '[GalleryService.createMany] embedBatch failed, fallback to zero vectors:',
+        error,
+      );
+      embeddings = Array.from({ length: inputs.length }, () =>
+        new Array<number>(768).fill(0),
+      );
+    }
 
     const docs: GalleryImageEntity[] = inputs.map((input, idx) => {
       const w = Number.isFinite(Number(input.width)) ? Math.floor(Number(input.width)) : undefined;
@@ -242,7 +253,10 @@ export class GalleryService {
                 dpi: Math.max(1, Math.floor(Number(input.collageMeta.dpi))),
               }
             : undefined,
-        embedding: embeddings[idx] ?? new Array<number>(768).fill(0),
+        embedding:
+          Array.isArray(embeddings[idx]) && embeddings[idx].length > 0
+            ? embeddings[idx]
+            : new Array<number>(768).fill(0),
         createdAt: now,
         updatedAt: now,
       };
@@ -269,7 +283,7 @@ export class GalleryService {
     userId: string | undefined,
     tenantId?: string,
     options?: {
-      groupId?: number;
+      groupId?: string | number;
       tag?: string;
       cursorId?: number;
       limit?: number;
@@ -411,14 +425,14 @@ export class GalleryService {
    */
   async list(
     userId?: string,
-    groupId?: number,
+    groupId?: string | number,
     tag?: string,
     cursorId?: number,
     limit = 50,
   ): Promise<GalleryImageEntity[]> {
     const filter: Record<string, unknown> = {};
     if (userId) filter.userId = userId;
-    if (typeof groupId === 'number') filter.groupId = groupId;
+    if (groupId !== undefined && (typeof groupId === 'number' ? Number.isFinite(groupId) : typeof groupId === 'string')) filter.groupId = groupId;
     if (tag) filter.tags = tag;
     if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
       filter.id = { $lt: cursorId };
@@ -466,7 +480,7 @@ export class GalleryService {
   ): Promise<string[]> {
     const filter: Record<string, unknown> = {};
     if (userId) filter.userId = userId;
-    if (typeof groupId === 'number' && Number.isFinite(groupId)) {
+    if (groupId !== undefined && (typeof groupId === 'number' ? Number.isFinite(groupId) : typeof groupId === 'string')) {
       filter.groupId = groupId;
     }
     const raw = await this.images.distinct('tags', filter);
@@ -488,7 +502,7 @@ export class GalleryService {
   async searchByTags(input: {
     userId?: string;
     tenantId?: string;
-    groupId?: number;
+    groupId?: string | number;
     tags: string[];
     limit?: number;
     matchCollage?: boolean;
@@ -507,7 +521,7 @@ export class GalleryService {
     } else if (input.matchCollage === false) {
       clauses.push({ isCollage: { $ne: true } });
     }
-    if (typeof input.groupId === 'number' && Number.isFinite(input.groupId)) {
+    if (input.groupId !== undefined && ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) || typeof input.groupId === 'string')) {
       clauses.push({ groupId: input.groupId });
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
@@ -522,12 +536,12 @@ export class GalleryService {
   async sampleRandom(input: {
     userId?: string;
     tenantId?: string;
-    groupId?: number;
+    groupId?: string | number;
     limit?: number;
   }): Promise<GalleryImageEntity[]> {
     // 使用租户过滤构建基础 filter
     const baseFilter = this.buildTenantFilter(input.userId, input.tenantId);
-    if (typeof input.groupId === 'number' && Number.isFinite(input.groupId)) {
+    if (input.groupId !== undefined && ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) || typeof input.groupId === 'string')) {
       baseFilter.groupId = input.groupId;
     }
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));

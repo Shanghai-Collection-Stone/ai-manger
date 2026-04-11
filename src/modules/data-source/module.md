@@ -32,6 +32,8 @@ Schema服务。
 - **关键词**: tools, data-source-query, tenant-hard-isolation, mongo-route
 - **函数**:
   - `getHandle`: 工具句柄/get handle
+  - `normalizeBatchQueriesInput`: 批量查询入参规范化/normalize batch queries input
+  - `formatZodIssues`: 校验错误格式化/format zod issues
   - `resolveTargetCollection`: 解析查询目标/resolve target collection
   - `buildExternalMongoUri`: 构建外部连接/build external mongo uri
 

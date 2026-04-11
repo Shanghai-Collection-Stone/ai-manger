@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { tool, CreateAgentParams } from 'langchain';
 import * as z from 'zod';
 import { ArticleGraphService } from '../../../graph/services/article-graph.service.js';
@@ -14,6 +14,7 @@ import { GalleryService } from '../../../gallery/services/gallery.service.js';
  */
 @Injectable()
 export class GraphWorkflowFunctionCallService {
+  private readonly logger = new Logger(GraphWorkflowFunctionCallService.name);
   private readonly orchestrateInFlight = new Map<string, Promise<string>>();
   private readonly orchestrateRecent = new Map<
     string,
@@ -94,6 +95,8 @@ export class GraphWorkflowFunctionCallService {
     userId: string;
     platform?: string;
     topic?: string;
+    userPrompt?: string;
+    dataSummary?: string;
     outline?: Record<string, unknown>;
     style?: Record<string, unknown>;
     count?: number;
@@ -105,6 +108,10 @@ export class GraphWorkflowFunctionCallService {
       this.normalizeKeyString(input.userId),
       this.normalizeKeyString(input.platform),
       this.normalizeKeyString(input.topic),
+      this.normalizeKeyString(input.userPrompt),
+      this.normalizeKeyString(input.dataSummary),
+      this.stableStringify(input.outline),
+      this.stableStringify(input.style),
       Number.isFinite(Number(input.count)) ? String(Number(input.count)) : '',
       this.normalizeKeyString(input.galleryUserId),
       Number.isFinite(Number(input.galleryGroupId))
@@ -120,6 +127,22 @@ export class GraphWorkflowFunctionCallService {
     for (const [k, v] of this.orchestrateRecent.entries()) {
       if (now - v.at > this.orchestrateTtlMs) this.orchestrateRecent.delete(k);
     }
+  }
+
+  /**
+   * @description 归一化用户/LLM指定的文章篇数，不做 6-8 强制限制。
+   * @param {number | undefined} count - 用户输入数量。
+   * @returns {number | undefined} 归一化后的数量。
+   * @keyword-en normalize requested article count
+   */
+  private normalizeRequestedArticleCount(
+    count: number | undefined,
+  ): number | undefined {
+    if (typeof count !== 'number' || !Number.isFinite(count)) {
+      return undefined;
+    }
+    const parsed = Math.trunc(count);
+    return Math.max(1, parsed);
   }
 
   private resolveScopedUserId(
@@ -189,6 +212,8 @@ export class GraphWorkflowFunctionCallService {
         userId,
         platform,
         topic,
+        userPrompt,
+        dataSummary,
         outline: outlineRaw,
         style: styleRaw,
         count,
@@ -198,6 +223,12 @@ export class GraphWorkflowFunctionCallService {
       }) => {
         const outline = coerceRecord(outlineRaw);
         const style = coerceRecord(styleRaw);
+        const requestedCount = this.normalizeRequestedArticleCount(count);
+        if (typeof galleryGroupId === 'string') {
+          const msg = '[topic_orchestrate] galleryGroupId must be a number (group ID), not a string. Please provide the numeric group ID. You may need to look up the group ID first using gallery_group_find.';
+          this.logger.warn(msg);
+          return JSON.stringify({ ok: false, error: 'GALLERY_GROUP_ID_MUST_BE_NUMBER', message: msg });
+        }
         if (streamWriter) streamWriter('[Graph] Orchestrating topic workflow');
         const finalUserId = this.resolveScopedUserId(userId, scope);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
@@ -205,14 +236,19 @@ export class GraphWorkflowFunctionCallService {
           finalUserId,
           scope,
         );
+        this.logger.log(
+          `[topic_orchestrate] start userId=${finalUserId} platform=${String(platform ?? '')} requestedCount=${requestedCount ?? 'auto'} topic=${String(topic ?? '')} dataSummaryLen=${String(dataSummary?.length ?? 0)} userPromptLen=${String(userPrompt?.length ?? 0)}`,
+        );
 
         const dedupKey = this.buildTopicOrchestrateDedupKey({
           userId: finalUserId,
           platform,
           topic,
+          userPrompt,
+          dataSummary,
           outline,
           style,
-          count,
+          count: requestedCount,
           galleryUserId: finalGalleryUserId,
           galleryGroupId,
           minImageScore,
@@ -240,7 +276,10 @@ export class GraphWorkflowFunctionCallService {
             tenantId: scope?.tenantId,
             platform,
             topic,
-            count,
+            userPrompt,
+            dataSummary,
+            count: requestedCount,
+            imageMode: 'image-group',
             galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,
@@ -277,6 +316,7 @@ export class GraphWorkflowFunctionCallService {
             canvasTags: Array.isArray(canvasTags) ? canvasTags : [],
             platform,
             topic,
+            requestedCount,
             status:
               typeof canvasRec?.['status'] === 'string'
                 ? canvasRec['status']
@@ -289,7 +329,11 @@ export class GraphWorkflowFunctionCallService {
               needFields.length > 0 ||
               canvasRec?.['status'] === 'requires_human',
             needFields,
+            perArticleImageTarget: '6-8',
           };
+          this.logger.log(
+            `[topic_orchestrate] canvas_ready canvasId=${String(canvasId ?? '')} articleCount=${String(base.articleCount ?? '')} requestedCount=${requestedCount ?? 'auto'} needHuman=${base.needHuman ? 'true' : 'false'}`,
+          );
 
           // 拼接 canvas-it 代码块（与 xhs_create_image_group_canvas 保持一致），让子代理原样透传给上层，前端立即渲染看板入口
           const cid = typeof canvasId === 'number' ? canvasId : Number(canvasId);
@@ -309,17 +353,28 @@ export class GraphWorkflowFunctionCallService {
           this.orchestrateRecent.set(dedupKey, { at: Date.now(), result });
           return result;
         } finally {
+          this.logger.log(
+            `[topic_orchestrate] end dedupKey=${dedupKey.slice(0, 60)}...`,
+          );
           this.orchestrateInFlight.delete(dedupKey);
         }
       },
       {
         name: 'topic_orchestrate',
         description:
-          'Topic Orchestration Tool. Generates 6-8 articles with images in Canvas based on user requirements. Default count is 6, max 8.',
+          'Topic Orchestration Tool. Generates articles in Canvas based on user requirements and merges image-group matching into each article. Article count follows user/LLM request when provided.',
         schema: z.object({
           userId: z.string().optional().describe('Target user id (injected from session scope if omitted)'),
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
+          userPrompt: z
+            .string()
+            .optional()
+            .describe('User original intent/prompt summary for article generation context'),
+          dataSummary: z
+            .string()
+            .optional()
+            .describe('Collected data summary (facts/trends/evidence) used to ground article generation'),
           outline: z
             .union([z.record(z.string(), z.any()), z.string()])
             .optional()
@@ -331,7 +386,7 @@ export class GraphWorkflowFunctionCallService {
           count: z
             .number()
             .optional()
-            .describe('Article count (default 6, max 8)'),
+            .describe('Article count (optional; follows user/LLM request when provided)'),
           galleryUserId: z
             .string()
             .optional()
@@ -905,7 +960,7 @@ export class GraphWorkflowFunctionCallService {
         const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
-          typeof groupId === 'number' && Number.isFinite(groupId)
+          groupId !== undefined && ((typeof groupId === 'number' && Number.isFinite(groupId)) || typeof groupId === 'string')
             ? groupId
             : undefined;
         const lim =
@@ -935,7 +990,7 @@ export class GraphWorkflowFunctionCallService {
         const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
-          typeof groupId === 'number' && Number.isFinite(groupId)
+          groupId !== undefined && ((typeof groupId === 'number' && Number.isFinite(groupId)) || typeof groupId === 'string')
             ? groupId
             : undefined;
         const lim =

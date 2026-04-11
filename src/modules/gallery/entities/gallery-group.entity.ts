@@ -5,7 +5,7 @@ export type GalleryGroupScope = 'platform' | 'tenant';
 
 export interface GalleryGroupEntity {
   _id: ObjectId;
-  id: number;
+  id: string | number;
   userId: string;
   /** @description 数据可见范围，默认 tenant */
   scope: GalleryGroupScope;
@@ -31,7 +31,7 @@ export interface GalleryGroupCreateInput {
 }
 
 export interface GalleryGroupUpdateInput {
-  id: number;
+  id: string | number;
   name?: string;
   description?: string;
   tags?: string[];

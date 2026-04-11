@@ -110,6 +110,7 @@ function hashApiKey(value: string): string {
  */
 @Injectable()
 export class SassService {
+  private readonly PLATFORM_INFO_SCOPE_TENANT_ID = '__platform__';
   private readonly schemas: Collection<SassSchemaEntity>;
   private readonly tenants: Collection<SassTenantEntity>;
   private readonly apiKeys: Collection<SassApiKeyEntity>;
@@ -1250,42 +1251,64 @@ export class SassService {
 
   /**
    * @description 获取租户平台信息（AI补充说明）
-   * @param {string} tenantId - 租户ID
+   * @param {string | undefined} tenantId - 租户ID（为空时回退全局平台作用域）
    * @returns {Promise<PlatformInfoEntity | null>} 平台信息
    * @keyword-en get platform info
    */
-  async getPlatformInfo(tenantId: string): Promise<PlatformInfoEntity | null> {
+  async getPlatformInfo(tenantId?: string): Promise<PlatformInfoEntity | null> {
     const normalized = (tenantId ?? '').trim();
-    if (!normalized) return null;
-    return this.platformInfos.findOne({ tenantId: normalized }) as Promise<PlatformInfoEntity | null>;
+    if (!normalized) {
+      return this.platformInfos.findOne({
+        tenantId: this.PLATFORM_INFO_SCOPE_TENANT_ID,
+      }) as Promise<PlatformInfoEntity | null>;
+    }
+
+    const tenantInfo = (await this.platformInfos.findOne({
+      tenantId: normalized,
+    })) as PlatformInfoEntity | null;
+    if (tenantInfo) return tenantInfo;
+
+    if (normalized === this.PLATFORM_INFO_SCOPE_TENANT_ID) return null;
+    return this.platformInfos.findOne({
+      tenantId: this.PLATFORM_INFO_SCOPE_TENANT_ID,
+    }) as Promise<PlatformInfoEntity | null>;
   }
 
   /**
    * @description 更新租户平台信息（AI补充说明）
    * @param {string} tenantId - 租户ID
    * @param {string} aiPromptSupplement - AI补充说明（markdown）
+   * @param {boolean | undefined} enableAiCover - 是否开启 AI 封面生成
    * @returns {Promise<PlatformInfoEntity>} 更新后的平台信息
    * @keyword-en upsert platform info
    */
   async upsertPlatformInfo(
     tenantId: string,
     aiPromptSupplement: string,
+    enableAiCover?: boolean,
   ): Promise<PlatformInfoEntity> {
     const normalized = (tenantId ?? '').trim();
     if (!normalized) throw new BadRequestException('TENANT_ID_REQUIRED');
     const now = new Date();
+    const setDoc: Record<string, unknown> = {
+      aiPromptSupplement: String(aiPromptSupplement ?? ''),
+      updatedAt: now,
+    };
+    const setOnInsertDoc: Record<string, unknown> = {
+      _id: new ObjectId(),
+      tenantId: normalized,
+      createdAt: now,
+    };
+    if (typeof enableAiCover === 'boolean') {
+      setDoc.enableAiCover = enableAiCover;
+    } else {
+      setOnInsertDoc.enableAiCover = false;
+    }
     const res = await this.platformInfos.findOneAndUpdate(
       { tenantId: normalized },
       {
-        $set: {
-          aiPromptSupplement: String(aiPromptSupplement ?? ''),
-          updatedAt: now,
-        },
-        $setOnInsert: {
-          _id: new ObjectId(),
-          tenantId: normalized,
-          createdAt: now,
-        },
+        $set: setDoc,
+        $setOnInsert: setOnInsertDoc,
       },
       { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );

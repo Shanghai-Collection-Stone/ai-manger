@@ -72,6 +72,32 @@ function parseBooleanFlag(input: unknown): boolean | undefined {
   return undefined;
 }
 
+/**
+ * @description 根据文件名识别是否为动态封面/动态拼图导入。
+ * @param {string} name - 文件名或路径。
+ * @returns {'cover' | 'collage' | undefined} 识别类型。
+ * @keyword-en detect generated image kind by name
+ */
+function detectGeneratedImageKindByName(
+  name: string,
+): 'cover' | 'collage' | undefined {
+  const s = String(name || '').trim().toLowerCase();
+  if (!s) return undefined;
+  if (
+    /(^|[\/_\-.])(cover)([\/_\-.]|$)/i.test(s) ||
+    /封面/i.test(s)
+  ) {
+    return 'cover';
+  }
+  if (
+    /(^|[\/_\-.])(collage)([\/_\-.]|$)/i.test(s) ||
+    /拼图/i.test(s)
+  ) {
+    return 'collage';
+  }
+  return undefined;
+}
+
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
@@ -497,6 +523,46 @@ export class GalleryController {
   }
 
   /**
+   * @description 将默认动态分组（动态封面/动态拼图）固定置顶展示。
+   * @param {GalleryGroupEntity[]} groups - 原始分组列表。
+   * @param {number[]} defaultIds - 默认分组ID顺序（封面在前，拼图在后）。
+   * @returns {GalleryGroupEntity[]} 排序后的分组列表。
+   * @keyword-en prioritize default generated groups
+   */
+  private prioritizeDefaultGroups(
+    groups: GalleryGroupEntity[],
+    defaultIds: (string | number)[],
+  ): GalleryGroupEntity[] {
+    const list = Array.isArray(groups) ? groups : [];
+    const idOrder = (Array.isArray(defaultIds) ? defaultIds : []).filter(
+      (id) => (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string',
+    );
+    if (idOrder.length === 0) return list;
+
+    const byId = new Map<string | number, GalleryGroupEntity>();
+    for (const g of list) {
+      if ((typeof g?.id === 'number' || typeof g?.id === 'string') && !byId.has(g.id)) {
+        byId.set(g.id, g);
+      }
+    }
+
+    const out: GalleryGroupEntity[] = [];
+    const used = new Set<string | number>();
+    for (const gid of idOrder) {
+      const g = byId.get(gid);
+      if (!g) continue;
+      out.push(g);
+      used.add(gid);
+    }
+    for (const g of list) {
+      if (typeof g?.id !== 'number' && typeof g?.id !== 'string') continue;
+      if (used.has(g.id)) continue;
+      out.push(g);
+    }
+    return out;
+  }
+
+  /**
    * @description 上传图片文件并写入图库记录（含Embedding向量）。
    * @param {Express.Multer.File[]} files - 上传的文件数组（字段名：files）。
    * @param {{ userId?: string; tenantId?: string; groupId?: string; tags?: string; description?: string }} body - 表单字段。
@@ -578,13 +644,13 @@ export class GalleryController {
       body.description.trim().length > 0
         ? body.description.trim()
         : undefined;
-    const isCollage = parseBooleanFlag(body?.isCollage) === true;
+    const explicitIsCollage = parseBooleanFlag(body?.isCollage) === true;
     const collageSourceImageIds = String(body?.collageSourceImageIds ?? '')
       .split(/[,\s]+/g)
       .map((x) => Number(x))
       .filter((x) => Number.isFinite(x))
       .slice(0, 2);
-    if (isCollage) {
+    if (explicitIsCollage) {
       if (files.length !== 1) {
         throw new BadRequestException('collage upload requires exactly one file');
       }
@@ -601,21 +667,55 @@ export class GalleryController {
     const groupIdRaw = String(body?.groupId ?? '').trim();
     const groupId = groupIdRaw.length > 0 ? Number(groupIdRaw) : undefined;
 
-    // 提取图片尺寸（在压缩之前）
-    const dims = await extractUploadFileDimensions(files);
+    const detectedKinds = files.map((f) =>
+      detectGeneratedImageKindByName(
+        `${String(f.originalname || '')} ${String(f.filename || '')}`,
+      ),
+    );
+    const hasDetectedCover = detectedKinds.some((k) => k === 'cover');
+    const hasDetectedCollage =
+      explicitIsCollage || detectedKinds.some((k) => k === 'collage');
+
+    let dynamicCoverGroupId: string | number | undefined;
+    let dynamicCollageGroupId: string | number | undefined;
+    if (hasDetectedCover || hasDetectedCollage) {
+      const defaults = await this.groups.ensureDefaultDynamicGroups(
+        userId,
+        tenantId,
+      );
+      dynamicCoverGroupId = defaults.coverGroup.id;
+      dynamicCollageGroupId = defaults.collageGroup.id;
+    }
+
     await compressUploadFiles(files);
+    // 提取图片尺寸（压缩后），保证宽高元数据与落盘文件一致
+    const dims = await extractUploadFileDimensions(files);
     const thumbs = await createUploadThumbnails(files);
 
-    const inputs = files.map((f) => {
+    const inputs = files.map((f, idx) => {
       const key = String(f.filename || '');
       const dim = dims.get(key);
+      const kind = detectedKinds[idx];
+      const markAsCover = kind === 'cover';
+      const markAsCollage = explicitIsCollage || kind === 'collage';
+      const markAsGenerated = markAsCover || markAsCollage;
+      const finalGroupId = markAsCover
+        ? dynamicCoverGroupId
+        : markAsGenerated
+          ? dynamicCollageGroupId
+          : groupId !== undefined && (typeof groupId === 'number' ? Number.isFinite(groupId) : typeof groupId === 'string')
+            ? groupId
+            : undefined;
+
+      const collageMetaWidth =
+        dim?.width ?? (Number.isFinite(collageWidth) ? collageWidth : 640);
+      const collageMetaHeight =
+        dim?.height ?? (Number.isFinite(collageHeight) ? collageHeight : 853);
+
       return {
         userId,
         tenantId,
-        groupId:
-          typeof groupId === 'number' && Number.isFinite(groupId)
-            ? groupId
-            : undefined,
+        groupId: finalGroupId,
         originalName: String(f.originalname || ''),
         fileName: key,
         absPath: String(f.path || ''),
@@ -628,12 +728,12 @@ export class GalleryController {
         isPortrait: dim?.isPortrait,
         tags,
         description,
-        isCollage,
-        collageSourceImageIds: isCollage ? collageSourceImageIds : undefined,
-        collageMeta: isCollage
+        isCollage: markAsGenerated,
+        collageSourceImageIds: explicitIsCollage ? collageSourceImageIds : undefined,
+        collageMeta: markAsGenerated
           ? {
-              width: Number.isFinite(collageWidth) ? collageWidth : 640,
-              height: Number.isFinite(collageHeight) ? collageHeight : 853,
+              width: collageMetaWidth,
+              height: collageMetaHeight,
               dpi: Number.isFinite(collageDpi) ? collageDpi : 96,
             }
           : undefined,
@@ -672,18 +772,21 @@ export class GalleryController {
     const authScope = req ? await this.resolveAuthScope(req) : {};
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : undefined;
-    const gid = groupId ? Number(groupId) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
     const includeCollageFlag = parseBooleanFlag(includeCollage);
     const resolvedImageType =
       imageType === 'regular' || imageType === 'collage' || imageType === 'all'
         ? (imageType as 'regular' | 'collage' | 'all')
         : undefined;
+    // groupId can be number (legacy) or string (default_group_image, default_collage_image)
+    const resolvedGroupId = groupId
+      ? (Number.isFinite(Number(groupId)) ? Number(groupId) : groupId)
+      : undefined;
     const rows = await this.gallery.findAccessibleImages(
       userId ?? 'default',
       tid,
       {
-        groupId: typeof gid === 'number' && Number.isFinite(gid) ? gid : undefined,
+        groupId: resolvedGroupId,
         tag,
         includeCollage: includeCollageFlag !== false,
         imageType: resolvedImageType,
@@ -864,9 +967,30 @@ export class GalleryController {
   ): Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id'>> }> {
     const authScope = req ? await this.resolveAuthScope(req) : {};
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
+    const resolvedUserId =
+      String(userId ?? '').trim() || authScope.userId || 'default';
     const lim = limit ? Number(limit) : 50;
-    const rows = await this.groups.listAccessibleGroups(userId, tid, tag, lim);
-    return { groups: rows as Array<Omit<GalleryGroupEntity, '_id'>> };
+
+    const defaults = await this.groups.ensureDefaultDynamicGroups(
+      resolvedUserId,
+      tid,
+    );
+    const rows = await this.groups.listAccessibleGroups(
+      resolvedUserId,
+      tid,
+      tag,
+      lim,
+    );
+
+    const merged = this.prioritizeDefaultGroups(rows, [
+      defaults.coverGroup.id,
+      defaults.collageGroup.id,
+    ]);
+    const safeLimit = Math.max(1, Math.min(200, Math.floor(lim)));
+    return {
+      groups: merged
+        .slice(0, Math.max(safeLimit, 2)) as Array<Omit<GalleryGroupEntity, '_id'>>,
+    };
   }
 
   /**

@@ -33,6 +33,7 @@ Canvas控制器。
 Canvas服务。
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）
+- `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups
 - `runImageGroupGeneration` — 后台异步生成图片组并回写
 - `updateImageGroups` — 回写图片组到 Canvas
 - `get` / `list` / `addArticles` / `updateStatus` / `updateArticle` — 常用crud
@@ -42,11 +43,17 @@ Canvas服务。
 图片组生成服务。
 - `generateImageGroups` — 根据文章 tag 批量匹配图库配图，按版式分配图片组
 - `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]）
-- `fetchImagePool` — tag匹配+随机补充图片池
+- `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
+- `buildAiCoverPrompt` — 基于文章类型与配图语义推演生图提示词，并强制注入封面主/副标题浮动文字约束
+- `tryGenerateAiCoverToGallery` — 调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit）
+- `fetchImagePool` — tag匹配+随机补充图片池（过滤默认动态封面/动态拼图分组）
+- `supplementPoolWithRelatedTags` — 图片不足时使用“相近标签”补池，避免纯随机导致语义偏移
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
 - `pickPortrait` — 从池中选竖图（优先未使用，其次降级复用）
 - `pickAndMakeCollage` — 选 2 张横图动态合成拼图（上下拼，640x853，等比缩放不裁切）
 - `createDynamicCollageFile` — 动态合成双图拼图（使用 sharp）
+- `persistGeneratedAssetToGallery` — 将动态封面/拼图文件写入 gallery_images（返回真实 imageId，避免 id=0 虚拟图）
+- `resolveGeneratedUploadFileInfo` / `getImageDimensionsFromAbsPath` — 解析生成文件路径并补齐宽高元数据
 - `burnCoverText` — 使用 sharp+SVG 将主副标题烧录到封面图（无背景框，白色描边文字）
 - `loadCoverFontFaceCss` — 加载封面字体 base64 缓存（支持 public/dist/web 三条路径）
 - `ensureFontconfigSetup` — 写入 /tmp/cover-fonts 并设置 FONTCONFIG_FILE，解决 Alpine/Linux 无字体问题

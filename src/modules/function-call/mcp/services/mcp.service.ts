@@ -45,9 +45,40 @@ export class McpFunctionCallService {
 
     const mcpRead = tool(
       async ({ id, name }) => {
-        const data = await this.storage.readResource({ id, name });
-        if (streamWriter) streamWriter(`[MCP] Read resource: ${data.name}`);
-        return JSON.stringify({ resource: data });
+        if (
+          (!id || id.trim().length === 0) &&
+          (!name || name.trim().length === 0)
+        ) {
+          return JSON.stringify({
+            ok: false,
+            error: 'MCP_RESOURCE_NOT_FOUND',
+            message:
+              'Missing id/name. Call mcp_list_resources first, then pass exact id or name.',
+            query: { id, name },
+          });
+        }
+        try {
+          const data = await this.storage.readResource({ id, name });
+          if (streamWriter) streamWriter(`[MCP] Read resource: ${data.name}`);
+          return JSON.stringify({ resource: data });
+        } catch (error) {
+          const msg =
+            error instanceof Error
+              ? error.message
+              : typeof error === 'string'
+                ? error
+                : JSON.stringify(error);
+          if (msg.includes('MCP_RESOURCE_NOT_FOUND')) {
+            return JSON.stringify({
+              ok: false,
+              error: 'MCP_RESOURCE_NOT_FOUND',
+              message:
+                'Resource not found. Call mcp_list_resources first and use exact id/name.',
+              query: { id, name },
+            });
+          }
+          return JSON.stringify({ ok: false, error: msg, query: { id, name } });
+        }
       },
       {
         name: 'mcp_read_resource',

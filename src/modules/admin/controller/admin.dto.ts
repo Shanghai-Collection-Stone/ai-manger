@@ -121,8 +121,8 @@ export class UpsertAiProviderDto {
   model?: string;
 
   @IsString()
-  @IsIn(['llm', 'em'])
-  modelCategory!: 'llm' | 'em';
+  @IsIn(['llm', 'em', 'image'])
+  modelCategory!: 'llm' | 'em' | 'image';
 
   @IsOptional()
   @IsString()
@@ -167,8 +167,8 @@ export class UpdateAiProviderDto {
   model?: string;
 
   @IsOptional()
-  @IsIn(['llm', 'em'])
-  modelCategory?: 'llm' | 'em';
+  @IsIn(['llm', 'em', 'image'])
+  modelCategory?: 'llm' | 'em' | 'image';
 
   @IsOptional()
   @IsString()
@@ -471,4 +471,51 @@ export class UpdateAgentConfigDto {
   @IsOptional()
   @IsBoolean()
   enabled?: boolean;
+}
+
+/**
+ * @description 平台AI配置请求体
+ * @keyword-en upsert platform info dto
+ */
+export class UpsertPlatformInfoDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(50000)
+  aiPromptSupplement?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  enableAiCover?: boolean;
+}
+
+/**
+ * @description LLM 设置请求体
+ * @keyword-en llm setting dto
+ */
+export class UpsertLlmSettingDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  imageCount?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  coverUseLlm?: boolean;
+}
+
+/**
+ * @description 更新 LLM 设置请求体
+ * @keyword-en update llm setting dto
+ */
+export class UpdateLlmSettingDto {
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  imageCount?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  coverUseLlm?: boolean;
 }

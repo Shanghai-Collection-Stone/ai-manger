@@ -2,7 +2,7 @@
 
 ## 模块描述
 该模块提供“编排文章 -> 写入Canvas -> 图库向量配图/即时生成拼图与封面”的生成流程，并提供“从Canvas生成批量任务 -> 并行入队 -> 触发MCP运行”的发布流程，作为后端工作流编排的统一入口。
-拼图与封面逻辑在文章生成（Canvas）阶段执行：每篇文章默认基于图库原始图片即时生成动态两图拼图（640x853）与浮动文字封面，不复用历史拼图或历史封面。
+拼图与封面逻辑在文章生成（Canvas）阶段执行：每篇文章默认基于图库原始图片即时生成动态两图拼图（640x853）与浮动文字封面；当租户平台配置开启 AI 封面时，优先走生图模型生成封面并入图库。
 文件路径: `src/modules/graph`
 
 ## 功能描述及关键词
@@ -15,18 +15,22 @@ Graph控制器。
 文章编排服务。
 - **关键词**: articles, canvas, gallery, service
 - **函数**:
-  - `generateToCanvas`: 建立文章列表(blueprints)+预存根，立即返回 generating，后台并发生成正文+配图/async article canvas with pre-stub list
+  - `generateToCanvas`: 建立文章列表(blueprints)+预存根，立即返回 generating；支持传入 userPrompt/dataSummary，并在 imageMode=image-group 时复用图组链路在同一 Canvas 回写配图/async article canvas with pre-stub list
   - `runArticleGeneration`: 后台异步执行正文+配图生成并回写状态/run article generation in background
   - `planArticleTasks`: LLM规划文章蓝图列表/plan article blueprints
-  - `generateArticlesAndImages`: 一次拉取图片池，内容生成与配图解析真正并发，合并回写/parallel content gen + image resolve from shared pool
+  - `generateArticlesAndImages`: legacy 模式下并发正文+配图；image-group 模式下“正文生成 + 图组匹配”并发执行，双完成后统一回写/parallel content gen + image-group matching then merge
+  - `assignImageGroupsToCanvasArticles`: 在同一 Canvas 使用图组同源逻辑合并文章配图，并校验单篇 6-8 张目标/merge image-group results into article fields with per-article image count checks
   - `fetchArticleImagePool`: 按所有蓝图tag一次性拉取regular图片池/fetch article image pool by blueprint tags once
-  - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover（**拼图必须使用横图 isPortrait !== true**）
+  - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover（**拼图必须使用横图 isPortrait !== true，且过滤默认动态封面/动态拼图分组**）
+  - `isAiCoverEnabled`: 读取租户 AI 封面开关/resolve ai cover toggle
+  - `buildAiCoverImagePrompt`: 根据文章类型与封面文案推演生图提示词，并强制注入封面主/副标题浮动文字约束/build ai cover image prompt
+  - `tryGenerateAiCoverImage`: 调用封面生图工具生成封面并入图库（透传prompt与底图候选，meitu兜底走image-edit）/try generate ai cover image
   - `generateToCanvasBySubAgent`: 子代理生成并逐篇写入/subagent canvas generation
   - `collectArticleDataBySubAgent`: 子代理采集数据/collect data by subagent
   - `planBlueprintsBySubAgent`: 子代理规划蓝图/plan blueprints by subagent
   - `appendOneArticleToCanvas`: 单篇写入Canvas/append one article
-  - `generateOneArticleFromBlueprint`: 单篇文章生成/generate one article
-  - `saveGeneratedImageToGallery`: 本地生成图片写入图库/save generated image to gallery
+  - `generateOneArticleFromBlueprint`: 单篇文章生成（融合 userPrompt + dataSummary）/generate one article
+  - `saveGeneratedImageToGallery`: 本地生成图片写入图库（cover/collage 均标记 isCollage=true，自动写入动态封面/动态拼图默认分组，并持久化 width/height）/save generated image to gallery
   - `assignImagesForCanvasBySubAgent`: 子代理配图/assign images by subagent
   - `normalizeBlueprints`: 蓝图去机械化/normalize blueprints
   - `buildFallbackBlueprints`: 动态蓝图兜底/build fallback blueprints

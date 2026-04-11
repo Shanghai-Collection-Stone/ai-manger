@@ -1,7 +1,7 @@
 # Chat-Main Module
 
 ## 模块描述
-主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。
+主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。针对生图/图组等工具密集链路，支持 updates-only 流模式与连接关闭后的中断保护。topic_orchestrate_subagent 支持数据收集链路（analysis_subagent/task + data_analysis + duckduckgo 类 MCP 搜索）后再发起编排。
 文件路径: `src/modules/chat-main`
 
 ## 功能描述及关键词
@@ -29,6 +29,7 @@
   - `getDataAnalysisPromptCN`: 系统提示/data analysis prompt
   - `getSystemPromptCN`: 模式提示/system prompt
   - `getThoughtPromptCN`: 思维链提示/thought prompt
+  - `buildGallerySubagent`: 构建图库子代理/build gallery subagent
   - `getTools`: 获取工具/get tools
   - `getRequestScope`: 解析租户范围/get request scope
   - `getToolsForInput`: 工具过滤/get tools for input
@@ -36,6 +37,7 @@
   - `normalizeSubagentTools`: 规范工具/normalize subagent tools
   - `isBatchPublishIntent`: 批量发布意图/batch publish intent
   - `isTopicOrchestrateIntent`: 选题编排意图/topic orchestrate intent
+  - `shouldUseUpdatesOnlyStreamForInput`: updates-only 流模式判定/updates-only stream intent
   - `parseCanvasExecuteCanvasId`: 解析画布ID/parse canvas id
   - `extractCanvasItItems`: 解析画布块/extract canvas items
   - `extractTaskItItems`: 解析待办块/extract task items

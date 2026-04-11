@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "plugins/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test",
+    "public",
+    "open-md",
+    "data",
+    "storage",
+    "**/*.md"
+  ],
+  "watchOptions": {
+    "excludeDirectories": [
+      "**/node_modules",
+      "**/dist",
+      "**/.git",
+      "**/public/uploads",
+      "**/public/uploads_thumbs",
+      "**/public/pages",
+      "**/open-md",
+      "**/data",
+      "**/storage"
+    ],
+    "excludeFiles": ["config/mcp.servers.json"]
+  }
+}

@@ -155,10 +155,14 @@ export class SassController {
   @Put('platform-info')
   async upsertPlatformInfo(
     @Req() req: Request,
-    @Body() body: { aiPromptSupplement: string },
+    @Body() body: { aiPromptSupplement?: string; enableAiCover?: boolean },
   ): Promise<Record<string, unknown>> {
     const tenantId = this.readTenantId(req);
-    const info = await this.sass.upsertPlatformInfo(tenantId, body.aiPromptSupplement);
+    const info = await this.sass.upsertPlatformInfo(
+      tenantId,
+      body.aiPromptSupplement ?? '',
+      body.enableAiCover,
+    );
     return { platformInfo: info };
   }
 

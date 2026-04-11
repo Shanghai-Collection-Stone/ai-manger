@@ -166,8 +166,23 @@ export class McpStorageService {
   ): Promise<string> {
     const { id, name } = query;
     if (name && name.trim().length > 0) {
-      const full = path.resolve(dir, path.basename(name));
-      return full;
+      const safeName = path.basename(name.trim());
+      const direct = path.resolve(dir, safeName);
+      try {
+        const stat = await fs.stat(direct);
+        if (stat.isFile()) return direct;
+      } catch {
+        void 0;
+      }
+
+      // Windows/不同来源大小写不一致时，做一次不区分大小写匹配
+      const ents = await fs.readdir(dir, { withFileTypes: true });
+      const byName = ents.find(
+        (ent) => ent.isFile() && ent.name.toLowerCase() === safeName.toLowerCase(),
+      );
+      if (byName) return path.resolve(dir, byName.name);
+
+      throw new Error('MCP_RESOURCE_NOT_FOUND');
     }
     if (id && id.trim().length > 0) {
       const ents = await fs.readdir(dir, { withFileTypes: true });

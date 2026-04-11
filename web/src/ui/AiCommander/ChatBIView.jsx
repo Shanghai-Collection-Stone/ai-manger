@@ -272,7 +272,9 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
   const isGenerating = status === 'generating';
   const topic = canvas?.topic || initialPayload?.topic || '';
   const groups = Array.isArray(canvas?.imageGroups) ? canvas.imageGroups : [];
-  const doneGroups = groups.filter(g => g.status === 'done');
+  const groupTotal = groups.length || Number(initialPayload?.articleCount || 0);
+  const groupDone = groups.filter((g) => g.status === 'done').length;
+  const groupFailed = groups.filter((g) => g.status === 'failed').length;
 
   /* article 类型进度统计 */
   const articleList = !isImageGroup ? (Array.isArray(canvas?.articles) ? canvas.articles : []) : [];
@@ -320,34 +322,39 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
         {isGenerating ? (
           <span className="flex items-center gap-1 text-[11px] text-amber-600 shrink-0">
             <Loader2 size={11} className="animate-spin" />
-            {!isImageGroup && articleTotal > 0
-              ? `${articleDone}/${articleTotal} 篇${articleFailed > 0 ? ` · ${articleFailed}失败` : ''}`
-              : '生成中...'}
+            {isImageGroup
+              ? `${groupDone}/${groupTotal || groupDone || 0} 组${groupFailed > 0 ? ` · ${groupFailed}失败` : ''}`
+              : articleTotal > 0
+                ? `${articleDone}/${articleTotal} 篇${articleFailed > 0 ? ` · ${articleFailed}失败` : ''}`
+                : '生成中...'}
           </span>
         ) : (
           <span className="text-[11px] text-green-600 shrink-0">
-            {isImageGroup && doneGroups.length > 0 ? `${doneGroups.length}组` : `${articleDone || articleTotal || ''}篇完成`}
+            {isImageGroup
+              ? `${groupTotal || groupDone || 0}组${groupFailed > 0 ? ` · ${groupFailed}失败` : ''}`
+              : `${articleDone || articleTotal || ''}篇完成`}
           </span>
         )}
       </div>
 
       {/* 图组封面缩略图列 */}
-      {!isGenerating && isImageGroup && doneGroups.length > 0 && (
+      {!isGenerating && isImageGroup && groups.length > 0 && (
         <div className="flex gap-1.5 px-3 py-2 overflow-x-auto bg-slate-50/50">
-          {doneGroups.slice(0, 6).map((g, i) => {
+          {groups.slice(0, 6).map((g, i) => {
             const imgs = Array.isArray(g.images) ? g.images : [];
-            const cover = imgs.find(img => img.role === 'cover');
-            return cover?.thumbUrl ? (
-              <img key={g.id ?? i} src={cover.thumbUrl} className="h-16 w-16 object-cover rounded-lg shrink-0" alt="" />
+            const cover = imgs.find((img) => img.role === 'cover') || imgs[0];
+            const coverUrl = cover?.thumbUrl || cover?.url || '';
+            return coverUrl ? (
+              <img key={g.id ?? i} src={coverUrl} className="h-16 w-16 object-cover rounded-lg shrink-0" alt="" />
             ) : (
               <div key={g.id ?? i} className="h-16 w-16 rounded-lg bg-slate-200 flex items-center justify-center shrink-0">
                 <Images size={14} className="text-slate-400" />
               </div>
             );
           })}
-          {doneGroups.length > 6 && (
+          {groups.length > 6 && (
             <div className="h-16 w-16 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 text-[11px] text-slate-500 font-medium">
-              +{doneGroups.length - 6}
+              +{groups.length - 6}
             </div>
           )}
         </div>
@@ -413,6 +420,13 @@ const ThinkingBubble = ({ toolCount, subagentCount }) => {
 const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
   // 提取 canvas-it 块，渲染为 React 卡片
   const canvasItBlocks = useMemo(() => extractAllCanvasItBlocks(msg.content), [msg.content]);
+  const strippedText = useMemo(() => {
+    const raw = typeof msg.content === 'string' ? msg.content : '';
+    return raw
+      .replace(/```canvas-it[\s\S]*?```/gi, '')
+      .trim();
+  }, [msg.content]);
+  const hasRenderableText = strippedText.length > 0;
 
   // Parse markdown securely with URL→image conversion
   const htmlContent = React.useMemo(() => {
@@ -455,9 +469,9 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
       )}
 
     {/* Text content */}
-      {(msg.content || msg.isStreaming) && (
+      {(hasRenderableText || msg.isStreaming) && (
         <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-x-hidden">
-          {msg.content ? (
+          {hasRenderableText ? (
             <div 
               className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words
                          prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5
@@ -519,7 +533,7 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
       ))}
 
     {/* Show empty placeholder while loading, no content yet, no error */}
-    {!msg.content && !msg.isStreaming && !msg.errorText && (
+    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && (
       <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
         <span className="text-sm text-slate-400">（无内容）</span>
       </div>

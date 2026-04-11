@@ -11,7 +11,7 @@ export interface GalleryImageEntity {
   scope: GalleryScope;
   /** @description 租户ID，scope=tenant 时必填 */
   tenantId?: string;
-  groupId?: number;
+  groupId?: string | number;
   originalName: string;
   fileName: string;
   url: string;
@@ -49,7 +49,7 @@ export interface GalleryImageCreateInput {
   scope?: GalleryScope;
   /** @description 租户ID */
   tenantId?: string;
-  groupId?: number;
+  groupId?: string | number;
   originalName: string;
   fileName: string;
   url: string;

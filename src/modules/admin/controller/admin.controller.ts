@@ -32,8 +32,11 @@ import {
   UpdateApiKeyByAdminDto,
   UpdateClawConfigDto,
   UpdateDataSourceByAdminDto,
+  UpdateLlmSettingDto,
   UpdateTenantByAdminDto,
   UpsertAiProviderDto,
+  UpsertLlmSettingDto,
+  UpsertPlatformInfoDto,
 } from './admin.dto.js';
 
 /**
@@ -401,11 +404,12 @@ export class AdminController {
   @Put('platform-info')
   async upsertPlatformInfo(
     @Req() req: Request,
-    @Body() body: { aiPromptSupplement: string },
+    @Body() body: UpsertPlatformInfoDto,
   ) {
     return this.adminService.upsertPlatformInfo(
       this.requireUser(req),
-      body.aiPromptSupplement,
+      body.aiPromptSupplement ?? '',
+      body.enableAiCover,
     );
   }
 
@@ -515,6 +519,47 @@ export class AdminController {
   async deleteAgentConfig(@Param('id') id: string) {
     const ok = await this.adminService.deleteAgentConfig(id);
     return { ok };
+  }
+
+  // ─── LLM 设置管理 ───────────────────────────────────────────────────────────
+
+  /**
+   * @description 获取 LLM 设置
+   * @keyword-en admin llm settings get endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Get('llm-settings')
+  async getLlmSetting() {
+    const setting = await this.adminService.getLlmSetting();
+    return { setting };
+  }
+
+  /**
+   * @description 创建或更新 LLM 设置
+   * @keyword-en admin llm settings upsert endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Put('llm-settings')
+  async upsertLlmSetting(@Req() req: Request, @Body() body: UpsertLlmSettingDto) {
+    const setting = await this.adminService.upsertLlmSetting(
+      this.requireUser(req),
+      body,
+    );
+    return { setting };
+  }
+
+  /**
+   * @description 更新 LLM 设置
+   * @keyword-en admin llm settings update endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Patch('llm-settings')
+  async updateLlmSetting(@Req() req: Request, @Body() body: UpdateLlmSettingDto) {
+    const setting = await this.adminService.updateLlmSetting(
+      this.requireUser(req),
+      body,
+    );
+    return { setting };
   }
 
   /**

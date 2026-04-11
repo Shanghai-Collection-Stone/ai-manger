@@ -9,6 +9,8 @@ export interface PlatformInfoEntity {
   tenantId: string;
   /** AI 补充说明（markdown 格式），用于给各租户填写更适合自己使用习惯的AI提示 */
   aiPromptSupplement: string;
+  /** 是否开启 AI 封面生成 */
+  enableAiCover?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

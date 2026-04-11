@@ -8,15 +8,15 @@ on:
   workflow_dispatch:
     inputs:
       deploy_path:
-        description: 服务器Runner部署目录（包含或挂载docker专用配置）
+        description: 部署目录（相对路径会自动拼接到 Runner 工作目录）
         type: string
         required: true
-        default: "/www/ace.root/ai-manger"
+        default: "ai-manger"
       env_file_path:
-        description: 服务器Runner上的环境文件（可选）
+        description: Runner 上的环境文件路径（可选，留空则沿用部署目录中的 .env）
         type: string
         required: false
-        default: "/www/ace.root/ai-manger/.env"
+        default: ""
       app_port:
         description: 对外端口映射到容器 3011
         type: string
@@ -60,19 +60,29 @@ jobs:
         env:
           NODE_ENV: production
 
+      - name: Build frontend pages
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web run build
+        env:
+          NODE_ENV: production
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ai-mvp-dist
           path: |
             dist
+            migrations
+            public
             package.json
             pnpm-lock.yaml
           retention-days: 1
 
   deploy:
     needs: build
-    runs-on: self-hosted
+    runs-on:
+      - new-server
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,11 +93,48 @@ jobs:
           name: ai-mvp-dist
           path: ./artifact
 
+      - name: Resolve deploy path
+        run: |
+          INPUT_DP="${{ inputs.deploy_path }}"
+          BASE_DIR="${RUNNER_WORKSPACE:-$GITHUB_WORKSPACE}"
+
+          case "$INPUT_DP" in
+            /*) DP="$INPUT_DP" ;;
+            *) DP="$BASE_DIR/$INPUT_DP" ;;
+          esac
+
+          mkdir -p "$DP"
+          echo "DEPLOY_PATH=$DP" >> "$GITHUB_ENV"
+
+          echo "Runner workspace: $BASE_DIR"
+          echo "Deploy path: $DP"
+
+      - name: Sync source snapshot to deploy path
+        run: |
+          DP="$DEPLOY_PATH"
+          SNAPSHOT_DIR="$RUNNER_TEMP/source-snapshot"
+
+          rm -rf "$SNAPSHOT_DIR"
+          mkdir -p "$SNAPSHOT_DIR"
+
+          git -C "$GITHUB_WORKSPACE" archive --format=tar HEAD | tar -xf - -C "$SNAPSHOT_DIR"
+
+          mkdir -p "$DP"
+          cp -a "$SNAPSHOT_DIR"/. "$DP"/
+          echo "$GITHUB_SHA" > "$DP/.deploy-commit"
+
+          echo "Source snapshot synced: $DP"
+          echo "Deploy commit: $GITHUB_SHA"
+
       - name: Prepare target directory
         run: |
-          DP="${{ inputs.deploy_path }}"
-          mkdir -p "$DP"
-          rm -rf "$DP/dist"
+          DP="$DEPLOY_PATH"
+          rm -rf "$DP/dist" "$DP/migrations"
+          mkdir -p "$DP/public"
+          if [ -d "$DP/public/pages" ]; then
+            rm -rf "$DP/public/pages"
+          fi
+
           echo "=== Artifact directory ==="
           if [ ! -d "./artifact" ]; then
             echo "✗ ./artifact not found"; pwd; ls -la | head -50; exit 1
@@ -95,108 +142,75 @@ jobs:
           ls -la ./artifact | head -50
 
           cp -r ./artifact/dist "$DP/"
+          cp -r ./artifact/migrations "$DP/"
+          if [ -d ./artifact/public ]; then
+            cp -r ./artifact/public/. "$DP/public/"
+          fi
           cp ./artifact/package.json "$DP/"
           if [ -f ./artifact/pnpm-lock.yaml ]; then cp ./artifact/pnpm-lock.yaml "$DP/"; fi
 
-          HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
-          echo "=== Path mapping ==="
-          echo "Runner container path: $DP"
-          echo "Host machine path: $HOST_PATH"
-
       - name: Optional env file copy
         run: |
-          SRC="${{ inputs.env_file_path }}"; DST="${{ inputs.deploy_path }}/.env"
+          SRC="${{ inputs.env_file_path }}"
+          DST="$DEPLOY_PATH/.env"
+
+          if [ -n "$SRC" ] && [ ! -f "$SRC" ]; then
+            REPO_CANDIDATE="$GITHUB_WORKSPACE/$SRC"
+            WORKSPACE_CANDIDATE="${RUNNER_WORKSPACE:-$GITHUB_WORKSPACE}/$SRC"
+            if [ -f "$REPO_CANDIDATE" ]; then
+              SRC="$REPO_CANDIDATE"
+            elif [ -f "$WORKSPACE_CANDIDATE" ]; then
+              SRC="$WORKSPACE_CANDIDATE"
+            fi
+          fi
+
           if [ -n "$SRC" ] && [ -f "$SRC" ] && [ "$SRC" != "$DST" ]; then
-            cp -f "$SRC" "$DST"; fi
+            cp -f "$SRC" "$DST"
+          fi
 
       - name: Place server docker yml
         run: |
-          DP="${{ inputs.deploy_path }}"
-          HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
-          cp -f server/docker-compose.yml "$DP/docker-compose.yml"
-          sed -i "s#/www/ace.c/ai-manger#$HOST_PATH#g" "$DP/docker-compose.yml" || true
+          cp -f server/docker-compose.yml "$DEPLOY_PATH/docker-compose.yml"
 
       - name: Verify files before docker run
         run: |
-          DP="${{ inputs.deploy_path }}"
+          DP="$DEPLOY_PATH"
           ls -la "$DP" | head -50
           test -f "$DP/package.json" && echo "✓ package.json" || (echo "✗ package.json missing" && exit 1)
           test -f "$DP/pnpm-lock.yaml" && echo "✓ pnpm-lock.yaml" || echo "! pnpm-lock.yaml missing"
           test -f "$DP/dist/main.js" && echo "✓ dist/main.js" || (echo "✗ dist/main.js missing" && exit 1)
+          test -d "$DP/public/pages" && echo "✓ public/pages" || echo "! public/pages missing"
+          test -f "$DP/.env" && echo "✓ .env" || (echo "✗ .env missing" && exit 1)
 
       - name: Rebuild and Redeploy Docker app
         run: |
-          SERVICE="ai-mvp-app"
-          DP="${{ inputs.deploy_path }}"
+          DP="$DEPLOY_PATH"
 
           APP_PORT="${{ inputs.app_port }}"; [ -z "$APP_PORT" ] && APP_PORT=3011
           export APP_PORT
-
-          HOST_PATH="${DP/\/www\/ace.root/\/www\/ace.c}"
-
-          echo "=== Path mapping ==="
-          echo "Runner container path: $DP"
-          echo "Host machine path: $HOST_PATH"
-          echo ""
-
-          echo "=== Verify host path exists ==="
-          if [ -d "$HOST_PATH" ]; then
-            echo "✓ Host path exists: $HOST_PATH"
-            ls -la "$HOST_PATH" | head -10
-          else
-            echo "✗ Host path does NOT exist: $HOST_PATH"
-          fi
-
-          ENV_INPUT="${{ inputs.env_file_path }}"
-          ENV_TARGET="$DP/.env"
-
-          if [ -n "$ENV_INPUT" ] && [ -f "$ENV_INPUT" ]; then
-            ENV_FILE="$ENV_INPUT"
-          elif [ -f "$ENV_TARGET" ]; then
-            ENV_FILE="$ENV_TARGET"
-          else
-            ENV_FILE=""
-          fi
-
-          if [ -n "$ENV_FILE" ]; then
-            ENV_OPT=(--env-file "$ENV_FILE")
-          else
-            ENV_OPT=()
-          fi
+          export APP_ROOT="$DP"
 
           if command -v docker >/dev/null 2>&1; then
             if [ -f "$DP/docker-compose.yml" ]; then
-              echo "=== Using docker-compose ==="
               if docker compose version >/dev/null 2>&1; then
                 docker compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
               elif command -v docker-compose >/dev/null 2>&1; then
-                docker-compose -f "$DP/docker-compose.yml" up -d --build --force-recreate --remove-orphans
+                docker-compose -f "$DP/docker-compose.yml" --project-directory "$DP" up -d --build --force-recreate --remove-orphans
               else
                 echo "docker compose not available"
                 exit 1
               fi
             else
-              echo "=== Using docker run ==="
-              echo "Removing old container..."
-              docker rm -f "$SERVICE" >/dev/null 2>&1 || true
-
-              echo "Starting new container with volume: $HOST_PATH:/app"
-              docker run "${ENV_OPT[@]}" -d --name "$SERVICE" -p "$APP_PORT":3011 \
-                -e PORT=3011 -e NODE_ENV=production \
-                -v "$HOST_PATH":/app \
-                node:20-alpine sh -lc "echo '=== Container started ===' && ls -la /app && echo '' && echo '=== Checking key files ===' && ls -la /app/package.json && cd /app && (npm i -g pnpm@9 && pnpm install --prod) || (npm_config_production=true npm install); node dist/main.js"
+              echo "docker-compose.yml missing in deploy path"
+              exit 1
             fi
           else
             echo "docker not found"
             exit 1
           fi
 
-          echo ""
-          echo "=== Waiting for container to start ==="
-          sleep 3
-
           echo "=== Container logs ==="
-          docker logs "$SERVICE" 2>&1 | tail -80 || true
+          docker logs ai_mvp_app 2>&1 | tail -80 || true
 
       - name: Cleanup local artifact
         run: rm -rf ./artifact

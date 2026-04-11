@@ -28,6 +28,7 @@ import type {
   AdminAgentConfigEntity,
   AdminClawConfigEntity,
   AdminJwtPayload,
+  AdminLlmSettingEntity,
   AdminSessionEntity,
   AdminUserEntity,
   AdminUserRole,
@@ -42,11 +43,13 @@ type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & { id: string };
  */
 @Injectable()
 export class AdminService {
+  private readonly PLATFORM_INFO_SCOPE_TENANT_ID = '__platform__';
   private readonly users: Collection<AdminUserEntity>;
   private readonly sessions: Collection<AdminSessionEntity>;
   private readonly aiProviders: Collection<AdminAiProviderEntity>;
   private readonly clawConfigs: Collection<AdminClawConfigEntity>;
   private readonly agentConfigs: Collection<AdminAgentConfigEntity>;
+  private readonly llmSettings: Collection<AdminLlmSettingEntity>;
   private readonly sassTenants: Collection<SassTenantEntity>;
   private readonly sassApiKeys: Collection<SassApiKeyEntity>;
   private readonly dataSources: Collection<DataSourceEntity>;
@@ -66,6 +69,8 @@ export class AdminService {
       db.collection<AdminClawConfigEntity>('admin_claw_configs');
     this.agentConfigs =
       db.collection<AdminAgentConfigEntity>('admin_agent_configs');
+    this.llmSettings =
+      db.collection<AdminLlmSettingEntity>('admin_llm_settings');
     this.sassTenants = db.collection<SassTenantEntity>('sass_tenants');
     this.sassApiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.dataSources = db.collection<DataSourceEntity>('data_sources');
@@ -380,7 +385,7 @@ export class AdminService {
       name: string;
       baseUrl?: string;
       model?: string;
-      modelCategory: 'llm' | 'em';
+      modelCategory: 'llm' | 'em' | 'image';
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
@@ -389,7 +394,9 @@ export class AdminService {
     this.assertSuperAdmin(currentUser);
     const now = new Date();
     const modelCategory: AdminAiProviderEntity['modelCategory'] =
-      input.modelCategory === 'em' ? 'em' : 'llm';
+      input.modelCategory === 'em' || input.modelCategory === 'image'
+        ? input.modelCategory
+        : 'llm';
     const filter: Record<string, unknown> = {
       providerCode: input.providerCode.trim(),
       modelCategory,
@@ -441,7 +448,7 @@ export class AdminService {
       name?: string;
       baseUrl?: string;
       model?: string;
-      modelCategory?: 'llm' | 'em';
+      modelCategory?: 'llm' | 'em' | 'image';
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
@@ -464,7 +471,7 @@ export class AdminService {
     if (typeof input.model === 'string') {
       updates.model = input.model.trim() || undefined;
     }
-    if (input.modelCategory === 'llm' || input.modelCategory === 'em') {
+    if (input.modelCategory === 'llm' || input.modelCategory === 'em' || input.modelCategory === 'image') {
       updates.modelCategory = input.modelCategory;
     }
     if (typeof input.apiKey === 'string') {
@@ -520,7 +527,7 @@ export class AdminService {
    * @keyword-en get default ai provider
    */
   async getDefaultAiProvider(
-    modelCategory: 'llm' | 'em' = 'llm',
+    modelCategory: 'llm' | 'em' | 'image' = 'llm',
   ): Promise<AdminAiProviderEntity | null> {
     const row = await this.aiProviders.findOne(
       { enabled: true, isDefault: true, modelCategory },
@@ -570,6 +577,26 @@ export class AdminService {
     return {
       providerCode,
       model,
+      baseUrl: row.baseUrl,
+      apiKey: row.apiKey,
+    };
+  }
+
+  /**
+   * @description 读取默认生图运行配置
+   * @keyword-en get default image generation runtime config
+   */
+  async getDefaultImageProviderRuntime(): Promise<{
+    providerCode: string;
+    model?: string;
+    baseUrl?: string;
+    apiKey?: string;
+  } | null> {
+    const row = await this.getDefaultAiProvider('image');
+    if (!row) return null;
+    return {
+      providerCode: row.providerCode,
+      model: row.model,
       baseUrl: row.baseUrl,
       apiKey: row.apiKey,
     };
@@ -1076,6 +1103,20 @@ export class AdminService {
         model: 'text-embedding-3-small',
         modelCategory: 'em' as const,
       },
+      {
+        providerCode: 'gemini',
+        name: 'Gemini Image',
+        baseUrl: undefined,
+        model: 'gemini-2.0-flash-preview-image-generation',
+        modelCategory: 'image' as const,
+      },
+      {
+        providerCode: 'doubao',
+        name: 'Doubao Image',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        model: 'doubao-seedream-3.0-t2i-250415',
+        modelCategory: 'image' as const,
+      },
     ];
     for (const item of candidates) {
       await this.aiProviders.findOneAndUpdate(
@@ -1097,7 +1138,9 @@ export class AdminService {
         { upsert: true },
       );
     }
-    const ensureDefaultForCategory = async (category: 'llm' | 'em') => {
+    const ensureDefaultForCategory = async (
+      category: 'llm' | 'em' | 'image',
+    ) => {
       const exists = await this.aiProviders.findOne({
         isDefault: true,
         modelCategory: category,
@@ -1117,6 +1160,7 @@ export class AdminService {
     };
     await ensureDefaultForCategory('llm');
     await ensureDefaultForCategory('em');
+    await ensureDefaultForCategory('image');
   }
 
   // ─── Claw Config CRUD ───────────────────────────────────────────────────────
@@ -1376,14 +1420,15 @@ export class AdminService {
    */
   async getPlatformInfo(adminUser: AdminUserEntity): Promise<object> {
     // 租户管理员只能访问自己的租户，平台管理员可以访问任何租户
-    const tenantId =
-      adminUser.role === 'tenant_admin'
-        ? (adminUser.tenantId || '')
-        : undefined;
-    if (!tenantId && adminUser.role !== 'super_admin') {
+    if (adminUser.role !== 'tenant_admin' && adminUser.role !== 'super_admin') {
       throw new ForbiddenException('INSUFFICIENT_PERMISSIONS');
     }
-    const info = await this.sassService.getPlatformInfo(tenantId || '');
+    const tenantId =
+      adminUser.role === 'tenant_admin'
+        ? String(adminUser.tenantId ?? '').trim()
+        : this.PLATFORM_INFO_SCOPE_TENANT_ID;
+    if (!tenantId) throw new ForbiddenException('INSUFFICIENT_PERMISSIONS');
+    const info = await this.sassService.getPlatformInfo(tenantId);
     return { platformInfo: info };
   }
 
@@ -1391,25 +1436,102 @@ export class AdminService {
    * @description 更新平台信息（AI补充说明）
    * @param {AdminUserEntity} adminUser - 管理员用户
    * @param {string} aiPromptSupplement - AI补充说明
+   * @param {boolean | undefined} enableAiCover - 是否开启 AI 封面
    * @returns {Promise<object>} 更新后的平台信息
    * @keyword-en upsert platform info
    */
   async upsertPlatformInfo(
     adminUser: AdminUserEntity,
     aiPromptSupplement: string,
+    enableAiCover?: boolean,
   ): Promise<object> {
     // 租户管理员只能管理自己的租户，平台管理员可以管理任何租户
-    const tenantId =
-      adminUser.role === 'tenant_admin'
-        ? (adminUser.tenantId || '')
-        : undefined;
-    if (!tenantId && adminUser.role !== 'super_admin') {
+    if (adminUser.role !== 'tenant_admin' && adminUser.role !== 'super_admin') {
       throw new ForbiddenException('INSUFFICIENT_PERMISSIONS');
     }
+    const tenantId =
+      adminUser.role === 'tenant_admin'
+        ? String(adminUser.tenantId ?? '').trim()
+        : this.PLATFORM_INFO_SCOPE_TENANT_ID;
+    if (!tenantId) throw new ForbiddenException('INSUFFICIENT_PERMISSIONS');
     const info = await this.sassService.upsertPlatformInfo(
-      tenantId || '',
+      tenantId,
       aiPromptSupplement,
+      enableAiCover,
     );
     return { platformInfo: info };
+  }
+
+  // ─── LLM Settings CRUD ───────────────────────────────────────────────────────
+
+  /**
+   * @description 获取 LLM 设置（单条，全局）
+   * @keyword-en get llm settings
+   */
+  async getLlmSetting(): Promise<AdminLlmSettingEntity | null> {
+    const row = await this.llmSettings.findOne({});
+    if (row) return row;
+    // 返回默认值
+    return {
+      _id: new ObjectId(),
+      imageCount: 6,
+      coverUseLlm: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  /**
+   * @description 创建或更新 LLM 设置
+   * @keyword-en upsert llm setting
+   */
+  async upsertLlmSetting(
+    currentUser: AdminUserEntity,
+    input: {
+      imageCount?: number;
+      coverUseLlm?: boolean;
+    },
+  ): Promise<AdminLlmSettingEntity> {
+    this.assertSuperAdmin(currentUser);
+    const now = new Date();
+    const doc = {
+      imageCount: input.imageCount ?? 6,
+      coverUseLlm: input.coverUseLlm ?? false,
+      updatedAt: now,
+    };
+    const res = await this.llmSettings.findOneAndUpdate(
+      {},
+      { $set: doc, $setOnInsert: { _id: new ObjectId(), createdAt: now } },
+      { upsert: true, returnDocument: 'after', includeResultMetadata: true },
+    );
+    if (!res.value) throw new BadRequestException('LLM_SETTING_SAVE_FAILED');
+    return res.value;
+  }
+
+  /**
+   * @description 更新 LLM 设置
+   * @keyword-en update llm setting
+   */
+  async updateLlmSetting(
+    currentUser: AdminUserEntity,
+    input: {
+      imageCount?: number;
+      coverUseLlm?: boolean;
+    },
+  ): Promise<AdminLlmSettingEntity | null> {
+    this.assertSuperAdmin(currentUser);
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof input.imageCount === 'number') {
+      updates.imageCount = input.imageCount;
+    }
+    if (typeof input.coverUseLlm === 'boolean') {
+      updates.coverUseLlm = input.coverUseLlm;
+    }
+    const res = await this.llmSettings.findOneAndUpdate(
+      {},
+      { $set: updates },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
   }
 }

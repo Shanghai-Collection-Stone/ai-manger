@@ -19,6 +19,8 @@ Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统�
   - `createTenant`: 创建租户/create tenant
   - `listTenant`: 列出租户/list tenant
   - `getTenant`: 获取租户/get tenant
+  - `getPlatformInfo`: 获取平台AI配置/get platform info
+  - `upsertPlatformInfo`: 更新平台AI配置（含AI补充说明与AI封面开关）/upsert platform info
   - `createApiKey`: 创建api key/create api key
   - `listApiKey`: 列出api key/list api key
   - `revokeApiKey`: 撤销api key/revoke api key
@@ -83,6 +85,8 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `syncOrdersToSchema`: 同步订单入库/sync orders to schema
   - `syncUsagesToSchema`: 同步订单使用入库/sync usages to schema
   - `syncRefundsToSchema`: 同步订单退单入库/sync refunds to schema
+  - `getPlatformInfo`: 获取租户平台AI配置/get platform info
+  - `upsertPlatformInfo`: 更新租户平台AI配置（含enableAiCover）/upsert platform info
 
 ### sass-tenant-auth.middleware.ts
 Sass租户鉴权中间件，在sass schema、data与sync路由生效，支持通过 `X-Request-ID` 或传统API Key头解析密钥。
@@ -111,6 +115,10 @@ Schema实体定义。
 ### sass-api-key.entity.ts
 API Key实体定义。
 - **关键词**: entity, api-key
+
+### platform-info.entity.ts
+平台AI配置实体定义。
+- **关键词**: entity, platform-info, ai-prompt-supplement, enable-ai-cover
 
 ### sass-database-log.entity.ts
 数据操作日志实体定义。

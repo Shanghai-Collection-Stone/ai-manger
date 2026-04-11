@@ -30,9 +30,11 @@
 - **关键词**: xhs, canvas, tools, langchain, image-group
 - **函数**:
   - `getHandle` - 获取 XHS 工具列表（list、detail、create-image-group）
+  - `normalizeImageGroupArticles` - 对齐 groupCount 与 articles 数量（不强制 6-8 组）
+  - `mergeImageGroupsToArticles` - 将图组结果回写到同一 Canvas 的文章字段，并校验单篇图片 6-8 张目标
   - `createListCanvasesTool` - 列出 Canvas 列表（xhs_list_canvases）
   - `createGetCanvasDetailTool` - 获取 Canvas 详情（xhs_get_canvas_detail）
-  - `createImageGroupCanvasTool` - 创建图片组 Canvas 异步生成（xhs_create_image_group_canvas）
+  - `createImageGroupCanvasTool` - 创建图片组 Canvas，或传入 canvasId 在同一 Canvas 生成并合并文章配图（xhs_create_image_group_canvas）
 
 ### media-agent.module.ts
 模块定义。

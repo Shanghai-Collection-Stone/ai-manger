@@ -32,6 +32,8 @@ import { MediaAgentService } from '../../media-agent/services/media-agent.servic
 @Injectable()
 export class ChatMainService {
   private readonly logger = new Logger(ChatMainService.name);
+  private readonly IMAGE_PER_ARTICLE_MIN_COUNT = 6;
+  private readonly IMAGE_PER_ARTICLE_MAX_COUNT = 8;
 
   constructor(
     private readonly ctx: ContextService,
@@ -106,7 +108,11 @@ export class ChatMainService {
       },
     );
     // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
-    const mainAgentTools = this.filterSubagentOnlyTools(tools, scope.sessionType);
+    const mainAgentTools = this.filterSubagentOnlyTools(
+      tools,
+      scope.sessionType,
+      request.input,
+    );
     const checkpoint_id =
       (await this.ctx.getConversation(sid, scope))?.lastCheckpointId ?? 'root';
     let ai: AIMessage;
@@ -224,6 +230,10 @@ export class ChatMainService {
       text,
       directToolResults ?? derivedToolResults,
     );
+    text = this.ensureReadableNarrationIfNeeded(
+      text,
+      directToolResults ?? derivedToolResults,
+    );
 
     await this.ctx.appendMessage(
       sid,
@@ -260,12 +270,22 @@ export class ChatMainService {
    */
   stream(request: ChatRequest): Observable<MessageEvent> {
     return new Observable<MessageEvent>((subscriber) => {
+      const abortController = new AbortController();
+      let disposed = false;
+      const shouldStop = (): boolean =>
+        disposed || subscriber.closed || abortController.signal.aborted;
+
       void (async () => {
         let sid: string | null = null;
         try {
           const scope = this.getRequestScope(request);
+          const updatesOnlyStream = this.shouldUseUpdatesOnlyStreamForInput(
+            request.input,
+            scope.sessionType,
+          );
           sid = await this.ctx.createSessionWithScope(request.sessionId, scope);
           if (!sid) throw new Error('SESSION_ID_MISSING');
+          if (shouldStop()) return;
 
           await this.ctx.appendMessage(
             sid,
@@ -292,11 +312,15 @@ export class ChatMainService {
           ].join('\n');
 
           const streamWriter = (msg: string) => {
-            if (!subscriber.closed)
+            if (!shouldStop())
               subscriber.next({
                 data: { type: 'log', data: msg, thread_id: sid },
               } as MessageEvent);
           };
+
+          if (updatesOnlyStream) {
+            streamWriter('[StreamMode] updates-only enabled for tool-heavy workflow');
+          }
 
           const tools = this.getToolsForInput(
             request.input,
@@ -311,7 +335,11 @@ export class ChatMainService {
             { sid, now: nowStr, ip: ipStr },
           );
           // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
-          const mainAgentTools = this.filterSubagentOnlyTools(tools, scope.sessionType);
+          const mainAgentTools = this.filterSubagentOnlyTools(
+            tools,
+            scope.sessionType,
+            request.input,
+          );
           const checkpoint_id = meta?.lastCheckpointId ?? 'root';
 
           // ─── 消费 agent stream 事件 ───
@@ -323,6 +351,7 @@ export class ChatMainService {
               system: sysContent,
               recursionLimit: 1000,
               streamWriter,
+              streamMode: updatesOnlyStream ? 'updates' : undefined,
               context: { threadId: sid, checkpointId: checkpoint_id },
             },
             messages: [new HumanMessage(request.input)],
@@ -332,6 +361,7 @@ export class ChatMainService {
                 checkpoint_ns: 'default',
                 checkpoint_id: checkpoint_id,
               },
+              signal: abortController.signal,
             },
           });
 
@@ -340,14 +370,17 @@ export class ChatMainService {
           let endToolResults:
             | { name?: unknown; output?: unknown }[]
             | undefined;
+          const observedToolResults: { name?: unknown; output?: unknown }[] =
+            [];
 
           const safeSend = (payload: unknown) => {
-            if (!subscriber.closed) {
+            if (!shouldStop()) {
               subscriber.next({ data: payload } as MessageEvent);
             }
           };
 
           for await (const step of iterable) {
+            if (shouldStop()) break;
             switch (step.type) {
               case 'start':
                 // 内部初始化，不推送
@@ -375,6 +408,10 @@ export class ChatMainService {
                 safeSend({ type: 'tool_chunk', data: step.data });
                 break;
               case 'tool_end':
+                observedToolResults.push({
+                  name: step.data?.name,
+                  output: step.data?.output,
+                });
                 safeSend({ type: 'tool_end', data: step.data });
                 break;
               case 'subagent':
@@ -408,6 +445,12 @@ export class ChatMainService {
 
           // ─── 后处理 ───
           let text = this.sanitizeFinalText(fullText);
+          const finalToolResults =
+            Array.isArray(endToolResults) && endToolResults.length > 0
+              ? endToolResults
+              : observedToolResults.length > 0
+                ? observedToolResults
+                : undefined;
 
           // HITL 检测
           try {
@@ -422,15 +465,16 @@ export class ChatMainService {
                     : undefined;
                 return !!(obj && obj['requires_human'] === true);
               });
-            if (hasHitl(endToolResults)) text = this.HITL_PLACEHOLDER;
+            if (hasHitl(finalToolResults)) text = this.HITL_PLACEHOLDER;
           } catch {
             void 0;
           }
 
-          text = this.appendCanvasItIfNeeded(text, endToolResults);
-          text = this.appendTaskItIfNeeded(text, endToolResults);
-          text = this.appendDecisionSummaryIfNeeded(text, endToolResults);
-          text = this.appendDecisionItIfNeeded(text, endToolResults);
+          text = this.appendCanvasItIfNeeded(text, finalToolResults);
+          text = this.appendTaskItIfNeeded(text, finalToolResults);
+          text = this.appendDecisionSummaryIfNeeded(text, finalToolResults);
+          text = this.appendDecisionItIfNeeded(text, finalToolResults);
+          text = this.ensureReadableNarrationIfNeeded(text, finalToolResults);
 
           // 推送最终 end 事件
           safeSend({
@@ -438,7 +482,7 @@ export class ChatMainService {
             data: {
               text,
               tool_calls: endToolCalls,
-              tool_results: endToolResults,
+              tool_results: finalToolResults,
               thread_id: sid,
             },
           });
@@ -453,7 +497,7 @@ export class ChatMainService {
                 Array.isArray(endToolCalls) && endToolCalls.length > 0
                   ? endToolCalls
                   : undefined,
-              tool_results: endToolResults,
+              tool_results: finalToolResults,
             },
             scope,
           );
@@ -485,6 +529,15 @@ export class ChatMainService {
           if (!subscriber.closed) subscriber.complete();
         }
       })();
+
+      return () => {
+        disposed = true;
+        try {
+          abortController.abort();
+        } catch {
+          void 0;
+        }
+      };
     });
   }
 
@@ -505,6 +558,10 @@ export class ChatMainService {
     return this.ctx.createSessionWithScope(sessionId, scope);
   }
 
+  /**
+   * @description 追加一条用户消息到会话。
+   * @keyword-en append user message
+   */
   async appendUser(
     sessionId: string,
     content: string,
@@ -524,6 +581,10 @@ export class ChatMainService {
     );
   }
 
+  /**
+   * @description 追加一条助手消息到会话。
+   * @keyword-en append assistant message
+   */
   async appendAssistant(
     sessionId: string,
     content: string,
@@ -543,6 +604,10 @@ export class ChatMainService {
     );
   }
 
+  /**
+   * @description 获取会话消息并附加可删除指纹，同时过滤已删除项。
+   * @keyword-en get messages with fingerprints
+   */
   async getMessages(
     sessionId: string,
     limit?: number,
@@ -578,6 +643,10 @@ export class ChatMainService {
     );
   }
 
+  /**
+   * @description 按指纹或可见索引删除消息（软删除）。
+   * @keyword-en delete messages by fingerprint or index
+   */
   async deleteMessages(
     sessionId: string,
     params?: { fingerprints?: string[]; indexes?: number[] },
@@ -617,6 +686,10 @@ export class ChatMainService {
     return { deleted: uniqueFps.length };
   }
 
+  /**
+   * @description 清空指定会话上下文。
+   * @keyword-en clear session messages
+   */
   async clearSession(
     sessionId: string,
     scope?: {
@@ -628,6 +701,10 @@ export class ChatMainService {
     await this.ctx.clearSessionWithScope(sessionId, scope);
   }
 
+  /**
+   * @description 从 AIMessage 中抽取可展示文本。
+   * @keyword-en extract display text from ai message
+   */
   private extractText(ai: AIMessage): string {
     const content = ai.content;
     if (typeof content === 'string') {
@@ -638,6 +715,10 @@ export class ChatMainService {
     return JSON.stringify(content);
   }
 
+  /**
+   * @description 清洗历史消息内容，剔除仅含 thinking/tool_use 的块结构。
+   * @keyword-en sanitize history message content
+   */
   private sanitizeHistoryContent(content: unknown): string {
     if (typeof content !== 'string') return '';
     const s = content.trim();
@@ -658,6 +739,10 @@ export class ChatMainService {
     }
   }
 
+  /**
+   * @description 从多种模型 content 结构中提取纯文本。
+   * @keyword-en extract text from model content
+   */
   private extractTextFromModelContent(content: unknown): string {
     if (content === null || content === undefined) return '';
     if (typeof content === 'string') return content;
@@ -699,6 +784,10 @@ export class ChatMainService {
     return '';
   }
 
+  /**
+   * @description 清洗最终输出，避免把工具 JSON 头部原样展示给用户。
+   * @keyword-en sanitize final output text
+   */
   private sanitizeFinalText(text: string): string {
     const s = typeof text === 'string' ? text : String(text ?? '');
     const trimmed = s.trimStart();
@@ -760,6 +849,10 @@ export class ChatMainService {
     }
   }
 
+  /**
+   * @description 规范化字符串数组输入，必要时返回默认值。
+   * @keyword-en normalize string array input
+   */
   private ensureStringArray(
     v: unknown,
     fallback: string[] = ['analysis_subagent'],
@@ -772,6 +865,10 @@ export class ChatMainService {
     return out.length > 0 ? out : fallback;
   }
 
+  /**
+   * @description 生成会话的临时标题。
+   * @keyword-en build provisional session title
+   */
   private provisionalTitle(text: string): string {
     const s = String(text || '').trim();
     let t = s.slice(0, 24);
@@ -790,6 +887,7 @@ export class ChatMainService {
     const base = [
       '你是 AI 指挥官 “小集”，目标是用最少步骤完成用户当前需求。',
       '你能完成代码生成,看版替换,页面生成,数据分析等任务,但你不是执行者,只能调用工具/子代理来完成任务。',
+      '如果是生成文章的数据收集,直接交给生文节点去做就好了,不需要你检索完了给到 subagent',
       '优先直接回答；只有当信息不足或用户明确要求时再调用工具/子代理。',
       '当工具返回了 Canvas 信息（如 canvasId），回复中输出一个 ```canvas-it``` JSON 代码块（至少包含 canvasId）。',
       '当用户诉求属于”方案/决策/策略/建议”，且已有可支撑的数据时，调用 decision_card_generate 生成决策卡,如果没有就进行复杂数据查询, 然后继续生成',
@@ -806,11 +904,9 @@ export class ChatMainService {
       '批量发布通过 Todo 派单：创建/更新 Todo，并使用中文接单人名称”小红书发布机”（避免暴露内部代码）；type 只能为 auto_execute/offline_execute/other（发布场景必须 auto_execute），并写清关联资源（如 canvasId）与 count。',
       '调用 todo_create/todo_update 时不要手填 userId，统一由会话上下文注入。',
       '创建发布任务时，description 必须写入当前会话上下文摘要（用户目标、对象、资源、执行要求），不要留空。',
-      '示例文章生成阶段会基于图库原始图片即时生成拼图与封面；不复用历史拼图或历史封面。',
       '生成拼图/封面属于独立图库操作；除非用户明确要求生成文章/内容，否则禁止同时触发 Canvas 创建。',
       '[重要]需要任何数据分析,数据查询,数据获取时使用 analysis_subagent, 如果有数据来源返回也要在回答生成中说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '涉及计算时必须调用 js_calc 或 js_calc_batch。',
-      '[搜索]当用户询问最新资讯、热门话题、竞品动态、实时数据，或在生成文章/Canvas 前需要参考素材时，优先调用 duckduckgo_search 检索；把搜索结果摘要作为 notes/参考资料传给后续工具或直接呈现给用户，禁止在没有检索意图的情况下强行调用搜索。',
       '若工具失败或返回空，明确告知用户并给下一步选项。',
       '所有的数据查询都要带上数据表清单（schema catalog），说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '【重要】返回图片时：只输出 markdown 图片语法如 ![描述](/static/uploads/xxx.jpg)，禁止在路径前加任何域名、IP或 baseURL，禁止使用 HTML img 标签。',
@@ -949,10 +1045,12 @@ export class ChatMainService {
       '你可以使用Canvas和图库工具来：',
       '1. 查看Canvas列表 - 使用 xhs_list_canvases 了解用户的内容集合',
       '2. 获取Canvas详情 - 使用 xhs_get_canvas_detail 查看具体文章内容和图片组',
-      '3. 创建图片组Canvas - 使用 xhs_create_image_group_canvas 根据文章主题快速生成配图集合',
+      '3. 创建图片组Canvas - 使用 xhs_create_image_group_canvas 根据文章主题快速生成配图集合并触发匹配生图',
+      '   - 参数规则：groupCount 与 articles 数量保持一致；篇数按用户/LLM要求，不做 6-8 强制限制',
+      `   - 质量目标：每篇文章配图数量应在 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前模板默认 6 张）`,
       '   - 图片组Canvas会异步从图库中匹配图片，立即返回"生成中"状态',
       '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
-      '   - 严格禁止多次调用 xhs_create_image_group_canvas（这是高频错误！）**核心原则**："生成 N 组图片"=1个Canvas含N个imageGroup=articles数组传N个元素，**不是**创建N个Canvas。例如用户要3组图组，应该一次调用传入 articles:[{title:"第1组",tags}, {title:"第2组",tags}, {title:"第3组",tags}]，groupCount:3，创建出1个Canvas（ID=xxx），articleCount=3，而不是创建3个Canvas',
+      '   - 严格禁止多次调用 xhs_create_image_group_canvas（这是高频错误！）**核心原则**："生成 N 组图片"=1个Canvas含N个imageGroup=articles数组传N个元素，**不是**创建N个Canvas',
       '4. 结合图库图片 - 为文章配图',
       '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi），再用于内容链路。',
       '【canvas-it 展示规则】每次创建 Canvas 后，工具返回 canvas-it 代码块，必须原样输出给用户：',
@@ -973,6 +1071,45 @@ export class ChatMainService {
     mode: ConversationSessionType = 'default',
   ): CreateAgentParams['tools'] {
     return this.tools.getHandle(streamWriter, scope, { mode });
+  }
+
+  /**
+   * @description 构建图库子代理配置（统一 xhs-specialist/default，避免重复设计与规则漂移）
+   * @keyword-en build gallery subagent shared config
+   */
+  private buildGallerySubagent(
+    envStr: string,
+    tools: StructuredTool[],
+  ): DeepAgentSubAgent {
+    return {
+      name: 'gallery_subagent',
+      description:
+        '⚡【图组Canvas(image-group)·图库搜图·素材】「图组」「图片组」「image-group」「配图集合」「图组Canvas」以及文章配图需求 → 委派此代理，优先级高于文章正文生成。',
+      systemPrompt: [
+        envStr,
+        '你是图库与图片素材子代理，同时负责创建图片组 Canvas（image-group 类型）并触发匹配生图。',
+        '【图组Canvas创建规则】',
+        '  1. 当用户需求包含文章配图/生图时，必须调用 xhs_create_image_group_canvas，不要只返回文字建议。',
+        '  2. groupCount 与 articles 数量保持一致；文章篇数必须按用户或LLM指定，不要强制改成 6-8 篇。',
+        `  3. 每篇文章配图目标为 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前图组模板默认 6 张）。`,
+        '  4. 一次需求只允许调用一次 xhs_create_image_group_canvas，禁止循环创建多个 Canvas。',
+        '  5. 调用后把工具结果里的 canvas-it 代码块原样返回，不要再做其他工具调用。',
+        '【Canvas 工具】',
+        '- xhs_list_canvases：列出 Canvas 列表',
+        '- xhs_get_canvas_detail：获取 Canvas 详情（含文章和图片组）',
+        '- xhs_create_image_group_canvas：创建图片组 Canvas（异步后台生成，立即返回 generating 状态）',
+        '【图库工具】',
+        '- gallery_search_images：向量+标签检索（优先使用）',
+        '- gallery_list_images：列出图片',
+        '- gallery_list_tags：列标签',
+        '- gallery_random_images：随机取图',
+        '返回图片路径使用相对路径（如 /static/uploads/xxx.jpg），禁止拼接域名。',
+        '若用户明确只需要文章正文且不需要配图，可改由 topic_orchestrate_subagent 处理。',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      tools,
+    };
   }
 
   /**
@@ -1013,9 +1150,20 @@ export class ChatMainService {
     const tools = this.getTools(streamWriter, scope, mode) ?? [];
     if (mode === 'thought') return tools;
     if (this.isTopicOrchestrateIntent(input)) {
+      const allow = new Set([
+        'task',
+        'topic_orchestrate',
+        'data_analysis',
+        'mcp_list_resources',
+        'mcp_read_resource',
+        'mcp_ingest_file',
+        'mcp_list_mcp_tools',
+        'mcp_list_mcp_resources',
+      ]);
       return tools.filter((t) => {
         const name = (t as unknown as { name?: string }).name ?? '';
-        return name === 'topic_orchestrate' || name === 'task';
+        if (allow.has(name)) return true;
+        return /duck|ddg|duckduckgo|web_search/i.test(name);
       });
     }
     return tools;
@@ -1047,8 +1195,35 @@ export class ChatMainService {
       analysis: this.normalizeSubagentTools(
         this.analysisTools.getAllDataSourceTools(scope),
       ),
-      // 文章正文生成 — 仅 topic_orchestrate
-      topicOrchestrate: pick('topic_orchestrate'),
+      // 文章正文生成（可先做数据收集）
+      topicOrchestrate: Array.from(
+        new Map(
+          [
+            ...pick('topic_orchestrate', 'data_analysis'),
+            ...pick(
+              'mcp_list_resources',
+              'mcp_read_resource',
+              'mcp_ingest_file',
+              'mcp_list_mcp_tools',
+              'mcp_list_mcp_resources',
+            ),
+            ...allTools.filter((t) => {
+              const n = t.name;
+              if (!n) return false;
+              if (
+                n.startsWith('gallery_') ||
+                n.startsWith('xhs_') ||
+                n.startsWith('todo_') ||
+                n.startsWith('dashboard_') ||
+                n.startsWith('frontend_')
+              ) {
+                return false;
+              }
+              return /duck|ddg|duckduckgo|web_search/i.test(n);
+            }),
+          ].map((t) => [t.name, t] as const),
+        ).values(),
+      ),
       // 前端可视化 — HTML/图表生成 + 标题 + MCP 读取 + 看板只读查询
       frontend: [
         ...pick('frontend_plan', 'frontend_finalize', 'title_generate'),
@@ -1096,10 +1271,13 @@ export class ChatMainService {
   private filterSubagentOnlyTools(
     tools: CreateAgentParams['tools'],
     mode: ConversationSessionType,
+    input?: string,
   ): CreateAgentParams['tools'] {
     if (mode === 'thought' || mode === 'gallery-agent' || mode === 'xhs-specialist') {
       return tools;
     }
+    const isTopicIntent =
+      typeof input === 'string' && this.isTopicOrchestrateIntent(input);
     // default 模式：主agent不直接持有这些工具，全部交给对应subagent
     const subagentOnly = new Set([
       'topic_orchestrate',             // → topic_orchestrate_subagent
@@ -1107,9 +1285,22 @@ export class ChatMainService {
       'xhs_get_canvas_detail',         // → gallery_subagent
       'xhs_create_image_group_canvas', // → gallery_subagent
     ]);
+    const topicDataCollectionOnly = new Set([
+      'data_analysis',
+      'mcp_list_resources',
+      'mcp_read_resource',
+      'mcp_ingest_file',
+      'mcp_list_mcp_tools',
+      'mcp_list_mcp_resources',
+    ]);
     return (tools ?? []).filter((t) => {
       const name = (t as { name?: string }).name ?? '';
-      return !subagentOnly.has(name);
+      if (subagentOnly.has(name)) return false;
+      if (isTopicIntent && topicDataCollectionOnly.has(name)) return false;
+      if (isTopicIntent && /duck|ddg|duckduckgo|web_search/i.test(name)) {
+        return false;
+      }
+      return true;
     });
   }
 
@@ -1150,37 +1341,7 @@ export class ChatMainService {
     }
 
     if (mode === 'xhs-specialist') {
-      const xhsTools = this.normalizeSubagentTools(
-        this.mediaAgent.getXhsToolsHandle(scope),
-      );
-      const galleryTools = this.normalizeSubagentTools(
-        this.mediaAgent.getGalleryToolsHandle(scope),
-      );
-      return [
-        {
-          name: 'gallery_subagent',
-          description:
-            '⚡【图组Canvas(image-group)·图库·Canvas看板】「图组」「图片组」「image-group」「配图集合」关键词 → 必须委派此代理，优先级最高。搜图/查Canvas/创建图组Canvas 均来此。',
-          systemPrompt: [
-            envStr,
-            '你是图库与 Canvas 管理子代理，负责图片素材搜索和 Canvas 看板操作。',
-            '【图库工具】',
-            '- gallery_search_images：按向量+标签检索图片（优先使用）',
-            '- gallery_list_images：列出图片',
-            '- gallery_list_tags：列出标签',
-            '- gallery_random_images：随机取图',
-            '【Canvas 工具】',
-            '- xhs_list_canvases：列出 Canvas 列表',
-            '- xhs_get_canvas_detail：获取 Canvas 详情（含文章和图片组）',
-            '- xhs_create_image_group_canvas：创建图片组 Canvas（异步后台生成，立即返回 generating 状态）',
-            '调用 xhs_create_image_group_canvas 后，必须将工具结果里的 canvas_it hint 代码块原样输出给上层，让前端渲染看板入口。',
-            '返回图片路径时使用相对路径（如 /static/uploads/xxx.jpg），禁止拼接域名。',
-          ]
-            .filter(Boolean)
-            .join('\n'),
-          tools: [...xhsTools, ...galleryTools],
-        },
-      ];
+      return [this.buildGallerySubagent(envStr, toolSets.gallery)];
     }
 
     const analysisSys = [
@@ -1264,11 +1425,21 @@ export class ChatMainService {
       },
       {
         name: 'topic_orchestrate_subagent',
-        description:
-          '【仅限文章正文生成】用户要生成小红书/平台文章的「文字正文内容」→ 委派此代理。⛔ 含「图组」「图片组」「image-group」「配图集合」关键词时，转给 gallery_subagent，不要来此代理。',
+        description:[
+          '【仅限文章正文生成】用户要生成小红书/平台文章 委派此代理。禁止直接输出文章正文，必须调用 topic_orchestrate 工具写入 Canvas, Canvas 是异步加载的 不需要等待返回!',
+          '该代理可先做数据收集：优先通过 task 委派 analysis_subagent，或直接用 data_analysis / duckduckgo 相关 MCP 搜索工具整理素材，再调用 topic_orchestrate。',
+        ].join('\n'),
         systemPrompt: [
           envStr,
           '你是专项文章生成代理。',
+          '在调用 topic_orchestrate 之前，先判断是否需要补充事实数据/案例/趋势。',
+          '若信息不足：优先通过 task 委派 analysis_subagent 做结构化数据收集；如需外部实时信息，可调用 duckduckgo/web_search 类 MCP 工具检索。',
+          '你也可以直接调用 data_analysis 完成数据库分析；但当任务较复杂时，优先使用 analysis_subagent 以获得更稳定的数据链路。',
+          '完成数据收集后，必须将结果压缩为 dataSummary（建议 300-1200 字，包含数据来源、关键结论、可用于写作的要点），并在调用 topic_orchestrate 时一并传入。',
+          '调用 topic_orchestrate 时，同时传入 userPrompt（用户原始需求的精炼重述）和 dataSummary（你整理的数据摘要）。',
+          '多篇文章可以在一个Canvas里生成，给 topic_orchestrate 对应的数量参数即可，禁止通过重复调用来生成多篇文章。',
+          'topic_orchestrate 工具会返回 canvas-it 代码 或 Canvas id,你需要立刻返回,不需要等待 Canvas执行结果,直接返回就可以了,告知用户正在生成中,并把 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
+          '你的职责仅是整理参数并调用 topic_orchestrate 工具，禁止直接输出文章正文、标题列表、items JSON。',
           '【userId 来源】上方 CURRENT_USER_ID 字段即当前用户 ID，调用 topic_orchestrate 时必须把此值传给 userId 参数，禁止省略、禁止自造。',
           '所有文章产出都必须通过 topic_orchestrate 工具写入 Canvas，禁止直接返回文章正文或大纲。',
           '小红书正文要求：开头 1-2 句强钩子；短句短段；多要点列表；真实分享语气；末尾 3-6 个话题标签（#标签）；至少 200 字。',
@@ -1289,6 +1460,8 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是前端页面生成子代理。只在用户明确要求图表/页面/可视化时工作。',
+          '除非用户明确要求 MCP 资源读取/导入，否则不要调用任何 mcp_* 工具。',
+          '若必须读取 MCP 资源，先调用 mcp_list_resources 确认存在，再调用 mcp_read_resource。',
           '输出需严格遵循工具与系统提示的约束。',
         ]
           .filter(Boolean)
@@ -1307,29 +1480,7 @@ export class ChatMainService {
           .join('\n'),
         tools: toolSets.ops,
       },
-      {
-        name: 'gallery_subagent',
-        description:
-          '⚡【图组Canvas(image-group)·图库搜图·素材】「图组」「图片组」「image-group」「配图集合」「图组Canvas」关键词 → 必须委派此代理，优先级高于文章生成。搜图/查标签/随机取图 也委派此代理。',
-        systemPrompt: [
-          envStr,
-          '你是图库与图片素材子代理，同时负责创建图片组 Canvas（image-group 类型）。',
-          '【图组Canvas创建步骤】用户要求"图组Canvas"或"image-group"或"图片组"时：',
-          '  1. 根据用户话题和数量要求，先自行拟定所有文章的标题和标签列表（无需调用其他工具）；除非用户明确指定数量，否则默认生成 1 个 Canvas 包含 6-8 个 imageGroup',
-          '  2. 严格禁止多次调用 xhs_create_image_group_canvas（这是高频错误！）**核心原则**："生成 N 组图片"=1个Canvas含N个imageGroup=articles数组传N个元素，**不是**创建N个Canvas。例如用户要3组图组，应该一次调用传入 articles:[{title:"第1组",tags}, {title:"第2组",tags}, {title:"第3组",tags}]，groupCount:3，创建出1个Canvas（ID=xxx），articleCount=3，而不是创建3个Canvas',
-          '  3. 把工具结果里的 canvas-it 代码块原样返回，不要再做其他操作',
-          '【图库工具】',
-          '- gallery_search_images：向量+标签检索（优先使用）',
-          '- gallery_list_images：列出图片',
-          '- gallery_list_tags：列标签',
-          '- gallery_random_images：随机取图',
-          '返回图片路径使用相对路径（如 /static/uploads/xxx.jpg），禁止拼接域名。',
-          '不生成文章正文；若用户要生成正文文章，告知上层委派 topic_orchestrate_subagent。',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-        tools: toolSets.gallery,
-      },
+      this.buildGallerySubagent(envStr, toolSets.gallery),
     ];
   }
 
@@ -1353,6 +1504,20 @@ export class ChatMainService {
   }
 
   /**
+   * @description 判断当前输入是否应使用 updates-only 流模式，降低工具高频阶段 token 流写入风险。
+   * @keyword-en detect updates-only stream mode intent
+   */
+  private shouldUseUpdatesOnlyStreamForInput(
+    input: string,
+    sessionType: ConversationSessionType,
+  ): boolean {
+    void input;
+    void sessionType;
+    // 为保证首屏与刷新后的结果一致性，暂时关闭 updates-only 模式，统一走默认流式。
+    return false;
+  }
+
+  /**
    * @description 规范子代理工具列表
    * @keyword-en normalize subagent tools
    */
@@ -1363,6 +1528,10 @@ export class ChatMainService {
     return tools.filter((t): t is StructuredTool => isStructuredTool(t));
   }
 
+  /**
+   * @description 从自然语言中提取待执行的 canvasId。
+   * @keyword-en parse canvas execute id
+   */
   private parseCanvasExecuteCanvasId(input: string): number | null {
     const s = String(input || '').trim();
     if (!s) return null;
@@ -1373,6 +1542,10 @@ export class ChatMainService {
     return n;
   }
 
+  /**
+   * @description 从工具输出中提取 canvas-it 结构化信息。
+   * @keyword-en extract canvas-it items
+   */
   private extractCanvasItItems(output: unknown): Array<{
     canvasId: number;
     status?: string;
@@ -1382,7 +1555,7 @@ export class ChatMainService {
     needFields?: string[];
     type?: string;
   }> {
-    const out: Array<{
+    type CanvasItItem = {
       canvasId: number;
       status?: string;
       topic?: string;
@@ -1390,18 +1563,21 @@ export class ChatMainService {
       articleCount?: number;
       needFields?: string[];
       type?: string;
-    }> = [];
+    };
+
+    const out: CanvasItItem[] = [];
+    const visited = new Set<unknown>();
 
     const tryPush = (obj: Record<string, unknown>) => {
-      const cidRaw = obj['canvasId'] ?? obj['canvas_id'] ?? obj['id'];
+      const canvasVal = obj['canvas'];
+      const canvasRec =
+        canvasVal && typeof canvasVal === 'object' && !Array.isArray(canvasVal)
+          ? (canvasVal as Record<string, unknown>)
+          : undefined;
+      const cidRaw =
+        obj['canvasId'] ?? obj['canvas_id'] ?? obj['id'] ?? canvasRec?.['id'];
       const cid = Number(cidRaw);
       if (!Number.isFinite(cid)) return;
-
-      const canvas = obj['canvas'];
-      const canvasRec =
-        canvas && typeof canvas === 'object'
-          ? (canvas as Record<string, unknown>)
-          : undefined;
       const status =
         typeof obj['status'] === 'string'
           ? obj['status']
@@ -1450,55 +1626,114 @@ export class ChatMainService {
       });
     };
 
-    if (output && typeof output === 'object') {
-      const rec = output as Record<string, unknown>;
-      tryPush(rec);
-      return out;
-    }
+    const visit = (val: unknown): void => {
+      if (val === null || val === undefined) return;
 
-    if (typeof output === 'string') {
-      const s = output.trim();
-      if (!s) return out;
-      if (s.startsWith('{') || s.startsWith('[')) {
-        try {
-          const parsed: unknown = JSON.parse(s);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            tryPush(parsed as Record<string, unknown>);
+      if (typeof val === 'string') {
+        const s = val.trim();
+        if (!s) return;
+        if (s.startsWith('{') || s.startsWith('[')) {
+          try {
+            visit(JSON.parse(s));
+          } catch {
+            void 0;
           }
-          if (Array.isArray(parsed)) {
-            for (const item of parsed) {
-              if (item && typeof item === 'object' && !Array.isArray(item)) {
-                tryPush(item as Record<string, unknown>);
-              }
-            }
+        }
+
+        // Parse embedded canvas-it JSON blocks from tool text.
+        const canvasItRe = /```canvas-it\s*([\s\S]*?)```/gi;
+        let cim: RegExpExecArray | null;
+        while ((cim = canvasItRe.exec(s)) !== null) {
+          try {
+            visit(JSON.parse(cim[1].trim()));
+          } catch {
+            void 0;
           }
-          return out;
-        } catch {
-          void 0;
+        }
+
+        const idPatterns = [
+          /(?:canvasId|canvas_id)\s*[:=]\s*(\d+)/i,
+          /canvas\s*\(id\s*=\s*(\d+)\)/i,
+          /canvas（id\s*=\s*(\d+)）/i,
+        ];
+        for (const re of idPatterns) {
+          const m = s.match(re);
+          if (!m || !m[1]) continue;
+          const cid = Number(m[1]);
+          if (Number.isFinite(cid)) out.push({ canvasId: cid });
+          break;
+        }
+        return;
+      }
+
+      if (typeof val !== 'object') return;
+      if (visited.has(val)) return;
+      visited.add(val);
+
+      if (Array.isArray(val)) {
+        for (const item of val) visit(item);
+        return;
+      }
+
+      const rec = val as Record<string, unknown>;
+      tryPush(rec);
+
+      const text = rec['text'];
+      if (typeof text === 'string') visit(text);
+
+      const content = rec['content'];
+      if (
+        typeof content === 'string' ||
+        Array.isArray(content) ||
+        (content && typeof content === 'object')
+      ) {
+        visit(content);
+      }
+
+      const nestedKeys = ['result', 'data', 'summary', 'payload', 'canvas'];
+      for (const key of nestedKeys) {
+        const nested = rec[key];
+        if (!nested) continue;
+        if (typeof nested === 'string' || typeof nested === 'object') {
+          visit(nested);
         }
       }
-      // Parse embedded canvas-it JSON blocks (tool returns string with ```canvas-it ... ```)
-      const canvasItRe = /```canvas-it\s*([\s\S]*?)```/gi;
-      let cim: RegExpExecArray | null;
-      while ((cim = canvasItRe.exec(s)) !== null) {
-        try {
-          const parsed: unknown = JSON.parse(cim[1].trim());
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            tryPush(parsed as Record<string, unknown>);
-          }
-        } catch { void 0; }
-      }
-      if (out.length > 0) return out;
-      const m = s.match(/(?:canvasId|canvas_id|id)\s*[:=]\s*(\d+)/i);
-      if (m && m[1]) {
-        const cid = Number(m[1]);
-        if (Number.isFinite(cid)) out.push({ canvasId: cid });
-      }
-    }
+    };
 
-    return out;
+    visit(output);
+    if (out.length <= 1) return out;
+
+    const merged = new Map<number, CanvasItItem>();
+    for (const item of out) {
+      const prev = merged.get(item.canvasId);
+      if (!prev) {
+        merged.set(item.canvasId, item);
+        continue;
+      }
+      merged.set(item.canvasId, {
+        canvasId: item.canvasId,
+        status: prev.status ?? item.status,
+        topic: prev.topic ?? item.topic,
+        platform: prev.platform ?? item.platform,
+        articleCount:
+          typeof prev.articleCount === 'number' &&
+          Number.isFinite(prev.articleCount)
+            ? prev.articleCount
+            : item.articleCount,
+        needFields:
+          Array.isArray(prev.needFields) && prev.needFields.length > 0
+            ? prev.needFields
+            : item.needFields,
+        type: prev.type ?? item.type,
+      });
+    }
+    return Array.from(merged.values());
   }
 
+  /**
+   * @description 从工具输出中提取 task-it 结构化信息。
+   * @keyword-en extract task-it items
+   */
   private extractTaskItItems(output: unknown): Array<{
     todoId: number;
     batchTaskId?: number;
@@ -1621,6 +1856,10 @@ export class ChatMainService {
     return out;
   }
 
+  /**
+   * @description 构建 task-it markdown 代码块。
+   * @keyword-en build task-it block
+   */
   private buildTaskItBlock(item: {
     todoId: number;
     batchTaskId?: number;
@@ -1659,6 +1898,10 @@ export class ChatMainService {
     return `\n\n\`\`\`task-it\n${JSON.stringify(payload)}\n\`\`\`\n`;
   }
 
+  /**
+   * @description 按工具结果自动补全 task-it 代码块。
+   * @keyword-en append task-it block if needed
+   */
   private appendTaskItIfNeeded(
     text: string,
     toolResults?: Array<{ name?: unknown; output?: unknown }>,
@@ -1701,6 +1944,10 @@ export class ChatMainService {
     return base + unique.map((it) => this.buildTaskItBlock(it)).join('');
   }
 
+  /**
+   * @description 构建 canvas-it markdown 代码块。
+   * @keyword-en build canvas-it block
+   */
   private buildCanvasItBlock(item: {
     canvasId: number;
     status?: string;
@@ -1735,6 +1982,10 @@ export class ChatMainService {
     return `\n\n\`\`\`canvas-it\n${JSON.stringify(payload)}\n\`\`\`\n`;
   }
 
+  /**
+   * @description 按工具结果自动补全 canvas-it 代码块。
+   * @keyword-en append canvas-it block if needed
+   */
   private appendCanvasItIfNeeded(
     text: string,
     toolResults?: Array<{ name?: unknown; output?: unknown }>,
@@ -1779,6 +2030,10 @@ export class ChatMainService {
     return cleaned + unique.map((it) => this.buildCanvasItBlock(it)).join('');
   }
 
+  /**
+   * @description 从工具输出中提取决策卡数据。
+   * @keyword-en extract decision items
+   */
   private extractDecisionItems(output: unknown): Array<{
     cardId: string;
     decisionSummary?: string;
@@ -1872,6 +2127,10 @@ export class ChatMainService {
     return out;
   }
 
+  /**
+   * @description 构建 decision-it markdown 代码块。
+   * @keyword-en build decision-it block
+   */
   private buildDecisionItBlock(item: {
     cardId: string;
     title?: string;
@@ -1909,6 +2168,10 @@ export class ChatMainService {
     return `\n\n\`\`\`decision-it\n${JSON.stringify(payload)}\n\`\`\`\n`;
   }
 
+  /**
+   * @description 若存在决策结果则补充简短摘要文案。
+   * @keyword-en append decision summary if needed
+   */
   private appendDecisionSummaryIfNeeded(
     text: string,
     toolResults?: Array<{ name?: unknown; output?: unknown }>,
@@ -1928,6 +2191,10 @@ export class ChatMainService {
     return `${base}\n\n决策已生成：${first.decisionSummary}`;
   }
 
+  /**
+   * @description 按工具结果自动补全 decision-it 代码块。
+   * @keyword-en append decision-it block if needed
+   */
   private appendDecisionItIfNeeded(
     text: string,
     toolResults?: Array<{ name?: unknown; output?: unknown }>,
@@ -1965,6 +2232,46 @@ export class ChatMainService {
     return base + uniq.map((it) => this.buildDecisionItBlock(it)).join('');
   }
 
+  /**
+   * @description 当输出仅包含结构化卡片代码块时，补充可读文案，避免前端出现空消息气泡。
+   * @keyword-en ensure readable narration for card-only output
+   */
+  private ensureReadableNarrationIfNeeded(
+    text: string,
+    toolResults?: Array<{ name?: unknown; output?: unknown }>,
+  ): string {
+    const base = typeof text === 'string' ? text : String(text ?? '');
+    if (base.trim() === this.HITL_PLACEHOLDER) return base;
+
+    const plain = base
+      .replace(/```canvas-it\s*[\s\S]*?```/gi, '')
+      .replace(/```task-it\s*[\s\S]*?```/gi, '')
+      .replace(/```decision-it\s*[\s\S]*?```/gi, '')
+      .trim();
+    if (plain.length > 0) return base;
+
+    const results = Array.isArray(toolResults) ? toolResults : [];
+    const hasCanvas =
+      results.flatMap((tr) => this.extractCanvasItItems(tr?.output)).length > 0;
+    const hasTask =
+      results.flatMap((tr) => this.extractTaskItItems(tr?.output)).length > 0;
+    const hasDecision =
+      results.flatMap((tr) => this.extractDecisionItems(tr?.output)).length > 0;
+
+    const hints: string[] = [];
+    if (hasCanvas) hints.push('已为你创建看板，正在生成中。');
+    if (hasTask) hints.push('已为你创建执行任务，请稍候查看进度。');
+    if (hasDecision) hints.push('已为你生成决策卡。');
+    if (hints.length === 0) return base;
+
+    const prefix = hints.join('\n');
+    return base.trim().length > 0 ? `${prefix}\n\n${base}` : prefix;
+  }
+
+  /**
+   * @description 判断输入是否更适合数据分析链路。
+   * @keyword-en detect analysis intent
+   */
   private shouldUseAnalysis(text: string): boolean {
     const kws = [
       '数据',
@@ -1982,6 +2289,10 @@ export class ChatMainService {
     return false;
   }
 
+  /**
+   * @description 判断输入是否更适合前端可视化链路。
+   * @keyword-en detect frontend intent
+   */
   private shouldUseFrontend(text: string): boolean {
     const kws = [
       '页面',
@@ -1997,6 +2308,10 @@ export class ChatMainService {
     return false;
   }
 
+  /**
+   * @description 从输入中快速抽取关键词集合，用于复杂度估计。
+   * @keyword-en extract keywords fast
+   */
   private extractKeywordsFast(input: string): string[] {
     const val = String(input || '');
     const set = new Set<string>();
@@ -2040,6 +2355,10 @@ export class ChatMainService {
     return Array.from(set);
   }
 
+  /**
+   * @description 根据输入复杂度与工具规模估算递归上限。
+   * @keyword-en estimate default recursion limit
+   */
   private getDefaultRecursionLimit(input: string, toolCount: number): number {
     const complexity = this.extractKeywordsFast(input).length;
     let base = toolCount > 1 ? 28 : 16;
