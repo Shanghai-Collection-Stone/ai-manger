@@ -62,7 +62,7 @@ jobs:
 
       - name: Build frontend pages
         run: |
-          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web install --frozen-lockfile --prod=false
           pnpm --dir web run build
         env:
           NODE_ENV: production
