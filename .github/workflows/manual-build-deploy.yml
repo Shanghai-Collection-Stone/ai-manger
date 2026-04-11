@@ -96,7 +96,12 @@ jobs:
       - name: Resolve deploy path
         run: |
           INPUT_DP="${{ inputs.deploy_path }}"
-          BASE_DIR="${RUNNER_WORKSPACE:-$GITHUB_WORKSPACE}"
+
+          if [ -n "${RUNNER_WORKSPACE:-}" ]; then
+            BASE_DIR="$RUNNER_WORKSPACE"
+          else
+            BASE_DIR="$(cd "$GITHUB_WORKSPACE/../.." && pwd -P)"
+          fi
 
           case "$INPUT_DP" in
             /*) DP="$INPUT_DP" ;;
@@ -106,34 +111,42 @@ jobs:
           mkdir -p "$DP"
           echo "DEPLOY_PATH=$DP" >> "$GITHUB_ENV"
 
-          echo "Runner workspace: $BASE_DIR"
+          echo "RUNNER_WORKSPACE: ${RUNNER_WORKSPACE:-<empty>}"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "Runner base dir: $BASE_DIR"
           echo "Deploy path: $DP"
 
-      - name: Sync source snapshot to deploy path
+      - name: Sync source code to deploy path
         run: |
           DP="$DEPLOY_PATH"
-          SNAPSHOT_DIR="$RUNNER_TEMP/source-snapshot"
-
-          rm -rf "$SNAPSHOT_DIR"
-          mkdir -p "$SNAPSHOT_DIR"
-
-          git -C "$GITHUB_WORKSPACE" archive --format=tar HEAD | tar -xf - -C "$SNAPSHOT_DIR"
+          WS_REAL="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
 
           mkdir -p "$DP"
-          cp -a "$SNAPSHOT_DIR"/. "$DP"/
+          DP_REAL="$(cd "$DP" && pwd -P)"
+
+          case "$DP_REAL" in
+            "$WS_REAL"/*)
+              echo "Deploy path cannot be inside GITHUB_WORKSPACE: $DP_REAL"
+              exit 1
+              ;;
+          esac
+
+          if command -v rsync >/dev/null 2>&1; then
+            rsync -a "$GITHUB_WORKSPACE"/ "$DP"/
+          else
+            cp -a "$GITHUB_WORKSPACE"/. "$DP"/
+          fi
+
           echo "$GITHUB_SHA" > "$DP/.deploy-commit"
 
-          echo "Source snapshot synced: $DP"
+          echo "Source code synced: $DP"
           echo "Deploy commit: $GITHUB_SHA"
 
       - name: Prepare target directory
         run: |
           DP="$DEPLOY_PATH"
-          rm -rf "$DP/dist" "$DP/migrations"
+          rm -rf "$DP/dist"
           mkdir -p "$DP/public"
-          if [ -d "$DP/public/pages" ]; then
-            rm -rf "$DP/public/pages"
-          fi
 
           echo "=== Artifact directory ==="
           if [ ! -d "./artifact" ]; then
@@ -142,7 +155,9 @@ jobs:
           ls -la ./artifact | head -50
 
           cp -r ./artifact/dist "$DP/"
-          cp -r ./artifact/migrations "$DP/"
+          if [ -d ./artifact/migrations ]; then
+            cp -r ./artifact/migrations "$DP/"
+          fi
           if [ -d ./artifact/public ]; then
             cp -r ./artifact/public/. "$DP/public/"
           fi
