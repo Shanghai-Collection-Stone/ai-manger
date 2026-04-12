@@ -308,11 +308,12 @@ export class AgentService {
       };
     }
 
-    const absPath = path.isAbsolute(source)
-      ? source
-      : path.resolve(process.cwd(), source);
-    if (!fs.existsSync(absPath)) {
-      throw new Error(`IMAGE_EDIT_BASE_IMAGE_NOT_FOUND:${absPath}`);
+    const absPath = this.resolveExistingLocalFilePath(source);
+    if (!absPath) {
+      const fallbackPath = path.isAbsolute(source)
+        ? source
+        : path.resolve(process.cwd(), source);
+      throw new Error(`IMAGE_EDIT_BASE_IMAGE_NOT_FOUND:${fallbackPath}`);
     }
     const buffer = await readFile(absPath);
     return {
@@ -685,7 +686,104 @@ export class AgentService {
     if (normalized.startsWith('/')) {
       return path.join(process.cwd(), 'public', normalized.slice(1));
     }
-    return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+    return path.isAbsolute(raw) || /^[a-zA-Z]:[\\/]/.test(raw)
+      ? raw
+      : path.resolve(process.cwd(), raw);
+  }
+
+  /**
+   * @description 将任意绝对路径中的 /public/... 段映射到当前工作区 public 目录。
+   * @param {string} absolutePath - 绝对路径。
+   * @returns {string | null} 映射后的工作区路径。
+   * @keyword-en remap absolute public path to workspace
+   */
+  private remapAbsolutePublicPathToWorkspace(absolutePath: string): string | null {
+    const normalized = String(absolutePath ?? '').trim().replace(/\\/g, '/');
+    if (!normalized) return null;
+    const lower = normalized.toLowerCase();
+    const marker = '/public/';
+    const markerIndex = lower.indexOf(marker);
+    if (markerIndex < 0) return null;
+
+    const relative = normalized
+      .slice(markerIndex + marker.length)
+      .replace(/^\/+/, '');
+    return relative
+      ? path.join(process.cwd(), 'public', relative)
+      : path.join(process.cwd(), 'public');
+  }
+
+  /**
+   * @description 在区分大小写的文件系统上，按目录逐层执行不区分大小写匹配。
+   * @param {string} targetPath - 待匹配的绝对路径。
+   * @returns {string | null} 命中的真实路径。
+   * @keyword-en resolve existing path by case-insensitive walk
+   */
+  private resolveCaseInsensitiveExistingPath(targetPath: string): string | null {
+    const raw = String(targetPath ?? '').trim();
+    if (!raw) return null;
+    const absPath = path.resolve(raw);
+    if (fs.existsSync(absPath)) return absPath;
+
+    const parsed = path.parse(absPath);
+    if (!parsed.root) return null;
+    const segments = absPath
+      .slice(parsed.root.length)
+      .split(path.sep)
+      .filter((x) => x.length > 0);
+
+    let current = parsed.root;
+    for (const segment of segments) {
+      const exactPath = path.join(current, segment);
+      if (fs.existsSync(exactPath)) {
+        current = exactPath;
+        continue;
+      }
+      let children: string[] = [];
+      try {
+        children = fs.readdirSync(current);
+      } catch {
+        return null;
+      }
+      const matched = children.find(
+        (name) => name.toLowerCase() === segment.toLowerCase(),
+      );
+      if (!matched) return null;
+      current = path.join(current, matched);
+    }
+
+    return fs.existsSync(current) ? current : null;
+  }
+
+  /**
+   * @description 解析并匹配本地可用文件路径（支持 /public 映射与大小写容错）。
+   * @param {string} filePath - 候选文件路径。
+   * @returns {string | null} 可用文件绝对路径。
+   * @keyword-en resolve existing local file path with docker fallback
+   */
+  private resolveExistingLocalFilePath(filePath: string): string | null {
+    const raw = String(filePath ?? '').trim();
+    if (!raw) return null;
+
+    const normalized = raw.replace(/\\/g, '/');
+    const isWindowsAbs = /^[a-zA-Z]:\//.test(normalized);
+    const basePath =
+      path.isAbsolute(raw) || isWindowsAbs
+        ? raw
+        : path.resolve(process.cwd(), raw);
+
+    const candidates: string[] = [basePath];
+    const remapped = this.remapAbsolutePublicPathToWorkspace(basePath);
+    if (remapped && !candidates.some((x) => x === remapped)) {
+      candidates.push(remapped);
+    }
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+      const byInsensitiveWalk = this.resolveCaseInsensitiveExistingPath(candidate);
+      if (byInsensitiveWalk) return byInsensitiveWalk;
+    }
+    return null;
   }
 
   /**
@@ -710,7 +808,8 @@ export class AgentService {
       const normalized = this.normalizeMeituImageInputCandidate(candidate);
       if (!normalized) continue;
       if (/^https?:\/\//i.test(normalized)) return normalized;
-      if (fs.existsSync(normalized)) return normalized;
+      const localPath = this.resolveExistingLocalFilePath(normalized);
+      if (localPath) return localPath;
     }
 
     const summary = candidates.join('|').slice(0, 260);
@@ -856,8 +955,8 @@ export class AgentService {
   private async persistMeituGeneratedFile(filePath: string): Promise<string> {
     const p = String(filePath ?? '').trim();
     if (!p) throw new Error('MEITU_OUTPUT_FILE_EMPTY');
-    const absPath = path.isAbsolute(p) ? p : path.resolve(process.cwd(), p);
-    if (!fs.existsSync(absPath)) {
+    const absPath = this.resolveExistingLocalFilePath(p);
+    if (!absPath) {
       throw new Error('MEITU_OUTPUT_FILE_NOT_FOUND');
     }
     const ext = path.extname(absPath).toLowerCase();
