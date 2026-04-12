@@ -683,8 +683,11 @@ export class AgentService {
     if (normalized.startsWith('/uploads/')) {
       return path.join(process.cwd(), 'public', normalized.slice(1));
     }
+    // NOTE: 对其他 / 开头路径（含 Linux 绝对路径如 /app/public/uploads/xxx）直接原样返回，
+    // 由 resolveExistingLocalFilePath 通过 remapAbsolutePublicPath 做映射；
+    // 以前此处强制拼 {cwd}/public 会把 /app/public/uploads/xxx 变成 {cwd}/public/app/public/uploads/xxx 永远找不到。
     if (normalized.startsWith('/')) {
-      return path.join(process.cwd(), 'public', normalized.slice(1));
+      return raw;
     }
     return path.isAbsolute(raw) || /^[a-zA-Z]:[\\/]/.test(raw)
       ? raw
@@ -778,9 +781,18 @@ export class AgentService {
       candidates.push(remapped);
     }
 
+    this.logger.log(
+      `[meitu][file-resolve] input=${raw} basePath=${basePath} remapped=${remapped ?? 'none'} candidates=${JSON.stringify(candidates)}`,
+    );
+
     for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) return candidate;
+      const exists = fs.existsSync(candidate);
+      this.logger.log(`[meitu][file-resolve] existsSync(${candidate})=${exists}`);
+      if (exists) return candidate;
       const byInsensitiveWalk = this.resolveCaseInsensitiveExistingPath(candidate);
+      this.logger.log(
+        `[meitu][file-resolve] caseInsensitive(${candidate})=${byInsensitiveWalk ?? 'null'}`,
+      );
       if (byInsensitiveWalk) return byInsensitiveWalk;
     }
     return null;
@@ -804,15 +816,30 @@ export class AgentService {
       : [];
     const candidates = [direct, ...fromList].filter((x) => x.length > 0);
 
+    this.logger.log(
+      `[meitu][base-image] resolve_start cwd=${process.cwd()} candidates(${candidates.length})=${JSON.stringify(candidates)}`,
+    );
+
     for (const candidate of candidates) {
       const normalized = this.normalizeMeituImageInputCandidate(candidate);
+      this.logger.log(
+        `[meitu][base-image] candidate=${candidate} normalized=${normalized}`,
+      );
       if (!normalized) continue;
-      if (/^https?:\/\//i.test(normalized)) return normalized;
+      if (/^https?:\/\//i.test(normalized)) {
+        this.logger.log(`[meitu][base-image] hit=url url=${normalized}`);
+        return normalized;
+      }
       const localPath = this.resolveExistingLocalFilePath(normalized);
-      if (localPath) return localPath;
+      if (localPath) {
+        this.logger.log(`[meitu][base-image] hit=local resolved=${localPath}`);
+        return localPath;
+      }
+      this.logger.warn(`[meitu][base-image] miss candidate=${candidate} normalized=${normalized}`);
     }
 
     const summary = candidates.join('|').slice(0, 260);
+    this.logger.error(`[meitu][base-image] not_found cwd=${process.cwd()} summary=${summary}`);
     throw new Error(`MEITU_BASE_IMAGE_NOT_FOUND:${summary}`);
   }
 
