@@ -6,7 +6,7 @@ services:
     container_name: ai_mvp_app
     working_dir: /app
     env_file:
-      - ../.env
+      - .env
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3011}
