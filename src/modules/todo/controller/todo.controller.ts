@@ -23,6 +23,7 @@ import type {
   TodoItemCreateInput,
   TodoItemUpdateInput,
 } from '../entities/todo-item.entity.js';
+import { XhsPostStatService } from '../services/xhs-post-stat.service.js';
 
 /**
  * @description 待办控制器，提供REST接口
@@ -35,6 +36,7 @@ export class TodoController {
     private readonly todo: TodoService,
     private readonly adminService: AdminService,
     private readonly robots: RobotRegistryService,
+    private readonly xhsPostStat: XhsPostStatService,
   ) {}
 
   @Post(':todoId/items')
@@ -128,6 +130,7 @@ export class TodoController {
     @Req() req: Request,
     @Query('userId') userId?: string,
     @Query('assignee') assignee?: string,
+    @Query('category') category?: string,
   ): Promise<Record<string, unknown>> {
     const authUser = await this.resolveAuthUser(req);
     const canViewAll = this.canViewAllTasks(authUser?.role);
@@ -137,6 +140,7 @@ export class TodoController {
       tenantId: authUser?.tenantId,
       userId: canViewAll ? userId : authUser?.username,
       assignee: filterAssignee,
+      category: category || undefined,
     });
     const agentConfigs = await this.adminService.listAgentConfigs();
     const agentMap = new Map<string, string>(agentConfigs.map((a) => [String(a._id), a.name]));
@@ -271,6 +275,20 @@ export class TodoController {
     const authUser = await this.resolveAuthUser(req);
     const ok = await this.todo.delete(Number(id), authUser?.tenantId);
     return { ok };
+  }
+
+  /**
+   * @description 获取任务下的小红书帖子数据列表（前端鉴权接口）
+   * @keyword-en list xhs post stats for todo
+   */
+  @Get(':id/xhs-stats')
+  async listXhsStats(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    await this.resolveAuthUser(req);
+    const stats = await this.xhsPostStat.listByTodo(Number(id));
+    return { stats };
   }
 
   /**

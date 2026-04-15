@@ -416,6 +416,12 @@ export class GraphWorkflowFunctionCallService {
         callbackUrl,
           payload,
       }) => {
+        if (!userId) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'userId 参数必填' });
+        }
+        if (!canvasId) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+        }
         const finalUserId = this.resolveScopedUserId(userId, scope);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
           galleryUserId,
@@ -476,8 +482,8 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Canvas Execute Tool. Runs batch publishing / execution from an existing Canvas.',
         schema: z.object({
-          userId: z.string().describe('Target user id'),
-          canvasId: z.union([z.number(), z.string()]).describe('Canvas id'),
+          userId: z.string().optional().describe('Target user id (required)'),
+          canvasId: z.union([z.number(), z.string()]).optional().describe('Canvas id (required)'),
           platform: z.string().optional().describe('Publishing platform label'),
           galleryUserId: z
             .string()
@@ -529,6 +535,15 @@ export class GraphWorkflowFunctionCallService {
         temperature,
         taskCount,
       }) => {
+        if (!userId) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'userId 参数必填' });
+        }
+        if (!canvasId) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+        }
+        if (taskCount === undefined || taskCount === null) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'taskCount 参数必填' });
+        }
         const finalUserId = this.resolveScopedUserId(userId, scope);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
           galleryUserId,
@@ -593,9 +608,9 @@ export class GraphWorkflowFunctionCallService {
         description:
           'XHS Batch Publish Tool. Creates an async queue job, then runs the publish graph in the background. IMPORTANT: Provide taskCount; Canvas articles are only references for generation.',
         schema: z.object({
-          userId: z.string().describe('Target user id'),
-          canvasId: z.union([z.number(), z.string()]).describe('Canvas id'),
-          taskCount: z.number().describe('Number of posts to generate'),
+          userId: z.string().optional().describe('Target user id (required)'),
+          canvasId: z.union([z.number(), z.string()]).optional().describe('Canvas id (required)'),
+          taskCount: z.number().optional().describe('Number of posts to generate (required)'),
           platform: z
             .string()
             .optional()
@@ -753,7 +768,7 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Batch Publish Tool. Orchestrates a Canvas from topic/outline/style then runs batch publishing from that Canvas.',
         schema: z.object({
-          userId: z.string().describe('Target user id'),
+          userId: z.string().optional().describe('Target user id (required)'),
           canvasId: z
             .union([z.number(), z.string()])
             .optional()
@@ -813,6 +828,15 @@ export class GraphWorkflowFunctionCallService {
 
     const canvasAppendArticle = tool(
       async ({ canvasId, title, tags, markdown, imageQuery, meta }) => {
+        if (!canvasId) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+        }
+        if (!title) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'title 参数必填' });
+        }
+        if (!markdown) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'markdown 参数必填' });
+        }
         const canvasIdNum = Number(canvasId);
         if (!Number.isFinite(canvasIdNum)) {
           return JSON.stringify({ ok: false, error: 'CANVAS_ID_INVALID' });
@@ -855,10 +879,10 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Canvas Append Article Tool. Writes exactly one article into a canvas each call.',
         schema: z.object({
-          canvasId: z.union([z.number(), z.string()]).describe('Canvas id'),
-          title: z.string().describe('Article title'),
+          canvasId: z.union([z.number(), z.string()]).optional().describe('Canvas id (required)'),
+          title: z.string().optional().describe('Article title (required)'),
           tags: z.array(z.string()).optional().describe('Article tags'),
-          markdown: z.string().describe('Article markdown content'),
+          markdown: z.string().optional().describe('Article markdown content (required)'),
           imageQuery: z.string().optional().describe('Image retrieval query'),
           meta: z
             .record(z.string(), z.any())
@@ -871,6 +895,9 @@ export class GraphWorkflowFunctionCallService {
     // 新增：获取 canvas 详情工具，让 LLM 能查看实际数据
     const getCanvasDetail = tool(
       async ({ canvasId }) => {
+        if (!canvasId) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+        }
         const canvasIdNum = Number(canvasId);
         if (!Number.isFinite(canvasIdNum)) {
           return JSON.stringify({ ok: false, error: 'CANVAS_ID_INVALID' });
@@ -950,7 +977,8 @@ export class GraphWorkflowFunctionCallService {
         schema: z.object({
           canvasId: z
             .union([z.number(), z.string()])
-            .describe('Canvas id to get details for'),
+            .optional()
+            .describe('Canvas id to get details for (required)'),
         }),
       },
     );
@@ -987,6 +1015,9 @@ export class GraphWorkflowFunctionCallService {
 
     const gallerySearchImages = tool(
       async ({ userId, groupId, tags, limit, matchCollage, image_type }) => {
+        if (!tags) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'tags 参数必填' });
+        }
         const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
@@ -1050,7 +1081,7 @@ export class GraphWorkflowFunctionCallService {
         schema: z.object({
           userId: z.string().optional().describe('Gallery owner user id'),
           groupId: z.number().optional().describe('Gallery group id filter'),
-          tags: z.array(z.string()).describe('Selected tags'),
+          tags: z.array(z.string()).optional().describe('Selected tags (required)'),
           image_type: z
             .enum(['all', 'regular', 'collage'])
             .optional()

@@ -190,7 +190,9 @@ const Settings = (p) => (
 const api = {
   async listSessions() {
     try {
-      const res = await fetch(`${API_BASE}/context/list`);
+      const res = await fetch(`${API_BASE}/context/list`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -201,7 +203,7 @@ const api = {
     try {
       const res = await fetch(`${API_BASE}/chat/session/${sessionId}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       });
       return res.ok;
     } catch {
@@ -210,7 +212,9 @@ const api = {
   },
   async fetchHistory(sessionId) {
     try {
-      const res = await fetch(`${API_BASE}/context/${sessionId}?limit=50`);
+      const res = await fetch(`${API_BASE}/context/${sessionId}?limit=50`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -219,7 +223,10 @@ const api = {
   },
   async createSession() {
     try {
-      const res = await fetch(`${API_BASE}/chat/session`, { method: 'POST' });
+      const res = await fetch(`${API_BASE}/chat/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      });
       return await res.json();
     } catch {
       return { sessionId: 'local-' + Date.now() };
@@ -231,6 +238,7 @@ const api = {
       (Array.isArray(files) ? files : []).forEach((f) => fd.append('files', f));
       const res = await fetch(`${API_BASE}/chat/upload-images`, {
         method: 'POST',
+        headers: getAuthHeaders(),
         body: fd,
       });
       if (!res.ok) return { files: [] };
@@ -248,6 +256,7 @@ const api = {
       });
       const res = await fetch(
         `${API_BASE}/context/retrieval/${sessionId}?${params}`,
+        { headers: getAuthHeaders() },
       );
       if (!res.ok) throw new Error('Context fetch failed');
       return await res.json();
@@ -269,7 +278,7 @@ const api = {
     }
     const res = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify(payload),
     });
     return res;
@@ -282,7 +291,7 @@ const api = {
       }
       const res = await fetch(`${API_BASE}/chat/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(payload),
       });
       if (!res.ok) return null;
@@ -293,7 +302,9 @@ const api = {
   },
   async listFrontendJobs(sessionId) {
     try {
-      const res = await fetch(`${API_BASE}/fc/frontend/jobs/${sessionId}`);
+      const res = await fetch(`${API_BASE}/fc/frontend/jobs/${sessionId}`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -2820,6 +2831,30 @@ const MessageBubble = ({
                           </div>
                           <div className="mt-1 text-gray-600">您可以打开外链查看生成进度与最终图表界面。</div>
                         </div>
+                      ) : seg.kind === 'subagent' ? (
+                        <div
+                          key={`subagent-${i}`}
+                          className="text-xs bg-indigo-50 border border-indigo-200 rounded p-2 overflow-hidden"
+                        >
+                          <div className="font-semibold text-indigo-700 flex items-center gap-2">
+                            <Layers size={12} /> 子代理: {seg.namespace || '未知'}
+                            <span className="ml-1 text-indigo-500 font-normal">({(seg.events || []).length} 步)</span>
+                          </div>
+                          {Array.isArray(seg.events) && seg.events.length > 0 && (
+                            <div className="mt-1 space-y-0.5 max-h-40 overflow-y-auto">
+                              {seg.events.map((ev, ei) => (
+                                <div key={ei} className="text-indigo-600 font-mono text-[11px]">
+                                  ▸ {ev.node}
+                                  {ev.data && (
+                                    <span className="ml-2 text-indigo-400 break-all whitespace-pre-wrap">
+                                      {typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data, null, 0).slice(0, 200)}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <div
                           key={`tool-${i}`}
@@ -4200,6 +4235,28 @@ export default function AiChatApp() {
             ...m,
             content: `请求失败：${msg}`,
           }));
+          return;
+        }
+
+        if (type === 'subagent') {
+          const namespace = typeof data?.namespace === 'string' ? data.namespace : '子代理';
+          const event = data?.event ?? {};
+          const nodeName = Object.keys(event)[0] || '';
+          pushAiUpdate((m) => {
+            const segs = Array.isArray(m.segments) ? [...m.segments] : [];
+            const lastIdx = segs.map((s, i) => (s && s.kind === 'subagent' && s.namespace === namespace ? i : -1)).filter(x => x !== -1).pop() ?? -1;
+            if (lastIdx !== -1) {
+              const existing = segs[lastIdx];
+              segs[lastIdx] = {
+                ...existing,
+                events: [...(Array.isArray(existing.events) ? existing.events : []), { node: nodeName, data: event[nodeName] }],
+              };
+            } else {
+              segs.push({ kind: 'subagent', namespace, events: [{ node: nodeName, data: event[nodeName] }] });
+            }
+            return { ...m, segments: segs };
+          });
+          return;
         }
       };
 

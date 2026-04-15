@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "mcp__MiniMax__understand_image",
+      "Bash(pnpm build:*)",
+      "mcp__MiniMax__web_search",
+      "Bash(pnpm add:*)",
+      "Bash(npx tsc:*)",
+      "WebFetch(domain:www.npmjs.com)"
+    ]
+  }
+}

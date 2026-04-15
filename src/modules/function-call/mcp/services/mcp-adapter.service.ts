@@ -87,14 +87,14 @@ export class McpAdaptersService implements OnModuleInit {
     }
     try {
       this.toolsCache = (await this.client.getTools()) ?? [];
-      this.logger.log(`[MCP] Loaded tools: ${this.toolsCache.length}`);
+      const names = this.toolsCache.map((t) => (t as { name?: string }).name).filter(Boolean);
+      this.logger.log(`[MCP] Loaded tools: ${this.toolsCache.length} — ${names.join(', ')}`);
     } catch (e) {
       this.toolsCache = [];
       const err = e instanceof Error ? e : new Error(String(e));
-      this.logger.warn(
-        `[MCP] Tool discovery failed; MCP tools set to empty. ${err.message}`,
+      this.logger.error(
+        `[MCP] Tool discovery failed; MCP tools set to empty. Error: ${err.message}\nStack: ${err.stack}`,
       );
-      if (err.stack) this.logger.debug(err.stack);
     }
   }
 
@@ -496,6 +496,7 @@ export class McpAdaptersService implements OnModuleInit {
     config: ServerConfig | null,
   ): Promise<ServerConfig | null> {
     if (!config || typeof config !== 'object') return null;
+    this.logger.debug(`[MCP] Raw server config: ${JSON.stringify(config)}`);
     const out: ServerConfig = {};
     for (const [name, raw] of Object.entries(config)) {
       const entry = raw as Record<string, unknown>;
@@ -506,6 +507,11 @@ export class McpAdaptersService implements OnModuleInit {
         | 'sse'
         | 'streamable_http'
         | undefined;
+      const hasCommand = typeof entry['command'] === 'string' && entry['command'].length > 0;
+      const hasArgs = Array.isArray(entry['args']) && entry['args'].length > 0;
+      const hasUrl = typeof entry['url'] === 'string' && entry['url'].startsWith('http');
+
+      // 显式 transport
       if (transport === 'stdio') {
         const cmd = (entry['command'] as string) ?? 'node';
         const args = (entry['args'] as string[]) ?? [];
@@ -531,6 +537,31 @@ export class McpAdaptersService implements OnModuleInit {
         if (typeof url === 'string' && url.startsWith('http')) {
           out[name] = { transport, url, headers } as HttpServer;
         }
+        continue;
+      }
+
+      // 隐式 stdio: 有 command + args 但无显式 transport（如 { command: "uvx", args: ["pkg"] }）
+      if (hasCommand && hasArgs) {
+        const cmd = entry['command'] as string;
+        const args = entry['args'] as string[];
+        if (cmd === 'node' && args.length > 0) {
+          try {
+            const stat = await fs.stat(args[0]);
+            if (!stat.isFile()) continue;
+          } catch {
+            continue;
+          }
+        }
+        out[name] = { transport: 'stdio', command: cmd, args } as StdioServer;
+        continue;
+      }
+
+      // 隐式 http/sse: 有 url 但无显式 transport
+      if (hasUrl) {
+        const url = entry['url'] as string;
+        const headers = entry['headers'] as Record<string, string> | undefined;
+        // 默认为 streamable_http，MCP SDK 会自动降级到 SSE
+        out[name] = { transport: 'streamable_http', url, headers } as HttpServer;
       }
     }
     return Object.keys(out).length > 0 ? out : null;

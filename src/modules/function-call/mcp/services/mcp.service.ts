@@ -93,6 +93,12 @@ export class McpFunctionCallService {
 
     const mcpIngest = tool(
       async ({ filename, content, encoding }) => {
+        if (!filename) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'filename 参数必填' });
+        }
+        if (!content) {
+          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'content 参数必填' });
+        }
         const res = await this.storage.ingestFile(
           filename,
           content,
@@ -106,8 +112,8 @@ export class McpFunctionCallService {
         description:
           'Ingest a file into the MCP storage directory. Accepts content encoded as utf-8 or base64.',
         schema: z.object({
-          filename: z.string().describe('Target file name'),
-          content: z.string().describe('File content'),
+          filename: z.string().optional().describe('Target file name (required)'),
+          content: z.string().optional().describe('File content (required)'),
           encoding: z
             .enum(['utf-8', 'base64'])
             .optional()

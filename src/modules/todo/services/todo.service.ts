@@ -45,6 +45,7 @@ export class TodoService {
     await this.todos.createIndex({ userId: 1 });
     await this.todos.createIndex({ status: 1 });
     await this.todos.createIndex({ type: 1 });
+    await this.todos.createIndex({ category: 1 });
     await this.todos.createIndex({ assignee: 1 });
     await this.todos.createIndex({ taskToken: 1 }, { unique: true, sparse: true });
     await this.todoItems.createIndex({ id: 1 }, { unique: true });
@@ -136,11 +137,14 @@ export class TodoService {
       title: input.title,
       description: input.description,
       resource,
+      associatedResources: input.associatedResources,
       type: normalizedType,
+      category: input.category,
       assignee: input.assignee,
       aiConsideration: input.aiConsideration,
       decisionReason: input.decisionReason,
       aiPlan: input.aiPlan,
+      deadline: input.deadline,
       status: 'pending',
       createdAt: now,
       updatedAt: now,
@@ -196,6 +200,9 @@ export class TodoService {
       const r = String(input.resource ?? '').trim();
       upd.resource = r || undefined;
     }
+    if (typeof input.associatedResources !== 'undefined') {
+      upd.associatedResources = input.associatedResources;
+    }
     const res = await this.todos.findOneAndUpdate(
       { id: input.id, ...this.buildTenantFilter(input.tenantId) },
       { $set: upd },
@@ -242,10 +249,11 @@ export class TodoService {
    * @keyword todo, list, user
    * @since 2026-01-27
    */
-  async list(userId?: string, tenantId?: string, assignee?: string): Promise<TodoEntity[]> {
+  async list(userId?: string, tenantId?: string, assignee?: string, category?: string): Promise<TodoEntity[]> {
     const filter: Record<string, unknown> = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
     if (assignee) filter.assignee = assignee;
+    if (category) filter.category = category;
     return this.todos
       .find(filter, { projection: { _id: 0 } })
       .sort({ updatedAt: -1 })
@@ -261,9 +269,10 @@ export class TodoService {
     userId?: string;
     assignee?: string;
     tenantId?: string;
+    category?: string;
   }): Promise<TodoEntity[]> {
     if (input.canViewAll) {
-      return this.list(input.userId, input.tenantId, input.assignee);
+      return this.list(input.userId, input.tenantId, input.assignee, input.category);
     }
     const filter: Record<string, unknown> = {
       ...this.buildTenantFilter(input.tenantId),
@@ -272,6 +281,7 @@ export class TodoService {
     const orList = filter.$or as Record<string, unknown>[];
     if (input.userId) orList.push({ userId: input.userId });
     if (input.assignee) orList.push({ assignee: input.assignee });
+    if (input.category) filter.category = input.category;
     if (orList.length === 0) {
       return [];
     }
@@ -440,6 +450,7 @@ export class TodoService {
     ) {
       return 'offline_execute';
     }
+    if (['long_task', '长时任务', 'long-task', 'longtask'].includes(t)) return 'long_task';
     if (['other', '其他'].includes(t)) return 'other';
     return 'other';
   }

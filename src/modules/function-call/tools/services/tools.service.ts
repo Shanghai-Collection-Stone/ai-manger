@@ -14,6 +14,12 @@ import { MediaAgentService } from '../../../media-agent/services/media-agent.ser
 import { tool } from 'langchain';
 import * as z from 'zod';
 
+export interface FunctionCallScope {
+  tenantId?: string;
+  userId?: string;
+  category?: string;
+}
+
 /**
  * @title 工具服务 Tools Service
  * @description 提供工具集合的Function-Call描述。所有数据源工具已集中到 AnalysisFunctionCallService。
@@ -67,8 +73,17 @@ export class ToolsService {
    */
   getHandle(
     streamWriter?: (msg: string) => void,
-    scope?: { tenantId?: string; userId?: string },
-    options?: { mode?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' },
+    scope?: FunctionCallScope,
+    options?: {
+      mode?:
+        | 'default'
+        | 'thought'
+        | 'gallery-agent'
+        | 'xhs-specialist'
+        | 'xhs-tracker'
+        | 'xhs-nurturer'
+        | 'xhs-publisher';
+    },
   ): CreateAgentParams['tools'] {
     const mode = options?.mode ?? 'default';
     if (mode === 'thought') {
@@ -78,7 +93,14 @@ export class ToolsService {
       return this.getGalleryAgentTools(scope);
     }
     if (mode === 'xhs-specialist') {
-      return this.getXhsSpecialistTools(scope);
+      return this.getXhsSpecialistTools();
+    }
+    if (
+      mode === 'xhs-tracker' ||
+      mode === 'xhs-nurturer' ||
+      mode === 'xhs-publisher'
+    ) {
+      return this.getXhsSubAgentSessionTools(scope);
     }
     const tools: CreateAgentParams['tools'] = [];
     const tFrontend = this.frontend.getHandle() ?? [];
@@ -94,7 +116,8 @@ export class ToolsService {
       this.mcpAdapters.getTools(),
     );
     const tDecision = this.getDecisionTools(scope) ?? [];
-    const tGraphWorkflowAll = this.graphWorkflow.getHandle(streamWriter, scope) ?? [];
+    const tGraphWorkflowAll =
+      this.graphWorkflow.getHandle(streamWriter, scope) ?? [];
     const tGraphWorkflow = tGraphWorkflowAll.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       return name === 'topic_orchestrate';
@@ -144,10 +167,9 @@ export class ToolsService {
    * @description 获取思维链路专用工具集
    * @keyword-en get thought route tools
    */
-  private getThoughtRouteTools(scope?: {
-    tenantId?: string;
-    userId?: string;
-  }): CreateAgentParams['tools'] {
+  private getThoughtRouteTools(
+    scope?: FunctionCallScope,
+  ): CreateAgentParams['tools'] {
     const raw = this.analysis.getAllDataSourceTools(scope) ?? [];
     const allow = new Set([
       'schema_search',
@@ -166,10 +188,9 @@ export class ToolsService {
    * @description 获取对话层可直接调用的决策工具
    * @keyword-en decision tools
    */
-  private getDecisionTools(scope?: {
-    tenantId?: string;
-    userId?: string;
-  }): NonNullable<CreateAgentParams['tools']> {
+  private getDecisionTools(
+    scope?: FunctionCallScope,
+  ): NonNullable<CreateAgentParams['tools']> {
     const raw = this.analysis.getAllDataSourceTools(scope) ?? [];
     return raw.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
@@ -181,10 +202,9 @@ export class ToolsService {
    * @description 获取图库Agent专用工具集（以图库工具为主）
    * @keyword-en gallery agent tools
    */
-  private getGalleryAgentTools(scope?: {
-    tenantId?: string;
-    userId?: string;
-  }): CreateAgentParams['tools'] {
+  private getGalleryAgentTools(
+    scope?: FunctionCallScope,
+  ): CreateAgentParams['tools'] {
     const tGallery = this.mediaAgent.getGalleryToolsHandle(scope) ?? [];
     return tGallery;
   }
@@ -193,11 +213,19 @@ export class ToolsService {
    * @description 获取小红书专家专用工具集（以XHS工具为主）
    * @keyword-en XHS specialist tools
    */
-  private getXhsSpecialistTools(_scope?: {
-    tenantId?: string;
-    userId?: string;
-  }): CreateAgentParams['tools'] {
+  private getXhsSpecialistTools(): CreateAgentParams['tools'] {
     // xhs-specialist 所有 Canvas/图库操作通过 subagents 路由，主 agent 无直接工具
     return [];
+  }
+
+  /**
+   * @description 追踪/养号/发布子代理独立会话模式工具集，仅含 todo 操作
+   * @keyword-en XHS sub-agent session todo-only tools
+   */
+  private getXhsSubAgentSessionTools(
+    scope?: FunctionCallScope,
+  ): CreateAgentParams['tools'] {
+    // tracker/nurturer/publisher 直接对话层只需 todo 工具来创建和管理任务
+    return this.todo.getHandle(scope) ?? [];
   }
 }

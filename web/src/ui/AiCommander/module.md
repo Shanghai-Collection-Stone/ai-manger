@@ -1,155 +1,31 @@
 # AiCommander 模块
 
-## 模块描述
+前端 AI 指挥台页面模块，包含多个子视图。
 
-该模块实现了 AI 指挥官的移动端 Bento UI 风格界面，包含仪表盘、决策流、AI 助理对话、任务中心及工具箱功能。
-文件路径: `web/src/ui/AiCommander`
-
-## 功能描述及关键词
-
-### AiCommanderBento.jsx
-
-AI 指挥官主界面容器，管理底部导航和视图切换。
-底部菜单采用 "中间圆图标 + 左右两格" 布局，集成 AI 助理快捷入口。
-支持左右滑动切换主标签页。
-
-- **关键词**: AiCommanderBento, MainContainer, TabSwitch, BottomNavigation, SwipeNavigation
-
-### DashboardView.jsx
-
-仪表盘视图，自动加载后端 JSON 配置（`/dashboard-config/current`），按配置中的 Tabs + Blocks 网格渲染看板。
-支持左右滑动切换看板子标签，所有区块通过 `blocks/BlockRegistry` 分发。
-
-- **关键词**: DashboardView, JSON-config-driven, BentoGrid, TabNavigation, SwipeNavigation, useTabData
-
-### dashboardApi.js
-
-Dashboard 数据 API + 看板 JSON 配置获取接口 + 通用 Mongo 查询支持。
-
-- `getRevenueOverview` — 营收总览（预置）
-- `getDailyRevenue` — 日营收与人数（预置）
-- `getPeopleStats` — 人数统计（预置）
-- `getDemandChannel` — 需求与渠道（预置）
-- `getEvents` — 活动与类型（预置）
-- `getSales` — 销售与客户（预置）
-- `getDashboardConfig` — 看板 JSON 配置
-- `queryFetchers` — query key → 预置 fetcher 映射
-- `timeRangeToWhere` — 中文时间范围 → Mongo Where DSL 转换
-- `fetchMongoQuery` — 通用 Mongo 查询执行（消费 config.queries 定义）
-
-- **关键词**: dashboardApi, dashboard-config, json, api, queryFetchers, mongo-query, timeRange, where-dsl
-
-### blocks/
-
-看板 Block 组件库子模块，详见 `blocks/module.md`。
-
-- **关键词**: blocks, block-registry, shared, echart
-
-### DecisionFeedView.jsx
-
-决策流视图，展示待处理的 AI 决策建议卡片。目前包含空状态处理。
-
-- **关键词**: DecisionFeedView, ActionCards, TaskList, EmptyState
-
-### ImageGroupCanvasView.jsx
-
-图片组 Canvas 专属视图，以文章为单位展示图组，支持选择和批量下载图片。
-- 每组展示3张图（封面+内页1+内页2），角色标签标注版式
-- 顶部操作栏：全选/取消全选、批量下载选中图组
-- 生成中状态：每5秒自动轮询，实时更新显示
-
-- **关键词**: ImageGroupCanvasView, image-group, canvas, layout, download, polling
-
-### CanvasFeedView.jsx
-
-Canvas 文章看板视图，支持按 canvasId 加载文章列表与详情，提供小红书风格文章卡片阅读体验。
-详情区支持多图轮播（左右按钮 + 移动端手势滑动），可在 1-N 张配图间切换浏览。
-
-- **关键词**: CanvasFeedView, canvas, article, xiaohongshu, detail, modal
+## 文件清单
 
 ### ChatBIView.jsx
-
-AI 助理对话视图，提供自然语言数据查询和指令交互。支持按 `sessionType` 运行普通会话或思维链路会话。
-支持在输入框上方显示“会话历史”按钮，并通过弹窗切换历史会话。
-canvas-it 代码块自动区分 article/image-group 两种类型，渲染对应标签和按钮。
-轮询：扫描消息中 generating 状态的 canvas-it，每5秒刷新状态，新会话时清空追踪。
-
-- **关键词**: ChatBIView, AIChat, DataQuery, RealtimeInteraction, SessionManagement, DrawerUI, thought-session, session-picker, canvas-polling, image-group
-
-### ThoughtRouteView.jsx
-
-思维链路工具页，包含「对话」和「思维链表格管理」双Tab。
-对话模式仅用于Schema理解和思维链生成，表格管理支持思维链增删改查。
-页面头部使用轻量布局，不显示大标题区，仅保留返回操作与Tab切换。
-表格管理在移动端改为卡片列表展示，在桌面端保留表格展示。
-
-- **关键词**: ThoughtRouteView, thought-route, tab, schema, skill-thought, crud
-
-### TaskCenterView.jsx
-
-执行指挥中心视图，提供任务管理、派单和工单状态追踪。支持**列表**和**看板**两种视图模式。
-
-- 顶部 Tab 切换列表视图（含统计卡片、分类筛选、状态 Tab）和看板视图（按状态横向泳道）。
-- 点击任务卡片跳转至 `TaskDetailPage` 全屏详情页（非弹窗）。
-- 新建派单弹窗支持填写标题、类型、指派人、关联资源、描述等信息。
-- KanbanBoard 组件：四列泳道（待接单/执行中/已完成/异常），横向可滚动。
-
-- **关键词**: TaskCenterView, KanbanBoard, ViewModeTab, TaskManagement, WorkOrder, CreateTaskModal, CategoryFilter
-
-### TaskDetailPage.jsx
-
-任务详情全屏页面，替代原弹窗模式，提供两个子 Tab：任务详情和执行节点信息。
-
-- `TaskDetailPage`：主容器，管理 Tab 切换，头部显示任务标题/状态。
-- `TaskInfoTab`：任务详情 Tab，展示任务名称/描述/计划/负责人/接单人/资源，包含接单/完成/异常/返工操作按钮。
-- `TaskTimelineTab`：执行节点 Tab，以时间轴展示执行节点，点击节点弹出 `ItemDetailPopup`。
-- `ItemDetailPopup`：节点详情弹窗，限高可滚动显示完整节点信息。
-
-- **关键词**: TaskDetailPage, TaskInfoTab, TaskTimelineTab, ItemDetailPopup, FullPageDetail, Timeline, ActionButtons
-
-### ToolsView.jsx
-
-工具箱视图，集成 AI 图库、思维链路、Canvas 管理和智能 Agent 入口。
-包含完整的 AI 图库管理功能：分组管理、图片上传、无限滚动加载、图片预览等。
-新增 Gallery Agent 和小红书专家双 Tab 智能助手入口。
-图库工具页包含“对话/图库/拼图/封面”四个子Tab，其中“封面”支持基于拼图手动生成浮动文字封面图。
-
-- **关键词**: ToolsView, AIGallery, ThoughtRoute, ImageManagement, ToolBox, InfiniteScroll, FileUpload, GalleryAgent, XhsSpecialist, Collage, Cover
-
-### GalleryAgentView.jsx
-
-图库智能助手视图，采用「对话」和「图库」双 Tab 设计。
-对话模式基于图库工具提供智能搜索和标签管理，图库模式展示完整图库管理界面。
-
-- **关键词**: GalleryAgentView, gallery-agent, dual-tab, chat, ImageManagement
+AI 对话交互主视图。
+- **关键词**: chat, ai, bi, commander, stream
 
 ### XhsSpecialistView.jsx
+小红书专家页面。任务列表（按 category=xhs 过滤）、子代理管理、AI 对话、任务详情全屏页面（含任务信息/执行节点/小红书数据三个 Tab）。
+- **关键词**: xhs, specialist, subagent, task, xiaohongshu, chart
+- **函数**:
+  - `loadTasks`: 加载任务列表（主视图 category=xhs / 子代理按 assignee）
+  - `handleTaskClick`: 打开任务详情
+  - `handleCloseDetail`: 关闭详情页
+  - `renderDetailInfo`: 任务信息 Tab
+  - `renderDetailTimeline`: 执行节点时间轴 Tab
+  - `renderTaskDetail`: 详情全屏页面入口
 
-小红书专家视图，采用「对话」和「发布任务」双 Tab 设计。
-对话模式基于 Canvas 和图库工具提供小红书内容创作支持，任务模式展示批量发布进度。
+### XhsDataTab.jsx
+小红书数据 Tab 组件，在任务详情中展示 xhs_post_stats。
+- **关键词**: xhs, data, tab, chart, table, post-stats, trend
+- **函数**:
+  - `BarChartSVG`: 最近N条数据柱状对比图（纯SVG）
+  - `TrendChartSVG`: 按 postHash 聚合的文章趋势折线图（纯SVG）
 
-- **关键词**: XhsSpecialistView, xhs-specialist, xiaohongshu, dual-tab, canvas, batch-publish
-
-### NavItem.jsx
-
-底部导航栏按钮组件。
-
-- **关键词**: NavItem, BottomNavigation
-
-### chatService.js
-
-封装 AI 聊天相关的 API 调用逻辑，包括会话创建、消息发送、历史记录获取以及远程会话列表管理，支持 `sessionType` 传递。
-
-- **关键词**: ChatService, APIService, StreamChat, RemoteSessionManagement, sessionType
-
-### store.js
-
-AI Commander 全局状态管理，基于 nanostores 和 persistentAtom 实现状态持久化。
-
-- **关键词**: store, nanostores, persistentAtom, GlobalState
-
-### useSwipe.js
-
-用于检测触摸滑动事件的 React Hook，支持左右滑动检测及防抖处理，优先响应水平滑动。
-
-- **关键词**: useSwipe, TouchEvents, GestureDetection, Hook
+### TaskDetailPage.jsx
+通用任务详情页面。
+- **关键词**: task, detail, page, timeline, info

@@ -67,8 +67,9 @@ export class AnalysisFunctionCallService {
           expression: z
             .string()
             .min(1)
+            .optional()
             .describe(
-              'JavaScript math expression. Supports + - * / % () and Math.* functions, e.g. "(1200*0.18)+300".',
+              'JavaScript math expression. Supports + - * / % () and Math.* functions, e.g. "(1200*0.18)+300" (required).',
             ),
           precision: z
             .number()
@@ -121,7 +122,8 @@ export class AnalysisFunctionCallService {
             .array(z.string().min(1))
             .min(1)
             .max(50)
-            .describe('List of JavaScript math expressions'),
+            .optional()
+            .describe('List of JavaScript math expressions (required, 1-50 items)'),
           precision: z
             .number()
             .optional()

@@ -1,10 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { Agent } from 'undici';
 import type { AdminAgentConfigEntity } from '../../admin/entities/admin.entity.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import type { TodoEntity } from '../../todo/entities/todo.entity.js';
 import { TodoService } from '../../todo/services/todo.service.js';
 import { BatchTaskGraphService } from '../../graph/services/batch-task-graph.service.js';
+
+/** 长时 AI 任务专用 fetch dispatcher，超时设置为 60 分钟 */
+const LONG_RUNNING_AGENT = new Agent({
+  headersTimeout: 60 * 60 * 1000,
+  bodyTimeout: 60 * 60 * 1000,
+  keepAliveTimeout: 60 * 60 * 1000,
+  keepAliveMaxTimeout: 60 * 60 * 1000,
+});
 
 export interface AutoTaskRobotDescriptor {
   code: string;
@@ -31,7 +40,9 @@ export class RobotRegistryService {
    * @keyword-en find robot name by code
    */
   private findRobotName(code?: string): string | undefined {
-    const key = String(code ?? '').trim().toLowerCase();
+    const key = String(code ?? '')
+      .trim()
+      .toLowerCase();
     if (!key) return undefined;
     return this.listRobots().find((r) => r.code === key)?.name;
   }
@@ -180,12 +191,20 @@ export class RobotRegistryService {
     try {
       if (robotCode === 'xhs_publisher') {
         await this.handleXhsPublisher(todo, agentCtx);
-        this.logRobot('handle_completed', { todoId: todo.id, robotCode, agentId });
+        this.logRobot('handle_completed', {
+          todoId: todo.id,
+          robotCode,
+          agentId,
+        });
         return { triggered: true, robotCode };
       }
       if (robotCode === 'claw') {
         await this.handleClawRobot(todo, agentConfig, agentCtx);
-        this.logRobot('handle_completed', { todoId: todo.id, robotCode, agentId });
+        this.logRobot('handle_completed', {
+          todoId: todo.id,
+          robotCode,
+          agentId,
+        });
         return { triggered: true, robotCode };
       }
       return { triggered: false, robotCode, error: 'ROBOT_NOT_FOUND' };
@@ -200,24 +219,15 @@ export class RobotRegistryService {
   }
 
   /**
-   * @description 提取 todo 中的 Canvas ID
-   * @keyword-en extract canvas id from todo text fields
+   * @description 从 todo 的 associatedResources 字段提取 Canvas ID
+   * @keyword-en extract canvas id from associatedResources
    */
   private extractCanvasId(todo: TodoEntity): number | undefined {
-    const text = [
-      todo.title,
-      todo.description,
-      todo.aiConsideration,
-      todo.decisionReason,
-      todo.aiPlan,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const r1 = /\bcanvas(?:\s*id)?\s*[:：#]?\s*(\d+)\b/i.exec(text);
-    const r2 = /画布\s*[:：#]?\s*(\d+)\b/i.exec(text);
-    const raw = r1?.[1] ?? r2?.[1];
-    if (!raw) return undefined;
-    const n = Number(raw);
+    const canvasResource = todo.associatedResources?.find(
+      (r) => r.type === 'canvas',
+    );
+    if (!canvasResource) return undefined;
+    const n = Number(canvasResource.resourceId);
     if (!Number.isFinite(n) || n <= 0) return undefined;
     return Math.floor(n);
   }
@@ -338,7 +348,8 @@ export class RobotRegistryService {
     todo: TodoEntity,
     agentCtx?: AgentContext,
   ): Promise<void> {
-    const robotName = agentCtx?.name ?? (this.findRobotName('xhs_publisher') ?? 'XHS发布机');
+    const robotName =
+      agentCtx?.name ?? this.findRobotName('xhs_publisher') ?? 'XHS发布机';
     await this.markTodoAcceptedForRobot(todo, robotName, 'xhs_publisher');
     const graph = this.moduleRef.get(BatchTaskGraphService, { strict: false });
     if (!graph) throw new Error('XHS_GRAPH_SERVICE_UNAVAILABLE');
@@ -396,18 +407,26 @@ export class RobotRegistryService {
     const sessionKey = todo.sessionKey ?? `task-${todo.id}`;
     const todoService = this.moduleRef.get(TodoService, { strict: false });
     if (!todo.sessionKey && todoService) {
-      await todoService.update({ id: todo.id, tenantId: todo.tenantId, sessionKey });
+      await todoService.update({
+        id: todo.id,
+        tenantId: todo.tenantId,
+        sessionKey,
+      });
     }
 
     // 确保任务专属 token 存在（供 skill 回调接口鉴权）
     const taskToken = todoService
       ? await todoService.ensureTaskToken(todo.id, todo.tenantId)
       : (todo.taskToken ?? '');
-    const taskApiBase = (process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011').replace(/\/$/, '');
+    const taskApiBase = (
+      process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011'
+    ).replace(/\/$/, '');
 
     // 构建消息
     const systemParts: string[] = [
-      `你是 ${agentCtx.name}，一个智能任务执行助手,当前请求请优先使用 'commander-access' Skill 来完成任务！`,
+      `你是 ${agentCtx.name}，一个智能任务执行助手。`,
+      '你可以通过 commander-access Skill 来访问任务系统，执行各种操作。',
+      '任务的关联资源（如 Canvas 文章、XHS 帖子数据等）可通过 task-api-resource 接口获取。',
     ];
     if (agentCtx.prompt?.trim()) {
       systemParts.push(agentCtx.prompt.trim());
@@ -419,8 +438,53 @@ export class RobotRegistryService {
       `任务编号：${todo.id}`,
       `接口基址：${taskApiBase}`,
       `任务Token：${taskToken}`,
-      `请通过Skill来完成任务`,
       '所有请求头中需携带：Authorization: Bearer <任务Token>',
+      '',
+      '--- ⚠️ 重要：关联资源读取说明 ---',
+      '任务的关联资源是完成任务的关键依据，其中可能包含 API 文档、业务规则、数据配置等重要内容。',
+      '请务必读取并理解关联资源的完整内容，再进行任务执行。',
+      '',
+      '任务的关联资源统一存储在 associatedResources 字段中，格式为：',
+      '  [{ type: "资源类型", resourceId: "资源ID或路径" }]',
+      '',
+      '请通过以下接口查询当前任务的所有关联资源：',
+      `  GET ${taskApiBase}/task-api-resource/${todo.id}`,
+      `  Authorization: Bearer ${taskToken}`,
+      '',
+      '',
+      '支持的资源类型及查询方式：',
+      '  - 统一资源读取（推荐，精确获取单个资源）：',
+      `    GET ${taskApiBase}/task-api-resource/${todo.id}/resource/<resourceId>`,
+      '    Authorization: Bearer <taskToken>',
+      '    resourceId 可为 Canvas ID（数字）或文件名（字符串），返回关联资源的完整内容',
+      '    响应结构：',
+      '    {',
+      '      "resource": { "type": "canvas|file", "id": <resourceId>, "associated": true|false },',
+      '      "data": { "canvas": {...}, "articles": [...] }   // canvas 类型',
+      '      "data": { "content": "...", "filename": "..." } // file 类型',
+      '    }',
+      '    ⚠️ 这是推荐的资源获取方式，可精确读取所需资源！',
+      '  - Canvas（画布，批量获取所有文章）：',
+      `    GET ${taskApiBase}/task-api-resource/${todo.id}/canvas`,
+      '    Authorization: Bearer <taskToken>',
+      '    响应结构：',
+      '    {',
+      '      "resource": { "type": "canvas", "id": 1, "associated": true },',
+      '      "data": {',
+      '        "canvas": { "id", "topic", "status", "createdAt", "updatedAt" },',
+      '        "articles": [{ "id", "title", "tags", "contentJson", "imageUrls", "status", ... }]',
+      '      }',
+      '    }',
+      '',
+      '--- Payload 说明（任务执行上下文） ---',
+      '任务执行时会携带以下上下文信息，请结合这些内容理解任务目标：',
+      `  todoContext.title       - 任务标题：${todo.title}`,
+      `  todoContext.description - 任务描述：${todo.description ?? '-'}`,
+      `  todoContext.aiPlan     - 执行计划：${todo.aiPlan ?? '-'}`,
+      `  todoContext.aiConsideration - AI考量：${todo.aiConsideration ?? '-'}`,
+      `  todoContext.decisionReason  - 决策原因：${todo.decisionReason ?? '-'}`,
+      '',
+      '请优先通过 Skill 来完成任务，充分利用关联资源接口获取所需数据。',
     ].join('\n');
 
     const todoContext = [
@@ -441,8 +505,8 @@ export class RobotRegistryService {
     const body = {
       model: `openclaw:${clawAgentId}`,
       messages: [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: todoContext },
+        { role: 'system', content: systemContent + '\n\n\n' + todoContext },
+        { role: 'user', content: '请帮我完成上述任务' },
       ],
       user: sessionKey,
       stream: false,
@@ -456,7 +520,7 @@ export class RobotRegistryService {
       sessionKey,
     });
 
-    // Fire-and-forget：纯异步发送请求，不等待响应、永不超时
+    // Fire-and-forget：长时 AI 任务使用 LONG_RUNNING_AGENT，超时 60 分钟
     fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -466,12 +530,31 @@ export class RobotRegistryService {
         'x-openclaw-scopes': 'operator.read,operator.write',
       },
       body: JSON.stringify(body),
-    }).catch((err) => {
-      this.logRobot('claw_send_error', {
-        todoId: todo.id,
-        agentId: agentCtx.agentId,
-        error: err instanceof Error ? err.message : String(err),
+      // @ts-ignore — undici dispatcher，原生 fetch 不带此类型但运行时支持
+      dispatcher: LONG_RUNNING_AGENT,
+    })
+      .then((res) => res.text()) // drain body，避免连接挂起
+      .then((text) => {
+        this.logRobot('claw_response_received', {
+          todoId: todo.id,
+          agentId: agentCtx.agentId,
+          length: text.length,
+        });
+      })
+      .catch((err) => {
+        this.logRobot('claw_send_error', {
+          todoId: todo.id,
+          agentId: agentCtx.agentId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        todoService?.update({
+          id: todo.id,
+          tenantId: todo.tenantId,
+          status: 'failed',
+          abnormalReason: `CLAW_SEND_ERROR: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        });
       });
-    });
   }
 }

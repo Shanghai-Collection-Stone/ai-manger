@@ -115,21 +115,20 @@ export class ContextService {
         if (raw && this.isConversationInScope(raw, scope)) {
           return sid;
         }
-        if (!requestedSessionId) {
-          sid = cryptoRandomId();
-          await this.conversations.insertOne({
-            _id: new ObjectId(),
-            sessionId: sid,
-            sessionType: this.normalizeSessionType(scope?.sessionType),
-            tenantId: scope?.tenantId,
-            userId: scope?.userId,
-            title: undefined,
-            lastCheckpointId: undefined,
-            createdAt: now,
-            updatedAt: now,
-          });
-          return sid;
-        }
+        // sessionId 冲突但 sessionType 不匹配（如旧会话类型与新类型不同），生成新随机 ID
+        sid = cryptoRandomId();
+        await this.conversations.insertOne({
+          _id: new ObjectId(),
+          sessionId: sid,
+          sessionType: this.normalizeSessionType(scope?.sessionType),
+          tenantId: scope?.tenantId,
+          userId: scope?.userId,
+          title: undefined,
+          lastCheckpointId: undefined,
+          createdAt: now,
+          updatedAt: now,
+        });
+        return sid;
       }
       throw error;
     }
@@ -1130,7 +1129,7 @@ export class ContextService {
   private normalizeSessionType(
     sessionType?: ConversationSessionType,
   ): ConversationSessionType {
-    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist'];
+    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist', 'xhs-tracker', 'xhs-nurturer', 'xhs-publisher'];
     return validTypes.includes(sessionType as ConversationSessionType)
       ? (sessionType as ConversationSessionType)
       : 'default';

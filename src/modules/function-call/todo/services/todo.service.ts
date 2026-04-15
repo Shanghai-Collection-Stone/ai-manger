@@ -3,6 +3,7 @@ import { tool, CreateAgentParams } from 'langchain';
 import * as z from 'zod';
 import { TodoService } from '../../../todo/services/todo.service.js';
 import { RobotRegistryService } from '../../../auto-task-robot/services/robot-registry.service.js';
+import { FunctionCallScope } from '../../tools/services/tools.service.js';
 
 /**
  * @description 待办函数调用工具，提供AI可用的待办CRUD能力
@@ -24,10 +25,7 @@ export class TodoFunctionCallService {
    * @keyword todo, tools, handle
    * @since 2026-01-27
    */
-  getHandle(scope?: {
-    tenantId?: string;
-    userId?: string;
-  }): CreateAgentParams['tools'] {
+  getHandle(scope?: FunctionCallScope): CreateAgentParams['tools'] {
     const todoCreate = tool(
       async ({
         tenantId,
@@ -40,6 +38,7 @@ export class TodoFunctionCallService {
         aiConsideration,
         decisionReason,
         aiPlan,
+        deadline,
       }) => {
         const autoXhsPublish = this.shouldAutoAssignXhsRobot({
           title,
@@ -52,7 +51,8 @@ export class TodoFunctionCallService {
         const finalAssigneeRaw =
           typeof assignee === 'string' ? assignee.trim() : '';
         const finalAssignee =
-          finalAssigneeRaw || (autoXhsPublish ? 'robot:xhs_publisher' : undefined);
+          finalAssigneeRaw ||
+          (autoXhsPublish ? 'robot:xhs_publisher' : undefined);
         const normalizedType = this.normalizeToolTodoTypeInput(type);
         const finalType = autoXhsPublish ? 'auto_execute' : normalizedType;
         const finalDescription = this.buildTodoDescription({
@@ -63,20 +63,81 @@ export class TodoFunctionCallService {
           decisionReason,
           aiPlan,
         });
+
+        // 解析 resource 为 JSON 并写入 associatedResources
+        let associatedResources:
+          | { type: string; resourceId: string | number }[]
+          | undefined;
+        if (typeof resource === 'string' && resource.trim()) {
+          try {
+            const parsed = JSON.parse(resource);
+            if (!Array.isArray(parsed)) {
+              return JSON.stringify({
+                ok: false,
+                error: 'RESOURCE_FORMAT_ERROR',
+                message:
+                  'resource 必须是 JSON 数组格式，例如：[{"type":"canvas","resourceId":123},{"type":"file","resourceId":"文档.md"}]',
+                hint: '请将 resource 字段修改为符合格式的 JSON 数组后重试。每个元素需包含 type（资源类型）和 resourceId（资源ID或文件名）',
+              });
+            }
+            for (let i = 0; i < parsed.length; i++) {
+              const item = parsed[i];
+              if (
+                !item ||
+                typeof item.type !== 'string' ||
+                item.resourceId === undefined
+              ) {
+                return JSON.stringify({
+                  ok: false,
+                  error: 'RESOURCE_ITEM_ERROR',
+                  message: `resource[${i}] 格式错误：每个元素必须包含 type（string）和 resourceId（string|number）`,
+                  received: JSON.stringify(item),
+                  hint: `请确保 resource[${i}] 包含有效的 type 和 resourceId 字段后重试`,
+                });
+              }
+            }
+            associatedResources = parsed;
+          } catch {
+            return JSON.stringify({
+              ok: false,
+              error: 'RESOURCE_JSON_PARSE_ERROR',
+              message: `resource 不是合法的 JSON 字符串，请检查 JSON 格式是否正确`,
+              received: resource,
+              hint: '示例格式：[{"type":"canvas","resourceId":123},{"type":"file","resourceId":"任务说明.md"}]',
+            });
+          }
+        }
+        const finalAiPlan = this.injectLongTaskCronPrompt(
+          finalType,
+          this.injectXhsTrackerDataCollectPrompt(finalAssignee, aiPlan),
+          typeof deadline === 'string' ? deadline : undefined,
+        );
+        const deadlineDate =
+          typeof deadline === 'string' && deadline
+            ? new Date(deadline)
+            : undefined;
+        // 小红书相关任务自动从上下文继承 category
+        const finalCategory = scope?.category;
         const doc = await this.todo.create({
           tenantId: this.resolveTenantId(tenantId, scope),
           userId: finalUserId,
           title,
           description: finalDescription,
           resource: typeof resource === 'string' ? resource.trim() : undefined,
+          associatedResources,
           assignee: finalAssignee,
           type: finalType,
+          category: finalCategory,
           aiConsideration,
           decisionReason,
-          aiPlan,
+          aiPlan: finalAiPlan,
+          deadline: deadlineDate,
         });
         const robotTrigger = this.triggerRobotAssignedDeferred(doc);
-        return JSON.stringify({ todo: { ...doc, _id: undefined }, robotTrigger });
+        return JSON.stringify({
+          todo: { ...doc, _id: undefined },
+          robotTrigger,
+        });
       },
       {
         name: 'todo_create',
@@ -86,7 +147,9 @@ export class TodoFunctionCallService {
           userId: z
             .string()
             .optional()
-            .describe('Target user id（有会话上下文时将被忽略，强制使用上下文 userId）'),
+            .describe(
+              'Target user id（有会话上下文时将被忽略，强制使用上下文 userId）',
+            ),
           tenantId: z
             .string()
             .optional()
@@ -96,33 +159,89 @@ export class TodoFunctionCallService {
           resource: z
             .string()
             .optional()
-            .describe('关联资源（如 Canvas#384、URL 或资源摘要）'),
+            .describe(
+              '关联资源，必须是 JSON 数组格式，示例：[{“type”:”canvas”,”resourceId”:123},{“type”:”file”,”resourceId”:”任务说明.md”}]，type 支持 canvas/file 等类型',
+            ),
           assignee: z
             .string()
             .optional()
-            .describe('接单人中文名称（如“小红书发布机”或线下人员名）'),
+            .describe('接单人中文名称（如”小红书发布机”或线下人员名）'),
           type: z
             .string()
             .optional()
             .describe(
-              '任务类型（推荐：auto_execute/offline_execute/other；兼容历史值如 xhs_publish、cleaning 等）',
+              '任务类型（推荐：auto_execute/offline_execute/long_task/other；兼容历史值如 xhs_publish、cleaning 等）',
             ),
           aiConsideration: z.string().describe('AI consideration'),
           decisionReason: z.string().describe('Decision reasoning'),
           aiPlan: z.string().describe('AI plan for the user'),
+          deadline: z
+            .string()
+            .optional()
+            .describe(
+              '长时任务截止时间（ISO 日期字符串，仅 long_task 类型使用）',
+            ),
         }),
       },
     );
 
     const todoUpdate = tool(
-      async ({ id, tenantId, userId, ...rest }) => {
+      async ({ id, tenantId, userId, deadline, ...rest }) => {
+        // 解析 resource 为 JSON 并提取 associatedResources
+        let associatedResources:
+          | { type: string; resourceId: string | number }[]
+          | undefined;
+        if (typeof rest.resource === 'string' && rest.resource.trim()) {
+          try {
+            const parsed = JSON.parse(rest.resource);
+            if (!Array.isArray(parsed)) {
+              return JSON.stringify({
+                ok: false,
+                error: 'RESOURCE_FORMAT_ERROR',
+                message: 'resource 必须是 JSON 数组格式',
+                hint: '示例：[{"type":"canvas","resourceId":123},{"type":"file","resourceId":"文档.md"}]',
+              });
+            }
+            for (let i = 0; i < parsed.length; i++) {
+              const item = parsed[i];
+              if (
+                !item ||
+                typeof item.type !== 'string' ||
+                item.resourceId === undefined
+              ) {
+                return JSON.stringify({
+                  ok: false,
+                  error: 'RESOURCE_ITEM_ERROR',
+                  message: `resource[${i}] 格式错误：必须包含 type 和 resourceId`,
+                  received: JSON.stringify(item),
+                  hint: `请修正 resource[${i}] 后重试`,
+                });
+              }
+            }
+            associatedResources = parsed;
+          } catch {
+            return JSON.stringify({
+              ok: false,
+              error: 'RESOURCE_JSON_PARSE_ERROR',
+              message: 'resource 不是合法的 JSON 字符串',
+              hint: '示例：[{"type":"canvas","resourceId":123}]',
+            });
+          }
+        }
+
         const normalizedType = this.normalizeToolTodoTypeInput(rest.type);
+        const deadlineDate =
+          typeof deadline === 'string' && deadline
+            ? new Date(deadline)
+            : undefined;
         const doc = await this.todo.update({
           id,
           tenantId: this.resolveTenantId(tenantId, scope),
           userId: this.resolveUserId(userId, scope),
           ...rest,
           type: normalizedType,
+          deadline: deadlineDate,
+          associatedResources,
         });
         const robotTrigger = doc
           ? this.triggerRobotAssignedDeferred(doc)
@@ -144,20 +263,28 @@ export class TodoFunctionCallService {
           resource: z
             .string()
             .optional()
-            .describe('关联资源（如 Canvas#384、URL 或资源摘要）'),
+            .describe(
+              '关联资源，必须是 JSON 数组格式，示例：[{“type”:”canvas”,”resourceId”:123},{“type”:”file”,”resourceId”:”任务说明.md”}]，type 支持 canvas/file 等类型',
+            ),
           assignee: z
             .string()
             .optional()
-            .describe('接单人中文名称（如“小红书发布机”或线下人员名）'),
+            .describe('接单人中文名称（如”小红书发布机”或线下人员名）'),
           type: z
             .string()
             .optional()
             .describe(
-              '任务类型（推荐：auto_execute/offline_execute/other；兼容历史值如 xhs_publish、cleaning 等）',
+              '任务类型（推荐：auto_execute/offline_execute/long_task/other；兼容历史值如 xhs_publish、cleaning 等）',
             ),
           aiConsideration: z.string().optional().describe('AI consideration'),
           decisionReason: z.string().optional().describe('Decision reasoning'),
           aiPlan: z.string().optional().describe('AI plan for the user'),
+          deadline: z
+            .string()
+            .optional()
+            .describe(
+              '长时任务截止时间（ISO 日期字符串，仅 long_task 类型使用）',
+            ),
           status: z
             .enum(['pending', 'in_progress', 'done', 'failed', 'cancelled'])
             .optional()
@@ -280,11 +407,9 @@ export class TodoFunctionCallService {
    * @returns {unknown} 归一化后的类型或原值。
    * @keyword-en normalize tool todo type input
    */
-  private normalizeToolTodoTypeInput(input: unknown):
-    | 'auto_execute'
-    | 'offline_execute'
-    | 'other'
-    | undefined {
+  private normalizeToolTodoTypeInput(
+    input: unknown,
+  ): 'auto_execute' | 'offline_execute' | 'long_task' | 'other' | undefined {
     if (typeof input !== 'string') return undefined;
     const t = input.trim().toLowerCase();
     if (!t) return undefined;
@@ -314,8 +439,94 @@ export class TodoFunctionCallService {
     ) {
       return 'offline_execute';
     }
+    if (['long_task', '长时任务', 'long-task', 'longtask'].includes(t))
+      return 'long_task';
     if (['other', '其他'].includes(t)) return 'other';
     return 'other';
+  }
+
+  /**
+   * @description 当接单人为 robot:xhs_tracker 时，向 aiPlan 注入数据回写规范。
+   * Claw 收到任务后需按此规范采集数据并通过专项接口回写。
+   * @param {string | undefined} assignee - 归一化后的接单人标识。
+   * @param {string} aiPlan - 原始 AI 计划。
+   * @returns {string} 注入后的 aiPlan。
+   * @keyword-en inject xhs tracker data collection write-back prompt
+   */
+  private injectXhsTrackerDataCollectPrompt(
+    assignee: string | undefined,
+    aiPlan: string,
+  ): string {
+    if (assignee !== 'robot:xhs_tracker') return aiPlan;
+    const instructions = [
+      '[小红书数据采集-回写规范]',
+      '此任务由 xhs_tracker 机器人执行，数据采集完成后必须通过专项接口回写结果。',
+      '',
+      '【数据回写步骤】',
+      '1. 采集帖子数据后，调用批量回写接口：',
+      '   POST /task-api/{todoId}/xhs-stats/bulk',
+      '   Authorization: Bearer {taskToken}',
+      '   Content-Type: application/json',
+      '   Body: {',
+      '     "items": [',
+      '       {',
+      '         "postTitle": "帖子标题",',
+      '         "postUrl": "https://xiaohongshu.com/...",',
+      '         "authorUrl": "https://xiaohongshu.com/user/...",',
+      '         "likeCount": 1200,',
+      '         "commentCount": 80,',
+      '         "collectCount": 450,',
+      '         "tag": "分类标签（可选）",',
+      '         "dataAt": "2026-04-13T00:00:00.000Z",',
+      '         "topComments": [',
+      '           { "content": "评论内容", "likeCount": 50, "replyCount": 3 }',
+      '         ]',
+      '       }',
+      '     ]',
+      '   }',
+      '2. 所有帖子数据回写完成后，将采集摘要（markdown 格式）写入任务成果：',
+      '   PATCH /task-api/{todoId}',
+      '   Authorization: Bearer {taskToken}',
+      '   Body: {',
+      '     "taskResult": "## 数据采集摘要\\n- 共采集 N 条帖子\\n- 最高点赞: xxx\\n- ...",',
+      '     "status": "done"',
+      '   }',
+      '3. taskToken 从任务详情中获取（首次执行先调用 GET /task-api/{todoId} 读取）。',
+    ].join('\n');
+    return [aiPlan, instructions].filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * @description 当任务类型为 long_task 时，自动在 aiPlan 中注入 Cron job 追踪提示词。
+   * @param {string | undefined} type - 归一化后的任务类型。
+   * @param {string} aiPlan - 原始 AI 计划。
+   * @param {string | undefined} deadline - 截止时间字符串（ISO）。
+   * @returns {string} 注入后的 aiPlan。
+   * @keyword-en inject long task cron job prompt
+   */
+  private injectLongTaskCronPrompt(
+    type: string | undefined,
+    aiPlan: string,
+    deadline?: string,
+  ): string {
+    if (type !== 'long_task') return aiPlan;
+    const deadlinePart = deadline
+      ? `截止时间：${deadline}。`
+      : '该任务无截止时间。';
+    const cronInstructions = [
+      '[长时任务-Cron 追踪要求]',
+      `此任务类型为 long_task（长时任务）。${deadlinePart}`,
+      '执行规则：',
+      '1. 必须使用 Cron job 定期和追踪本任务状态。',
+      '2. 每次 Cron job 执行前，必须先调用 todo_get 查询当前任务状态。',
+      '3. 若任务状态为 done/failed/cancelled，必须立即删除 Cron job，停止持续执行。',
+      deadline
+        ? '4. 若当前时间已超过截止时间，必须删除 Cron job，并将任务状态设置为 cancelled。'
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return [aiPlan, cronInstructions].filter(Boolean).join('\n\n');
   }
 
   /**
@@ -384,36 +595,41 @@ export class TodoFunctionCallService {
    * @returns {{ triggered: boolean; deferred: boolean; robotCode?: string; error?: string }} 触发状态。
    * @keyword-en deferred robot trigger
    */
-  private triggerRobotAssignedDeferred(todo: import('../../../todo/entities/todo.entity.js').TodoEntity): {
+  private triggerRobotAssignedDeferred(
+    todo: import('../../../todo/entities/todo.entity.js').TodoEntity,
+  ): {
     triggered: boolean;
     deferred: boolean;
     robotCode?: string;
     error?: string;
   } {
     const robotCode = this.robots.parseRobotCode(todo.assignee);
-    if (!robotCode) {
+    const agentId = this.robots.parseAgentId(todo.assignee);
+    // 既不是 robot:xxx 也不是 agent:xxx，直接跳过
+    if (!robotCode && !agentId) {
       return { triggered: false, deferred: false };
     }
 
+    const identifier = robotCode ?? agentId ?? 'unknown';
     void this.robots
       .triggerIfRobotAssigned({ todo })
       .then((ret) => {
         if (ret?.error) {
           this.logger.warn(
-            `[todo-robot] todoId=${todo.id} robotCode=${robotCode} async_failed=${ret.error}`,
+            `[todo-robot] todoId=${todo.id} assignee=${todo.assignee} identifier=${identifier} async_failed=${ret.error}`,
           );
           return;
         }
         this.logger.debug(
-          `[todo-robot] todoId=${todo.id} robotCode=${robotCode} async_completed=true`,
+          `[todo-robot] todoId=${todo.id} assignee=${todo.assignee} identifier=${identifier} async_completed=true`,
         );
       })
       .catch((err: unknown) => {
         this.logger.warn(
-          `[todo-robot] todoId=${todo.id} robotCode=${robotCode} async_throw=${err instanceof Error ? err.message : String(err)}`,
+          `[todo-robot] todoId=${todo.id} assignee=${todo.assignee} identifier=${identifier} async_throw=${err instanceof Error ? err.message : String(err)}`,
         );
       });
 
-    return { triggered: true, deferred: true, robotCode };
+    return { triggered: true, deferred: true, robotCode: identifier };
   }
 }

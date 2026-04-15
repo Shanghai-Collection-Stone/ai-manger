@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Logger,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -12,21 +13,27 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import type { Request } from 'express';
+import { TodoService } from '../services/todo.service.js';
+import type { TodoEntity } from '../entities/todo.entity.js';
+import type { TodoItemCreateInput, TodoItemUpdateInput } from '../entities/todo-item.entity.js';
 import { XhsPostStatService } from '../services/xhs-post-stat.service.js';
 import type {
   XhsPostStatCreateInput,
   XhsPostStatUpdateInput,
 } from '../entities/xhs-post-stat.entity.js';
+import type { CanvasArticleEntity } from '../../canvas/entities/canvas.entity.js';
 
-/** 合法的任务状态枚举值（运行时校验用） */
+/** 合法的任务状态枚举值 */
 const VALID_TODO_STATUSES = new Set(['pending', 'in_progress', 'done', 'failed', 'cancelled']);
-/** 合法的节点状态枚举值（运行时校验用） */
+/** 合法的节点状态枚举值 */
 const VALID_ITEM_STATUSES = new Set(['pending', 'in_progress', 'done', 'failed', 'cancelled']);
 
 /**
- * @description 将 AI 可能传入的别名状态归一化为数据库在1值
- * 例： 'completed' → 'done'、'running' → 'in_progress'
- * @keyword-en normalize status alias from AI input
+ * @description 状态别名归一化（AI 传入别名时自动转换）
+ * @keyword-en normalize status alias
  * @param {string} s
  * @returns {string}
  */
@@ -47,14 +54,10 @@ function normalizeStatus(s: string): string {
   };
   return aliases[s] ?? s;
 }
-import type { Request } from 'express';
-import { TodoService } from '../services/todo.service.js';
-import type { TodoItemCreateInput, TodoItemUpdateInput } from '../entities/todo-item.entity.js';
-import type { CanvasArticleEntity } from '../../canvas/entities/canvas.entity.js';
 
 /**
- * @description 诊断字符串是否已乱码（含 U+003F '?' 或 U+FFFD '\uFFFD'）
- * @keyword-en diagnose garbled string char codes
+ * @description 诊断字符串是否已乱码
+ * @keyword-en diagnose garbled string
  */
 function garbageDiag(label: string, value: unknown): Record<string, unknown> {
   if (typeof value !== 'string') return { label, type: typeof value };
@@ -71,12 +74,13 @@ function garbageDiag(label: string, value: unknown): Record<string, unknown> {
 }
 
 /**
- * @description 任务专项接口控制器，供 claw skill 通过 taskToken 鉴权后操作任务和执行节点
- * @keyword-en TodoTaskController task token auth dedicated API for claw skill
+ * @description 关键资源接口控制器，提供对 task-api 所有资源的无差别访问
+ * 通过 resourceToken 鉴权，可访问 token 对应资源集合下的所有资源
+ * @keyword-en TodoResourceController resource token auth API for accessing all task resources
  */
-@Controller('task-api')
-export class TodoTaskController {
-  private readonly logger = new Logger(TodoTaskController.name);
+@Controller('task-api-resource')
+export class TodoResourceController {
+  private readonly logger = new Logger(TodoResourceController.name);
 
   constructor(
     private readonly todo: TodoService,
@@ -85,8 +89,8 @@ export class TodoTaskController {
   ) {}
 
   /**
-   * @description 从请求头提取并验证 taskToken，返回对应 todo
-   * @keyword-en resolve todo by task token from Authorization header
+   * @description 从请求头提取并验证 taskToken，返回对应任务
+   * @keyword-en resolve todo by task token
    */
   private async resolveTodo(req: Request, todoId: number) {
     const auth = req.headers.authorization;
@@ -95,15 +99,108 @@ export class TodoTaskController {
     }
     const token = auth.slice(7).trim();
     if (!token) throw new UnauthorizedException('TASK_TOKEN_REQUIRED');
+
+    // taskToken 验证
     const todo = await this.todo.getByTaskToken(token);
     if (!todo) throw new UnauthorizedException('INVALID_TASK_TOKEN');
+
+    // 验证 todoId 归属
     if (todo.id !== todoId) throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
     return todo;
   }
 
+  // ─── 统一资源读取 ─────────────────────────────────────────────────────────
+
+  /**
+   * @description 统一资源读取接口，根据 resourceId（canvas ID 或 filename）精确获取关联资源
+   * @keyword-en get associated resource by resourceId or filename
+   */
+  @Get(':todoId/resource/:resourceId')
+  async getResource(
+    @Param('todoId') todoId: string,
+    @Param('resourceId') resourceId: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const todo = await this.resolveTodo(req, Number(todoId));
+
+    // 查找关联资源
+    const associated = todo.associatedResources?.find(
+      (r) => String(r.resourceId) === resourceId,
+    );
+    if (!associated) {
+      throw new UnauthorizedException('RESOURCE_NOT_ASSOCIATED');
+    }
+
+    if (associated.type === 'canvas') {
+      // Canvas 类型：调用 canvasService 获取单篇文章
+      const canvasId = Number(resourceId);
+      if (!Number.isFinite(canvasId) || canvasId <= 0) {
+        return {
+          resource: { type: 'canvas', id: resourceId, associated: false },
+          data: null,
+          message: 'CANVAS_ID_INVALID',
+        };
+      }
+
+      const { CanvasService } = await import('../../canvas/services/canvas.service.js');
+      const canvasService = this.moduleRef.get(CanvasService, { strict: false });
+      if (!canvasService) throw new Error('CANVAS_SERVICE_UNAVAILABLE');
+
+      const canvas = await canvasService.get(canvasId, todo.tenantId);
+      if (!canvas) {
+        return {
+          resource: { type: 'canvas', id: canvasId, associated: false },
+          data: null,
+          message: 'CANVAS_NOT_FOUND',
+        };
+      }
+
+      const articles: Array<Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }> = (
+        canvas.articles ?? []
+      ).map((article: CanvasArticleEntity) => ({
+        ...article,
+        imageUrls: (article.imageUrls ?? []).map((url: string) => this.resolveImageUrl(url) ?? url),
+      }));
+
+      return {
+        resource: { type: 'canvas', id: canvas.id, associated: true },
+        data: {
+          canvas: { id: canvas.id, topic: canvas.topic, status: canvas.status, createdAt: canvas.createdAt, updatedAt: canvas.updatedAt },
+          articles,
+        },
+      };
+    }
+
+    if (associated.type === 'file') {
+      // File 类型：从 task-api 目录读取文件
+      const filePath = join(process.cwd(), 'task-api', String(resourceId));
+      try {
+        const content = await readFile(filePath, 'utf-8');
+        return {
+          resource: { type: 'file', id: resourceId, associated: true },
+          data: { content, filename: resourceId },
+        };
+      } catch {
+        return {
+          resource: { type: 'file', id: resourceId, associated: false },
+          data: null,
+          message: 'FILE_NOT_FOUND',
+        };
+      }
+    }
+
+    return {
+      resource: { type: associated.type, id: resourceId, associated: false },
+      data: null,
+      message: 'RESOURCE_TYPE_NOT_SUPPORTED',
+    };
+  }
+
+  // ─── 任务操作 ─────────────────────────────────────────────────────────────
+
   /**
    * @description 获取任务详情
-   * @keyword-en get task detail by task token
+   * @keyword-en get task detail
    */
   @Get(':todoId')
   async getTask(
@@ -117,8 +214,8 @@ export class TodoTaskController {
   }
 
   /**
-   * @description 更新任务字段（状态/描述/aiPlan/异常原因等）
-   * @keyword-en update task fields via task token
+   * @description 更新任务字段
+   * @keyword-en update task fields
    */
   @Patch(':todoId')
   async updateTask(
@@ -134,7 +231,7 @@ export class TodoTaskController {
     },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    // --- status 运行时校验：AI 可能传入中文或无效值，直接拒绝写入 ---
+    // status 运行时校验
     if (body.status !== undefined) {
       const rawStatus = body.status as unknown as string;
       const normalized = normalizeStatus(rawStatus);
@@ -143,52 +240,27 @@ export class TodoTaskController {
         (body as Record<string, unknown>).status = normalized;
       }
       if (!VALID_TODO_STATUSES.has(normalized)) {
-        this.logger.warn(
-          `[updateTask] INVALID status rejected: '${rawStatus}' (todoId=${todoId})`,
-        );
+        this.logger.warn(`[updateTask] INVALID status rejected: '${rawStatus}' (todoId=${todoId})`);
         delete (body as Record<string, unknown>).status;
       }
     }
 
-    // --- 接口入参日志 ---
-    this.logger.log(
-      `[updateTask] todoId=${todoId} body.keys=${Object.keys(body).join(',')} status=${body.status ?? '-'}`,
-    );
+    this.logger.log(`[updateTask] todoId=${todoId} body.keys=${Object.keys(body).join(',')}`);
     if (body.aiPlan !== undefined) {
       this.logger.log(`[updateTask] aiPlan diag: ${JSON.stringify(garbageDiag('aiPlan', body.aiPlan))}`);
     }
-    if (body.description !== undefined) {
-      this.logger.log(`[updateTask] description diag: ${JSON.stringify(garbageDiag('description', body.description))}`);
-    }
-    if (body.taskResult !== undefined) {
-      this.logger.log(`[updateTask] taskResult diag: ${JSON.stringify(garbageDiag('taskResult', body.taskResult))}`);
-    }
-    if (body.abnormalReason !== undefined) {
-      this.logger.log(`[updateTask] abnormalReason diag: ${JSON.stringify(garbageDiag('abnormalReason', body.abnormalReason))}`);
-    }
 
     const todo = await this.resolveTodo(req, Number(todoId));
-    const updated = await this.todo.update({
-      id: todo.id,
-      tenantId: todo.tenantId,
-      ...body,
-    });
-    if (!updated) {
-      this.logger.warn(`[updateTask] update returned null, todoId=${todoId}`);
-      return { ok: false };
-    }
+    const updated = await this.todo.update({ id: todo.id, tenantId: todo.tenantId, ...body });
+    if (!updated) return { ok: false };
     const { _id, taskToken, ...rest } = updated as typeof updated & { _id?: unknown; taskToken?: unknown };
     void _id; void taskToken;
-    // --- 接口响应日志 ---
-    this.logger.log(
-      `[updateTask] ok todoId=${todoId} status=${String(rest.status)} aiPlan.len=${typeof rest.aiPlan === 'string' ? rest.aiPlan.length : '-'}`,
-    );
     return { ok: true, todo: rest };
   }
 
   /**
-   * @description 删除任务（仅影响当前 token 绑定的任务）
-   * @keyword-en delete task via task token
+   * @description 删除任务
+   * @keyword-en delete task
    */
   @Delete(':todoId')
   async deleteTask(
@@ -200,9 +272,11 @@ export class TodoTaskController {
     return { ok };
   }
 
+  // ─── 执行节点操作 ─────────────────────────────────────────────────────────
+
   /**
-   * @description 列出任务的执行节点
-   * @keyword-en list todo items via task token
+   * @description 列出执行节点
+   * @keyword-en list todo items
    */
   @Get(':todoId/items')
   async listItems(
@@ -215,8 +289,8 @@ export class TodoTaskController {
   }
 
   /**
-   * @description 获取单个执行节点详情
-   * @keyword-en get single todo item via task token
+   * @description 获取单个执行节点
+   * @keyword-en get single todo item
    */
   @Get(':todoId/items/:itemId')
   async getItem(
@@ -236,7 +310,7 @@ export class TodoTaskController {
 
   /**
    * @description 新增执行节点
-   * @keyword-en create todo item via task token
+   * @keyword-en create todo item
    */
   @Post(':todoId/items')
   async createItem(
@@ -244,32 +318,16 @@ export class TodoTaskController {
     @Body() body: Omit<TodoItemCreateInput, 'todoId'>,
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    // 通过 task-api 创建的节点默认为 in_progress（机器人执行步骤语境）
-    // 若 AI 传了非法 status，也修正为 in_progress
     const rawStatus = body.status as unknown as string | undefined;
     if (!rawStatus || !VALID_ITEM_STATUSES.has(rawStatus)) {
       if (rawStatus) {
-        this.logger.warn(`[createItem] INVALID status coerced to in_progress: '${rawStatus}' (todoId=${todoId})`);
+        this.logger.warn(`[createItem] INVALID status coerced to in_progress: '${rawStatus}'`);
       }
       (body as Record<string, unknown>).status = 'in_progress';
     }
 
-    this.logger.log(
-      `[createItem] todoId=${todoId} title=${JSON.stringify(body.title)} status=${body.status ?? '-'} stage=${body.stage ?? '-'}`,
-    );
-    if (body.title !== undefined) {
-      this.logger.log(`[createItem] title diag: ${JSON.stringify(garbageDiag('title', body.title))}`);
-    }
-    if (body.description !== undefined) {
-      this.logger.log(`[createItem] description diag: ${JSON.stringify(garbageDiag('description', body.description))}`);
-    }
-
     const todo = await this.resolveTodo(req, Number(todoId));
-    const item = await this.todo.createItem({
-      ...body,
-      todoId: todo.id,
-      tenantId: todo.tenantId,
-    });
+    const item = await this.todo.createItem({ ...body, todoId: todo.id, tenantId: todo.tenantId });
     const { _id, ...rest } = item as typeof item & { _id?: unknown };
     void _id;
     this.logger.log(`[createItem] created itemId=${String(rest.id)} todoId=${todoId}`);
@@ -277,8 +335,8 @@ export class TodoTaskController {
   }
 
   /**
-   * @description 更新执行节点（通过节点ID，验证归属当前任务）
-   * @keyword-en update todo item via task token
+   * @description 更新执行节点
+   * @keyword-en update todo item
    */
   @Patch(':todoId/items/:itemId')
   async updateItem(
@@ -287,30 +345,15 @@ export class TodoTaskController {
     @Body() body: Omit<TodoItemUpdateInput, 'id'>,
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
-    // status 运行时校验
     if (body.status !== undefined) {
       const rawStatus = body.status as unknown as string;
       const normalized = normalizeStatus(rawStatus);
       if (normalized !== rawStatus) {
-        this.logger.log(`[updateItem] status alias: '${rawStatus}' → '${normalized}' (itemId=${itemId})`);
         (body as Record<string, unknown>).status = normalized;
       }
       if (!VALID_ITEM_STATUSES.has(normalized)) {
-        this.logger.warn(
-          `[updateItem] INVALID status rejected: '${rawStatus}' (itemId=${itemId})`,
-        );
         delete (body as Record<string, unknown>).status;
       }
-    }
-
-    this.logger.log(
-      `[updateItem] todoId=${todoId} itemId=${itemId} body.keys=${Object.keys(body).join(',')} status=${body.status ?? '-'}`,
-    );
-    if (body.doneNote !== undefined) {
-      this.logger.log(`[updateItem] doneNote diag: ${JSON.stringify(garbageDiag('doneNote', body.doneNote))}`);
-    }
-    if (body.title !== undefined) {
-      this.logger.log(`[updateItem] title diag: ${JSON.stringify(garbageDiag('title', body.title))}`);
     }
 
     const todo = await this.resolveTodo(req, Number(todoId));
@@ -318,24 +361,16 @@ export class TodoTaskController {
     if (!item || item.todoId !== todo.id) {
       throw new UnauthorizedException('ITEM_NOT_BELONG_TO_TASK');
     }
-    const updated = await this.todo.updateItem({
-      ...body,
-      id: Number(itemId),
-      tenantId: todo.tenantId,
-    });
-    if (!updated) {
-      this.logger.warn(`[updateItem] update returned null, itemId=${itemId}`);
-      return { ok: false };
-    }
+    const updated = await this.todo.updateItem({ ...body, id: Number(itemId), tenantId: todo.tenantId });
+    if (!updated) return { ok: false };
     const { _id, ...rest } = updated as typeof updated & { _id?: unknown };
     void _id;
-    this.logger.log(`[updateItem] ok itemId=${itemId} status=${String(rest.status)}`);
     return { ok: true, item: rest };
   }
 
   /**
-   * @description 删除执行节点（验证归属当前任务）
-   * @keyword-en delete todo item via task token
+   * @description 删除执行节点
+   * @keyword-en delete todo item
    */
   @Delete(':todoId/items/:itemId')
   async deleteItem(
@@ -352,45 +387,22 @@ export class TodoTaskController {
     return { ok };
   }
 
-  /**
-   * @description 从 todo 文本中提取 Canvas ID
-   * @keyword-en extract canvas id from todo text fields
-   */
-  private extractCanvasId(todo: { title?: string; description?: string; aiConsideration?: string; decisionReason?: string; aiPlan?: string }): number | undefined {
-    const text = [
-      todo.title,
-      todo.description,
-      todo.aiConsideration,
-      todo.decisionReason,
-      todo.aiPlan,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    const r1 = /\bcanvas(?:\s*id)?\s*[:：#]?\s*(\d+)\b/i.exec(text);
-    const r2 = /画布\s*[:：#]?\s*(\d+)\b/i.exec(text);
-    const raw = r1?.[1] ?? r2?.[1];
-    if (!raw) return undefined;
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) return undefined;
-    return Math.floor(n);
-  }
+  // ─── Canvas 资源操作 ─────────────────────────────────────────────────────
 
   /**
    * @description 将图片相对路径转换为完整路径
-   * @keyword-en resolve relative image url to absolute
+   * @keyword-en resolve relative image url
    */
   private resolveImageUrl(url?: string): string | undefined {
     if (!url) return undefined;
-    // 如果已经是完整路径（http/https/data:开头），直接返回
     if (/^(https?|data:)/i.test(url)) return url;
-    // 拼接完整路径
     const base = (process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011').replace(/\/$/, '');
     return `${base}/${url.replace(/^\//, '')}`;
   }
 
   /**
-   * @description 获取专项 Canvas 下的所有文章（图片地址转为完整路径）
-   * @keyword-en get canvas articles by task token
+   * @description 获取 Canvas 下的所有文章（需任务关联此 Canvas）
+   * @keyword-en get canvas articles
    */
   @Get(':todoId/canvas')
   async getCanvasArticles(
@@ -398,24 +410,39 @@ export class TodoTaskController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
-    const canvasId = this.extractCanvasId(todo);
-    if (!canvasId) {
-      return { canvas: null, articles: [], message: 'CANVAS_ID_NOT_FOUND_IN_TASK' };
+
+    // 从 associatedResources 中查找 canvas 类型的关联
+    const canvasResource = todo.associatedResources?.find((r) => r.type === 'canvas');
+    if (!canvasResource) {
+      return {
+        resource: { type: 'canvas', id: null, associated: false },
+        data: null,
+        message: 'CANVAS_NOT_ASSOCIATED',
+      };
     }
 
-    // 通过 ModuleRef 获取 CanvasService（懒加载避免循环依赖）
+    const canvasId = Number(canvasResource.resourceId);
+    if (!Number.isFinite(canvasId) || canvasId <= 0) {
+      return {
+        resource: { type: 'canvas', id: canvasResource.resourceId, associated: false },
+        data: null,
+        message: 'CANVAS_ID_INVALID',
+      };
+    }
+
     const { CanvasService } = await import('../../canvas/services/canvas.service.js');
     const canvasService = this.moduleRef.get(CanvasService, { strict: false });
-    if (!canvasService) {
-      throw new Error('CANVAS_SERVICE_UNAVAILABLE');
-    }
+    if (!canvasService) throw new Error('CANVAS_SERVICE_UNAVAILABLE');
 
     const canvas = await canvasService.get(canvasId, todo.tenantId);
     if (!canvas) {
-      return { canvas: null, articles: [], message: 'CANVAS_NOT_FOUND' };
+      return {
+        resource: { type: 'canvas', id: canvasId, associated: false },
+        data: null,
+        message: 'CANVAS_NOT_FOUND',
+      };
     }
 
-    // 转换图片地址为完整路径
     const articles: Array<Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }> = (
       canvas.articles ?? []
     ).map((article: CanvasArticleEntity) => ({
@@ -424,25 +451,19 @@ export class TodoTaskController {
     }));
 
     return {
-      canvas: {
-        id: canvas.id,
-        topic: canvas.topic,
-        status: canvas.status,
-        createdAt: canvas.createdAt,
-        updatedAt: canvas.updatedAt,
+      resource: { type: 'canvas', id: canvas.id, associated: true },
+      data: {
+        canvas: { id: canvas.id, topic: canvas.topic, status: canvas.status, createdAt: canvas.createdAt, updatedAt: canvas.updatedAt },
+        articles,
       },
-      articles,
     };
   }
 
-  // ─── XHS 帖子数据收集接口 ─────────────────────────────────────────────────────
+  // ─── XHS 帖子数据操作 ────────────────────────────────────────────────────
 
   /**
-   * @description 列出任务下所有帖子数据（按 dataAt 倒序）
-   * @keyword-en list xhs post stats by todo
-   *
-   * GET /task-api/:todoId/xhs-stats
-   * Authorization: Bearer <taskToken>
+   * @description 列出帖子数据
+   * @keyword-en list xhs post stats
    */
   @Get(':todoId/xhs-stats')
   async listXhsStats(
@@ -451,15 +472,15 @@ export class TodoTaskController {
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
     const stats = await this.xhsPostStat.listByTodo(todo.id);
-    return { stats };
+    return {
+      resource: { type: 'xhs_stats', id: null, associated: true, todoId: todo.id },
+      data: { stats },
+    };
   }
 
   /**
-   * @description 获取单条帖子数据（按 stat id）
+   * @description 获取单条帖子数据
    * @keyword-en get single xhs post stat
-   *
-   * GET /task-api/:todoId/xhs-stats/:statId
-   * Authorization: Bearer <taskToken>
    */
   @Get(':todoId/xhs-stats/:statId')
   async getXhsStat(
@@ -469,42 +490,45 @@ export class TodoTaskController {
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
     const stat = await this.xhsPostStat.get(Number(statId));
-    if (!stat || stat.todoId !== todo.id) {
+    if (!stat) {
+      return {
+        resource: { type: 'xhs_stats', id: Number(statId), associated: false },
+        data: null,
+        message: 'STAT_NOT_FOUND',
+      };
+    }
+    if (stat.todoId !== todo.id) {
       throw new UnauthorizedException('STAT_NOT_BELONG_TO_TASK');
     }
-    return { stat };
+    return {
+      resource: { type: 'xhs_stats', id: stat.id, associated: true },
+      data: { stat },
+    };
   }
 
   /**
-   * @description 新增一条帖子数据
+   * @description 新增帖子数据
    * @keyword-en create xhs post stat
-   *
-   * POST /task-api/:todoId/xhs-stats
-   * Authorization: Bearer <taskToken>
-   * Body: { tag?, postTitle, postUrl?, authorUrl?, likeCount?, commentCount?, collectCount?, topComments?, dataAt? }
    */
   @Post(':todoId/xhs-stats')
   async createXhsStat(
     @Param('todoId') todoId: string,
-    @Body()
-    body: Omit<XhsPostStatCreateInput, 'todoId'>,
+    @Body() body: Omit<XhsPostStatCreateInput, 'todoId'>,
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
     const stat = await this.xhsPostStat.create({ ...body, todoId: todo.id });
     const { _id, ...rest } = stat as typeof stat & { _id?: unknown };
     void _id;
-    this.logger.log(`[createXhsStat] statId=${String(rest.id)} todoId=${todoId}`);
-    return { stat: rest };
+    return {
+      resource: { type: 'xhs_stats', id: rest.id, associated: true },
+      data: { stat: rest },
+    };
   }
 
   /**
-   * @description 批量新增/更新帖子数据（同 todoId + postHash 重复则覆盖）
+   * @description 批量 upsert 帖子数据
    * @keyword-en bulk upsert xhs post stats
-   *
-   * POST /task-api/:todoId/xhs-stats/bulk
-   * Authorization: Bearer <taskToken>
-   * Body: { items: Array<{ tag?, postTitle, postUrl?, authorUrl?, likeCount?, commentCount?, collectCount?, topComments?, dataAt? }> }
    */
   @Post(':todoId/xhs-stats/bulk')
   async bulkUpsertXhsStats(
@@ -524,9 +548,7 @@ export class TodoTaskController {
     }
 
     const items = body.items;
-    const badIndex = items.findIndex(
-      (x) => !x || typeof x.postTitle !== 'string' || x.postTitle.trim().length === 0,
-    );
+    const badIndex = items.findIndex((x) => !x || typeof x.postTitle !== 'string' || x.postTitle.trim().length === 0);
     if (badIndex >= 0) {
       throw new BadRequestException({
         code: 'INVALID_XHS_STATS_ITEM',
@@ -535,19 +557,15 @@ export class TodoTaskController {
     }
 
     const result = await this.xhsPostStat.bulkUpsert(todo.id, items);
-    this.logger.log(
-      `[bulkUpsertXhsStats] todoId=${todoId} upserted=${result.upserted}`,
-    );
-    return { ok: true, ...result };
+    return {
+      resource: { type: 'xhs_stats', id: null, associated: true, todoId: todo.id },
+      data: { ok: true, upserted: result.upserted },
+    };
   }
 
   /**
-   * @description 更新帖子数据（按 stat id）
+   * @description 更新帖子数据
    * @keyword-en update xhs post stat
-   *
-   * PATCH /task-api/:todoId/xhs-stats/:statId
-   * Authorization: Bearer <taskToken>
-   * Body: 任意可更新字段（同创建字段，均可选）
    */
   @Patch(':todoId/xhs-stats/:statId')
   async updateXhsStat(
@@ -558,22 +576,29 @@ export class TodoTaskController {
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
     const existing = await this.xhsPostStat.get(Number(statId));
-    if (!existing || existing.todoId !== todo.id) {
+    if (!existing) {
+      return {
+        resource: { type: 'xhs_stats', id: Number(statId), associated: false },
+        data: null,
+        message: 'STAT_NOT_FOUND',
+      };
+    }
+    if (existing.todoId !== todo.id) {
       throw new UnauthorizedException('STAT_NOT_BELONG_TO_TASK');
     }
     const updated = await this.xhsPostStat.update({ ...body, id: Number(statId) });
     if (!updated) return { ok: false };
     const { _id, ...rest } = updated as typeof updated & { _id?: unknown };
     void _id;
-    return { ok: true, stat: rest };
+    return {
+      resource: { type: 'xhs_stats', id: rest.id, associated: true },
+      data: { ok: true, stat: rest },
+    };
   }
 
   /**
-   * @description 删除帖子数据（按 stat id）
+   * @description 删除帖子数据
    * @keyword-en delete xhs post stat
-   *
-   * DELETE /task-api/:todoId/xhs-stats/:statId
-   * Authorization: Bearer <taskToken>
    */
   @Delete(':todoId/xhs-stats/:statId')
   async deleteXhsStat(
@@ -583,10 +608,20 @@ export class TodoTaskController {
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
     const existing = await this.xhsPostStat.get(Number(statId));
-    if (!existing || existing.todoId !== todo.id) {
+    if (!existing) {
+      return {
+        resource: { type: 'xhs_stats', id: Number(statId), associated: false },
+        data: null,
+        message: 'STAT_NOT_FOUND',
+      };
+    }
+    if (existing.todoId !== todo.id) {
       throw new UnauthorizedException('STAT_NOT_BELONG_TO_TASK');
     }
     const ok = await this.xhsPostStat.delete(Number(statId));
-    return { ok };
+    return {
+      resource: { type: 'xhs_stats', id: Number(statId), associated: true },
+      data: { ok },
+    };
   }
 }

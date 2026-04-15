@@ -9,7 +9,7 @@ import { BaseMessage } from 'langchain';
 export interface ChatRequest {
   sessionId: string;
   input: string;
-  sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist';
+  sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-nurturer' | 'xhs-publisher';
   provider?: string;
   model?: string;
   temperature?: number;

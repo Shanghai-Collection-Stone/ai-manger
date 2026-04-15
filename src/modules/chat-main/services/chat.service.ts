@@ -1,4 +1,4 @@
-﻿import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ContextService } from '../../context/services/context.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { ChatRequest, ChatResponse } from '../types/chat.types';
@@ -11,7 +11,10 @@ import {
 import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
 import type { DeepAgentSubAgent } from '../../ai-agent/types/agent.types.js';
 import { ContextRole } from '../../context/enums/context.enums';
-import { ToolsService } from '../../function-call/tools/services/tools.service.js';
+import {
+  ToolsService,
+  FunctionCallScope,
+} from '../../function-call/tools/services/tools.service.js';
 import { TitleFunctionCallService } from '../../function-call/title/services/title.service.js';
 import { AnalysisFunctionCallService } from '../../function-call/analysis/services/analysis.service.js';
 import { RetrievalService } from '../../ai-context/services/retrieval.service.js';
@@ -80,7 +83,9 @@ export class ChatMainService {
 
     const now = request.now ?? new Date().toISOString();
     const ip = request.ip ?? '';
-    const platformSupplement = await this.buildPlatformSupplement(scope.tenantId);
+    const platformSupplement = await this.buildPlatformSupplement(
+      scope.tenantId,
+    );
     const sysContent = [
       `SESSION_ID:${sid}`,
       `REQUEST_TIME_ISO:${now}`,
@@ -91,10 +96,14 @@ export class ChatMainService {
 
     // checkpoint 会根据 thread_id 自动获取上下文，只需传入最新消息
     const messages: BaseMessage[] = [new HumanMessage(request.input)];
+    const finalScope = {
+      ...scope,
+      category: scope?.sessionType?.startsWith('xhs') ? 'xhs' : undefined,
+    };
     const tools = this.getToolsForInput(
       request.input,
       undefined,
-      scope,
+      finalScope,
       scope.sessionType,
     );
     const subagents = this.buildDefaultSubagents(
@@ -113,6 +122,8 @@ export class ChatMainService {
       scope.sessionType,
       request.input,
     );
+    // 调试日志：打印主 agent 和各 subagent 的工具列表
+    this.logToolsForLLM('sync', scope.sessionType, mainAgentTools, subagents);
     const checkpoint_id =
       (await this.ctx.getConversation(sid, scope))?.lastCheckpointId ?? 'root';
     let ai: AIMessage;
@@ -302,7 +313,9 @@ export class ChatMainService {
 
           const nowStr = request.now ?? new Date().toISOString();
           const ipStr = request.ip || 'unknown';
-          const platformSupplement = await this.buildPlatformSupplement(scope.tenantId);
+          const platformSupplement = await this.buildPlatformSupplement(
+            scope.tenantId,
+          );
           const sysContent = [
             `SESSION_ID:${sid}`,
             `REQUEST_TIME_ISO:${nowStr}`,
@@ -319,19 +332,26 @@ export class ChatMainService {
           };
 
           if (updatesOnlyStream) {
-            streamWriter('[StreamMode] updates-only enabled for tool-heavy workflow');
+            streamWriter(
+              '[StreamMode] updates-only enabled for tool-heavy workflow',
+            );
           }
+
+          const finalScope = {
+            ...scope,
+            category: scope?.sessionType?.startsWith('xhs') ? 'xhs' : undefined,
+          };
 
           const tools = this.getToolsForInput(
             request.input,
             streamWriter,
-            scope,
+            finalScope,
             scope.sessionType,
           );
           const subagents = this.buildDefaultSubagents(
             tools,
             scope.sessionType,
-            scope,
+            finalScope,
             { sid, now: nowStr, ip: ipStr },
           );
           // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
@@ -339,6 +359,13 @@ export class ChatMainService {
             tools,
             scope.sessionType,
             request.input,
+          );
+          // 调试日志：打印主 agent 和各 subagent 的工具列表
+          this.logToolsForLLM(
+            'stream',
+            scope.sessionType,
+            mainAgentTools,
+            subagents,
           );
           const checkpoint_id = meta?.lastCheckpointId ?? 'root';
 
@@ -901,7 +928,8 @@ export class ChatMainService {
       '当看板指标需要复杂过滤/聚合/格式重组时，可在 config.queries.<key>.transformJs 中定义前端 JS 数据处理逻辑。',
       '不要回显工具原始 JSON 长文本，只做简洁结论。',
       '小红书流程：先生成示例内容 Canvas；用户明确”发布/执行”后再进入发布任务阶段。',
-      '批量发布通过 Todo 派单：创建/更新 Todo，并使用中文接单人名称”小红书发布机”（避免暴露内部代码）；type 只能为 auto_execute/offline_execute/other（发布场景必须 auto_execute），并写清关联资源（如 canvasId）与 count。',
+      '批量发布通过 Todo 派单：创建/更新 Todo，并使用中文接单人名称”小红书发布机”（避免暴露内部代码）；type 只能为 auto_execute/offline_execute/long_task/other（发布场景必须 auto_execute），并写清关联资源（如 canvasId）与 count。',
+      '【long_task 长时任务】需要跨天/跨周持续执行的任务使用 long_task 类型，可携带 deadline（ISO日期字符串，非必填）。long_task 会自动注入 Cron 追踪规则：每次执行前须调用 todo_get 检查任务状态，若状态为 done/failed/cancelled 或当前时间超过 deadline，须立即删除 Cron job。',
       '调用 todo_create/todo_update 时不要手填 userId，统一由会话上下文注入。',
       '创建发布任务时，description 必须写入当前会话上下文摘要（用户目标、对象、资源、执行要求），不要留空。',
       '生成拼图/封面属于独立图库操作；除非用户明确要求生成文章/内容，否则禁止同时触发 Canvas 创建。',
@@ -972,10 +1000,19 @@ export class ChatMainService {
    * @description 获取会话模式系统提示
    * @keyword-en resolve system prompt by session mode
    */
-  private async getSystemPromptCN(sessionType: ConversationSessionType, tenantId?: string): Promise<string> {
+  private async getSystemPromptCN(
+    sessionType: ConversationSessionType,
+    tenantId?: string,
+  ): Promise<string> {
+    console.log('当前会话模式:', sessionType);
     if (sessionType === 'thought') return this.getThoughtPromptCN();
     if (sessionType === 'gallery-agent') return this.getGalleryAgentPromptCN();
-    if (sessionType === 'xhs-specialist') return this.getXhsSpecialistPromptCN();
+    if (sessionType === 'xhs-specialist') {
+      return this.getXhsSpecialistPromptCN();
+    }
+    if (sessionType === 'xhs-tracker') return this.getXhsTrackerPromptCN();
+    if (sessionType === 'xhs-nurturer') return this.getXhsNurturerPromptCN();
+    if (sessionType === 'xhs-publisher') return this.getXhsPublisherPromptCN();
     return this.getDataAnalysisPromptCN(tenantId);
   }
 
@@ -1005,7 +1042,7 @@ export class ChatMainService {
       '若信息不足先提问澄清，不得编造字段。',
       '【关键】当需要生成思维链时，必须：1. 先完成完整的数据分析 2. 存入经验时 content 必须包含：数据源、涉及的表/集合、核心字段（字段名+含义+业务用途）、典型查询条件、业务场景、查询示例、结果解读 3. 禁止只写入抽象性描述，必须写入具体分析过程和结论 4. category 使用具体业务场景标签',
     ].join('\n');
-  } 
+  }
 
   /**
    * @description 图库Agent专用提示词
@@ -1042,22 +1079,124 @@ export class ChatMainService {
   private getXhsSpecialistPromptCN(): string {
     return [
       '你是"小红书内容创作专家"，专注于帮助用户生成和管理小红书内容。',
-      '你可以使用Canvas和图库工具来：',
-      '1. 查看Canvas列表 - 使用 xhs_list_canvases 了解用户的内容集合',
-      '2. 获取Canvas详情 - 使用 xhs_get_canvas_detail 查看具体文章内容和图片组',
-      '3. 创建图片组Canvas - 使用 xhs_create_image_group_canvas 根据文章主题快速生成配图集合并触发匹配生图',
+      '你统筹四个子代理，按用户意图路由：',
+      '- gallery_subagent：图组Canvas生成、图库搜图、文章配图',
+      '- xhs_data_tracking_subagent：账号数据分析、爆文规律、互动趋势追踪',
+      '- xhs_account_nurturing_subagent：养号策略、账号定位、内容日历规划',
+      '- xhs_publish_subagent：发布任务派单、批量发布执行',
+      '',
+      '【主代理直接处理】（无需委派子代理）：',
+      '- 查看Canvas列表：使用 xhs_list_canvases',
+      '- 获取Canvas详情：使用 xhs_get_canvas_detail',
+      '',
+      '【子代理路由规则】：',
+      '- 用户要"生图/配图/图组/Canvas生成" → 委派 gallery_subagent',
+      '- 用户要"数据/分析/爆文/粉丝/互动情况" → 委派 xhs_data_tracking_subagent',
+      '- 用户要"养号/运营策略/内容规划/账号定位" → 委派 xhs_account_nurturing_subagent',
+      '- 用户要"发布/派单/批量发文" → 委派 xhs_publish_subagent',
+      '',
+      '【图片组Canvas创建规则（gallery_subagent 执行）】',
       '   - 参数规则：groupCount 与 articles 数量保持一致；篇数按用户/LLM要求，不做 6-8 强制限制',
       `   - 质量目标：每篇文章配图数量应在 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前模板默认 6 张）`,
-      '   - 图片组Canvas会异步从图库中匹配图片，立即返回"生成中"状态',
-      '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
-      '   - 严格禁止多次调用 xhs_create_image_group_canvas（这是高频错误！）**核心原则**："生成 N 组图片"=1个Canvas含N个imageGroup=articles数组传N个元素，**不是**创建N个Canvas',
-      '4. 结合图库图片 - 为文章配图',
-      '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi），再用于内容链路。',
-      '【canvas-it 展示规则】每次创建 Canvas 后，工具返回 canvas-it 代码块，必须原样输出给用户：',
-      '```canvas-it',
-      '{"canvasId": <id>, "status": "generating", "type": "image-group", "topic": "<topic>", "articleCount": <n>}',
-      '```',
+      '   - 严格禁止多次调用 xhs_create_image_group_canvas',
+      '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户',
+      '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi）。',
       '请根据用户需求，帮助他们创建高质量的小红书内容。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 获取工具集合
+   * @keyword-en get tools
+   */
+  /**
+   * @description 数据追踪会话专用主提示词（xhs-tracker 直接对话模式）
+   * @keyword-en xhs tracker session system prompt
+   */
+  private getXhsTrackerPromptCN(): string {
+    console.log('小红书数据追踪专家提示词被调用');
+    return [
+      '你是"小红书数据追踪专家"，专注于小红书账号与内容的数据分析及定期采集任务创建。',
+      '',
+      '【职责范围】',
+      '- 分析账号粉丝增长趋势、笔记互动数据（点赞/收藏/评论/阅读）',
+      '- 识别爆文规律：标题特征、发布时间、话题标签、内容类型',
+      '- 竞品账号对比分析与内容选题建议',
+      '- 结合历史数据判断最佳发文时间、频次策略',
+      '- 根据任务耗时程度来决定创建长时还是短时任务',
+      '',
+      '【数据收集任务创建规则】',
+      '当用户要求任何数据追踪时，使用 todo_create 创建任务：',
+      '- type: long_task',
+      '- assignee: agent:69cb7d8c3b3d8011b589736e',
+      '- 关联资源一定要有: 任务专项接口-XHS帖子数据收集.md, 小红书网站操作说明.md',
+      '- [!重要!] 进行小红书数据采集任务的时候,一定要按照 小红书网站操作说明.md 的说明来完成操作',
+      '- aiPlan 必须包含以下几个部分：',
+      '  1. 【采集目标】说明要采集哪些帖子/账号/关键词',
+      '  2. 【采集字段】postTitle、postUrl、authorUrl、likeCount、commentCount、collectCount、top5评论',
+      '  3. 【数据回写规则】采集完成后，必须通过任务专项接口回写数据：',
+      '     - 接口地址：POST /task-api/{todoId}/xhs-stats/bulk',
+      '     - 鉴权方式：Authorization: Bearer {taskToken}（从 todo.taskToken 获取）',
+      '     - 请求体：{ "items": [ { postTitle, postUrl, authorUrl, likeCount, commentCount, collectCount, topComments, tag, dataAt } ] }',
+      '     - topComments 格式：[ { content, likeCount, replyCount } ]（最多5条）',
+      '  4. 要说明数据采集完成后 可以使用关联资源 任务专项接口-XHS帖子数据收集.md 的markdown说明来进行回传数据',
+      '',
+      '- 创建完任务后可以立即返回,不需要等待任务完成；任务执行结果通过用户查询任务状态或主动推送的方式反馈给用户。',
+      '【执行约束】',
+      '1. 量化输出：给出具体数字、趋势方向、行动建议，不给模糊判断。',
+      '2. 所有数据分析必须说明数据来源和字段含义，确保可解释。',
+      '3. 禁止生成文章正文或调用图库工具。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 养号策略会话专用主提示词（xhs-nurturer 直接对话模式）
+   * @keyword-en xhs nurturer session system prompt
+   */
+  private getXhsNurturerPromptCN(): string {
+    return [
+      '你是"小红书养号策略专家"，专注于账号成长与运营策略设计。',
+      '',
+      '【职责范围】',
+      '- 账号定位：人设设计、目标受众分析、差异化竞争策略',
+      '- 养号计划：内容发布日历（频次/时间/选题周期）',
+      '- 互动运营：评论回复策略、话题参与、同类博主互动建议',
+      '- 涨粉路径：冷启动策略、关键节点优化（第100/1000/10000粉）',
+      '- 内容垂直度：账号标签稳定性与内容一致性规划',
+      '',
+      '【策略任务创建规则】',
+      '当用户要求"建立/追踪/执行养号策略"时，使用 todo_create 创建任务：',
+      '- type: long_task',
+      '- assignee: robot:xhs_nurturer',
+      '- aiPlan 必须结构化包含：短期（1-2周）/中期（1个月）/长期（3个月）行动计划',
+      '',
+      '【执行约束】',
+      '1. 输出应结构化：分阶段计划（短期/中期/长期）+ 每阶段核心动作。',
+      '2. 策略建议必须可落地执行，不给模糊描述。',
+      '3. 禁止直接生成文章正文或执行发布任务。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 发文执行会话专用主提示词（xhs-publisher 直接对话模式）
+   * @keyword-en xhs publisher session system prompt
+   */
+  private getXhsPublisherPromptCN(): string {
+    return [
+      '你是"小红书发文执行专家"，专注于将内容推入发布流程。',
+      '',
+      '【职责范围】',
+      '- 接收已确认发布的文章/Canvas，创建发布 Todo 派单',
+      '- 调用 todo_create 设置 type=auto_execute，接单人为"小红书发布机（robot:xhs_publisher）"',
+      '- 记录关联资源（canvasId/文章标题），填写 aiPlan 说明发布目标',
+      '- 反馈发布状态：已派单/排队中/执行中/完成',
+      '',
+      '【执行约束】',
+      '1. 发布前确认用户已完成内容审核，禁止在内容草稿阶段触发发布。',
+      '2. 如内容未生成，请提示用户先完成内容创作，本代理只处理"确认发布"阶段。',
+      '3. todo_create 中 userId 由会话上下文注入，禁止手填。',
+      '4. description 必须包含：内容主题、关联 canvasId、篇数、发布时间要求。',
+      '5. 创建成功后输出 task-it 代码块供前端渲染任务看板。',
     ].join('\n');
   }
 
@@ -1067,7 +1206,7 @@ export class ChatMainService {
    */
   private getTools(
     streamWriter?: (msg: string) => void,
-    scope?: { tenantId?: string; userId?: string },
+    scope?: FunctionCallScope,
     mode: ConversationSessionType = 'default',
   ): CreateAgentParams['tools'] {
     return this.tools.getHandle(streamWriter, scope, { mode });
@@ -1116,21 +1255,31 @@ export class ChatMainService {
    * @description 读取请求租户范围
    * @keyword-en resolve request scope
    */
-  private getRequestScope(request: ChatRequest): {
-    tenantId?: string;
-    userId?: string;
+  private getRequestScope(request: ChatRequest): FunctionCallScope & {
     sessionType: ConversationSessionType;
   } {
     const tenantId = request.tenantId?.trim();
     const userId = request.userId?.trim();
-    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist'];
-    const sessionType = validTypes.includes(request.sessionType as ConversationSessionType)
+    const validTypes: ConversationSessionType[] = [
+      'default',
+      'thought',
+      'gallery-agent',
+      'xhs-specialist',
+      'xhs-tracker',
+      'xhs-nurturer',
+      'xhs-publisher',
+    ];
+    const sessionType = validTypes.includes(
+      request.sessionType as ConversationSessionType,
+    )
       ? (request.sessionType as ConversationSessionType)
       : 'default';
+    const category = sessionType.startsWith('xhs') ? 'xhs' : undefined;
     return {
       tenantId: tenantId || undefined,
       userId: userId || undefined,
       sessionType,
+      category,
     };
   }
 
@@ -1144,7 +1293,7 @@ export class ChatMainService {
   private getToolsForInput(
     input: string,
     streamWriter?: (msg: string) => void,
-    scope?: { tenantId?: string; userId?: string },
+    scope?: FunctionCallScope,
     mode: ConversationSessionType = 'default',
   ): CreateAgentParams['tools'] {
     const tools = this.getTools(streamWriter, scope, mode) ?? [];
@@ -1190,11 +1339,30 @@ export class ChatMainService {
     const pickPrefix = (...prefixes: string[]): StructuredTool[] =>
       allTools.filter((t) => prefixes.some((p) => t.name.startsWith(p)));
 
+    // 搜索类 MCP 工具（如 ddg-search）— 先排除前缀再保留 duck 匹配
+    const searchTools = allTools.filter((t) => {
+      const n = t.name;
+      if (!n) return false;
+      if (
+        n.startsWith('gallery_') ||
+        n.startsWith('xhs_') ||
+        n.startsWith('todo_') ||
+        n.startsWith('dashboard_') ||
+        n.startsWith('frontend_')
+      ) {
+        return false;
+      }
+      return /duck|ddg|duckduckgo|web_search/i.test(n);
+    });
+
     return {
       // 数据查询分析 — 独立来源（含 schema/data_source/js_calc/thought 等）
-      analysis: this.normalizeSubagentTools(
-        this.analysisTools.getAllDataSourceTools(scope),
-      ),
+      analysis: [
+        ...this.normalizeSubagentTools(
+          this.analysisTools.getAllDataSourceTools(scope),
+        ),
+        ...searchTools,
+      ],
       // 文章正文生成（可先做数据收集）
       topicOrchestrate: Array.from(
         new Map(
@@ -1207,20 +1375,7 @@ export class ChatMainService {
               'mcp_list_mcp_tools',
               'mcp_list_mcp_resources',
             ),
-            ...allTools.filter((t) => {
-              const n = t.name;
-              if (!n) return false;
-              if (
-                n.startsWith('gallery_') ||
-                n.startsWith('xhs_') ||
-                n.startsWith('todo_') ||
-                n.startsWith('dashboard_') ||
-                n.startsWith('frontend_')
-              ) {
-                return false;
-              }
-              return /duck|ddg|duckduckgo|web_search/i.test(n);
-            }),
+            ...searchTools,
           ].map((t) => [t.name, t] as const),
         ).values(),
       ),
@@ -1228,17 +1383,25 @@ export class ChatMainService {
       frontend: [
         ...pick('frontend_plan', 'frontend_finalize', 'title_generate'),
         ...pick(
-          'mcp_list_resources', 'mcp_read_resource', 'mcp_ingest_file',
-          'mcp_list_mcp_tools', 'mcp_list_mcp_resources',
+          'mcp_list_resources',
+          'mcp_read_resource',
+          'mcp_ingest_file',
+          'mcp_list_mcp_tools',
+          'mcp_list_mcp_resources',
         ),
-        ...pick('tenant_tables', 'tenant_query', 'dashboard_mongo_search', 'dashboard_config_view'),
+        ...pick(
+          'tenant_tables',
+          'tenant_query',
+          'dashboard_mongo_search',
+          'dashboard_config_view',
+        ),
       ],
       // 执行编排 — Todo 管理 + 机器人 + MCP 适配器执行工具 + 看板写入
       ops: [
         ...pickPrefix('todo_'),
         ...pick('robot_list'),
         ...pick('dashboard_config_patch'),
-        // 剩余 MCP 适配器工具（非分析/前端/图库类），如自动化指令等
+        // 剩余 MCP 适配器工具（非分析/前端/图库/搜索类），如自动化指令等
         ...allTools.filter((t) => {
           const n = t.name;
           return (
@@ -1249,17 +1412,28 @@ export class ChatMainService {
             !n.startsWith('tenant_') &&
             !n.startsWith('dashboard_') &&
             !n.startsWith('xhs_') &&
+            !/duck|ddg|duckduckgo|web_search/i.test(n) &&
             ![
-              'robot_list', 'title_generate', 'topic_orchestrate',
-              'js_calc', 'js_calc_batch', 'decision_card_generate',
+              'robot_list',
+              'title_generate',
+              'topic_orchestrate',
+              'js_calc',
+              'js_calc_batch',
+              'decision_card_generate',
             ].includes(n)
           );
         }),
       ],
       // 图库 + XHS Canvas — 完全独立来源
       gallery: [
-        ...this.normalizeSubagentTools(this.mediaAgent.getGalleryToolsHandle(scope)),
-        ...this.normalizeSubagentTools(this.mediaAgent.getXhsToolsHandle(scope)),
+        ...this.normalizeSubagentTools(
+          this.mediaAgent.getGalleryToolsHandle(scope),
+        ),
+        ...this.normalizeSubagentTools(
+          this.mediaAgent.getXhsToolsHandle(scope),
+        ),
+        // 搜索工具仅用于图组素材搜集
+        ...searchTools,
       ],
     };
   }
@@ -1273,16 +1447,23 @@ export class ChatMainService {
     mode: ConversationSessionType,
     input?: string,
   ): CreateAgentParams['tools'] {
-    if (mode === 'thought' || mode === 'gallery-agent' || mode === 'xhs-specialist') {
+    if (
+      mode === 'thought' ||
+      mode === 'gallery-agent' ||
+      mode === 'xhs-specialist' ||
+      mode === 'xhs-tracker' ||
+      mode === 'xhs-nurturer' ||
+      mode === 'xhs-publisher'
+    ) {
       return tools;
     }
     const isTopicIntent =
       typeof input === 'string' && this.isTopicOrchestrateIntent(input);
     // default 模式：主agent不直接持有这些工具，全部交给对应subagent
     const subagentOnly = new Set([
-      'topic_orchestrate',             // → topic_orchestrate_subagent
-      'xhs_list_canvases',             // → gallery_subagent
-      'xhs_get_canvas_detail',         // → gallery_subagent
+      'topic_orchestrate', // → topic_orchestrate_subagent
+      'xhs_list_canvases', // → gallery_subagent
+      'xhs_get_canvas_detail', // → gallery_subagent
       'xhs_create_image_group_canvas', // → gallery_subagent
     ]);
     const topicDataCollectionOnly = new Set([
@@ -1305,6 +1486,34 @@ export class ChatMainService {
   }
 
   /**
+   * @description 调试用：打印主 agent 和各 subagent 的工具名称列表
+   * @keyword-en debug log LLM tools
+   */
+  private logToolsForLLM(
+    path: 'sync' | 'stream',
+    mode: ConversationSessionType,
+    mainAgentTools: CreateAgentParams['tools'],
+    subagents: DeepAgentSubAgent[],
+  ): void {
+    const main = (mainAgentTools ?? [])
+      .map((t) => (t as { name?: string }).name)
+      .filter(Boolean);
+    console.log(
+      `[tools:llm:${path}] mode=${mode} mainAgent tools (${main.length}):`,
+      main,
+    );
+    for (const sa of subagents ?? []) {
+      const names = (sa.tools ?? [])
+        .map((t) => (t as { name?: string }).name)
+        .filter(Boolean);
+      console.log(
+        `[tools:llm:${path}] subagent="${sa.name}" tools (${names.length}):`,
+        names,
+      );
+    }
+  }
+
+  /**
    * @description 构建默认子代理配置
    * @keyword-en build default subagents
    */
@@ -1323,8 +1532,8 @@ export class ChatMainService {
           `CLIENT_IP:${env.ip}`,
           scope?.userId ? `CURRENT_USER_ID:${scope.userId}` : '',
         ]
-        .filter(Boolean)
-        .join('\n')
+          .filter(Boolean)
+          .join('\n')
       : '';
 
     if (mode === 'thought') {
@@ -1340,8 +1549,48 @@ export class ChatMainService {
       ];
     }
 
-    if (mode === 'xhs-specialist') {
-      return [this.buildGallerySubagent(envStr, toolSets.gallery)];
+    if (
+      mode === 'xhs-specialist' ||
+      mode === 'xhs-tracker' ||
+      mode === 'xhs-nurturer' ||
+      mode === 'xhs-publisher'
+    ) {
+      // Todo 操作工具（数据追踪/养号子代理需要创建长时任务） todo tools for tracking/nurturing agents
+      const todoOpsTools = allTools.filter((t) =>
+        ['todo_create', 'todo_get', 'todo_update', 'todo_list'].includes(
+          t.name,
+        ),
+      );
+      return [
+        this.buildGallerySubagent(envStr, toolSets.gallery),
+        {
+          name: 'xhs_data_tracking_subagent',
+          description:
+            '【数据追踪·账号分析·爆文洞察】分析账号互动、阅读量、粉丝增长、爆文规律、竞品对比 → 委派此代理。',
+          systemPrompt: [envStr, this.getXhsTrackerPromptCN()]
+            .filter(Boolean)
+            .join('\n'),
+          tools: todoOpsTools,
+        },
+        {
+          name: 'xhs_account_nurturing_subagent',
+          description:
+            '【养号策略·账号定位·内容规划·互动运营】制定养号策略、账号人设定位、内容日历规划 → 委派此代理。',
+          systemPrompt: [envStr, this.getXhsNurturerPromptCN()]
+            .filter(Boolean)
+            .join('\n'),
+          tools: todoOpsTools,
+        },
+        {
+          name: 'xhs_publish_subagent',
+          description:
+            '【发文执行·批量发布·发布任务派单】触发文章发布、创建发布 Todo、派单执行批量发布 → 委派此代理。',
+          systemPrompt: [envStr, this.getXhsPublisherPromptCN()]
+            .filter(Boolean)
+            .join('\n'),
+          tools: toolSets.ops,
+        },
+      ];
     }
 
     const analysisSys = [
@@ -1425,7 +1674,7 @@ export class ChatMainService {
       },
       {
         name: 'topic_orchestrate_subagent',
-        description:[
+        description: [
           '【仅限文章正文生成】用户要生成小红书/平台文章 委派此代理。禁止直接输出文章正文，必须调用 topic_orchestrate 工具写入 Canvas, Canvas 是异步加载的 不需要等待返回!',
           '该代理可先做数据收集：优先通过 task 委派 analysis_subagent，或直接用 data_analysis / duckduckgo 相关 MCP 搜索工具整理素材，再调用 topic_orchestrate。',
         ].join('\n'),
