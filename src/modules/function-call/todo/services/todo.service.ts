@@ -40,21 +40,14 @@ export class TodoFunctionCallService {
         aiPlan,
         deadline,
       }) => {
-        const autoXhsPublish = this.shouldAutoAssignXhsRobot({
-          title,
-          description,
-          type,
-          aiPlan,
-          decisionReason,
-        });
         const finalUserId = this.resolveUserId(userId, scope, 'todo_create');
         const finalAssigneeRaw =
           typeof assignee === 'string' ? assignee.trim() : '';
-        const finalAssignee =
-          finalAssigneeRaw ||
-          (autoXhsPublish ? 'robot:xhs_publisher' : undefined);
-        const normalizedType = this.normalizeToolTodoTypeInput(type);
-        const finalType = autoXhsPublish ? 'auto_execute' : normalizedType;
+        const finalAssignee = finalAssigneeRaw || undefined;
+        let finalType = this.normalizeToolTodoTypeInput(type);
+        if (!finalType) {
+          finalType = 'other';
+        }
         const finalDescription = this.buildTodoDescription({
           title,
           description,
@@ -568,25 +561,6 @@ export class TodoFunctionCallService {
 
     if (lines.length === 0) return '由对话上下文自动创建的发布任务';
     return lines.join('\n');
-  }
-
-  private shouldAutoAssignXhsRobot(input: {
-    title?: string;
-    description?: string;
-    type?: string;
-    aiPlan?: string;
-    decisionReason?: string;
-  }): boolean {
-    const text = [
-      input.title,
-      input.description,
-      input.type,
-      input.aiPlan,
-      input.decisionReason,
-    ]
-      .filter(Boolean)
-      .join('\n');
-    return /小红书|xhs|发文|发布|batch publish/i.test(text);
   }
 
   /**
