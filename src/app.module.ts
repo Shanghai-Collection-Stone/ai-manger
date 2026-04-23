@@ -23,6 +23,7 @@ import { DecisionCardModule } from './modules/decision-card/decision-card.module
 import { MongoQueryModule } from './modules/mongo-query/mongo-query.module.js';
 import { DashboardConfigModule } from './modules/dashboard-config/dashboard-config.module.js';
 import { ImageAntiDetectionModule } from './modules/image-anti-detection/image-anti-detection.module.js';
+import { ArticleLibraryModule } from './modules/article-library/article-library.module.js';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { ImageAntiDetectionModule } from './modules/image-anti-detection/image-a
     MongoQueryModule,
     DashboardConfigModule,
     ImageAntiDetectionModule,
+    ArticleLibraryModule,
   ],
   controllers: [AppController],
   providers: [AppService],

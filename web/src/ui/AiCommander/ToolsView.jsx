@@ -1,12 +1,13 @@
 ﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import XhsSpecialistView from './XhsSpecialistView';
 import CanvasFeedView from './CanvasFeedView';
 import ImageGroupCanvasView from './ImageGroupCanvasView';
 import ChatBIView from './ChatBIView';
+import ArticleLibraryView from './ArticleLibraryView';
 import { showToast } from './blocks/shared';
 
 /**
@@ -2245,7 +2246,7 @@ const GalleryView = ({ onBack }) => {
  * @param {{ onThoughtRouteChange?: Function }} props
  */
 const ToolsView = ({ onThoughtRouteChange }) => {
-  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist'
+  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'article-library'
 
   // ── Canvas 管理状态 ──────────────────────────────────────────
   const [canvases, setCanvases] = useState([]);
@@ -2333,6 +2334,9 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   }
   if (view === 'xhs-specialist') {
     return <XhsSpecialistView onBack={() => setView('list')} />;
+  }
+  if (view === 'article-library') {
+    return <ArticleLibraryView onBack={() => setView('list')} />;
   }
   if (view === 'canvas') {
     // ── 打开某个 Canvas 的内部覆盖层 ──
@@ -2555,6 +2559,25 @@ const ToolsView = ({ onThoughtRouteChange }) => {
           <span className="text-xs text-slate-400 mt-1.5 z-10">专项内容助手</span>
 
           <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-rose-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+
+        {/* Article Library Card */}
+        <div
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-amber-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => setView('article-library')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mb-4 text-white shadow-amber-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <Library size={30} />
+          </div>
+
+          <span className="font-bold text-slate-800 text-lg z-10">文章库</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">文章归档与队列推送</span>
+
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-amber-500">
              <ChevronLeft size={18} className="rotate-180" />
           </div>
         </div>

@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus } from 'lucide-react';
+import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus, Library } from 'lucide-react';
 import { chatService } from './chatService';
+import { articleLibraryService } from './articleLibraryService';
+import { showToast } from './blocks/shared';
 
 const toTextPreview = (value) => {
   const s = String(value ?? '')
@@ -51,6 +53,8 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
   // 删除中状态
   const [deletingArticleId, setDeletingArticleId] = useState(null);
   const [deletingCanvas, setDeletingCanvas] = useState(false);
+  // 存入文章库弹窗状态：target=null 关闭；target='all' 整份；target={articleId} 单篇
+  const [libraryPickerFor, setLibraryPickerFor] = useState(null);
   const pollingRef = useRef(null);
 
   const loadCanvas = useCallback(async () => {
@@ -220,6 +224,44 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
     }
   };
 
+  /**
+   * 把 canvas 文章转成文章库入库 payload
+   * @keyword-en map canvas article to library payload
+   */
+  const toLibraryPayload = (article) => ({
+    title: article?.title || `文章 #${article?.id ?? ''}`,
+    tags: Array.isArray(article?.tags) ? article.tags : [],
+    contentJson: article?.contentJson ?? {},
+    imageUrls: Array.isArray(article?.imageUrls) ? article.imageUrls : [],
+    imageIds: Array.isArray(article?.imageIds) ? article.imageIds : [],
+    publishStatus: 'unpublished',
+    source: 'canvas',
+    sourceRef: { canvasId: Number(canvasId), canvasArticleId: article?.id },
+  });
+
+  /**
+   * 执行入库（target: 'all' 整份 / { articleId }）
+   * @keyword-en put canvas into library single or bulk
+   */
+  const handleStoreInto = async (libraryId, target) => {
+    const batch = target === 'all'
+      ? articles.map(toLibraryPayload)
+      : [toLibraryPayload(articles.find((a) => a.id === target?.articleId))].filter(
+          (x) => x && typeof x.title === 'string',
+        );
+    if (batch.length === 0) {
+      showToast('没有可入库的文章', 'error');
+      return;
+    }
+    const res = await articleLibraryService.putArticles(libraryId, batch);
+    if (!res?.items) {
+      showToast('入库失败', 'error');
+      return;
+    }
+    showToast(`已入库 ${res.count} 篇`, 'success');
+    setLibraryPickerFor(null);
+  };
+
   /** 删除当前预览图 */
   const handleDeleteImage = async (article, imgIdx) => {
     setDeletingImageIdx(imgIdx);
@@ -270,13 +312,23 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
               )}
             </p>
           </div>
+          {/* 存入文章库（整份） */}
+          {!isGenerating && articles.length > 0 && (
+            <button
+              onClick={() => setLibraryPickerFor('all')}
+              title="整份存入文章库"
+              className="ml-auto p-2 rounded-full text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition"
+            >
+              <Library size={16} />
+            </button>
+          )}
           {/* 删除 Canvas 按钮 */}
           {!isGenerating && (
             <button
               onClick={handleDeleteCanvas}
               disabled={deletingCanvas}
               title="删除 Canvas"
-              className="ml-auto p-2 rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition"
+              className={`${articles.length > 0 ? '' : 'ml-auto '}p-2 rounded-full text-slate-400 hover:text-red-500 hover:bg-red-50 transition`}
             >
               {deletingCanvas ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
             </button>
@@ -450,6 +502,16 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                       <h4 className="text-base md:text-lg font-semibold text-slate-900 flex-1">
                         {selected.title || `文章 #${selected.id}`}
                       </h4>
+                      {/* 存入文章库（单篇） */}
+                      {editingId !== selected.id && (
+                        <button
+                          onClick={() => setLibraryPickerFor({ articleId: selected.id })}
+                          title="存入文章库"
+                          className="p-1.5 rounded-full text-slate-400 hover:text-amber-500 hover:bg-amber-50 transition shrink-0"
+                        >
+                          <Library size={14} />
+                        </button>
+                      )}
                       {/* 编辑正文按钮 */}
                       {editingId !== selected.id ? (
                         <button
@@ -558,6 +620,139 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
           </div>
         </div>
       )}
+
+      {/* 存入文章库 — 库选择弹窗 */}
+      {libraryPickerFor !== null && (
+        <LibraryPickerDialog
+          target={libraryPickerFor}
+          onClose={() => setLibraryPickerFor(null)}
+          onPick={(libraryId) => handleStoreInto(libraryId, libraryPickerFor)}
+        />
+      )}
+    </div>
+  );
+};
+
+/**
+ * @description 文章库选择器弹窗（支持新建），供 canvas 选库入库使用
+ * @keyword-en library picker dialog for canvas store
+ */
+const LibraryPickerDialog = ({ target, onClose, onPick }) => {
+  const [libraries, setLibraries] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newType, setNewType] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await articleLibraryService.listLibraries({ limit: 200 });
+    setLibraries(Array.isArray(res?.items) ? res.items : []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handlePick = async (libraryId) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onPick(libraryId);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name) {
+      showToast('请输入文章库名称', 'error');
+      return;
+    }
+    setCreating(true);
+    const res = await articleLibraryService.createLibrary({ name, type: newType.trim() });
+    setCreating(false);
+    if (!res?.library) {
+      showToast('创建失败', 'error');
+      return;
+    }
+    setNewName('');
+    setNewType('');
+    await load();
+    await handlePick(res.library.id);
+  };
+
+  const title = target === 'all' ? '整份存入文章库' : '单篇存入文章库';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4">
+      <div className="bg-white rounded-3xl p-5 w-full max-w-md shadow-xl max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between mb-4">
+          <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-700">
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* 库列表 */}
+        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">
+          {loading ? (
+            <div className="flex items-center justify-center py-10 text-slate-400">
+              <Loader2 size={18} className="animate-spin" />
+            </div>
+          ) : libraries.length === 0 ? (
+            <div className="text-xs text-slate-400 text-center py-6">还没有文章库，先新建一个</div>
+          ) : (
+            <div className="space-y-2">
+              {libraries.map((lib) => (
+                <button
+                  key={lib.id}
+                  onClick={() => handlePick(lib.id)}
+                  disabled={saving}
+                  className="w-full flex items-center gap-2 p-3 rounded-2xl border border-slate-100 hover:border-amber-200 hover:bg-amber-50 transition text-left"
+                >
+                  <Library size={16} className="text-amber-500 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-slate-800 truncate">{lib.name}</div>
+                    <div className="text-[11px] text-slate-400">
+                      {lib.type ? `${lib.type} · ` : ''}{lib.stats?.publishedCount ?? 0} / {lib.stats?.total ?? 0}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 新建区 */}
+        <div className="mt-4 pt-4 border-t border-slate-100">
+          <div className="text-xs text-slate-500 mb-2">或新建</div>
+          <div className="flex gap-2">
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="名称"
+              className="flex-1 min-w-0 text-sm border border-slate-200 rounded-xl px-3 py-1.5 outline-none focus:ring-1 focus:ring-amber-300"
+            />
+            <input
+              value={newType}
+              onChange={(e) => setNewType(e.target.value)}
+              placeholder="类型"
+              className="w-24 text-sm border border-slate-200 rounded-xl px-3 py-1.5 outline-none focus:ring-1 focus:ring-amber-300"
+            />
+            <button
+              onClick={handleCreate}
+              disabled={creating || saving}
+              className="text-sm px-3 py-1.5 rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition inline-flex items-center gap-1"
+            >
+              {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+              新建
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">新建后会自动把当前内容存入该库。</p>
+        </div>
+      </div>
     </div>
   );
 };
