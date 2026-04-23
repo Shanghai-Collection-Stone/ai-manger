@@ -133,26 +133,24 @@ export class AgentService {
         : undefined;
 
     if (protocol === 'google-genai') {
-      const llm = new ChatGoogleGenerativeAI({
+      return new ChatGoogleGenerativeAI({
         model: modelName,
         apiKey: runtime.apiKey,
         baseUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
       });
-      return await this.decorateModelInvokeWithPlatformSupplement(llm, config);
     }
     if (protocol === 'anthropic') {
-      const llm = new ChatAnthropic({
+      return new ChatAnthropic({
         model: modelName,
         apiKey: runtime.apiKey,
         anthropicApiUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
       });
-      return await this.decorateModelInvokeWithPlatformSupplement(llm, config);
     }
-    const llm = new ChatOpenAI({
+    return new ChatOpenAI({
       model: modelName,
       apiKey: runtime.apiKey,
       temperature,
@@ -160,7 +158,6 @@ export class AgentService {
       useResponsesApi: false,
       configuration: runtime.baseUrl ? { baseURL: runtime.baseUrl } : undefined,
     });
-    return await this.decorateModelInvokeWithPlatformSupplement(llm, config);
   }
 
   /**
@@ -1995,90 +1992,6 @@ export class AgentService {
   private buildPlatformSupplementBlock(text: string): string {
     const body = String(text ?? '').trim();
     return body.length > 0 ? `【平台AI补充说明】\n${body}` : '';
-  }
-
-  /**
-   * @description 为模型 invoke 注入平台 AI 补充说明，覆盖 direct buildLLM 调用路径。
-   * @param {BaseChatModel} llm - 原始聊天模型。
-   * @param {AgentConfig} config - Agent 配置。
-   * @returns {Promise<BaseChatModel>} 装饰后的模型。
-   * @keyword-en decorate model invoke with platform supplement
-   */
-  private async decorateModelInvokeWithPlatformSupplement(
-    llm: BaseChatModel,
-    config: AgentConfig,
-  ): Promise<BaseChatModel> {
-    const supplementText = await this.resolvePlatformSupplementText(config);
-    if (!supplementText) return llm;
-    const block = this.buildPlatformSupplementBlock(supplementText);
-    if (!block) return llm;
-
-    const model = llm as unknown as {
-      invoke?: (input: unknown, options?: unknown) => Promise<unknown>;
-      __platformSupplementDecorated?: boolean;
-    };
-    if (typeof model.invoke !== 'function') return llm;
-    if (model.__platformSupplementDecorated) return llm;
-
-    const originalInvoke = model.invoke.bind(llm);
-    model.invoke = async (invokeInput: unknown, options?: unknown) => {
-      const patchedInput = this.injectPlatformSupplementToInvokeInput(
-        invokeInput,
-        block,
-      );
-      return await originalInvoke(patchedInput, options);
-    };
-    model.__platformSupplementDecorated = true;
-    return llm;
-  }
-
-  /**
-   * @description 将平台 AI 补充说明注入到模型 invoke 输入中。
-   * @param {unknown} input - 模型输入。
-   * @param {string} supplementBlock - 补充说明块。
-   * @returns {unknown} 注入后的输入。
-   * @keyword-en inject platform supplement into invoke input
-   */
-  private injectPlatformSupplementToInvokeInput(
-    input: unknown,
-    supplementBlock: string,
-  ): unknown {
-    if (!supplementBlock) return input;
-
-    if (typeof input === 'string') {
-      return this.hasPlatformSupplement(input, supplementBlock)
-        ? input
-        : `${supplementBlock}\n\n${input}`;
-    }
-
-    if (Array.isArray(input) || isBaseMessage(input)) {
-      try {
-        const normalized = this.normalizeMessages(
-          Array.isArray(input) ? input : [input],
-        );
-        const extracted = this.extractSystemTextFromMessages(normalized);
-        if (this.hasPlatformSupplement(extracted.systemText, supplementBlock)) {
-          return normalized;
-        }
-        return [new SystemMessage(supplementBlock), ...normalized];
-      } catch {
-        return input;
-      }
-    }
-
-    if (input && typeof input === 'object' && 'messages' in input) {
-      const record = input as Record<string, unknown>;
-      const messages = record.messages;
-      return {
-        ...record,
-        messages: this.injectPlatformSupplementToInvokeInput(
-          messages,
-          supplementBlock,
-        ),
-      };
-    }
-
-    return input;
   }
 
   /**
