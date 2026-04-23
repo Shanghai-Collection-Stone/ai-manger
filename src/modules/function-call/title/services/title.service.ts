@@ -27,6 +27,9 @@ export class TitleFunctionCallService {
   getHandle(): CreateAgentParams['tools'] {
     const titleGenerate = tool(
       async ({ sessionId, question, answer, language }) => {
+        const conv = await this.ctx.getConversation(sessionId);
+        const tenantId =
+          typeof conv?.tenantId === 'string' ? conv.tenantId : undefined;
         const sys = [
           '你是一个会话标题生成器。根据第一轮问答内容生成简短而准确的会话标题。',
           '要求：不超过24个字符；避免冗长；避免标点结尾；突出主题。只返回标题文本，不要包含额外符号。',
@@ -44,6 +47,7 @@ export class TitleFunctionCallService {
         const ai = await this.agent.runWithMessages({
           config: {
             temperature: 0.3,
+            tenantId,
             system: sys,
           },
           messages,
@@ -105,6 +109,8 @@ export class TitleFunctionCallService {
     const ai = await this.agent.runWithMessages({
       config: {
         temperature: 0.3,
+        tenantId:
+          typeof meta?.tenantId === 'string' ? meta.tenantId : undefined,
         system: sys,
       },
       messages,

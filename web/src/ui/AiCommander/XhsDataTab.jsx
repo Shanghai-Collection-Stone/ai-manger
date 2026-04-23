@@ -321,7 +321,13 @@ const XhsDataTab = ({ task }) => {
               {stats.map((s, i) => (
                 <tr key={s.id || i} className="border-t border-slate-100 hover:bg-slate-50/50 transition">
                   <td className="px-3 py-2.5">
-                    <div className="font-medium text-slate-800 line-clamp-1">{s.postTitle || '-'}</div>
+                    {s.postUrl ? (
+                      <a href={s.postUrl} target="_blank" rel="noreferrer" className="font-medium text-slate-800 line-clamp-1 hover:text-rose-600 transition">
+                        {s.postTitle || '-'}
+                      </a>
+                    ) : (
+                      <div className="font-medium text-slate-800 line-clamp-1">{s.postTitle || '-'}</div>
+                    )}
                     {s.tag && <span className="text-[10px] text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded mt-0.5 inline-block">{s.tag}</span>}
                   </td>
                   <td className="text-center px-2 py-2.5 text-rose-600 font-medium">{fmtNum(s.likeCount)}</td>

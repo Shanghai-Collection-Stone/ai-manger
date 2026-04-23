@@ -4,6 +4,8 @@ import {
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import XhsSpecialistView from './XhsSpecialistView';
+import CanvasFeedView from './CanvasFeedView';
+import ImageGroupCanvasView from './ImageGroupCanvasView';
 import ChatBIView from './ChatBIView';
 import { showToast } from './blocks/shared';
 
@@ -344,13 +346,16 @@ const api = {
     }
   },
 
-  async listCanvases({ userId, limit } = {}) {
+  async listCanvases({ userId, limit, type, skip, tag } = {}) {
     try {
       const params = new URLSearchParams();
       if (userId) params.set('userId', userId);
       if (typeof limit === 'number' && Number.isFinite(limit)) {
         params.set('limit', String(Math.max(1, Math.floor(limit))));
       }
+      if (type) params.set('type', type);
+      if (typeof skip === 'number' && skip > 0) params.set('skip', String(Math.floor(skip)));
+      if (tag) params.set('tag', tag);
       const qs = params.toString();
       const res = await fetch(`${API_BASE}/canvas${qs ? `?${qs}` : ''}`, {
         headers: getAuthHeaders(),
@@ -2234,22 +2239,60 @@ const GalleryView = ({ onBack }) => {
   );
 };
 
+/**
+ * @description ToolsView — 工具入口页，包含图库、思维链路、Canvas管理、小红书专家入口。
+ * @keyword-en ToolsView, tools, gallery, canvas, xhs-specialist
+ * @param {{ onThoughtRouteChange?: Function }} props
+ */
 const ToolsView = ({ onThoughtRouteChange }) => {
   const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist'
+
+  // ── Canvas 管理状态 ──────────────────────────────────────────
   const [canvases, setCanvases] = useState([]);
   const [canvasLoading, setCanvasLoading] = useState(false);
-  const [canvasQuery, setCanvasQuery] = useState('');
+  const [canvasType, setCanvasType] = useState('all'); // 'all' | 'article' | 'image-group'
+  const [canvasTag, setCanvasTag] = useState('');
+  const [canvasHasMore, setCanvasHasMore] = useState(true);
+  const [canvasOpenItem, setCanvasOpenItem] = useState(null); // canvas object currently opened
 
-  const loadCanvases = useCallback(async () => {
+  const canvasReqIdRef = useRef(0);
+  const canvasListRef = useRef([]);
+  const canvasLoadMoreRef = useRef(null);
+
+  /**
+   * @description 加载 Canvas 列表，支持分页追加和首屏重置。
+   * @param {{ append?: boolean }} [opts]
+   * @keyword-en load canvases with pagination
+   */
+  const loadCanvases = useCallback(async ({ append = false } = {}) => {
+    const reqId = (canvasReqIdRef.current += 1);
     setCanvasLoading(true);
     try {
-      const res = await api.listCanvases({ limit: 100 });
+      const curList = canvasListRef.current;
+      const skip = append ? curList.length : 0;
+      const res = await api.listCanvases({
+        limit: 20,
+        type: canvasType !== 'all' ? canvasType : undefined,
+        tag: canvasTag || undefined,
+        skip,
+      });
+      if (reqId !== canvasReqIdRef.current) return;
       const rows = Array.isArray(res?.canvases) ? res.canvases : [];
-      setCanvases(rows);
+      setCanvasHasMore(rows.length >= 20);
+      if (append) {
+        setCanvases((prev) => {
+          const next = [...prev, ...rows];
+          canvasListRef.current = next;
+          return next;
+        });
+      } else {
+        canvasListRef.current = rows;
+        setCanvases(rows);
+      }
     } finally {
-      setCanvasLoading(false);
+      if (reqId === canvasReqIdRef.current) setCanvasLoading(false);
     }
-  }, []);
+  }, [canvasType, canvasTag]);
 
   useEffect(() => {
     if (typeof onThoughtRouteChange === 'function') {
@@ -2262,11 +2305,25 @@ const ToolsView = ({ onThoughtRouteChange }) => {
     };
   }, [onThoughtRouteChange, view]);
 
+  // 切换到 canvas 视图或过滤条件变化时重新加载
   useEffect(() => {
     if (view === 'canvas') {
-      void loadCanvases();
+      canvasListRef.current = [];
+      void loadCanvases({ append: false });
     }
-  }, [view, loadCanvases]);
+  }, [view, canvasType, canvasTag, loadCanvases]);
+
+  // Canvas 无限滚动
+  useEffect(() => {
+    if (!canvasLoadMoreRef.current || view !== 'canvas') return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && !canvasLoading && canvasHasMore) {
+        void loadCanvases({ append: true });
+      }
+    }, { threshold: 0.1 });
+    obs.observe(canvasLoadMoreRef.current);
+    return () => obs.disconnect();
+  }, [canvasHasMore, canvasLoading, loadCanvases, view]);
 
   if (view === 'gallery') {
     return <GalleryView onBack={() => setView('list')} />;
@@ -2278,76 +2335,146 @@ const ToolsView = ({ onThoughtRouteChange }) => {
     return <XhsSpecialistView onBack={() => setView('list')} />;
   }
   if (view === 'canvas') {
-    
-    const normalizedQuery = String(canvasQuery || '').trim().toLowerCase();
-    const filtered = (Array.isArray(canvases) ? canvases : []).filter((c) => {
-      if (!normalizedQuery) return true;
-      const idText = String(c?.id ?? '').toLowerCase();
-      const topic = String(c?.topic ?? '').toLowerCase();
-      return idText.includes(normalizedQuery) || topic.includes(normalizedQuery);
-    });
+    // ── 打开某个 Canvas 的内部覆盖层 ──
+    if (canvasOpenItem) {
+      if (canvasOpenItem.type === 'image-group') {
+        return (
+          <ImageGroupCanvasView
+            canvasId={canvasOpenItem.id}
+            onClose={() => setCanvasOpenItem(null)}
+          />
+        );
+      }
+      return (
+        <CanvasFeedView
+          canvasId={canvasOpenItem.id}
+          onClose={() => setCanvasOpenItem(null)}
+        />
+      );
+    }
+
     return (
       <div className="h-full flex flex-col bg-white animate-fade-in">
-        {/* Header matching other tools */}
-        <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
+        {/* ── 顶部导航栏：返回、标题、类型过滤、标签筛选、刷新 ── */}
+        <div className="flex flex-wrap items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
+          {/* 返回按钮 back button */}
           <button
             onClick={() => setView('list')}
-            className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800"
+            className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0"
           >
             <ChevronLeft size={22} />
           </button>
-          <div className="font-bold text-slate-800">Canvas 管理</div>
+          <div className="font-bold text-slate-800 flex-1 min-w-0">Canvas 管理</div>
+
+          {/* 类型过滤 tab pills type filter */}
+          <div className="inline-flex rounded-full bg-slate-100 p-1 shrink-0">
+            {[
+              { key: 'all', label: '全部' },
+              { key: 'article', label: '图文' },
+              { key: 'image-group', label: '图组' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setCanvasType(key)}
+                className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${canvasType === key ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* 标签筛选 tag filter input */}
+          <div className="flex items-center gap-1 shrink-0">
+            <input
+              value={canvasTag}
+              onChange={(e) => setCanvasTag(e.target.value)}
+              placeholder="筛选标签"
+              className="px-3 py-1.5 text-xs border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-24"
+            />
+            {canvasTag && (
+              <button onClick={() => setCanvasTag('')} className="text-slate-400 hover:text-slate-600 p-1">
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* 刷新按钮 refresh button */}
+          <button
+            onClick={() => { canvasListRef.current = []; void loadCanvases({ append: false }); }}
+            className="p-1.5 text-slate-400 hover:text-slate-600 shrink-0"
+          >
+            <RefreshCw size={14} className={canvasLoading ? 'animate-spin' : ''} />
+          </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
-          <div className="bg-white rounded-2xl border border-slate-100 p-4">
-            <div className="flex items-center gap-2 mb-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
-              <Search size={16} className="text-slate-400" />
-              <input
-                value={canvasQuery}
-                onChange={(e) => setCanvasQuery(e.target.value)}
-                placeholder="按 Canvas ID / 主题筛选"
-                className="w-full text-sm bg-transparent outline-none placeholder:text-slate-400"
-              />
-              <button
-                onClick={() => void loadCanvases()}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <RefreshCw size={14} className={canvasLoading ? 'animate-spin' : ''} />
-              </button>
+        {/* ── Canvas 卡片网格 canvas cards grid ── */}
+        <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
+          {canvasLoading && canvases.length === 0 ? (
+            <div className="py-12 flex items-center justify-center text-slate-400">
+              <Loader2 size={24} className="animate-spin" />
             </div>
-            
-            {canvasLoading ? (
-              <div className="py-12 flex items-center justify-center text-slate-400">
-                <RefreshCw size={24} className="animate-spin" />
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className="py-12 text-center text-sm text-slate-400">暂无 Canvas</div>
-            ) : (
-              <div className="space-y-2">
-                {filtered.map((c) => (
+          ) : canvases.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-400">暂无 Canvas</div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              {canvases.map((c) => {
+                // 获取缩略图 thumbnail: 图文取第一篇文章首图，图组取第一组第一张
+                const thumb =
+                  c?.type === 'image-group'
+                    ? c?.imageGroups?.[0]?.images?.[0]?.url
+                    : c?.articles?.[0]?.imageUrls?.[0];
+                const count =
+                  c?.type === 'image-group'
+                    ? `${c?.imageGroups?.length ?? 0} 组`
+                    : `${c?.articles?.length ?? 0} 篇`;
+                const typeLabel = c?.type === 'image-group' ? '图组' : '图文';
+                const typeBg = c?.type === 'image-group' ? 'bg-violet-600' : 'bg-emerald-600';
+
+                return (
                   <button
                     key={String(c?.id ?? Math.random())}
-                    onClick={() => {
-                      const id = Number(c?.id);
-                      if (Number.isFinite(id)) {
-                        window.location.hash = '#canvas-' + id;
-                      }
-                    }}
-                    className="w-full flex items-center justify-between text-left p-3 rounded-xl border border-slate-100 bg-white hover:border-indigo-200 hover:bg-indigo-50/30 transition shadow-sm"
+                    onClick={() => setCanvasOpenItem(c)}
+                    className="group flex flex-col rounded-2xl border border-slate-100 bg-white overflow-hidden hover:shadow-md hover:border-emerald-200 transition text-left"
                   >
-                    <div>
+                    {/* 缩略图区域 thumbnail area */}
+                    <div className="relative w-full aspect-video bg-slate-100 overflow-hidden">
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={c?.topic || `canvas-${c?.id}`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-slate-300">
+                          <FolderPlus size={28} />
+                        </div>
+                      )}
+                      {/* 类型徽章 type badge */}
+                      <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-full text-white text-[10px] font-medium ${typeBg}`}>
+                        {typeLabel}
+                      </div>
+                    </div>
+
+                    {/* Canvas 信息 info */}
+                    <div className="p-3">
                       <div className="text-sm font-medium text-slate-800 line-clamp-1">
                         {c?.topic || `Canvas #${c?.id ?? '-'}`}
                       </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {`#${c?.id ?? '-'} · ${(Array.isArray(c?.articles) ? c.articles.length : 0)} 篇 · ${c?.status || 'unknown'}`}
+                      <div className="mt-1 text-xs text-slate-400">
+                        #{c?.id ?? '-'} · {count}
                       </div>
                     </div>
-                    <ChevronLeft size={16} className="text-slate-300 rotate-180" />
                   </button>
-                ))}
-              </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* 无限滚动哨兵 infinite scroll sentinel */}
+          <div ref={canvasLoadMoreRef} className="h-10 flex items-center justify-center mt-4">
+            {canvasLoading && canvases.length > 0 && (
+              <Loader2 size={16} className="animate-spin text-slate-400" />
             )}
           </div>
         </div>

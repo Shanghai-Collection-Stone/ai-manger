@@ -270,7 +270,12 @@ export class CanvasImageGroupService {
       if (coverPlan) {
         const imageContext = this.summarizeImageContext(contextImages);
         const coverText =
-          (await this.generateCoverTexts(input.topic, [art], [imageContext]))[0] ??
+          (await this.generateCoverTexts(
+            input.topic,
+            [art],
+            [imageContext],
+            input.tenantId,
+          ))[0] ??
           this.buildCoverText(art.title, i);
 
         const aiCover = aiCoverEnabled
@@ -544,6 +549,7 @@ export class CanvasImageGroupService {
    * @keyword-en infer ai cover prompt by llm
    */
   private async buildAiCoverPrompt(input: {
+    tenantId?: string;
     topic?: string;
     articleTitle?: string;
     articleTags?: string[];
@@ -582,6 +588,7 @@ export class CanvasImageGroupService {
       const llm = await this.agentService.buildLLM({
         nonStreaming: true,
         temperature: 0.4,
+        tenantId: input.tenantId,
       });
       const msg = [
         '你是一名封面视觉提示词工程师。',
@@ -645,6 +652,7 @@ export class CanvasImageGroupService {
   }): Promise<GalleryImageEntity | null> {
     try {
       const prompt = await this.buildAiCoverPrompt({
+        tenantId: input.tenantId,
         topic: input.topic,
         articleTitle: input.articleTitle,
         articleTags: input.articleTags,
@@ -975,10 +983,15 @@ export class CanvasImageGroupService {
     topic: string | undefined,
     articles: Array<{ title: string; tags: string[] }>,
     imageContexts?: Array<{ tags: string[]; descriptions: string[] }>,
+    tenantId?: string,
   ): Promise<Array<{ title: string; subtitle: string }>> {
     const fallback = articles.map((a, i) => this.buildCoverText(a.title, i));
     try {
-      const llm = await this.agentService.buildLLM({ nonStreaming: true, temperature: 0.8 });
+      const llm = await this.agentService.buildLLM({
+        nonStreaming: true,
+        temperature: 0.8,
+        tenantId,
+      });
       const titlesBlock = articles
         .map((a, i) => {
           const articleTags = Array.isArray(a.tags) ? a.tags.filter((t) => String(t ?? '').trim().length > 0) : [];

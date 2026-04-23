@@ -111,6 +111,7 @@ const ALL_TABS = [
   { id: 'sources', label: '数据源管理' },
   { id: 'claw_configs', label: 'Claw管理', platformOnly: true },
   { id: 'agent_configs', label: 'Agent管理', platformOnly: true },
+  { id: 'social_accounts', label: '自媒体账号管理' },
   { id: 'dashboard_configs', label: '看板配置' },
   { id: 'platform_info', label: '平台AI配置' },
 ];
@@ -141,6 +142,7 @@ const AdminApp = () => {
   const [platformInfo, setPlatformInfo] = useState(null);
   const [clawConfigs, setClawConfigs] = useState([]);
   const [agentConfigs, setAgentConfigs] = useState([]);
+  const [xhsAccounts, setXhsAccounts] = useState([]);
   const [editingUserId, setEditingUserId] = useState('');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
@@ -150,6 +152,10 @@ const AdminApp = () => {
   const [editingClawConfigId, setEditingClawConfigId] = useState('');
   const [pingLoadingId, setPingLoadingId] = useState('');
   const [editingAgentConfigId, setEditingAgentConfigId] = useState('');
+  const [editingXhsAccountId, setEditingXhsAccountId] = useState('');
+  const [testLoginLoadingId, setTestLoginLoadingId] = useState('');
+  /** 自媒体账号管理当前平台子 Tab | @keyword-en social account platform sub tab */
+  const [socialAccountSubTab, setSocialAccountSubTab] = useState('xhs');
   const [filters, setFilters] = useState({
     users: { keyword: '', tenantId: '' },
     providers: { keyword: '' },
@@ -159,6 +165,7 @@ const AdminApp = () => {
     dashboardConfigs: { keyword: '', tenantId: '' },
     clawConfigs: { keyword: '' },
     agentConfigs: { keyword: '' },
+    xhsAccounts: { keyword: '' },
   });
   const [pages, setPages] = useState({
     users: 1,
@@ -169,6 +176,7 @@ const AdminApp = () => {
     dashboardConfigs: 1,
     clawConfigs: 1,
     agentConfigs: 1,
+    xhsAccounts: 1,
   });
   const [forms, setForms] = useState({
     user: {
@@ -231,6 +239,13 @@ const AdminApp = () => {
       prompt: '',
       enabled: true,
     },
+    xhsAccount: {
+      username: '',
+      adspowerId: '',
+      clawConfigId: '',
+      clawAgentId: '',
+      notes: '',
+    },
   });
 
   const loadData = async () => {
@@ -286,6 +301,13 @@ const AdminApp = () => {
             enableAiCover: Boolean(pi.platformInfo?.enableAiCover),
           },
         }));
+      } catch {
+        // 忽略加载失败
+      }
+      // 加载小红书账号（租户级）
+      try {
+        const xa = await adminApi.listXhsAccounts();
+        setXhsAccounts(xa.accounts || []);
       } catch {
         // 忽略加载失败
       }
@@ -533,6 +555,73 @@ const AdminApp = () => {
     setAgentConfigs((prev) => prev.filter((item) => item._id !== id));
     if (editingAgentConfigId === id) setEditingAgentConfigId('');
     setNotice('Agent配置已删除');
+  };
+
+  /**
+   * @description 提交小红书账号（创建/更新）
+   * @keyword-en submit xhs account create update
+   * @returns {Promise<void>}
+   */
+  const onSubmitXhsAccount = async () => {
+    const payload = {
+      username: toText(forms.xhsAccount.username).trim(),
+      adspowerId: toText(forms.xhsAccount.adspowerId).trim() || undefined,
+      clawConfigId: toText(forms.xhsAccount.clawConfigId).trim() || undefined,
+      clawAgentId: toText(forms.xhsAccount.clawAgentId).trim() || undefined,
+      notes: toText(forms.xhsAccount.notes).trim() || undefined,
+    };
+    if (!payload.username) throw new Error('账号名称不能为空');
+    if (editingXhsAccountId) {
+      const res = await adminApi.updateXhsAccount(editingXhsAccountId, payload);
+      setXhsAccounts((prev) =>
+        prev.map((item) => (toText(item._id) === editingXhsAccountId ? res.account : item)),
+      );
+      setNotice('小红书账号已更新');
+    } else {
+      const res = await adminApi.createXhsAccount(payload);
+      setXhsAccounts((prev) => [res.account, ...prev]);
+      setEditingXhsAccountId(toText(res.account._id));
+      setNotice('小红书账号已创建');
+    }
+  };
+
+  /**
+   * @description 删除小红书账号
+   * @keyword-en delete xhs account
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onDeleteXhsAccount = async (id) => {
+    await adminApi.deleteXhsAccount(id);
+    setXhsAccounts((prev) => prev.filter((item) => toText(item._id) !== id));
+    if (editingXhsAccountId === id) setEditingXhsAccountId('');
+    setNotice('小红书账号已删除');
+  };
+
+  /**
+   * @description 测试登录小红书账号（触发 Claw 登录流程）
+   * @keyword-en test login xhs account, claw login
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onTestLoginXhsAccount = async (id) => {
+    setTestLoginLoadingId(id);
+    try {
+      const res = await adminApi.testLoginXhsAccount(id);
+      setXhsAccounts((prev) =>
+        prev.map((item) =>
+          toText(item._id) === id
+            ? { ...item, loginStatus: res.loginStatus, lastLoginAt: new Date().toISOString() }
+            : item,
+        ),
+      );
+      const statusLabel = { online: '在线', offline: '离线', error: '异常', unknown: '未知' }[res.loginStatus] ?? res.loginStatus;
+      setNotice(`登录测试完成：${statusLabel}${res.message ? `（${res.message}）` : ''}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setTestLoginLoadingId('');
+    }
   };
 
   const onLogout = async () => {
@@ -802,6 +891,16 @@ const AdminApp = () => {
     );
   });
 
+  const filteredXhsAccounts = xhsAccounts.filter((item) => {
+    const keyword = toLower(filters.xhsAccounts.keyword.trim());
+    if (!keyword) return true;
+    return (
+      toLower(item.username).includes(keyword) ||
+      toLower(item.adspowerId ?? '').includes(keyword) ||
+      toLower(item.notes ?? '').includes(keyword)
+    );
+  });
+
   const pagedUsers = buildPagedRows(filteredUsers, pages.users);
   const pagedProviders = buildPagedRows(filteredProviders, pages.providers);
   const pagedTenants = buildPagedRows(filteredTenants, pages.tenants);
@@ -813,6 +912,7 @@ const AdminApp = () => {
   );
   const pagedClawConfigs = buildPagedRows(filteredClawConfigs, pages.clawConfigs);
   const pagedAgentConfigs = buildPagedRows(filteredAgentConfigs, pages.agentConfigs);
+  const pagedXhsAccounts = buildPagedRows(filteredXhsAccounts, pages.xhsAccounts);
 
   if (loading) {
     return (
@@ -1590,6 +1690,197 @@ const AdminApp = () => {
                 () => gotoPage('agentConfigs', pages.agentConfigs + 1),
               )}
             </div>
+          </div>
+        ) : null}
+
+        {/* 自媒体账号管理 | @keyword-en social media account management */}
+        {activeTab === 'social_accounts' ? (
+          <div className="space-y-4 pb-8">
+            {/* 平台子 Tab 导航 | @keyword-en platform sub tab nav */}
+            <div className="flex gap-1 border-b border-slate-200">
+              {[{ id: 'xhs', label: '小红书' }].map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setSocialAccountSubTab(p.id)}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                    socialAccountSubTab === p.id
+                      ? 'border-slate-900 text-slate-900'
+                      : 'border-transparent text-slate-400 hover:text-slate-600'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {socialAccountSubTab === 'xhs' ? (
+          <div className="grid lg:grid-cols-2 gap-4">
+            {/* 小红书账号表单区域 | @keyword-en xhs account form area */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <h2 className="font-semibold text-slate-900">
+                {editingXhsAccountId ? '编辑小红书账号' : '新增小红书账号'}
+              </h2>
+              {/* 账号名称输入 | @keyword-en username input */}
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="账号名称（必填，如小红书昵称）"
+                value={forms.xhsAccount.username}
+                onChange={(e) => updateForm('xhsAccount', 'username', e.target.value)}
+              />
+              {/* AdsPower 环境 ID | @keyword-en adspowerid input */}
+              <input
+                className="w-full border rounded px-3 py-2 text-sm font-mono"
+                placeholder="AdsPower 环境 ID（选填）"
+                value={forms.xhsAccount.adspowerId}
+                onChange={(e) => updateForm('xhsAccount', 'adspowerId', e.target.value)}
+              />
+              {/* Claw 配置选择 | @keyword-en claw config selector */}
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">关联 Claw 配置（选填）</label>
+                <select
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  value={forms.xhsAccount.clawConfigId}
+                  onChange={(e) => updateForm('xhsAccount', 'clawConfigId', e.target.value)}
+                >
+                  <option value="">-- 不关联 --</option>
+                  {clawConfigs.map((cc) => (
+                    <option key={toText(cc._id)} value={toText(cc._id)}>
+                      {cc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {/* Claw Agent ID | @keyword-en claw agent id input */}
+              <input
+                className="w-full border rounded px-3 py-2 text-sm font-mono"
+                placeholder="Claw Agent ID（选填，如 main）"
+                value={forms.xhsAccount.clawAgentId}
+                onChange={(e) => updateForm('xhsAccount', 'clawAgentId', e.target.value)}
+              />
+              {/* 备注 | @keyword-en notes textarea */}
+              <textarea
+                className="w-full border rounded px-3 py-2 text-sm resize-none"
+                rows={2}
+                placeholder="备注（选填）"
+                value={forms.xhsAccount.notes}
+                onChange={(e) => updateForm('xhsAccount', 'notes', e.target.value)}
+              />
+              {/* 操作按钮区域 | @keyword-en form action buttons */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onSubmitXhsAccount().catch((err) => setError(err.message))}
+                  className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                >
+                  {editingXhsAccountId ? '更新' : '创建'}
+                </button>
+                {editingXhsAccountId ? (
+                  <button
+                    onClick={() => {
+                      setEditingXhsAccountId('');
+                      setForms((prev) => ({
+                        ...prev,
+                        xhsAccount: { username: '', adspowerId: '', clawConfigId: '', clawAgentId: '', notes: '' },
+                      }));
+                    }}
+                    className="px-3 py-2 text-sm border rounded"
+                  >
+                    取消编辑
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {/* 小红书账号列表区域 | @keyword-en xhs account list area */}
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-slate-900">账号列表</h2>
+                <span className="text-xs text-slate-400">{filteredXhsAccounts.length} 条</span>
+              </div>
+              {/* 账号搜索框 | @keyword-en xhs account search input */}
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="搜索账号..."
+                value={filters.xhsAccounts.keyword}
+                onChange={(e) => updateFilter('xhsAccounts', 'keyword', e.target.value)}
+              />
+              {pagedXhsAccounts.rows.map((item) => {
+                const statusStyle = {
+                  online: 'text-emerald-600 border-emerald-200 bg-emerald-50',
+                  offline: 'text-slate-500 border-slate-200 bg-slate-50',
+                  error: 'text-rose-500 border-rose-200 bg-rose-50',
+                  unknown: 'text-slate-400 border-slate-200 bg-slate-50',
+                }[item.loginStatus ?? 'unknown'] ?? 'text-slate-400 border-slate-200 bg-slate-50';
+                const statusText = { online: '在线', offline: '离线', error: '异常', unknown: '未知' }[item.loginStatus ?? 'unknown'] ?? '未知';
+                const linkedClaw = clawConfigs.find((cc) => toText(cc._id) === toText(item.clawConfigId));
+                return (
+                  /* 单个账号卡片 | @keyword-en xhs account card */
+                  <div
+                    key={toText(item._id)}
+                    className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
+                      editingXhsAccountId === toText(item._id) ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                    }`}
+                    onClick={() => {
+                      setEditingXhsAccountId(toText(item._id));
+                      setForms((prev) => ({
+                        ...prev,
+                        xhsAccount: {
+                          username: item.username || '',
+                          adspowerId: item.adspowerId || '',
+                          clawConfigId: toText(item.clawConfigId) || '',
+                          clawAgentId: item.clawAgentId || '',
+                          notes: item.notes || '',
+                        },
+                      }));
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      {/* 账号名 | @keyword-en account username */}
+                      <span className="font-medium text-slate-900 truncate">{item.username}</span>
+                      {/* 登录状态徽章 | @keyword-en login status badge */}
+                      <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${statusStyle}`}>{statusText}</span>
+                    </div>
+                    {item.adspowerId ? (
+                      <div className="text-xs text-slate-400 font-mono">AdsPower: {item.adspowerId}</div>
+                    ) : null}
+                    {linkedClaw ? (
+                      <div className="text-xs text-slate-500">Claw: {linkedClaw.name}{item.clawAgentId ? ` / ${item.clawAgentId}` : ''}</div>
+                    ) : null}
+                    {item.notes ? (
+                      <div className="text-xs text-slate-400 truncate">{item.notes}</div>
+                    ) : null}
+                    {/* 账号操作按钮 | @keyword-en account action buttons */}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onTestLoginXhsAccount(toText(item._id)).catch((err) => setError(err.message));
+                        }}
+                        disabled={testLoginLoadingId === toText(item._id)}
+                        className="text-xs text-blue-600 px-2 py-1 border border-blue-200 rounded disabled:opacity-50"
+                      >
+                        {testLoginLoadingId === toText(item._id) ? '测试中...' : '测试登录'}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!window.confirm('确认删除该小红书账号？')) return;
+                          onDeleteXhsAccount(toText(item._id)).catch((err) => setError(err.message));
+                        }}
+                        className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {renderPager(
+                pagedXhsAccounts,
+                () => gotoPage('xhsAccounts', pages.xhsAccounts - 1),
+                () => gotoPage('xhsAccounts', pages.xhsAccounts + 1),
+              )}
+            </div>
+          </div>
+            ) : null}
           </div>
         ) : null}
 

@@ -54,6 +54,8 @@ export interface CanvasArticleEntity {
   imageIds?: number[];
   status: 'pending' | 'done' | 'requires_human' | 'failed';
   doneNote?: string;
+  /** 文章成功发送（发布到小红书等平台）的时间，null 表示未发送 */
+  sentAt?: Date;
 }
 
 export interface CanvasEntity {
@@ -70,6 +72,10 @@ export interface CanvasEntity {
   articles: CanvasArticleEntity[];
   /** @description 图片组列表，仅 type=image-group 时有值 */
   imageGroups?: CanvasImageGroup[];
+  /** 画布关键词，用于向量搜索与分类过滤 */
+  keywords?: string[];
+  /** 嵌入向量，用于语义相似度检索 */
+  embeddingVector?: number[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -81,6 +87,7 @@ export interface CanvasCreateInput {
   type?: CanvasType;
   outline?: Record<string, unknown>;
   style?: Record<string, unknown>;
+  keywords?: string[];
 }
 
 /** @description 创建图片组 canvas 的入参：包含文章标题+标签，用于匹配配图 */

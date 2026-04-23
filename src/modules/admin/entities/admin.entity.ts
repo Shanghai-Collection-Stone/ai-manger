@@ -128,3 +128,39 @@ export interface AdminJwtPayload {
   exp: number;
   iat: number;
 }
+
+/**
+ * @description 小红书账号登录状态
+ * @keyword-en xhs account login status
+ */
+export type XhsAccountLoginStatus = 'unknown' | 'online' | 'offline' | 'error';
+
+/**
+ * @description 自媒体账号实体（多租户，支持多平台）
+ * @keyword-en social media account entity, multi-platform
+ */
+export interface XhsAccountEntity {
+  _id: ObjectId;
+  /** 租户 ID */
+  tenantId?: string;
+  /** 平台类型，如 xhs（小红书），默认 xhs */
+  platform?: string;
+  /** 账号用户名（手机号/邮箱/昵称） */
+  username: string;
+  /** base64 加密的密码（可选） */
+  passwordEncrypted?: string;
+  /** 绑定的 AdsPower 浏览器配置文件 ID */
+  adspowerId?: string;
+  /** 绑定的 Claw 配置 ID */
+  clawConfigId?: string;
+  /** Claw Agent ID */
+  clawAgentId?: string;
+  /** 账号说明 */
+  notes?: string;
+  /** 登录状态 */
+  loginStatus: XhsAccountLoginStatus;
+  /** 最近登录时间 */
+  lastLoginAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}

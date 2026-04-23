@@ -27,7 +27,7 @@ export class ContextController {
   @Get('list')
   async listConversations(
     @Req() req: Request,
-    @Query('sessionType') sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-nurturer' | 'xhs-publisher',
+    @Query('sessionType') sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher',
   ) {
     const scope = await this.resolveAuthScope(req);
     return this.context.getScopedConversations({

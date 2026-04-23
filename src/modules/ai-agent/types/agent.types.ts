@@ -28,6 +28,10 @@ export interface AgentConfig {
   baseUrl?: string;
   temperature?: number;
   system?: string;
+  /** 租户 ID，用于统一注入平台 AI 补充说明 */
+  tenantId?: string;
+  /** 直接传入的平台 AI 补充说明（优先级高于 tenantId 自动查询） */
+  platformAiPromptSupplement?: string;
   tools?: CreateAgentParams['tools'];
   contextSchema?: unknown;
   responseFormat?: SupportedResponseFormat;

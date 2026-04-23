@@ -387,4 +387,56 @@ export const adminApi = {
       method: 'DELETE',
     });
   },
+
+  // ─── 自媒体账号管理 ─────────────────────────────────────────────────────────
+
+  /**
+   * @description 获取自媒体账号列表（按平台过滤）
+   * @keyword-en list social accounts by platform
+   */
+  async listXhsAccounts() {
+    return request('/social-accounts?platform=xhs');
+  },
+
+  /**
+   * @description 创建自媒体账号
+   * @keyword-en create social account
+   */
+  async createXhsAccount(payload) {
+    return request('/social-accounts', {
+      method: 'POST',
+      body: JSON.stringify({ platform: 'xhs', ...payload }),
+    });
+  },
+
+  /**
+   * @description 更新自媒体账号
+   * @keyword-en update social account
+   */
+  async updateXhsAccount(id, payload) {
+    return request(`/social-accounts/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除自媒体账号
+   * @keyword-en delete social account
+   */
+  async deleteXhsAccount(id) {
+    return request(`/social-accounts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * @description 测试登录自媒体账号（触发 Claw 登录）
+   * @keyword-en test login social account via claw
+   */
+  async testLoginXhsAccount(id) {
+    return request(`/social-accounts/${encodeURIComponent(id)}/test-login`, {
+      method: 'POST',
+    });
+  },
 };

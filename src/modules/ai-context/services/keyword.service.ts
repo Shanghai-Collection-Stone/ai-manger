@@ -62,7 +62,7 @@ export class KeywordService {
    * @param text 原始文本内容
    * @returns 去重后的关键词数组
    */
-  async extractKeywords(text: string): Promise<string[]> {
+  async extractKeywords(text: string, tenantId?: string): Promise<string[]> {
     let aiConfig:
       | {
           provider: string;
@@ -83,6 +83,7 @@ export class KeywordService {
         temperature: 0.1,
         apiKey: aiConfig.apiKey,
         baseUrl: aiConfig.baseUrl,
+        tenantId,
       });
       const aiResult = await llm.invoke([
         new SystemMessage(

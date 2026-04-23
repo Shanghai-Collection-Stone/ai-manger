@@ -33,6 +33,7 @@ import type {
   AdminUserEntity,
   AdminUserRole,
   ClawConnectStatus,
+  XhsAccountEntity,
 } from '../entities/admin.entity.js';
 
 type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & { id: string };
@@ -50,6 +51,7 @@ export class AdminService {
   private readonly clawConfigs: Collection<AdminClawConfigEntity>;
   private readonly agentConfigs: Collection<AdminAgentConfigEntity>;
   private readonly llmSettings: Collection<AdminLlmSettingEntity>;
+  private readonly xhsAccounts: Collection<XhsAccountEntity>;
   private readonly sassTenants: Collection<SassTenantEntity>;
   private readonly sassApiKeys: Collection<SassApiKeyEntity>;
   private readonly dataSources: Collection<DataSourceEntity>;
@@ -71,6 +73,7 @@ export class AdminService {
       db.collection<AdminAgentConfigEntity>('admin_agent_configs');
     this.llmSettings =
       db.collection<AdminLlmSettingEntity>('admin_llm_settings');
+    this.xhsAccounts = db.collection<XhsAccountEntity>('admin_xhs_accounts');
     this.sassTenants = db.collection<SassTenantEntity>('sass_tenants');
     this.sassApiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.dataSources = db.collection<DataSourceEntity>('data_sources');
@@ -1433,6 +1436,21 @@ export class AdminService {
   }
 
   /**
+   * @description 按 tenantId 获取平台 AI 补充说明文本。
+   * @param {string | undefined} tenantId - 租户 ID。
+   * @returns {Promise<string>} 补充说明文本；无配置时返回空字符串。
+   * @keyword-en get tenant platform ai prompt supplement
+   */
+  async getTenantPlatformAiPromptSupplement(
+    tenantId?: string,
+  ): Promise<string> {
+    const id = String(tenantId ?? '').trim();
+    if (!id) return '';
+    const info = await this.sassService.getPlatformInfo(id);
+    return String(info?.aiPromptSupplement ?? '').trim();
+  }
+
+  /**
    * @description 更新平台信息（AI补充说明）
    * @param {AdminUserEntity} adminUser - 管理员用户
    * @param {string} aiPromptSupplement - AI补充说明
@@ -1533,5 +1551,169 @@ export class AdminService {
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;
+  }
+
+  // ─── 小红书账号管理 ───────────────────────────────────────
+
+  /**
+   * @description 列出自媒体账号（租户隔离），可按平台类型过滤
+   * @param {string} [tenantId] - 租户 ID
+   * @param {string} [platform] - 平台类型，如 xhs
+   * @returns {Promise<XhsAccountEntity[]>}
+   * @keyword-en list social accounts with optional platform filter
+   */
+  async listXhsAccounts(tenantId?: string, platform?: string): Promise<XhsAccountEntity[]> {
+    const filter: Record<string, unknown> = {};
+    if (tenantId) filter.tenantId = tenantId;
+    if (platform) filter.platform = platform;
+    return this.xhsAccounts.find(filter).sort({ createdAt: -1 }).toArray();
+  }
+
+  /**
+   * @description 创建自媒体账号
+   * @param {object} input - 账号信息
+   * @param {string} [tenantId] - 租户 ID
+   * @returns {Promise<XhsAccountEntity>}
+   * @keyword-en create social media account
+   */
+  async createXhsAccount(
+    input: {
+      platform?: string;
+      username: string;
+      passwordEncrypted?: string;
+      adspowerId?: string;
+      clawConfigId?: string;
+      clawAgentId?: string;
+      notes?: string;
+    },
+    tenantId?: string,
+  ): Promise<XhsAccountEntity> {
+    const now = new Date();
+    const doc: XhsAccountEntity = {
+      _id: new ObjectId(),
+      tenantId,
+      platform: input.platform?.trim() || 'xhs',
+      username: input.username.trim(),
+      passwordEncrypted: input.passwordEncrypted || undefined,
+      adspowerId: input.adspowerId?.trim() || undefined,
+      clawConfigId: input.clawConfigId?.trim() || undefined,
+      clawAgentId: input.clawAgentId?.trim() || undefined,
+      notes: input.notes || undefined,
+      loginStatus: 'unknown',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.xhsAccounts.insertOne(doc);
+    return doc;
+  }
+
+  /**
+   * @description 更新小红书账号信息
+   * @param {string} id - 账号 ObjectId
+   * @param {object} input - 更新字段
+   * @param {string} [tenantId] - 租户 ID
+   * @returns {Promise<XhsAccountEntity | null>}
+   * @keyword-en update xhs account
+   */
+  async updateXhsAccount(
+    id: string,
+    input: {
+      passwordEncrypted?: string;
+      adspowerId?: string;
+      clawConfigId?: string;
+      clawAgentId?: string;
+      notes?: string;
+    },
+    tenantId?: string,
+  ): Promise<XhsAccountEntity | null> {
+    if (!ObjectId.isValid(id)) return null;
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof input.passwordEncrypted === 'string')
+      updates.passwordEncrypted = input.passwordEncrypted || undefined;
+    if (typeof input.adspowerId === 'string')
+      updates.adspowerId = input.adspowerId.trim() || undefined;
+    if (typeof input.clawConfigId === 'string')
+      updates.clawConfigId = input.clawConfigId.trim() || undefined;
+    if (typeof input.clawAgentId === 'string')
+      updates.clawAgentId = input.clawAgentId.trim() || undefined;
+    if (typeof input.notes === 'string')
+      updates.notes = input.notes || undefined;
+    const filter: Record<string, unknown> = { _id: new ObjectId(id) };
+    if (tenantId) filter.tenantId = tenantId;
+    const res = await this.xhsAccounts.findOneAndUpdate(
+      filter,
+      { $set: updates },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
+  }
+
+  /**
+   * @description 删除小红书账号
+   * @param {string} id - 账号 ObjectId
+   * @param {string} [tenantId] - 租户 ID
+   * @returns {Promise<boolean>}
+   * @keyword-en delete xhs account
+   */
+  async deleteXhsAccount(id: string, tenantId?: string): Promise<boolean> {
+    if (!ObjectId.isValid(id)) return false;
+    const filter: Record<string, unknown> = { _id: new ObjectId(id) };
+    if (tenantId) filter.tenantId = tenantId;
+    const res = await this.xhsAccounts.deleteOne(filter);
+    return res.deletedCount === 1;
+  }
+
+  /**
+   * @description 尝试登录小红书账号（通过 Claw 代理），回写登录状态
+   * @param {string} id - 账号 ObjectId
+   * @param {string} [tenantId] - 租户 ID
+   * @returns {Promise<{ loginStatus: string; message?: string }>}
+   * @keyword-en try login xhs account via claw
+   */
+  async tryLoginXhsAccount(
+    id: string,
+    tenantId?: string,
+  ): Promise<{ loginStatus: string; message?: string }> {
+    if (!ObjectId.isValid(id)) return { loginStatus: 'error', message: 'INVALID_ID' };
+    const filter: Record<string, unknown> = { _id: new ObjectId(id) };
+    if (tenantId) filter.tenantId = tenantId;
+    const account = await this.xhsAccounts.findOne(filter);
+    if (!account) return { loginStatus: 'error', message: 'NOT_FOUND' };
+    if (!account.clawConfigId) {
+      return { loginStatus: 'error', message: 'NO_CLAW_CONFIG' };
+    }
+    const clawConfig = await this.clawConfigs.findOne({
+      _id: new ObjectId(account.clawConfigId),
+    });
+    if (!clawConfig) return { loginStatus: 'error', message: 'CLAW_CONFIG_NOT_FOUND' };
+    try {
+      const agentId = account.clawAgentId || 'main';
+      const url = `${clawConfig.serviceUrl.replace(/\/$/, '')}/api/agents/${agentId}/chat`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${clawConfig.token}`,
+        },
+        body: JSON.stringify({
+          message: `请登录小红书账号：${account.username}`,
+          action: 'xhs_login',
+          username: account.username,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const loginStatus: XhsAccountEntity['loginStatus'] = resp.ok ? 'online' : 'error';
+      await this.xhsAccounts.updateOne(
+        { _id: account._id },
+        { $set: { loginStatus, lastLoginAt: new Date(), updatedAt: new Date() } },
+      );
+      return { loginStatus, message: resp.ok ? 'LOGIN_OK' : 'CLAW_ERROR' };
+    } catch (err) {
+      await this.xhsAccounts.updateOne(
+        { _id: account._id },
+        { $set: { loginStatus: 'error', updatedAt: new Date() } },
+      );
+      return { loginStatus: 'error', message: String(err) };
+    }
   }
 }

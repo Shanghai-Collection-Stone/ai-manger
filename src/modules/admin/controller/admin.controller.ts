@@ -26,6 +26,7 @@ import {
   CreateClawConfigDto,
   CreateDataSourceByAdminDto,
   CreateTenantByAdminDto,
+  CreateXhsAccountDto,
   UpdateAgentConfigDto,
   UpdateAiProviderDto,
   UpdateAdminUserDto,
@@ -34,6 +35,7 @@ import {
   UpdateDataSourceByAdminDto,
   UpdateLlmSettingDto,
   UpdateTenantByAdminDto,
+  UpdateXhsAccountDto,
   UpsertAiProviderDto,
   UpsertLlmSettingDto,
   UpsertPlatformInfoDto,
@@ -570,5 +572,70 @@ export class AdminController {
     const user = (req as AdminRequest).adminUser;
     if (!user) throw new UnauthorizedException('UNAUTHORIZED');
     return user;
+  }
+
+  // ─── 小红书账号管理 ───────────────────────────────────
+
+  /**
+   * @description 列出自媒体账号（租户隔离，支持 platform 过滤）
+   * @keyword-en list social accounts
+   */
+  @UseGuards(AdminAuthGuard)
+  @Get('social-accounts')
+  async listXhsAccounts(@Req() req: Request, @Query('platform') platform?: string) {
+    const user = this.requireUser(req);
+    const accounts = await this.adminService.listXhsAccounts(user.tenantId, platform);
+    return { accounts };
+  }
+
+  /**
+   * @description 创建自媒体账号
+   * @keyword-en create social account
+   */
+  @UseGuards(AdminAuthGuard)
+  @Post('social-accounts')
+  async createXhsAccount(@Req() req: Request, @Body() body: CreateXhsAccountDto) {
+    const user = this.requireUser(req);
+    const account = await this.adminService.createXhsAccount(body, user.tenantId);
+    return { account };
+  }
+
+  /**
+   * @description 更新自媒体账号
+   * @keyword-en update social account
+   */
+  @UseGuards(AdminAuthGuard)
+  @Patch('social-accounts/:id')
+  async updateXhsAccount(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: UpdateXhsAccountDto,
+  ) {
+    const user = this.requireUser(req);
+    const account = await this.adminService.updateXhsAccount(id, body, user.tenantId);
+    return { account };
+  }
+
+  /**
+   * @description 删除自媒体账号
+   * @keyword-en delete social account
+   */
+  @UseGuards(AdminAuthGuard)
+  @Delete('social-accounts/:id')
+  async deleteXhsAccount(@Req() req: Request, @Param('id') id: string) {
+    const user = this.requireUser(req);
+    const deleted = await this.adminService.deleteXhsAccount(id, user.tenantId);
+    return { deleted };
+  }
+
+  /**
+   * @description 尝试登录自媒体账号（通过 Claw）
+   * @keyword-en try login social account via claw
+   */
+  @UseGuards(AdminAuthGuard)
+  @Post('social-accounts/:id/test-login')
+  async testLoginXhsAccount(@Req() req: Request, @Param('id') id: string) {
+    const user = this.requireUser(req);
+    return this.adminService.tryLoginXhsAccount(id, user.tenantId);
   }
 }

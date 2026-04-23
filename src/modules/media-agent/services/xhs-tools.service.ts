@@ -342,7 +342,7 @@ export class XhsToolsService {
       {
         name: 'xhs_create_image_group_canvas',
         description:
-          '创建图片组 Canvas 或在已有 Canvas 内生成图片组。根据文章列表（标题+标签）从图库中匹配图片，自动生成固定布局的图片组。**重要**：一个 Canvas 的 articles 数组可以包含多个文章（对应多个 imageGroup），**"生成 N 组图片"是指一个 Canvas 包含 N 个 imageGroup，不是创建 N 个 Canvas**。传入 canvasId 时会复用同一 Canvas 并回写文章配图；每篇文章配图目标为 6-8 张（当前模板默认 6 张）。',
+          '创建图片组 Canvas 或在已有 Canvas 内生成图片组。根据文章列表（标题+标签）从图库中匹配图片，自动生成固定布局的图片组。**重要**：一个 Canvas 的 articles 数组可以包含多个文章（对应多个 imageGroup），**"生成 N 组图片"是指一个 Canvas 包含 N 个 imageGroup，不是创建 N 个 Canvas**。**数量缺省规则**：用户未明确给出组数/篇数时，默认 articles 只传 1 篇（生成 1 个 imageGroup），严禁把单一主题（如"团建"）自行拆成多个子场景来凑多组。"一组/一套/一份"在中文里就是 1 组。传入 canvasId 时会复用同一 Canvas 并回写文章配图；每篇文章配图目标为 6-8 张（当前模板默认 6 张）。',
         schema: z.object({
           canvasId: z
             .union([z.number(), z.string()])

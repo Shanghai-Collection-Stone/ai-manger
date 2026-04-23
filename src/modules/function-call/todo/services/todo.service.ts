@@ -39,6 +39,7 @@ export class TodoFunctionCallService {
         decisionReason,
         aiPlan,
         deadline,
+        callbacks,
       }) => {
         const finalUserId = this.resolveUserId(userId, scope, 'todo_create');
         const finalAssigneeRaw =
@@ -125,6 +126,13 @@ export class TodoFunctionCallService {
           decisionReason,
           aiPlan: finalAiPlan,
           deadline: deadlineDate,
+          callbacks: (() => {
+            if (Array.isArray(callbacks)) return callbacks;
+            if (typeof callbacks === 'string' && callbacks.trim()) {
+              try { return JSON.parse(callbacks); } catch { /* ignore */ }
+            }
+            return undefined;
+          })(),
         });
         const robotTrigger = this.triggerRobotAssignedDeferred(doc);
         return JSON.stringify({
@@ -135,7 +143,7 @@ export class TodoFunctionCallService {
       {
         name: 'todo_create',
         description:
-          'Create a todo for a specific user with AI consideration, decision reason and AI plan.',
+          'Create a todo for a specific user with AI consideration, decision reason and AI plan. Use robot_list tool first to get available agent IDs for assignee field.',
         schema: z.object({
           userId: z
             .string()
@@ -153,12 +161,14 @@ export class TodoFunctionCallService {
             .string()
             .optional()
             .describe(
-              '关联资源，必须是 JSON 数组格式，示例：[{“type”:”canvas”,”resourceId”:123},{“type”:”file”,”resourceId”:”任务说明.md”}]，type 支持 canvas/file 等类型',
+              '关联资源，必须是 JSON 数组格式，示例：[{"type":"canvas","resourceId":123},{"type":"file","resourceId":"任务说明.md"}]，type 支持 canvas/file 等类型',
             ),
           assignee: z
             .string()
             .optional()
-            .describe('接单人中文名称（如”小红书发布机”或线下人员名）'),
+            .describe(
+              '指派接单人。优先使用 robot_list 返回的 agents[].id（格式 agent:<24位hex>）进行精准指派；也可使用旧格式 robot:<code>（如 robot:xhs_publisher）或线下人员中文名。',
+            ),
           type: z
             .string()
             .optional()
@@ -173,6 +183,25 @@ export class TodoFunctionCallService {
             .optional()
             .describe(
               '长时任务截止时间（ISO 日期字符串，仅 long_task 类型使用）',
+            ),
+          callbacks: z
+            .union([
+              z.array(
+                z.object({
+                  event: z.string().describe('回调事件类型，如 update_process_task'),
+                  params: z
+                    .record(z.string(), z.unknown())
+                    .optional()
+                    .describe(
+                      '事件参数。update_process_task: { targetTodoId: number, assignee?: string, action?: string }',
+                    ),
+                }),
+              ),
+              z.string(),
+            ])
+            .optional()
+            .describe(
+              '任务完成/失败后触发的回调事件列表（JSON 数组或 JSON 字符串均可）。常用于发文+数据收集双任务联动：发文任务完成后通过 update_process_task 自动指派并启动数据收集任务。',
             ),
         }),
       },
@@ -262,7 +291,9 @@ export class TodoFunctionCallService {
           assignee: z
             .string()
             .optional()
-            .describe('接单人中文名称（如”小红书发布机”或线下人员名）'),
+            .describe(
+              '指派接单人。优先使用 robot_list 返回的 agents[].id（格式 agent:<24位hex>）进行精准指派；也可使用旧格式 robot:<code>（如 robot:xhs_publisher）或线下人员中文名。',
+            ),
           type: z
             .string()
             .optional()
@@ -349,7 +380,58 @@ export class TodoFunctionCallService {
       },
     );
 
-    return [todoCreate, todoUpdate, todoDelete, todoGet, todoList];
+    /**
+     * @description 在指定 Todo 内创建子节点（todo item）。
+     * 必须在为父 Todo 设置 assignee 之前调用，否则机器人提前触发会忽略后续节点。
+     * @keyword-en todo item create, sub task node
+     */
+    const todoItemCreate = tool(
+      async ({ todoId, title, description, status, stage, tenantId }) => {
+        try {
+          const doc = await this.todo.createItem({
+            todoId,
+            tenantId: this.resolveTenantId(tenantId, scope),
+            title,
+            description,
+            status: (status as 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled') ?? 'pending',
+            stage,
+          });
+          return JSON.stringify({ ok: true, item: { ...doc, _id: undefined } });
+        } catch (err: unknown) {
+          const e = err instanceof Error ? err : new Error(String(err));
+          return JSON.stringify({ ok: false, error: e.message });
+        }
+      },
+      {
+        name: 'todo_item_create',
+        description:
+          'Create a sub-item (node) inside an existing todo. IMPORTANT: Call this for EACH article/account assignment BEFORE calling todo_update to set assignee on the parent todo, otherwise the robot triggers before seeing the list.',
+        schema: z.object({
+          todoId: z.number().describe('Parent todo sequence id'),
+          title: z
+            .string()
+            .describe('Node title, e.g. "账号 username 发送第 1 篇：文章标题"'),
+          description: z
+            .string()
+            .optional()
+            .describe('Node description with account and execution details'),
+          status: z
+            .enum(['pending', 'in_progress', 'done', 'failed', 'cancelled'])
+            .optional()
+            .describe('Initial status, default: pending'),
+          stage: z
+            .string()
+            .optional()
+            .describe('Stage label, e.g. "发布节点 1/3"'),
+          tenantId: z
+            .string()
+            .optional()
+            .describe('Tenant id, omit for platform scope'),
+        }),
+      },
+    );
+
+    return [todoCreate, todoUpdate, todoDelete, todoGet, todoList, todoItemCreate];
   }
 
   /**

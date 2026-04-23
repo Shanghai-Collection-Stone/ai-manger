@@ -51,6 +51,7 @@ import type { Request } from 'express';
 import { TodoService } from '../services/todo.service.js';
 import type { TodoItemCreateInput, TodoItemUpdateInput } from '../entities/todo-item.entity.js';
 import type { CanvasArticleEntity } from '../../canvas/entities/canvas.entity.js';
+import type { TodoCallback } from '../entities/todo.entity.js';
 
 /**
  * @description 诊断字符串是否已乱码（含 U+003F '?' 或 U+FFFD '\uFFFD'）
@@ -131,6 +132,7 @@ export class TodoTaskController {
       abnormalReason?: string;
       taskResult?: string;
       stage?: string;
+      callbacks?: TodoCallback[];
     },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
@@ -435,8 +437,48 @@ export class TodoTaskController {
     };
   }
 
-  // ─── XHS 帖子数据收集接口 ─────────────────────────────────────────────────────
+  // ─── Canvas 文章已发送接口 ─────────────────────────────────────────────────────
 
+  /**
+   * @description 将 canvas 文章标记为已发送（小红书发布成功后回写）
+   * @keyword-en mark canvas article as sent via task token
+   *
+   * PATCH /task-api/:todoId/canvas/articles/:articleId/sent
+   * Authorization: Bearer <taskToken>
+   * Body: { sentAt?: string }
+   */
+  @Patch(':todoId/canvas/articles/:articleId/sent')
+  async markCanvasArticleSent(
+    @Param('todoId') todoId: string,
+    @Param('articleId') articleId: string,
+    @Body() body: { sentAt?: string },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const todo = await this.resolveTodo(req, Number(todoId));
+    const canvasId = this.extractCanvasId(todo);
+    if (!canvasId) {
+      return { ok: false, message: 'CANVAS_ID_NOT_FOUND_IN_TASK' };
+    }
+    const { CanvasService } = await import('../../canvas/services/canvas.service.js');
+    const canvasService = this.moduleRef.get(CanvasService, { strict: false });
+    if (!canvasService) {
+      throw new Error('CANVAS_SERVICE_UNAVAILABLE');
+    }
+    const sentAt = body.sentAt ? new Date(body.sentAt) : undefined;
+    const canvas = await canvasService.markArticleSent(
+      canvasId,
+      Number(articleId),
+      todo.tenantId,
+      sentAt,
+    );
+    if (!canvas) {
+      return { ok: false, message: 'CANVAS_NOT_FOUND' };
+    }
+    const article = canvas.articles.find((a: CanvasArticleEntity) => a.id === Number(articleId));
+    return { ok: true, article: article ?? null };
+  }
+
+  // ─── XHS 帖子数据收集接口 ─────────────────────────────────────────────────────
   /**
    * @description 列出任务下所有帖子数据（按 dataAt 倒序）
    * @keyword-en list xhs post stats by todo

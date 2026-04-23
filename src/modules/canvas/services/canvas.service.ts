@@ -128,22 +128,29 @@ export class CanvasService {
   }
 
   /**
-   * @description 列出画布，支持按 userId 过滤（租户隔离）。
+   * @description 列出画布，支持按 userId / type / tag 过滤，支持 skip 分页（租户隔离）。
    * @param {string} [userId] - 用户ID。
    * @param {string} [tenantId] - 租户ID。
    * @param {number} [limit=50] - 返回条数上限。
+   * @param {string} [type] - 画布类型过滤（article / image-group）。
+   * @param {number} [skip=0] - 跳过条数（分页偏移）。
+   * @param {string} [tag] - 关键词标签过滤（匹配 keywords 数组）。
    * @returns {Promise<CanvasEntity[]>} 画布列表，按 updatedAt 倒序。
    * @throws {Error} 当数据库查询失败时抛出。
-   * @keyword canvas, list, user-filter
+   * @keyword canvas, list, user-filter, pagination
    * @since 2026-02-04
    */
-  async list(userId?: string, tenantId?: string, limit = 50): Promise<CanvasEntity[]> {
+  async list(userId?: string, tenantId?: string, limit = 50, type?: string, skip = 0, tag?: string): Promise<CanvasEntity[]> {
     const filter = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
+    if (type) filter.type = type;
+    if (tag) filter.keywords = { $in: [tag] };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
+    const skp = Math.max(0, Math.floor(skip));
     return this.canvases
       .find(filter, { projection: { _id: 0 } })
       .sort({ updatedAt: -1 })
+      .skip(skp)
       .limit(lim)
       .toArray();
   }
@@ -221,6 +228,7 @@ export class CanvasService {
       topic?: string;
       outline?: Record<string, unknown>;
       style?: Record<string, unknown>;
+      keywords?: string[];
     },
     tenantId?: string,
   ): Promise<CanvasEntity | null> {
@@ -231,6 +239,9 @@ export class CanvasService {
     }
     if (patch.style && typeof patch.style === 'object') {
       upd['style'] = patch.style;
+    }
+    if (Array.isArray(patch.keywords)) {
+      upd['keywords'] = patch.keywords;
     }
     await this.canvases.updateOne(
       { id, ...this.buildTenantFilter(tenantId) },
@@ -418,6 +429,69 @@ export class CanvasService {
   }
 
   /**
+   * @description 按关键词（tags）搜索 Canvas，优先 keywords 字段精确匹配，兜底 topic + 文章 title 文本搜索。
+   * @param {object} input - 搜索参数
+   * @param {string[]} input.tags - 要匹配的关键词列表（任意一个命中即返回）
+   * @param {string} [input.userId] - 用户 ID 过滤
+   * @param {string} [input.tenantId] - 租户 ID（隔离）
+   * @param {string} [input.type] - canvas 类型过滤（article / image-group）
+   * @param {number} [input.limit=20] - 最大返回数
+   * @returns {Promise<{ canvases: CanvasEntity[]; matchMode: 'keyword' | 'text' }>} 搜索结果及命中模式
+   * @keyword-en canvas search by keywords, tag match, text fallback
+   */
+  async searchByKeywords(input: {
+    tags: string[];
+    userId?: string;
+    tenantId?: string;
+    type?: string;
+    limit?: number;
+  }): Promise<{ canvases: CanvasEntity[]; matchMode: 'keyword' | 'text' }> {
+    const tags = (input.tags ?? []).map((t) => String(t).trim()).filter(Boolean);
+    const lim = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
+    const baseFilter = this.buildTenantFilter(input.tenantId);
+    if (input.userId) baseFilter.userId = input.userId;
+    if (input.type) baseFilter.type = input.type;
+
+    // 主匹配：keywords 字段 $in（精确 tag 命中）
+    if (tags.length > 0) {
+      const kwFilter = { ...baseFilter, keywords: { $in: tags } };
+      const kwResults = await this.canvases
+        .find(kwFilter, { projection: { _id: 0, embeddingVector: 0 } })
+        .sort({ updatedAt: -1 })
+        .limit(lim)
+        .toArray();
+      if (kwResults.length > 0) {
+        return { canvases: kwResults, matchMode: 'keyword' };
+      }
+    }
+
+    // 兜底：topic 或文章 title 文本 regex 搜索
+    if (tags.length > 0) {
+      const regexParts = tags.map((t) => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+      const orConditions = regexParts.flatMap((re) => [
+        { topic: { $regex: re } },
+        { 'articles.title': { $regex: re } },
+        { 'articles.tags': { $regex: re } },
+      ]);
+      const textFilter = { ...baseFilter, $or: orConditions };
+      const textResults = await this.canvases
+        .find(textFilter, { projection: { _id: 0, embeddingVector: 0 } })
+        .sort({ updatedAt: -1 })
+        .limit(lim)
+        .toArray();
+      return { canvases: textResults, matchMode: 'text' };
+    }
+
+    // 无 tags：返回最近画布
+    const recent = await this.canvases
+      .find(baseFilter, { projection: { _id: 0, embeddingVector: 0 } })
+      .sort({ updatedAt: -1 })
+      .limit(lim)
+      .toArray();
+    return { canvases: recent, matchMode: 'keyword' };
+  }
+
+  /**
    * @description 将生成好的图片组写入 Canvas。
    * @param {number} id - Canvas ID。
    * @param {CanvasImageGroup[]} imageGroups - 图片组列表。
@@ -434,5 +508,85 @@ export class CanvasService {
       { id, ...this.buildTenantFilter(tenantId) },
       { $set: { imageGroups, updatedAt: new Date() } },
     );
+  }
+
+  /**
+   * @description 将画布文章标记为已发送（小红书发布成功后回写时间）。
+   * @param {number} canvasId - 画布ID。
+   * @param {number} articleId - 文章ID。
+   * @param {string} [tenantId] - 租户ID。
+   * @param {Date} [sentAt] - 发送时间，默认当前时间。
+   * @returns {Promise<CanvasEntity | null>} 更新后的画布实体。
+   * @keyword-en mark canvas article as sent
+   */
+  async markArticleSent(
+    canvasId: number,
+    articleId: number,
+    tenantId?: string,
+    sentAt?: Date,
+  ): Promise<CanvasEntity | null> {
+    const now = sentAt ?? new Date();
+    await this.canvases.updateOne(
+      { id: canvasId, 'articles.id': articleId, ...this.buildTenantFilter(tenantId) },
+      { $set: { 'articles.$.sentAt': now, updatedAt: new Date() } },
+    );
+    return await this.get(canvasId, tenantId);
+  }
+
+  /**
+   * @description 删除整个 Canvas（租户隔离）。
+   * @param {number} id - Canvas ID。
+   * @param {string} [tenantId] - 租户ID。
+   * @returns {Promise<boolean>} 是否删除成功。
+   * @keyword-en delete canvas
+   */
+  async deleteCanvas(id: number, tenantId?: string): Promise<boolean> {
+    const res = await this.canvases.deleteOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
+    return res.deletedCount > 0;
+  }
+
+  /**
+   * @description 删除 Canvas 中指定文章（$pull，租户隔离）。
+   * @param {number} canvasId - Canvas ID。
+   * @param {number} articleId - 文章 ID。
+   * @param {string} [tenantId] - 租户ID。
+   * @returns {Promise<CanvasEntity | null>} 更新后的画布实体。
+   * @keyword-en delete article from canvas
+   */
+  async deleteArticle(
+    canvasId: number,
+    articleId: number,
+    tenantId?: string,
+  ): Promise<CanvasEntity | null> {
+    await this.canvases.updateOne(
+      { id: canvasId, ...this.buildTenantFilter(tenantId) },
+      { $pull: { articles: { id: articleId } }, $set: { updatedAt: new Date() } } as any,
+    );
+    return await this.get(canvasId, tenantId);
+  }
+
+  /**
+   * @description 删除图片组中的指定图片（按 imageId，$pull，租户隔离）。
+   * @param {number} canvasId - Canvas ID。
+   * @param {number} groupId - 图片组 ID。
+   * @param {number} imageId - 图片 imageId。
+   * @param {string} [tenantId] - 租户ID。
+   * @returns {Promise<CanvasEntity | null>} 更新后的画布实体。
+   * @keyword-en delete image from image group canvas
+   */
+  async deleteImageFromGroup(
+    canvasId: number,
+    groupId: number,
+    imageId: number,
+    tenantId?: string,
+  ): Promise<CanvasEntity | null> {
+    await this.canvases.updateOne(
+      { id: canvasId, 'imageGroups.id': groupId, ...this.buildTenantFilter(tenantId) },
+      { $pull: { 'imageGroups.$.images': { imageId } }, $set: { updatedAt: new Date() } } as any,
+    );
+    return await this.get(canvasId, tenantId);
   }
 }

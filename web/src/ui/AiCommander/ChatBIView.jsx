@@ -106,6 +106,26 @@ ${cardId ? `<div class="mt-2 text-[10px] text-slate-400">cardId: ${esc(cardId)}<
       return _origCode({ text, lang });
     }
   }
+  if (lang === 'task-it') {
+    try {
+      const parsed = JSON.parse(text);
+      const todoId = Number(parsed?.todoId);
+      if (!Number.isFinite(todoId)) return _origCode({ text, lang });
+      const esc = (v) => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const status = typeof parsed?.status === 'string' ? parsed.status : '';
+      const taskCount = Number(parsed?.taskCount);
+      const platform = typeof parsed?.platform === 'string' ? parsed.platform : '';
+      const statusLabel = status === 'in_progress' ? '执行中' : status === 'pending' ? '待接单' : status === 'done' ? '已完成' : status;
+      return `<section class="my-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+<div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-emerald-200 text-emerald-700 bg-white">任务看板</div>
+<h4 class="mt-2 mb-1 text-sm font-semibold text-slate-800">Todo#${todoId}${platform ? ` · ${esc(platform)}` : ''}${Number.isFinite(taskCount) ? ` · ${taskCount} 项` : ''}</h4>
+${statusLabel ? `<p class="text-xs text-slate-500">状态：${esc(statusLabel)}</p>` : ''}
+<button type="button" data-todo-id="${encodeURIComponent(String(todoId))}" class="js-open-todo-card mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-600 text-white hover:bg-emerald-700">查看任务详情</button>
+</section>`;
+    } catch {
+      return _origCode({ text, lang });
+    }
+  }
   if (lang) return _origCode({ text, lang });
   // Heuristic: if text has no typical code patterns, treat as plain text
   const looksLikeCode = /[{}[\];=<>]|function |const |let |var |import |class |=>|\.map\(|console\.|return /.test(text);
@@ -177,7 +197,9 @@ function appendDecisionItIfNeeded(text, toolResults) {
   if (inputText.includes('```decision-it')) return inputText;
   if (!Array.isArray(toolResults)) return inputText;
   for (const tr of toolResults) {
-    const out = tr && typeof tr === 'object' ? tr.output : undefined;
+    // 白名单：仅决策卡工具的结果才可生成 decision-it，避免其他工具 output 顶层碰巧带 cardId 被误识
+    if (!tr || tr.name !== 'decision_card_generate') continue;
+    const out = typeof tr === 'object' ? tr.output : undefined;
     const obj = out && typeof out === 'object' ? out : undefined;
     if (!obj) continue;
     const cardId =
@@ -397,6 +419,249 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
   );
 });
 
+/* ─── Task-it Block Extractor ─── */
+
+/**
+ * @description 从消息文本中提取所有 task-it JSON 块
+ * @keyword-en extract task-it blocks
+ */
+function extractAllTaskItBlocks(text) {
+  if (!text) return [];
+  const blocks = [];
+  const re = /```task-it\s*([\s\S]*?)```/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const payload = JSON.parse(m[1].trim());
+      const todoId = Number(payload?.todoId);
+      if (Number.isFinite(todoId)) blocks.push({ ...payload, todoId });
+    } catch { /* skip */ }
+  }
+  return blocks;
+}
+
+/* ─── Task-it Inline Card ─── */
+
+/**
+ * @description Task-it 内联卡片：自动加载任务状态，展示执行节点，支持打开任务详情面板
+ * @keyword-en TaskItCard inline task preview polling modal
+ */
+const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
+  const [todo, setTodo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState([]);
+  const [showModal, setShowModal] = useState(false);
+
+  const loadTodo = useCallback(async () => {
+    const tid = Number(todoId);
+    if (!Number.isFinite(tid)) return null;
+    try {
+      const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin : ''}/todo/${tid}`, {
+        headers: (() => {
+          const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') || '' : '';
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        })(),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const t = data?.todo && typeof data.todo === 'object' ? data.todo : null;
+      if (t) setTodo(t);
+      return t;
+    } catch { return null; }
+  }, [todoId]);
+
+  const loadItems = useCallback(async () => {
+    const tid = Number(todoId);
+    if (!Number.isFinite(tid)) return;
+    try {
+      const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin : ''}/todo/${tid}/items`, {
+        headers: (() => {
+          const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') || '' : '';
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        })(),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setItems(Array.isArray(data.items) ? data.items : []);
+    } catch { /* skip */ }
+  }, [todoId]);
+
+  useEffect(() => {
+    loadTodo().finally(() => setLoading(false));
+  }, [loadTodo]);
+
+  /* in_progress/pending 时每 6 秒轮询 */
+  useEffect(() => {
+    const status = todo?.status;
+    if (status !== 'in_progress' && status !== 'pending') return;
+    const timer = setInterval(async () => {
+      const next = await loadTodo();
+      if (next?.status !== 'in_progress' && next?.status !== 'pending') clearInterval(timer);
+    }, 6000);
+    return () => clearInterval(timer);
+  }, [todo?.status, loadTodo]);
+
+  /* 打开详情 modal 时加载节点 */
+  useEffect(() => {
+    if (showModal) loadItems();
+  }, [showModal, loadItems]);
+
+  const status = todo?.status || initialPayload?.status || '';
+  const isActive = status === 'in_progress' || status === 'pending';
+  const title = todo?.title || `Todo#${todoId}`;
+  const taskType = todo?.type || '';
+
+  const statusColor = {
+    in_progress: 'text-blue-600',
+    pending: 'text-amber-600',
+    done: 'text-green-600',
+    completed: 'text-green-600',
+    failed: 'text-red-600',
+  }[status] || 'text-slate-400';
+
+  const statusLabel = {
+    in_progress: '执行中',
+    pending: '待接单',
+    done: '已完成',
+    completed: '已完成',
+    failed: '失败',
+  }[status] || (status || '—');
+
+  const typeLabel = {
+    auto_execute: '自动执行',
+    offline_execute: '线下执行',
+    long_task: '长时任务',
+    other: '其他',
+  }[taskType] || taskType || '';
+
+  const getItemStatusColor = (s) => ({
+    done: 'text-green-600 bg-green-50 border-green-200',
+    in_progress: 'text-blue-600 bg-blue-50 border-blue-200',
+    failed: 'text-red-600 bg-red-50 border-red-200',
+  }[s] || 'text-slate-400 bg-slate-50 border-slate-200');
+
+  const getItemStatusLabel = (s) => ({
+    done: '完成', in_progress: '进行中', failed: '失败', pending: '待执行',
+  }[s] || s || '—');
+
+  if (loading) {
+    return (
+      <div className="mt-3 rounded-xl border border-slate-150 bg-white overflow-hidden animate-pulse">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-100">
+          <div className="h-4 w-14 rounded-full bg-slate-200" />
+          <div className="h-4 flex-1 rounded bg-slate-200" />
+          <Loader2 size={13} className="animate-spin text-slate-300 shrink-0" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {/* 任务卡片主体 */}
+      <div className="mt-3 rounded-xl border border-emerald-100 overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2 bg-white border-b border-slate-100">
+          <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full border border-emerald-200 text-emerald-700 bg-white font-medium">
+            {typeLabel || '任务看板'}
+          </span>
+          <span className="text-xs font-semibold text-slate-800 flex-1 truncate">
+            Todo#{todoId}{title !== `Todo#${todoId}` ? ` · ${title}` : ''}
+          </span>
+          {/* 状态指示 */}
+          {isActive ? (
+            <span className={`flex items-center gap-1 text-[11px] shrink-0 ${statusColor}`}>
+              <Loader2 size={11} className="animate-spin" />
+              {statusLabel}
+            </span>
+          ) : (
+            <span className={`text-[11px] shrink-0 ${statusColor}`}>{statusLabel}</span>
+          )}
+        </div>
+        {/* in_progress 时显示前几个进行中/已完成节点 */}
+        {isActive && items.length > 0 && (
+          <div className="px-3 py-2 bg-slate-50/30 space-y-1">
+            {items.filter(it => it.status === 'in_progress' || it.status === 'done').slice(0, 3).map((it) => (
+              <div key={it.id} className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg border ${getItemStatusColor(it.status)}`}>
+                {it.status === 'in_progress' && <Loader2 size={10} className="animate-spin shrink-0" />}
+                <span className="truncate">{it.title || '节点'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* 操作按钮 */}
+        <div className="px-3 pb-2 pt-1">
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof onOpenTodo === 'function') {
+                onOpenTodo(todo || { id: todoId, ...initialPayload });
+              } else {
+                setShowModal(true);
+              }
+            }}
+            className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-medium text-white bg-emerald-600 hover:bg-emerald-700"
+          >
+            查看任务详情
+          </button>
+        </div>
+      </div>
+
+      {/* 任务详情 Modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => setShowModal(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            {/* Modal 头部 */}
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 shrink-0">
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-slate-800 text-sm truncate">{title}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  {typeLabel && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{typeLabel}</span>}
+                  <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+                </div>
+              </div>
+              <button onClick={() => setShowModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400">
+                <X size={16} />
+              </button>
+            </div>
+            {/* Modal 内容 */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* 任务 aiPlan */}
+              {todo?.aiPlan && (
+                <div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">执行计划</div>
+                  <div className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap bg-slate-50 rounded-xl p-3 border border-slate-100 max-h-40 overflow-y-auto">
+                    {todo.aiPlan}
+                  </div>
+                </div>
+              )}
+              {/* 执行节点 */}
+              <div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">执行节点</div>
+                {items.length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-6">暂无执行节点</div>
+                ) : (
+                  <div className="space-y-2">
+                    {items.map((it) => (
+                      <div key={it.id} className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border text-xs ${getItemStatusColor(it.status)}`}>
+                        {it.status === 'in_progress' && <Loader2 size={12} className="animate-spin shrink-0 mt-0.5" />}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium truncate">{it.title || '节点'}</div>
+                          {it.description && <div className="text-[10px] opacity-80 truncate mt-0.5">{it.description}</div>}
+                        </div>
+                        <span className="shrink-0 text-[10px]">{getItemStatusLabel(it.status)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+});
+
 /* ─── Thinking Indicator (replaces tool call cards) ─── */
 
 const ThinkingBubble = ({ toolCount, subagentCount }) => {
@@ -420,10 +685,13 @@ const ThinkingBubble = ({ toolCount, subagentCount }) => {
 const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
   // 提取 canvas-it 块，渲染为 React 卡片
   const canvasItBlocks = useMemo(() => extractAllCanvasItBlocks(msg.content), [msg.content]);
+  // 提取 task-it 块，渲染为 React 卡片
+  const taskItBlocks = useMemo(() => extractAllTaskItBlocks(msg.content), [msg.content]);
   const strippedText = useMemo(() => {
     const raw = typeof msg.content === 'string' ? msg.content : '';
     return raw
       .replace(/```canvas-it[\s\S]*?```/gi, '')
+      .replace(/```task-it[\s\S]*?```/gi, '')
       .trim();
   }, [msg.content]);
   const hasRenderableText = strippedText.length > 0;
@@ -432,8 +700,11 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
   const htmlContent = React.useMemo(() => {
     if (!msg.content) return { __html: '' };
     const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
-    // 移除 canvas-it 块（已由 CanvasItCard 渲染）
-    const stripped = String(msg.content).replace(/```canvas-it[\s\S]*?```/gi, '').trim();
+    // 移除 canvas-it / task-it 块（已由 React 卡片渲染）
+    const stripped = String(msg.content)
+      .replace(/```canvas-it[\s\S]*?```/gi, '')
+      .replace(/```task-it[\s\S]*?```/gi, '')
+      .trim();
     // 1. 把纯 URL 转成 markdown 图片语法
     let converted = stripped.replace(imgPattern, (url) => `![](${url})`);
     let rawMarkup = marked.parse(converted);
@@ -509,6 +780,17 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
                   if (cardId && typeof onOpenDecision === 'function') {
                     onOpenDecision(cardId);
                   }
+                  return;
+                }
+                const todoBtn = target.closest('button[data-todo-id]');
+                if (todoBtn) {
+                  const raw = decodeURIComponent(
+                    String(todoBtn.getAttribute('data-todo-id') || '').trim(),
+                  );
+                  const tid = Number(raw);
+                  if (Number.isFinite(tid)) {
+                    // TaskItCard 负责自行渲染 modal，此处仅阻止冒泡
+                  }
                 }
               }}
             />
@@ -532,8 +814,17 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
         />
       ))}
 
+      {/* Task-it 内联卡片（自动轮询状态 + 详情 Modal） */}
+      {taskItBlocks.map(payload => (
+        <TaskItCard
+          key={payload.todoId}
+          todoId={payload.todoId}
+          initialPayload={payload}
+        />
+      ))}
+
     {/* Show empty placeholder while loading, no content yet, no error */}
-    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && (
+    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && taskItBlocks.length === 0 && (
       <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
         <span className="text-sm text-slate-400">（无内容）</span>
       </div>

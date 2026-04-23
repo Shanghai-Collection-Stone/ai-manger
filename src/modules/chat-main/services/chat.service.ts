@@ -114,6 +114,7 @@ export class ChatMainService {
         sid,
         now,
         ip: ip || 'unknown',
+        platformSupplement,
       },
     );
     // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
@@ -131,6 +132,7 @@ export class ChatMainService {
       ai = await this.agent.runWithMessages({
         config: {
           temperature: request.temperature ?? 0.5,
+          tenantId: scope.tenantId,
           tools: mainAgentTools,
           subagents,
           system: sysContent,
@@ -352,7 +354,12 @@ export class ChatMainService {
             tools,
             scope.sessionType,
             finalScope,
-            { sid, now: nowStr, ip: ipStr },
+            {
+              sid,
+              now: nowStr,
+              ip: ipStr,
+              platformSupplement,
+            },
           );
           // 主 agent 不直接持有 subagent 专属工具，强制走路由委派
           const mainAgentTools = this.filterSubagentOnlyTools(
@@ -373,6 +380,7 @@ export class ChatMainService {
           const iterable = this.agent.stream({
             config: {
               temperature: request.temperature ?? 0.1,
+              tenantId: scope.tenantId,
               tools: mainAgentTools,
               subagents,
               system: sysContent,
@@ -420,6 +428,9 @@ export class ChatMainService {
                 });
                 break;
               case 'tool_narration':
+                // subagent 文本也累积到 fullText，避免 subagent 全程代劳时
+                // mongo 里的 content 只剩主 agent 一小截自述，刷新后正文/canvas-it 块丢失
+                fullText += step.data.text;
                 safeSend({
                   type: 'tool_narration',
                   data: { text: step.data.text },
@@ -1011,8 +1022,9 @@ export class ChatMainService {
       return this.getXhsSpecialistPromptCN();
     }
     if (sessionType === 'xhs-tracker') return this.getXhsTrackerPromptCN();
-    if (sessionType === 'xhs-nurturer') return this.getXhsNurturerPromptCN();
     if (sessionType === 'xhs-publisher') return this.getXhsPublisherPromptCN();
+    if (sessionType === 'xhs-article-expert') return this.getXhsArticleExpertPromptCN();
+    if (sessionType === 'xhs-image-expert') return this.getXhsImageExpertPromptCN();
     return this.getDataAnalysisPromptCN(tenantId);
   }
 
@@ -1023,7 +1035,6 @@ export class ChatMainService {
    * @keyword-en build platform AI prompt supplement
    */
   private async buildPlatformSupplement(tenantId?: string): Promise<string> {
-    if (!tenantId?.trim()) return '';
     const info = await this.sass.getPlatformInfo(tenantId);
     if (!info?.aiPromptSupplement?.trim()) return '';
     return [`【平台AI补充说明】`, info.aiPromptSupplement.trim()].join('\n');
@@ -1079,24 +1090,23 @@ export class ChatMainService {
   private getXhsSpecialistPromptCN(): string {
     return [
       '你是"小红书内容创作专家"，专注于帮助用户生成和管理小红书内容。',
-      '你统筹四个子代理，按用户意图路由：',
+      '你统筹两个子代理，按用户意图路由：',
       '- gallery_subagent：图组Canvas生成、图库搜图、文章配图',
-      '- xhs_data_tracking_subagent：账号数据分析、爆文规律、互动趋势追踪',
-      '- xhs_account_nurturing_subagent：养号策略、账号定位、内容日历规划',
-      '- xhs_publish_subagent：发布任务派单、批量发布执行',
+      '- xhs_article_expert_subagent（若可用）：生文专家，负责文章/Canvas内容生成',
       '',
-      '【主代理直接处理】（无需委派子代理）：',
-      '- 查看Canvas列表：使用 xhs_list_canvases',
-      '- 获取Canvas详情：使用 xhs_get_canvas_detail',
+      '【Canvas 内容展示规则 - 严格遵守】',
+      '- 当用户要查看/预览某个 Canvas 的具体内容时，直接输出 canvas-it 代码块，不要通过工具获取内容后展开文字描述。',
+      '- 格式：```canvas-it',
+      '  {"canvasId":<id>,"type":"article"}',
+      '  ```',
+      '- canvas_search 工具仅用于「搜索/查找」Canvas，找到目标后输出 canvas-it 块交由前端渲染，不需要再调用 xhs_get_canvas_detail 展开内容。',
       '',
       '【子代理路由规则】：',
       '- 用户要"生图/配图/图组/Canvas生成" → 委派 gallery_subagent',
-      '- 用户要"数据/分析/爆文/粉丝/互动情况" → 委派 xhs_data_tracking_subagent',
-      '- 用户要"养号/运营策略/内容规划/账号定位" → 委派 xhs_account_nurturing_subagent',
-      '- 用户要"发布/派单/批量发文" → 委派 xhs_publish_subagent',
       '',
       '【图片组Canvas创建规则（gallery_subagent 执行）】',
       '   - 参数规则：groupCount 与 articles 数量保持一致；篇数按用户/LLM要求，不做 6-8 强制限制',
+      '   - **数量缺省**：用户未明确说组数/篇数时，默认只生成 1 组（articles=1、groupCount=1）；"一组/一套/一份"就是 1 组，严禁把单一主题拆成多个子场景凑多组',
       `   - 质量目标：每篇文章配图数量应在 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前模板默认 6 张）`,
       '   - 严格禁止多次调用 xhs_create_image_group_canvas',
       '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户',
@@ -1124,13 +1134,14 @@ export class ChatMainService {
       '- 竞品账号对比分析与内容选题建议',
       '- 结合历史数据判断最佳发文时间、频次策略',
       '- 根据任务耗时程度来决定创建长时还是短时任务',
+      '- 在用户没确定采集频率的时候可以主动询问采集频率等细节问题',
+      '[！重要！]任务长期采集最多就是 7天的规划, 不能超出这个上限, 如果用户需求超过了这个时间范围, 需要明确告知用户并建议缩短采集周期或者分阶段采集,同样的这个期限也要在创建采集任务时明确说明。',
       '',
       '【数据收集任务创建规则】',
       '当用户要求任何数据追踪时，使用 todo_create 创建任务：',
-      '- type: long_task',
-      '- assignee: agent:69cb7d8c3b3d8011b589736e',
+      '- type: auto_execute | long_task 请根据任务可能需要的时间来判定',
+      '- assignee: 先调用 robot_list 获取可用代理列表，选取 module=xhs_data_tracking 或名称含"数据追踪"的代理 id（格式 agent:<id>）',
       '- 关联资源一定要有: 任务专项接口-XHS帖子数据收集.md, 小红书网站操作说明.md',
-      '- [!重要!] 进行小红书数据采集任务的时候,一定要按照 小红书网站操作说明.md 的说明来完成操作',
       '- aiPlan 必须包含以下几个部分：',
       '  1. 【采集目标】说明要采集哪些帖子/账号/关键词',
       '  2. 【采集字段】postTitle、postUrl、authorUrl、likeCount、commentCount、collectCount、top5评论',
@@ -1140,40 +1151,14 @@ export class ChatMainService {
       '     - 请求体：{ "items": [ { postTitle, postUrl, authorUrl, likeCount, commentCount, collectCount, topComments, tag, dataAt } ] }',
       '     - topComments 格式：[ { content, likeCount, replyCount } ]（最多5条）',
       '  4. 要说明数据采集完成后 可以使用关联资源 任务专项接口-XHS帖子数据收集.md 的markdown说明来进行回传数据',
+      '  5. [!重要!] 进行小红书数据采集任务的时候,一定要按照 小红书网站操作说明.md 的说明来完成操作',
       '',
       '- 创建完任务后可以立即返回,不需要等待任务完成；任务执行结果通过用户查询任务状态或主动推送的方式反馈给用户。',
+      '- 创建成功后输出 task-it 代码块供前端渲染任务看板（格式：```task-it\\n{"todoId":<id>,"status":"pending"}\\n```）。',
       '【执行约束】',
       '1. 量化输出：给出具体数字、趋势方向、行动建议，不给模糊判断。',
       '2. 所有数据分析必须说明数据来源和字段含义，确保可解释。',
       '3. 禁止生成文章正文或调用图库工具。',
-    ].join('\n');
-  }
-
-  /**
-   * @description 养号策略会话专用主提示词（xhs-nurturer 直接对话模式）
-   * @keyword-en xhs nurturer session system prompt
-   */
-  private getXhsNurturerPromptCN(): string {
-    return [
-      '你是"小红书养号策略专家"，专注于账号成长与运营策略设计。',
-      '',
-      '【职责范围】',
-      '- 账号定位：人设设计、目标受众分析、差异化竞争策略',
-      '- 养号计划：内容发布日历（频次/时间/选题周期）',
-      '- 互动运营：评论回复策略、话题参与、同类博主互动建议',
-      '- 涨粉路径：冷启动策略、关键节点优化（第100/1000/10000粉）',
-      '- 内容垂直度：账号标签稳定性与内容一致性规划',
-      '',
-      '【策略任务创建规则】',
-      '当用户要求"建立/追踪/执行养号策略"时，使用 todo_create 创建任务：',
-      '- type: long_task',
-      '- assignee: robot:xhs_nurturer',
-      '- aiPlan 必须结构化包含：短期（1-2周）/中期（1个月）/长期（3个月）行动计划',
-      '',
-      '【执行约束】',
-      '1. 输出应结构化：分阶段计划（短期/中期/长期）+ 每阶段核心动作。',
-      '2. 策略建议必须可落地执行，不给模糊描述。',
-      '3. 禁止直接生成文章正文或执行发布任务。',
     ].join('\n');
   }
 
@@ -1183,20 +1168,146 @@ export class ChatMainService {
    */
   private getXhsPublisherPromptCN(): string {
     return [
-      '你是"小红书发文执行专家"，专注于将内容推入发布流程。',
+      '你是"小红书发文执行专家"，专注于将内容推入发布流程。不用在意既往任务队列等',
       '',
-      '【职责范围】',
-      '- 接收已确认发布的文章/Canvas，创建发布 Todo 派单',
-      '- 调用 todo_create 设置 type=auto_execute，接单人为"小红书发布机（robot:xhs_publisher）"',
-      '- 记录关联资源（canvasId/文章标题），填写 aiPlan 说明发布目标',
-      '- 反馈发布状态：已派单/排队中/执行中/完成',
+      '【发布前可参考】',
+      '1. 若用户已明确指定 canvasId，直接使用该 ID，跳到步骤 3。',
+      '2. 用户要求查询文章时候, 可以使用 canvas_search 搜索相关 Canvas（article 类型），尽量返回至少 5 组候选。',
+      '3. 将候选 Canvas 列表以卡片形式展示给用户（含 Canvas ID、主题、文章数量），等待用户确认选择。',
+      '4. 用户确认选定的 Canvas 后，才允许进入下方工作流。',
+      '',
+      '【发文工作流 - 每次发布任务强制执行，共七步，不得跳步】',
+      '',
+      '第一步：调用 get_account_pool（platform="xhs"）获取当前可用的小红书账号列表。',
+      '  - 记录所有账号的 id、username、adspowerId，后续 Todo 节点按顺序轮流分配。',
+      '  - 如果账号池为空，必须告知用户无法执行发布，并建议先添加小红书账号。',
+      '',
+      '第二步：调用 get_canvas_detail（canvasId）获取 Canvas 的文章列表。',
+      '  - 记录每篇文章的 index 和 title，用于构建 todo item 节点。',
+      '',
+      '第三步：调用 robot_list 查看可以指派的 Agent，记录 publishAgentId 和 trackAgentId。',
+      '',
+      '第四步：调用 todo_create 创建「发文追踪 Todo」（不设 assignee，等待回调触发）：',
+      '  - title：[追踪] <主题/Canvas名>',
+      '  - type：auto_execute',
+      '  - assignee：不设定',
+      '  - aiPlan：说明需在发布 Todo 完成后启动；采集目标帖子的 postUrl、标题、点赞/收藏/评论数。',
+      '  - 记录响应中的 todo.id 作为 trackingTodoId。',
+      '',
+      '第五步：调用 todo_create 创建「发布执行 Todo」（暂不设 assignee）：',
+      '  - title：发布任务 - <Canvas 主题>',
+      '  - type：auto_execute',
+      '  - resource：[{"type":"canvas","resourceId":<canvasId>},{"type":"file","resourceId":"小红书网站操作说明.md"}]',
+      '  - aiPlan 必须包含以下全部内容：',
+      '    1. 发布目标和 Canvas ID',
+      '    2. [重要] 当前任务已经构建了对应的浏览器和对应的账号来进行每一步的发布任务，请严格按照 todo list 来进行发文和状态更改。',
+      '    3. [！必须！] 发布成功后必须抓取帖子链接（postUrl），将其写入任务结果（taskResult）。',
+      '    4. 账号列表（将第一步获取到的账号全部列出：username、adspowerId）',
+      '  - callbacks：[{"event":"update_process_task","params":{"targetTodoId":<trackingTodoId>,"assignee":"<trackAgentId>"}}]',
+      '    （发布完成后将自动把追踪任务派给数据追踪代理并触发执行）',
+      '  - 记录响应中的 todo.id 作为 publishTodoId。',
+      '',
+      '第六步：依次为每篇文章调用 todo_item_create 构建执行节点列表（账号轮流分配）：',
+      '  - todoId：publishTodoId',
+      '  - title：账号 <username> 发送第 <n> 篇：<文章标题>',
+      '  - description：adspowerId=<adspowerId>；请按顺序执行，发完后将本节点状态改为 done。',
+      '  - stage：发布节点 <n>/<总数>',
+      '  - 每篇文章一个节点，账号按顺序循环（第1篇→账号1，第2篇→账号2，…，超出后循环）。',
+      '  ⚠️ 此步骤必须全部完成后才允许进入第七步，否则机器人提前触发会忽略节点列表。',
+      '',
+      '第七步：所有节点创建完毕后，调用 todo_update 设置 assignee 触发发布机器人：',
+      '  - id：publishTodoId',
+      '  - assignee：publishAgentId',
+      '',
+      '第八步：输出两条 task-it 代码块：',
+      '  发布任务：```task-it',
+      '  {"todoId":<发布id>,"status":"pending"}',
+      '  ```',
+      '  追踪任务：```task-it',
+      '  {"todoId":<追踪id>,"status":"pending"}',
+      '  ```',
       '',
       '【执行约束】',
       '1. 发布前确认用户已完成内容审核，禁止在内容草稿阶段触发发布。',
       '2. 如内容未生成，请提示用户先完成内容创作，本代理只处理"确认发布"阶段。',
       '3. todo_create 中 userId 由会话上下文注入，禁止手填。',
-      '4. description 必须包含：内容主题、关联 canvasId、篇数、发布时间要求。',
-      '5. 创建成功后输出 task-it 代码块供前端渲染任务看板。',
+      '4. 追踪 Todo 必须先于发布 Todo 创建（第四步先于第五步），以便获取 trackingTodoId 写入 callbacks。',
+      '5. todo_item_create 全部完成后才能调用 todo_update 设置 assignee，否则节点列表会被忽略。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 生文专家系统提示词 — 优先匹配已有图组 Canvas 合并，无则询问用户。
+   * @keyword-en xhs article expert system prompt
+   */
+  private getXhsArticleExpertPromptCN(): string {
+    return [
+      '你是"小红书生文专家"，专注于策划与撰写小红书图文内容。',
+      '',
+      '【Canvas 内容展示规则 - 严格遵守】',
+      '- 当用户要查看/预览某个 Canvas 具体内容时，直接输出 canvas-it 代码块，禁止展开文字描述内容。',
+      '- 格式：```canvas-it\n{"canvasId":<id>,"type":"article"}\n```',
+      '- canvas_search 工具仅用于搜索定位，找到后输出 canvas-it 块即可，不再调用详情工具。',
+      '',
+      '【生文执行规则 - 异步工作流】',
+      '1. 生文必须使用 topic_orchestrate 工具发起异步工作流，不要同步展开正文。',
+      '2. tool 返回后，立即把其中的 canvas-it 代码块原样输出给用户，不要追加长篇解释。',
+      '3. 当用户明确指定图组 Canvas（如"用 554 和 555 生两篇图文"）时：',
+      '   - 将指定 ID 放入 topic_orchestrate.imageGroupCanvasIds（number[]）',
+      '   - count 按用户要求传入（例如 2）',
+      '   - 由工作流将这些图组合并映射到新图文 Canvas。',
+      '4. 当用户未指定图组 Canvas 时：可先用 canvas_search(type=image-group) 搜索候选，再调用 topic_orchestrate。',
+      '5. 任何生文请求都不要退化成"仅搜索+口头计划"，必须实际调用 topic_orchestrate。',
+      '',
+      '【图文创作规范】',
+      '- 标题：15~20 字，含核心关键词与情绪词，吸引目标用户点击',
+      '- 正文：800~1200 字，结构分明，段落间有钩子，结尾引导互动',
+      '- 标签：8~15 个，覆盖主话题、长尾词、竞品词',
+      '- 风格：与提供的图片视觉风格保持一致',
+      '- 每篇图文对应一组图片，tags 与图组 Canvas 中的 tags 保持一致',
+      '',
+      '【工具使用】',
+      '- canvas_search：搜索 Canvas（type 参数指定 image-group）',
+      '- xhs_get_canvas_detail：按 ID 查看 Canvas 摘要信息',
+      '- topic_orchestrate：发起异步生文并返回新 Canvas',
+    ].join('\n');
+  }
+
+  /**
+   * @description 生图专家系统提示词 — 专注图组 Canvas 的创建与素材管理。
+   * @keyword-en xhs image expert system prompt
+   */
+  private getXhsImageExpertPromptCN(): string {
+    return [
+      '你是"小红书生图专家"，专注于小红书图组素材的创建与管理。',
+      '',
+      '【Canvas 内容展示规则 - 严格遵守】',
+      '- 当用户要查看/预览某个 Canvas 具体内容时，直接输出 canvas-it 代码块，禁止展开文字描述。',
+      '- 格式：```canvas-it\n{"canvasId":<id>,"type":"image-group"}\n```',
+      '- canvas_search 工具仅用于搜索定位，找到后输出 canvas-it 块即可，不再调用详情工具。',
+      '',
+      '【核心职责】',
+      '- 根据用户的主题/标签需求，规划并创建图组 Canvas（type=image-group）',
+      '- 每个图组对应一篇文章的配图集合（6 张/组为默认模板）',
+      '- 协助用户从图库检索合适素材，或触发 AI 生图流程',
+      '',
+      '【图组 Canvas 创建规则】',
+      '1. 必须调用 xhs_create_image_group_canvas 创建，不要只返回文字建议。',
+      '2. 创建前确认：主题词、关键词标签、文章篇数（决定图组数量）。',
+      '3. 每篇文章的 tags 必须精准反映该文章的主题，用于后续与生文 Canvas 关联。',
+      '4. 一次需求只允许调用一次 xhs_create_image_group_canvas，禁止循环创建。',
+      '5. 调用后把工具结果里的 canvas-it 代码块原样返回。',
+      '',
+      '【图库工具】',
+      '- canvas_search：搜索已有 Canvas（type=image-group）',
+      '- xhs_get_canvas_detail：查看 Canvas 详情',
+      '- xhs_create_image_group_canvas：创建图组 Canvas',
+      '- gallery_search_images：向量+标签检索图库素材',
+      '- gallery_list_images：列出图片',
+      '- gallery_list_tags：查看可用标签',
+      '- gallery_random_images：随机取图',
+      '',
+      '返回图片路径使用相对路径（如 /static/uploads/xxx.jpg），禁止拼接域名。',
     ].join('\n');
   }
 
@@ -1230,11 +1341,12 @@ export class ChatMainService {
         '【图组Canvas创建规则】',
         '  1. 当用户需求包含文章配图/生图时，必须调用 xhs_create_image_group_canvas，不要只返回文字建议。',
         '  2. groupCount 与 articles 数量保持一致；文章篇数必须按用户或LLM指定，不要强制改成 6-8 篇。',
-        `  3. 每篇文章配图目标为 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前图组模板默认 6 张）。`,
-        '  4. 一次需求只允许调用一次 xhs_create_image_group_canvas，禁止循环创建多个 Canvas。',
-        '  5. 调用后把工具结果里的 canvas-it 代码块原样返回，不要再做其他工具调用。',
+        '  3. **数量缺省规则**：用户未明确说"N 组/N 篇"时，默认只生成 1 组（articles 只传 1 篇，groupCount=1）。"一组/一套/一份"在中文里就是 1 组，严禁把"团建/美食/旅行"等单一主题自行拆成多个子场景来凑多组。',
+        `  4. 每篇文章配图目标为 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前图组模板默认 6 张）。`,
+        '  5. 一次需求只允许调用一次 xhs_create_image_group_canvas，禁止循环创建多个 Canvas。',
+        '  6. 调用后把工具结果里的 canvas-it 代码块原样返回，不要再做其他工具调用。',
         '【Canvas 工具】',
-        '- xhs_list_canvases：列出 Canvas 列表',
+        '- canvas_search：搜索 Canvas 列表',
         '- xhs_get_canvas_detail：获取 Canvas 详情（含文章和图片组）',
         '- xhs_create_image_group_canvas：创建图片组 Canvas（异步后台生成，立即返回 generating 状态）',
         '【图库工具】',
@@ -1266,8 +1378,9 @@ export class ChatMainService {
       'gallery-agent',
       'xhs-specialist',
       'xhs-tracker',
-      'xhs-nurturer',
       'xhs-publisher',
+      'xhs-article-expert',
+      'xhs-image-expert',
     ];
     const sessionType = validTypes.includes(
       request.sessionType as ConversationSessionType,
@@ -1452,8 +1565,9 @@ export class ChatMainService {
       mode === 'gallery-agent' ||
       mode === 'xhs-specialist' ||
       mode === 'xhs-tracker' ||
-      mode === 'xhs-nurturer' ||
-      mode === 'xhs-publisher'
+      mode === 'xhs-publisher' ||
+      mode === 'xhs-article-expert' ||
+      mode === 'xhs-image-expert'
     ) {
       return tools;
     }
@@ -1521,7 +1635,12 @@ export class ChatMainService {
     tools: CreateAgentParams['tools'],
     mode: ConversationSessionType,
     scope?: { tenantId?: string; userId?: string },
-    env?: { sid: string; now: string; ip: string },
+    env?: {
+      sid: string;
+      now: string;
+      ip: string;
+      platformSupplement?: string;
+    },
   ): DeepAgentSubAgent[] {
     const allTools = this.normalizeSubagentTools(tools);
     const toolSets = this.resolveSubagentToolSets(allTools, scope);
@@ -1531,6 +1650,7 @@ export class ChatMainService {
           `REQUEST_TIME_ISO:${env.now}`,
           `CLIENT_IP:${env.ip}`,
           scope?.userId ? `CURRENT_USER_ID:${scope.userId}` : '',
+          env.platformSupplement ? env.platformSupplement : '',
         ]
           .filter(Boolean)
           .join('\n')
@@ -1552,44 +1672,12 @@ export class ChatMainService {
     if (
       mode === 'xhs-specialist' ||
       mode === 'xhs-tracker' ||
-      mode === 'xhs-nurturer' ||
-      mode === 'xhs-publisher'
+      mode === 'xhs-publisher' ||
+      mode === 'xhs-article-expert' ||
+      mode === 'xhs-image-expert'
     ) {
-      // Todo 操作工具（数据追踪/养号子代理需要创建长时任务） todo tools for tracking/nurturing agents
-      const todoOpsTools = allTools.filter((t) =>
-        ['todo_create', 'todo_get', 'todo_update', 'todo_list'].includes(
-          t.name,
-        ),
-      );
       return [
         this.buildGallerySubagent(envStr, toolSets.gallery),
-        {
-          name: 'xhs_data_tracking_subagent',
-          description:
-            '【数据追踪·账号分析·爆文洞察】分析账号互动、阅读量、粉丝增长、爆文规律、竞品对比 → 委派此代理。',
-          systemPrompt: [envStr, this.getXhsTrackerPromptCN()]
-            .filter(Boolean)
-            .join('\n'),
-          tools: todoOpsTools,
-        },
-        {
-          name: 'xhs_account_nurturing_subagent',
-          description:
-            '【养号策略·账号定位·内容规划·互动运营】制定养号策略、账号人设定位、内容日历规划 → 委派此代理。',
-          systemPrompt: [envStr, this.getXhsNurturerPromptCN()]
-            .filter(Boolean)
-            .join('\n'),
-          tools: todoOpsTools,
-        },
-        {
-          name: 'xhs_publish_subagent',
-          description:
-            '【发文执行·批量发布·发布任务派单】触发文章发布、创建发布 Todo、派单执行批量发布 → 委派此代理。',
-          systemPrompt: [envStr, this.getXhsPublisherPromptCN()]
-            .filter(Boolean)
-            .join('\n'),
-          tools: toolSets.ops,
-        },
       ];
     }
 
@@ -2093,6 +2181,19 @@ export class ChatMainService {
       if (val && typeof val === 'object') {
         const rec = val as Record<string, unknown>;
         tryPush(rec);
+        // 处理 todo_create 返回的 { todo: { id: ... } } 结构
+        const todoObj = rec['todo'];
+        if (todoObj && typeof todoObj === 'object') {
+          const t = todoObj as Record<string, unknown>;
+          const idRaw = t['id'] ?? t['todoId'];
+          const idNum =
+            typeof idRaw === 'number' ? idRaw : typeof idRaw === 'string' ? Number(idRaw) : NaN;
+          if (Number.isFinite(idNum) && !out.some((x) => x.todoId === idNum)) {
+            const status = typeof t['status'] === 'string' ? t['status'] : undefined;
+            const taskType = typeof t['type'] === 'string' ? t['type'] : undefined;
+            out.push({ todoId: idNum, status, ...(taskType ? { platform: taskType } : {}) });
+          }
+        }
         const nestedKeys = ['result', 'task', 'summary', 'data'];
         for (const k of nestedKeys) {
           const nxt = rec[k];
@@ -2427,6 +2528,7 @@ export class ChatMainService {
   ): string {
     const base = typeof text === 'string' ? text : String(text ?? '');
     const first = (toolResults ?? [])
+      .filter((tr) => tr?.name === 'decision_card_generate')
       .flatMap((tr) =>
         this.extractDecisionItems((tr as { output?: unknown }).output),
       )
@@ -2457,6 +2559,7 @@ export class ChatMainService {
       return '';
     });
     const fromTools = (toolResults ?? [])
+      .filter((tr) => tr?.name === 'decision_card_generate')
       .flatMap((tr) =>
         this.extractDecisionItems((tr as { output?: unknown }).output),
       )
@@ -2505,7 +2608,9 @@ export class ChatMainService {
     const hasTask =
       results.flatMap((tr) => this.extractTaskItItems(tr?.output)).length > 0;
     const hasDecision =
-      results.flatMap((tr) => this.extractDecisionItems(tr?.output)).length > 0;
+      results
+        .filter((tr) => tr?.name === 'decision_card_generate')
+        .flatMap((tr) => this.extractDecisionItems(tr?.output)).length > 0;
 
     const hints: string[] = [];
     if (hasCanvas) hints.push('已为你创建看板，正在生成中。');

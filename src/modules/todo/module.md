@@ -29,6 +29,12 @@ Todo服务。
   - `createItem`: 创建清单/create item
   - `buildTenantFilter`: 租户过滤/build tenant filter
 
+### task-callback.service.ts
+Todo回调事件处理服务，异步处理任务完成/失败时的回调事件列表。
+- `processCallbacks` — 非阻塞触发所有回调（status 变为 done/failed 时由 TodoService 调用）
+- `handleUpdateProcessTask` — 处理 `update_process_task` 事件：更新目标任务 assignee，触发 robot 执行
+- **关键词**: callback, update-process-task, async, robot-trigger
+
 ### todo.module.ts
 Todo模块定义。
 - **关键词**: module
@@ -47,6 +53,7 @@ Todo模块定义。
   - `updateItem`: 更新执行节点/update item via token
   - `deleteItem`: 删除执行节点/delete item via token
   - `getCanvasArticles`: 获取专项 Canvas 下所有文章（含图片完整路径）/get canvas articles by token
+  - `markCanvasArticleSent`: 标记 Canvas 文章已发送（写入 sentAt）/mark canvas article as sent
   - `listXhsStats`: 列出任务下所有帖子数据/list xhs stats by todo
   - `getXhsStat`: 获取单条帖子数据/get xhs post stat by id
   - `createXhsStat`: 新增一条帖子数据/create xhs post stat
@@ -55,8 +62,9 @@ Todo模块定义。
   - `deleteXhsStat`: 删除帖子数据/delete xhs post stat
 
 ### todo.entity.ts
-Todo实体。新增 `taskToken`、`deadline`、`category` 字段（任务专属token、长时任务截止时间、分类标签如xhs）。
-- **关键词**: entity, deadline, long_task, category, xhs
+Todo实体。新增 `taskToken`、`deadline`、`category`、`callbacks` 字段（任务专属token、长时任务截止时间、分类标签如xhs、完成/失败回调列表）。
+- `TodoCallback` — 回调事件接口（event + params），支持 `update_process_task` 事件（自动指派+触发目标任务）
+- **关键词**: entity, deadline, long_task, category, xhs, callbacks
 
 ### todo-item.entity.ts
 清单实体。

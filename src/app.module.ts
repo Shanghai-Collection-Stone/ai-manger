@@ -22,6 +22,7 @@ import { AdminModule } from './modules/admin/admin.module.js';
 import { DecisionCardModule } from './modules/decision-card/decision-card.module.js';
 import { MongoQueryModule } from './modules/mongo-query/mongo-query.module.js';
 import { DashboardConfigModule } from './modules/dashboard-config/dashboard-config.module.js';
+import { ImageAntiDetectionModule } from './modules/image-anti-detection/image-anti-detection.module.js';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { DashboardConfigModule } from './modules/dashboard-config/dashboard-conf
     DecisionCardModule,
     MongoQueryModule,
     DashboardConfigModule,
+    ImageAntiDetectionModule,
   ],
   controllers: [AppController],
   providers: [AppService],

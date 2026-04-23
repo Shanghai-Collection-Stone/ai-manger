@@ -23,6 +23,7 @@
 | 函数名 | 关键词描述 |
 |---|---|
 | `listRobots()` | 返回所有可用 robot 技术描述列表（code/name/description） |
+| `listAgentConfigs()` | 查询 AdminService 返回所有已启用 agent 配置（id/name/module），供 LLM 选择指派 |
 | `parseRobotCode(assignee)` | 解析 `robot:code` 格式的 assignee，返回 robotCode |
 | `parseAgentId(assignee)` | 解析 `agent:<24-hex-id>` 格式，返回 agentId |
 | `triggerIfRobotAssigned({ todo })` | 联合触发：优先 agent 格式，兼容 legacy robot 格式 |

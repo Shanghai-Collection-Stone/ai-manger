@@ -24,6 +24,36 @@ import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { AgentConfig } from '../../ai-agent/types/agent.types.js';
 import { TextFormatService } from '../../format/services/format.service';
 
+/**
+ * @description 小红书账号分配信息（轻量化，无需引入 admin 模块依赖）
+ * @keyword-en xhs account assignment, round-robin account binding
+ */
+export interface XhsAccountAssignment {
+  /** 账号数据库 ID */
+  id: string;
+  /** 账号用户名（小红书昵称） */
+  username: string;
+  /** AdsPower 环境 ID */
+  adspowerId?: string;
+  /** 绑定 Claw 配置 ID */
+  clawConfigId?: string;
+  /** 绑定 Claw Agent ID */
+  clawAgentId?: string;
+}
+
+/**
+ * @description 带账号分配信息的发文节点摘要
+ * @keyword-en post with account assignment for task node plan
+ */
+export interface PostWithAccount {
+  /** 帖子标题 */
+  title: string;
+  /** 节点序号（0-based） */
+  index: number;
+  /** 分配的小红书账号（若无账号则 undefined） */
+  xhsAccount?: XhsAccountAssignment;
+}
+
 const ZGalleryTagSelection = z.object({
   selections: z
     .array(
@@ -817,6 +847,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     provider: 'gemini' | 'deepseek';
     model: string;
     temperature: number;
+    tenantId?: string;
     platform?: string;
     topic?: string;
     availableTags: string[];
@@ -851,6 +882,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       provider: input.provider,
       model: input.model,
       temperature: input.temperature,
+      tenantId: input.tenantId,
       system: sys,
       responseFormat:
         input.provider === 'deepseek'
@@ -985,6 +1017,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       provider,
       model,
       temperature,
+      tenantId,
       platform: input.platform,
       topic: typeof c.topic === 'string' ? c.topic : undefined,
       availableTags: tags,
@@ -1138,6 +1171,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     todoId: number;
     taskCount: number;
     tasksPreview: string[];
+    tenantId?: string;
     provider?: 'gemini' | 'deepseek';
     model?: string;
     temperature?: number;
@@ -1161,6 +1195,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         Number.isFinite(input.temperature)
           ? input.temperature
           : 0.2,
+      tenantId: input.tenantId,
       system: sys,
       responseFormat:
         provider === 'deepseek'
@@ -1264,6 +1299,10 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     if (!c) throw new BadRequestException('CANVAS_NOT_FOUND');
     if (c.userId !== input.userId)
       throw new BadRequestException('CANVAS_USER_MISMATCH');
+    const tenantId =
+      typeof c.tenantId === 'string' && c.tenantId.trim().length > 0
+        ? c.tenantId.trim()
+        : undefined;
 
     const articles = Array.isArray(c.articles) ? c.articles : [];
     if (articles.length === 0)
@@ -1430,6 +1469,8 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     temperature?: number;
     taskCount: number;
     todoId?: number;
+    /** 可用的小红书账号列表，按顺序 round-robin 分配到每篇发文 */
+    xhsAccounts?: XhsAccountAssignment[];
   }): Promise<Record<string, unknown>> {
     const platform =
       typeof input.platform === 'string' && input.platform.trim().length > 0
@@ -1444,6 +1485,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     if (!c) throw new BadRequestException('CANVAS_NOT_FOUND');
     if (c.userId !== input.userId)
       throw new BadRequestException('CANVAS_USER_MISMATCH');
+
+    const tenantId =
+      typeof c.tenantId === 'string' && c.tenantId.trim().length > 0
+        ? c.tenantId.trim()
+        : undefined;
 
     const canvasIdStr = String(c.id);
     const existing =
@@ -1487,6 +1533,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           tasksPreview: Array.isArray(summary.tasksPreview)
             ? (summary.tasksPreview as string[])
             : [],
+          tenantId,
           provider: input.provider,
           model: input.model,
           temperature: input.temperature,
@@ -1546,11 +1593,13 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
 
     const baseMs = typeof startMs === 'number' ? startMs : Date.now();
     let cursorMs = baseMs;
+    const accounts = Array.isArray(input.xhsAccounts) ? input.xhsAccounts : [];
     const postsInit: Array<{
       title: string;
       plannedAt?: string;
       payload: Record<string, unknown>;
     }> = [];
+    const postsWithAccounts: PostWithAccount[] = [];
     for (let idx = 0; idx < taskCountRaw; idx++) {
       const refIndex = idx < allArticles.length ? idx : undefined;
       const refArticle =
@@ -1568,6 +1617,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       }
       const plannedAt = new Date(cursorMs).toISOString();
 
+      // round-robin 分配账号 | assign account round-robin
+      const acct = accounts.length > 0 ? accounts[idx % accounts.length] : undefined;
+
       postsInit.push({
         title,
         plannedAt,
@@ -1578,8 +1630,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
             typeof refArticle?.id === 'number' ? refArticle.id : undefined,
           refIndex: typeof refIndex === 'number' ? refIndex : undefined,
           refTitle: refTitleRaw.length > 0 ? refTitleRaw : undefined,
+          // 账号分配信息，供执行层识别目标账号
+          xhsAccount: acct ?? undefined,
         },
       });
+      postsWithAccounts.push({ title, index: idx, xhsAccount: acct });
     }
 
     console.log(
@@ -1604,6 +1659,8 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       taskId: opened?.mcpTaskId,
       taskCount: postsInit.length,
       tasksPreview,
+      /** 带账号分配的节点列表，供调用方生成有序执行 todo items */
+      postsWithAccounts,
       status: afterInit?.status ?? opened?.status,
       callbackUrlTodo: 'TODO: 支持配置回调地址的校验/签名与更细粒度状态同步',
     } as Record<string, unknown>;
@@ -1616,6 +1673,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         todoId: summary.todoId,
         taskCount: postsInit.length,
         tasksPreview,
+        tenantId,
         provider: input.provider,
         model: input.model,
         temperature: input.temperature,
@@ -1915,6 +1973,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           provider: state.provider,
           model: state.model,
           temperature: state.temperature,
+          tenantId: state.tenantId,
           system: sys,
           nonStreaming: true,
           responseFormat:

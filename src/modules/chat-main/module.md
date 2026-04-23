@@ -30,7 +30,7 @@
   - `getSystemPromptCN`: 模式提示/system prompt
   - `getThoughtPromptCN`: 思维链提示/thought prompt
   - `buildGallerySubagent`: 构建图库子代理/build gallery subagent
-  - `buildDefaultSubagents`: 子代理配置（xhs-specialist新增：xhs_data_tracking/xhs_account_nurturing/xhs_publish）/build default subagents
+  - `buildDefaultSubagents`: 子代理配置（xhs-specialist新增：xhs_data_tracking/xhs_publish）/build default subagents
   - `getTools`: 获取工具/get tools
   - `getRequestScope`: 解析租户范围/get request scope
   - `getToolsForInput`: 工具过滤/get tools for input

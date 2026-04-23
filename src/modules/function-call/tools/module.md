@@ -12,6 +12,8 @@
 - **函数**:
   - `getHandle`: 获取工具集合/get handle
   - `getThoughtRouteTools`: 获取思维链路工具/get thought route tools
+  - `buildAccountPoolTool`: 构建账号池查询工具（仅 xhs）/build account pool tool, xhs only
+  - `getXhsSubAgentSessionTools`: 发布/追踪子会话工具集（含账号池、canvas详情）/xhs sub-agent session tools
 
 ### services/graph-workflow.service.ts
 图工作流工具服务，负责 Canvas 生成、单篇写入、发布编排。
@@ -19,6 +21,7 @@
 - **函数**:
   - `normalizeRequestedArticleCount`: 归一化请求篇数（不强制 6-8）
   - `buildTopicOrchestrateDedupKey`: 选题编排去重键（含 userPrompt/dataSummary）
+  - `normalizePlatformType`: 归一化平台标签（小红书别名→xhs，软纠正）/normalize platform type alias
   - `getHandle`: 获取图工作流工具/get graph workflow tools
 
 ### tools.module.ts

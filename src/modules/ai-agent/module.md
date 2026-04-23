@@ -21,6 +21,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `resolveMeituEditableBaseImage`: 匹配可编辑底图（优先调用方传入候选）/resolve meitu editable base image
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底/generate image by meitu image-edit fallback
   - `sendPrompt`: 调用AI封面生成工具生图（入参为prompt/size/底图候选）/send prompt for image generation
+  - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection
   - `run`: 运行/run
   - `runWithMessages`: 消息运行/run with messages
   - `runSubAgentWithMessages`: 子代理消息运行/run subagent with messages

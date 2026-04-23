@@ -10,6 +10,7 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from 'lucide-react';
 import { chatService } from './chatService';
 
@@ -148,7 +149,7 @@ const ImageLightbox = ({ images, startIndex, onClose }) => {
  * @description 单个图片组卡片，展示版式、图片缩略图和角色标签；点击图片触发预览
  * @keyword-en image group card component
  */
-const GroupCard = ({ group, selected, onToggle, onImageClick }) => {
+const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, deletingImageId }) => {
   const images = Array.isArray(group.images) ? group.images : [];
   const isFailed = group.status === 'failed';
 
@@ -189,15 +190,17 @@ const GroupCard = ({ group, selected, onToggle, onImageClick }) => {
 
       {/* 图片网格：按版式排列 */}
       <div className="grid grid-cols-3 gap-1 p-2 bg-[#f8f9fa]">
-        {images.map((img, idx) => (
-          /* 单张图片缩略图 + 角色标签，点击预览 */
-          <div
-            key={img.imageId ?? idx}
-            className="relative aspect-square cursor-pointer"
-            onClick={() => typeof onImageClick === 'function' && onImageClick(images, idx)}
-          >
-            {img.thumbUrl || img.url ? (
-              <img
+        {images.map((img, idx) => {
+          const isImgDeleting = deletingImageId === img.imageId;
+          return (
+            /* 单张图片缩略图 + 角色标签 + 删除按钮 */
+            <div
+              key={img.imageId ?? idx}
+              className="relative aspect-square cursor-pointer group"
+              onClick={() => typeof onImageClick === 'function' && onImageClick(images, idx)}
+            >
+              {img.thumbUrl || img.url ? (
+                <img
                 src={img.thumbUrl || img.url}
                 alt={ROLE_LABEL[img.role] || img.role}
                 className="w-full h-full object-cover rounded-lg hover:brightness-90 transition"
@@ -215,8 +218,20 @@ const GroupCard = ({ group, selected, onToggle, onImageClick }) => {
             {img.isCollage && (
               <span className="absolute top-1 right-1 w-3 h-3 rounded-full bg-indigo-500 pointer-events-none" title="拼图" />
             )}
+            {/* 删除图片按钮 — hover 时显示 */}
+            {typeof onDeleteImage === 'function' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDeleteImage(group.id, img.imageId); }}
+                disabled={isImgDeleting}
+                title="删除图片"
+                className="absolute top-1 left-1 w-5 h-5 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-500 transition"
+              >
+                {isImgDeleting ? <Loader2 size={8} className="animate-spin" /> : <Trash2 size={8} />}
+              </button>
+            )}
           </div>
-        ))}
+          );
+        })}
         {/* 图片数量不足时的占位格 */}
         {Array.from({ length: Math.max(0, 6 - images.length) }).map((_, i) => (
           <div
@@ -250,6 +265,8 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
   const [polling, setPolling] = useState(false);
   /** @description 灯箱状态：{ images, startIndex } */
   const [lightbox, setLightbox] = useState(null);
+  /** @description 正在删除中的图片 imageId */
+  const [deletingImageId, setDeletingImageId] = useState(null);
 
   /* 加载 canvas 数据 */
   const loadCanvas = useCallback(async () => {
@@ -343,6 +360,18 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
   }, [selectedIds, imageGroups, canvas]);
 
   const isGenerating = canvas?.status === 'generating';
+
+  /** 删除图片组中的一张图片 */
+  const handleDeleteImage = useCallback(async (groupId, imageId) => {
+    if (!window.confirm('确定要删除这张图片吗？')) return;
+    setDeletingImageId(imageId);
+    try {
+      const res = await chatService.deleteCanvasGroupImage(Number(canvasId), groupId, imageId);
+      if (res.canvas) setCanvas(res.canvas);
+    } finally {
+      setDeletingImageId(null);
+    }
+  }, [canvasId]);
 
   return (
     /* 主容器 */
@@ -451,6 +480,8 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
                 selected={selectedIds.has(group.id)}
                 onToggle={toggleGroup}
                 onImageClick={(images, idx) => setLightbox({ images, startIndex: idx })}
+                onDeleteImage={handleDeleteImage}
+                deletingImageId={deletingImageId}
               />
             ))}
           </div>

@@ -4,6 +4,7 @@ import { AutoTaskRobotModule } from '../auto-task-robot/auto-task-robot.module.j
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { TodoService } from './services/todo.service.js';
 import { XhsPostStatService } from './services/xhs-post-stat.service.js';
+import { TaskCallbackService } from './services/task-callback.service.js';
 import { TodoController } from './controller/todo.controller.js';
 import { TodoTaskController } from './controller/todo-task.controller.js';
 import { TodoResourceController } from './controller/todo-resource.controller.js';
@@ -16,7 +17,7 @@ import { TodoResourceController } from './controller/todo-resource.controller.js
 @Module({
   imports: [DataSourceModule, AdminModule, AutoTaskRobotModule],
   controllers: [TodoController, TodoTaskController, TodoResourceController],
-  providers: [TodoService, XhsPostStatService],
+  providers: [TaskCallbackService, TodoService, XhsPostStatService],
   exports: [TodoService, XhsPostStatService],
 })
 export class TodoModule {}

@@ -13,6 +13,7 @@ import { CanvasModule } from '../../canvas/canvas.module.js';
 import { GalleryModule } from '../../gallery/gallery.module.js';
 import { AutoTaskRobotModule } from '../../auto-task-robot/auto-task-robot.module.js';
 import { MediaAgentModule } from '../../media-agent/media-agent.module.js';
+import { AdminModule } from '../../admin/admin.module.js';
 
 /**
  * @title 工具模块 Tools Module
@@ -32,6 +33,7 @@ import { MediaAgentModule } from '../../media-agent/media-agent.module.js';
     GalleryModule,
     AutoTaskRobotModule,
     MediaAgentModule,
+    AdminModule,
   ],
   providers: [ToolsService, GraphWorkflowFunctionCallService],
   exports: [ToolsService],

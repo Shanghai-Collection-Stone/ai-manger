@@ -42,8 +42,8 @@ Tab 按角色过滤（`platformOnly` 标记限制 `super_admin` 才可见）。
   - `resolvePostLoginTarget`: 登录后跳转/resolve post login target
 
 ### adminApi.js
-后台 API 封装：管理端接口请求、token 存取、页面跳转地址解析。
-- **关键词**: api, bearer token, request, redirect
+后台 API 封装：管理端接口请求、token 存取、页面跳转地址解析。注意：`request()` 内部已拼接 `/admin` 前缀，调用方路径不得重复。
+- **关键词**: api, bearer token, request, redirect, social-accounts
 - **函数**:
   - `getAdminToken`: 读取token/get admin token
   - `setAdminToken`: 写入token/set admin token
@@ -51,6 +51,11 @@ Tab 按角色过滤（`platformOnly` 标记限制 `super_admin` 才可见）。
   - `resolveAdminPageHref`: 后台页面地址/resolve admin href
   - `resolveFrontendPageHref`: 前台页面地址/resolve frontend href
   - `resolveLoginPageHref`: 登录页地址/resolve login href
-  - `request`: 统一请求/request
+  - `request`: 统一请求（内置 `/admin` 前缀）/request with /admin prefix
+  - `adminApi.listXhsAccounts`: 获取xhs账号列表/list social accounts?platform=xhs
+  - `adminApi.createXhsAccount`: 创建自媒体账号（默认platform=xhs）/create social account
+  - `adminApi.updateXhsAccount`: 更新自媒体账号/update social account
+  - `adminApi.deleteXhsAccount`: 删除自媒体账号/delete social account
+  - `adminApi.testLoginXhsAccount`: 测试登录/test login via claw
   - `adminApi.*`: 后台接口集合/admin api methods
 

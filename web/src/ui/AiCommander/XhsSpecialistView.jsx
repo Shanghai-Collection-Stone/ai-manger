@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ChevronLeft, ChevronDown, RefreshCw, CheckCircle, Clock, AlertCircle, BookOpen, X, CircleDot, User, ArrowLeft, XCircle, Timer, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronDown, RefreshCw, CheckCircle, Clock, AlertCircle, BookOpen, X, CircleDot, User, ArrowLeft, XCircle, Timer, ChevronRight, LayoutGrid, FileText, Images } from 'lucide-react';
 import ChatBIView from './ChatBIView';
 import XhsDataTab from './XhsDataTab';
+import CanvasFeedView from './CanvasFeedView';
+import ImageGroupCanvasView from './ImageGroupCanvasView';
+import { chatService } from './chatService';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -48,17 +51,6 @@ const XHS_SUBAGENTS = [
     inputPlaceholder: '输入分析需求，关于小红书账号数据...',
   },
   {
-    id: 'nurture',
-    label: '养号策略',
-    assignee: 'robot:xhs_nurturer',
-    sessionType: 'xhs-nurturer',
-    sessionStorageKey: 'ai_commander_xhs_nurture_session',
-    welcomeTitle: '养号策略',
-    welcomeDesc: '账号定位、内容规划与运营成长路径设计',
-    quickPrompts: ['制定本月内容日历', '设计账号人设和定位', '规划涨粉冷启动策略'],
-    inputPlaceholder: '输入需求，关于小红书账号运营策略...',
-  },
-  {
     id: 'publish',
     label: '发文执行',
     assignee: 'robot:xhs_publisher',
@@ -69,6 +61,28 @@ const XHS_SUBAGENTS = [
     quickPrompts: ['发布当前 Canvas 文章', '查看发布任务进度', '批量派发发布任务'],
     inputPlaceholder: '输入发布指令...',
   },
+  {
+    id: 'article-expert',
+    label: '生文专家',
+    assignee: null,
+    sessionType: 'xhs-article-expert',
+    sessionStorageKey: 'ai_commander_xhs_article_expert_session',
+    welcomeTitle: '生文专家',
+    welcomeDesc: '基于 Canvas 画布生成小红书图文内容，从主题到文章一键生成',
+    quickPrompts: ['生成一批图文Canvas', '基于已有Canvas补充文章', '查看图文Canvas列表'],
+    inputPlaceholder: '输入主题或要求，生成小红书图文...',
+  },
+  {
+    id: 'image-expert',
+    label: '生图专家',
+    assignee: null,
+    sessionType: 'xhs-image-expert',
+    sessionStorageKey: 'ai_commander_xhs_image_expert_session',
+    welcomeTitle: '生图专家',
+    welcomeDesc: '基于图库和 Canvas 生成小红书图片组，匹配标签配图',
+    quickPrompts: ['生成一组图片Canvas', '为Canvas生成图片组', '查看图组Canvas列表'],
+    inputPlaceholder: '输入要求，生成小红书图片组...',
+  },
 ];
 
 /**
@@ -78,7 +92,7 @@ const XHS_SUBAGENTS = [
  * @keyword-en XhsSpecialistView, xhs, canvas, specialist, dual-tab
  */
 const XhsSpecialistView = ({ onBack }) => {
-  const [tab, setTab] = useState('chat'); // 'chat' | 'tasks'
+  const [tab, setTab] = useState('chat'); // 'chat' | 'tasks' | 'canvas'
   // 当前激活的子代理 active subagent id
   const [activeAgent, setActiveAgent] = useState('main');
   // 子代理下拉菜单开关 subagent dropdown open state
@@ -92,6 +106,11 @@ const XhsSpecialistView = ({ onBack }) => {
   const [itemsFetched, setItemsFetched] = useState(false);
   // 详情页内部 tab: 'info' | 'timeline' | 'xhs-data'
   const [detailTab, setDetailTab] = useState('info');
+  // Canvas tab state 画布列表状态
+  const [canvases, setCanvases] = useState([]);
+  const [canvasLoading, setCanvasLoading] = useState(false);
+  const [canvasTypeFilter, setCanvasTypeFilter] = useState('all'); // 'all' | 'article' | 'image-group'
+  const [selectedCanvas, setSelectedCanvas] = useState(null); // { id, type } 打开的 canvas
 
   // 关闭下拉菜单（点击外部区域时） close dropdown on outside click
   useEffect(() => {
@@ -106,22 +125,13 @@ const XhsSpecialistView = ({ onBack }) => {
   }, [agentDropOpen]);
 
   /**
-   * @description 加载当前子代理的任务列表，主视图按 category=xhs 过滤，子代理按 assignee
-   * @keyword-en load tasks by category or assignee filter
+   * @description 加载小红书任务列表，始终按 category=xhs 过滤（不受子代理影响）
+   * @keyword-en load xhs tasks by category
    */
   const loadTasks = useCallback(async () => {
-    const agent = XHS_SUBAGENTS.find(a => a.id === activeAgent) ?? XHS_SUBAGENTS[0];
     setLoading(true);
     try {
-      let url;
-      if (agent.assignee) {
-        // 子代理：按 assignee 过滤
-        url = `${API_BASE}/todo?limit=100&assignee=${encodeURIComponent(agent.assignee)}`;
-      } else {
-        // 主视图：按 category=xhs 拉取所有小红书类型任务
-        url = `${API_BASE}/todo?limit=100&category=xhs`;
-      }
-      const res = await fetch(url, { headers: getAuthHeaders() });
+      const res = await fetch(`${API_BASE}/todo?limit=100&category=xhs`, { headers: getAuthHeaders() });
       if (res.ok) {
         const data = await res.json();
         const allTasks = Array.isArray(data.todos) ? data.todos : [];
@@ -135,13 +145,36 @@ const XhsSpecialistView = ({ onBack }) => {
     } finally {
       setLoading(false);
     }
-  }, [activeAgent]);
+  }, []);
 
   useEffect(() => {
     if (tab === 'tasks') {
       loadTasks();
     }
   }, [tab, loadTasks]);
+
+  /**
+   * @description 加载小红书 Canvas 列表，支持按类型过滤
+   * @keyword-en load xhs canvas list by type filter
+   */
+  const loadCanvases = useCallback(async () => {
+    setCanvasLoading(true);
+    try {
+      const opts = canvasTypeFilter !== 'all' ? { type: canvasTypeFilter, limit: 50 } : { limit: 50 };
+      const data = await chatService.listCanvases(opts);
+      const list = Array.isArray(data.canvases) ? data.canvases : [];
+      list.sort((a, b) => new Date(b.createdAt ?? 0) - new Date(a.createdAt ?? 0));
+      setCanvases(list);
+    } catch {
+      setCanvases([]);
+    } finally {
+      setCanvasLoading(false);
+    }
+  }, [canvasTypeFilter]);
+
+  useEffect(() => {
+    if (tab === 'canvas') loadCanvases();
+  }, [tab, loadCanvases]);
 
   // Load task items when a task is selected
   useEffect(() => {
@@ -458,12 +491,14 @@ const XhsSpecialistView = ({ onBack }) => {
     );
   };
 
-  // Chat Tab Content — 按当前子代理动态传入会话配置
+  // Chat Tab Content — 按当前子代理动态传入会话配置，key 强制切换时重载
   const renderChatTab = () => {
     const cfg = XHS_SUBAGENTS.find(a => a.id === activeAgent) ?? XHS_SUBAGENTS[0];
     return (
       <div className="flex-1 min-h-0">
+        {/* key 绑定 sessionType，切换子代理时强制重载 ChatBIView */}
         <ChatBIView
+          key={cfg.sessionType}
           sessionType={cfg.sessionType}
           sessionStorageKey={cfg.sessionStorageKey}
           welcomeTitle={cfg.welcomeTitle}
@@ -472,6 +507,108 @@ const XhsSpecialistView = ({ onBack }) => {
           inputPlaceholder={cfg.inputPlaceholder}
           showInlineSessionPicker
         />
+      </div>
+    );
+  };
+
+  /**
+   * @description Canvas 列表 Tab，展示小红书画布（图文 / 图组），支持类型过滤
+   * @keyword-en xhs canvas list tab article image-group
+   */
+  const renderCanvasTab = () => {
+    const TYPE_OPTS = [
+      { value: 'all', label: '全部', icon: <LayoutGrid size={13} /> },
+      { value: 'article', label: '图文', icon: <FileText size={13} /> },
+      { value: 'image-group', label: '图组', icon: <Images size={13} /> },
+    ];
+    const statusColor = (s) => {
+      if (s === 'completed') return 'text-green-600 bg-green-50 border-green-200';
+      if (s === 'generating') return 'text-blue-600 bg-blue-50 border-blue-200';
+      if (s === 'failed') return 'text-red-600 bg-red-50 border-red-200';
+      return 'text-slate-400 bg-slate-50 border-slate-200';
+    };
+    const statusText = (s) => ({ completed: '完成', generating: '生成中', failed: '失败' }[s] ?? s ?? '');
+    const typeLabel = (t) => t === 'image-group' ? '图组' : '图文';
+    const countLabel = (cv) => {
+      if (cv.type === 'image-group') {
+        const n = Array.isArray(cv.imageGroups) ? cv.imageGroups.length : 0;
+        return `${n} 组`;
+      }
+      const n = Array.isArray(cv.articles) ? cv.articles.length : 0;
+      return `${n} 篇`;
+    };
+    const formatDate = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      return isNaN(dt.getTime()) ? '' : dt.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+    };
+
+    return (
+      /* Canvas Tab 主容器 区域 */
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {/* 类型过滤栏 canvas type filter bar */}
+        <div className="sticky top-0 z-10 bg-white border-b border-slate-100 px-4 py-2 flex items-center gap-2">
+          <div className="flex rounded-full bg-slate-100 p-0.5 gap-0.5 text-xs">
+            {TYPE_OPTS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setCanvasTypeFilter(opt.value)}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-full transition ${canvasTypeFilter === opt.value ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                {opt.icon}{opt.label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={loadCanvases}
+            disabled={canvasLoading}
+            className="ml-auto p-1.5 hover:bg-slate-100 rounded-full text-slate-500 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={canvasLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {/* Canvas 列表内容 canvas list content */}
+        <div className="p-4">
+          {canvasLoading ? (
+            <div className="flex items-center justify-center py-12 text-slate-400">
+              <RefreshCw size={18} className="animate-spin mr-2" /><span className="text-sm">加载中...</span>
+            </div>
+          ) : canvases.length === 0 ? (
+            <div className="text-center py-12 text-slate-400">
+              <LayoutGrid size={32} className="mx-auto mb-2 opacity-40" />
+              <p className="text-sm">暂无画布</p>
+              <p className="text-xs mt-1">在对话中生成 Canvas 后会显示在这里</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {canvases.map(cv => (
+                /* 单个 Canvas 卡片 canvas card */
+                <div
+                  key={cv.id}
+                  onClick={() => setSelectedCanvas({ id: cv.id, type: cv.type })}
+                  className="p-3 bg-slate-50 rounded-xl border border-slate-100 hover:border-rose-200 transition cursor-pointer"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        {/* 类型徽章 type badge */}
+                        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-rose-50 text-rose-600 border-rose-100">{typeLabel(cv.type)}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${statusColor(cv.status)}`}>{statusText(cv.status)}</span>
+                      </div>
+                      <div className="text-sm font-medium text-slate-800 truncate">{cv.title || `Canvas #${cv.id}`}</div>
+                      <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+                        <span>{countLabel(cv)}</span>
+                        {formatDate(cv.createdAt) && <span>{formatDate(cv.createdAt)}</span>}
+                      </div>
+                    </div>
+                    <ChevronRight size={16} className="text-slate-300 shrink-0 mt-1" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -562,14 +699,53 @@ const XhsSpecialistView = ({ onBack }) => {
           >
             任务列表
           </button>
+
+          {/* Canvas 管理 tab canvas tab button */}
+          <button
+            onClick={() => { setTab('canvas'); setAgentDropOpen(false); }}
+            className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap transition ${
+              tab === 'canvas'
+                ? 'bg-white shadow text-slate-800'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            画布
+          </button>
         </div>
       </div>
 
-      {/* Tab Content */}
-      {tab === 'chat' ? renderChatTab() : renderTasksTab()}
+      {/* Tab Content 内容区 */}
+      {tab === 'chat' && renderChatTab()}
+      {tab === 'tasks' && renderTasksTab()}
+      {tab === 'canvas' && renderCanvasTab()}
 
-      {/* Task Detail Modal */}
+      {/* Task Detail Modal 任务详情弹层 */}
       {selectedTask && renderTaskDetail()}
+
+      {/* Canvas Detail Overlay 画布详情全屏弹层 */}
+      {selectedCanvas && (
+        <div className="fixed inset-0 z-50 bg-white flex flex-col">
+          {selectedCanvas.type === 'image-group' ? (
+            /* 图组 Canvas 详情 image-group canvas detail */
+            <ImageGroupCanvasView
+              canvasId={selectedCanvas.id}
+              onClose={() => {
+                setSelectedCanvas(null);
+                loadCanvases();
+              }}
+            />
+          ) : (
+            /* 图文 Canvas 详情 article canvas detail */
+            <CanvasFeedView
+              canvasId={selectedCanvas.id}
+              onClose={() => {
+                setSelectedCanvas(null);
+                loadCanvases();
+              }}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 };

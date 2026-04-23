@@ -32,13 +32,16 @@ export class RetrievalService {
    * @keywords-en reindex, keywords, session keywords
    */
   async reindexSession(sessionId: string): Promise<number> {
+    const session = await this.conversations.findOne({ sessionId });
+    const tenantId =
+      typeof session?.tenantId === 'string' ? session.tenantId : undefined;
     const cursor = this.messages.find({
       sessionId,
       $or: [{ keywords: { $exists: false } }, { keywords: { $size: 0 } }],
     });
     let count = 0;
     for await (const doc of cursor) {
-      const kws = await this.keyword.extractKeywords(doc.content);
+      const kws = await this.keyword.extractKeywords(doc.content, tenantId);
       await this.messages.updateOne(
         { _id: doc._id },
         { $set: { keywords: kws } },
@@ -57,6 +60,9 @@ export class RetrievalService {
    * @description 基于最近消息分析会话主题关键词。
    */
   async reindexSessionKeywords(sessionId: string): Promise<void> {
+    const session = await this.conversations.findOne({ sessionId });
+    const tenantId =
+      typeof session?.tenantId === 'string' ? session.tenantId : undefined;
     const messages = await this.messages
       .find({ sessionId })
       .sort({ timestamp: -1 })
@@ -66,7 +72,7 @@ export class RetrievalService {
     if (messages.length === 0) return;
 
     const text = messages.map((m) => m.content).join('\n');
-    const kws = await this.keyword.extractKeywords(text);
+    const kws = await this.keyword.extractKeywords(text, tenantId);
 
     await this.conversations.updateOne(
       { sessionId },

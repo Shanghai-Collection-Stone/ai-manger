@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -94,9 +95,12 @@ export class CanvasController {
   }
 
   /**
-   * @description 列出画布，支持按 userId 过滤。
+   * @description 列出画布，支持按 userId / type / tag 过滤，支持分页 skip。
    * @param {string} [userId] - 查询参数：用户ID。
    * @param {string} [limit] - 查询参数：返回条数上限。
+   * @param {string} [type] - 查询参数：画布类型（article / image-group）。
+   * @param {string} [skip] - 查询参数：跳过条数（分页偏移）。
+   * @param {string} [tag] - 查询参数：关键词标签过滤。
    * @returns {Promise<Record<string, unknown>>} 包含 canvases 的响应对象。
    * @keyword canvas, controller, list
    * @since 2026-02-04
@@ -105,11 +109,15 @@ export class CanvasController {
   async list(
     @Query('userId') userId?: string,
     @Query('limit') limit?: string,
+    @Query('type') type?: string,
+    @Query('skip') skip?: string,
+    @Query('tag') tag?: string,
     @Req() req?: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = req ? await this.resolveAuthScope(req) : { tenantId: undefined };
     const lim = limit ? Number(limit) : 50;
-    const rows = await this.canvas.list(userId, authScope.tenantId, lim);
+    const skp = skip ? Number(skip) : 0;
+    const rows = await this.canvas.list(userId, authScope.tenantId, lim, type, skp, tag);
     return { canvases: rows };
   }
 
@@ -184,6 +192,95 @@ export class CanvasController {
       Number(id),
       Number(articleId),
       input,
+      authScope.tenantId,
+    );
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 将画布文章标记为已发送。
+   * @param {string} id - 画布ID。
+   * @param {string} articleId - 文章ID。
+   * @param {{ sentAt?: string }} body - 发送时间（ISO字符串，可选，默认当前时间）。
+   * @returns {Promise<Record<string, unknown>>} 更新后的画布实体。
+   * @keyword canvas, article, sent, mark
+   */
+  @Patch(':id/articles/:articleId/sent')
+  async markArticleSent(
+    @Param('id') id: string,
+    @Param('articleId') articleId: string,
+    @Body() body: { sentAt?: string },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const sentAt = body.sentAt ? new Date(body.sentAt) : undefined;
+    const doc = await this.canvas.markArticleSent(
+      Number(id),
+      Number(articleId),
+      authScope.tenantId,
+      sentAt,
+    );
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 删除整个 Canvas（租户隔离）。
+   * @param {string} id - Canvas ID。
+   * @returns {Promise<Record<string, unknown>>} 删除结果。
+   * @keyword-en delete canvas
+   */
+  @Delete(':id')
+  async deleteCanvas(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const deleted = await this.canvas.deleteCanvas(Number(id), authScope.tenantId);
+    return { deleted };
+  }
+
+  /**
+   * @description 删除 Canvas 中指定文章（租户隔离）。
+   * @param {string} id - Canvas ID。
+   * @param {string} articleId - 文章 ID。
+   * @returns {Promise<Record<string, unknown>>} 更新后的画布。
+   * @keyword-en delete article from canvas
+   */
+  @Delete(':id/articles/:articleId')
+  async deleteArticle(
+    @Param('id') id: string,
+    @Param('articleId') articleId: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.deleteArticle(
+      Number(id),
+      Number(articleId),
+      authScope.tenantId,
+    );
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 删除图片组中指定图片（按 imageId，租户隔离）。
+   * @param {string} id - Canvas ID。
+   * @param {string} groupId - 图片组 ID。
+   * @param {string} imageId - 图片 imageId。
+   * @returns {Promise<Record<string, unknown>>} 更新后的画布。
+   * @keyword-en delete image from canvas image group
+   */
+  @Delete(':id/image-groups/:groupId/images/:imageId')
+  async deleteImageFromGroup(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Param('imageId') imageId: string,
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const doc = await this.canvas.deleteImageFromGroup(
+      Number(id),
+      Number(groupId),
+      Number(imageId),
       authScope.tenantId,
     );
     return { canvas: doc };

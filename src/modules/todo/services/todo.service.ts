@@ -11,6 +11,7 @@ import type {
   TodoItemEntity,
   TodoItemUpdateInput,
 } from '../entities/todo-item.entity.js';
+import { TaskCallbackService } from './task-callback.service.js';
 
 /**
  * @description 待办服务，提供序号ID的CRUD，并保证AI字段完整
@@ -26,7 +27,10 @@ export class TodoService {
   private readonly todoItems: Collection<TodoItemEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
 
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly callbackSvc: TaskCallbackService,
+  ) {
     this.todos = db.collection<TodoEntity>('todos');
     this.todoItems = db.collection<TodoItemEntity>('todo_items');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
@@ -145,6 +149,7 @@ export class TodoService {
       decisionReason: input.decisionReason,
       aiPlan: input.aiPlan,
       deadline: input.deadline,
+      callbacks: input.callbacks,
       status: 'pending',
       createdAt: now,
       updatedAt: now,
@@ -208,7 +213,18 @@ export class TodoService {
       { $set: upd },
       { returnDocument: 'after', includeResultMetadata: true },
     );
-    return res.value ?? null;
+    const updated = res.value ?? null;
+
+    // 状态变为 done/failed 时异步触发回调
+    if (
+      updated &&
+      (updated.status === 'done' || updated.status === 'failed') &&
+      existing.status !== updated.status
+    ) {
+      this.callbackSvc.processCallbacks(updated as TodoEntity);
+    }
+
+    return updated;
   }
 
   /**

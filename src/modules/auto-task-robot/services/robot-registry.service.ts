@@ -5,7 +5,7 @@ import type { AdminAgentConfigEntity } from '../../admin/entities/admin.entity.j
 import { AdminService } from '../../admin/services/admin.service.js';
 import type { TodoEntity } from '../../todo/entities/todo.entity.js';
 import { TodoService } from '../../todo/services/todo.service.js';
-import { BatchTaskGraphService } from '../../graph/services/batch-task-graph.service.js';
+import { BatchTaskGraphService, type PostWithAccount } from '../../graph/services/batch-task-graph.service.js';
 
 /** 长时 AI 任务专用 fetch dispatcher，超时设置为 60 分钟 */
 const LONG_RUNNING_AGENT = new Agent({
@@ -65,12 +65,12 @@ export class RobotRegistryService {
    */
   listRobots(): AutoTaskRobotDescriptor[] {
     return [
-      {
-        code: 'xhs_publisher',
-        name: '小红书发布机',
-        description:
-          '接收 Todo 派单后自动执行小红书批量发布流程（基于 Canvas + Todo）。',
-      },
+      // xhs_publisher robot 已停用，改为由 LLM subagent 直接处理发布任务
+      // {
+      //   code: 'xhs_publisher',
+      //   name: '小红书发布机',
+      //   description: '接收 Todo 派单后自动执行小红书批量发布流程（基于 Canvas + Todo）。',
+      // },
       {
         code: 'claw',
         name: 'OpenClaw 智能体',
@@ -78,6 +78,31 @@ export class RobotRegistryService {
           '通过 OpenClaw 网关接入的智能体，兼容 OpenAI Chat Completions 协议。',
       },
     ];
+  }
+
+  /**
+   * @description 列出所有已启用的 admin agent 配置（含 assignee 格式 ID）。
+   * 供 LLM 进行任务指派时参考，优先使用 agent:<id> 格式。
+   * @returns {Promise<Array<{ id: string; name: string; module: string; description?: string }>>}
+   * @keyword-en list all enabled admin agent configs with assignee format id
+   */
+  async listAgentConfigs(): Promise<
+    Array<{ id: string; name: string; module: string; description?: string }>
+  > {
+    const adminService = this.moduleRef.get(AdminService, { strict: false });
+    if (!adminService) return [];
+    try {
+      const configs = await adminService.listAgentConfigs();
+      return configs
+        .filter((c) => c.enabled)
+        .map((c) => ({
+          id: `agent:${c._id.toString()}`,
+          name: c.name,
+          module: c.module,
+        }));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -136,11 +161,12 @@ export class RobotRegistryService {
     });
 
     try {
-      if (robotCode === 'xhs_publisher') {
-        await this.handleXhsPublisher(input.todo);
-        this.logRobot('handle_completed', { todoId: input.todo.id, robotCode });
-        return { triggered: true, robotCode };
-      }
+      // xhs_publisher robot 已停用
+      // if (robotCode === 'xhs_publisher') {
+      //   await this.handleXhsPublisher(input.todo);
+      //   this.logRobot('handle_completed', { todoId: input.todo.id, robotCode });
+      //   return { triggered: true, robotCode };
+      // }
       return { triggered: false, robotCode, error: 'ROBOT_NOT_FOUND' };
     } catch (error) {
       await this.safeMarkFailed(input.todo, robotCode, error);
@@ -189,15 +215,12 @@ export class RobotRegistryService {
     });
 
     try {
-      if (robotCode === 'xhs_publisher') {
-        await this.handleXhsPublisher(todo, agentCtx);
-        this.logRobot('handle_completed', {
-          todoId: todo.id,
-          robotCode,
-          agentId,
-        });
-        return { triggered: true, robotCode };
-      }
+      // xhs_publisher robot 已停用
+      // if (robotCode === 'xhs_publisher') {
+      //   await this.handleXhsPublisher(todo, agentCtx);
+      //   this.logRobot('handle_completed', { todoId: todo.id, robotCode, agentId });
+      //   return { triggered: true, robotCode };
+      // }
       if (robotCode === 'claw') {
         await this.handleClawRobot(todo, agentConfig, agentCtx);
         this.logRobot('handle_completed', {
@@ -341,8 +364,8 @@ export class RobotRegistryService {
   }
 
   /**
-   * @description 处理 xhs_publisher robot，可携带 agent 上下文
-   * @keyword-en handle xhs publisher robot with optional agent context
+   * @description 处理 xhs_publisher robot，加载账号、分配发文节点、写入有序 todo items
+   * @keyword-en handle xhs publisher robot, load accounts, build sequential task nodes
    */
   private async handleXhsPublisher(
     todo: TodoEntity,
@@ -356,12 +379,38 @@ export class RobotRegistryService {
     const canvasId = this.extractCanvasId(todo);
     if (!canvasId) throw new Error('ROBOT_XHS_CANVAS_ID_REQUIRED');
     const taskCount = this.extractTaskCount(todo);
-    await graph.openAndStartXhsFromCanvas({
+
+    // 加载租户下有效的小红书账号（必须有 adspowerId 才能执行自动化）
+    const adminService = this.moduleRef.get(AdminService, { strict: false });
+    const allAccounts = adminService
+      ? await adminService.listXhsAccounts(todo.tenantId).catch(() => [])
+      : [];
+    const validAccounts = allAccounts
+      .filter(
+        (a) =>
+          typeof a.adspowerId === 'string' && a.adspowerId.trim().length > 0,
+      )
+      .map((a) => ({
+        id: String(a._id),
+        username: a.username,
+        adspowerId: a.adspowerId,
+        clawConfigId: a.clawConfigId,
+        clawAgentId: a.clawAgentId,
+      }));
+
+    this.logRobot('xhs_publisher_accounts_resolved', {
+      todoId: todo.id,
+      totalAccounts: allAccounts.length,
+      validAccounts: validAccounts.length,
+    });
+
+    const graphResult = await graph.openAndStartXhsFromCanvas({
       userId: todo.userId,
       canvasId,
       taskCount,
       platform: 'xhs',
       todoId: todo.id,
+      xhsAccounts: validAccounts,
       payload: {
         source: agentCtx ? `agent:${agentCtx.agentId}` : 'robot:xhs_publisher',
         todoId: todo.id,
@@ -377,6 +426,50 @@ export class RobotRegistryService {
           aiPlan: todo.aiPlan,
         },
       },
+    });
+
+    // 复用已有任务时跳过节点写入（节点已在首次创建时写入）
+    const resultData = (graphResult?.result ?? {}) as Record<string, unknown>;
+    const isNewTask = !resultData.reused;
+    if (!isNewTask) return;
+
+    // 写入有序执行节点 todo items（每篇文章一个节点，明确标注使用账号和顺序规则）
+    const postsWithAccounts = Array.isArray(resultData.postsWithAccounts)
+      ? (resultData.postsWithAccounts as PostWithAccount[])
+      : [];
+    if (postsWithAccounts.length === 0) return;
+
+    const todoService = this.moduleRef.get(TodoService, { strict: false });
+    if (!todoService) return;
+
+    const total = postsWithAccounts.length;
+    for (let i = 0; i < postsWithAccounts.length; i++) {
+      const post = postsWithAccounts[i];
+      const acct = post.xhsAccount;
+      const accountLabel = acct
+        ? `账号 ${acct.username}（AdsPower: ${acct.adspowerId ?? '未设置'}）`
+        : '账号：未配置（将使用默认方式）';
+      await todoService.createItem({
+        todoId: todo.id,
+        tenantId: todo.tenantId,
+        title: `${accountLabel} 发送：${post.title}`,
+        description: [
+          `第 ${i + 1}/${total} 个执行节点`,
+          '⚠️ 必须按节点顺序执行，不得跳过前序节点',
+          acct?.adspowerId ? `AdsPower 环境 ID：${acct.adspowerId}` : '',
+          acct?.clawConfigId ? `Claw 配置 ID：${acct.clawConfigId}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        status: 'pending',
+        stage: `发布节点 ${i + 1}/${total}`,
+      });
+    }
+
+    this.logRobot('xhs_publisher_task_nodes_created', {
+      todoId: todo.id,
+      nodeCount: total,
+      withAccounts: validAccounts.length > 0,
     });
   }
 

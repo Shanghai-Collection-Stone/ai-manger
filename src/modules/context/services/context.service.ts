@@ -586,6 +586,27 @@ export class ContextService {
       if (m.role !== ContextRole.Assistant) continue;
       const stored = findBestStoredMatch(m);
 
+      // 0. 用 MongoDB 存储的 content 覆盖 checkpoint 版本 content。
+      // checkpoint 仅记录 LLM 原始输出（无 canvas-it / task-it / decision-it 等 UI 块），
+      // 而 chat.service 流式结束时会把这些 UI 块追加到 text 再写入 MongoDB；
+      // 刷新时若直接用 checkpoint content，Canvas/Task/Decision 预览块将丢失。
+      if (stored) {
+        const storedContent =
+          typeof stored.content === 'string' ? stored.content : '';
+        if (storedContent.trim().length > 0 && storedContent !== m.content) {
+          m.content = storedContent;
+          // 同步覆盖 parts 中首个 text 片段（若存在），保持展示一致
+          if (Array.isArray(m.parts)) {
+            const firstTextIdx = m.parts.findIndex((p) => p.type === 'text');
+            if (firstTextIdx >= 0) {
+              m.parts[firstTextIdx] = { type: 'text', content: storedContent };
+            } else {
+              m.parts.unshift({ type: 'text', content: storedContent });
+            }
+          }
+        }
+      }
+
       // 1. 优先使用存储的 parts (包含完美的 SSE 顺序)
       if (stored && Array.isArray(stored.parts) && stored.parts.length > 0) {
         m.parts = stored.parts as MessagePart[];
@@ -1129,7 +1150,7 @@ export class ContextService {
   private normalizeSessionType(
     sessionType?: ConversationSessionType,
   ): ConversationSessionType {
-    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist', 'xhs-tracker', 'xhs-nurturer', 'xhs-publisher'];
+    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist', 'xhs-tracker', 'xhs-publisher', 'xhs-article-expert', 'xhs-image-expert'];
     return validTypes.includes(sessionType as ConversationSessionType)
       ? (sessionType as ConversationSessionType)
       : 'default';

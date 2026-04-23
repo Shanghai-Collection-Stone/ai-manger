@@ -160,6 +160,27 @@ export const chatService = {
   },
 
   /**
+   * 查询 Canvas 列表
+   * @param {{ type?: 'article'|'image-group', limit?: number, skip?: number, tag?: string }} opts
+   * @returns {Promise<{ canvases: object[] }>}
+   */
+  async listCanvases(opts = {}) {
+    try {
+      const params = new URLSearchParams({ limit: String(opts.limit ?? 50) });
+      if (opts.type) params.set('type', opts.type);
+      if (opts.skip) params.set('skip', String(opts.skip));
+      if (opts.tag) params.set('tag', opts.tag);
+      const res = await fetch(`${API_BASE}/canvas?${params}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return { canvases: [] };
+      return await res.json();
+    } catch {
+      return { canvases: [] };
+    }
+  },
+
+  /**
    * 创建图片组 Canvas（返回 generating 状态，后台异步生成）
    * @param {{ topic?: string, articles: Array<{title: string, tags: string[]}> }} input
    * @returns {Promise<{canvas: object|null}>}
@@ -170,6 +191,84 @@ export const chatService = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * 删除整个 Canvas
+   * @param {number} canvasId
+   * @returns {Promise<{deleted: boolean}>}
+   */
+  async deleteCanvas(canvasId) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return { deleted: false };
+      return await res.json();
+    } catch {
+      return { deleted: false };
+    }
+  },
+
+  /**
+   * 删除 Canvas 中的文章
+   * @param {number} canvasId
+   * @param {number} articleId
+   * @returns {Promise<{canvas: object|null}>}
+   */
+  async deleteCanvasArticle(canvasId, articleId) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/articles/${articleId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * 更新 Canvas 文章内容
+   * @param {number} canvasId
+   * @param {number} articleId
+   * @param {{ title?: string, tags?: string[], contentJson?: object }} patch
+   * @returns {Promise<{canvas: object|null}>}
+   */
+  async updateCanvasArticle(canvasId, articleId, patch) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/articles/${articleId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * 删除图片组中的图片
+   * @param {number} canvasId
+   * @param {number} groupId
+   * @param {number} imageId
+   * @returns {Promise<{canvas: object|null}>}
+   */
+  async deleteCanvasGroupImage(canvasId, groupId, imageId) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/image-groups/${groupId}/images/${imageId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
       });
       if (!res.ok) return { canvas: null };
       return await res.json();

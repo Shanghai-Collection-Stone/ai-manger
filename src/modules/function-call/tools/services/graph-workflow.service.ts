@@ -102,6 +102,7 @@ export class GraphWorkflowFunctionCallService {
     count?: number;
     galleryUserId?: string;
     galleryGroupId?: number;
+    imageGroupCanvasIds?: number[];
     minImageScore?: number;
   }): string {
     return [
@@ -116,6 +117,14 @@ export class GraphWorkflowFunctionCallService {
       this.normalizeKeyString(input.galleryUserId),
       Number.isFinite(Number(input.galleryGroupId))
         ? String(Number(input.galleryGroupId))
+        : '',
+      Array.isArray(input.imageGroupCanvasIds)
+        ? input.imageGroupCanvasIds
+            .map((n) => Number(n))
+            .filter((n) => Number.isFinite(n) && n > 0)
+            .map((n) => Math.floor(n))
+            .sort((a, b) => a - b)
+            .join(',')
         : '',
       Number.isFinite(Number(input.minImageScore))
         ? String(Number(input.minImageScore))
@@ -187,6 +196,21 @@ export class GraphWorkflowFunctionCallService {
   }
 
   /**
+   * @description 归一化平台类型标签：小红书相关别名统一为 "xhs"，其余保持原值。
+   * 当前有效值：普通 | xhs。
+   * @param {string | undefined} platform - 原始平台标签。
+   * @returns {string | undefined} 归一化后的平台标签。
+   * @keyword-en normalize platform type, xhs alias soft correct
+   */
+  private normalizePlatformType(platform?: string): string | undefined {
+    if (!platform) return platform;
+    const t = platform.trim();
+    if (!t) return platform;
+    if (/小红书|xhs/i.test(t)) return 'xhs';
+    return t;
+  }
+
+  /**
    * @description 返回 Graph 工作流相关的工具句柄集合（topic_orchestrate）。
    * @param {(msg: string) => void} [streamWriter] - 可选的流式日志输出。
    * @returns {CreateAgentParams['tools']} 工具集合。
@@ -219,11 +243,22 @@ export class GraphWorkflowFunctionCallService {
         count,
         galleryUserId,
         galleryGroupId,
+        imageGroupCanvasIds,
         minImageScore,
       }) => {
         const outline = coerceRecord(outlineRaw);
         const style = coerceRecord(styleRaw);
         const requestedCount = this.normalizeRequestedArticleCount(count);
+        const normalizedImageGroupCanvasIds = Array.isArray(imageGroupCanvasIds)
+          ? Array.from(
+              new Set(
+                imageGroupCanvasIds
+                  .map((x) => Number(x))
+                  .filter((n) => Number.isFinite(n) && n > 0)
+                  .map((n) => Math.floor(n)),
+              ),
+            )
+          : [];
         if (typeof galleryGroupId === 'string') {
           const msg = '[topic_orchestrate] galleryGroupId must be a number (group ID), not a string. Please provide the numeric group ID. You may need to look up the group ID first using gallery_group_find.';
           this.logger.warn(msg);
@@ -231,18 +266,19 @@ export class GraphWorkflowFunctionCallService {
         }
         if (streamWriter) streamWriter('[Graph] Orchestrating topic workflow');
         const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalPlatform = this.normalizePlatformType(platform);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
           galleryUserId,
           finalUserId,
           scope,
         );
         this.logger.log(
-          `[topic_orchestrate] start userId=${finalUserId} platform=${String(platform ?? '')} requestedCount=${requestedCount ?? 'auto'} topic=${String(topic ?? '')} dataSummaryLen=${String(dataSummary?.length ?? 0)} userPromptLen=${String(userPrompt?.length ?? 0)}`,
+          `[topic_orchestrate] start userId=${finalUserId} platform=${String(finalPlatform ?? '')} requestedCount=${requestedCount ?? 'auto'} topic=${String(topic ?? '')} dataSummaryLen=${String(dataSummary?.length ?? 0)} userPromptLen=${String(userPrompt?.length ?? 0)}`,
         );
 
         const dedupKey = this.buildTopicOrchestrateDedupKey({
           userId: finalUserId,
-          platform,
+          platform: finalPlatform,
           topic,
           userPrompt,
           dataSummary,
@@ -251,6 +287,7 @@ export class GraphWorkflowFunctionCallService {
           count: requestedCount,
           galleryUserId: finalGalleryUserId,
           galleryGroupId,
+          imageGroupCanvasIds: normalizedImageGroupCanvasIds,
           minImageScore,
         });
         const now = Date.now();
@@ -274,7 +311,7 @@ export class GraphWorkflowFunctionCallService {
           const gen = await this.articles.generateToCanvas({
             userId: finalUserId,
             tenantId: scope?.tenantId,
-            platform,
+            platform: finalPlatform,
             topic,
             userPrompt,
             dataSummary,
@@ -282,12 +319,13 @@ export class GraphWorkflowFunctionCallService {
             imageMode: 'image-group',
             galleryUserId: finalGalleryUserId,
             galleryGroupId,
+            imageGroupCanvasIds: normalizedImageGroupCanvasIds,
             minImageScore,
             langchainContext: {
               source: 'tool.topic_orchestrate',
               userId: finalUserId,
               tenantId: scope?.tenantId,
-              platform,
+              platform: finalPlatform,
               topic,
             },
           });
@@ -314,7 +352,7 @@ export class GraphWorkflowFunctionCallService {
             canvasId,
             canvas,
             canvasTags: Array.isArray(canvasTags) ? canvasTags : [],
-            platform,
+            platform: finalPlatform,
             topic,
             requestedCount,
             status:
@@ -399,6 +437,10 @@ export class GraphWorkflowFunctionCallService {
             .number()
             .optional()
             .describe('Min similarity score for image matching'),
+          imageGroupCanvasIds: z
+            .array(z.number().int().positive())
+            .optional()
+            .describe('Optional image-group canvas IDs. When provided, reuse these canvas image groups as article image sources by order.'),
         }),
       },
     );
@@ -423,6 +465,7 @@ export class GraphWorkflowFunctionCallService {
           return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
         }
         const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalPlatformExec = this.normalizePlatformType(platform);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
           galleryUserId,
           finalUserId,
@@ -442,7 +485,7 @@ export class GraphWorkflowFunctionCallService {
           console.log('[Tool.canvas_execute] args', {
             userId: finalUserId,
             canvasId,
-            platform,
+            platform: finalPlatformExec,
             galleryUserId: finalGalleryUserId,
             galleryGroupId,
             plannedAtStart,
@@ -460,13 +503,13 @@ export class GraphWorkflowFunctionCallService {
 
         if (streamWriter) {
           streamWriter(
-            `[Graph] Executing canvas workflow (canvasId=${canvasIdNum}, platform=${String(platform ?? '')})`,
+            `[Graph] Executing canvas workflow (canvasId=${canvasIdNum}, platform=${String(finalPlatformExec ?? '')})`,
           );
         }
         const res = await this.batch.runFromCanvas({
           userId: finalUserId,
           canvasId: canvasIdNum,
-          platform,
+          platform: finalPlatformExec,
           galleryUserId: finalGalleryUserId,
           galleryGroupId,
           plannedAtStart,
@@ -545,6 +588,7 @@ export class GraphWorkflowFunctionCallService {
           return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'taskCount 参数必填' });
         }
         const finalUserId = this.resolveScopedUserId(userId, scope);
+        const finalPlatformXhs = this.normalizePlatformType(platform);
         const finalGalleryUserId = this.resolveScopedGalleryUserId(
           galleryUserId,
           finalUserId,
@@ -558,7 +602,7 @@ export class GraphWorkflowFunctionCallService {
         console.log('[xhs_batch_publish] payload', {
           userId: finalUserId,
           canvasId: canvasIdNum,
-          platform,
+          platform: finalPlatformXhs,
           galleryUserId: finalGalleryUserId,
           galleryGroupId,
           minImageScore,
@@ -577,7 +621,7 @@ export class GraphWorkflowFunctionCallService {
           const res = await this.batch.openAndStartXhsFromCanvas({
             userId: finalUserId,
             canvasId: canvasIdNum,
-            platform,
+            platform: finalPlatformXhs,
             galleryUserId: finalGalleryUserId,
             galleryGroupId,
             minImageScore,

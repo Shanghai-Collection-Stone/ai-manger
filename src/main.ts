@@ -5,35 +5,11 @@ import { join } from 'path';
 import { enableProxyFromEnv } from './shared/network/proxy';
 import { ConfigService } from '@nestjs/config';
 import { existsSync } from 'fs';
+import { resolveMongoUri } from './shared/mongo/resolve-mongo-uri';
 
 async function runMigrations() {
   const configService = new ConfigService();
-  const env = (configService.get<string>('NODE_ENV') ?? '').toLowerCase();
-  const isDev = env === 'development' || env === 'dev';
-
-  let uri =
-    configService.get<string>('MONGODB_URI') ?? 'mongodb://localhost:27017';
-  let dbName = configService.get<string>('MONGODB_DB') ?? 'ai_system';
-
-  if (isDev) {
-    const host = configService.get<string>('DEV_MONGODB_HOST');
-    const db = configService.get<string>('DEV_MONGODB_DB');
-    const user = configService.get<string>('DEV_MONGODB_USER');
-    const pass = configService.get<string>('DEV_MONGODB_PASS');
-    const topo = (
-      configService.get<string>('DEV_MONGODB_TOPOLOGY') ?? ''
-    ).toLowerCase();
-
-    if (host && db && user && pass) {
-      const qp = new URLSearchParams();
-      const authSource =
-        configService.get<string>('DEV_MONGODB_AUTH_SOURCE') ?? db;
-      qp.set('authSource', authSource);
-      if (topo === 'standalone') qp.set('directConnection', 'true');
-      uri = `mongodb://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:27017/?${qp.toString()}`;
-      dbName = db;
-    }
-  }
+  const { uri, dbName } = resolveMongoUri(configService);
 
   try {
     // 动态导入 migrate-mongo（ESM 兼容）

@@ -36,6 +36,7 @@ import { ConfigService } from '@nestjs/config';
 import { MongoClient } from 'mongodb';
 import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { AntiDetectionService } from '../../image-anti-detection/services/anti-detection.service.js';
 
 type DeepAgentReturn = Awaited<ReturnType<typeof createDeepAgent>>;
 type InteropZodObject =
@@ -58,6 +59,7 @@ export class AgentService {
     @Inject('CTX_MONGO_CLIENT') client: MongoClient,
     config: ConfigService,
     private readonly adminService: AdminService,
+    private readonly antiDetection: AntiDetectionService,
   ) {
     const env = (config.get<string>('NODE_ENV') ?? '').toLowerCase();
     const isDev = env === 'development' || env === 'dev';
@@ -85,10 +87,14 @@ export class AgentService {
    */
   async buildChatModel(config: AgentConfig): Promise<DeepAgentReturn> {
     const llm = await this.buildLLM(config);
+    const mergedSystem = await this.mergeSystemWithPlatformSupplement(
+      config.system,
+      config,
+    );
 
     const options = {
       model: llm,
-      systemPrompt: config.system,
+      systemPrompt: mergedSystem,
       tools: this.normalizeTools(config.tools),
       contextSchema: this.normalizeContextSchema(config.contextSchema),
       responseFormat: config.responseFormat,
@@ -127,24 +133,26 @@ export class AgentService {
         : undefined;
 
     if (protocol === 'google-genai') {
-      return new ChatGoogleGenerativeAI({
+      const llm = new ChatGoogleGenerativeAI({
         model: modelName,
         apiKey: runtime.apiKey,
         baseUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
       });
+      return await this.decorateModelInvokeWithPlatformSupplement(llm, config);
     }
     if (protocol === 'anthropic') {
-      return new ChatAnthropic({
+      const llm = new ChatAnthropic({
         model: modelName,
         apiKey: runtime.apiKey,
         anthropicApiUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
       });
+      return await this.decorateModelInvokeWithPlatformSupplement(llm, config);
     }
-    return new ChatOpenAI({
+    const llm = new ChatOpenAI({
       model: modelName,
       apiKey: runtime.apiKey,
       temperature,
@@ -152,6 +160,7 @@ export class AgentService {
       useResponsesApi: false,
       configuration: runtime.baseUrl ? { baseURL: runtime.baseUrl } : undefined,
     });
+    return await this.decorateModelInvokeWithPlatformSupplement(llm, config);
   }
 
   /**
@@ -325,21 +334,30 @@ export class AgentService {
 
   /**
    * @description 将二进制图片保存到本地 uploads 目录并返回静态路径。
+   * 在落盘前经 AntiDetectionService 处理（元数据剥离 / 像素扰动 / 噪点 / 重采样 / gamma），
+   * 降低被 AI 生图检测器识别的概率。处理失败自动降级为原始 buffer。
    * @param {Buffer} buffer - 图片二进制。
    * @param {string | undefined} mimeType - 图片 mimeType。
    * @returns {Promise<string>} 静态访问路径。
-   * @keyword-en persist generated image buffer to local upload
+   * @keyword-en persist generated image buffer to local upload with anti detection
    */
   private async saveGeneratedImageBuffer(
     buffer: Buffer,
     mimeType?: string,
   ): Promise<string> {
-    const ext = this.resolveImageExtFromMimeType(mimeType);
+    const processed = await this.antiDetection.process(buffer, {
+      strength: 'standard',
+      outputFormat: 'keep',
+      tag: 'ai-agent.saveGeneratedImageBuffer',
+    });
+    const finalBuffer = processed.buffer;
+    const finalMime = processed.processed ? processed.mimeType : mimeType;
+    const ext = this.resolveImageExtFromMimeType(finalMime);
     const dir = path.join(process.cwd(), 'public', 'uploads', 'ai-generated');
     await mkdir(dir, { recursive: true });
     const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
     const absPath = path.join(dir, fileName);
-    await writeFile(absPath, buffer);
+    await writeFile(absPath, finalBuffer);
     return `/static/uploads/ai-generated/${fileName}`;
   }
 
@@ -601,10 +619,10 @@ export class AgentService {
 
     return [
       basePrompt,
-      '任务:基于提供底图做二次编辑，输出小红书风格封面图',
+      '任务:基于提供底图,绝对不能丢掉底图大部分特征来完成,必须基于底图做二次编辑，输出小红书风格封面图',
       '要求:保留底图主体与核心元素，优化构图层次、视觉焦点与画面氛围',
       '文案呈现:请将主标题与副标题以清晰可读的浮动文字排版展示在画面中，主标题更突出，避免被人物或背景遮挡',
-      '装饰元素:可加入动画感物件与贴纸元素（如光斑、彩带、箭头、气泡、星芒）提升封面活力与点击吸引力',
+      '装饰元素:可加入贴纸元素（如光斑、彩带、箭头、气泡、星芒）提升封面活力与点击吸引力',
       '风格:清晰明快、生活方式感、平台封面质感、适合移动端浏览',
       size && /^\d{2,5}x\d{2,5}$/i.test(size)
         ? `尺寸:竖版封面 ${size}`
@@ -1918,6 +1936,164 @@ export class AgentService {
     const m = /^([A-Z0-9_]+):?\s*/.exec(raw);
     const code = m?.[1] ? m[1] : 'STREAM_ERROR';
     return { code, message: raw.slice(0, 240) };
+  }
+
+  /**
+   * @description 合并系统提示词与平台 AI 补充说明（统一注入入口）。
+   * @param {string | undefined} system - 原系统提示词。
+   * @param {AgentConfig} config - Agent 配置。
+   * @returns {Promise<string | undefined>} 合并后的系统提示词。
+   * @keyword-en merge system prompt with platform ai supplement
+   */
+  private async mergeSystemWithPlatformSupplement(
+    system: string | undefined,
+    config: AgentConfig,
+  ): Promise<string | undefined> {
+    const base = String(system ?? '').trim();
+    const supplementText = await this.resolvePlatformSupplementText(config);
+    if (!supplementText) return base.length > 0 ? base : undefined;
+
+    const block = this.buildPlatformSupplementBlock(supplementText);
+    if (base.length === 0) return block;
+    if (this.hasPlatformSupplement(base, block)) return base;
+    return `${base}\n\n${block}`;
+  }
+
+  /**
+   * @description 解析平台 AI 补充说明文本（显式传入优先，缺省按 tenantId 查询）。
+   * @param {AgentConfig} config - Agent 配置。
+   * @returns {Promise<string>} 补充说明文本。
+   * @keyword-en resolve platform ai supplement text
+   */
+  private async resolvePlatformSupplementText(
+    config: AgentConfig,
+  ): Promise<string> {
+    const direct = String(config.platformAiPromptSupplement ?? '').trim();
+    if (direct.length > 0) return direct;
+
+    const tenantId = String(config.tenantId ?? '').trim();
+    if (!tenantId) return '';
+    try {
+      return await this.adminService.getTenantPlatformAiPromptSupplement(
+        tenantId,
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error ?? '');
+      this.logger.warn(
+        `[platform-ai-supplement] resolve_failed tenantId=${tenantId} error=${msg.slice(0, 120)}`,
+      );
+      return '';
+    }
+  }
+
+  /**
+   * @description 构建标准化的平台 AI 补充说明块。
+   * @param {string} text - 补充说明文本。
+   * @returns {string} 标准化文本块。
+   * @keyword-en build platform ai supplement block
+   */
+  private buildPlatformSupplementBlock(text: string): string {
+    const body = String(text ?? '').trim();
+    return body.length > 0 ? `【平台AI补充说明】\n${body}` : '';
+  }
+
+  /**
+   * @description 为模型 invoke 注入平台 AI 补充说明，覆盖 direct buildLLM 调用路径。
+   * @param {BaseChatModel} llm - 原始聊天模型。
+   * @param {AgentConfig} config - Agent 配置。
+   * @returns {Promise<BaseChatModel>} 装饰后的模型。
+   * @keyword-en decorate model invoke with platform supplement
+   */
+  private async decorateModelInvokeWithPlatformSupplement(
+    llm: BaseChatModel,
+    config: AgentConfig,
+  ): Promise<BaseChatModel> {
+    const supplementText = await this.resolvePlatformSupplementText(config);
+    if (!supplementText) return llm;
+    const block = this.buildPlatformSupplementBlock(supplementText);
+    if (!block) return llm;
+
+    const model = llm as unknown as {
+      invoke?: (input: unknown, options?: unknown) => Promise<unknown>;
+      __platformSupplementDecorated?: boolean;
+    };
+    if (typeof model.invoke !== 'function') return llm;
+    if (model.__platformSupplementDecorated) return llm;
+
+    const originalInvoke = model.invoke.bind(llm);
+    model.invoke = async (invokeInput: unknown, options?: unknown) => {
+      const patchedInput = this.injectPlatformSupplementToInvokeInput(
+        invokeInput,
+        block,
+      );
+      return await originalInvoke(patchedInput, options);
+    };
+    model.__platformSupplementDecorated = true;
+    return llm;
+  }
+
+  /**
+   * @description 将平台 AI 补充说明注入到模型 invoke 输入中。
+   * @param {unknown} input - 模型输入。
+   * @param {string} supplementBlock - 补充说明块。
+   * @returns {unknown} 注入后的输入。
+   * @keyword-en inject platform supplement into invoke input
+   */
+  private injectPlatformSupplementToInvokeInput(
+    input: unknown,
+    supplementBlock: string,
+  ): unknown {
+    if (!supplementBlock) return input;
+
+    if (typeof input === 'string') {
+      return this.hasPlatformSupplement(input, supplementBlock)
+        ? input
+        : `${supplementBlock}\n\n${input}`;
+    }
+
+    if (Array.isArray(input) || isBaseMessage(input)) {
+      try {
+        const normalized = this.normalizeMessages(
+          Array.isArray(input) ? input : [input],
+        );
+        const extracted = this.extractSystemTextFromMessages(normalized);
+        if (this.hasPlatformSupplement(extracted.systemText, supplementBlock)) {
+          return normalized;
+        }
+        return [new SystemMessage(supplementBlock), ...normalized];
+      } catch {
+        return input;
+      }
+    }
+
+    if (input && typeof input === 'object' && 'messages' in input) {
+      const record = input as Record<string, unknown>;
+      const messages = record.messages;
+      return {
+        ...record,
+        messages: this.injectPlatformSupplementToInvokeInput(
+          messages,
+          supplementBlock,
+        ),
+      };
+    }
+
+    return input;
+  }
+
+  /**
+   * @description 判断文本中是否已包含平台 AI 补充说明，避免重复注入。
+   * @param {string} text - 待检测文本。
+   * @param {string} supplementBlock - 标准补充块。
+   * @returns {boolean} 是否已包含。
+   * @keyword-en detect duplicated platform supplement
+   */
+  private hasPlatformSupplement(text: string, supplementBlock: string): boolean {
+    const src = String(text ?? '').trim();
+    if (!src) return false;
+    if (src.includes(supplementBlock)) return true;
+    const raw = supplementBlock.replace(/^【平台AI补充说明】\s*/u, '').trim();
+    return raw.length > 0 && src.includes(raw);
   }
 
   /**

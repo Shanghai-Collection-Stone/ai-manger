@@ -13,6 +13,27 @@ export interface TodoAssociatedResource {
 }
 
 /**
+ * @description 任务回调事件定义
+ * 支持的 event 类型：
+ * - `update_process_task`: 任务完成后更新关联任务（如指派 agent、触发自动执行）
+ * @keyword-en TodoCallback callback event definition
+ */
+export interface TodoCallback {
+  /** 回调事件类型 */
+  event: 'update_process_task' | string;
+  /** 事件参数 */
+  params?: {
+    /** 目标任务 ID（update_process_task 必填） */
+    targetTodoId?: number;
+    /** 要设置的 assignee（agent:<id> 格式） */
+    assignee?: string;
+    /** 附加操作：assign_agent | mark_done */
+    action?: string;
+    [key: string]: unknown;
+  };
+}
+
+/**
  * @description 待办实体，包含AI考量、决策来源与AI计划
  * @keyword todo, entity, ai-consideration
  * @returns {void}
@@ -45,6 +66,8 @@ export interface TodoEntity {
   taskResult?: string;
   /** 长时任务截止时间（long_task 类型专用，非必填） */
   deadline?: Date;
+  /** 任务完成后触发的回调事件列表 */
+  callbacks?: TodoCallback[];
   status: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
   createdAt: Date;
   updatedAt: Date;
@@ -71,6 +94,8 @@ export interface TodoCreateInput {
   aiPlan: string;
   /** 长时任务截止时间（long_task 类型专用） */
   deadline?: Date;
+  /** 任务完成后触发的回调事件列表 */
+  callbacks?: TodoCallback[];
 }
 
 /**
@@ -100,4 +125,6 @@ export interface TodoUpdateInput {
   /** 长时任务截止时间（long_task 类型专用） */
   deadline?: Date;
   status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
+  /** 任务完成后触发的回调事件列表 */
+  callbacks?: TodoCallback[];
 }

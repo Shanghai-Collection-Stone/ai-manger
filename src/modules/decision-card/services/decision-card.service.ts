@@ -63,7 +63,10 @@ export class DecisionCardService {
     }
 
     const runtime = await this.resolveDecisionRuntime();
-    const capabilityBrief = this.buildCapabilityBrief(input.capabilityBrief);
+    const capabilityBrief = await this.buildCapabilityBrief(
+      input.capabilityBrief,
+      { tenantId: input.tenantId, userId: input.userId },
+    );
     const hasXhsIntent = /小红书|xhs|发布|发文|种草/i.test(normalizedQuestion);
     const sys = [
       '你是业务决策引擎，负责基于当前数据与当前能力组合生成可执行决策。',
@@ -73,11 +76,18 @@ export class DecisionCardService {
       'recommendation 必须是完整建议，不得使用“已基于当前数据与能力生成决策建议，请查看决策卡。”这类空洞文案。',
       'recommendation 需要包含：关键判断、执行方向、阶段目标、可量化指标（至少1个）。',
       'reasoning/options/actions/risks 每个数组至少返回2条，内容要具体可执行。',
-      'actions 必须体现“AI下一步要做的具体操作”，每条动作包含：操作对象、使用能力/工具、负责人、完成标准。',
-      'actions 至少一条要体现任务分配（例如使用 todo_create 创建并指派线下执行人员任务）。',
-      'actions 中涉及能力时，必须只写中文能力名；禁止出现工具函数名、robot:xxx、下划线英文代号。',
+      'actions 每条必须以"三要素结构"成句（不用拆字段，写成一段话即可）：',
+      '  · 输入：完成此动作需要什么素材/数据/前置条件',
+      '  · 交付物：完成后会产出什么具体结果（文档/素材/报告/任务链路）',
+      '  · 完成条件：什么样的可验证指标/产物代表此动作已完成',
+      'actions 中若涉及指派，必须在文案中明示指派对象并使用以下格式之一（与下方"可指派对象清单"严格对齐）：',
+      '  · robot:<code> — 系统自动机器人',
+      '  · agent:<id>  — 租户配置的 Agent（直接使用清单中给出的 agent:xxx 完整字符串）',
+      '  · user:<id>   — 具体用户',
+      '  · "待分配"    — 明确暂不指派，交由运营后续人工分派',
+      'actions 中涉及能力时，必须只写中文能力名；禁止出现工具函数名、下划线英文代号（但上述 robot:/agent:/user: 指派格式为合法例外）。',
       hasXhsIntent
-        ? '若问题涉及小红书发布，actions 至少一条要体现从“示例内容生成”到“自动发布机执行”的链路。'
+        ? '若问题涉及小红书发布，actions 至少一条要体现从"示例内容生成"到"自动发布机执行"的链路，且指派对象必须从可指派清单中选取。'
         : '若问题不涉及发布，可将发布链路作为备选动作，不要强制写发布执行。',
     ].join('\n');
     const payload = {
@@ -106,6 +116,7 @@ export class DecisionCardService {
           apiKey: runtime.apiKey,
           baseUrl: runtime.baseUrl,
           temperature: 0.2,
+          tenantId: input.tenantId,
           system: sys,
         },
         messages,
@@ -506,29 +517,120 @@ export class DecisionCardService {
     ];
   }
 
-  private buildCapabilityBrief(input?: string): string {
+  /**
+   * @description 构建能力清单 prompt 文本，含三类可指派对象（robots/agents/users）与 assignee 格式约定。
+   * 传给 LLM 用于生成决策 actions 与 applyDecision 的任务大纲，让 LLM 清楚"谁可以被指派、用什么格式表达"。
+   * @param {string} [input] - 外部补充的能力信息（会做英文代号→中文能力名的归一化）
+   * @param {{ tenantId?: string; userId?: string }} [scope] - 作用域，用于拉取租户用户与启用中的 agent
+   * @returns {Promise<string>} 能力清单文本
+   * @keyword-en build capability brief with assignable robots agents users
+   */
+  private async buildCapabilityBrief(
+    input?: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): Promise<string> {
     const robots = this.robots.listRobots();
     const robotLines =
       robots.length > 0
         ? robots
-            .map(
-              (r, i) => `${i + 1}) ${r.name}：${r.description}`,
+            .map((r) => `  - robot:${r.code} → ${r.name}（${r.description}）`)
+            .join('\n')
+        : '  -（当前无自动机器人）';
+
+    const [agents, users] = await Promise.all([
+      this.robots.listAgentConfigs().catch(() => []),
+      this.listAssignableUsers(scope).catch(() => []),
+    ]);
+
+    const agentLines =
+      agents.length > 0
+        ? agents
+            .map((a) => `  - ${a.id} → ${a.name}（基础能力：${a.module}）`)
+            .join('\n')
+        : '  -（当前租户无启用中的 Agent 配置）';
+    const userLines =
+      users.length > 0
+        ? users
+            .map((u) =>
+              u.role
+                ? `  - user:${u.id} → ${u.name}（${u.role}）`
+                : `  - user:${u.id} → ${u.name}`,
             )
             .join('\n')
-        : '（当前无自动机器人）';
+        : '  -（当前租户无可指派用户）';
+
     const base = [
-      '可用能力清单（仅输出中文能力名）：',
+      '=== 可指派对象清单（assignee 字段必须使用以下格式之一，或留空） ===',
+      '1) 自动机器人 — 格式：robot:<code>',
+      robotLines,
+      '2) 配置 Agent — 格式：agent:<id>（已由系统前缀拼好，直接用）',
+      agentLines,
+      '3) 可指派用户 — 格式：user:<id>',
+      userLines,
+      'assignee 规则：',
+      '  · 指派给机器人/Agent：对应能力匹配，自动执行链路将被触发',
+      '  · 指派给用户：由该用户在后台执行线下任务',
+      '  · 不指派：留空字段，由运营后续人工分派',
+      '',
+      '=== 可用能力清单（仅输出中文能力名） ===',
       'A) 内容生成：示例文章生成（可产出 Canvas）',
       'B) 任务管理：待办创建/更新/分配/跟踪（可指派到人或自动化代理）',
-      'C) 自动机器人：',
-      robotLines,
-      'D) 数据分析：数据分析子代理（查询/统计/复盘，必要时使用）',
-      'E) 计算能力：精确计算器（用于复杂/批量计算）',
+      'C) 数据分析：数据分析子代理（查询/统计/复盘，必要时使用）',
+      'D) 计算能力：精确计算器（用于复杂/批量计算）',
       '约束：小红书发布必须基于 Canvas；若要批量发布，先有 CanvasId，再指派小红书发布机执行。',
     ].join('\n');
     const extra = this.localizeCapabilityText(String(input || '').trim());
     if (!extra) return base;
     return `${base}\n补充能力信息：\n${extra}`;
+  }
+
+  /**
+   * @description 拉取当前租户可指派的用户清单（id/名称/角色），供 LLM 在 assignee 字段使用 user:<id> 格式。
+   * 当前实现通过 AdminService 暴露的内部接口读取；无法访问时返回空数组。
+   * @param {{ tenantId?: string; userId?: string }} [scope] - 作用域
+   * @returns {Promise<Array<{ id: string; name: string; role?: string }>>} 用户清单
+   * @keyword-en list assignable users for decision assignee
+   */
+  private async listAssignableUsers(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): Promise<Array<{ id: string; name: string; role?: string }>> {
+    const tenantId = scope?.tenantId?.trim();
+    if (!tenantId) return [];
+    const svc = this.adminService as unknown as {
+      listUsers?: (
+        currentUser: { tenantId?: string; _id?: unknown },
+      ) => Promise<Array<Record<string, unknown>>>;
+    };
+    if (typeof svc.listUsers !== 'function') return [];
+    try {
+      const rows = await svc.listUsers({ tenantId });
+      return rows
+        .map((row) => {
+          const idRaw = row['_id'] ?? row['id'] ?? row['userId'];
+          const id =
+            typeof idRaw === 'string'
+              ? idRaw
+              : idRaw && typeof (idRaw as { toString?: () => string }).toString === 'function'
+                ? String((idRaw as { toString: () => string }).toString())
+                : '';
+          const name =
+            typeof row['name'] === 'string' && (row['name'] as string).trim().length > 0
+              ? (row['name'] as string)
+              : typeof row['displayName'] === 'string'
+                ? (row['displayName'] as string)
+                : typeof row['username'] === 'string'
+                  ? (row['username'] as string)
+                  : '';
+          const roleRaw = row['role'] ?? row['roleName'];
+          const role = typeof roleRaw === 'string' ? roleRaw : undefined;
+          return { id, name, role };
+        })
+        .filter((u) => u.id.length > 0 && u.name.length > 0)
+        .slice(0, 30);
+    } catch {
+      return [];
+    }
   }
 
   private localizeCapabilityText(text: string): string {
@@ -684,11 +786,10 @@ export class DecisionCardService {
     }
 
     const runtime = await this.resolveDecisionRuntime();
-    const capabilityBrief = this.buildCapabilityBrief(card.capabilityBrief);
-    const robots = this.robots.listRobots();
-    const robotHints = robots
-      .map((r) => `robot:${r.code}（${r.name}）`)
-      .join('、');
+    const capabilityBrief = await this.buildCapabilityBrief(
+      card.capabilityBrief,
+      scope,
+    );
 
     const ZTodoOutlinePlan = z.object({
       tasks: z
@@ -707,35 +808,36 @@ export class DecisionCardService {
         .max(8),
     });
 
-    const ZTodoDetail = z.object({
-      goalAndScope: z.string().min(20).max(800),
-      prerequisites: z.array(z.string().min(1).max(160)).min(1).max(10),
-      materials: z.array(z.string().min(1).max(160)).min(1).max(20),
-      steps: z.array(z.string().min(1).max(200)).min(6).max(14),
-      deliverables: z.array(z.string().min(1).max(160)).min(1).max(12),
-      acceptanceCriteria: z.array(z.string().min(1).max(220)).min(3).max(12),
-      dataAndReview: z.array(z.string().min(1).max(220)).min(1).max(12),
-    });
-
     const sysOutline = [
       '你是任务规划引擎（第1步：生成任务大纲）。',
       '必须输出 JSON，不要输出其他文本。',
       '输出 schema：{ "tasks": [{ "title": string, "description"?: string, "aiConsideration": string, "decisionReason": string, "assignee"?: string, "type"?: string, "detailHint": string }] }。',
       '至少 3 条任务：1条总控 + 每条决策 action 至少 1 条。',
-      'detailHint 要写“这个任务需要哪些具体物料/步骤/表格字段/会议安排”，但要短（<=220字），避免长文本。',
+      '',
+      '=== 字段填写规范（必须严格遵守） ===',
+      '· title：短标题，动宾结构，6~20 字。',
+      '· description：任务一句话说明，≤120 字。',
+      '· aiConsideration：AI 的考量逻辑 —— 为何选这个任务、与决策的关联点（20~300 字）。',
+      '· decisionReason：此任务对应决策中的哪一条 action / 哪一块目标（20~300 字，引用原句更好）。',
+      '· detailHint：后续生成执行细节所需的线索，必须包含三要素（≤220 字）：',
+      '    · 输入：需要哪些素材/数据/前置条件',
+      '    · 交付物：会产出哪些具体内容',
+      '    · 完成条件：可验证的完成标准（量化指标/产物清单）',
+      '· assignee：严格从"可指派对象清单"中选一个，使用 robot:<code> / agent:<id> / user:<id> 三种格式之一，不指派时留空。禁止写中文名、"待定"等模糊表达。',
+      '· type：可选；robot/agent 可根据匹配能力设置 "xhs" 等分类标签。',
+      '',
       hasXhsIntent
         ? [
-            '若涉及小红书发布：必须包含一条“发布执行任务”，assignee=robot:xhs_publisher。',
+            '=== 小红书发布特殊约束 ===',
+            '必须包含一条"发布执行任务"，并在 assignee 中选择合适的发布代理（优先 agent:<id>，其次 robot:<code>）。',
             canvasId
-              ? `发布执行任务必须包含 Canvas#${canvasId}。`
-              : '发布执行任务必须包含 Canvas#<id>（若缺失则先生成）。',
-            `发布执行任务必须包含“发布数量: ${publishCount} 篇”。`,
+              ? `发布执行任务必须在 detailHint 中明示 Canvas#${canvasId}。`
+              : '发布执行任务必须在 detailHint 中明示 Canvas#<id>（若缺失则前置一条"生成 Canvas"任务）。',
+            `发布执行任务必须在 detailHint 中明示"发布数量：${publishCount} 篇"。`,
           ].join('\n')
         : undefined,
-      robotHints.length > 0
-        ? `可用机器人：${robotHints}。适合机器人执行的任务请设置 assignee 为对应 robot:code。`
-        : undefined,
-      `可用能力信息：\n${capabilityBrief}`,
+      '',
+      capabilityBrief,
     ]
       .filter((x) => typeof x === 'string' && x.trim().length > 0)
       .join('\n');
@@ -770,6 +872,7 @@ export class DecisionCardService {
         baseUrl: runtime.baseUrl,
         temperature: 0.1,
         nonStreaming: true,
+        tenantId: scope?.tenantId,
         system: undefined,
       });
     } catch (e) {
@@ -857,8 +960,173 @@ export class DecisionCardService {
     }
 
     const outlineTasks = outlinePlan.data.tasks;
-    const detailedTasksResults = await Promise.all(
-      outlineTasks.map(async (t) => {
+
+    // === 阶段 A：立即基于大纲创建"粗粒度 todo"并返回前端（首屏快） ===
+    // 详情（aiPlan / description）使用占位文案，由后台异步填充。
+    const PENDING_AI_PLAN = DecisionCardService.PENDING_DETAIL_PLACEHOLDER;
+    const placeholderTasks = outlineTasks.map((t) => ({
+      title: t.title,
+      description:
+        typeof t.description === 'string' && t.description.trim().length > 0
+          ? t.description.trim()
+          : (t.detailHint || '').slice(0, 160),
+      aiConsideration: t.aiConsideration,
+      decisionReason: t.decisionReason,
+      aiPlan: PENDING_AI_PLAN,
+      assignee: t.assignee,
+      type: t.type,
+    }));
+
+    const expected = Math.min(
+      12,
+      Math.max(3, 1 + (Array.isArray(card.actions) ? card.actions.length : 0)),
+    );
+    const tasks = this.ensureTodoTasks(placeholderTasks, {
+      expected,
+      card,
+      hasXhsIntent,
+      canvasId,
+      publishCount,
+    });
+
+    const createdIds: number[] = [];
+    const createdTodoMap = new Map<number, (typeof outlineTasks)[number]>();
+    const createResults = await Promise.all(
+      tasks.map(async (t, idx) => {
+        try {
+          const todo = await this.todoService.create({
+            tenantId: card.tenantId,
+            userId,
+            title: t.title,
+            description: t.description,
+            aiConsideration: t.aiConsideration,
+            decisionReason: t.decisionReason,
+            aiPlan: t.aiPlan,
+            assignee:
+              typeof t.assignee === 'string' && t.assignee.trim().length > 0
+                ? t.assignee.trim()
+                : undefined,
+            type: typeof t.type === 'string' ? t.type : undefined,
+          });
+          // 仅对源自 outline 的 task 记录映射（供后续生成详情）；ensureTodoTasks 补齐的任务跳过。
+          const originalOutline = outlineTasks[idx];
+          if (originalOutline) createdTodoMap.set(todo.id, originalOutline);
+          return { todoId: todo.id };
+        } catch (e) {
+          failures.push(
+            capture('todo_create', e, { title: trunc(t.title, 120) }),
+          );
+          return null;
+        }
+      }),
+    );
+    for (const result of createResults) {
+      if (result) createdIds.push(result.todoId);
+    }
+    if (createdIds.length === 0) {
+      return {
+        success: false,
+        error: '生成待办任务失败',
+        details: { failures },
+      };
+    }
+
+    // 决策卡标记为已应用（早于详情生成完成，避免前端长时间 loading）
+    await this.cards.updateOne(
+      { _id: new ObjectId(cardId) },
+      { $set: { status: 'applied', updatedAt: new Date() } },
+    );
+
+    // === 阶段 B：后台异步填充详情 + 延后触发 robot ===
+    // 单条失败不影响其他任务；robot 触发放在详情就绪后，让 robot 拿到完整 aiPlan。
+    void this.fillTodoDetailsInBackground({
+      llm,
+      sysDetail,
+      payload,
+      outlineTasks,
+      createdTodoMap,
+      tenantId: card.tenantId,
+      hasXhsIntent,
+      canvasId,
+      publishCount,
+    });
+
+    return {
+      success: true,
+      todoId: createdIds[0],
+      todoIds: createdIds,
+      // 首次返回时 robot 尚未触发；调用方可通过 todo 列表轮询或订阅状态变化。
+      robotTriggers: [],
+      details: failures.length > 0 ? { warnings: failures } : undefined,
+    };
+  }
+
+  /** @description 待办详情尚未生成时的占位文案；前端可识别此值显示 loading 态。 */
+  private static readonly PENDING_DETAIL_PLACEHOLDER =
+    '⏳ 执行细节正在 AI 生成中，稍后自动填充…';
+
+  /**
+   * @description 后台异步为 outline-level todo 生成执行详情，逐条更新回 todo 并触发 robot（若已指派）。
+   * 设计原则：
+   *  1) 失败隔离 — 单条详情失败回退为兜底模板，不影响其他 todo；
+   *  2) 延后触发 — robot/agent 必须在详情就绪后才触发，避免它们拿到占位 aiPlan；
+   *  3) 并发可控 — 内部复用 Promise.all，受 LLM 并发限流天然约束；若后续需要更细粒度，可在此加 chunk。
+   * @keyword-en fill todo details in background, trigger robots after detail ready
+   */
+  private async fillTodoDetailsInBackground(params: {
+    llm: Awaited<ReturnType<AgentService['buildLLM']>>;
+    sysDetail: string;
+    payload: Record<string, unknown>;
+    outlineTasks: Array<{
+      title: string;
+      description?: string;
+      aiConsideration: string;
+      decisionReason: string;
+      assignee?: string;
+      type?: string;
+      detailHint: string;
+    }>;
+    createdTodoMap: Map<
+      number,
+      {
+        title: string;
+        description?: string;
+        aiConsideration: string;
+        decisionReason: string;
+        assignee?: string;
+        type?: string;
+        detailHint: string;
+      }
+    >;
+    tenantId?: string;
+    hasXhsIntent: boolean;
+    canvasId?: number;
+    publishCount: number;
+  }): Promise<void> {
+    const {
+      llm,
+      sysDetail,
+      payload,
+      outlineTasks,
+      createdTodoMap,
+      tenantId,
+      hasXhsIntent,
+      canvasId,
+      publishCount,
+    } = params;
+
+    const ZTodoDetail = z.object({
+      goalAndScope: z.string().min(20).max(800),
+      prerequisites: z.array(z.string().min(1).max(160)).min(1).max(10),
+      materials: z.array(z.string().min(1).max(160)).min(1).max(20),
+      steps: z.array(z.string().min(1).max(200)).min(6).max(14),
+      deliverables: z.array(z.string().min(1).max(160)).min(1).max(12),
+      acceptanceCriteria: z.array(z.string().min(1).max(220)).min(3).max(12),
+      dataAndReview: z.array(z.string().min(1).max(220)).min(1).max(12),
+    });
+
+    const jobs = Array.from(createdTodoMap.entries()).map(
+      async ([todoId, t]) => {
         let detail = ZTodoDetail.safeParse(undefined);
         let lastDetailRaw = '';
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -940,16 +1208,11 @@ export class DecisionCardService {
               if (this.isDetailSpecificEnough(t.title, detail.data)) break;
               detail = ZTodoDetail.safeParse(undefined);
             }
-          } catch (e) {
-            failures.push(
-              capture('task_detail', e, {
-                title: trunc(t.title, 120),
-                attempt,
-                lastRaw: lastDetailRaw ? trunc(lastDetailRaw) : undefined,
-              }),
-            );
+          } catch {
+            /* 进入下一次 attempt 或兜底 */
           }
         }
+
         if (!detail.success) {
           detail = ZTodoDetail.safeParse({
             goalAndScope: t.detailHint,
@@ -981,106 +1244,30 @@ export class DecisionCardService {
             ],
           });
         }
-        if (!detail.success) return null;
-        return {
-          title: t.title,
-          description: this.renderTodoDescriptionFromDetail(
-            t.description,
-            detail.data,
-          ),
-          aiConsideration: t.aiConsideration,
-          decisionReason: t.decisionReason,
-          aiPlan: this.renderTodoAiPlan(detail.data),
-          assignee: t.assignee,
-          type: t.type,
-        };
-      }),
-    );
+        if (!detail.success) return;
 
-    const detailedTasks = detailedTasksResults.filter(
-      (x): x is NonNullable<(typeof detailedTasksResults)[number]> => !!x,
-    );
-    if (detailedTasks.length === 0) {
-      return {
-        success: false,
-        error: '生成待办任务失败',
-        details: { failures },
-      };
-    }
-
-    const expected = Math.min(
-      12,
-      Math.max(3, 1 + (Array.isArray(card.actions) ? card.actions.length : 0)),
-    );
-    const tasks = this.ensureTodoTasks(detailedTasks, {
-      expected,
-      card,
-      hasXhsIntent,
-      canvasId,
-      publishCount,
-    });
-
-    const createdIds: number[] = [];
-    const robotTriggers: Array<{
-      todoId: number;
-      triggered: boolean;
-      robotCode?: string;
-      error?: string;
-    }> = [];
-    const createResults = await Promise.all(
-      tasks.map(async (t) => {
         try {
-          const todo = await this.todoService.create({
-            tenantId: card.tenantId,
-            userId,
-            title: t.title,
-            description: t.description,
-            aiConsideration: t.aiConsideration,
-            decisionReason: t.decisionReason,
-            aiPlan: t.aiPlan,
-            assignee:
-              typeof t.assignee === 'string' && t.assignee.trim().length > 0
-                ? t.assignee.trim()
-                : undefined,
-            type: typeof t.type === 'string' ? t.type : undefined,
+          const updated = await this.todoService.update({
+            id: todoId,
+            tenantId,
+            description: this.renderTodoDescriptionFromDetail(
+              t.description,
+              detail.data,
+            ),
+            aiPlan: this.renderTodoAiPlan(detail.data),
           });
-          const trig = await this.robots.triggerIfRobotAssigned({ todo });
-          return { todoId: todo.id, trig };
-        } catch (e) {
-          failures.push(
-            capture('todo_create_or_trigger', e, {
-              title: trunc(t.title, 120),
-            }),
-          );
-          return null;
+
+          // 详情就绪后再触发 robot / agent，让其拿到完整 aiPlan。
+          if (updated) {
+            await this.robots.triggerIfRobotAssigned({ todo: updated });
+          }
+        } catch {
+          /* 后台任务吞掉错误，不影响其他 todo */
         }
-      }),
-    );
-    for (const result of createResults) {
-      if (!result) continue;
-      createdIds.push(result.todoId);
-      robotTriggers.push({ todoId: result.todoId, ...result.trig });
-    }
-    if (createdIds.length === 0) {
-      return {
-        success: false,
-        error: '生成待办任务失败',
-        details: { failures },
-      };
-    }
-
-    await this.cards.updateOne(
-      { _id: new ObjectId(cardId) },
-      { $set: { status: 'applied', updatedAt: new Date() } },
+      },
     );
 
-    return {
-      success: true,
-      todoId: createdIds[0],
-      todoIds: createdIds,
-      robotTriggers,
-      details: failures.length > 0 ? { warnings: failures } : undefined,
-    };
+    await Promise.all(jobs);
   }
 
   private parseJsonFromModelText(text: string): unknown {

@@ -519,3 +519,73 @@ export class UpdateLlmSettingDto {
   @IsBoolean()
   coverUseLlm?: boolean;
 }
+
+/**
+ * @description 创建自媒体账号请求体（通用，platform 区分平台）
+ * @keyword-en create social account dto
+ */
+export class CreateXhsAccountDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  platform?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  username!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  passwordEncrypted?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  adspowerId?: string;
+
+  @IsOptional()
+  @IsMongoId()
+  clawConfigId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  clawAgentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
+}
+
+/**
+ * @description 更新小红书账号请求体
+ * @keyword-en update xhs account dto
+ */
+export class UpdateXhsAccountDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  passwordEncrypted?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  adspowerId?: string;
+
+  @IsOptional()
+  @IsMongoId()
+  clawConfigId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  clawAgentId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
+}
