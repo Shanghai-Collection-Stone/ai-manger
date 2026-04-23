@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import XhsSpecialistView from './XhsSpecialistView';
@@ -8,6 +8,7 @@ import CanvasFeedView from './CanvasFeedView';
 import ImageGroupCanvasView from './ImageGroupCanvasView';
 import ChatBIView from './ChatBIView';
 import ArticleLibraryView from './ArticleLibraryView';
+import AntiDetectionView from './AntiDetectionView';
 import { showToast } from './blocks/shared';
 
 /**
@@ -2246,7 +2247,7 @@ const GalleryView = ({ onBack }) => {
  * @param {{ onThoughtRouteChange?: Function }} props
  */
 const ToolsView = ({ onThoughtRouteChange }) => {
-  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'article-library'
+  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'article-library' | 'anti-detection'
 
   // ── Canvas 管理状态 ──────────────────────────────────────────
   const [canvases, setCanvases] = useState([]);
@@ -2337,6 +2338,9 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   }
   if (view === 'article-library') {
     return <ArticleLibraryView onBack={() => setView('list')} />;
+  }
+  if (view === 'anti-detection') {
+    return <AntiDetectionView onBack={() => setView('list')} />;
   }
   if (view === 'canvas') {
     // ── 打开某个 Canvas 的内部覆盖层 ──
@@ -2578,6 +2582,25 @@ const ToolsView = ({ onThoughtRouteChange }) => {
           <span className="text-xs text-slate-400 mt-1.5 z-10">文章归档与队列推送</span>
 
           <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-amber-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+
+        {/* Anti-Detection Card */}
+        <div
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-teal-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => setView('anti-detection')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center mb-4 text-white shadow-teal-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <ShieldCheck size={30} />
+          </div>
+
+          <span className="font-bold text-slate-800 text-lg z-10">去 AI 标识</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10 whitespace-nowrap">去除 AI 生图指纹</span>
+
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-teal-500">
              <ChevronLeft size={18} className="rotate-180" />
           </div>
         </div>

@@ -70,3 +70,34 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it 内联卡片
   - `listLibraries` / `getLibrary` / `createLibrary` / `updateLibrary` / `deleteLibrary`: 库 CRUD
   - `listArticles` / `putArticles` / `updateArticleStatus` / `deleteArticle`: 文章 CRUD + 状态更新
   - `leaseNext`: 管理端队列领取（测试用）
+
+### AntiDetectionView.jsx
+图片去 AI 标识工具视图。支持拖拽 / 多选批量上传（≤20 张，单张 ≤20MB），可选**处理引擎**（浏览器本地 / 服务器）、强度档位 + 输出格式。浏览器模式逐张本地处理并显示进度；服务器模式单张走二进制接口、批量走 base64 JSON 接口。支持单张下载 / 全部下载（a.download 逐个触发）。
+- **关键词**: anti-detection, remove-ai-fingerprint, upload, batch, drag-drop, download, engine-toggle, browser-local, server
+- **函数**:
+  - `handleAddFiles` / `handleDrop` / `handleInputChange`: 文件收集与过滤（类型 / 大小 / 数量）
+  - `runBrowserProcess`: 浏览器逐张本地处理（带进度）
+  - `runServerProcess`: 服务器处理（单张二进制 / 批量 base64）
+  - `runProcess`: 按 engine 开关分流
+  - `downloadOne` / `downloadAll`: 下载单张 / 全部结果
+  - `AntiDetectionView`: 主组件
+
+### antiDetectionService.js
+图片去 AI 标识前端 API client + 工具函数。
+- **关键词**: anti-detection, api-client, multipart, blob, base64, download
+- **函数**:
+  - `processSingle`: 单张接口，返回 Blob + headers 元信息
+  - `processBatch`: 批量接口，返回 JSON
+  - `base64ToBlob`: base64 → Blob
+  - `downloadBlob`: 触发浏览器下载
+
+### browserAntiDetection.js
+浏览器端抗 AI 识别算法（纯 Canvas 实现，对齐后端 AntiDetectionService 5 层流水线）。不上传图片、不消耗服务器资源；EXIF/XMP/ICC 经 canvas.toBlob 天然剥离；JPEG 编码用浏览器内置（无 mozjpeg）。
+- **关键词**: browser, canvas, offscreen-canvas, anti-detection, gamma-lut, noise-svg, resample, no-upload
+- **函数**:
+  - `processInBrowser`: 主入口（解码 → resize → color ops → 噪点 → 编码）
+  - `pickParams`: 与后端同口径的参数随机化
+  - `applyColorOps`: gamma LUT + 亮度 + 线性近似饱和度
+  - `buildNoiseSvg` / `loadSvgAsImage`: 噪点 SVG 构建与加载
+  - `decodeImage` / `makeCanvas` / `canvasToBlob`: createImageBitmap / OffscreenCanvas 兼容封装
+  - `resolveFinalFormat` / `deriveOutName`: 格式与文件名推导

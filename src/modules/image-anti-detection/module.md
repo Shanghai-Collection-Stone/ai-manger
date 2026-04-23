@@ -36,10 +36,27 @@
   - `AntiDetectionResult`: 处理结果
 
 ### image-anti-detection.module.ts
-NestJS 模块声明（`@Global()`，导出 AntiDetectionService）。
-- **关键词**: module declaration, global provider
+NestJS 模块声明（`@Global()`，导入 AdminModule 供控制器鉴权，挂载 AntiDetectionController，导出 AntiDetectionService）。
+- **关键词**: module declaration, global provider, controller, admin auth
+
+### controller/anti-detection.controller.ts
+对前端工具页暴露 HTTP 接口（Bearer token 鉴权）。
+- **关键词**: controller, upload, multipart, single, batch, base64, anti detection
+- **函数**:
+  - `resolveAuth`: 从 Bearer token 解析管理员身份 / resolve bearer token
+  - `processSingle`: 单张处理 POST /api/anti-detection/process，multipart field=file，返回处理后二进制（Content-Type 匹配 mime、Content-Disposition attachment） / process single image binary response
+  - `processBatch`: 批量处理 POST /api/anti-detection/process-batch，multipart field=files（≤20），返回 JSON（items: base64 数组） / process batch images json base64 response
+  - 辅助：`normalizeStrength` / `normalizeFormat` / `parseQuality` / `deriveOutName`
 
 ## 接入点（调用方）
 - `ai-agent/services/agent.service.ts::saveGeneratedImageBuffer`：AI 原始生图落盘前唯一处理点（standard 档）。
   所有 AI 生图（Gemini / 豆包-Doubao / 即梦 / 美图 等提供商）的 base64/URL 下载结果都会汇流到此函数，因此源头处理一次即可覆盖全部 AI 生图产物。
   非 AI 路径（图库拼图、用户真实图烧字封面）不做处理，保留真实图质感。
+- 前端工具页：`web/src/ui/AiCommander/AntiDetectionView.jsx`（经 `antiDetectionService.js` 调用上述 HTTP 接口）。
+
+## HTTP 接口
+
+| 方法 | 路径 | 入参 | 响应 |
+|---|---|---|---|
+| POST | `/api/anti-detection/process` | multipart: `file`（单张，≤20MB）；form 字段：`strength` `outputFormat` `jpegQualityMin` `jpegQualityMax` | 二进制（`Content-Type`=mime，`Content-Disposition: attachment`；Header `X-AntiDetection-Processed: 1/0`） |
+| POST | `/api/anti-detection/process-batch` | multipart: `files`（≤20 张）；同上可选 form 字段 | JSON `{ count, items: [{ originalName, outputName, mimeType, size, processed, dataBase64, appliedParams }] }` |
