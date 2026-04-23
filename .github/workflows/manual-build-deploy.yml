@@ -149,7 +149,7 @@ jobs:
             if command -v rsync >/dev/null 2>&1; then
               rsync -a --exclude '.git/' "$GITHUB_WORKSPACE"/ "$DP"/
             else
-              tar --exclude='.git' -C "$GITHUB_WORKSPACE" -cf - . | tar -xf - -C "$DP"
+              tar --exclude='.git' -C "$GITHUB_WORKSPACE" -cf - . | tar -xf - -C "$DP" --overwrite --touch
             fi
             echo "Source code synced: $DP"
           fi
