@@ -52,22 +52,29 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it 内联卡片
 - **关键词**: canvas, image-group, layout, lightbox, preview
 
 ### ArticleLibraryView.jsx
-文章库工具主视图。库列表网格（2×2 缩略图拼合）+ 详情页（文章 / 基础信息 / 推送二维码 三个 Tab）。
-- **关键词**: article-library, grid, thumbnail-mosaic, tabs, push-config, status-filter, queue
+文章库工具主视图。库列表网格（2×2 缩略图拼合，展示已发布/总数/占用中）+ 详情页（文章 / 基础信息 / 推送二维码 三个 Tab），支持刷新实时统计。
+- **关键词**: article-library, grid, thumbnail-mosaic, tabs, push-config, queue, qrcode, occupied-count, refresh
 - **函数**:
   - `ThumbnailMosaic`: 2×2 缩略图网格
   - `LibraryFormDialog`: 新建/编辑库弹窗
   - `BasicInfoTab`: 基础信息 Tab（名称/类型）
-  - `PushConfigTab`: 推送二维码 Tab（状态多选 + 数据历史 + 二维码占位 + "已发布/总数"）
-  - `ArticleListTab`: 文章列表 Tab（状态切换、发布状态切换、删除）
+  - `PushConfigTab`: 推送二维码 Tab（取文范围说明 + 数据历史 + 占用中统计 + SVG 二维码）
+  - `ArticleListTab`: 文章列表 Tab（状态切换、发布状态切换、占用中标识、删除）
   - `LibraryDetailView`: 库详情页
   - `ArticleLibraryView`: 文章库主入口
 
+### qrCodeSvg.js
+浏览器端二维码 SVG 生成器。基于生产级 `qrcode` 库，输入后端返回的 `qrContent`，输出可直接嵌入页面的 SVG 字符串。
+- **关键词**: qrcode, svg, production-library, article-library
+- **函数**:
+  - `createQrCodeSvg`: 将 JSON 字符串生成 SVG 二维码
+
 ### articleLibraryService.js
 文章库前端 API client（对接 `/api/article-library` 系列接口）。
-- **关键词**: article-library, api-client, fetch, bearer, crud, lease
+- **关键词**: article-library, api-client, fetch, bearer, crud, lease, qrcode
 - **函数**:
   - `listLibraries` / `getLibrary` / `createLibrary` / `updateLibrary` / `deleteLibrary`: 库 CRUD
+  - `getPushQr`: 获取二维码 payload 与 `qrContent`
   - `listArticles` / `putArticles` / `updateArticleStatus` / `deleteArticle`: 文章 CRUD + 状态更新
   - `leaseNext`: 管理端队列领取（测试用）
 

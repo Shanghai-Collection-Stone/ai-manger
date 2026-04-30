@@ -179,10 +179,13 @@ export class ArticleService {
   async updatePublishStatus(
     id: number,
     status: ArticlePublishStatus,
-    opts: { tenantId?: string; leaseToken?: string } = {},
+    opts: { tenantId?: string; libraryId?: number; leaseToken?: string } = {},
   ): Promise<ArticleEntity | null> {
     const filter: Record<string, unknown> = { id };
     if (opts.tenantId) filter.tenantId = opts.tenantId;
+    if (typeof opts.libraryId === 'number' && Number.isFinite(opts.libraryId)) {
+      filter.libraryId = opts.libraryId;
+    }
     if (opts.leaseToken) filter.lastLeaseToken = opts.leaseToken;
     const set: Record<string, unknown> = {
       publishStatus: status,
@@ -210,23 +213,21 @@ export class ArticleService {
   }
 
   /**
-   * @description 队列式领取一篇文章：按 createdAt 升序 FIFO，允许在 statusFilter 指定的状态池内取；
+   * @description 队列式领取一篇未发布文章：按 createdAt 升序 FIFO；
+   * 已发布/已发送文章不再进入领取池，未释放租约的文章也不会被再次领取。
    * CAS 原子更新写入 lockExpireAt=now+15min 与 leaseToken，租约过期后自动回池。
-   * @keyword-en article lease next fifo cas 15min
+   * @keyword-en article lease next unpublished fifo cas 15min
    */
   async leaseNext(params: {
     libraryId: number;
     tenantId?: string;
-    statusFilter: ArticlePublishStatus[];
   }): Promise<ArticleLeaseResult | null> {
-    const statuses =
-      params.statusFilter.length > 0 ? params.statusFilter : ['unpublished'];
     const now = new Date();
     const expireAt = new Date(now.getTime() + this.LEASE_DURATION_MS);
     const leaseToken = randomUUID();
     const filter: Record<string, unknown> = {
       libraryId: params.libraryId,
-      publishStatus: { $in: statuses },
+      publishStatus: 'unpublished',
       $or: [
         { lockExpireAt: { $exists: false } },
         { lockExpireAt: null },
@@ -260,9 +261,18 @@ export class ArticleService {
    * @description 主动释放租约（任务失败时将文章放回池）
    * @keyword-en article release lease
    */
-  async releaseLease(id: number, leaseToken: string): Promise<boolean> {
+  async releaseLease(
+    id: number,
+    leaseToken: string,
+    opts: { tenantId?: string; libraryId?: number } = {},
+  ): Promise<boolean> {
+    const filter: Record<string, unknown> = { id, lastLeaseToken: leaseToken };
+    if (opts.tenantId) filter.tenantId = opts.tenantId;
+    if (typeof opts.libraryId === 'number' && Number.isFinite(opts.libraryId)) {
+      filter.libraryId = opts.libraryId;
+    }
     const res = await this.articles.updateOne(
-      { id, lastLeaseToken: leaseToken },
+      filter,
       {
         $set: { updatedAt: new Date() },
         $unset: { lockExpireAt: '' },

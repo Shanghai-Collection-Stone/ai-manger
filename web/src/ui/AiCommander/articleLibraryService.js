@@ -71,6 +71,15 @@ export const articleLibraryService = {
   },
 
   /**
+   * @description 获取文章库二维码内容
+   * @keyword-en get article library qr payload
+   */
+  async getPushQr(libraryId) {
+    const { ok, data } = await request(`/api/article-library/${libraryId}/push-qr`);
+    return ok ? data : null;
+  },
+
+  /**
    * @description 创建文章库
    * @keyword-en create library
    */

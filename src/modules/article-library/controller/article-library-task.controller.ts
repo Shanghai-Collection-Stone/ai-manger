@@ -73,6 +73,21 @@ export class ArticleLibraryTaskController {
   }
 
   /**
+   * @description 通过二维码携带的文章库 token 校验文章库
+   * @keyword-en resolve article library by qr token
+   */
+  private async resolveLibraryByQrToken(
+    token: string,
+    libraryId: number,
+  ) {
+    const trimmed = String(token ?? '').trim();
+    if (!trimmed) throw new UnauthorizedException('ARTICLE_LIBRARY_TOKEN_REQUIRED');
+    const lib = await this.library.getByQrToken(libraryId, trimmed);
+    if (!lib) throw new UnauthorizedException('INVALID_ARTICLE_LIBRARY_TOKEN');
+    return lib;
+  }
+
+  /**
    * @description 获取文章库信息（含统计）
    * @keyword-en article library task api get detail
    */
@@ -94,8 +109,8 @@ export class ArticleLibraryTaskController {
   }
 
   /**
-   * @description 获取推送链接（接口 #5 占位：未接二维码前先返回配置中的 pushUrl）
-   * @keyword-en article library task api push url placeholder qrcode
+   * @description 获取推送链接与二维码内容（二维码内容为 JSON：{ token, articleLibraryId }）
+   * @keyword-en article library task api push url qrcode json payload
    */
   @Get(':todoId/article-library/:libraryId/push-url')
   async getPushUrl(
@@ -110,10 +125,40 @@ export class ArticleLibraryTaskController {
     );
     const lib = await this.library.get(Number(libraryId), todo.tenantId);
     if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');
+    const token = await this.library.ensureQrToken(lib.id, todo.tenantId);
+    const qrPayload = {
+      token,
+      articleLibraryId: lib.id,
+    };
     return {
       pushUrl: lib.pushConfig.pushUrl ?? null,
+      qrPayload,
+      qrContent: JSON.stringify(qrPayload),
       statusFilter: lib.pushConfig.statusFilter,
     };
+  }
+
+  /**
+   * @description token 版获取文章库信息；用于扫码端只拿到二维码 JSON 的场景
+   * @keyword-en article library token api get detail
+   */
+  @Post('article-library/detail')
+  async getLibraryByToken(
+    @Body()
+    body: {
+      token?: string;
+      articleLibraryId?: number | string;
+      libraryId?: number | string;
+    },
+  ) {
+    const rawLibraryId = body?.articleLibraryId ?? body?.libraryId;
+    const libraryId = Number(rawLibraryId);
+    if (!Number.isFinite(libraryId) || libraryId <= 0) {
+      throw new BadRequestException('ARTICLE_LIBRARY_ID_REQUIRED');
+    }
+    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const stats = await this.library.getStats(lib.id);
+    return { library: { ...lib, stats } };
   }
 
   /**
@@ -124,7 +169,6 @@ export class ArticleLibraryTaskController {
   async leaseNext(
     @Param('todoId') todoId: string,
     @Param('libraryId') libraryId: string,
-    @Body() body: { statusFilter?: ArticlePublishStatus[] } | undefined,
     @Req() req: Request,
   ) {
     const todo = await this.resolveTodoForLibrary(
@@ -134,22 +178,136 @@ export class ArticleLibraryTaskController {
     );
     const lib = await this.library.get(Number(libraryId), todo.tenantId);
     if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');
-    const statusFilter =
-      Array.isArray(body?.statusFilter) && body!.statusFilter.length > 0
-        ? body!.statusFilter.filter((s): s is ArticlePublishStatus =>
-            VALID_PUBLISH_STATUSES.has(s),
-          )
-        : lib.pushConfig.statusFilter;
     const result = await this.article.leaseNext({
       libraryId: Number(libraryId),
       tenantId: todo.tenantId,
-      statusFilter,
     });
     this.logger.log(
       `[leaseNext] todoId=${todoId} libraryId=${libraryId} leased=${result ? result.article.id : 'none'}`,
     );
     if (!result) return { article: null };
     return result;
+  }
+
+  /**
+   * @description token 版队列领取下一篇；请求体可直接传二维码 JSON：{ token, articleLibraryId }
+   * @keyword-en article library token api lease next from qrcode payload
+   */
+  @Post('article-library/lease-next')
+  async leaseNextByToken(
+    @Body()
+    body:
+      | {
+          token?: string;
+          articleLibraryId?: number | string;
+          libraryId?: number | string;
+        }
+      | undefined,
+  ) {
+    const rawLibraryId = body?.articleLibraryId ?? body?.libraryId;
+    const libraryId = Number(rawLibraryId);
+    if (!Number.isFinite(libraryId) || libraryId <= 0) {
+      throw new BadRequestException('ARTICLE_LIBRARY_ID_REQUIRED');
+    }
+    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const result = await this.article.leaseNext({
+      libraryId,
+      tenantId: lib.tenantId,
+    });
+    this.logger.log(
+      `[leaseNextByToken] libraryId=${libraryId} leased=${result ? result.article.id : 'none'}`,
+    );
+    if (!result) return { article: null };
+    return result;
+  }
+
+  /**
+   * @description token 版更新文章状态；扫码端发布完成后可直接按文章库 token 回写，不依赖 todo/taskToken。
+   * @keyword-en article library token api update status from qrcode payload
+   */
+  @Patch('article-library/articles/:articleId/status')
+  async updateStatusByToken(
+    @Param('articleId') articleId: string,
+    @Body()
+    body:
+      | {
+          token?: string;
+          articleLibraryId?: number | string;
+          libraryId?: number | string;
+          status?: string;
+          leaseToken?: string;
+        }
+      | undefined,
+  ) {
+    const rawLibraryId = body?.articleLibraryId ?? body?.libraryId;
+    const libraryId = Number(rawLibraryId);
+    if (!Number.isFinite(libraryId) || libraryId <= 0) {
+      throw new BadRequestException('ARTICLE_LIBRARY_ID_REQUIRED');
+    }
+    const articleIdNum = Number(articleId);
+    if (!Number.isFinite(articleIdNum) || articleIdNum <= 0) {
+      throw new BadRequestException('ARTICLE_ID_REQUIRED');
+    }
+    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const status = body?.status as ArticlePublishStatus | undefined;
+    if (!status || !VALID_PUBLISH_STATUSES.has(status)) {
+      throw new BadRequestException('INVALID_STATUS');
+    }
+    const updated = await this.article.updatePublishStatus(
+      articleIdNum,
+      status,
+      {
+        tenantId: lib.tenantId,
+        libraryId: lib.id,
+        leaseToken:
+          typeof body?.leaseToken === 'string' && body.leaseToken.trim().length > 0
+            ? body.leaseToken.trim()
+            : undefined,
+      },
+    );
+    if (!updated) {
+      this.logger.warn(
+        `[updateStatusByToken] not found or lease mismatch articleId=${articleId} libraryId=${libraryId}`,
+      );
+      return { ok: false, article: null };
+    }
+    return { ok: true, article: updated };
+  }
+
+  /**
+   * @description token 版主动释放租约；扫码端放弃本次领取时可立即放回队列，不必等待 15 分钟过期。
+   * @keyword-en article library token api release lease
+   */
+  @Post('article-library/articles/:articleId/release')
+  async releaseLeaseByToken(
+    @Param('articleId') articleId: string,
+    @Body()
+    body:
+      | {
+          token?: string;
+          articleLibraryId?: number | string;
+          libraryId?: number | string;
+          leaseToken?: string;
+        }
+      | undefined,
+  ) {
+    const rawLibraryId = body?.articleLibraryId ?? body?.libraryId;
+    const libraryId = Number(rawLibraryId);
+    if (!Number.isFinite(libraryId) || libraryId <= 0) {
+      throw new BadRequestException('ARTICLE_LIBRARY_ID_REQUIRED');
+    }
+    const articleIdNum = Number(articleId);
+    if (!Number.isFinite(articleIdNum) || articleIdNum <= 0) {
+      throw new BadRequestException('ARTICLE_ID_REQUIRED');
+    }
+    const leaseToken = String(body?.leaseToken ?? '').trim();
+    if (!leaseToken) throw new BadRequestException('LEASE_TOKEN_REQUIRED');
+    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const ok = await this.article.releaseLease(articleIdNum, leaseToken, {
+      tenantId: lib.tenantId,
+      libraryId: lib.id,
+    });
+    return { ok };
   }
 
   /**
@@ -178,6 +336,7 @@ export class ArticleLibraryTaskController {
       status,
       {
         tenantId: todo.tenantId,
+        libraryId: Number(libraryId),
         leaseToken:
           typeof body?.leaseToken === 'string' && body.leaseToken.trim().length > 0
             ? body.leaseToken.trim()
@@ -189,9 +348,6 @@ export class ArticleLibraryTaskController {
         `[updateStatus] not found or lease mismatch articleId=${articleId} libraryId=${libraryId}`,
       );
       return { ok: false, article: null };
-    }
-    if (updated.libraryId !== Number(libraryId)) {
-      throw new BadRequestException('ARTICLE_NOT_IN_LIBRARY');
     }
     return { ok: true, article: updated };
   }
@@ -208,14 +364,17 @@ export class ArticleLibraryTaskController {
     @Body() body: { leaseToken?: string },
     @Req() req: Request,
   ) {
-    await this.resolveTodoForLibrary(
+    const todo = await this.resolveTodoForLibrary(
       req,
       Number(todoId),
       Number(libraryId),
     );
     const leaseToken = String(body?.leaseToken ?? '').trim();
     if (!leaseToken) throw new BadRequestException('LEASE_TOKEN_REQUIRED');
-    const ok = await this.article.releaseLease(Number(articleId), leaseToken);
+    const ok = await this.article.releaseLease(Number(articleId), leaseToken, {
+      tenantId: todo.tenantId,
+      libraryId: Number(libraryId),
+    });
     return { ok };
   }
 }

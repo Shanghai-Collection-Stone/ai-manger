@@ -595,7 +595,13 @@ export class AdminService {
     baseUrl?: string;
     apiKey?: string;
   } | null> {
-    const row = await this.getDefaultAiProvider('image');
+    // image 严格按 isDefault=true 查找：未显式设为默认时直接返回 null，
+    // 让调用方走 meitu-cli 降级。不复用 getDefaultAiProvider，避免其
+    // "任意 enabled 记录即默认" 的 fallback 在此语义下误选 gemini/doubao。
+    const row = await this.aiProviders.findOne(
+      { enabled: true, isDefault: true, modelCategory: 'image' },
+      { sort: { updatedAt: -1 } },
+    );
     if (!row) return null;
     return {
       providerCode: row.providerCode,
@@ -1117,7 +1123,8 @@ export class AdminService {
         providerCode: 'doubao',
         name: 'Doubao Image',
         baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-        model: 'doubao-seedream-3.0-t2i-250415',
+        // Doubao-Seedream 5.0 lite，纯 text-to-image（ark 网关无 /images/edits，有底图请求会被上层降级到 meitu）
+        model: 'doubao-seedream-5.0-lite',
         modelCategory: 'image' as const,
       },
     ];
@@ -1163,7 +1170,8 @@ export class AdminService {
     };
     await ensureDefaultForCategory('llm');
     await ensureDefaultForCategory('em');
-    await ensureDefaultForCategory('image');
+    // image 默认模型由人工管理：未设置 default 时运行时已降级到 meitu-cli
+    // (见 agent.service.runAiCoverGenerateTool)，启动时不再回种以免覆盖管理员手动选择
   }
 
   // ─── Claw Config CRUD ───────────────────────────────────────────────────────

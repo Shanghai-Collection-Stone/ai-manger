@@ -543,93 +543,54 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 推演封面生图提示词（优先LLM，失败回退模板）。
+   * @description 构建封面生图提示词。封面元信息骨架（选题/文章标题/封面主副标题/封面版式）
+   * 之外，显式注入封面专属的视觉调性（小红书生活方式封面感、动态视觉元素、装饰丰富度、文案
+   * 排版、活力色彩、情绪氛围等）—— 让底图编辑模型在保持底图主体的前提下产出更"封面化、
+   * 更有活力"的成图。通用图生图硬约束（底图保真/输出纯净度等）由
+   * {@link AgentService.buildMeituEditPrompt} 在下游补齐。
    * @param {object} input - 提示词上下文。
-   * @returns {Promise<string>} 生图提示词。
-   * @keyword-en infer ai cover prompt by llm
+   * @returns {string} 生图提示词。
+   * @keyword-en build ai cover prompt with rich visual style directives
    */
-  private async buildAiCoverPrompt(input: {
-    tenantId?: string;
+  private buildAiCoverPrompt(input: {
     topic?: string;
     articleTitle?: string;
-    articleTags?: string[];
-    imageContext: { tags: string[]; descriptions: string[] };
     coverText: { title: string; subtitle: string };
     coverType: 'portrait' | 'collage';
-  }): Promise<string> {
-    const appendCoverTextDirectives = (rawPrompt: string): string => {
-      const core = String(rawPrompt ?? '').replace(/\s+/g, ' ').trim();
-      return [
-        core,
-        input.coverText.title ? `封面主标题:${input.coverText.title}` : '',
-        input.coverText.subtitle ? `封面副标题:${input.coverText.subtitle}` : '',
-        '文案呈现:请将封面主标题与副标题以浮动文字形式显示在画面中，确保清晰可读且不被遮挡',
-      ]
-        .filter((x) => x.length > 0)
-        .join('；');
-    };
-
-    const fallback = [
-      '小红书封面图',
-      input.coverType === 'collage' ? '拼图风格' : '单图风格',
-      input.topic ? `主题:${input.topic}` : '',
-      input.articleTitle ? `标题:${input.articleTitle}` : '',
-      input.coverText.title ? `主文案:${input.coverText.title}` : '',
-      input.coverText.subtitle ? `副文案:${input.coverText.subtitle}` : '',
-      input.imageContext.tags.length > 0
-        ? `视觉元素:${input.imageContext.tags.slice(0, 10).join(',')}`
-        : '',
-      '竖版 640x853，清晰，高对比，适合移动端封面',
+  }): string {
+    // 1) 封面元信息：调用方可识别字段，主体内容
+    const meta = [
+      input.coverType === 'collage' ? '封面版式:拼图封面' : '封面版式:单图封面',
+      input.topic ? `选题:${input.topic}` : '',
+      input.articleTitle ? `文章标题:${input.articleTitle}` : '',
+      input.coverText.title ? `封面主标题:${input.coverText.title}` : '',
+      input.coverText.subtitle ? `封面副标题:${input.coverText.subtitle}` : '',
     ]
       .filter((x) => x.length > 0)
       .join('；');
 
-    try {
-      const llm = await this.agentService.buildLLM({
-        nonStreaming: true,
-        temperature: 0.4,
-        tenantId: input.tenantId,
-      });
-      const msg = [
-        '你是一名封面视觉提示词工程师。',
-        '请根据输入信息输出 1 条中文生图提示词。',
-        '要求：不超过 180 字，必须可直接用于图片生成；包含主体、风格、构图、光线、质感。',
-        '禁止输出 markdown、代码块、解释性文字。',
-        JSON.stringify({
-          topic: input.topic,
-          articleTitle: input.articleTitle,
-          articleTags: input.articleTags,
-          coverType: input.coverType,
-          coverText: input.coverText,
-          imageContext: input.imageContext,
-        }),
-      ].join('\n');
-      const result = await llm.invoke(msg);
-      const content = result?.content;
-      let text = '';
-      if (typeof content === 'string') {
-        text = content;
-      } else if (Array.isArray(content)) {
-        text = content
-          .map((item) => {
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object') {
-              const rec = item as Record<string, unknown>;
-              if (typeof rec['text'] === 'string') return rec['text'];
-              if (typeof rec['content'] === 'string') return rec['content'];
-            }
-            return '';
-          })
-          .join(' ');
-      }
-      const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
-      if (normalized.length >= 8) {
-        return appendCoverTextDirectives(normalized.slice(0, 240));
-      }
-      return appendCoverTextDirectives(fallback);
-    } catch {
-      return appendCoverTextDirectives(fallback);
-    }
+    // 2) 封面视觉调性：强化"风格 / 动态视觉 / 装饰丰富 / 光影质感 / 文案表现"全方位指令
+    const themeAnchor =
+      input.topic?.trim() ?? input.articleTitle?.trim() ?? '所给主题';
+    const styleDirectives = [
+      '【封面视觉要求 - 鼓励大胆改造、部分动画化重绘，禁止平淡输出】',
+      '- 文字放中间一点,留白承载文案，避免贴边；主体突出，画面层次分明，氛围鲜明有记忆点',
+      '- 风格定位:小红书爆款封面 / 生活方式感 / 第一眼吸睛 / 强情绪驱动 / 画面饱满有层次',
+      '- 视觉张力:通过尺度对比、明暗对比、虚实对比制造冲击力，画面要有呼吸感与节奏感，杜绝平铺直叙',
+      '- 动画化改造(鼓励大胆):可将主体从写实转为 2D 扁平插画 / 3D Q版渲染 / 港漫卡通 / 厚涂插画 / 手绘水彩 / 像素动画 / 赛博潮酷等动画化风格，只要主体身份与场景识别度保留即可，风格化可大胆',
+      '- 表情与动作动画化:允许适度夸张主体表情(惊喜/眨眼/wink/笑哭/呆萌)、加上动态肢体(挥手/比心/跳跃/奔跑/V 字手势)、动作幅度可夸张以强化情绪',
+      '- 主体表达:主体特写或近景突出，保留底图核心识别度的同时大胆做风格化与表情夸张',
+      '- 动态视觉特效:必须加入流动光带 / 光晕散射 / 爆裂粒子 / 星芒 / 动感线条 / 彩带飘动 / 聚焦光圈 / 速度线 / 漫画风冲击线 / 拟声词图形(POW! BOOM! WOW!) 等动效，让静态画面读起来"会动"',
+      '- 装饰丰富度(3-6 个组合):贴纸、标签便签、手撕胶带、手绘涂鸦、emoji 表情符号、色块拼贴、几何图案、箭头标注、引号气泡、便利贴、漫画对话框 —— 多种类组合避免重复',
+      '- 色彩:高饱和 + 强对比，撞色或渐变虹彩，主色调统一形成记忆点；可叠加金属光泽 / 霓虹高光 / 糖果色点缀 / 故障艺术(glitch)色块',
+      '- 光影质感:明确的主光 + 轮廓光，层次分明；叠加光斑、镜头光晕、烟雾质感、磨砂玻璃、二次元角色描边光，让画面有质感颗粒而非扁平贴图',
+      '- 文案表现:封面主标题用粗体 / 描边 / 双色叠层 / 烫金 / 不规则手写体 / 漫画拟声体，字号显著、与背景形成清晰层级；副标题以小字标签或手写体辅助；严禁错别字、乱码、字符叠加遮挡',
+      '- 构图:三分法或对角线构图，留白承载文字；主体不贴边；画面分层(前景装饰 / 中景主体 / 背景氛围)；可使用动漫常见的运镜如低角度仰拍 / 鱼眼透视 / 漫画分镜',
+      `- 情绪锚定:贴合"${themeAnchor}"的核心情绪(燃 / 治愈 / 心动 / 反差 / 惊艳 / 沉浸 / 中二热血 等择一突出)，第一眼让人读懂氛围`,
+      '- 严禁:平淡极简、性冷淡风、灰暗低对比、商务中性、单调重复堆砌、模糊脏污、低分辨率、过度滤镜导致细节丢失、保守复制原图无改造感',
+    ].join('\n');
+
+    return [meta, styleDirectives].filter((x) => x.length > 0).join('\n\n');
   }
 
   /**
@@ -651,12 +612,9 @@ export class CanvasImageGroupService {
     dynamicCoverGroupId: string | number;
   }): Promise<GalleryImageEntity | null> {
     try {
-      const prompt = await this.buildAiCoverPrompt({
-        tenantId: input.tenantId,
+      const prompt = this.buildAiCoverPrompt({
         topic: input.topic,
         articleTitle: input.articleTitle,
-        articleTags: input.articleTags,
-        imageContext: input.imageContext,
         coverText: input.coverText,
         coverType: input.coverType,
       });

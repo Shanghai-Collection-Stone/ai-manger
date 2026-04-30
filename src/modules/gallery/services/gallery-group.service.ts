@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   GalleryGroupCreateInput,
   GalleryGroupEntity,
@@ -23,10 +24,34 @@ export class GalleryGroupService {
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly embedding: EmbeddingService,
+    private readonly adminService: AdminService,
   ) {
     this.groups = db.collection<GalleryGroupEntity>('gallery_groups');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     void this.ensureIndexes();
+  }
+
+  /**
+   * @description 解析默认 embedding runtime 配置（来源 ai_providers 表的 em 记录）。
+   * @returns {Promise<{ providerCode?: string; model?: string; apiKey?: string; baseUrl?: string }>} 配置。
+   * @keyword-en resolve default embedding config from provider table
+   */
+  private async resolveDefaultEmbeddingConfig(): Promise<{
+    providerCode?: string;
+    model?: string;
+    apiKey?: string;
+    baseUrl?: string;
+  }> {
+    const runtime = await this.adminService.getDefaultEmbeddingRuntime();
+    if (!runtime) {
+      return { providerCode: 'gemini', model: 'gemini-embedding-001' };
+    }
+    return {
+      providerCode: runtime.providerCode,
+      model: runtime.model,
+      apiKey: runtime.apiKey,
+      baseUrl: runtime.baseUrl,
+    };
   }
 
   /**
@@ -92,7 +117,8 @@ export class GalleryGroupService {
    */
   private async safeEmbedText(text: string): Promise<number[]> {
     try {
-      const vec = await this.embedding.embedText(text);
+      const config = await this.resolveDefaultEmbeddingConfig();
+      const vec = await this.embedding.embedText(text, config);
       if (Array.isArray(vec) && vec.length > 0) return vec;
     } catch (error) {
       console.warn(
@@ -527,7 +553,8 @@ export class GalleryGroupService {
     limit = 8,
     minScore = 0.5,
   ): Promise<GalleryGroupSearchResult[]> {
-    const queryEmbedding = await this.embedding.embedText(query);
+    const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
+    const queryEmbedding = await this.embedding.embedText(query, embeddingConfig);
     if (this.isAtlasAvailable === false) {
       return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
     }

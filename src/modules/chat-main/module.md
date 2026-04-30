@@ -1,21 +1,21 @@
 # Chat-Main Module
 
 ## 模块描述
-主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。针对生图/图组等工具密集链路，支持 updates-only 流模式与连接关闭后的中断保护。topic_orchestrate_subagent 支持数据收集链路（analysis_subagent/task + data_analysis + duckduckgo 类 MCP 搜索）后再发起编排。
+主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。针对生图/图组等工具密集链路，支持 updates-only 流模式与连接关闭后的中断保护。topic_orchestrate_subagent 支持数据收集链路（analysis_subagent/task + data_analysis + duckduckgo 类 MCP 搜索）后再发起编排。主 LLM 与小红书生文专家支持文章库工具（列库、按标题/ID取二维码、Canvas 入库）。
 文件路径: `src/modules/chat-main`
 
 ## 功能描述及关键词
 
 ### chat.service.ts
 主对话服务。
-- **关键词**: chat main, streaming, non-streaming, context, service, session-type, thought-route, tool-whitelist
+- **关键词**: chat main, streaming, non-streaming, context, service, session-type, thought-route, tool-whitelist, article-library
 - **函数**:
   - `send`: 非流式发送/send
   - `stream`: 流式发送/stream
   - `createSession`: 创建会话/create session
   - `appendUser`: 追加用户/append user
   - `appendAssistant`: 追加助手/append assistant
-  - `getMessages`: 获取消息/get messages
+  - `getMessages`: 获取消息（对 assistant content 幂等重建 canvas-it/task-it/decision-it 块，stream 中断导致 MongoDB 未保存 content 时从 checkpoint tool_results 兜底）/get messages
   - `deleteMessages`: 删除消息/delete messages
   - `clearSession`: 清空会话/clear session
   - `buildErrorDiagnostics`: 错误诊断/build error diagnostics

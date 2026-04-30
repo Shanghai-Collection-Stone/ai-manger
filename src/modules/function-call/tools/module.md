@@ -7,11 +7,12 @@
 ## 功能描述及关键词
 
 ### tools.service.ts
-工具聚合服务。聚合所有子模块工具（含 dashboard、todo、analysis 等），统一向对话层暴露。
-- **关键词**: tools, function-call, aggregation, thought-route, tool-whitelist, langchain, agent, service, dashboard
+工具聚合服务。聚合所有子模块工具（含 dashboard、todo、analysis、article-library 等），统一向对话层暴露。
+- **关键词**: tools, function-call, aggregation, thought-route, tool-whitelist, langchain, agent, service, dashboard, article-library
 - **函数**:
   - `getHandle`: 获取工具集合/get handle
   - `getThoughtRouteTools`: 获取思维链路工具/get thought route tools
+  - `buildArticleLibraryTools`: 构建文章库工具（列库 / 获取二维码 / Canvas 入库）/build article library tools
   - `buildAccountPoolTool`: 构建账号池查询工具（仅 xhs）/build account pool tool, xhs only
   - `getXhsSubAgentSessionTools`: 发布/追踪子会话工具集（含账号池、canvas详情）/xhs sub-agent session tools
 

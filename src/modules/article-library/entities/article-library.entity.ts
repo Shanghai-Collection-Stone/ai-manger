@@ -11,10 +11,12 @@ export type ArticlePublishStatus = 'unpublished' | 'published';
  * @keyword-en article library push configuration
  */
 export interface ArticleLibraryPushConfig {
-  /** 队列领取时允许的状态池（默认 ['unpublished']） */
+  /** 历史兼容字段；领取接口固定只取未发布文章 */
   statusFilter: ArticlePublishStatus[];
-  /** 推送 URL（二维码实现前先用普通链接承载；由调用方扫码后访问） */
+  /** 推送 URL（可选，扫码端落地页地址） */
   pushUrl?: string;
+  /** 文章库推送 token，用于二维码扫码后领取文章 */
+  qrToken?: string;
 }
 
 /**
@@ -68,4 +70,5 @@ export interface ArticleLibraryStats {
   total: number;
   publishedCount: number;
   unpublishedCount: number;
+  occupiedCount: number;
 }

@@ -13,6 +13,11 @@ import { RobotRegistryService } from '../../../auto-task-robot/services/robot-re
 import { MediaAgentService } from '../../../media-agent/services/media-agent.service.js';
 import { CanvasService } from '../../../canvas/services/canvas.service.js';
 import { AdminService } from '../../../admin/services/admin.service.js';
+import { ArticleLibraryService } from '../../../article-library/services/article-library.service.js';
+import { ArticleService } from '../../../article-library/services/article.service.js';
+import type { ArticleLibraryEntity } from '../../../article-library/entities/article-library.entity.js';
+import type { ArticleCreateInput } from '../../../article-library/entities/article.entity.js';
+import type { CanvasArticleEntity } from '../../../canvas/entities/canvas.entity.js';
 import { tool } from 'langchain';
 import * as z from 'zod';
 
@@ -21,6 +26,23 @@ export interface FunctionCallScope {
   userId?: string;
   category?: string;
 }
+
+type ArticleLibraryToolSummary = {
+  id: number;
+  title: string;
+  name: string;
+  type: string;
+  statusFilter: string[];
+  pushUrl: string | null;
+  stats: {
+    total: number;
+    publishedCount: number;
+    unpublishedCount: number;
+    occupiedCount: number;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 /**
  * @title 工具服务 Tools Service
@@ -44,6 +66,8 @@ export class ToolsService {
     private readonly mediaAgent: MediaAgentService,
     private readonly canvas: CanvasService,
     private readonly admin: AdminService,
+    private readonly articleLibrary: ArticleLibraryService,
+    private readonly article: ArticleService,
   ) {}
 
   /**
@@ -134,6 +158,7 @@ export class ToolsService {
     const tDashboard = this.dashboard.getHandle(scope) ?? [];
     const tGallery = this.mediaAgent.getGalleryToolsHandle(scope) ?? [];
     const tRobots = this.buildRobotListTools();
+    const tArticleLibrary = this.buildArticleLibraryTools(scope);
     // 所有数据源工具（schema_search, data_source_query, super_party_*, feishu_bitable_*）
     // 仅在 data_analysis 内部使用，不直接暴露给对话层
     // Chat层只能调用 data_analysis，数据分析由 analysis 层统一管理
@@ -152,6 +177,7 @@ export class ToolsService {
       ...tDashboard,
       ...tGallery,
       ...tRobots,
+      ...tArticleLibrary,
     );
     return tools.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
@@ -203,6 +229,419 @@ export class ToolsService {
   ): CreateAgentParams['tools'] {
     const tGallery = this.mediaAgent.getGalleryToolsHandle(scope) ?? [];
     return tGallery;
+  }
+
+  /**
+   * @description 构建文章库摘要，供 LLM 列表选择时使用。
+   * @keyword-en build article library summary for tool response
+   */
+  private async buildArticleLibrarySummary(
+    lib: ArticleLibraryEntity,
+  ): Promise<ArticleLibraryToolSummary> {
+    const stats = await this.articleLibrary.getStats(lib.id);
+    return {
+      id: lib.id,
+      title: lib.name,
+      name: lib.name,
+      type: lib.type ?? '',
+      statusFilter: lib.pushConfig?.statusFilter ?? ['unpublished'],
+      pushUrl: lib.pushConfig?.pushUrl ?? null,
+      stats,
+      createdAt: lib.createdAt,
+      updatedAt: lib.updatedAt,
+    };
+  }
+
+  private normalizeLibraryTitle(value: unknown): string {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  /**
+   * @description 按 ID 或标题解析文章库，标题多匹配时返回候选而不猜测。
+   * @keyword-en resolve article library by id or title
+   */
+  private async resolveArticleLibraryForTool(
+    input: {
+      libraryId?: number | string;
+      title?: string;
+      libraryTitle?: string;
+      name?: string;
+    },
+    scope?: FunctionCallScope,
+  ): Promise<{
+    library?: ArticleLibraryEntity;
+    error?: string;
+    message?: string;
+    candidates?: ArticleLibraryToolSummary[];
+  }> {
+    const libraryIdNum =
+      typeof input.libraryId === 'number'
+        ? input.libraryId
+        : typeof input.libraryId === 'string'
+          ? Number(input.libraryId)
+          : NaN;
+    if (Number.isFinite(libraryIdNum)) {
+      const lib = await this.articleLibrary.get(libraryIdNum, scope?.tenantId);
+      if (!lib) {
+        return { error: 'ARTICLE_LIBRARY_NOT_FOUND', message: '文章库不存在' };
+      }
+      return { library: lib };
+    }
+
+    const rawTitle = String(
+      input.title ?? input.libraryTitle ?? input.name ?? '',
+    ).trim();
+    if (!rawTitle) {
+      const { items } = await this.articleLibrary.list({
+        tenantId: scope?.tenantId,
+        limit: 20,
+      });
+      return {
+        error: 'ARTICLE_LIBRARY_REQUIRED',
+        message: '请先指定文章库标题或 ID',
+        candidates: await Promise.all(
+          items.map((lib) => this.buildArticleLibrarySummary(lib)),
+        ),
+      };
+    }
+
+    const target = this.normalizeLibraryTitle(rawTitle);
+    const { items } = await this.articleLibrary.list({
+      tenantId: scope?.tenantId,
+      limit: 200,
+    });
+    const exact = items.filter(
+      (lib) => this.normalizeLibraryTitle(lib.name) === target,
+    );
+    const matched =
+      exact.length > 0
+        ? exact
+        : items.filter((lib) =>
+            this.normalizeLibraryTitle(lib.name).includes(target),
+          );
+
+    if (matched.length === 1) return { library: matched[0] };
+    if (matched.length > 1) {
+      return {
+        error: 'ARTICLE_LIBRARY_AMBIGUOUS',
+        message: '文章库标题匹配到多个结果，请改用 libraryId 或更完整标题',
+        candidates: await Promise.all(
+          matched.slice(0, 20).map((lib) => this.buildArticleLibrarySummary(lib)),
+        ),
+      };
+    }
+    return {
+      error: 'ARTICLE_LIBRARY_NOT_FOUND',
+      message: `未找到标题为 "${rawTitle}" 的文章库`,
+      candidates: await Promise.all(
+        items.slice(0, 20).map((lib) => this.buildArticleLibrarySummary(lib)),
+      ),
+    };
+  }
+
+  private extractCanvasArticleText(article: CanvasArticleEntity): string | undefined {
+    const content = article.contentJson ?? {};
+    const markdown = content['markdown'];
+    if (typeof markdown === 'string' && markdown.trim().length > 0) {
+      return markdown.trim();
+    }
+    const text = content['text'];
+    if (typeof text === 'string' && text.trim().length > 0) {
+      return text.trim();
+    }
+    return undefined;
+  }
+
+  /**
+   * @description 文章库工具：列库、获取二维码、Canvas 入库。
+   * @keyword-en article library tools list qr store canvas
+   */
+  private buildArticleLibraryTools(
+    scope?: FunctionCallScope,
+  ): NonNullable<CreateAgentParams['tools']> {
+    const listLibraries = tool(
+      async ({
+        titleKeyword,
+        type,
+        limit,
+        offset,
+      }: {
+        titleKeyword?: string;
+        type?: string;
+        limit?: number;
+        offset?: number;
+      }) => {
+        const rawLimit = Number(limit ?? 20);
+        const safeLimit = Number.isFinite(rawLimit)
+          ? Math.max(1, Math.min(Math.floor(rawLimit), 50))
+          : 20;
+        const keyword = String(titleKeyword ?? '').trim();
+        const { items, total } = await this.articleLibrary.list({
+          tenantId: scope?.tenantId,
+          type: typeof type === 'string' ? type : undefined,
+          limit: keyword ? 200 : safeLimit,
+          offset: Number.isFinite(Number(offset)) ? Number(offset) : 0,
+        });
+        const filtered = keyword
+          ? items.filter((lib) =>
+              this.normalizeLibraryTitle(lib.name).includes(
+                this.normalizeLibraryTitle(keyword),
+              ),
+            )
+          : items;
+        const selected = filtered.slice(0, safeLimit);
+        return JSON.stringify({
+          ok: true,
+          total,
+          matched: filtered.length,
+          returned: selected.length,
+          libraries: await Promise.all(
+            selected.map((lib) => this.buildArticleLibrarySummary(lib)),
+          ),
+          hint: '用户要二维码或入库时，优先让用户从列表中确认标题或 id；标题确定后可调用 article_library_get_push_qr 或 canvas_store_to_article_library。',
+        });
+      },
+      {
+        name: 'article_library_list',
+        description:
+          'List article libraries available to the current tenant/user. Use this first when the user wants to store a Canvas into an article library or get a library QR code but did not provide an exact library id/title.',
+        schema: z.object({
+          titleKeyword: z
+            .string()
+            .optional()
+            .describe('Optional fuzzy title/name keyword for article library search.'),
+          type: z.string().optional().describe('Optional article library type filter.'),
+          limit: z.number().int().min(1).max(50).optional(),
+          offset: z.number().int().min(0).optional(),
+        }),
+      },
+    );
+
+    const getPushQr = tool(
+      async ({
+        libraryId,
+        title,
+        libraryTitle,
+        name,
+      }: {
+        libraryId?: number | string;
+        title?: string;
+        libraryTitle?: string;
+        name?: string;
+      }) => {
+        const resolved = await this.resolveArticleLibraryForTool(
+          { libraryId, title, libraryTitle, name },
+          scope,
+        );
+        if (!resolved.library) {
+          return JSON.stringify({
+            ok: false,
+            error: resolved.error,
+            message: resolved.message,
+            candidates: resolved.candidates,
+          });
+        }
+        const lib = resolved.library;
+        const token = await this.articleLibrary.ensureQrToken(
+          lib.id,
+          scope?.tenantId,
+        );
+        const latest = (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
+        const qrPayload = { token, articleLibraryId: lib.id };
+        return JSON.stringify({
+          ok: true,
+          library: await this.buildArticleLibrarySummary(latest),
+          pushUrl: latest.pushConfig?.pushUrl ?? null,
+          statusFilter: latest.pushConfig?.statusFilter ?? ['unpublished'],
+          qrPayload,
+          qrContent: JSON.stringify(qrPayload),
+          hint: 'qrContent 是二维码实际编码内容；前端应使用生产级二维码库渲染它。',
+        });
+      },
+      {
+        name: 'article_library_get_push_qr',
+        description:
+          'Get the push QR payload/content for an article library by libraryId or exact/fuzzy title. If title is ambiguous, returns candidates and asks the user to choose.',
+        schema: z.object({
+          libraryId: z
+            .union([z.number().int().positive(), z.string()])
+            .optional()
+            .describe('Article library id. Prefer this when known.'),
+          title: z
+            .string()
+            .optional()
+            .describe('Article library title/name, fuzzy matched when id is omitted.'),
+          libraryTitle: z
+            .string()
+            .optional()
+            .describe('Alias of title.'),
+          name: z.string().optional().describe('Alias of title.'),
+        }),
+      },
+    );
+
+    const storeCanvas = tool(
+      async ({
+        canvasId,
+        libraryId,
+        libraryTitle,
+        title,
+        articleIds,
+        returnPushQr,
+        allowGenerating,
+      }: {
+        canvasId?: number | string;
+        libraryId?: number | string;
+        libraryTitle?: string;
+        title?: string;
+        articleIds?: Array<number | string>;
+        returnPushQr?: boolean;
+        allowGenerating?: boolean;
+      }) => {
+        const canvasIdNum = Number(canvasId);
+        if (!Number.isFinite(canvasIdNum)) {
+          return JSON.stringify({
+            ok: false,
+            error: 'CANVAS_ID_REQUIRED',
+            message: 'canvasId 参数必填且必须是数字',
+          });
+        }
+        const canvas = await this.canvas.get(canvasIdNum, scope?.tenantId);
+        if (!canvas) {
+          return JSON.stringify({ ok: false, error: 'CANVAS_NOT_FOUND' });
+        }
+        if (scope?.userId && canvas.userId !== scope.userId) {
+          return JSON.stringify({ ok: false, error: 'CANVAS_SCOPE_FORBIDDEN' });
+        }
+        if (canvas.status === 'generating' && allowGenerating !== true) {
+          return JSON.stringify({
+            ok: false,
+            error: 'CANVAS_NOT_READY',
+            message: 'Canvas 仍在生成中，完成后再入库；如用户明确要求保存当前占位内容，可传 allowGenerating=true。',
+            canvas: {
+              id: canvas.id,
+              topic: canvas.topic,
+              type: canvas.type ?? 'article',
+              status: canvas.status,
+              articleCount: (canvas.articles ?? []).length,
+            },
+          });
+        }
+
+        const resolved = await this.resolveArticleLibraryForTool(
+          { libraryId, title, libraryTitle },
+          scope,
+        );
+        if (!resolved.library) {
+          return JSON.stringify({
+            ok: false,
+            error: resolved.error,
+            message: resolved.message,
+            candidates: resolved.candidates,
+          });
+        }
+
+        const idSet =
+          Array.isArray(articleIds) && articleIds.length > 0
+            ? new Set(
+                articleIds
+                  .map((id) => Number(id))
+                  .filter((id) => Number.isFinite(id)),
+              )
+            : null;
+        const sourceArticles = (canvas.articles ?? []).filter((article) =>
+          idSet ? idSet.has(Number(article.id)) : true,
+        );
+        if (sourceArticles.length === 0) {
+          return JSON.stringify({
+            ok: false,
+            error: 'CANVAS_ARTICLES_EMPTY',
+            message: idSet ? '指定 articleIds 未匹配到文章' : 'Canvas 中没有可入库文章',
+          });
+        }
+
+        const lib = resolved.library;
+        const userId = scope?.userId ?? canvas.userId ?? 'default';
+        const batch: ArticleCreateInput[] = sourceArticles.map((article) => ({
+          libraryId: lib.id,
+          userId,
+          tenantId: scope?.tenantId,
+          title: article.title || `文章 #${article.id}`,
+          tags: Array.isArray(article.tags) ? article.tags : [],
+          contentJson: article.contentJson ?? {},
+          text: this.extractCanvasArticleText(article),
+          imageUrls: Array.isArray(article.imageUrls) ? article.imageUrls : [],
+          imageIds: Array.isArray(article.imageIds) ? article.imageIds : [],
+          publishStatus: 'unpublished',
+          source: 'canvas',
+          sourceRef: {
+            canvasId: canvasIdNum,
+            canvasArticleId: article.id,
+          },
+        }));
+        const created = await this.article.bulkCreate(batch);
+        const latest = (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
+        let qrPayload: { token: string; articleLibraryId: number } | undefined;
+        let qrContent: string | undefined;
+        if (returnPushQr === true) {
+          const token = await this.articleLibrary.ensureQrToken(
+            lib.id,
+            scope?.tenantId,
+          );
+          qrPayload = { token, articleLibraryId: lib.id };
+          qrContent = JSON.stringify(qrPayload);
+        }
+        return JSON.stringify({
+          ok: true,
+          canvas: {
+            id: canvas.id,
+            topic: canvas.topic,
+            type: canvas.type ?? 'article',
+            sourceArticleCount: sourceArticles.length,
+          },
+          library: await this.buildArticleLibrarySummary(latest),
+          storedCount: created.length,
+          sourceArticleIds: sourceArticles.map((article) => article.id),
+          articleIds: created.map((article) => article.id),
+          qrPayload,
+          qrContent,
+        });
+      },
+      {
+        name: 'canvas_store_to_article_library',
+        description:
+          'Store all or selected articles from a Canvas into an article library. Resolve the library by libraryId or title. If the library is unknown, call article_library_list first and ask the user to choose. Can optionally return the library QR content.',
+        schema: z.object({
+          canvasId: z
+            .union([z.number().int().positive(), z.string()])
+            .optional()
+            .describe('Canvas id to store. Required.'),
+          libraryId: z
+            .union([z.number().int().positive(), z.string()])
+            .optional()
+            .describe('Target article library id. Prefer this when known.'),
+          libraryTitle: z
+            .string()
+            .optional()
+            .describe('Target article library title/name when id is unknown.'),
+          title: z.string().optional().describe('Alias of libraryTitle.'),
+          articleIds: z
+            .array(z.union([z.number().int().positive(), z.string()]))
+            .optional()
+            .describe('Optional canvas article ids to store. Omit to store the whole canvas.'),
+          returnPushQr: z
+            .boolean()
+            .optional()
+            .describe('When true, also return qrPayload and qrContent for the target library.'),
+          allowGenerating: z
+            .boolean()
+            .optional()
+            .describe('Default false. Only set true if the user explicitly wants to store a still-generating Canvas.'),
+        }),
+      },
+    );
+
+    return [listLibraries, getPushQr, storeCanvas];
   }
 
   /**
@@ -353,7 +792,12 @@ export class ToolsService {
         (t as { name?: string }).name ?? '',
       ),
     );
-    return [this.buildCanvasSearchTool(scope), ...todoTools, ...this.buildRobotListTools()];
+    return [
+      this.buildCanvasSearchTool(scope),
+      ...todoTools,
+      ...this.buildRobotListTools(),
+      ...this.buildArticleLibraryTools(scope),
+    ];
   }
 
   /**
@@ -391,6 +835,11 @@ export class ToolsService {
       const name = (t as { name?: string }).name ?? '';
       return name === 'topic_orchestrate' || name === 'xhs_get_canvas_detail';
     });
-    return [...tTodo, this.buildCanvasSearchTool(scope), ...tTopicAndCanvas];
+    return [
+      ...tTodo,
+      this.buildCanvasSearchTool(scope),
+      ...tTopicAndCanvas,
+      ...this.buildArticleLibraryTools(scope),
+    ];
   }
 }

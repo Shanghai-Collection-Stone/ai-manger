@@ -514,54 +514,101 @@ export class AgentService {
     }
 
     if (provider === 'doubao' || provider === 'volcengine' || provider === 'ark') {
+      // ark Seedream 5.0 lite：文生图 / 图生图 共用 /images/generations endpoint（ark 无 /images/edits）。
+      // 图生图时 body 追加 image 字段（单字符串，URL 或 data:<mime>;base64,<b64>）。
+      // size 支持 2K / 4K / 比例(3:4) / 像素(1728x2304)；5.0 lite 像素下限 2560x1440，
+      // 低于此值的像素用 resolveMeituRatioBySize 换算为比例。watermark 默认关闭。
       const endpointBase = runtime.baseUrl?.trim() || 'https://ark.cn-beijing.volces.com/api/v3';
-      const normalizedSize =
-        typeof input.size === 'string' && input.size.trim().length > 0
-          ? input.size.trim()
-          : '1024x1024';
-      let response: Response;
+      const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+      // Seedream 5.0 lite size 接受两种格式（互斥）：
+      //   1) 档位 '2K' | '3K'
+      //   2) 'WIDTHxHEIGHT' 像素串：总像素 ∈ [3,686,400, 10,404,496]，宽高比 ∈ [1/16, 16]
+      // 上游传入的小缩略尺寸(如 640x853)按宽高比匹配官方推荐 2K 档位像素值，
+      // 既保证落在合法区间又对齐官方推荐档（避免奇形怪状的边缘像素值）。
+      const SEED_2K_TABLE: Array<{ ratio: number; size: string }> = [
+        { ratio: 1 / 1, size: '2048x2048' },
+        { ratio: 4 / 3, size: '2304x1728' },
+        { ratio: 3 / 4, size: '1728x2304' },
+        { ratio: 16 / 9, size: '2848x1600' },
+        { ratio: 9 / 16, size: '1600x2848' },
+        { ratio: 3 / 2, size: '2496x1664' },
+        { ratio: 2 / 3, size: '1664x2496' },
+        { ratio: 21 / 9, size: '3136x1344' },
+      ];
+      const SEED_DEFAULT = '2048x2048';
+      const SEED_MIN_PIXELS = 3_686_400;
+      const SEED_MAX_PIXELS = 10_404_496;
+      const matchSeedream2KByRatio = (w: number, h: number): string => {
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+          return SEED_DEFAULT;
+        }
+        const target = w / h;
+        let best = SEED_2K_TABLE[0];
+        let minDiff = Math.abs(target - best.ratio);
+        for (const entry of SEED_2K_TABLE) {
+          const diff = Math.abs(target - entry.ratio);
+          if (diff < minDiff) {
+            minDiff = diff;
+            best = entry;
+          }
+        }
+        return best.size;
+      };
+      const sizeRaw =
+        typeof input.size === 'string' ? input.size.trim() : '';
+      const qualityTier = /^(2k|3k)$/i.exec(sizeRaw)?.[0]?.toUpperCase();
+      const pixelMatch = /^(\d{2,5})x(\d{2,5})$/i.exec(sizeRaw);
+      const normalizedSize = (() => {
+        if (qualityTier) return qualityTier;
+        if (pixelMatch) {
+          const w = Number(pixelMatch[1]);
+          const h = Number(pixelMatch[2]);
+          const total = w * h;
+          const ratio = w / h;
+          // 已是合法像素 → 透传；否则按比例匹配 2K 档推荐值
+          if (
+            total >= SEED_MIN_PIXELS &&
+            total <= SEED_MAX_PIXELS &&
+            ratio >= 1 / 16 &&
+            ratio <= 16
+          ) {
+            return `${w}x${h}`;
+          }
+          return matchSeedream2KByRatio(w, h);
+        }
+        return SEED_DEFAULT;
+      })();
+      const body: Record<string, unknown> = {
+        model: runtime.model,
+        prompt,
+        size: normalizedSize,
+        output_format: 'png',
+        watermark: false,
+      };
       if (runtimeEditImage) {
-        const endpoint = `${endpointBase.replace(/\/$/, '')}/images/edits`;
-        const formData = new FormData();
-        formData.append('model', runtime.model);
-        formData.append('prompt', prompt);
-        formData.append('size', normalizedSize);
-        formData.append('response_format', 'b64_json');
-        const imageBytes = Uint8Array.from(runtimeEditImage.buffer);
-        formData.append(
-          'image',
-          new Blob([imageBytes], {
-            type: runtimeEditImage.mimeType || 'image/png',
-          }) as any,
-          runtimeEditImage.fileName || 'runtime-edit-input.png',
-        );
-
-        response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${runtime.apiKey}`,
-          },
-          body: formData,
-        });
-      } else {
-        const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
-        response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${runtime.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: runtime.model,
-            prompt,
-            size: normalizedSize,
-            response_format: 'b64_json',
-          }),
-        });
+        const mimeType = runtimeEditImage.mimeType || 'image/png';
+        const base64 = Buffer.from(runtimeEditImage.buffer).toString('base64');
+        body['image'] = `data:${mimeType};base64,${base64}`;
       }
+      // 请求信息打印：api key 遮蔽；image 只打 data URI 头部前缀 + 总长度
+      const imageField = typeof body['image'] === 'string' ? body['image'] : '';
+      const imagePreview = imageField
+        ? `${imageField.slice(0, 64)}...<total=${imageField.length}>`
+        : '(none)';
+      this.logger.log(
+        `[ai-cover][doubao] request endpoint=${endpoint} model=${runtime.model} size=${String(body['size'])} output_format=${String(body['output_format'])} watermark=${String(body['watermark'])} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length} image=${imagePreview}`,
+      );
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${runtime.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        const requestType = runtimeEditImage ? 'EDIT' : 'REQUEST';
+        const requestType = runtimeEditImage ? 'EDIT' : 'GENERATE';
         throw new Error(
           `IMAGE_DOUBAO_${requestType}_FAILED:${response.status}:${errorText.slice(0, 300)}`,
         );
@@ -602,10 +649,12 @@ export class AgentService {
   }
 
   /**
-   * @description 为 meitu image-edit 构建封面编辑提示词，显式注入标题、类型与小红书风格约束。
+   * @description 为 meitu image-edit 构建封面编辑提示词。上层只传入"选题/标题/副标题"
+   * 等 meta 骨架，本函数补齐所有硬性规格约束（任务/要求/文案/装饰/风格/尺寸），
+   * 并强化为明确的"硬性规格-必须严格遵守"指令，最大化底图保真度与可读性。
    * @param {{ prompt: string; size?: string }} input - 编辑上下文。
    * @returns {string} 增强后的编辑提示词。
-   * @keyword-en build meitu image edit prompt
+   * @keyword-en build meitu image edit prompt with hard constraints
    */
   private buildMeituEditPrompt(input: {
     prompt: string;
@@ -613,20 +662,25 @@ export class AgentService {
   }): string {
     const basePrompt = String(input.prompt ?? '').replace(/\s+/g, ' ').trim();
     const size = String(input.size ?? '').trim();
-
-    return [
-      basePrompt,
-      '任务:基于提供底图,绝对不能丢掉底图大部分特征来完成,必须基于底图做二次编辑，输出小红书风格封面图',
-      '要求:保留底图主体与核心元素，优化构图层次、视觉焦点与画面氛围',
-      '文案呈现:请将主标题与副标题以清晰可读的浮动文字排版展示在画面中，主标题更突出，避免被人物或背景遮挡',
-      '装饰元素:可加入贴纸元素（如光斑、彩带、箭头、气泡、星芒）提升封面活力与点击吸引力',
-      '风格:清晰明快、生活方式感、平台封面质感、适合移动端浏览',
+    const sizeLine =
       size && /^\d{2,5}x\d{2,5}$/i.test(size)
-        ? `尺寸:竖版封面 ${size}`
-        : '尺寸:竖版封面',
-    ]
-      .filter((x) => x.length > 0)
-      .join('；');
+        ? `尺寸规格:竖版封面 ${size}，严禁输出横版或方版`
+        : '尺寸规格:竖版封面，严禁输出横版或方版';
+
+    const metaBlock = basePrompt.length > 0 ? `【封面元信息】\n${basePrompt}` : '';
+
+    const hardBlock = [
+      '【硬性规格 - 必须严格遵守，违反即判为失败】',
+      '1. 任务:基于所提供底图做二次编辑/重绘，鼓励大胆做风格化转换(写实→插画/卡通/3D/手绘/赛博等)与装饰夸张化处理；但严禁完全脱离底图生成无关画面，主体与场景的识别度必须保留(看得出"是谁/是什么/在哪/在做什么")。',
+      '2. 底图识别度:主体身份、场景关系、核心姿态/构图占位需可识别；允许风格化重绘、表情与动作适度夸张化、局部动画化处理；严禁替换主体身份、严禁抹除主体使其消失。',
+      '3. 文案呈现:必须将上文"封面主标题/封面副标题"以浮动文字形式清晰排版在画面中；主标题字号显著大于副标题；严禁被人物/物体/背景遮挡；严禁出现错别字、乱码、重复字、残缺字。',
+      '4. 装饰元素:鼓励叠加贴纸类装饰(光斑、彩带、箭头、气泡、星芒、胶带、涂鸦、漫画对话框、拟声词等)提升封面活力与点击率；装饰不得遮盖主标题、副标题、主体面部。',
+      '5. 风格:小红书爆款封面质感——清晰明快、生活方式感、高对比、画面饱满、适合移动端竖屏浏览；可走插画/卡通/3D/赛博等动画化方向；杜绝灰暗脏污、低分辨率、过度滤镜、保守复制无改造感。',
+      `6. ${sizeLine}`,
+      '7. 输出:仅输出最终编辑后的封面图本体，严禁在画面中加入水印、平台 logo、网址、二维码、无关文字。',
+    ].join('\n');
+
+    return [metaBlock, hardBlock].filter((x) => x.length > 0).join('\n\n');
   }
 
   /**
@@ -895,6 +949,40 @@ export class AgentService {
   }
 
   /**
+   * @description 兜底解析 meitu-cli 的扁平 key-value 文本（"code: 0 message: success result: https://... progress: 1"）。
+   * 即使传了 --json，meitu-cli 实际仍可能输出这种空格串，JSON.parse 必然失败；
+   * 本方法按"key: " 切分，value 截止到下一个 key 前，容忍 URL 中的 ":"。
+   * @param {string} text - CLI 原始 stdout。
+   * @returns {Record<string, unknown> | null} 解析后的键值对，无效时返回 null。
+   * @keyword-en parse meitu cli flat key value text
+   */
+  private parseMeituKeyValueText(
+    text: string,
+  ): Record<string, unknown> | null {
+    const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (!raw) return null;
+    const keyRe = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*/g;
+    const hits: Array<{ key: string; start: number; valueStart: number }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = keyRe.exec(raw)) !== null) {
+      hits.push({ key: m[1], start: m.index, valueStart: keyRe.lastIndex });
+    }
+    if (hits.length === 0) return null;
+    const out: Record<string, unknown> = {};
+    for (let i = 0; i < hits.length; i++) {
+      const cur = hits[i];
+      const end = i + 1 < hits.length ? hits[i + 1].start : raw.length;
+      const valStr = raw.slice(cur.valueStart, end).trim();
+      const num = Number(valStr);
+      out[cur.key] =
+        valStr !== '' && !Number.isNaN(num) && /^-?\d+(\.\d+)?$/.test(valStr)
+          ? num
+          : valStr;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+
+  /**
    * @description 从 meitu 返回对象里提取首个本地下载文件路径。
    * @param {Record<string, unknown>} payload - meitu JSON 响应。
    * @returns {string | null} 本地文件路径。
@@ -984,6 +1072,14 @@ export class AgentService {
         | string
         | undefined;
       if (direct && direct.trim().length > 0) return direct.trim();
+      // meitu-cli 扁平输出下 result 直接是一个 URL 字符串（http(s) 才认，避免与对象型 result 冲突）
+      const resultField = root['result'];
+      if (
+        typeof resultField === 'string' &&
+        /^https?:\/\//i.test(resultField.trim())
+      ) {
+        return resultField.trim();
+      }
     }
     return null;
   }
@@ -1266,10 +1362,19 @@ export class AgentService {
     }
 
     const payload =
-      this.tryParseJsonObject(stdoutText) ?? this.tryParseJsonObject(stderrText);
+      this.tryParseJsonObject(stdoutText) ??
+      this.tryParseJsonObject(stderrText) ??
+      this.parseMeituKeyValueText(stdoutText) ??
+      this.parseMeituKeyValueText(stderrText);
     if (!payload) {
-      this.logger.error('[ai-cover][meitu] result_invalid_json');
-      throw new Error('MEITU_SKILL_RESULT_INVALID_JSON');
+      const stdoutSnippet = stdoutText.replace(/\s+/g, ' ').slice(0, 800);
+      const stderrSnippet = stderrText.replace(/\s+/g, ' ').slice(0, 400);
+      this.logger.error(
+        `[ai-cover][meitu] result_invalid_json cli=${executedCli} stdoutLen=${stdoutText.length} stderrLen=${stderrText.length} stdout=${stdoutSnippet} stderr=${stderrSnippet}`,
+      );
+      throw new Error(
+        `MEITU_SKILL_RESULT_INVALID_JSON:stdoutLen=${stdoutText.length}:${stdoutSnippet.slice(0, 200)}`,
+      );
     }
 
     const savedPath = this.resolveMeituDownloadedPath(payload);
@@ -1368,6 +1473,19 @@ export class AgentService {
           }
           this.logger.warn(
             `[ai-cover][tool] runtime_provider_not_supported provider=${runtime.providerCode}, fallback=meitu`,
+          );
+          return this.generateImageByMeituSkill({
+            prompt: finalPrompt,
+            size: input.size,
+            baseImagePath: input.baseImagePath,
+            baseImageCandidates: input.baseImageCandidates,
+          });
+        }
+        // provider 侧调用失败（如 429/404/502、鉴权失败、额度耗尽等），不让生图流程判死，
+        // 统一降级到 meitu-cli。错误模式：IMAGE_<PROVIDER>_(EDIT|GENERATE)_FAILED:...
+        if (/^IMAGE_[A-Z]+_(EDIT|GENERATE)_FAILED/.test(msg)) {
+          this.logger.warn(
+            `[ai-cover][tool] runtime_call_failed provider=${runtime.providerCode} fallback=meitu message=${msg.slice(0, 200)}`,
           );
           return this.generateImageByMeituSkill({
             prompt: finalPrompt,

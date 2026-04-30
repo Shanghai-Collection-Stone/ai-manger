@@ -14,6 +14,7 @@ import { GalleryModule } from '../../gallery/gallery.module.js';
 import { AutoTaskRobotModule } from '../../auto-task-robot/auto-task-robot.module.js';
 import { MediaAgentModule } from '../../media-agent/media-agent.module.js';
 import { AdminModule } from '../../admin/admin.module.js';
+import { ArticleLibraryModule } from '../../article-library/article-library.module.js';
 
 /**
  * @title 工具模块 Tools Module
@@ -34,6 +35,7 @@ import { AdminModule } from '../../admin/admin.module.js';
     AutoTaskRobotModule,
     MediaAgentModule,
     AdminModule,
+    ArticleLibraryModule,
   ],
   providers: [ToolsService, GraphWorkflowFunctionCallService],
   exports: [ToolsService],

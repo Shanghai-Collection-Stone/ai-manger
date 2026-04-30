@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  X, Plus, Trash2, Loader2, Folder, ChevronLeft, Check, Pencil, RefreshCw, FileText,
+  X, Plus, Trash2, Loader2, Folder, ChevronLeft, Check, Pencil, RefreshCw, FileText, QrCode,
 } from 'lucide-react';
 import { articleLibraryService } from './articleLibraryService';
+import { createQrCodeSvg } from './qrCodeSvg';
 import { showToast } from './blocks/shared';
 
 /**
@@ -174,61 +175,62 @@ const BasicInfoTab = ({ library, onUpdated }) => {
 };
 
 /**
- * @description 库详情：推送二维码 Tab（状态多选 / 数据历史 / 二维码占位）
- * @keyword-en push qrcode tab status filter history placeholder
+ * @description 库详情：推送二维码 Tab（取文范围说明 / 数据历史 / 二维码）
+ * @keyword-en push qrcode tab lease scope history qr
  */
-const PushConfigTab = ({ library, onUpdated }) => {
-  const [statusFilter, setStatusFilter] = useState(
-    Array.isArray(library?.pushConfig?.statusFilter) && library.pushConfig.statusFilter.length > 0
-      ? library.pushConfig.statusFilter
-      : ['unpublished'],
-  );
-  const [pushUrl, setPushUrl] = useState(library?.pushConfig?.pushUrl ?? '');
-  const [saving, setSaving] = useState(false);
+const PushConfigTab = ({ library, onRefreshStats, statsLoading = false }) => {
+  const [qrState, setQrState] = useState({ loading: false, data: null, error: '' });
 
-  useEffect(() => {
-    setStatusFilter(
-      Array.isArray(library?.pushConfig?.statusFilter) && library.pushConfig.statusFilter.length > 0
-        ? library.pushConfig.statusFilter
-        : ['unpublished'],
-    );
-    setPushUrl(library?.pushConfig?.pushUrl ?? '');
-  }, [library?.id]);
-
-  const toggle = (val) => {
-    setStatusFilter((prev) => {
-      const has = prev.includes(val);
-      if (has) {
-        const next = prev.filter((x) => x !== val);
-        // 至少留一个
-        return next.length === 0 ? prev : next;
-      }
-      return [...prev, val];
-    });
-  };
-
-  const save = async () => {
-    setSaving(true);
-    const res = await articleLibraryService.updateLibrary(library.id, {
-      pushConfig: { statusFilter, pushUrl: pushUrl.trim() },
-    });
-    setSaving(false);
-    if (!res?.library) {
-      showToast('保存失败', 'error');
+  const loadQr = useCallback(async () => {
+    if (!library?.id) return;
+    setQrState({ loading: true, data: null, error: '' });
+    const res = await articleLibraryService.getPushQr(library.id);
+    if (!res?.qrContent) {
+      setQrState({ loading: false, data: null, error: '二维码生成失败' });
       return;
     }
-    showToast('已保存', 'success');
-    onUpdated?.(res.library);
-  };
+    try {
+      const svg = await createQrCodeSvg(res.qrContent, { scale: 5, margin: 4 });
+      setQrState({
+        loading: false,
+        data: { svg },
+        error: '',
+      });
+    } catch (error) {
+      setQrState({
+        loading: false,
+        data: null,
+        error: error?.message === 'QR_CONTENT_TOO_LONG' ? '二维码内容过长' : '二维码生成失败',
+      });
+    }
+  }, [library?.id]);
 
-  const stats = library?.stats ?? { total: 0, publishedCount: 0, unpublishedCount: 0 };
+  useEffect(() => { loadQr(); }, [loadQr]);
+
+  const stats = library?.stats ?? {
+    total: 0,
+    publishedCount: 0,
+    unpublishedCount: 0,
+    occupiedCount: 0,
+  };
 
   return (
     <div className="p-4 space-y-5 max-w-lg">
       {/* 数据历史 */}
       <div>
-        <div className="text-xs text-slate-500 mb-1.5">数据历史</div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="flex items-center justify-between mb-1.5">
+          <div className="text-xs text-slate-500">数据历史</div>
+          <button
+            type="button"
+            onClick={onRefreshStats}
+            disabled={statsLoading}
+            className="p-1 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition disabled:opacity-50"
+            title="刷新实时数据"
+          >
+            <RefreshCw size={12} className={statsLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
           <div className="bg-slate-50 rounded-xl p-3">
             <div className="text-xs text-slate-400">已发布</div>
             <div className="text-lg font-semibold text-emerald-600">{stats.publishedCount}</div>
@@ -238,71 +240,59 @@ const PushConfigTab = ({ library, onUpdated }) => {
             <div className="text-lg font-semibold text-amber-600">{stats.unpublishedCount}</div>
           </div>
           <div className="bg-slate-50 rounded-xl p-3">
+            <div className="text-xs text-slate-400">占用中</div>
+            <div className="text-lg font-semibold text-rose-600">{stats.occupiedCount ?? 0}</div>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-3">
             <div className="text-xs text-slate-400">总计</div>
             <div className="text-lg font-semibold text-slate-700">{stats.total}</div>
           </div>
         </div>
       </div>
 
-      {/* 状态池勾选 */}
+      {/* 取文范围 */}
       <div>
-        <div className="text-xs text-slate-500 mb-1.5">推送状态池（扫码取文时可消费的范围）</div>
+        <div className="text-xs text-slate-500 mb-1.5">扫码取文范围</div>
         <div className="flex flex-wrap gap-2">
-          {[
-            { key: 'unpublished', label: '未发布' },
-            { key: 'published', label: '已发布' },
-          ].map((it) => {
-            const active = statusFilter.includes(it.key);
-            return (
-              <button
-                key={it.key}
-                type="button"
-                onClick={() => toggle(it.key)}
-                className={`text-xs px-3 py-1 rounded-full border transition ${
-                  active
-                    ? 'bg-blue-500 text-white border-blue-500'
-                    : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
-                }`}
-              >
-                {it.label}
-              </button>
-            );
-          })}
+          <span className="text-xs px-3 py-1 rounded-full border bg-blue-500 text-white border-blue-500">
+            未发布
+          </span>
         </div>
         <p className="text-[11px] text-slate-400 mt-1">
-          默认勾选未发布。允许同时勾选已发布以支持重复推送。
+          已发布表示已发送，不会再被扫码取文；未释放租约的文章会等待释放或 15 分钟过期。
         </p>
       </div>
 
-      {/* 推送 URL（二维码占位） */}
-      <div>
-        <div className="text-xs text-slate-500 mb-1.5">推送链接（二维码占位）</div>
-        <input
-          value={pushUrl}
-          onChange={(e) => setPushUrl(e.target.value)}
-          placeholder="http://.../scan/xxx"
-          className="w-full text-sm border border-slate-200 rounded-xl px-3 py-2 outline-none focus:ring-1 focus:ring-blue-300"
-        />
-      </div>
-
-      {/* 二维码底部文案预览 */}
+      {/* 二维码 */}
       <div className="bg-slate-50 rounded-2xl p-4 flex flex-col items-center">
-        <div className="w-32 h-32 bg-slate-200 rounded-xl flex items-center justify-center text-slate-400 text-xs">
-          二维码占位
+        <div className="w-44 h-44 bg-white rounded-xl border border-slate-100 flex items-center justify-center overflow-hidden">
+          {qrState.loading ? (
+            <Loader2 size={22} className="animate-spin text-slate-400" />
+          ) : qrState.data?.svg ? (
+            <div
+              className="w-40 h-40"
+              dangerouslySetInnerHTML={{ __html: qrState.data.svg }}
+            />
+          ) : (
+            <div className="flex flex-col items-center gap-2 text-slate-400 text-xs">
+              <QrCode size={24} />
+              <span>{qrState.error || '暂无二维码'}</span>
+            </div>
+          )}
         </div>
         <div className="mt-2 text-xs text-slate-500">
-          {stats.publishedCount} / {stats.total}
+          已发布 {stats.publishedCount} / 总计 {stats.total} · 占用 {stats.occupiedCount ?? 0}
         </div>
+        <button
+          type="button"
+          onClick={loadQr}
+          disabled={qrState.loading}
+          className="mt-2 text-xs px-3 py-1 rounded-full border border-slate-200 text-slate-500 hover:bg-white transition inline-flex items-center gap-1 disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={qrState.loading ? 'animate-spin' : ''} />
+          刷新
+        </button>
       </div>
-
-      <button
-        onClick={save}
-        disabled={saving}
-        className="text-sm px-4 py-1.5 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition inline-flex items-center gap-1"
-      >
-        {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-        保存
-      </button>
     </div>
   );
 };
@@ -393,6 +383,7 @@ const ArticleListTab = ({ library, onChanged }) => {
           {items.map((a) => {
             const cover = Array.isArray(a.imageUrls) && a.imageUrls.length > 0 ? a.imageUrls[0] : '';
             const isPub = a.publishStatus === 'published';
+            const isOccupied = !isPub && a.lockExpireAt && new Date(a.lockExpireAt).getTime() > Date.now();
             return (
               <div key={a.id} className="bg-white rounded-2xl border border-slate-100 overflow-hidden flex flex-col">
                 <div className="w-full aspect-video bg-slate-100 overflow-hidden">
@@ -426,6 +417,11 @@ const ArticleListTab = ({ library, onChanged }) => {
                       {updatingId === a.id ? <Loader2 size={10} className="animate-spin" /> : null}
                       {isPub ? '已发布' : '未发布'}
                     </button>
+                    {isOccupied ? (
+                      <span className="text-[11px] px-2.5 py-1 rounded-full bg-rose-50 text-rose-600">
+                        占用中
+                      </span>
+                    ) : null}
                     <button
                       onClick={() => remove(a)}
                       className="ml-auto p-1 text-slate-400 hover:text-red-500 transition"
@@ -455,9 +451,12 @@ const LibraryDetailView = ({ libraryId, onBack }) => {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await articleLibraryService.getLibrary(libraryId);
-    setLibrary(res?.library ?? null);
-    setLoading(false);
+    try {
+      const res = await articleLibraryService.getLibrary(libraryId);
+      setLibrary(res?.library ?? null);
+    } finally {
+      setLoading(false);
+    }
   }, [libraryId]);
 
   useEffect(() => { load(); }, [load]);
@@ -487,9 +486,17 @@ const LibraryDetailView = ({ libraryId, onBack }) => {
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-bold text-slate-900 truncate">{library.name}</h3>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {library.type ? `${library.type} · ` : ''}#{library.id} · {library.stats?.total ?? 0} 篇
+            {library.type ? `${library.type} · ` : ''}#{library.id} · {library.stats?.total ?? 0} 篇 · 占用 {library.stats?.occupiedCount ?? 0}
           </p>
         </div>
+        <button
+          onClick={load}
+          disabled={loading}
+          className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition disabled:opacity-50"
+          title="刷新实时数据"
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+        </button>
       </div>
 
       <div className="px-4 pt-3">
@@ -520,7 +527,11 @@ const LibraryDetailView = ({ libraryId, onBack }) => {
           <BasicInfoTab library={library} onUpdated={(lib) => setLibrary({ ...library, ...lib })} />
         )}
         {tab === 'push' && (
-          <PushConfigTab library={library} onUpdated={(lib) => setLibrary({ ...library, ...lib })} />
+          <PushConfigTab
+            library={library}
+            onRefreshStats={load}
+            statsLoading={loading}
+          />
         )}
       </div>
     </div>
@@ -541,10 +552,13 @@ const ArticleLibraryView = ({ onBack }) => {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await articleLibraryService.listLibraries({ limit: 100 });
-    setItems(Array.isArray(res?.items) ? res.items : []);
-    setTotal(Number(res?.total ?? 0));
-    setLoading(false);
+    try {
+      const res = await articleLibraryService.listLibraries({ limit: 100 });
+      setItems(Array.isArray(res?.items) ? res.items : []);
+      setTotal(Number(res?.total ?? 0));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -597,6 +611,14 @@ const ArticleLibraryView = ({ onBack }) => {
           <p className="text-[10px] text-slate-500 mt-0.5">共 {total} 个</p>
         </div>
         <button
+          onClick={load}
+          disabled={loading}
+          className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition disabled:opacity-50"
+          title="刷新实时数据"
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+        </button>
+        <button
           onClick={() => setShowCreate(true)}
           className="text-xs px-3 py-1 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition inline-flex items-center gap-1"
         >
@@ -645,10 +667,11 @@ const ArticleLibraryView = ({ onBack }) => {
                       <div className="text-sm font-medium text-slate-800 line-clamp-1">
                         {lib.name}
                       </div>
-                      <div className="mt-1 text-[11px] text-slate-400">
+                      <div className="mt-1 text-[11px] text-slate-400 leading-4">
                         <span className="text-emerald-500">{lib.stats?.publishedCount ?? 0}</span>
                         {' / '}
                         {lib.stats?.total ?? 0}
+                        <span className="ml-2 text-rose-500">占用 {lib.stats?.occupiedCount ?? 0}</span>
                       </div>
                     </div>
                     <div className="opacity-0 group-hover:opacity-100 transition flex items-center gap-1">

@@ -39,12 +39,15 @@
 
 ### gallery-group.service.ts
 图库组服务。
-- **关键词**: group, service
+- **关键词**: group, service, embedding, vector-search, admin-runtime
 - **函数**:
   - `findOrCreateDynamicCoverGroup`: 查找或创建“动态封面”默认分组
   - `findOrCreateDynamicCollageGroup`: 查找或创建“动态拼图”默认分组（兼容升级旧“拼图封面”）
   - `ensureDefaultDynamicGroups`: 确保默认动态分组存在
   - `getDefaultDynamicGroupIds`: 返回默认动态分组 ID（用于生成流程过滤）
+  - `resolveDefaultEmbeddingConfig`: 读取 ai_providers em 记录作为向量运行时配置（apiKey/baseUrl/model）/resolve default embedding config
+  - `safeEmbedText`: 安全文本向量化（失败兜底零向量，已接入 admin runtime 配置）/safe embed text with admin runtime
+  - `searchSimilar`: 向量相似检索（透传 admin 默认 em 配置到 EmbeddingService）/vector similarity search
 
 ### gallery-image.entity.ts
 图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, isCollage, collageSourceImageIds, collageMeta, embedding, createdAt, updatedAt）。

@@ -44,9 +44,10 @@
   - `getUserByToken`: token解析用户/get user by token
   - `logout`: 注销会话/logout
   - `listLoginTenants`: 登录租户列表/list login tenants
-  - `getDefaultAiProvider`: 读取默认提供商/get default provider
+  - `getDefaultAiProvider`: 读取默认提供商（llm/em 未设 default 时 fallback 任一 enabled 记录）/get default provider
   - `getDefaultAiProviderRuntime`: 读取默认提供商运行配置/get default provider runtime
   - `getDefaultEmbeddingRuntime`: 读取默认向量配置/get default embedding runtime
+  - `getDefaultImageProviderRuntime`: 读取默认生图配置（严格 isDefault=true，未设 default 返回 null 走 meitu-cli 降级）/get default image provider runtime
   - `listAiProviders`: 提供商列表/list providers
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
@@ -65,7 +66,7 @@
   - `getLlmSetting`: 获取LLM设置/get llm setting
   - `upsertLlmSetting`: 创建或更新LLM设置/upsert llm setting
   - `updateLlmSetting`: 更新LLM设置/update llm setting
-  - `ensureProvidersFromEnv`: 环境迁移提供商/migrate providers from env
+  - `ensureProvidersFromEnv`: 环境迁移提供商（仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
 
 ### guards/admin-auth.guard.ts
 后台鉴权守卫。

@@ -670,9 +670,21 @@ export class ChatMainService {
     const deleted = await this.ctx.getDeletedFingerprints(sessionId, scope);
     const enriched = (history ?? []).map((m, idx) => {
       const fingerprint = this.ctx.fingerprintMessage(sessionId, m, idx);
+      let content = this.sanitizeHistoryContent(m.content);
+      // 历史消息兜底：stream 中断或 appendMessage 失败时 MongoDB 未保存 content，
+      // 但 checkpoint 里已有 tool_results。此处基于 tool_results 幂等重建
+      // canvas-it / task-it / decision-it 代码块，避免刷新后 canvas 块消失
+      if (m.role === ContextRole.Assistant) {
+        const toolResults = Array.isArray(m.tool_results)
+          ? (m.tool_results as Array<{ name?: unknown; output?: unknown }>)
+          : undefined;
+        content = this.appendCanvasItIfNeeded(content, toolResults);
+        content = this.appendTaskItIfNeeded(content, toolResults);
+        content = this.appendDecisionItIfNeeded(content, toolResults);
+      }
       return {
         ...m,
-        content: this.sanitizeHistoryContent(m.content),
+        content,
         fingerprint,
       };
     });
@@ -928,6 +940,7 @@ export class ChatMainService {
       '如果是生成文章的数据收集,直接交给生文节点去做就好了,不需要你检索完了给到 subagent',
       '优先直接回答；只有当信息不足或用户明确要求时再调用工具/子代理。',
       '当工具返回了 Canvas 信息（如 canvasId），回复中输出一个 ```canvas-it``` JSON 代码块（至少包含 canvasId）。',
+      '文章库流程：用户要“存入文章库/获取文章库二维码/按库标题取二维码”时，先用 article_library_list 给出候选；用户提供明确标题或 ID 后，再调用 canvas_store_to_article_library 或 article_library_get_push_qr。Canvas 仍在 generating 时不要强行入库，提示完成后再存；不要编造二维码内容。',
       '当用户诉求属于”方案/决策/策略/建议”，且已有可支撑的数据时，调用 decision_card_generate 生成决策卡,如果没有就进行复杂数据查询, 然后继续生成',
       '当工具返回决策卡信息（如 cardId）时，回复中输出一个 ```decision-it``` JSON 代码块（至少包含 cardId）。',
       '涉及看板替换/改版时：先调用 dashboard_config_view 读取现状，再调用 dashboard_config_patch 增量修改；不要跳过读取步骤。',
@@ -1103,6 +1116,7 @@ export class ChatMainService {
       '',
       '【子代理路由规则】：',
       '- 用户要"生图/配图/图组/Canvas生成" → 委派 gallery_subagent',
+      '- 用户要"Canvas 存入文章库"或"获取文章库二维码" → 直接使用 article_library_list / canvas_store_to_article_library / article_library_get_push_qr；如果只给了库标题，先列候选再按标题或 id 操作。Canvas 仍在 generating 时提示完成后再入库。',
       '',
       '【图片组Canvas创建规则（gallery_subagent 执行）】',
       '   - 参数规则：groupCount 与 articles 数量保持一致；篇数按用户/LLM要求，不做 6-8 强制限制',
@@ -1270,6 +1284,10 @@ export class ChatMainService {
       '- canvas_search：搜索 Canvas（type 参数指定 image-group）',
       '- xhs_get_canvas_detail：按 ID 查看 Canvas 摘要信息',
       '- topic_orchestrate：发起异步生文并返回新 Canvas',
+      '- article_library_list：列出可用文章库，供用户按标题或 id 选择',
+      '- canvas_store_to_article_library：把整个 Canvas 或指定文章存入文章库',
+      '- article_library_get_push_qr：按文章库标题或 id 获取二维码 qrContent',
+      '【文章库工作流】用户要求把 Canvas 存入文章库时，如果未指定库，先列出候选文章库；用户用标题确认后再调用入库工具。若 Canvas 仍在生成中，告诉用户完成后再入库。用户要求二维码时，优先按标题或 id 调用二维码工具，返回 qrContent，不要自行生成 token。',
     ].join('\n');
   }
 

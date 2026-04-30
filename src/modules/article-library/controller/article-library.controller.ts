@@ -145,6 +145,29 @@ export class ArticleLibraryController {
   }
 
   /**
+   * @description 获取文章库二维码内容（JSON：{ token, articleLibraryId }）
+   * @keyword-en article library admin get push qr payload
+   */
+  @Get(':libraryId/push-qr')
+  async getPushQr(
+    @Param('libraryId') libraryId: string,
+    @Req() req: Request,
+  ) {
+    const scope = await this.resolveAuthScope(req);
+    const id = Number(libraryId);
+    const lib = await this.library.get(id, scope.tenantId);
+    if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');
+    const token = await this.library.ensureQrToken(id, scope.tenantId);
+    const qrPayload = { token, articleLibraryId: id };
+    return {
+      pushUrl: lib.pushConfig.pushUrl ?? null,
+      statusFilter: lib.pushConfig.statusFilter,
+      qrPayload,
+      qrContent: JSON.stringify(qrPayload),
+    };
+  }
+
+  /**
    * @description 更新文章库基础信息 / 推送配置
    * @keyword-en article library update endpoint
    */
@@ -278,12 +301,9 @@ export class ArticleLibraryController {
     const updated = await this.article.updatePublishStatus(
       Number(articleId),
       status,
-      { tenantId: scope.tenantId },
+      { tenantId: scope.tenantId, libraryId: Number(libraryId) },
     );
     if (!updated) throw new NotFoundException('ARTICLE_NOT_FOUND');
-    if (updated.libraryId !== Number(libraryId)) {
-      throw new BadRequestException('ARTICLE_NOT_IN_LIBRARY');
-    }
     return { article: updated };
   }
 
@@ -310,22 +330,14 @@ export class ArticleLibraryController {
   @Post(':libraryId/articles/lease-next')
   async leaseNext(
     @Param('libraryId') libraryId: string,
-    @Body() body: { statusFilter?: ArticlePublishStatus[] } | undefined,
     @Req() req: Request,
   ) {
     const scope = await this.resolveAuthScope(req);
     const lib = await this.library.get(Number(libraryId), scope.tenantId);
     if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');
-    const statusFilter =
-      Array.isArray(body?.statusFilter) && body!.statusFilter.length > 0
-        ? body!.statusFilter.filter((s): s is ArticlePublishStatus =>
-            VALID_PUBLISH_STATUSES.has(s),
-          )
-        : lib.pushConfig.statusFilter;
     const result = await this.article.leaseNext({
       libraryId: Number(libraryId),
       tenantId: scope.tenantId,
-      statusFilter,
     });
     if (!result) return { article: null };
     return result;

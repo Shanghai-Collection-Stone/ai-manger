@@ -47,7 +47,7 @@ Canvas服务。
 - `generateImageGroups` — 根据文章 tag 批量匹配图库配图，按版式分配图片组
 - `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]）
 - `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
-- `buildAiCoverPrompt` — 基于文章类型与配图语义推演生图提示词，并强制注入封面主/副标题浮动文字约束
+- `buildAiCoverPrompt` — 构建封面元信息骨架（选题/文章标题/封面主/副标题/封面版式）+ 强化版封面视觉调性指令（13 条：风格定位/视觉张力/动画化改造/表情动作动画化/主体表达/动态视觉特效/装饰丰富度/色彩/光影质感/文案表现/构图/情绪锚定/严禁项），鼓励大胆改造与动画化重绘（2D 插画/3D Q版/港漫/手绘等），不调 LLM 推演主题；通用图生图硬约束由 AgentService.buildMeituEditPrompt 在下游补齐
 - `tryGenerateAiCoverToGallery` — 调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit）
 - `fetchImagePool` — tag匹配+随机补充图片池（过滤默认动态封面/动态拼图分组）
 - `supplementPoolWithRelatedTags` — 图片不足时使用“相近标签”补池，避免纯随机导致语义偏移

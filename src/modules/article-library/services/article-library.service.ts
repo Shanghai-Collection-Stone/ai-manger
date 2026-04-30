@@ -1,4 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
 import type {
   ArticleLibraryCreateInput,
@@ -38,6 +39,10 @@ export class ArticleLibraryService {
     await this.libraries.createIndex({ id: 1 }, { unique: true });
     await this.libraries.createIndex({ scope: 1, tenantId: 1, userId: 1 });
     await this.libraries.createIndex({ scope: 1, tenantId: 1, type: 1 });
+    await this.libraries.createIndex(
+      { 'pushConfig.qrToken': 1 },
+      { unique: true, sparse: true },
+    );
     await this.libraries.createIndex({ createdAt: -1 });
     const exists = await this.counters.findOne({ _id: this.COUNTER_KEY });
     if (!exists)
@@ -60,23 +65,18 @@ export class ArticleLibraryService {
   }
 
   /**
-   * @description 规范化 pushConfig（补默认值：statusFilter 默认仅未发布）
+   * @description 规范化 pushConfig（statusFilter 为历史兼容字段，固定仅未发布）
    * @keyword-en article library normalize push config
    */
   private normalizePushConfig(
     input?: Partial<ArticleLibraryPushConfig>,
   ): ArticleLibraryPushConfig {
-    const validStatuses: ArticlePublishStatus[] = ['unpublished', 'published'];
-    const rawFilter = Array.isArray(input?.statusFilter)
-      ? (input!.statusFilter as string[]).filter((s): s is ArticlePublishStatus =>
-          validStatuses.includes(s as ArticlePublishStatus),
-        )
-      : [];
-    const statusFilter: ArticlePublishStatus[] =
-      rawFilter.length > 0 ? Array.from(new Set(rawFilter)) : ['unpublished'];
+    const statusFilter: ArticlePublishStatus[] = ['unpublished'];
     const pushUrl =
       typeof input?.pushUrl === 'string' ? input!.pushUrl.trim() || undefined : undefined;
-    return { statusFilter, pushUrl };
+    const qrToken =
+      typeof input?.qrToken === 'string' ? input!.qrToken.trim() || undefined : undefined;
+    return { statusFilter, pushUrl, qrToken };
   }
 
   /**
@@ -114,6 +114,53 @@ export class ArticleLibraryService {
     const filter: Record<string, unknown> = { id };
     if (tenantId) filter.tenantId = tenantId;
     return this.libraries.findOne(filter);
+  }
+
+  /**
+   * @description 确保文章库有二维码 token，如不存在则生成并写入
+   * @keyword-en ensure article library qr token
+   */
+  async ensureQrToken(id: number, tenantId?: string): Promise<string> {
+    const existing = await this.get(id, tenantId);
+    if (!existing) throw new Error('LIBRARY_NOT_FOUND');
+    const current = existing.pushConfig?.qrToken;
+    if (typeof current === 'string' && current.trim().length > 0) {
+      return current.trim();
+    }
+    const token = randomUUID().replace(/-/g, '');
+    const res = await this.libraries.findOneAndUpdate(
+      { id, ...(tenantId ? { tenantId } : {}) },
+      {
+        $set: {
+          'pushConfig.qrToken': token,
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    const next = res.value?.pushConfig?.qrToken;
+    if (typeof next === 'string' && next.trim().length > 0) {
+      return next.trim();
+    }
+    return token;
+  }
+
+  /**
+   * @description 通过文章库 ID 与二维码 token 获取文章库
+   * @keyword-en get article library by qr token
+   */
+  async getByQrToken(
+    id: number,
+    token: string,
+  ): Promise<ArticleLibraryEntity | null> {
+    const trimmed = String(token ?? '').trim();
+    if (!trimmed) return null;
+    return (
+      (await this.libraries.findOne({
+        id,
+        'pushConfig.qrToken': trimmed,
+      })) ?? null
+    );
   }
 
   /**
@@ -186,18 +233,27 @@ export class ArticleLibraryService {
   }
 
   /**
-   * @description 统计文章库内各状态数量
-   * @keyword-en article library stats aggregate by status
+   * @description 统计文章库内各状态数量与当前租约占用数量
+   * @keyword-en article library stats aggregate by status and occupied leases
    */
   async getStats(libraryId: number): Promise<ArticleLibraryStats> {
-    const cursor = this.articles.aggregate<{
-      _id: ArticlePublishStatus;
-      count: number;
-    }>([
-      { $match: { libraryId } },
-      { $group: { _id: '$publishStatus', count: { $sum: 1 } } },
+    const now = new Date();
+    const [rows, occupiedCount] = await Promise.all([
+      this.articles
+        .aggregate<{
+          _id: ArticlePublishStatus;
+          count: number;
+        }>([
+          { $match: { libraryId } },
+          { $group: { _id: '$publishStatus', count: { $sum: 1 } } },
+        ])
+        .toArray(),
+      this.articles.countDocuments({
+        libraryId,
+        publishStatus: 'unpublished',
+        lockExpireAt: { $gt: now },
+      }),
     ]);
-    const rows = await cursor.toArray();
     let publishedCount = 0;
     let unpublishedCount = 0;
     for (const row of rows) {
@@ -208,6 +264,7 @@ export class ArticleLibraryService {
       total: publishedCount + unpublishedCount,
       publishedCount,
       unpublishedCount,
+      occupiedCount,
     };
   }
 
