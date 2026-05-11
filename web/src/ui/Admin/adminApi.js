@@ -439,4 +439,185 @@ export const adminApi = {
       method: 'POST',
     });
   },
+
+  // ─── 飞书凭证管理 ───────────────────────────────────────────────────────────
+
+  /**
+   * @description 列出当前用户可见的飞书凭证
+   * @keyword-en list tenant feishu credentials
+   */
+  async listFeishuCredentials() {
+    return request('/tenant-feishu-credentials');
+  },
+
+  /**
+   * @description Upsert 飞书凭证
+   * @keyword-en upsert feishu credential
+   */
+  async upsertFeishuCredential(payload) {
+    return request('/tenant-feishu-credentials', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除飞书凭证
+   * @keyword-en delete feishu credential
+   */
+  async deleteFeishuCredential(id) {
+    return request(`/tenant-feishu-credentials/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // ─── 财务配置管理 ───────────────────────────────────────────────────────────
+
+  /**
+   * @description 列出财务源绑定(按 name 任意多个)
+   * @keyword-en list finance bindings
+   */
+  async listFinanceBindings() {
+    return request('/finance/bindings');
+  },
+
+  /**
+   * @description Upsert 财务源绑定(name 自定义;改名传 previousName)
+   * @keyword-en upsert finance binding by name
+   */
+  async upsertFinanceBinding(payload) {
+    return request('/finance/bindings', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除财务源绑定(按 name)
+   * @keyword-en delete finance binding by name
+   */
+  async deleteFinanceBinding(name) {
+    return request(`/finance/bindings/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * @description 列出 appToken 下所有飞书多维表(弹窗批量勾选用)
+   * @keyword-en list bitable tables under app token
+   */
+  async listBitableTables(appToken) {
+    return request(
+      `/finance/bitable-tables?appToken=${encodeURIComponent(appToken)}`,
+    );
+  },
+
+  /**
+   * @description 取当前作用域的推送配置(每作用域一份)
+   * @keyword-en get finance push config
+   */
+  async getFinancePushConfig() {
+    return request('/finance/push/config');
+  },
+
+  /**
+   * @description Upsert 推送配置(每作用域一份)
+   * @keyword-en upsert finance push config
+   */
+  async upsertFinancePushConfig(payload) {
+    return request('/finance/push/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除推送配置
+   * @keyword-en delete finance push config
+   */
+  async deleteFinancePushConfig() {
+    return request('/finance/push/config', { method: 'DELETE' });
+  },
+
+  /**
+   * @description 测试推送 key 有效性(GET /api/v1/me)
+   * @keyword-en test finance push connectivity
+   */
+  async testFinancePush() {
+    return request('/finance/push/test', { method: 'POST' });
+  },
+
+  /**
+   * @description 按 binding name 立即执行推送(整批拒收;可传 { startDate, endDate } YYYY-MM-DD 时间窗按 occurredAt 过滤)
+   * @keyword-en run finance push by name with optional date window
+   */
+  async runFinancePush(name, opts = {}) {
+    const body = {};
+    if (opts && typeof opts.startDate === 'string' && opts.startDate.trim()) {
+      body.startDate = opts.startDate.trim();
+    }
+    if (opts && typeof opts.endDate === 'string' && opts.endDate.trim()) {
+      body.endDate = opts.endDate.trim();
+    }
+    return request(`/finance/push/run/${encodeURIComponent(name)}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+
+  /**
+   * @description 透传外部财务系统门店列表(供前端选 storeId)
+   * @keyword-en list external stores
+   */
+  async listExternalStores() {
+    return request('/finance/push/external/stores');
+  },
+
+  /**
+   * @description 透传外部财务系统公司列表(供前端选 companyId)
+   * @keyword-en list external companies
+   */
+  async listExternalCompanies() {
+    return request('/finance/push/external/companies');
+  },
+
+  /**
+   * @description 列出财务 transform DSL
+   * @keyword-en list finance transforms
+   */
+  async listFinanceTransforms() {
+    return request('/finance/transforms');
+  },
+
+  /**
+   * @description Upsert 财务 transform DSL(按 name;改名传 previousName)
+   * @keyword-en upsert finance transform by name
+   */
+  async upsertFinanceTransform(payload) {
+    return request('/finance/transforms', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除财务 transform DSL(按 name)
+   * @keyword-en delete finance transform by name
+   */
+  async deleteFinanceTransform(name) {
+    return request(`/finance/transforms/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * @description 财务 Agent 同步聊天(传 name + 完整历史 messages,返回最终 reply)
+   * @keyword-en finance agent chat
+   */
+  async chatFinanceAgent(payload) {
+    return request('/finance/agent/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
 };

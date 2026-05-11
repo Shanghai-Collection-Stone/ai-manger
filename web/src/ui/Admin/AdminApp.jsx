@@ -99,8 +99,62 @@ const renderPager = (pageInfo, onPrev, onNext) => (
  */
 const isSuperAdmin = (role) => role === 'super_admin';
 
+const PUSH_STATUS_COLOR = {
+  ok: 'bg-emerald-100 text-emerald-700',
+  auth: 'bg-red-100 text-red-700',
+  scope: 'bg-orange-100 text-orange-700',
+  validation: 'bg-amber-100 text-amber-700',
+  network: 'bg-slate-200 text-slate-700',
+  unknown: 'bg-slate-200 text-slate-700',
+};
+const PUSH_STATUS_LABEL = {
+  ok: '连通正常',
+  auth: 'API Key 无效',
+  scope: '缺少 scope',
+  validation: '校验失败',
+  network: '网络错误',
+  unknown: '未知错误',
+};
+
 /**
- * @description 全量 Tab 定义（含平台限定标记）
+ * @description 财务子 Tab 预设(name 内部固定,用户不可见;每种类预置默认 flow/partyType,提交 binding 时自动注入)
+ * 对齐 api.md §6 的四类业务:银行流水 / 报销审批 / 应付 / 应收
+ * @keyword-en finance kinds preset, four kinds bank approval payable receivable, hidden name, flow and party type defaults
+ */
+const FINANCE_KINDS = [
+  {
+    id: 'bank',
+    label: '流水表',
+    // 银行流水 in/out 都有(由 DSL 按金额正负或借贷字段决定),不预设 flowDefault
+    flowDefault: undefined,
+    partyTypeDefault: 'counterparty',
+    hint: '银行/支付通道流水(收支混合,直接结算落账)',
+  },
+  {
+    id: 'expense',
+    label: '审批表',
+    flowDefault: 'out',
+    partyTypeDefault: 'employee',
+    hint: '报销/差旅/办公等员工审批支出(stage 由审批状态映射:已通过→settled、审批中→intent、驳回→dead)',
+  },
+  {
+    id: 'payable',
+    label: '应付表',
+    flowDefault: 'out',
+    partyTypeDefault: 'supplier',
+    hint: '采购/物料/服务等供应商应付(committed 挂账 → settled 已付)',
+  },
+  {
+    id: 'receivable',
+    label: '应收表',
+    flowDefault: 'in',
+    partyTypeDefault: 'customer',
+    hint: '客户应收(committed 挂账 → settled 已收)',
+  },
+];
+
+/**
+ * @description 全量 Tab 定义(platformOnly:仅 super_admin 可见;tenantOnly:仅租户级用户可见)
  * @keyword-en all admin tabs definition
  */
 const ALL_TABS = [
@@ -114,12 +168,19 @@ const ALL_TABS = [
   { id: 'social_accounts', label: '自媒体账号管理' },
   { id: 'dashboard_configs', label: '看板配置' },
   { id: 'platform_info', label: '平台AI配置' },
+  { id: 'feishu_credentials', label: '飞书凭证' },
+  { id: 'finance', label: '财务' },
 ];
 
 const AdminApp = () => {
   const [currentRole, setCurrentRole] = useState('');
   const tabs = useMemo(
-    () => ALL_TABS.filter((t) => !t.platformOnly || isSuperAdmin(currentRole)),
+    () =>
+      ALL_TABS.filter(
+        (t) =>
+          (!t.platformOnly || isSuperAdmin(currentRole)) &&
+          (!t.tenantOnly || !isSuperAdmin(currentRole)),
+      ),
     [currentRole],
   );
 
@@ -143,6 +204,46 @@ const AdminApp = () => {
   const [clawConfigs, setClawConfigs] = useState([]);
   const [agentConfigs, setAgentConfigs] = useState([]);
   const [xhsAccounts, setXhsAccounts] = useState([]);
+  const [feishuCredentials, setFeishuCredentials] = useState([]);
+  /** binding 列表(按 name 任意多个) | @keyword-en finance bindings array */
+  const [financeBindings, setFinanceBindings] = useState([]);
+  /** transforms 按 name 索引 | @keyword-en finance transforms by name */
+  const [financeTransforms, setFinanceTransforms] = useState({});
+  /** 每个 binding name 一份独立聊天历史(持久化到 localStorage,跨刷新保留;清空对话才会删) | @keyword-en finance chat history per binding name persisted to localStorage */
+  const [financeChat, setFinanceChat] = useState(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = window.localStorage.getItem('finance_chat_history');
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return {};
+      const restored = {};
+      for (const [k, v] of Object.entries(parsed)) {
+        const messages = Array.isArray(v?.messages) ? v.messages : [];
+        restored[k] = { messages, input: '', loading: false };
+      }
+      return restored;
+    } catch {
+      return {};
+    }
+  });
+  /** 推送配置(每作用域一份) | @keyword-en finance push config single */
+  const [financePushConfig, setFinancePushConfig] = useState(null);
+  /** 推送类按钮 loading(test/save 全局,run 记录当前正在 run 的 name) | @keyword-en finance push pending flags */
+  const [financePushPending, setFinancePushPending] = useState({
+    test: false,
+    save: false,
+    run: '',
+  });
+  /** 推送即时反馈(全局一条) | @keyword-en finance push transient result */
+  const [financePushFeedback, setFinancePushFeedback] = useState(null);
+  /** 推送时间窗(按 occurredAt 过滤,YYYY-MM-DD;空=全量) | @keyword-en finance push date window */
+  const [financePushDateWindow, setFinancePushDateWindow] = useState({
+    startDate: '',
+    endDate: '',
+  });
+  /** 当前选中的 binding name(空=新建) | @keyword-en finance currently selected binding name */
+  const [financeSelectedName, setFinanceSelectedName] = useState('');
   const [editingUserId, setEditingUserId] = useState('');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
@@ -156,6 +257,19 @@ const AdminApp = () => {
   const [testLoginLoadingId, setTestLoginLoadingId] = useState('');
   /** 自媒体账号管理当前平台子 Tab | @keyword-en social account platform sub tab */
   const [socialAccountSubTab, setSocialAccountSubTab] = useState('xhs');
+  /** 财务子 Tab(预设 expense/payable;切换会自动同步对应 binding 到表单) | @keyword-en finance sub tab */
+  const [financeSubTab, setFinanceSubTab] = useState(FINANCE_KINDS[0].id);
+  /** 推送配置卡片折叠态 | @keyword-en finance push config collapsed */
+  const [financePushCollapsed, setFinancePushCollapsed] = useState(true);
+  /** 飞书多维表批量添加弹窗(挂在当前编辑的 binding 上,不再带 category) | @keyword-en bitable batch picker modal state */
+  const [bitableModal, setBitableModal] = useState({
+    open: false,
+    appToken: '',
+    loading: false,
+    tables: [],
+    selected: {},
+    error: '',
+  });
   const [filters, setFilters] = useState({
     users: { keyword: '', tenantId: '' },
     providers: { keyword: '' },
@@ -246,6 +360,26 @@ const AdminApp = () => {
       clawAgentId: '',
       notes: '',
     },
+    feishuCredential: {
+      appId: '',
+      appSecret: '',
+      remark: '',
+    },
+    /** 当前编辑中的 binding 表单 | @keyword-en finance binding edit form */
+    financeBinding: {
+      name: '',
+      flowDefault: '',
+      partyTypeDefault: '',
+      sources: [],
+      remark: '',
+      dslText: '',
+      explanation: '',
+    },
+    /** 全局推送配置表单 | @keyword-en finance push config form */
+    financePush: {
+      baseUrl: '',
+      apiKey: '',
+    },
   });
 
   const loadData = async () => {
@@ -311,6 +445,71 @@ const AdminApp = () => {
       } catch {
         // 忽略加载失败
       }
+      // 加载飞书凭证 + 财务配置(租户级)
+      try {
+        const [fc, fb, ft, fp] = await Promise.all([
+          adminApi.listFeishuCredentials(),
+          adminApi.listFinanceBindings(),
+          adminApi.listFinanceTransforms(),
+          adminApi.getFinancePushConfig().catch(() => ({ config: null })),
+        ]);
+        const credentials = fc.credentials || [];
+        setFeishuCredentials(credentials);
+        const ownCred = meRes?.tenantId
+          ? credentials.find((c) => c.tenantId === meRes.tenantId)
+          : credentials[0];
+        const bindingList = fb.bindings || [];
+        setFinanceBindings(bindingList);
+        const transformsByName = (ft.transforms || []).reduce(
+          (acc, row) => ({ ...acc, [row.name]: row }),
+          {},
+        );
+        setFinanceTransforms(transformsByName);
+        // 仅为没有持久化历史的 binding 补一份空聊天态(保留已有的 localStorage 历史)
+        setFinanceChat((prev) => {
+          const next = { ...prev };
+          for (const b of bindingList) {
+            if (!next[b.name]) {
+              next[b.name] = { messages: [], input: '', loading: false };
+            }
+          }
+          return next;
+        });
+        const pushConfig = fp?.config || null;
+        setFinancePushConfig(pushConfig);
+        // 默认选中第一个 binding(useEffect 会再按当前 financeSubTab 同步覆盖)
+        const firstName = bindingList[0]?.name || '';
+        setFinanceSelectedName(firstName);
+        const firstBinding = bindingList[0] || null;
+        const firstTransform = firstName ? transformsByName[firstName] : null;
+        setForms((prev) => ({
+          ...prev,
+          feishuCredential: ownCred
+            ? {
+                appId: ownCred.appId || '',
+                appSecret: ownCred.appSecret || '',
+                remark: ownCred.remark || '',
+              }
+            : prev.feishuCredential,
+          financeBinding: {
+            name: firstName,
+            flowDefault: firstBinding?.flowDefault || '',
+            partyTypeDefault: firstBinding?.partyTypeDefault || '',
+            sources: firstBinding?.sources || [],
+            remark: firstBinding?.remark || '',
+            dslText: firstTransform?.dsl
+              ? JSON.stringify(firstTransform.dsl, null, 2)
+              : '',
+            explanation: firstTransform?.explanation || '',
+          },
+          financePush: {
+            baseUrl: pushConfig?.baseUrl || '',
+            apiKey: pushConfig?.apiKey || '',
+          },
+        }));
+      } catch {
+        // 忽略加载失败
+      }
       if (tenantRows.length > 0) {
         setForms((prev) => ({
           ...prev,
@@ -350,6 +549,29 @@ const AdminApp = () => {
   useEffect(() => {
     writeAdminActiveTab(activeTab);
   }, [activeTab]);
+
+  // 持久化 financeChat 到 localStorage(仅保存 messages,input/loading 是临时态)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const persisted = {};
+      for (const [k, v] of Object.entries(financeChat || {})) {
+        if (Array.isArray(v?.messages) && v.messages.length > 0) {
+          persisted[k] = { messages: v.messages };
+        }
+      }
+      window.localStorage.setItem('finance_chat_history', JSON.stringify(persisted));
+    } catch {
+      // ignore quota errors
+    }
+  }, [financeChat]);
+
+  // 切换财务子 Tab 时把对应 binding 同步到表单(用户不感知 name 概念);binding/transform 列表变化(初次 load / 保存后)也同步一次
+  useEffect(() => {
+    if (activeTab !== 'finance') return;
+    onSelectFinanceBinding(financeSubTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, financeSubTab, financeBindings.length]);
 
   const updateForm = (group, key, value) => {
     setForms((prev) => ({
@@ -449,6 +671,555 @@ const AdminApp = () => {
       },
     }));
     setNotice('平台AI配置已保存');
+  };
+
+  /**
+   * @description 保存飞书凭证（appId / appSecret，仅本租户）
+   * @keyword-en submit feishu credential
+   */
+  const onSubmitFeishuCredential = async () => {
+    const payload = {
+      appId: toText(forms.feishuCredential.appId).trim(),
+      appSecret: toText(forms.feishuCredential.appSecret).trim(),
+      remark: toText(forms.feishuCredential.remark).trim() || undefined,
+    };
+    if (!payload.appId || !payload.appSecret) {
+      throw new Error('appId 和 appSecret 必填');
+    }
+    await adminApi.upsertFeishuCredential(payload);
+    const fc = await adminApi.listFeishuCredentials();
+    const credentials = fc.credentials || [];
+    setFeishuCredentials(credentials);
+    const own = credentials[0];
+    setForms((prev) => ({
+      ...prev,
+      feishuCredential: own
+        ? {
+            appId: own.appId || '',
+            appSecret: own.appSecret || '',
+            remark: own.remark || '',
+          }
+        : prev.feishuCredential,
+    }));
+    setNotice('飞书凭证已保存');
+  };
+
+  /**
+   * @description 删除当前租户的飞书凭证
+   * @keyword-en delete feishu credential
+   */
+  const onDeleteFeishuCredential = async (id) => {
+    await adminApi.deleteFeishuCredential(id);
+    const fc = await adminApi.listFeishuCredentials();
+    setFeishuCredentials(fc.credentials || []);
+    setForms((prev) => ({
+      ...prev,
+      feishuCredential: { appId: '', appSecret: '', remark: '' },
+    }));
+    setNotice('飞书凭证已删除');
+  };
+
+  /**
+   * @description 把指定 name 的 binding/transform 同步到表单(切 Tab 时自动调用,name 由 FINANCE_KINDS 预设)
+   * @keyword-en sync binding by preset name to form
+   */
+  const onSelectFinanceBinding = (name) => {
+    const binding = financeBindings.find((b) => b.name === name) || null;
+    const transform = name ? financeTransforms[name] : null;
+    setFinanceSelectedName(name);
+    setForms((prev) => ({
+      ...prev,
+      financeBinding: {
+        name,
+        flowDefault: binding?.flowDefault || '',
+        partyTypeDefault: binding?.partyTypeDefault || '',
+        sources: binding?.sources || [],
+        remark: binding?.remark || '',
+        dslText: transform?.dsl ? JSON.stringify(transform.dsl, null, 2) : '',
+        explanation: transform?.explanation || '',
+      },
+    }));
+  };
+
+  /**
+   * @description 打开"添加多维表"弹窗(挂在当前编辑 binding)
+   * @keyword-en open bitable batch picker modal
+   */
+  const onAddBitableSource = () => {
+    setBitableModal({
+      open: true,
+      appToken: '',
+      loading: false,
+      tables: [],
+      selected: {},
+      error: '',
+    });
+  };
+
+  /**
+   * @description 关闭多维表弹窗
+   * @keyword-en close bitable modal
+   */
+  const onCloseBitableModal = () => {
+    setBitableModal((prev) => ({ ...prev, open: false }));
+  };
+
+  /**
+   * @description 拉取 appToken 下所有 tables
+   * @keyword-en load bitable tables list
+   */
+  const onLoadBitableTables = async () => {
+    const token = toText(bitableModal.appToken).trim();
+    if (!token) {
+      setBitableModal((prev) => ({ ...prev, error: '请输入 appToken' }));
+      return;
+    }
+    setBitableModal((prev) => ({
+      ...prev,
+      loading: true,
+      error: '',
+      tables: [],
+      selected: {},
+    }));
+    try {
+      const res = await adminApi.listBitableTables(token);
+      setBitableModal((prev) => ({
+        ...prev,
+        loading: false,
+        tables: res.tables || [],
+      }));
+    } catch (err) {
+      setBitableModal((prev) => ({
+        ...prev,
+        loading: false,
+        error: err.message || '加载失败',
+      }));
+    }
+  };
+
+  /**
+   * @description 切换某张 table 的勾选状态
+   * @keyword-en toggle bitable table selection
+   */
+  const onToggleBitableTable = (tableId) => {
+    setBitableModal((prev) => ({
+      ...prev,
+      selected: { ...prev.selected, [tableId]: !prev.selected[tableId] },
+    }));
+  };
+
+  /**
+   * @description 批量把勾选的 tables 加入到当前 binding 的 sources(去重)
+   * @keyword-en confirm bitable batch add to sources
+   */
+  const onConfirmBitableModal = () => {
+    const { appToken, tables, selected } = bitableModal;
+    const token = toText(appToken).trim();
+    const picks = tables.filter((t) => selected[t.tableId]);
+    if (picks.length === 0) {
+      setBitableModal((prev) => ({ ...prev, error: '请至少勾选一张表' }));
+      return;
+    }
+    setForms((prev) => {
+      const existing = new Set(
+        prev.financeBinding.sources
+          .filter((s) => s.type === 'bitable')
+          .map((s) => `${s.appToken}::${s.tableId}`),
+      );
+      const additions = picks
+        .filter((t) => !existing.has(`${token}::${t.tableId}`))
+        .map((t) => ({
+          type: 'bitable',
+          appToken: token,
+          tableId: t.tableId,
+          alias: t.name || '',
+        }));
+      return {
+        ...prev,
+        financeBinding: {
+          ...prev.financeBinding,
+          sources: [...prev.financeBinding.sources, ...additions],
+        },
+      };
+    });
+    setBitableModal((prev) => ({ ...prev, open: false }));
+  };
+
+  /**
+   * @description 添加 approval 源到当前 binding 表单
+   * @keyword-en add approval source
+   */
+  const onAddApprovalSource = () => {
+    setForms((prev) => ({
+      ...prev,
+      financeBinding: {
+        ...prev.financeBinding,
+        sources: [
+          ...prev.financeBinding.sources,
+          { type: 'approval', approvalCode: '', alias: '' },
+        ],
+      },
+    }));
+  };
+
+  /**
+   * @description 修改某个 source 字段
+   * @keyword-en update finance source field
+   */
+  const onUpdateSourceField = (idx, key, value) => {
+    setForms((prev) => {
+      const next = [...prev.financeBinding.sources];
+      next[idx] = { ...next[idx], [key]: value };
+      return { ...prev, financeBinding: { ...prev.financeBinding, sources: next } };
+    });
+  };
+
+  /**
+   * @description 移除一个 source
+   * @keyword-en remove finance source
+   */
+  const onRemoveSource = (idx) => {
+    setForms((prev) => ({
+      ...prev,
+      financeBinding: {
+        ...prev.financeBinding,
+        sources: prev.financeBinding.sources.filter((_, i) => i !== idx),
+      },
+    }));
+  };
+
+  /**
+   * @description 保存当前子 Tab 的 binding(name + flow/partyType 默认值由 FINANCE_KINDS 自动注入,用户不感知)
+   * @keyword-en submit finance binding with preset name and defaults
+   */
+  const onSubmitFinanceBinding = async () => {
+    const kind = FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
+    const form = forms.financeBinding;
+    const sources = (form.sources || []).map((s) => {
+      const base = { alias: toText(s.alias).trim() || undefined };
+      if (s.type === 'bitable') {
+        return {
+          ...base,
+          type: 'bitable',
+          appToken: toText(s.appToken).trim(),
+          tableId: toText(s.tableId).trim(),
+        };
+      }
+      return {
+        ...base,
+        type: 'approval',
+        approvalCode: toText(s.approvalCode).trim(),
+      };
+    });
+    if (sources.length === 0) throw new Error('至少绑定一个源');
+    const payload = {
+      name: kind.id,
+      sources,
+      remark: toText(form.remark).trim() || undefined,
+      flowDefault: kind.flowDefault,
+      partyTypeDefault: kind.partyTypeDefault,
+    };
+    const res = await adminApi.upsertFinanceBinding(payload);
+    const fb = await adminApi.listFinanceBindings();
+    setFinanceBindings(fb.bindings || []);
+    setFinanceSelectedName(res.binding.name);
+    setNotice(`${kind.label}已保存`);
+  };
+
+  /**
+   * @description 财务聊天输入框联动(按 binding name)
+   * @keyword-en update finance chat input
+   */
+  const onUpdateFinanceChatInput = (name, value) => {
+    setFinanceChat((prev) => ({
+      ...prev,
+      [name]: { ...(prev[name] || { messages: [] }), input: value },
+    }));
+  };
+
+  /**
+   * @description 清空当前 binding 的聊天历史
+   * @keyword-en clear finance chat
+   */
+  const onClearFinanceChat = (name) => {
+    setFinanceChat((prev) => ({
+      ...prev,
+      [name]: { messages: [], input: '', loading: false },
+    }));
+  };
+
+  /**
+   * @description 刷新 transform 显示(agent 可能调用 set_transform 落库;按 name 索引)
+   * @keyword-en reload finance transforms after chat
+   */
+  const reloadFinanceTransforms = async () => {
+    const ft = await adminApi.listFinanceTransforms();
+    const transformsByName = (ft.transforms || []).reduce(
+      (acc, row) => ({ ...acc, [row.name]: row }),
+      {},
+    );
+    setFinanceTransforms(transformsByName);
+    // 如果当前编辑中的 binding 的 transform 被 agent 改了,同步更新表单
+    const cur = financeSelectedName;
+    if (!cur) return;
+    const t = transformsByName[cur];
+    if (t?.dsl) {
+      setForms((prev) => ({
+        ...prev,
+        financeBinding: {
+          ...prev.financeBinding,
+          dslText: JSON.stringify(t.dsl, null, 2),
+          explanation: t.explanation || prev.financeBinding.explanation,
+        },
+      }));
+    }
+  };
+
+  /**
+   * @description 发送财务 Agent 聊天(按 binding name;结束后刷新 transform)
+   * @keyword-en send finance agent chat
+   */
+  const onSendFinanceChat = async (name) => {
+    if (!name) return;
+    const current = financeChat[name] || { messages: [], input: '', loading: false };
+    const text = toText(current.input).trim();
+    if (!text) return;
+    const nextHistory = [...current.messages, { role: 'user', content: text }];
+    setFinanceChat((prev) => ({
+      ...prev,
+      [name]: { messages: nextHistory, input: '', loading: true },
+    }));
+    try {
+      const res = await adminApi.chatFinanceAgent({ name, messages: nextHistory });
+      const reply = toText(res?.reply).trim();
+      setFinanceChat((prev) => ({
+        ...prev,
+        [name]: {
+          messages: [
+            ...nextHistory,
+            { role: 'assistant', content: reply || '(空回复)' },
+          ],
+          input: '',
+          loading: false,
+        },
+      }));
+      await reloadFinanceTransforms().catch(() => undefined);
+    } catch (err) {
+      setFinanceChat((prev) => ({
+        ...prev,
+        [name]: {
+          messages: [
+            ...nextHistory,
+            { role: 'assistant', content: `❌ 调用失败:${err.message || String(err)}` },
+          ],
+          input: '',
+          loading: false,
+        },
+      }));
+    }
+  };
+
+  /**
+   * @description 保存 transform DSL(name 按当前子 Tab 自动取;前端 JSON.parse,后端再校验)
+   * @keyword-en submit finance transform with preset name
+   */
+  const onSubmitFinanceTransform = async () => {
+    const kind = FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
+    const form = forms.financeBinding;
+    let dsl;
+    try {
+      dsl = JSON.parse(form.dslText || '{}');
+    } catch (err) {
+      throw new Error('DSL JSON 解析失败:' + err.message);
+    }
+    const payload = {
+      name: kind.id,
+      dsl,
+      explanation: toText(form.explanation).trim() || undefined,
+    };
+    const res = await adminApi.upsertFinanceTransform(payload);
+    setFinanceTransforms((prev) => ({ ...prev, [res.transform.name]: res.transform }));
+    setNotice(`${kind.label} Transform 已保存`);
+  };
+
+  /**
+   * @description 保存全局推送配置(每作用域一份)
+   * @keyword-en submit finance push config
+   */
+  const onSubmitFinancePushConfig = async () => {
+    const baseUrl = toText(forms.financePush.baseUrl).trim();
+    const apiKey = toText(forms.financePush.apiKey).trim();
+    if (!baseUrl || !apiKey) throw new Error('baseUrl 和 apiKey 必填');
+    setFinancePushPending((prev) => ({ ...prev, save: true }));
+    try {
+      const res = await adminApi.upsertFinancePushConfig({ baseUrl, apiKey });
+      setFinancePushConfig(res.config);
+      setNotice('推送配置已保存');
+    } finally {
+      setFinancePushPending((prev) => ({ ...prev, save: false }));
+    }
+  };
+
+  /**
+   * @description 测试推送 key 有效性(GET /api/v1/me)
+   * @keyword-en test finance push connectivity
+   */
+  const onTestFinancePush = async () => {
+    setFinancePushPending((prev) => ({ ...prev, test: true }));
+    setFinancePushFeedback(null);
+    try {
+      const res = await adminApi.testFinancePush();
+      setFinancePushFeedback({ kind: 'test', ...(res.result || {}) });
+      try {
+        const fp = await adminApi.getFinancePushConfig();
+        setFinancePushConfig(fp.config || null);
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      setFinancePushFeedback({
+        kind: 'test',
+        status: 'unknown',
+        message: err.message || String(err),
+      });
+    } finally {
+      setFinancePushPending((prev) => ({ ...prev, test: false }));
+    }
+  };
+
+  /**
+   * @description 立即推送指定 binding(整批拒收;可选时间窗按 occurredAt 过滤)
+   * @keyword-en run finance push by binding name with date window
+   */
+  const onRunFinancePush = async (name) => {
+    if (!name) return;
+    const sd = toText(financePushDateWindow.startDate).trim();
+    const ed = toText(financePushDateWindow.endDate).trim();
+    const winLabel = sd || ed ? `时间窗 [${sd || '不限'} → ${ed || '不限'}]` : '全量';
+    if (
+      !window.confirm(
+        `确认立即推送 binding「${name}」到外部财务系统?\n${winLabel}\n整批拒收语义:任意一行不合规整批被拒。`,
+      )
+    ) {
+      return;
+    }
+    setFinancePushPending((prev) => ({ ...prev, run: name }));
+    setFinancePushFeedback(null);
+    try {
+      const res = await adminApi.runFinancePush(name, { startDate: sd, endDate: ed });
+      setFinancePushFeedback({ kind: 'run', ...(res.result || {}) });
+      try {
+        const fp = await adminApi.getFinancePushConfig();
+        setFinancePushConfig(fp.config || null);
+      } catch {
+        // ignore
+      }
+    } catch (err) {
+      setFinancePushFeedback({
+        kind: 'run',
+        name,
+        error: err.message || String(err),
+      });
+    } finally {
+      setFinancePushPending((prev) => ({ ...prev, run: '' }));
+    }
+  };
+
+  /**
+   * @description 把推送失败详情格式化成 Markdown(HTTP/错误信息/对方原始响应/前 3 条 payload),给 Agent 排错用
+   * @keyword-en format push failure as markdown for agent
+   */
+  const formatPushFailureMarkdown = (feedback) => {
+    if (!feedback || feedback.kind !== 'run') return '';
+    const fb = feedback.failedBatch;
+    const lines = [];
+    lines.push(`# 推送失败,请帮我修 Transform DSL`);
+    lines.push('');
+    lines.push(`- binding: **${feedback.name}**`);
+    if (feedback.startDate || feedback.endDate) {
+      lines.push(`- 时间窗: [${feedback.startDate || '不限'} → ${feedback.endDate || '不限'}]`);
+    }
+    lines.push(
+      `- 源拉取 ${feedback.totalRows};transform 输出 ${feedback.transformedRows};filter ${feedback.filteredRows};transform 错 ${feedback.transformErrors}` +
+        (feedback.dateFilteredRows > 0 ? `;时间窗滤掉 ${feedback.dateFilteredRows}` : ''),
+    );
+    if (feedback.error) {
+      lines.push('');
+      lines.push(`## 错误`);
+      lines.push('```');
+      lines.push(String(feedback.error));
+      lines.push('```');
+      return lines.join('\n');
+    }
+    if (!fb) return lines.join('\n');
+    lines.push(
+      `- 失败批次: #${fb.index + 1} · HTTP ${fb.httpStatus}${fb.code ? ` · ${fb.code}` : ''}${fb.contentType ? ` · ${fb.contentType}` : ''}`,
+    );
+    lines.push('');
+    lines.push(`## 错误信息(对方返回)`);
+    lines.push('```');
+    lines.push(typeof fb.message === 'string' ? fb.message : '(无)');
+    lines.push('```');
+    if (fb.rawResponseBody !== undefined && fb.rawResponseBody !== null) {
+      const rawStr =
+        typeof fb.rawResponseBody === 'string'
+          ? fb.rawResponseBody
+          : JSON.stringify(fb.rawResponseBody, null, 2);
+      // message 可能就等于 rawString,避免重复
+      if (rawStr && rawStr !== fb.message) {
+        lines.push('');
+        lines.push(`## 对方原始响应 body`);
+        lines.push('```');
+        lines.push(rawStr);
+        lines.push('```');
+      }
+    }
+    if (Array.isArray(fb.payloadAll) && fb.payloadAll.length > 0) {
+      lines.push('');
+      lines.push(`## 推送过去的 payload(共 ${fb.payloadAll.length} 条,以下前 3 条)`);
+      lines.push('```json');
+      lines.push(JSON.stringify(fb.payloadAll.slice(0, 3), null, 2));
+      lines.push('```');
+    }
+    lines.push('');
+    lines.push(
+      `请定位是哪几个字段不合 schema(对照 financial_event 的必填字段与枚举),改一下 DSL 后用 finance_dry_run_transform 试跑,确认无误再 finance_set_transform 落库。`,
+    );
+    return lines.join('\n');
+  };
+
+  /**
+   * @description 复制推送失败详情到剪贴板(给 Agent 排错用)
+   * @keyword-en copy push failure to clipboard
+   */
+  const onCopyPushFailure = async (feedback) => {
+    const md = formatPushFailureMarkdown(feedback);
+    if (!md) return;
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(md);
+      setNotice('失败详情已复制到剪贴板');
+    } else {
+      throw new Error('浏览器不支持剪贴板,请改用"发给 Agent"按钮');
+    }
+  };
+
+  /**
+   * @description 把推送失败详情塞进 Agent 输入框(用户点击发送即可让 Agent 修 DSL)
+   * @keyword-en send push failure to agent chat composer
+   */
+  const onSendPushFailureToAgent = (name, feedback) => {
+    if (!name) return;
+    const md = formatPushFailureMarkdown(feedback);
+    if (!md) return;
+    setFinanceChat((prev) => ({
+      ...prev,
+      [name]: {
+        ...(prev[name] || { messages: [] }),
+        input: md,
+        loading: false,
+      },
+    }));
+    setNotice('已塞入 Agent 输入框,在右侧检查后点发送');
   };
 
   /**
@@ -2048,6 +2819,794 @@ const AdminApp = () => {
               )}
             </div>
           </div>
+        ) : null}
+
+        {/* 飞书凭证（仅本租户） | @keyword-en feishu credentials current tenant only */}
+        {activeTab === 'feishu_credentials' ? (
+          (() => {
+            const ownCredential = feishuCredentials[0] || null;
+            return (
+              <div className="grid lg:grid-cols-1 gap-4 pb-8">
+                <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                  {/* 头部说明 + 保存 | @keyword-en feishu credential header */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="font-semibold text-slate-900">飞书 appId / appSecret</h2>
+                      <p className="text-xs text-slate-500 mt-1">
+                        本租户专属凭证，财务多维表 / 审批读取共用；同一租户只保留一份，重新提交即覆盖。
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      {ownCredential ? (
+                        <button
+                          onClick={() =>
+                            onDeleteFeishuCredential(ownCredential._id).catch((err) =>
+                              setError(err.message),
+                            )
+                          }
+                          className="px-3 py-2 border border-red-300 text-red-600 text-sm rounded"
+                        >
+                          删除凭证
+                        </button>
+                      ) : null}
+                      <button
+                        onClick={() =>
+                          onSubmitFeishuCredential().catch((err) => setError(err.message))
+                        }
+                        className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                      >
+                        保存凭证
+                      </button>
+                    </div>
+                  </div>
+                  {/* 表单区域 | @keyword-en feishu credential form area */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="text-xs text-slate-600 space-y-1">
+                      <div>appId</div>
+                      <input
+                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                        value={forms.feishuCredential.appId}
+                        onChange={(e) => updateForm('feishuCredential', 'appId', e.target.value)}
+                        placeholder="cli_xxxxxx"
+                      />
+                    </label>
+                    <label className="text-xs text-slate-600 space-y-1">
+                      <div>appSecret</div>
+                      <input
+                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                        value={forms.feishuCredential.appSecret}
+                        onChange={(e) => updateForm('feishuCredential', 'appSecret', e.target.value)}
+                        placeholder="xxxxxxxxxxxx"
+                        type="password"
+                      />
+                    </label>
+                    <label className="text-xs text-slate-600 space-y-1 md:col-span-2">
+                      <div>备注</div>
+                      <input
+                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                        value={forms.feishuCredential.remark}
+                        onChange={(e) => updateForm('feishuCredential', 'remark', e.target.value)}
+                      />
+                    </label>
+                  </div>
+                  {/* 状态信息 | @keyword-en feishu credential status info */}
+                  <div className="text-xs text-slate-400">
+                    {ownCredential
+                      ? `上次更新：${new Date(ownCredential.updatedAt).toLocaleString()}`
+                      : '当前租户尚未配置凭证，填写后点击保存。'}
+                  </div>
+                </div>
+              </div>
+            );
+          })()
+        ) : null}
+
+        {/* 财务（内含 支出 / 应付 / 推送配置 三个子 Tab） | @keyword-en finance tab with category and push sub tabs */}
+        {/* 财务 Tab(回归"支出/应付"子 Tab,name 由 FINANCE_KINDS 自动注入,用户不感知) | @keyword-en finance tab simplified preset kinds */}
+        {activeTab === 'finance' ? (
+          (() => {
+            const currentKind =
+              FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
+            const bindingForm = forms.financeBinding;
+            const pushForm = forms.financePush;
+            const currentBinding = financeBindings.find(
+              (b) => b.name === currentKind.id,
+            );
+            const currentTransform = financeTransforms[currentKind.id];
+            const chatState = financeChat[currentKind.id] || {
+              messages: [],
+              input: '',
+              loading: false,
+            };
+            const pushConfig = financePushConfig;
+            const canTest =
+              !!toText(pushForm.baseUrl).trim() && !!toText(pushForm.apiKey).trim();
+            const isRunning = financePushPending.run === currentKind.id;
+            const canRun =
+              !!pushConfig &&
+              (bindingForm.sources?.length || 0) > 0 &&
+              !!currentTransform?.dsl;
+            const testStatusBadge =
+              financePushFeedback && financePushFeedback.kind === 'test'
+                ? {
+                    status: financePushFeedback.status,
+                    message: financePushFeedback.message,
+                    code: financePushFeedback.code,
+                    httpStatus: financePushFeedback.httpStatus,
+                  }
+                : pushConfig?.lastTestStatus
+                  ? {
+                      status: pushConfig.lastTestStatus,
+                      message: pushConfig.lastTestMessage,
+                      at: pushConfig.lastTestedAt,
+                    }
+                  : null;
+            return (
+              <>
+              <div className="space-y-4 pb-8">
+                {/* 顶部:推送配置卡片(默认折叠,显示状态摘要) | @keyword-en collapsible push config */}
+                <div className="bg-white border border-slate-200 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setFinancePushCollapsed((v) => !v)}
+                    className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left"
+                  >
+                    <div className="min-w-0 flex items-center gap-3 flex-wrap">
+                      <span className="text-sm font-semibold text-slate-900">
+                        推送配置
+                      </span>
+                      {pushConfig ? (
+                        <span className="text-xs text-slate-500 truncate font-mono">
+                          {pushConfig.baseUrl}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-amber-600">未配置</span>
+                      )}
+                      {testStatusBadge ? (
+                        <span
+                          className={
+                            'text-xs px-2 py-0.5 rounded ' +
+                            (PUSH_STATUS_COLOR[testStatusBadge.status] || PUSH_STATUS_COLOR.unknown)
+                          }
+                        >
+                          {PUSH_STATUS_LABEL[testStatusBadge.status] || testStatusBadge.status}
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {financePushCollapsed ? '展开 ▾' : '收起 ▴'}
+                    </span>
+                  </button>
+                  {!financePushCollapsed ? (
+                    <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
+                      <p className="text-xs text-slate-500">
+                        外部财务系统的 API 前缀(含 <code>/api/v1</code>) + API Key。统一推到 <code className="text-slate-700">/events/upsert</code>,探活打 <code className="text-slate-700">/me</code>。
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label className="text-xs text-slate-600 space-y-1">
+                          <div>baseUrl</div>
+                          <input
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                            placeholder="https://your-server.example.com/api/v1"
+                            value={pushForm.baseUrl}
+                            onChange={(e) => updateForm('financePush', 'baseUrl', e.target.value)}
+                          />
+                        </label>
+                        <label className="text-xs text-slate-600 space-y-1">
+                          <div>apiKey</div>
+                          <input
+                            type="password"
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                            placeholder="fa_xxxxxxxxxxxx.yyyyyyyy"
+                            value={pushForm.apiKey}
+                            onChange={(e) => updateForm('financePush', 'apiKey', e.target.value)}
+                          />
+                        </label>
+                      </div>
+                      <div className="flex gap-2 flex-wrap">
+                        <button
+                          onClick={() =>
+                            onSubmitFinancePushConfig().catch((err) => setError(err.message))
+                          }
+                          disabled={financePushPending.save}
+                          className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded disabled:bg-slate-300"
+                        >
+                          {financePushPending.save ? '保存中…' : '保存配置'}
+                        </button>
+                        <button
+                          onClick={() => onTestFinancePush()}
+                          disabled={!canTest || financePushPending.test || !pushConfig}
+                          title={!pushConfig ? '请先保存配置后再测试' : ''}
+                          className="px-3 py-1.5 border border-slate-300 text-slate-700 text-xs rounded disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          {financePushPending.test ? '测试中…' : '测试连通性'}
+                        </button>
+                      </div>
+                      {testStatusBadge?.message ? (
+                        <div className="text-xs text-slate-500 truncate">
+                          {testStatusBadge.message}
+                          {testStatusBadge.at ? (
+                            <span className="ml-2 text-slate-400">
+                              {new Date(testStatusBadge.at).toLocaleString()}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* 推送结果反馈 + 执行日志(全宽) | @keyword-en push run feedback with logs */}
+                {financePushFeedback && financePushFeedback.kind === 'run' ? (
+                  <div className="space-y-2">
+                  {financePushFeedback.error ? (
+                    <div className="text-xs bg-red-50 border border-red-200 text-red-700 rounded p-2">
+                      ❌ 推送失败:{financePushFeedback.error}
+                    </div>
+                  ) : financePushFeedback.failedBatch ? (
+                    <div className="text-xs bg-red-50 border border-red-200 rounded p-2 space-y-2">
+                      <div className="flex flex-wrap gap-2 items-start justify-between">
+                        <div className="font-semibold text-red-700">
+                          ❌ binding「{financePushFeedback.name}」批次 #{financePushFeedback.failedBatch.index + 1} 整批拒收
+                          · HTTP {financePushFeedback.failedBatch.httpStatus}
+                          {financePushFeedback.failedBatch.code ? ` · ${financePushFeedback.failedBatch.code}` : ''}
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() =>
+                              onCopyPushFailure(financePushFeedback).catch((err) =>
+                                setError(err.message),
+                              )
+                            }
+                            className="px-2 py-0.5 border border-slate-300 text-slate-700 text-xs rounded bg-white hover:bg-slate-50"
+                            title="复制完整失败详情(HTTP / 错误信息 / 推送 payload / 对方原始响应)到剪贴板"
+                          >
+                            复制详情
+                          </button>
+                          <button
+                            onClick={() =>
+                              onSendPushFailureToAgent(currentKind.id, financePushFeedback)
+                            }
+                            className="px-2 py-0.5 bg-slate-900 text-white text-xs rounded"
+                            title="把失败详情塞进右侧 Agent 输入框,让 Agent 修 DSL"
+                          >
+                            发给 Agent
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-slate-600">
+                        成功 {financePushFeedback.successCount} / 共 {financePushFeedback.transformedRows} 条;
+                        源拉取 {financePushFeedback.totalRows}(filter {financePushFeedback.filteredRows},transform 错 {financePushFeedback.transformErrors}
+                        {financePushFeedback.dateFilteredRows > 0
+                          ? `,时间窗滤掉 ${financePushFeedback.dateFilteredRows}`
+                          : ''})
+                      </div>
+                      <details open>
+                        <summary className="cursor-pointer text-slate-700 font-semibold">
+                          错误信息(完整){financePushFeedback.failedBatch.contentType ? ` · ${financePushFeedback.failedBatch.contentType}` : ''}
+                        </summary>
+                        <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono text-red-700 whitespace-pre-wrap break-all">
+                          {financePushFeedback.failedBatch.message || '(无 message 字段)'}
+                        </pre>
+                      </details>
+                      {financePushFeedback.failedBatch.rawResponseBody !== undefined &&
+                      financePushFeedback.failedBatch.rawResponseBody !== null ? (
+                        <details>
+                          <summary className="cursor-pointer text-slate-500">
+                            对方原始响应 body(完整)
+                          </summary>
+                          <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono whitespace-pre-wrap break-all">
+                            {typeof financePushFeedback.failedBatch.rawResponseBody === 'string'
+                              ? financePushFeedback.failedBatch.rawResponseBody
+                              : JSON.stringify(financePushFeedback.failedBatch.rawResponseBody, null, 2)}
+                          </pre>
+                        </details>
+                      ) : null}
+                      {Array.isArray(financePushFeedback.failedBatch.payloadAll) &&
+                      financePushFeedback.failedBatch.payloadAll.length > 0 ? (
+                        <details>
+                          <summary className="cursor-pointer text-slate-500">
+                            该批推送 payload(共 {financePushFeedback.failedBatch.payloadAll.length} 条;展示首 3 条)
+                          </summary>
+                          <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono">
+                            {JSON.stringify(
+                              financePushFeedback.failedBatch.payloadAll.slice(0, 3),
+                              null,
+                              2,
+                            )}
+                          </pre>
+                        </details>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 rounded p-2">
+                      ✅ 全部成功 · {financePushFeedback.successCount} 条 / {financePushFeedback.batches} 批
+                      (源拉取 {financePushFeedback.totalRows},filter {financePushFeedback.filteredRows},transform 错 {financePushFeedback.transformErrors}
+                      {financePushFeedback.dateFilteredRows > 0
+                        ? `,时间窗滤掉 ${financePushFeedback.dateFilteredRows}`
+                        : ''})
+                    </div>
+                  )}
+                  {/* 执行日志(后端累积的关键步骤) | @keyword-en push run logs */}
+                  {Array.isArray(financePushFeedback.logs) && financePushFeedback.logs.length > 0 ? (
+                    <details className="text-xs bg-slate-50 border border-slate-200 rounded" open>
+                      <summary className="cursor-pointer px-3 py-1.5 select-none text-slate-700">
+                        执行日志 · {financePushFeedback.logs.length} 条
+                      </summary>
+                      <div className="px-3 py-2 max-h-64 overflow-y-auto space-y-0.5 font-mono">
+                        {financePushFeedback.logs.map((entry, i) => (
+                          <div
+                            key={i}
+                            className={
+                              entry.level === 'error'
+                                ? 'text-red-600'
+                                : entry.level === 'warn'
+                                  ? 'text-amber-600'
+                                  : 'text-slate-600'
+                            }
+                          >
+                            <span className="text-slate-400">
+                              {new Date(entry.at).toLocaleTimeString()}
+                            </span>{' '}
+                            <span className="text-slate-400">[{entry.level}]</span>{' '}
+                            {entry.msg}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  </div>
+                ) : null}
+
+                {/* 子 Tab(支出 / 应付) | @keyword-en finance sub tab bar */}
+                <div className="flex gap-2 border-b border-slate-200 pb-2">
+                  {FINANCE_KINDS.map((k) => (
+                    <button
+                      key={k.id}
+                      onClick={() => setFinanceSubTab(k.id)}
+                      className={
+                        'px-4 py-1.5 text-sm rounded ' +
+                        (financeSubTab === k.id
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
+                      }
+                    >
+                      {k.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 主体:左 binding 编辑 | 右 Agent | @keyword-en finance editor and agent */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="lg:col-span-2 space-y-4">
+                    {/* 源绑定 + 备注 + 保存/推送 | @keyword-en source binding card */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0">
+                          <h2 className="font-semibold text-slate-900">{currentKind.label}</h2>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {currentKind.hint}。可同时绑定多个多维表 / 审批,自动归类为 {currentKind.flowDefault === 'out' ? '支出' : '收入'}。
+                          </p>
+                        </div>
+                        <div className="flex gap-2 flex-wrap shrink-0">
+                          <button
+                            onClick={onAddBitableSource}
+                            className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs rounded whitespace-nowrap"
+                          >
+                            + 多维表
+                          </button>
+                          <button
+                            onClick={onAddApprovalSource}
+                            className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs rounded whitespace-nowrap"
+                          >
+                            + 审批
+                          </button>
+                          <button
+                            onClick={() =>
+                              onSubmitFinanceBinding().catch((err) => setError(err.message))
+                            }
+                            className="px-4 py-1.5 bg-slate-900 text-white text-xs rounded whitespace-nowrap"
+                          >
+                            保存
+                          </button>
+                          <button
+                            onClick={() => onRunFinancePush(currentKind.id)}
+                            disabled={!canRun || isRunning}
+                            title={
+                              !pushConfig
+                                ? '先保存推送配置(顶部)'
+                                : (bindingForm.sources?.length || 0) === 0
+                                  ? '请先绑定数据源'
+                                  : !currentTransform?.dsl
+                                    ? '请先让 Agent 生成 / 手填 Transform DSL'
+                                    : ''
+                            }
+                            className="px-4 py-1.5 bg-emerald-600 text-white text-xs rounded whitespace-nowrap disabled:bg-slate-300"
+                          >
+                            {isRunning ? '推送中…' : '立即推送'}
+                          </button>
+                        </div>
+                      </div>
+                      {/* 推送时间窗(按 occurredAt 过滤;空=全量) | @keyword-en push date window inputs */}
+                      <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                        <span className="text-slate-500">推送时间窗(按 occurredAt 过滤,留空=全量):</span>
+                        <label className="space-y-0.5">
+                          <div className="text-slate-400">起</div>
+                          <input
+                            type="date"
+                            className="border border-slate-300 rounded px-2 py-1 text-xs"
+                            value={financePushDateWindow.startDate}
+                            onChange={(e) =>
+                              setFinancePushDateWindow((p) => ({
+                                ...p,
+                                startDate: e.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        <label className="space-y-0.5">
+                          <div className="text-slate-400">止</div>
+                          <input
+                            type="date"
+                            className="border border-slate-300 rounded px-2 py-1 text-xs"
+                            value={financePushDateWindow.endDate}
+                            onChange={(e) =>
+                              setFinancePushDateWindow((p) => ({
+                                ...p,
+                                endDate: e.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                        {financePushDateWindow.startDate || financePushDateWindow.endDate ? (
+                          <button
+                            onClick={() =>
+                              setFinancePushDateWindow({ startDate: '', endDate: '' })
+                            }
+                            className="text-slate-500 underline"
+                          >
+                            清空
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {bindingForm.sources.length === 0 ? (
+                        <div className="text-center text-slate-400 text-sm py-4 border border-dashed border-slate-200 rounded">
+                          未绑定任何源,请用上方"+ 多维表"或"+ 审批"添加
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {bindingForm.sources.map((s, idx) => (
+                            <div key={idx} className="border border-slate-200 rounded p-2 space-y-2">
+                              <div className="flex items-start gap-2">
+                                <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 mt-1">
+                                  {s.type === 'bitable' ? '多维表' : '审批'}
+                                </span>
+                                <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2">
+                                  {s.type === 'bitable' ? (
+                                    <>
+                                      <input
+                                        className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                        placeholder="appToken"
+                                        value={s.appToken || ''}
+                                        onChange={(e) =>
+                                          onUpdateSourceField(idx, 'appToken', e.target.value)
+                                        }
+                                      />
+                                      <input
+                                        className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                        placeholder="tableId"
+                                        value={s.tableId || ''}
+                                        onChange={(e) =>
+                                          onUpdateSourceField(idx, 'tableId', e.target.value)
+                                        }
+                                      />
+                                    </>
+                                  ) : (
+                                    <input
+                                      className="md:col-span-2 border border-slate-300 rounded px-2 py-1 text-xs"
+                                      placeholder="approvalCode"
+                                      value={s.approvalCode || ''}
+                                      onChange={(e) =>
+                                        onUpdateSourceField(idx, 'approvalCode', e.target.value)
+                                      }
+                                    />
+                                  )}
+                                  <input
+                                    className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                    placeholder="别名(可选)"
+                                    value={s.alias || ''}
+                                    onChange={(e) =>
+                                      onUpdateSourceField(idx, 'alias', e.target.value)
+                                    }
+                                  />
+                                </div>
+                                <button
+                                  onClick={() => onRemoveSource(idx)}
+                                  className="text-red-500 text-xs px-2 py-1"
+                                >
+                                  移除
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                        💡 表的语义就是「别名」(如"云境上海银行流水")。Agent 会把别名当作表定义读懂归属/银行/业务,然后用 lookup 等手段产出 storeId / companyId / bankAccount 等字段。
+                      </div>
+                      <label className="block text-xs text-slate-600 space-y-1">
+                        <div>备注</div>
+                        <input
+                          className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          value={bindingForm.remark}
+                          onChange={(e) => updateForm('financeBinding', 'remark', e.target.value)}
+                        />
+                      </label>
+                      <div className="text-xs text-slate-400 flex flex-wrap gap-3">
+                        {currentBinding?.updatedAt ? (
+                          <span>绑定上次更新:{new Date(currentBinding.updatedAt).toLocaleString()}</span>
+                        ) : null}
+                        {currentTransform?.updatedAt ? (
+                          <span className={'text-emerald-600'}>
+                            DSL 已就绪 · {new Date(currentTransform.updatedAt).toLocaleString()}
+                          </span>
+                        ) : (
+                          <span className="text-amber-600">DSL 尚未就绪 — 请用右侧 Agent 生成</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 高级:Transform DSL(默认折叠) | @keyword-en transform dsl collapsed advanced */}
+                    <details className="bg-white border border-slate-200 rounded-xl">
+                      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900 select-none">
+                        高级:Transform DSL(可让 Agent 生成,通常无需手编)
+                      </summary>
+                      <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
+                        <textarea
+                          className="w-full border border-slate-300 rounded p-2 text-xs font-mono"
+                          rows={14}
+                          value={bindingForm.dslText}
+                          onChange={(e) => updateForm('financeBinding', 'dslText', e.target.value)}
+                          placeholder={'// 让 Agent 在右侧自动生成,或手填后点保存'}
+                        />
+                        <label className="block text-xs text-slate-600 space-y-1">
+                          <div>解读说明</div>
+                          <textarea
+                            className="w-full border border-slate-300 rounded p-2 text-xs"
+                            rows={2}
+                            value={bindingForm.explanation}
+                            onChange={(e) =>
+                              updateForm('financeBinding', 'explanation', e.target.value)
+                            }
+                          />
+                        </label>
+                        <button
+                          onClick={() =>
+                            onSubmitFinanceTransform().catch((err) => setError(err.message))
+                          }
+                          className="px-4 py-1.5 bg-slate-900 text-white text-xs rounded"
+                        >
+                          保存 DSL
+                        </button>
+                      </div>
+                    </details>
+                  </div>
+
+                  {/* 右栏:Agent 对话 | @keyword-en finance agent chat right column */}
+                  <div className="space-y-4">
+                    <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col h-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-3">
+                        <div className="min-w-0">
+                          <h2 className="font-semibold text-slate-900">{currentKind.label} - Agent</h2>
+                          <p className="text-xs text-slate-500 mt-1">
+                            让 AI 读飞书字段、自动生成 DSL。说"读字段"/"按下面方案存"等即可。
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => onClearFinanceChat(currentKind.id)}
+                          className="text-xs text-slate-500 hover:text-slate-800 whitespace-nowrap shrink-0"
+                        >
+                          清空
+                        </button>
+                      </div>
+                      <div className="flex-1 min-h-[20rem] border border-slate-200 rounded p-3 overflow-y-auto space-y-3 bg-slate-50">
+                        {chatState.messages.length === 0 ? (
+                          <div className="text-xs text-slate-400 text-center py-6">
+                            发起对话:"读一下当前绑定源的字段,给我一个 DSL 方案"
+                          </div>
+                        ) : (
+                          chatState.messages.map((m, i) => (
+                            <div key={i} className="text-sm">
+                              <div
+                                className={
+                                  'text-xs font-semibold mb-1 ' +
+                                  (m.role === 'user' ? 'text-slate-700' : 'text-blue-700')
+                                }
+                              >
+                                {m.role === 'user' ? '你' : 'Finance Agent'}
+                              </div>
+                              <div
+                                className="bg-white rounded p-2 border border-slate-200 overflow-hidden break-words finance-chat-bubble"
+                                data-color-mode="light"
+                              >
+                                <MDEditor.Markdown
+                                  source={toText(m.content)}
+                                  style={{ background: 'transparent', fontSize: 13 }}
+                                />
+                              </div>
+                            </div>
+                          ))
+                        )}
+                        {chatState.loading ? (
+                          <div className="text-xs text-slate-500 italic">
+                            Agent 思考中(可能十几秒,期间会读字段 / 试跑 DSL)...
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <textarea
+                          className="flex-1 border border-slate-300 rounded p-2 text-sm"
+                          rows={2}
+                          placeholder="输入消息,回车发送"
+                          value={chatState.input}
+                          onChange={(e) =>
+                            onUpdateFinanceChatInput(currentKind.id, e.target.value)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              if (!chatState.loading) {
+                                onSendFinanceChat(currentKind.id).catch((err) =>
+                                  setError(err.message),
+                                );
+                              }
+                            }
+                          }}
+                          disabled={chatState.loading}
+                        />
+                        <button
+                          onClick={() =>
+                            onSendFinanceChat(currentKind.id).catch((err) =>
+                              setError(err.message),
+                            )
+                          }
+                          disabled={chatState.loading || !toText(chatState.input).trim()}
+                          className="px-4 py-2 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300"
+                        >
+                          发送
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 多维表批量添加弹窗 | @keyword-en bitable batch picker modal */}
+              {bitableModal.open ? (
+                <div
+                  className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4"
+                  onClick={onCloseBitableModal}
+                >
+                  <div
+                    className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          添加飞书多维表 → {currentKind.label}
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          填入 appToken 加载该多维表下所有数据表,勾选后批量绑定。
+                        </div>
+                      </div>
+                      <button
+                        onClick={onCloseBitableModal}
+                        className="text-slate-400 hover:text-slate-700 text-lg leading-none"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="px-5 py-3 border-b border-slate-200 flex gap-2">
+                      <input
+                        className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
+                        placeholder="appToken(多维表 URL 中的 base/xxxx 部分)"
+                        value={bitableModal.appToken}
+                        onChange={(e) =>
+                          setBitableModal((prev) => ({ ...prev, appToken: e.target.value }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !bitableModal.loading) {
+                            e.preventDefault();
+                            onLoadBitableTables();
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={onLoadBitableTables}
+                        disabled={bitableModal.loading}
+                        className="px-4 py-1.5 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300 whitespace-nowrap"
+                      >
+                        {bitableModal.loading ? '加载中…' : '加载数据表'}
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto px-5 py-3 min-h-[200px]">
+                      {bitableModal.error ? (
+                        <div className="text-xs text-red-500 mb-2">{bitableModal.error}</div>
+                      ) : null}
+                      {bitableModal.tables.length === 0 ? (
+                        <div className="text-center text-slate-400 text-sm py-8">
+                          {bitableModal.loading ? '加载中…' : '尚未加载,输入 appToken 后点击右上方按钮'}
+                        </div>
+                      ) : (
+                        (() => {
+                          const existed = new Set(
+                            (forms.financeBinding.sources || [])
+                              .filter((s) => s.type === 'bitable')
+                              .map(
+                                (s) =>
+                                  `${toText(s.appToken).trim()}::${toText(s.tableId).trim()}`,
+                              ),
+                          );
+                          const token = toText(bitableModal.appToken).trim();
+                          return (
+                            <div className="space-y-1">
+                              {bitableModal.tables.map((t) => {
+                                const isExisted = existed.has(`${token}::${t.tableId}`);
+                                const checked = !!bitableModal.selected[t.tableId];
+                                return (
+                                  <label
+                                    key={t.tableId}
+                                    className={
+                                      'flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer ' +
+                                      (isExisted
+                                        ? 'bg-slate-50 text-slate-400'
+                                        : 'hover:bg-slate-50')
+                                    }
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isExisted || checked}
+                                      disabled={isExisted}
+                                      onChange={() => onToggleBitableTable(t.tableId)}
+                                    />
+                                    <span className="flex-1 truncate">{t.name}</span>
+                                    <span className="text-xs font-mono text-slate-400">
+                                      {t.tableId}
+                                    </span>
+                                    {isExisted ? (
+                                      <span className="text-xs text-slate-400">已绑定</span>
+                                    ) : null}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()
+                      )}
+                    </div>
+                    <div className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
+                      <button
+                        onClick={onCloseBitableModal}
+                        className="px-4 py-1.5 border border-slate-300 text-slate-700 text-sm rounded"
+                      >
+                        取消
+                      </button>
+                      <button
+                        onClick={onConfirmBitableModal}
+                        disabled={Object.values(bitableModal.selected).every((v) => !v)}
+                        className="px-4 py-1.5 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300"
+                      >
+                        添加 {Object.values(bitableModal.selected).filter(Boolean).length} 张表
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              </>
+            );
+          })()
         ) : null}
 
         {/* 平台AI配置 | @keyword-en platform info management */}

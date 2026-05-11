@@ -324,3 +324,34 @@
 .prose tbody tr:nth-child(even) td {
   @apply bg-slate-50/60;
 }
+
+/* 财务 Agent 聊天气泡 — markdown 内容不溢出 | finance chat bubble overflow guard */
+.finance-chat-bubble .wmde-markdown {
+  background: transparent !important;
+  font-size: 13px;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.finance-chat-bubble .wmde-markdown pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.finance-chat-bubble .wmde-markdown code {
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.finance-chat-bubble .wmde-markdown table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.finance-chat-bubble .wmde-markdown img {
+  max-width: 100%;
+  height: auto;
+}
+.finance-chat-bubble .wmde-markdown a {
+  word-break: break-all;
+}
