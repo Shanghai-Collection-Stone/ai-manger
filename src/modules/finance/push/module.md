@@ -8,7 +8,7 @@
 - **推送语义**:整批拒收(all-or-nothing)— 任意一行不合 schema 整批失败
 - amount 推送前强制 `Math.abs()` 兜底
 - 按 500 条切批;首个失败批次中止后续批次
-- **按 binding name 触发**:`POST /run/:name` 跑该 name 对应的 binding + transform
+- **按 binding name 触发(SSE 流式)**:`POST /run/:name` 返回 `text/event-stream`,每一步 log 通过 `event: log` 实时下发,结束时 `event: result` 给完整结果,异常 `event: error`,最后 `event: end`
 - **外部资源透传**:`GET /external/stores`、`GET /external/companies` 让前端 binding 编辑器选 storeId/companyId
 - 后台控制器挂载于 `/admin/finance/push/*`,复用 `AdminAuthGuard`
 
@@ -45,7 +45,7 @@
   - `FinancePushLogEntry`: `{ level:'info'|'warn'|'error', at, msg }`
   - `FinancePushRunResult`: 含 `name / totalRows / transformedRows / filteredRows / dateFilteredRows / transformErrors / successCount / batches / startDate? / endDate? / logs[] / failedBatch?`
   - `failedBatch`: `{ index, httpStatus, code?, message?, payloadAll[], rawResponseBody?, contentType? }`(失败时保留**完整不截断**的对方响应原文 + 该批所有 payload,给 Agent 排错;message 兜底最多 16k 字符)
-  - `FinancePushRunOptions`: `{ startDate?, endDate? }`(YYYY-MM-DD)
+  - `FinancePushRunOptions`: `{ startDate?, endDate?, onLog? }`(YYYY-MM-DD;`onLog(entry)` 用于 SSE 流式订阅,每追加一条 log 实时回调)
 - **函数**:
   - `test`: 探活 /me 并 recordTest /test connectivity
   - `run(currentUser, name, opts?)`: 按 binding name 推送(可选时间窗按 occurredAt 过滤),全程累积 log /run with logs and date window
@@ -77,7 +77,7 @@
   - `upsertConfig`: POST /config Upsert 配置 /upsert config
   - `deleteConfig`: DELETE /config 删除配置 /delete config
   - `test`: POST /test 探活 /test connectivity
-  - `run`: POST /run/:name 按 name 立即推送(body 可选 `{ startDate, endDate }` YYYY-MM-DD,按 occurredAt 过滤)/run push by name with date window
+  - `run`: POST /run/:name 按 name 立即推送(**SSE 流式**:`text/event-stream`,事件 `log`/`result`/`error`/`end`;body 可选 `{ startDate, endDate }` YYYY-MM-DD;客户端断开时 onLog 静默丢弃,主流程仍跑完并 recordPush)/run push by name as sse stream
   - `listExternalStores`: GET /external/stores 透传外部门店 /list external stores
   - `listExternalCompanies`: GET /external/companies 透传外部公司 /list external companies
 

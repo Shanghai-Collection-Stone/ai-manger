@@ -82,6 +82,8 @@ export interface FinancePushRunOptions {
   startDate?: string;
   /** 仅推 occurredAt <= endDate(YYYY-MM-DD) */
   endDate?: string;
+  /** 实时日志回调:每追加一条 log 时同步触发(用于 SSE 流式推送) */
+  onLog?: (entry: FinancePushLogEntry) => void;
 }
 
 /**
@@ -129,6 +131,7 @@ export class FinancePushRunnerService {
     const startDate = this.normalizeDateOpt(opts.startDate);
     const endDate = this.normalizeDateOpt(opts.endDate);
     const logs: FinancePushLogEntry[] = [];
+    const onLog = typeof opts.onLog === 'function' ? opts.onLog : undefined;
     const log = (level: FinancePushLogEntry['level'], msg: string) => {
       const entry: FinancePushLogEntry = { level, at: Date.now(), msg };
       logs.push(entry);
@@ -136,6 +139,14 @@ export class FinancePushRunnerService {
       if (level === 'error') this.logger.error(`${tag} ${msg}`);
       else if (level === 'warn') this.logger.warn(`${tag} ${msg}`);
       else this.logger.log(`${tag} ${msg}`);
+      // 流式订阅者(如 SSE controller)实时拿到新增 entry;回调内部异常不影响主流程
+      if (onLog) {
+        try {
+          onLog(entry);
+        } catch {
+          // ignore subscriber errors
+        }
+      }
     };
 
     const config = await this.configService.get(scopeId);

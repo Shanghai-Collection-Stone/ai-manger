@@ -548,10 +548,10 @@ export const adminApi = {
   },
 
   /**
-   * @description 按 binding name 立即执行推送(整批拒收;可传 { startDate, endDate } YYYY-MM-DD 时间窗按 occurredAt 过滤)
-   * @keyword-en run finance push by name with optional date window
+   * @description 按 binding name 立即执行推送(SSE 流式;每条 log 实时回调 onLog;结束时 onResult 或 onError;最终 onEnd)
+   * @keyword-en run finance push as SSE stream with live log callbacks
    */
-  async runFinancePush(name, opts = {}) {
+  async runFinancePushStream(name, opts = {}, callbacks = {}) {
     const body = {};
     if (opts && typeof opts.startDate === 'string' && opts.startDate.trim()) {
       body.startDate = opts.startDate.trim();
@@ -559,10 +559,86 @@ export const adminApi = {
     if (opts && typeof opts.endDate === 'string' && opts.endDate.trim()) {
       body.endDate = opts.endDate.trim();
     }
-    return request(`/finance/push/run/${encodeURIComponent(name)}`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    const token = getAdminToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(
+      `${API_BASE}/admin/finance/push/run/${encodeURIComponent(name)}`,
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+      },
+    );
+    if (!res.ok || !res.body) {
+      let message = `请求失败(${res.status})`;
+      try {
+        const data = await res.json();
+        message = data.message || data.error || message;
+      } catch {
+        // ignore json parse error
+      }
+      throw new Error(message);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    const dispatch = (event, dataRaw) => {
+      let payload = dataRaw;
+      try {
+        payload = JSON.parse(dataRaw);
+      } catch {
+        // 兼容空 data
+      }
+      if (event === 'log' && typeof callbacks.onLog === 'function') {
+        callbacks.onLog(payload);
+      } else if (event === 'result' && typeof callbacks.onResult === 'function') {
+        callbacks.onResult(payload);
+      } else if (event === 'error' && typeof callbacks.onError === 'function') {
+        callbacks.onError(payload);
+      } else if (event === 'end' && typeof callbacks.onEnd === 'function') {
+        callbacks.onEnd(payload);
+      }
+    };
+    // SSE 帧:`event: NAME\ndata: JSON\n\n`;以空行分割,逐帧解析
+    const parseChunk = () => {
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let event = 'message';
+        const dataLines = [];
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('event:')) {
+            event = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+        dispatch(event, dataLines.join('\n'));
+      }
+    };
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        parseChunk();
+      }
+      buffer += decoder.decode();
+      parseChunk();
+    } finally {
+      try {
+        reader.releaseLock?.();
+      } catch {
+        // ignore
+      }
+    }
   },
 
   /**

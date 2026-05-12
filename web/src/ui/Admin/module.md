@@ -16,7 +16,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 **飞书凭证 Tab 改为单条本作用域表单(无表格、无租户列)**;
 **财务 Tab(简化版,对齐 api.md `financial_event` 统一模型)**:
 - 顶部:推送配置卡片(默认折叠,显示 baseUrl 摘要 + 连通性 badge;展开后才有 baseUrl/apiKey 输入与"测试连通性")
-- 推送结果反馈(全宽,推送后显示成功/失败摘要 + 完整错误信息 + 对方原始响应 body + 该批前 3 条 payload + 折叠的"执行日志"区显示后端 push runner 累积的关键步骤 log;失败时提供"复制详情"和"发给 Agent"两个按钮一键把 markdown 化的完整失败详情送给 LLM 排错)
+- 推送结果反馈(全宽,**SSE 流式**:推送中实时显示蓝色进度条+最后一条 log,执行日志区随后端 onLog 逐条追加;结束后切到成功/失败摘要 + 完整错误信息 + 对方原始响应 body + 该批前 3 条 payload + 完整执行日志;失败时提供"复制详情"和"发给 Agent"两个按钮一键把 markdown 化的完整失败详情送给 LLM 排错)
 - 子 Tab(流水表 / 审批表 / 应付表 / 应收表,FINANCE_KINDS 预设 — name/flow/partyType 自动注入,用户不感知)
   - 流水表:bank,partyType=counterparty,flow 不预设(由 DSL 按金额正负决定)
   - 审批表:expense,flow=out,partyType=employee(报销审批,stage 由审批状态映射)
@@ -42,7 +42,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 - `onSubmitFinanceTransform`: 保存 DSL(name 取自当前子 Tab)/submit transform with preset
 - `onSubmitFinancePushConfig`: 保存全局推送配置 /submit push config
 - `onTestFinancePush`: 测试 /me /test connectivity
-- `onRunFinancePush`: 按 binding name 立即推送(带 `financePushDateWindow.startDate/endDate` 时间窗参数)/run push by name with date window
+- `onRunFinancePush`: 按 binding name 立即推送(**走 SSE 流式接口** `runFinancePushStream`,onLog 实时把每条日志追加到 `financePushFeedback.logs`;`streaming:true` 时 UI 显示推送进度条与最后一条 log,streaming 结束后 onResult 覆盖摘要字段)/run push by name with streaming logs
 - `formatPushFailureMarkdown`: 把推送失败详情格式化成 Markdown(HTTP/错误信息/对方原始响应/前 3 条 payload)/format push failure as markdown
 - `onCopyPushFailure`: 复制失败详情到剪贴板 /copy push failure to clipboard
 - `onSendPushFailureToAgent`: 把失败详情塞进当前 binding 的 Agent 输入框 /send push failure to agent composer
@@ -73,7 +73,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
   - `adminApi.listBitableTables`: 按 appToken 列飞书多维表
   - `adminApi.getFinancePushConfig` / `upsertFinancePushConfig` / `deleteFinancePushConfig`: 推送配置 CRUD(每作用域一份)
   - `adminApi.testFinancePush`: 测试 /me 探活
-  - `adminApi.runFinancePush(name)`: 按 binding name 立即推送
+  - `adminApi.runFinancePushStream(name, opts, { onLog, onResult, onError, onEnd })`: 按 binding name 立即推送的 SSE 流式封装(fetch + ReadableStream + TextDecoder,逐帧解析 `event:`/`data:` 然后分派回调)/run push as sse stream
   - `adminApi.listExternalStores` / `listExternalCompanies`: 透传外部 stores/companies 列表
   - `adminApi.listFinanceTransforms` / `upsertFinanceTransform` / `deleteFinanceTransform`: 财务 transform DSL CRUD(按 name)
   - `adminApi.chatFinanceAgent`: 财务 Agent 同步聊天(传 `{ name, messages }`)

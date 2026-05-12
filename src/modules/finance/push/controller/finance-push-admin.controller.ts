@@ -7,12 +7,13 @@ import {
   Param,
   Post,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { AdminAuthGuard } from '../../../admin/guards/admin-auth.guard.js';
 import type { AdminRequest } from '../../../admin/types/admin-request.types.js';
 import { FinanceExternalService } from '../services/finance-external.service.js';
@@ -90,23 +91,63 @@ export class FinancePushAdminController {
   }
 
   /**
-   * @description 立即执行一次推送(按 binding name 整批拒收;可选时间窗按 occurredAt 过滤;返回带 logs)
-   * @keyword-en run finance push by name with optional date window
+   * @description 立即执行一次推送(按 binding name);SSE 流式:每一步 log 实时下发,结束时发 result/error/end
+   * @keyword-en run finance push by name as SSE stream
    */
   @UseGuards(AdminAuthGuard)
   @Post('run/:name')
   async run(
     @Req() req: Request,
+    @Res() res: Response,
     @Param('name') name: string,
     @Body() body: RunFinancePushDto,
-  ) {
-    if (!name?.trim()) throw new BadRequestException('FINANCE_BINDING_NAME_REQUIRED');
-    const result = await this.runnerService.run(
-      this.requireUser(req),
-      decodeURIComponent(name),
-      { startDate: body?.startDate, endDate: body?.endDate },
-    );
-    return { result };
+  ): Promise<void> {
+    if (!name?.trim()) {
+      throw new BadRequestException('FINANCE_BINDING_NAME_REQUIRED');
+    }
+    const user = this.requireUser(req);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    // Nginx 反代关闭缓冲,确保每条 log 实时刷出
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const write = (event: string, data: unknown) => {
+      if (res.writableEnded) return;
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // 客户端断开:让 runner 后续的 onLog 静默丢弃(主流程仍跑完,持久化 lastPush 状态)
+    let aborted = false;
+    req.on('close', () => {
+      aborted = true;
+    });
+
+    try {
+      const result = await this.runnerService.run(
+        user,
+        decodeURIComponent(name),
+        {
+          startDate: body?.startDate,
+          endDate: body?.endDate,
+          onLog: (entry) => {
+            if (aborted) return;
+            write('log', entry);
+          },
+        },
+      );
+      write('result', result);
+      write('end', { ok: true });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : String(err ?? 'UNKNOWN_ERROR');
+      write('error', { message });
+      write('end', { ok: false });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
   }
 
   /**

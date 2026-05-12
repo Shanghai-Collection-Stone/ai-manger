@@ -1089,8 +1089,8 @@ const AdminApp = () => {
   };
 
   /**
-   * @description 立即推送指定 binding(整批拒收;可选时间窗按 occurredAt 过滤)
-   * @keyword-en run finance push by binding name with date window
+   * @description 立即推送指定 binding(SSE 流式;每条 log 实时累积到 feedback.logs,前端边推边渲染)
+   * @keyword-en run finance push by binding name with streaming logs
    */
   const onRunFinancePush = async (name) => {
     if (!name) return;
@@ -1105,10 +1105,47 @@ const AdminApp = () => {
       return;
     }
     setFinancePushPending((prev) => ({ ...prev, run: name }));
-    setFinancePushFeedback(null);
+    // 推送启动即清空旧反馈并初始化空 logs,让"执行日志"区立刻出现并随 SSE 增量更新
+    setFinancePushFeedback({ kind: 'run', name, streaming: true, logs: [] });
     try {
-      const res = await adminApi.runFinancePush(name, { startDate: sd, endDate: ed });
-      setFinancePushFeedback({ kind: 'run', ...(res.result || {}) });
+      await adminApi.runFinancePushStream(
+        name,
+        { startDate: sd, endDate: ed },
+        {
+          onLog: (entry) => {
+            if (!entry || typeof entry !== 'object') return;
+            setFinancePushFeedback((prev) => {
+              if (!prev || prev.kind !== 'run') return prev;
+              return { ...prev, logs: [...(prev.logs || []), entry] };
+            });
+          },
+          onResult: (result) => {
+            if (!result || typeof result !== 'object') return;
+            setFinancePushFeedback((prev) => {
+              const prevLogs = prev?.logs || [];
+              // 后端 result.logs 是完整的最终列表,可能比流式累积的更全(末尾几条);优先用 result.logs
+              return {
+                kind: 'run',
+                ...result,
+                logs:
+                  Array.isArray(result.logs) && result.logs.length >= prevLogs.length
+                    ? result.logs
+                    : prevLogs,
+                streaming: false,
+              };
+            });
+          },
+          onError: (err) => {
+            setFinancePushFeedback((prev) => ({
+              ...(prev || { kind: 'run', name }),
+              kind: 'run',
+              name,
+              error: err?.message || String(err) || '推送失败',
+              streaming: false,
+            }));
+          },
+        },
+      );
       try {
         const fp = await adminApi.getFinancePushConfig();
         setFinancePushConfig(fp.config || null);
@@ -1116,11 +1153,13 @@ const AdminApp = () => {
         // ignore
       }
     } catch (err) {
-      setFinancePushFeedback({
+      setFinancePushFeedback((prev) => ({
+        ...(prev || {}),
         kind: 'run',
         name,
         error: err.message || String(err),
-      });
+        streaming: false,
+      }));
     } finally {
       setFinancePushPending((prev) => ({ ...prev, run: '' }));
     }
@@ -3040,7 +3079,15 @@ const AdminApp = () => {
                 {/* 推送结果反馈 + 执行日志(全宽) | @keyword-en push run feedback with logs */}
                 {financePushFeedback && financePushFeedback.kind === 'run' ? (
                   <div className="space-y-2">
-                  {financePushFeedback.error ? (
+                  {financePushFeedback.streaming ? (
+                    <div className="text-xs bg-sky-50 border border-sky-200 text-sky-700 rounded p-2 flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+                      推送中… binding「{financePushFeedback.name}」
+                      {Array.isArray(financePushFeedback.logs) && financePushFeedback.logs.length > 0
+                        ? ` · ${financePushFeedback.logs[financePushFeedback.logs.length - 1].msg}`
+                        : ''}
+                    </div>
+                  ) : financePushFeedback.error ? (
                     <div className="text-xs bg-red-50 border border-red-200 text-red-700 rounded p-2">
                       ❌ 推送失败:{financePushFeedback.error}
                     </div>
