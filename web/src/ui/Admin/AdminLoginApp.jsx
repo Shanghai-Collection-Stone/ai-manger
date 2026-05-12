@@ -70,8 +70,8 @@ const resolvePostLoginTarget = (user) => {
  * @returns {JSX.Element}
  */
 const AdminLoginApp = () => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123456');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [tenantId, setTenantId] = useState('');
   const [tenantOptions, setTenantOptions] = useState([]);
   const [loading, setLoading] = useState(false);

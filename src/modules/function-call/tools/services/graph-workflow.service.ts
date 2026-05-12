@@ -400,7 +400,7 @@ export class GraphWorkflowFunctionCallService {
       {
         name: 'topic_orchestrate',
         description:
-          'Topic Orchestration Tool. Generates articles in Canvas based on user requirements and merges image-group matching into each article. Article count follows user/LLM request when provided.',
+          'Topic Orchestration Tool. Generates articles in a SINGLE Canvas based on user requirements and merges image-group matching into each article. Article count follows user/LLM request when provided. **CRITICAL — ONE CALL PER REQUEST**: when user asks for N articles, set count=N and call this tool ONCE; the N articles all live in the same Canvas. Never loop-call this tool to produce multiple Canvases for the same request.',
         schema: z.object({
           userId: z.string().optional().describe('Target user id (injected from session scope if omitted)'),
           platform: z.string().optional().describe('Publishing platform label'),
@@ -424,7 +424,7 @@ export class GraphWorkflowFunctionCallService {
           count: z
             .number()
             .optional()
-            .describe('Article count (optional; follows user/LLM request when provided)'),
+            .describe('Article count for THIS Canvas (set to total N when user asks for N articles; do NOT split into multiple count=1 calls)'),
           galleryUserId: z
             .string()
             .optional()

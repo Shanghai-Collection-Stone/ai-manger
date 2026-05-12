@@ -56,6 +56,7 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'doubao', label: '豆包 Doubao' },
   { value: 'nvidia', label: 'NVIDIA' },
   { value: 'minimax', label: 'MiniMax' },
+  { value: 'glm', label: '智谱 GLM (z.ai 国际端)' },
 ];
 
 const getRoleLabel = (role) => {

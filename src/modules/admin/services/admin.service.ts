@@ -1085,6 +1085,15 @@ export class AdminService {
         modelCategory: 'llm' as const,
       },
       {
+        // 智谱 GLM 国际端(z.ai) Coding Plan 入口；OpenAI 兼容协议。
+        // 按量付费可改为 https://api.z.ai/api/paas/v4；国内端为 https://open.bigmodel.cn/api/paas/v4
+        providerCode: 'glm',
+        name: 'GLM (z.ai Coding Plan)',
+        baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+        model: 'glm-4.6',
+        modelCategory: 'llm' as const,
+      },
+      {
         providerCode: 'gemini',
         name: 'Gemini Embedding',
         baseUrl: undefined,
@@ -1125,6 +1134,14 @@ export class AdminService {
         baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
         // Doubao-Seedream 5.0 lite，纯 text-to-image（ark 网关无 /images/edits，有底图请求会被上层降级到 meitu）
         model: 'doubao-seedream-5.0-lite',
+        modelCategory: 'image' as const,
+      },
+      {
+        providerCode: 'openai',
+        name: 'OpenAI gpt-image-1',
+        baseUrl: 'https://api.openai.com/v1',
+        // OpenAI gpt-image-1：文生图走 /images/generations，图生图走 /images/edits（multipart）。
+        model: 'gpt-image-1',
         modelCategory: 'image' as const,
       },
     ];

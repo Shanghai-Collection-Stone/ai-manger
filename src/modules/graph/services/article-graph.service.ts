@@ -1862,7 +1862,7 @@ export class ArticleGraphService {
         ? `【平台业务说明 - 必须严格遵守，内容不得超出以下范围】\n${input.platformAiPrompt}`
         : undefined,
       isXhs
-        ? '平台是小红书：title 要像真实分享，避免过于论文/教科书。'
+        ? '平台是小红书：title 要像真实分享，避免过于论文/教科书；title 必须 ≤20 字（小红书平台硬限制），超长一律改写到 20 字以内，禁止以省略号截断。'
         : undefined,
       `示例：{"items":[{"index":0,"title":"示例标题","tags":["tag1"],"angle":"切入点","imageQuery":"配图关键词","notes":["要点1"]}]}`,
     ]
@@ -2007,9 +2007,22 @@ export class ArticleGraphService {
       throw new BadRequestException('ARTICLE_PLAN_COUNT_MISMATCH');
     }
 
+    // 小红书 title 硬截断到 20 字（按 Unicode code point 计）；其它平台保留原值。
+    const enforceXhsTitleLimit = (raw: string): string => {
+      const trimmed = String(raw || '').trim();
+      if (!isXhs) return trimmed;
+      const codepoints = Array.from(trimmed);
+      if (codepoints.length <= 20) return trimmed;
+      const truncated = codepoints.slice(0, 20).join('');
+      this.logger.warn(
+        `[plan-article] xhs_title_truncated original_len=${codepoints.length} truncated="${truncated}"`,
+      );
+      return truncated;
+    };
+
     return items.map((it) => ({
       index: it.index,
-      title: String(it.title || '').trim(),
+      title: enforceXhsTitleLimit(String(it.title || '')),
       tags: Array.isArray(it.tags)
         ? it.tags.map((t) => String(t ?? '').trim()).filter(Boolean)
         : undefined,

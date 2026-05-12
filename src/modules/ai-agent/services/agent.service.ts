@@ -46,9 +46,9 @@ type InteropZodObject =
 
 /**
  * @title Agent服务 Agent Service
- * @description 使用LangChain构建与运行Agent，支持Gemini与DeepSeek。
- * @keywords-cn Agent服务, LangChain, Gemini, DeepSeek
- * @keywords-en agent service, LangChain, Gemini, DeepSeek
+ * @description 使用LangChain构建与运行Agent，支持Gemini/DeepSeek/GLM国际端(z.ai)等OpenAI兼容协议。
+ * @keywords-cn Agent服务, LangChain, Gemini, DeepSeek, GLM, z.ai, 智谱
+ * @keywords-en agent service, LangChain, Gemini, DeepSeek, GLM, z.ai, zhipu
  */
 @Injectable()
 export class AgentService {
@@ -81,9 +81,9 @@ export class AgentService {
 
   /**
    * @title 构建聊天模型 Build Chat Model
-   * @description 根据提供方返回对应的LangChain聊天模型。
-   * @keywords-cn 构建模型, Gemini, DeepSeek
-   * @keywords-en build model, Gemini, DeepSeek
+   * @description 根据提供方返回对应的LangChain聊天模型。GLM国际端(z.ai)走OpenAI兼容协议，baseUrl必填。
+   * @keywords-cn 构建模型, Gemini, DeepSeek, GLM, z.ai
+   * @keywords-en build model, Gemini, DeepSeek, GLM, z.ai
    */
   async buildChatModel(config: AgentConfig): Promise<DeepAgentReturn> {
     const llm = await this.buildLLM(config);
@@ -180,20 +180,34 @@ export class AgentService {
 
     const provider = providerCode.toLowerCase();
     const apiKey = String(runtime?.apiKey ?? '').trim() || undefined;
-    const baseUrl = String(runtime?.baseUrl ?? '').trim() || undefined;
+    const baseUrl =
+      String(runtime?.baseUrl ?? '').trim() ||
+      this.resolveProviderDefaultBaseUrl(provider);
 
     if (!apiKey) throw new Error('AI_API_KEY_NOT_CONFIGURED');
 
-    const requiresBaseUrl =
-      provider === 'deepseek' ||
-      provider === 'nvidia' ||
-      provider === 'minimax' ||
-      provider === 'anthropic' ||
-      provider === 'claude';
-    if (requiresBaseUrl && !baseUrl)
-      throw new Error('AI_BASE_URL_NOT_CONFIGURED');
-
     return { providerCode, model, apiKey, baseUrl };
+  }
+
+  /**
+   * @description 厂商默认 baseUrl 兜底（管理员留空时使用），OpenAI/Gemini 走 SDK 默认。
+   * @keyword-en resolve provider default base url
+   */
+  private resolveProviderDefaultBaseUrl(provider: string): string | undefined {
+    switch (provider) {
+      case 'deepseek':
+        return 'https://api.deepseek.com';
+      case 'nvidia':
+        return 'https://integrate.api.nvidia.com/v1';
+      case 'minimax':
+        return 'https://api.minimax.chat/v1';
+      // GLM 国际端(z.ai) Coding Plan 订阅入口；按量付费可手动改回 https://api.z.ai/api/paas/v4；
+      // 国内端可改为 https://open.bigmodel.cn/api/paas/v4
+      case 'glm':
+        return 'https://api.z.ai/api/coding/paas/v4';
+      default:
+        return undefined;
+    }
   }
 
   /**
@@ -643,6 +657,118 @@ export class AgentService {
         };
       }
       throw new Error('IMAGE_DOUBAO_RESULT_EMPTY');
+    }
+
+    if (provider === 'openai') {
+      // OpenAI gpt-image-1 / gpt-image-2：
+      //  - 文生图: POST /v1/images/generations
+      //  - 图生图(底图编辑): POST /v1/images/edits（multipart，image=底图二进制）
+      // size 接受 1024x1024 / 1024x1536 / 1536x1024 / auto；其它尺寸按宽高比就近映射。
+      const endpointBase = runtime.baseUrl?.trim() || 'https://api.openai.com/v1';
+      const sizeRaw =
+        typeof input.size === 'string' ? input.size.trim() : '';
+      const pixelMatch = /^(\d{2,5})x(\d{2,5})$/i.exec(sizeRaw);
+      const normalizedSize = (() => {
+        if (/^auto$/i.test(sizeRaw)) return 'auto';
+        if (pixelMatch) {
+          const w = Number(pixelMatch[1]);
+          const h = Number(pixelMatch[2]);
+          if (w === h) return '1024x1024';
+          if (w > h) return '1536x1024';
+          return '1024x1536';
+        }
+        return '1024x1024';
+      })();
+
+      if (runtimeEditImage) {
+        const endpoint = `${endpointBase.replace(/\/$/, '')}/images/edits`;
+        const form = new FormData();
+        form.append('model', runtime.model);
+        form.append('prompt', prompt);
+        form.append('size', normalizedSize);
+        form.append(
+          'image',
+          new Blob([new Uint8Array(runtimeEditImage.buffer)], {
+            type: runtimeEditImage.mimeType || 'image/png',
+          }),
+          'base.png',
+        );
+        this.logger.log(
+          `[ai-cover][openai] edit endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length} imageBytes=${runtimeEditImage.buffer.byteLength}`,
+        );
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${runtime.apiKey}` },
+          body: form,
+        });
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
+          throw new Error(
+            `IMAGE_OPENAI_EDIT_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+          );
+        }
+        const json = (await response.json()) as Record<string, unknown>;
+        const dataArr = Array.isArray(json['data']) ? (json['data'] as unknown[]) : [];
+        const first =
+          dataArr.length > 0 && dataArr[0] && typeof dataArr[0] === 'object'
+            ? (dataArr[0] as Record<string, unknown>)
+            : undefined;
+        if (typeof first?.['b64_json'] === 'string') {
+          const imagePath = await this.saveGeneratedImageBase64(
+            first['b64_json'] as string,
+            'image/png',
+          );
+          return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+        }
+        if (typeof first?.['url'] === 'string') {
+          const imagePath = await this.downloadGeneratedImage(first['url'] as string);
+          return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+        }
+        throw new Error('IMAGE_OPENAI_EDIT_RESULT_EMPTY');
+      }
+
+      const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+      const body: Record<string, unknown> = {
+        model: runtime.model,
+        prompt,
+        size: normalizedSize,
+        n: 1,
+      };
+      this.logger.log(
+        `[ai-cover][openai] generate endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length}`,
+      );
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${runtime.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(
+          `IMAGE_OPENAI_GENERATE_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+        );
+      }
+      const json = (await response.json()) as Record<string, unknown>;
+      const dataArr = Array.isArray(json['data']) ? (json['data'] as unknown[]) : [];
+      const first =
+        dataArr.length > 0 && dataArr[0] && typeof dataArr[0] === 'object'
+          ? (dataArr[0] as Record<string, unknown>)
+          : undefined;
+      if (typeof first?.['b64_json'] === 'string') {
+        const imagePath = await this.saveGeneratedImageBase64(
+          first['b64_json'] as string,
+          'image/png',
+        );
+        return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+      }
+      if (typeof first?.['url'] === 'string') {
+        const imagePath = await this.downloadGeneratedImage(first['url'] as string);
+        return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+      }
+      throw new Error('IMAGE_OPENAI_GENERATE_RESULT_EMPTY');
     }
 
     throw new Error(`IMAGE_PROVIDER_NOT_SUPPORTED:${runtime.providerCode}`);

@@ -66,7 +66,7 @@
   - `getLlmSetting`: 获取LLM设置/get llm setting
   - `upsertLlmSetting`: 创建或更新LLM设置/upsert llm setting
   - `updateLlmSetting`: 更新LLM设置/update llm setting
-  - `ensureProvidersFromEnv`: 环境迁移提供商（仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
+  - `ensureProvidersFromEnv`: 环境迁移提供商（含 GLM 国际端 z.ai 候选；仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
 
 ### guards/admin-auth.guard.ts
 后台鉴权守卫。

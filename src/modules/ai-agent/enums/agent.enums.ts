@@ -7,4 +7,6 @@
 export enum AgentProviderEnum {
   Gemini = 'gemini',
   DeepSeek = 'deepseek',
+  /** 智谱 GLM 国际端(z.ai), OpenAI 兼容协议 */
+  Glm = 'glm',
 }
