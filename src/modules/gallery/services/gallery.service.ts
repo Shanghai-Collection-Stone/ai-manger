@@ -499,6 +499,11 @@ export class GalleryService {
     return out.slice(0, lim);
   }
 
+  /**
+   * @description 按 tags 检索图片。默认排除 isUsed=true（已被生成消耗）的图片,
+   *  传 includeUsed=true 可关闭该过滤（用于素材管理类查询）。
+   * @keyword-en search images by tags, defaults to excluding used images
+   */
   async searchByTags(input: {
     userId?: string;
     tenantId?: string;
@@ -507,6 +512,8 @@ export class GalleryService {
     limit?: number;
     matchCollage?: boolean;
     imageType?: 'all' | 'regular' | 'collage';
+    /** 是否包含已使用 (isUsed=true) 图片, 默认 false */
+    includeUsed?: boolean;
   }): Promise<GalleryImageEntity[]> {
     const tags = Array.isArray(input?.tags)
       ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
@@ -524,6 +531,9 @@ export class GalleryService {
     if (input.groupId !== undefined && ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) || typeof input.groupId === 'string')) {
       clauses.push({ groupId: input.groupId });
     }
+    if (input.includeUsed !== true) {
+      clauses.push({ isUsed: { $ne: true } });
+    }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     return this.images
@@ -533,16 +543,116 @@ export class GalleryService {
       .toArray();
   }
 
+  /**
+   * @description 统计指定 tags 当前可用图片数(已排除 isUsed)。用于生成前的不足量预估。
+   *  返回 byTag 字典(每个 tag 单独 count) + total(去重后总数,$or 匹配任一 tag)。
+   * @keyword-en count available images by tags excluding used
+   */
+  async countAvailableByTags(input: {
+    userId?: string;
+    tenantId?: string;
+    tags: string[];
+    imageType?: 'all' | 'regular' | 'collage';
+  }): Promise<{ total: number; byTag: Record<string, number> }> {
+    const tags = Array.isArray(input?.tags)
+      ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
+      : [];
+    if (tags.length === 0) return { total: 0, byTag: {} };
+    const baseClauses: Record<string, unknown>[] = [
+      this.buildTenantFilter(input.userId, input.tenantId),
+      { isUsed: { $ne: true } },
+    ];
+    if (input.imageType && input.imageType !== 'all') {
+      baseClauses.push(this.buildImageTypeFilter(input.imageType));
+    }
+    const byTag: Record<string, number> = {};
+    for (const t of tags) {
+      const filter = { $and: [...baseClauses, { tags: t }] };
+      byTag[t] = await this.images.countDocuments(filter);
+    }
+    const totalFilter = { $and: [...baseClauses, { tags: { $in: tags } }] };
+    const total = await this.images.countDocuments(totalFilter);
+    return { total, byTag };
+  }
+
+  /**
+   * @description 列出租户可见的热门 tag (按图片数量倒序),用于 AI 推荐 tag 选择。
+   *  自动过滤 isUsed=true 的图片,避免推荐已耗尽的 tag。
+   * @keyword-en list top tags by image count for AI recommendation
+   */
+  async listTopTagsWithCount(input: {
+    userId?: string;
+    tenantId?: string;
+    limit?: number;
+    imageType?: 'all' | 'regular' | 'collage';
+  }): Promise<Array<{ tag: string; count: number }>> {
+    const matchClauses: Record<string, unknown>[] = [
+      this.buildTenantFilter(input.userId, input.tenantId),
+      { isUsed: { $ne: true } },
+      { tags: { $exists: true, $ne: [] } },
+    ];
+    if (input.imageType && input.imageType !== 'all') {
+      matchClauses.push(this.buildImageTypeFilter(input.imageType));
+    }
+    const lim = Math.max(1, Math.min(50, Math.floor(input.limit ?? 12)));
+    const pipe: Record<string, unknown>[] = [
+      { $match: { $and: matchClauses } },
+      { $unwind: '$tags' },
+      { $match: { tags: { $type: 'string', $ne: '' } } },
+      { $group: { _id: '$tags', count: { $sum: 1 } } },
+      { $sort: { count: -1, _id: 1 } },
+      { $limit: lim },
+      { $project: { _id: 0, tag: '$_id', count: 1 } },
+    ];
+    return this.images
+      .aggregate<{ tag: string; count: number }>(pipe)
+      .toArray();
+  }
+
+  /**
+   * @description 批量标记图片为已使用 (isUsed=true)。生成图组/拼图完成后调用,
+   *  消耗的原图后续不再被 searchByTags 默认查询命中。传 reset=true 可反向重置(将 isUsed 设回 false,清空 usedAt)。
+   * @keyword-en mark images as used or reset to unused
+   */
+  async markUsedBatch(input: {
+    ids: number[];
+    reset?: boolean;
+  }): Promise<{ matched: number; modified: number }> {
+    const ids = (Array.isArray(input?.ids) ? input.ids : [])
+      .map((x) => Number(x))
+      .filter((x) => Number.isFinite(x));
+    if (ids.length === 0) return { matched: 0, modified: 0 };
+    const now = new Date();
+    const update = input.reset === true
+      ? { $set: { isUsed: false, updatedAt: now }, $unset: { usedAt: '' } }
+      : { $set: { isUsed: true, usedAt: now, updatedAt: now } };
+    const res = await this.images.updateMany(
+      { id: { $in: ids } },
+      update as unknown as Record<string, unknown>,
+    );
+    return { matched: res.matchedCount ?? 0, modified: res.modifiedCount ?? 0 };
+  }
+
+  /**
+   * @description 随机采样图片。默认排除 isUsed=true,
+   *  传 includeUsed=true 关闭过滤(素材管理类查询)。
+   * @keyword-en random sample images excluding used by default
+   */
   async sampleRandom(input: {
     userId?: string;
     tenantId?: string;
     groupId?: string | number;
     limit?: number;
+    /** 是否包含已使用图片, 默认 false */
+    includeUsed?: boolean;
   }): Promise<GalleryImageEntity[]> {
     // 使用租户过滤构建基础 filter
     const baseFilter = this.buildTenantFilter(input.userId, input.tenantId);
     if (input.groupId !== undefined && ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) || typeof input.groupId === 'string')) {
       baseFilter.groupId = input.groupId;
+    }
+    if (input.includeUsed !== true) {
+      baseFilter.isUsed = { $ne: true };
     }
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     const pipe: Record<string, unknown>[] = [{ $match: baseFilter }];

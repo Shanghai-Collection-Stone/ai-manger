@@ -25,6 +25,12 @@ export interface FunctionCallScope {
   tenantId?: string;
   userId?: string;
   category?: string;
+  /**
+   * 可选:tool 内部在产出 canvas-it 块的瞬间(如 createImageGroupCanvas 完成)
+   * 直接把代码块推到前端 SSE,避免等待 subagent/LLM 二次解码。
+   * 由 chat.service.ts stream 路径注入。
+   */
+  earlyEmit?: (text: string) => void;
 }
 
 type ArticleLibraryToolSummary = {

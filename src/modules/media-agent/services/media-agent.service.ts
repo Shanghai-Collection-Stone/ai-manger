@@ -26,7 +26,11 @@ export class MediaAgentService {
    * @since 2026-03-23
    */
   getGalleryToolsHandle(
-    scope?: { tenantId?: string; userId?: string },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
   ): CreateAgentParams['tools'] {
     return this.galleryTools.getHandle(scope);
   }
@@ -39,7 +43,11 @@ export class MediaAgentService {
    * @since 2026-03-23
    */
   getXhsToolsHandle(
-    scope?: { tenantId?: string; userId?: string },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
   ): CreateAgentParams['tools'] {
     return this.xhsTools.getHandle(scope);
   }

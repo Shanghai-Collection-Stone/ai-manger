@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { Agent as UndiciAgent } from 'undici';
 import {
   AgentRunInput,
   AgentConfig,
@@ -15,13 +16,16 @@ import {
   HumanMessage,
   SystemMessage,
   AIMessageChunk,
+  ToolMessage,
+  ChatMessage,
+  ChatMessageChunk,
   coerceMessageLikeToMessage,
   isBaseMessage,
   AIMessage,
 } from '@langchain/core/messages';
 import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { CreateAgentParams } from 'langchain';
+import { CreateAgentParams, createMiddleware } from 'langchain';
 import type { Callbacks } from '@langchain/core/callbacks/manager';
 import type { SubAgent } from 'deepagents';
 import { ChatOpenAI } from '@langchain/openai';
@@ -54,6 +58,18 @@ type InteropZodObject =
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
   private readonly checkpointer: MongoDBSaver;
+  /**
+   * @description 生图专用 undici dispatcher: gpt-image-* / dall-e-* / seedream 这类
+   *  调用 OpenAI/Doubao 生图 API 的请求服务端处理常达 5-10 分钟,默认 undici
+   *  headersTimeout=300s/bodyTimeout=300s 会在 5 分钟时抛 `HeadersTimeoutError:
+   *  UND_ERR_HEADERS_TIMEOUT`。这里给 15 分钟,与 AbortSignal.timeout 配合。
+   * @keyword-en long-timeout undici dispatcher for image generation
+   */
+  private readonly imageGenDispatcher = new UndiciAgent({
+    headersTimeout: 15 * 60 * 1000,
+    bodyTimeout: 15 * 60 * 1000,
+    connectTimeout: 30 * 1000,
+  });
 
   constructor(
     @Inject('CTX_MONGO_CLIENT') client: MongoClient,
@@ -92,6 +108,11 @@ export class AgentService {
       config,
     );
 
+    const middleware: unknown[] = [];
+    if (llm instanceof ChatOpenAI) {
+      middleware.push(this.buildOpenAICompatSanitizeMiddleware());
+    }
+
     const options = {
       model: llm,
       systemPrompt: mergedSystem,
@@ -100,8 +121,11 @@ export class AgentService {
       responseFormat: config.responseFormat,
       checkpointer: this.checkpointer,
       subagents: this.normalizeSubagents(config.subagents),
+      ...(middleware.length > 0 ? { middleware } : {}),
     };
-    return createDeepAgent(options) as DeepAgentReturn;
+    return createDeepAgent(
+      options as unknown as Parameters<typeof createDeepAgent>[0],
+    ) as DeepAgentReturn;
   }
 
   async buildLLM(config: AgentConfig): Promise<BaseChatModel> {
@@ -113,6 +137,16 @@ export class AgentService {
     const modelProvider = m?.[1];
     const modelName = (m?.[2] ?? rawModel).trim();
     if (!modelName) throw new Error('AI_MODEL_NOT_CONFIGURED');
+
+    // 防止生图模型被误配置为 chat 默认运行时:这类模型走 /v1/images/generations,
+    // 不兼容 chat completions,塞进 LangChain agent 会触发 wrapModelCall 返回非
+    // AIMessage 对象,下游 patchToolCallsMiddleware 直接抛
+    // `expected AIMessage or Command, got object`。这里早抛明确错误,避免堆栈失真。
+    if (this.isImageOnlyModel(modelName)) {
+      throw new Error(
+        `AI_CHAT_RUNTIME_MISCONFIGURED: model "${modelName}" 是生图专用模型(images/generations), 不能作为 chat 默认运行时。请在管理后台 ai_providers 把它的 modelCategory 设为 image, 并为聊天单独配置一个文本模型(如 gpt-4o-mini / glm-4 / claude-* 等)。`,
+      );
+    }
 
     const protocol =
       provider === 'gemini'
@@ -161,6 +195,248 @@ export class AgentService {
   }
 
   /**
+   * @description OpenAI 兼容厂商(GLM/z.ai/DeepSeek 等)兼容性 middleware:每次 model 调用前
+   *   清洗历史消息的 content 数组,移除 thinking/reasoning/tool_use 等非 OpenAI 标准内容块,
+   *   避免 LangGraph checkpoint 持久化的旧消息在下一轮被对方端 `400 content[0].type type error` 拒收。
+   *   用 constructor 重建消息(保留 instance 标记),不破坏 deep agent 内部对 AIMessage 的判断。
+   * @keyword-en openai compat sanitize middleware, strip thinking reasoning
+   */
+  /**
+   * @description 公开版:供 chat.service 在构造 subagent 时调用,把 sanitize+诊断 middleware
+   *   也注入到 subagent 的 middleware 列表(deepagents 默认不会把主 agent 的 customMiddleware
+   *   传递给 subagent,subagent 自己的 model 调用得不到 sanitize 兜底/诊断 log)。
+   * @keyword-en build subagent sanitize middleware for chat service injection
+   */
+  buildSubagentSanitizeMiddleware() {
+    return this.buildOpenAICompatSanitizeMiddleware();
+  }
+
+  private buildOpenAICompatSanitizeMiddleware() {
+    const sanitize = (messages: BaseMessage[]): BaseMessage[] =>
+      this.sanitizeMessagesForOpenAICompat(messages);
+    const ensureValid = (result: unknown): unknown =>
+      this.ensureValidModelResponse(result);
+    return createMiddleware({
+      name: 'openaiCompatSanitizeMiddleware',
+      wrapModelCall: async (request, handler) => {
+        const messages = (request as { messages?: BaseMessage[] }).messages;
+        let finalRequest = request;
+        if (Array.isArray(messages) && messages.length > 0) {
+          const sanitized = sanitize(messages);
+          if (sanitized !== messages) {
+            finalRequest = { ...request, messages: sanitized };
+          }
+        }
+        const result = await handler(finalRequest);
+        // 兜底:确保返回值能通过 LangChain `isInternalModelResponse` 检查
+        // (AIMessage.isInstance / isCommand / structuredResponse)。
+        // 某些 OpenAI 兼容厂商(GLM/z.ai 等)在 stream 异常或部分响应场景下可能
+        // 返回缺失 MESSAGE_SYMBOL 标记的 plain object,会导致下游 middleware 抛
+        // `expected AIMessage or Command, got object` 错误。
+        // 这里用 cast 屏蔽 unknown 返回类型,运行时由 ensureValidModelResponse 担保实际类型。
+        return ensureValid(result) as AIMessage;
+      },
+    });
+  }
+
+  /**
+   * @description 确保 wrapModelCall handler 返回值通过 LangChain `isInternalModelResponse` 检查。
+   *   - AIMessage/AIMessageChunk/Command/structuredResponse: 静默放行
+   *   - ChatMessage/ChatMessageChunk: GLM/z.ai 等 OpenAI 兼容厂商在 cached_tokens 命中后的
+   *     空 content chunk 中 role 不是 "assistant",LangChain ChatOpenAI 用 ChatMessageChunk
+   *     兜底包装,而其 type === "generic" 不满足 AIMessage.isInstance(要求 type === "ai")。
+   *     这种 chunk 语义上就是 model 输出,直接 rebuild 为 AIMessageChunk 即可(保留 content/
+   *     tool_calls/response_metadata/id 等关键字段)。
+   *   - 其他形似但类型不符的对象: 完整 log 原始 payload(JSON 化, ctor name, keys), 不修改,
+   *     让 LangChain framework 自然抛错,便于发现新的 model 厂商兼容问题。
+   * @keyword-en convert ChatMessageChunk to AIMessageChunk for openai-compat providers
+   */
+  private ensureValidModelResponse(result: unknown): unknown {
+    if (result instanceof AIMessage) return result;
+    if (result instanceof AIMessageChunk) return result;
+
+    if (result && typeof result === 'object') {
+      const ro = result as Record<string, unknown>;
+      if ('goto' in ro || 'update' in ro || 'resume' in ro) return result;
+      if ('structuredResponse' in ro && 'messages' in ro) return result;
+    }
+
+    // ChatMessage / ChatMessageChunk → 转 AIMessageChunk
+    // (OpenAI 兼容厂商如 GLM/z.ai 在某些 chunk 里 role 非 "assistant" 时 LangChain
+    //  会用这两个通用类型,但 LangChain agent middleware 只识别 AIMessage 实例)
+    if (result instanceof ChatMessageChunk || result instanceof ChatMessage) {
+      const src = result as unknown as {
+        id?: string;
+        name?: string;
+        content: AIMessage['content'];
+        additional_kwargs?: Record<string, unknown>;
+        response_metadata?: Record<string, unknown>;
+        tool_calls?: AIMessage['tool_calls'];
+        invalid_tool_calls?: AIMessage['invalid_tool_calls'];
+        usage_metadata?: AIMessage['usage_metadata'];
+        tool_call_chunks?: AIMessageChunk['tool_call_chunks'];
+        role?: string;
+      };
+      const aiChunk = new AIMessageChunk({
+        id: src.id,
+        name: src.name,
+        content: src.content,
+        additional_kwargs: src.additional_kwargs ?? {},
+        response_metadata: src.response_metadata ?? {},
+        tool_calls: src.tool_calls,
+        invalid_tool_calls: src.invalid_tool_calls,
+        usage_metadata: src.usage_metadata,
+        tool_call_chunks: src.tool_call_chunks,
+      });
+      const contentLen =
+        typeof src.content === 'string'
+          ? src.content.length
+          : Array.isArray(src.content)
+            ? src.content.length
+            : 0;
+      this.logger.debug(
+        `[openaiCompatSanitizeMiddleware] converted ${result.constructor.name} → AIMessageChunk (role=${src.role ?? '<n/a>'} contentLen=${contentLen})`,
+      );
+      return aiChunk;
+    }
+
+    // 其他未知类型: 全量 log,让上层错误自然冒泡
+    let snapshot = '';
+    try {
+      snapshot = JSON.stringify(result, null, 2);
+    } catch (e) {
+      snapshot = `<unstringifyable: ${String(e)}>`;
+    }
+    const keys =
+      result && typeof result === 'object'
+        ? Object.keys(result as Record<string, unknown>).join(',')
+        : '<n/a>';
+    const ctorName =
+      result && typeof result === 'object' && result.constructor
+        ? result.constructor.name
+        : '<n/a>';
+    this.logger.error(
+      `[openaiCompatSanitizeMiddleware] non-instance model response detected resultType=${typeof result} ctor=${ctorName} keys=${keys || '<none>'}\n--- raw payload ---\n${String(snapshot).slice(0, 4000)}\n--- end ---`,
+    );
+    return result;
+  }
+
+  /**
+   * @description 清洗消息数组中非 OpenAI 标准的 content 块。
+   *   - content 为 string:原样保留
+   *   - content 为数组:HumanMessage 保留多模态(text/image_url/image/input_audio/file/data block),
+   *     其他角色只保留 text 块并拍平为字符串;过滤掉 thinking/reasoning/tool_use 等。
+   *   AIMessage 的 tool_calls 保留(在顶层字段,不受 content 影响)。
+   *   重建消息时使用对应 constructor(确保 MESSAGE_SYMBOL 等内部 instance 标记完整)。
+   * @keyword-en sanitize messages for openai compat, rebuild via constructor
+   */
+  private sanitizeMessagesForOpenAICompat(
+    messages: BaseMessage[],
+  ): BaseMessage[] {
+    if (!Array.isArray(messages)) return messages;
+    const OPENAI_USER_TYPES = new Set([
+      'text',
+      'image_url',
+      'image',
+      'input_audio',
+      'file',
+    ]);
+    const extractText = (block: unknown): string => {
+      if (typeof block === 'string') return block;
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (typeof b['text'] === 'string') return b['text'];
+      }
+      return '';
+    };
+    let changed = false;
+    const out = messages.map((msg) => {
+      const content = (msg as unknown as { content?: unknown }).content;
+      if (!Array.isArray(content)) return msg;
+      const isUser = msg instanceof HumanMessage;
+      let nextContent: unknown;
+      if (isUser) {
+        const kept = content.filter((b) => {
+          if (typeof b === 'string') return true;
+          if (b && typeof b === 'object') {
+            const rec = b as Record<string, unknown>;
+            const t = rec['type'];
+            if (typeof t === 'string' && OPENAI_USER_TYPES.has(t)) return true;
+            if (rec['source_type']) return true;
+          }
+          return false;
+        });
+        if (kept.length === content.length) return msg;
+        nextContent = kept.length > 0 ? kept : '';
+      } else {
+        const textParts = content
+          .map(extractText)
+          .filter((s) => typeof s === 'string' && s.length > 0);
+        nextContent = textParts.join('');
+      }
+      changed = true;
+      return this.rebuildMessageWithContent(msg, nextContent);
+    });
+    return changed ? out : messages;
+  }
+
+  /**
+   * @description 用原 message 同类型的 constructor 重建一条消息,只替换 content。
+   *   通过 constructor 创建保留 LangChain 内部 instance 标记(MESSAGE_SYMBOL 等),
+   *   避免 AIMessage.isInstance 判断失败导致 wrapModelCall middleware 报 "expected AIMessage or Command, got object"。
+   * @keyword-en rebuild message via constructor with new content
+   */
+  private rebuildMessageWithContent(
+    msg: BaseMessage,
+    content: unknown,
+  ): BaseMessage {
+    const m = msg as unknown as Record<string, unknown>;
+    if (msg instanceof AIMessage || msg instanceof AIMessageChunk) {
+      return new AIMessage({
+        id: msg.id,
+        name: msg.name,
+        content: content as AIMessage['content'],
+        additional_kwargs: msg.additional_kwargs,
+        response_metadata: msg.response_metadata,
+        tool_calls: (msg as AIMessage).tool_calls,
+        invalid_tool_calls: (msg as AIMessage).invalid_tool_calls,
+        usage_metadata: (msg as AIMessage).usage_metadata,
+      });
+    }
+    if (msg instanceof ToolMessage) {
+      return new ToolMessage({
+        id: msg.id,
+        name: msg.name,
+        content: content as ToolMessage['content'],
+        tool_call_id: msg.tool_call_id,
+        additional_kwargs: msg.additional_kwargs,
+        response_metadata: msg.response_metadata,
+        status: (m['status'] as ToolMessage['status']) ?? undefined,
+        artifact: m['artifact'],
+      });
+    }
+    if (msg instanceof SystemMessage) {
+      return new SystemMessage({
+        id: msg.id,
+        name: msg.name,
+        content: content as SystemMessage['content'],
+        additional_kwargs: msg.additional_kwargs,
+        response_metadata: msg.response_metadata,
+      });
+    }
+    if (msg instanceof HumanMessage) {
+      return new HumanMessage({
+        id: msg.id,
+        name: msg.name,
+        content: content as HumanMessage['content'],
+        additional_kwargs: msg.additional_kwargs,
+        response_metadata: msg.response_metadata,
+      });
+    }
+    return msg;
+  }
+
+  /**
    * @title 解析默认运行时 Resolve Default Runtime
    * @description 从管理配置中解析默认AI运行时信息。
    * @keywords-cn 运行时, 默认配置
@@ -187,6 +463,25 @@ export class AgentService {
     if (!apiKey) throw new Error('AI_API_KEY_NOT_CONFIGURED');
 
     return { providerCode, model, apiKey, baseUrl };
+  }
+
+  /**
+   * @description 识别 model 名是否是生图专用模型(不能用作 chat completions)。
+   *   主要 cover OpenAI(gpt-image-*, dall-e-*) + Doubao Seedream + Stable Diffusion 类。
+   * @keyword-en detect image-only model name to prevent chat misconfiguration
+   */
+  private isImageOnlyModel(modelName: string): boolean {
+    const name = String(modelName ?? '').trim().toLowerCase();
+    if (!name) return false;
+    return (
+      name.startsWith('gpt-image-') ||
+      name.startsWith('dall-e') ||
+      name.startsWith('dalle') ||
+      name.includes('seedream') ||
+      name.includes('flux-') ||
+      name.includes('stable-diffusion') ||
+      name === 'midjourney'
+    );
   }
 
   /**
@@ -408,6 +703,31 @@ export class AgentService {
     const mimeType = response.headers.get('content-type') ?? undefined;
     const arrayBuffer = await response.arrayBuffer();
     return this.saveGeneratedImageBuffer(Buffer.from(arrayBuffer), mimeType);
+  }
+
+  /**
+   * @description 把 undici fetch error.cause 序列化成可读字符串。常见 case:
+   *   - ConnectTimeoutError / UND_ERR_CONNECT_TIMEOUT: TCP 握手超时(代理/防火墙阻断)
+   *   - SocketError / UND_ERR_SOCKET: socket 在响应到达前断开(国内直连 OpenAI 常见的 idle close)
+   *   - ENOTFOUND / EAI_AGAIN: DNS 解析失败(baseUrl 配错)
+   *   - CertificateError / UNABLE_TO_VERIFY_LEAF_SIGNATURE: TLS 证书不受信
+   * @keyword-en format fetch error cause for diagnostic
+   */
+  private formatFetchCause(cause: unknown): string {
+    if (!cause) return '<none>';
+    if (cause instanceof Error) {
+      const c = cause as Error & { code?: string; cause?: unknown };
+      const inner =
+        c.cause && c.cause !== cause ? this.formatFetchCause(c.cause) : '';
+      return `${c.name}:${c.code ?? ''}:${String(c.message ?? '').slice(0, 200)}${
+        inner ? `(<-${inner})` : ''
+      }`;
+    }
+    try {
+      return JSON.stringify(cause).slice(0, 300);
+    } catch {
+      return String(cause).slice(0, 300);
+    }
   }
 
   /**
@@ -686,21 +1006,40 @@ export class AgentService {
         form.append('model', runtime.model);
         form.append('prompt', prompt);
         form.append('size', normalizedSize);
+        form.append('n', '1');
         form.append(
           'image',
           new Blob([new Uint8Array(runtimeEditImage.buffer)], {
             type: runtimeEditImage.mimeType || 'image/png',
           }),
-          'base.png',
+          runtimeEditImage.fileName || 'base.png',
         );
         this.logger.log(
           `[ai-cover][openai] edit endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length} imageBytes=${runtimeEditImage.buffer.byteLength}`,
         );
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${runtime.apiKey}` },
-          body: form,
-        });
+        // gpt-image 系列生图服务端处理常 5-10 分钟。显式给 10 分钟 AbortSignal 超时,
+        // 并用 imageGenDispatcher (headersTimeout/bodyTimeout=15min) 覆盖 undici
+        // 默认 5 分钟 headersTimeout(否则会抛 `HeadersTimeoutError: UND_ERR_HEADERS_TIMEOUT`)。
+        let response: Response;
+        try {
+          response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${runtime.apiKey}` },
+            body: form,
+            signal: AbortSignal.timeout(10 * 60 * 1000),
+            // @ts-expect-error undici extension on Node fetch
+            dispatcher: this.imageGenDispatcher,
+          });
+        } catch (err) {
+          const e = err as Error & { cause?: unknown; code?: string };
+          const causeStr = this.formatFetchCause(e.cause);
+          this.logger.error(
+            `[ai-cover][openai] edit_fetch_failed endpoint=${endpoint} name=${e.name} code=${e.code ?? ''} message=${String(e.message ?? '').slice(0, 200)} cause=${causeStr}`,
+          );
+          throw new Error(
+            `IMAGE_OPENAI_EDIT_NETWORK:${e.name}:${e.code ?? ''}:${causeStr}`,
+          );
+        }
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
           throw new Error(
@@ -737,14 +1076,29 @@ export class AgentService {
       this.logger.log(
         `[ai-cover][openai] generate endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length}`,
       );
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${runtime.apiKey}`,
-        },
-        body: JSON.stringify(body),
-      });
+      let response: Response;
+      try {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${runtime.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10 * 60 * 1000),
+          // @ts-expect-error undici extension on Node fetch
+          dispatcher: this.imageGenDispatcher,
+        });
+      } catch (err) {
+        const e = err as Error & { cause?: unknown; code?: string };
+        const causeStr = this.formatFetchCause(e.cause);
+        this.logger.error(
+          `[ai-cover][openai] generate_fetch_failed endpoint=${endpoint} name=${e.name} code=${e.code ?? ''} message=${String(e.message ?? '').slice(0, 200)} cause=${causeStr}`,
+        );
+        throw new Error(
+          `IMAGE_OPENAI_GENERATE_NETWORK:${e.name}:${e.code ?? ''}:${causeStr}`,
+        );
+      }
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         throw new Error(
@@ -2139,13 +2493,17 @@ export class AgentService {
       };
     } catch (err: unknown) {
       const e = err instanceof Error ? err : new Error(String(err));
-      console.error(err);
       const normalized = this.normalizeStreamError(e);
-      console.error(
-        '[AgentService.stream] ERROR',
-        normalized.code,
-        normalized.message,
+      // 完整诊断信息走 Nest logger,确保后端能看到 stack + cause 链(不再被 console.error
+      // 被某些环境吞掉)。前端只收 yield 出去的精简 error。
+      const causeChain = this.collectCauseChain(e);
+      this.logger.error(
+        `[AgentService.stream] ${normalized.code} ${e.name}: ${String(e.message ?? '').slice(0, 500)}`,
+        e.stack,
       );
+      if (causeChain) {
+        this.logger.error(`[AgentService.stream] cause: ${causeChain}`);
+      }
       const outErr = new Error(normalized.message) as Error & {
         code?: string;
       };
@@ -2153,6 +2511,32 @@ export class AgentService {
       outErr.code = normalized.code;
       yield { type: 'error', data: { error: outErr } };
     }
+  }
+
+  /**
+   * @description 递归提取 Error.cause 链(undici fetch failed / langchain MiddlewareError 等都会嵌 cause)。
+   * @keyword-en collect error cause chain
+   */
+  private collectCauseChain(error: Error): string {
+    const parts: string[] = [];
+    let current: unknown = (error as Error & { cause?: unknown }).cause;
+    let depth = 0;
+    while (current && depth < 8) {
+      if (current instanceof Error) {
+        const c = current as Error & { code?: string };
+        parts.push(`${c.name}:${c.code ?? ''}:${String(c.message ?? '').slice(0, 300)}`);
+        current = (c as Error & { cause?: unknown }).cause;
+      } else {
+        try {
+          parts.push(JSON.stringify(current).slice(0, 300));
+        } catch {
+          parts.push(String(current).slice(0, 300));
+        }
+        break;
+      }
+      depth += 1;
+    }
+    return parts.join(' <- ');
   }
 
   private normalizeStreamError(error: Error): {
@@ -2174,7 +2558,8 @@ export class AgentService {
         message: '本次生成未通过发布质量校验，请缩小话题范围后重试。',
       };
     }
-    const m = /^([A-Z0-9_]+):?\s*/.exec(raw);
+    // code 必须是 ≥3 个大写字母/数字/下划线 + 紧跟冒号(避免把句子首字母 "I" 这种当 code)
+    const m = /^([A-Z][A-Z0-9_]{2,}):\s*/.exec(raw);
     const code = m?.[1] ? m[1] : 'STREAM_ERROR';
     return { code, message: raw.slice(0, 240) };
   }

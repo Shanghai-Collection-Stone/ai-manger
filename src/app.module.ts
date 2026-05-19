@@ -14,6 +14,7 @@ import { SkillThoughtModule } from './modules/skill-thought/skill-thought.module
 import { SkillThoughtTestModule } from './modules/skill-thought-test/skill-thought-test.module';
 import { BatchTaskModule } from './modules/batch-task/batch-task.module';
 import { GalleryModule } from './modules/gallery/gallery.module';
+import { GalleryZipImportModule } from './modules/gallery/zip-import/gallery-zip-import.module';
 import { CanvasModule } from './modules/canvas/canvas.module';
 import { GraphModule } from './modules/graph/graph.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -45,6 +46,7 @@ import { FinanceModule } from './modules/finance/finance.module.js';
     SkillThoughtTestModule,
     BatchTaskModule,
     GalleryModule,
+    GalleryZipImportModule,
     CanvasModule,
     GraphModule,
     DashboardModule,

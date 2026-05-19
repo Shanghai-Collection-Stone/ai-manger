@@ -4,6 +4,9 @@
 该模块基于MongoDB存储图片与图库组的元数据及向量Embedding，支持批量上传、按用户/标签/分组查询，并提供向量相似度检索（优先Atlas Vector Search，失败回退本地余弦相似度）。
 文件路径: `src/modules/gallery`
 
+## 子模块
+- `zip-import/` — ZIP 批量导入子模块，详见 `zip-import/module.md`。复用 `GalleryService.createMany` 入库，支持队列化、进度轮询、取消。
+
 ## 功能描述及关键词
 
 ### gallery.controller.ts
@@ -25,7 +28,7 @@
 
 ### gallery.service.ts
 图片服务。
-- **关键词**: image, service
+- **关键词**: image, service, isUsed, capacity, mark-used, top-tags
 - **函数**:
   - `ensureIndexes`: 初始化索引/ensure indexes
   - `createMany`: 批量创建图片（含 width/height/isPortrait）/create many images
@@ -35,7 +38,11 @@
   - `rebuildEmbeddings`: 批量重建向量/rebuild embeddings
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
   - `generateThumbnail`: 生成缩略图
-  - `sampleRandom`: 随机获取图片
+  - `searchByTags`: 按 tags 查询(**默认排除 isUsed=true,传 includeUsed=true 关闭**)/search images by tags excluding used
+  - `sampleRandom`: 随机获取图片(**默认排除 isUsed=true,传 includeUsed=true 关闭**)/random sample excluding used
+  - `countAvailableByTags`: 统计指定 tags 当前可用图片数(已排除 isUsed),返回 total + byTag,用于生成前的不足量预估/count available images by tags
+  - `listTopTagsWithCount`: 列出租户可见的热门 tag(按图片数量倒序,排除 isUsed),用于 AI 推荐 tag 选择/list top tags by count for AI recommendation
+  - `markUsedBatch`: 批量标记图片为已使用 (isUsed=true,usedAt=now),生成图组/拼图完成后调用,reset=true 可反向重置/mark images as used
 
 ### gallery-group.service.ts
 图库组服务。
@@ -50,8 +57,8 @@
   - `searchSimilar`: 向量相似检索（透传 admin 默认 em 配置到 EmbeddingService）/vector similarity search
 
 ### gallery-image.entity.ts
-图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, isCollage, collageSourceImageIds, collageMeta, embedding, createdAt, updatedAt）。
-- **关键词**: entity, image, width, height, isPortrait
+图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, isCollage, collageSourceImageIds, collageMeta, **isUsed**, **usedAt**, embedding, createdAt, updatedAt）。`isUsed=true` 表示该图已被动态拼图/生图组消耗,默认 searchByTags/sampleRandom 不再命中。
+- **关键词**: entity, image, width, height, isPortrait, isUsed, usedAt
 
 ### gallery-group.entity.ts
 图库组实体。

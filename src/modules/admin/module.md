@@ -22,6 +22,7 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
+  - `testAiProvider`: 测试提供商连通性(POST /admin/ai-providers/:id/test, GET /models 探活, 15s 超时, 不消耗配额)/test ai provider
   - `listClawConfigs`: Claw配置列表/list claw configs
   - `createClawConfig`: 创建Claw配置/create claw config
   - `updateClawConfig`: 更新Claw配置/update claw config
@@ -52,6 +53,9 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
+  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key, 15s 超时)/test ai provider
+  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao, 与 AgentService 对齐)/resolve default provider base url
+  - `formatFetchCauseShort`: 简短序列化 fetch error.cause 给测试连接返回 message/format fetch cause short
   - `listClawConfigs`: Claw配置列表/list claw configs
   - `getClawConfigById`: 按ID获取Claw配置/get claw config by id
   - `createClawConfig`: 创建Claw配置/create claw config

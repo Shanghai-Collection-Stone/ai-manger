@@ -114,25 +114,12 @@ export class CanvasImageGroupService {
       (id): id is string | number =>
         (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string',
     );
-    let pool = await this.fetchImagePool(
+    // 严格按 tags 取池：图源不足不再跨 tag 补充（不足量由上游工具预检并询问用户）
+    const pool = await this.fetchImagePool(
       input,
       allTags,
       poolSize,
       'regular',
-      excludedGeneratedGroupIds,
-    );
-    pool = await this.supplementPoolWithRelatedTags(
-      pool,
-      input,
-      allTags,
-      poolSize,
-      'regular',
-      excludedGeneratedGroupIds,
-    );
-    pool = await this.supplementPoolWithRandom(
-      pool,
-      input,
-      poolSize,
       excludedGeneratedGroupIds,
     );
     // 对图片池进行随机打乱，避免封面和内页出现顺序性重复
@@ -370,6 +357,16 @@ export class CanvasImageGroupService {
       this.logger.debug(`[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`);
     }
 
+    // 一次性标记本批次消耗的所有源图为 isUsed=true，全局不再被默认查询命中
+    if (globalUsedIds.size > 0) {
+      try {
+        await this.gallery.markUsedBatch({ ids: Array.from(globalUsedIds) });
+        this.logger.debug(`[image-group] mark_used count=${globalUsedIds.size}`);
+      } catch (e) {
+        this.logger.warn(`[image-group] mark_used failed: ${String(e)}`);
+      }
+    }
+
     return groups;
   }
 
@@ -443,21 +440,8 @@ export class CanvasImageGroupService {
     };
 
     const triedPairs = new Set<string>();
-    pool = await this.supplementPoolWithRelatedTags(
-      pool,
-      userInput,
-      Array.isArray(relatedTags) ? relatedTags : [],
-      Math.max(120, pool.length + 40),
-      'regular',
-      excludedGroupIds,
-    );
-    // 先拉一次补充池，优先保证有足够可读本地图可用于拼图
-    pool = await this.supplementPoolWithRandom(
-      pool,
-      userInput,
-      Math.max(120, pool.length + 40),
-      excludedGroupIds,
-    );
+    // 严格按已收集池选对，图源不足不再额外补充（参数 relatedTags 仍保留以便日志/后续策略）
+    void relatedTags;
 
     const attemptPick = (): [GalleryImageEntity, GalleryImageEntity] | null => {
       // 1) 横图 + 两张都未占用（全局唯一优先）
@@ -874,21 +858,8 @@ export class CanvasImageGroupService {
       });
     }
 
-    // 去重
-    const deduped = this.dedup(this.filterOutExcludedGroups(images, excludedGroupIds));
-    if (deduped.length >= wantCount) return deduped;
-
-    // 不足时补随机
-    const more = await this.gallery.findAccessibleImages(
-      input.userId,
-      input.tenantId,
-      { imageType: imgType, limit: wantCount },
-    );
-    const merged = this.dedup([
-      ...deduped,
-      ...this.filterOutExcludedGroups(more, excludedGroupIds),
-    ]);
-    return merged;
+    // 去重；不足时不再补随机/跨 tag，保留原样供上游做不足量决策
+    return this.dedup(this.filterOutExcludedGroups(images, excludedGroupIds));
   }
 
   /**
@@ -1349,140 +1320,6 @@ export class CanvasImageGroupService {
       const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
       return !(Number.isFinite(gid) && excluded.has(gid));
     });
-  }
-
-  /**
-   * @description 通过随机样本补充图片池到目标规模（尽量去重）
-   * @param {GalleryImageEntity[]} pool - 当前池
-   * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 用户作用域
-   * @param {number} targetSize - 目标数量
-   * @returns {Promise<GalleryImageEntity[]>}
-   * @keyword-en supplement image pool by random samples
-   */
-  private async supplementPoolWithRandom(
-    pool: GalleryImageEntity[],
-    input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>,
-    targetSize: number,
-    excludedGroupIds?: (string | number)[],
-  ): Promise<GalleryImageEntity[]> {
-    let merged = this.dedup(this.filterOutExcludedGroups(pool, excludedGroupIds));
-    if (merged.length >= targetSize) return merged;
-    for (let i = 0; i < 4 && merged.length < targetSize; i++) {
-      try {
-        const random = await this.gallery.sampleRandom({
-          userId: input.userId,
-          tenantId: input.tenantId,
-          limit: 60,
-        });
-        const next = this.dedup([
-          ...merged,
-          ...this.filterOutExcludedGroups(random, excludedGroupIds),
-        ]);
-        if (next.length === merged.length) break;
-        merged = next;
-      } catch {
-        break;
-      }
-    }
-    return merged;
-  }
-
-  /**
-   * @description 构造相近标签集合：保留原标签并提取关键词，供图片不足时做相近补池。
-   * @param {string[]} tags - 原始标签。
-   * @returns {string[]} 扩展后的相近标签列表。
-   * @keyword-en build related tags for fallback search
-   */
-  private buildRelatedTags(tags: string[]): string[] {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    const push = (raw: unknown): void => {
-      const t = String(raw ?? '').trim();
-      if (!t) return;
-      if (seen.has(t)) return;
-      seen.add(t);
-      out.push(t);
-    };
-
-    for (const raw of Array.isArray(tags) ? tags : []) {
-      const tag = String(raw ?? '').trim();
-      if (!tag) continue;
-      push(tag);
-
-      const normalized = tag
-        .replace(/^#+/g, '')
-        .replace(/[【】\[\]()（）]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      push(normalized);
-
-      const tokens = normalized
-        .split(/[,\s，、/|_\\-]+/g)
-        .map((x) => x.trim())
-        .filter((x) => x.length >= 2);
-      for (const token of tokens) push(token);
-
-      if (normalized.length >= 4) {
-        push(normalized.slice(0, 4));
-        push(normalized.slice(-4));
-      }
-      if (normalized.length >= 6) {
-        const midStart = Math.floor((normalized.length - 4) / 2);
-        push(normalized.slice(midStart, midStart + 4));
-      }
-    }
-
-    return out.slice(0, 80);
-  }
-
-  /**
-   * @description 使用相近标签补充图片池，避免仅随机补图导致语义漂移。
-   * @param {GalleryImageEntity[]} pool - 当前图片池。
-   * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 用户作用域。
-   * @param {string[]} seedTags - 原始标签。
-   * @param {number} targetSize - 目标池大小。
-   * @param {'regular'|'collage'} imageType - 目标图片类型。
-   * @param {number[]} [excludedGroupIds] - 需排除分组。
-   * @returns {Promise<GalleryImageEntity[]>} 补充后的图片池。
-   * @keyword-en supplement pool with semantically related tags
-   */
-  private async supplementPoolWithRelatedTags(
-    pool: GalleryImageEntity[],
-    input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>,
-    seedTags: string[],
-    targetSize: number,
-    imageType: 'regular' | 'collage',
-    excludedGroupIds?: (string | number)[],
-  ): Promise<GalleryImageEntity[]> {
-    let merged = this.dedup(this.filterOutExcludedGroups(pool, excludedGroupIds));
-    if (merged.length >= targetSize) return merged;
-
-    const relatedTags = this.buildRelatedTags(seedTags);
-    if (relatedTags.length === 0) return merged;
-
-    const chunkSize = 24;
-    for (let i = 0; i < 4 && merged.length < targetSize; i++) {
-      const chunk = relatedTags.slice(i * chunkSize, (i + 1) * chunkSize);
-      if (chunk.length === 0) break;
-      try {
-        const fetched = await this.gallery.searchByTags({
-          userId: input.userId,
-          tenantId: input.tenantId,
-          tags: chunk,
-          limit: Math.max(40, Math.min(120, targetSize - merged.length + 20)),
-          imageType,
-        });
-        const next = this.dedup([
-          ...merged,
-          ...this.filterOutExcludedGroups(fetched, excludedGroupIds),
-        ]);
-        if (next.length === merged.length) continue;
-        merged = next;
-      } catch {
-        break;
-      }
-    }
-    return merged;
   }
 
   /**

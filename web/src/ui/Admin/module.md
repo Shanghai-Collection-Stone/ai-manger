@@ -26,7 +26,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 - 每个 source 没有额外的"表定义"配置 — `alias` 字段(如"云境上海银行流水")本身就是表定义。后端在拉行时把它注入到每行 fields 的 `source_alias` 保留字段(与 `record_id` 同风格),DSL 行级可用 `from: "source_alias"` + `compute: lookup` 映射成 companyId/bankAccount 等
 - **聊天记忆持久化**:`financeChat` 用 localStorage(`finance_chat_history` key)按 binding name 分别保存 messages,刷新页面不丢;只有点"清空"按钮才删该 binding 的历史
 - 子 Tab 内右 1/3:Agent 对话(sticky)
-- **关键词**: admin ui, tabs, crud, localStorage, dashboard config mapping, tenant isolation, ai provider, glm, z.ai, image category, ai cover toggle, feishu credential single tenant, finance preset kinds (FINANCE_KINDS), expense payable sub tabs, hidden name flow partyType auto inject, collapsible push config, auto-loaded stores companies, collapsed dsl advanced
+- **关键词**: admin ui, tabs, crud, localStorage, dashboard config mapping, tenant isolation, ai provider, glm, z.ai, image category, ai cover toggle, ai provider test connection button, feishu credential single tenant, finance preset kinds (FINANCE_KINDS), expense payable sub tabs, hidden name flow partyType auto inject, collapsible push config, auto-loaded stores companies, collapsed dsl advanced
 
 #### finance 相关常量与函数
 - `FINANCE_KINDS`: 子 Tab 预设(支出/应付,内含 id=name + flowDefault + partyTypeDefault + hint)/finance kinds preset
@@ -51,6 +51,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 - `toText` / `toLower` / `readAdminActiveTab` / `writeAdminActiveTab` / `toDateInput` / `getRoleLabel` / `hasAdminFullAccess` / `isSuperAdmin` / `ALL_TABS` / `buildPagedRows` / `renderPager` / `loadData` / `updateForm` / `updateFilter` / `gotoPage`
 - `reloadDashboardConfigs` / `onSubmitDashboardConfig` / `onDeleteDashboardConfig` / `onSubmitPlatformInfo`
 - `onSubmitFeishuCredential` / `onDeleteFeishuCredential`
+- `onTestProvider(id)`: AI 提供商测试连接按钮 handler(列表里每行的「测试连接」按钮触发,成功时绿色 notice 显示状态+延迟+模型数+前 3 个模型名,失败时红色 error 显示状态+endpoint+原始错误 message,disable 阻止重复点击)/test ai provider handler
 
 ### AdminLoginApp.jsx
 后台登录页:选择租户并登录,写入 token 并跳转。
@@ -77,3 +78,4 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
   - `adminApi.listExternalStores` / `listExternalCompanies`: 透传外部 stores/companies 列表
   - `adminApi.listFinanceTransforms` / `upsertFinanceTransform` / `deleteFinanceTransform`: 财务 transform DSL CRUD(按 name)
   - `adminApi.chatFinanceAgent`: 财务 Agent 同步聊天(传 `{ name, messages }`)
+  - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活, 15s 超时, 不消耗配额)/test ai provider

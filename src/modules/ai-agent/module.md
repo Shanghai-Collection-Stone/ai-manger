@@ -12,12 +12,19 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
 - **函数**:
   - `getHandle`: 函数句柄/handle
   - `buildChatModel`: 构建模型（GLM国际端z.ai走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）/build model
+  - `isImageOnlyModel`: 识别 model 名是否生图专用模型(gpt-image-* / dall-e* / seedream / flux- / stable-diffusion / midjourney),用于 buildLLM 入口防止用户把生图模型误配为 chat 默认运行时(会导致 wrapModelCall 返回非 AIMessage 触发 `expected AIMessage or Command, got object`)/detect image-only model
   - `resolveProviderDefaultBaseUrl`: 厂商默认baseUrl兜底（deepseek/nvidia/minimax/glm；glm默认走z.ai Coding Plan入口/api/coding/paas/v4）/resolve provider default base url
+  - `buildOpenAICompatSanitizeMiddleware`: 构建 deep agent middleware(挂在 wrapModelCall 钩子最内层)，在每次 model 调用前清洗 messages，避免 GLM/z.ai/DeepSeek 等 OpenAI 兼容端被 thinking/reasoning 等非标准 content block 拒收(400 content[0].type type error)。**handler 返回值也经 ensureValidModelResponse 兜底**，避免下游 patchToolCallsMiddleware 报 `expected AIMessage or Command, got object`/build openai compat sanitize middleware
+  - `buildSubagentSanitizeMiddleware`: 公开版,供 chat.service 在构造 subagent 时调用,把 sanitize+诊断 middleware 也注入到每个 subagent 的 middleware 列表(deepagents 1.8.2 默认不会把主 agent 的 customMiddleware 透传给 subagent 内部的 createAgent,subagent 自己的 model 调用得不到 sanitize 兜底/诊断 log,故必须通过 SubAgent.middleware 字段显式注入)/expose sanitize middleware factory for subagent injection
+  - `sanitizeMessagesForOpenAICompat`: 清洗 messages content 数组——HumanMessage 保留多模态块(text/image_url/image/input_audio/file/data block)，其他角色只取 text 拍平字符串/sanitize messages for openai compat
+  - `rebuildMessageWithContent`: 用原 message 同类型 constructor 重建消息(AIMessage/ToolMessage/SystemMessage/HumanMessage)，仅替换 content，保留 LangChain 内部 MESSAGE_SYMBOL 等 instance 标记，避免 wrapModelCall 链路报 `expected AIMessage or Command, got object`/rebuild message via constructor
+  - `ensureValidModelResponse`: wrapModelCall handler 返回值类型适配。AIMessage/AIMessageChunk/Command/structuredResponse 原样放行;**`ChatMessage` / `ChatMessageChunk` 转为 `AIMessageChunk`** —— GLM/z.ai 等 OpenAI 兼容厂商在 cached_tokens 命中后的空 content chunk 中 `role` 字段不是 `"assistant"`,LangChain ChatOpenAI 用通用 ChatMessageChunk 包装(其 type === "generic" 不满足 `AIMessage.isInstance` 的 `type === "ai"` 检查),需要 rebuild 为 AIMessageChunk 保留 content/tool_calls/response_metadata/id/usage_metadata;其他未知类型把原始 result 完整 JSON 化(ctor name, keys) 用 logger.error 打印让框架自然抛错/convert ChatMessageChunk to AIMessageChunk for openai-compat providers
   - `resolveDefaultRuntime`: 解析默认运行时/resolve runtime
   - `resolveDefaultImageRuntime`: 解析默认生图运行时/resolve default image runtime
   - `resolveAvailableDefaultImageRuntime`: 解析可用默认生图运行时（无完整配置返回null）/resolve available default image runtime
   - `runAiCoverGenerateTool`: AI封面生成工具入口（默认模型与meitu复用同一最终prompt；请求底图编辑时优先走runtime编辑；runtime 返回 IMAGE_*_EDIT/GENERATE_FAILED 或 IMAGE_PROVIDER_NOT_SUPPORTED 时自动降级 meitu-cli）/ai cover generate tool
-  - `generateImageByRuntime`: 按默认提供商执行生图/图片编辑并返回图片。已对接 gemini / doubao(ark) / openai。doubao/ark 文生图与图生图共用 /images/generations（无 /images/edits），图生图通过 body 的 image 字段传单字符串（URL 或 data:<mime>;base64,<b64>）；size 严格按 Seedream 5.0 lite 规则归一化：档位 2K/3K 透传，合法像素透传，否则按宽高比匹配官方推荐 2K 档表（1:1→2048x2048、3:4→1728x2304、16:9→2848x1600 等），无识别项回退 2048x2048。openai gpt-image-1/2：文生图 POST /images/generations、图生图 POST /images/edits（multipart, image=底图二进制）；size 自动映射 1024x1024 / 1024x1536 / 1536x1024 / auto/generate image by configured runtime
+  - `generateImageByRuntime`: 按默认提供商执行生图/图片编辑并返回图片。已对接 gemini / doubao(ark) / openai。doubao/ark 文生图与图生图共用 /images/generations（无 /images/edits），图生图通过 body 的 image 字段传单字符串（URL 或 data:<mime>;base64,<b64>）；size 严格按 Seedream 5.0 lite 规则归一化：档位 2K/3K 透传，合法像素透传，否则按宽高比匹配官方推荐 2K 档表（1:1→2048x2048、3:4→1728x2304、16:9→2848x1600 等），无识别项回退 2048x2048。openai gpt-image-1/2：文生图 POST /images/generations、图生图 POST /images/edits（multipart, image=底图二进制，n=1）；size 自动映射 1024x1024 / 1024x1536 / 1536x1024 / auto；**fetch 双层超时机制**: AbortSignal.timeout(10 分钟) + 实例级 `imageGenDispatcher` (undici Agent, headersTimeout/bodyTimeout=15 分钟) 覆盖 Node fetch 默认 undici 5 分钟 headersTimeout(否则 gpt-image 生图常在 5min 抛 `HeadersTimeoutError: UND_ERR_HEADERS_TIMEOUT`)；捕获 undici "fetch failed" 时把 error.cause 序列化(ConnectTimeoutError/SocketError/ENOTFOUND/CertificateError 等)落日志并抛 IMAGE_OPENAI_EDIT_NETWORK/IMAGE_OPENAI_GENERATE_NETWORK/generate image by configured runtime
+  - `formatFetchCause`: 递归序列化 fetch error.cause 为可读字符串，定位 DNS/TLS/socket/连接超时类失败/format fetch error cause
   - `buildMeituEditPrompt`: 构建封面编辑提示词（上层传入选题/主副标题等元信息，本函数追加"硬性规格-必须严格遵守"的 7 条编号约束：任务/底图识别度/文案呈现/装饰元素/风格/尺寸/输出纯净度。识别度规则放宽：允许风格化重绘/动画化/夸张表情，只要主体身份与场景识别度保留即可）/build meitu image edit prompt with hard constraints
   - `resolveMeituEditableBaseImage`: 匹配可编辑底图（优先调用方传入候选）/resolve meitu editable base image
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底（stdout 非 JSON 时走 parseMeituKeyValueText 扁平 key-value 兜底；result 字段取 http(s) URL 作为最终图片地址）/generate image by meitu image-edit fallback
@@ -34,7 +41,9 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `normalizeContextSchema`: 规范上下文schema/normalize context schema
   - `toAsyncIterable`: 规范流式/normalize stream iterable
   - `toMessages`: 消息转换/message convert
-  - `stream`: 流式/stream
+  - `stream`: 流式;catch 用 this.logger.error 打完整 stack + 递归 cause chain(避免被 console.error 在某些 logger 环境下吞掉),确保后端日志能看到与前端 SSE 错误事件相同的完整诊断信息/stream with full error diagnostic
+  - `collectCauseChain`: 递归提取 Error.cause 链(undici fetch failed / langchain MiddlewareError 等多层嵌套),格式化为 `Name:Code:Message <- ...`/collect error cause chain
+  - `normalizeStreamError`: 把 raw error 归一化成 {code, message} 给前端;code 提取 regex 要求 ≥3 个大写字母+冒号(避免把句首字母 "I" 误当 code)/normalize stream error
 
 ### agent.types.ts
 类型定义。

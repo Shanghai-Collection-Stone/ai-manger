@@ -1519,6 +1519,34 @@ const AdminApp = () => {
     setNotice('AI提供商已删除');
   };
 
+  const [testingProviderId, setTestingProviderId] = useState('');
+  const onTestProvider = async (id) => {
+    setTestingProviderId(id);
+    try {
+      const res = await adminApi.testProvider(id);
+      const head = res.ok
+        ? `✓ 连通 ${res.status} · ${res.latencyMs}ms`
+        : `✗ 失败 ${res.status || '-'} · ${res.latencyMs}ms`;
+      const modelInfo =
+        typeof res.modelCount === 'number'
+          ? ` · 模型${res.modelCount}个${
+              Array.isArray(res.sample) && res.sample.length > 0
+                ? `(${res.sample.slice(0, 3).join(', ')}${res.sample.length > 3 ? '…' : ''})`
+                : ''
+            }`
+          : '';
+      const tail = res.ok ? '' : `\n${res.message || ''}`;
+      const endpointInfo = res.endpoint ? `\nendpoint=${res.endpoint}` : '';
+      if (res.ok) {
+        setNotice(`${head}${modelInfo}${endpointInfo}`);
+      } else {
+        setError(`${head}${modelInfo}${endpointInfo}${tail}`);
+      }
+    } finally {
+      setTestingProviderId('');
+    }
+  };
+
   const onSubmitTenant = async () => {
     const payload = {
       name: forms.tenant.name.trim(),
@@ -1944,6 +1972,13 @@ const AdminApp = () => {
                         }));
                       }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
                         编辑
+                      </button>
+                      <button
+                        onClick={() => onTestProvider(item._id).catch((err) => setError(err.message))}
+                        disabled={testingProviderId === item._id}
+                        className="text-xs px-2 py-1 h-fit rounded border border-emerald-300 text-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {testingProviderId === item._id ? '测试中…' : '测试连接'}
                       </button>
                       <button onClick={() => onDeleteProvider(item._id).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600">
                         删除

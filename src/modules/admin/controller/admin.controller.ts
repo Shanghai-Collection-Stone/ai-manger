@@ -218,6 +218,22 @@ export class AdminController {
   }
 
   /**
+   * @description 测试 AI 提供商连通性:GET /models 探活,15 秒超时,不消耗配额。
+   *   返回 { ok, status, latencyMs, endpoint, message, modelCount?, sample? }。
+   *   主要用于诊断 baseUrl/apiKey 配置或国内直连 OpenAI 网络问题。
+   * @keyword-en admin ai providers test connectivity endpoint
+   */
+  @UseGuards(AdminAuthGuard)
+  @Post('ai-providers/:id/test')
+  async testAiProvider(@Req() req: Request, @Param('id') id: string) {
+    const result = await this.adminService.testAiProvider(
+      this.requireUser(req),
+      id,
+    );
+    return result;
+  }
+
+  /**
    * @description 租户管理列表
    * @keyword-en admin tenants list endpoint
    */

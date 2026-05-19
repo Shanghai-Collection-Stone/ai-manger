@@ -518,6 +518,182 @@ export class AdminService {
   }
 
   /**
+   * @description 测试 AI 提供商连通性:用 GET /models 探活,验证 baseUrl + apiKey 可达且
+   *   认证有效。不消耗 image/embedding/chat 配额。
+   *   - openai 兼容(openai/glm/deepseek/nvidia/minimax/doubao/...): GET ${baseUrl}/models, Bearer
+   *   - gemini: GET ${baseUrl}/models?key=${apiKey}(baseUrl 已含 /v1beta)
+   *   - anthropic: GET ${baseUrl}/v1/models, x-api-key
+   *   返回 { ok, status, latencyMs, message, modelCount?, sample? }
+   * @keyword-en test ai provider connectivity, get models probe
+   */
+  async testAiProvider(
+    currentUser: AdminUserEntity,
+    id: string,
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    latencyMs: number;
+    endpoint: string;
+    message: string;
+    modelCount?: number;
+    sample?: string[];
+  }> {
+    this.assertSuperAdmin(currentUser);
+    const targetId = this.toObjectId(id, 'INVALID_AI_PROVIDER_ID');
+    const provider = await this.aiProviders.findOne({ _id: targetId });
+    if (!provider) {
+      throw new BadRequestException('AI_PROVIDER_NOT_FOUND');
+    }
+    const code = String(provider.providerCode ?? '').toLowerCase().trim();
+    const apiKey = String(provider.apiKey ?? '').trim();
+    if (!apiKey) {
+      return {
+        ok: false,
+        status: 0,
+        latencyMs: 0,
+        endpoint: '',
+        message: 'API_KEY_NOT_CONFIGURED',
+      };
+    }
+    const baseUrl =
+      String(provider.baseUrl ?? '').trim() ||
+      this.resolveDefaultProviderBaseUrl(code);
+    if (!baseUrl) {
+      return {
+        ok: false,
+        status: 0,
+        latencyMs: 0,
+        endpoint: '',
+        message: 'BASE_URL_NOT_CONFIGURED',
+      };
+    }
+
+    let endpoint = '';
+    const headers: Record<string, string> = {};
+    if (code === 'gemini' || code === 'google-genai') {
+      endpoint = `${baseUrl.replace(/\/$/, '')}/models?key=${encodeURIComponent(apiKey)}`;
+    } else if (code === 'anthropic' || code === 'claude') {
+      endpoint = `${baseUrl.replace(/\/$/, '')}/v1/models`;
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      endpoint = `${baseUrl.replace(/\/$/, '')}/models`;
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
+    const startedAt = Date.now();
+    try {
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(15 * 1000),
+      });
+      const latencyMs = Date.now() - startedAt;
+      const text = await response.text().catch(() => '');
+      if (!response.ok) {
+        return {
+          ok: false,
+          status: response.status,
+          latencyMs,
+          endpoint,
+          message: text.slice(0, 400) || `HTTP_${response.status}`,
+        };
+      }
+      let modelCount: number | undefined;
+      let sample: string[] | undefined;
+      try {
+        const json = JSON.parse(text) as Record<string, unknown>;
+        const arr = Array.isArray(json['data'])
+          ? (json['data'] as unknown[])
+          : Array.isArray(json['models'])
+            ? (json['models'] as unknown[])
+            : undefined;
+        if (Array.isArray(arr)) {
+          modelCount = arr.length;
+          sample = arr
+            .slice(0, 5)
+            .map((m) => {
+              if (m && typeof m === 'object') {
+                const r = m as Record<string, unknown>;
+                return String(r['id'] ?? r['name'] ?? '').trim();
+              }
+              return '';
+            })
+            .filter((s) => s.length > 0);
+        }
+      } catch {
+        // 响应不是 JSON 也不算失败,只是无法计数
+      }
+      return {
+        ok: true,
+        status: response.status,
+        latencyMs,
+        endpoint,
+        message: 'OK',
+        modelCount,
+        sample,
+      };
+    } catch (err) {
+      const e = err as Error & { cause?: unknown; code?: string };
+      const causeStr = this.formatFetchCauseShort(e.cause);
+      return {
+        ok: false,
+        status: 0,
+        latencyMs: Date.now() - startedAt,
+        endpoint,
+        message: `${e.name}:${e.code ?? ''}:${String(e.message ?? '').slice(0, 160)}${causeStr ? ` cause=${causeStr}` : ''}`,
+      };
+    }
+  }
+
+  /**
+   * @description 厂商默认 baseUrl 兜底(与 AgentService.resolveProviderDefaultBaseUrl 对齐)
+   * @keyword-en resolve default provider base url
+   */
+  private resolveDefaultProviderBaseUrl(provider: string): string {
+    switch (provider) {
+      case 'openai':
+        return 'https://api.openai.com/v1';
+      case 'deepseek':
+        return 'https://api.deepseek.com';
+      case 'nvidia':
+        return 'https://integrate.api.nvidia.com/v1';
+      case 'minimax':
+        return 'https://api.minimax.chat/v1';
+      case 'glm':
+        return 'https://api.z.ai/api/coding/paas/v4';
+      case 'gemini':
+      case 'google-genai':
+        return 'https://generativelanguage.googleapis.com/v1beta';
+      case 'anthropic':
+      case 'claude':
+        return 'https://api.anthropic.com';
+      case 'doubao':
+      case 'ark':
+        return 'https://ark.cn-beijing.volces.com/api/v3';
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * @description 简短序列化 fetch error.cause 用于测试连接返回 message
+   * @keyword-en format fetch cause short
+   */
+  private formatFetchCauseShort(cause: unknown): string {
+    if (!cause) return '';
+    if (cause instanceof Error) {
+      const c = cause as Error & { code?: string };
+      return `${c.name}:${c.code ?? ''}:${String(c.message ?? '').slice(0, 120)}`;
+    }
+    try {
+      return JSON.stringify(cause).slice(0, 200);
+    } catch {
+      return String(cause).slice(0, 200);
+    }
+  }
+
+  /**
    * @description 登录页可选租户列表
    * @keyword-en list login tenant options
    */

@@ -440,6 +440,25 @@ function extractAllTaskItBlocks(text) {
   return blocks;
 }
 
+/**
+ * @description 从消息文本中提取所有 tag-select-it JSON 块
+ * @keyword-en extract tag-select-it blocks
+ */
+function extractAllTagSelectBlocks(text) {
+  if (!text) return [];
+  const blocks = [];
+  const re = /```tag-select-it\s*([\s\S]*?)```/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const payload = JSON.parse(m[1].trim());
+      const selectorId = typeof payload?.selectorId === 'string' ? payload.selectorId : '';
+      if (selectorId) blocks.push({ ...payload, selectorId });
+    } catch { /* skip */ }
+  }
+  return blocks;
+}
+
 /* ─── Task-it Inline Card ─── */
 
 /**
@@ -662,6 +681,301 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
   );
 });
 
+/* ─── Tag-select-it Inline Card + Modal ─── */
+
+/**
+ * @description Tag 选择卡片：点击展开搜索弹窗,未输入时显示推荐 tag 计数 chip,
+ *  输入时显示联想下拉。多选确认后通过 onSubmit 回调把所选 tags 以用户消息形式发回 AI。
+ * @keyword-en tag-select inline card with search & recommendation modal
+ */
+const TagSelectCard = React.memo(({ payload, onSubmit }) => {
+  const [open, setOpen] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [submittedTags, setSubmittedTags] = useState([]);
+  const recommendTags = useMemo(
+    () => (Array.isArray(payload?.recommendTags) ? payload.recommendTags : []),
+    [payload],
+  );
+
+  const title = payload?.title || '请选择素材标签';
+  const hint = payload?.hint || '';
+  const minTags = Math.max(1, Number(payload?.minTags ?? 1));
+  const maxTags = Math.max(minTags, Number(payload?.maxTags ?? 8));
+  const multi = payload?.multi !== false;
+
+  const handleConfirm = useCallback(
+    (tags) => {
+      const list = Array.isArray(tags) ? tags : [];
+      setSubmitted(true);
+      setSubmittedTags(list);
+      setOpen(false);
+      if (typeof onSubmit === 'function') onSubmit(list);
+    },
+    [onSubmit],
+  );
+
+  return (
+    <>
+      <section className="my-3 rounded-xl border border-amber-100 bg-amber-50/50 p-3 pb-4">
+        <div className="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-amber-200 text-amber-700 bg-white">
+          标签选择
+        </div>
+        <h4 className="mt-2 mb-1 text-sm font-semibold text-slate-800">{title}</h4>
+        {hint && <p className="text-xs text-slate-600">{hint}</p>}
+        {recommendTags.length > 0 && !submitted && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {recommendTags.slice(0, 6).map((t) => (
+              <span
+                key={t.tag}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white border border-amber-200 text-[11px] text-slate-600"
+              >
+                <span>#{t.tag}</span>
+                <span className="text-[10px] text-amber-600">{t.count}</span>
+              </span>
+            ))}
+            {recommendTags.length > 6 && (
+              <span className="text-[11px] text-slate-400 self-center">+{recommendTags.length - 6}</span>
+            )}
+          </div>
+        )}
+        {submitted ? (
+          <div className="mt-3">
+            <p className="text-[11px] text-emerald-600">已选定标签：</p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {submittedTags.map((t) => (
+                <span key={t} className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-700">#{t}</span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-600 text-white hover:bg-amber-700"
+          >
+            {multi ? '点击选择标签' : '点击选择一个标签'}
+          </button>
+        )}
+      </section>
+
+      {open && (
+        <TagSelectModal
+          title={title}
+          hint={hint}
+          multi={multi}
+          minTags={minTags}
+          maxTags={maxTags}
+          recommendTags={recommendTags}
+          onClose={() => setOpen(false)}
+          onConfirm={handleConfirm}
+        />
+      )}
+    </>
+  );
+});
+
+/**
+ * @description Tag 选择弹窗:顶部搜索框,未输入显示推荐 chips,输入显示联想下拉,
+ *  底部已选 chips 和确认按钮。
+ * @keyword-en tag select modal with search recommendation and chips
+ */
+const TagSelectModal = ({
+  title,
+  hint,
+  multi,
+  minTags,
+  maxTags,
+  recommendTags,
+  onClose,
+  onConfirm,
+}) => {
+  const [input, setInput] = useState('');
+  const [selected, setSelected] = useState([]);
+  const [allTags, setAllTags] = useState([]);
+
+  useEffect(() => {
+    let aborted = false;
+    chatService
+      .listGalleryTags({ limit: 2000 })
+      .then((res) => {
+        if (aborted) return;
+        const list = Array.isArray(res?.tags) ? res.tags : [];
+        setAllTags(list);
+      });
+    return () => {
+      aborted = true;
+    };
+  }, []);
+
+  const recommendList = useMemo(
+    () => (Array.isArray(recommendTags) ? recommendTags : []),
+    [recommendTags],
+  );
+  const recommendCountMap = useMemo(() => {
+    const map = new Map();
+    for (const t of recommendList) {
+      if (t && typeof t.tag === 'string') map.set(t.tag, Number(t.count) || 0);
+    }
+    return map;
+  }, [recommendList]);
+
+  const suggestions = useMemo(() => {
+    const q = String(input || '').trim().toLowerCase();
+    if (!q) return [];
+    return allTags
+      .filter((t) => typeof t === 'string' && t.toLowerCase().includes(q))
+      .slice(0, 20);
+  }, [input, allTags]);
+
+  const toggle = useCallback(
+    (tag) => {
+      if (!tag) return;
+      setSelected((prev) => {
+        if (prev.includes(tag)) return prev.filter((x) => x !== tag);
+        if (!multi) return [tag];
+        if (prev.length >= maxTags) return prev;
+        return [...prev, tag];
+      });
+    },
+    [multi, maxTags],
+  );
+
+  const canConfirm = selected.length >= minTags && selected.length <= maxTags;
+  const handleConfirm = () => {
+    if (!canConfirm) return;
+    onConfirm(selected);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-[1px] flex items-end sm:items-center justify-center p-3">
+      <div className="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between shrink-0">
+          <div className="min-w-0 pr-3">
+            <h3 className="text-sm font-semibold text-slate-800 truncate">{title}</h3>
+            {hint && <p className="text-[11px] text-slate-500 truncate">{hint}</p>}
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 shrink-0">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* 搜索框 */}
+        <div className="px-4 pt-3 pb-2 shrink-0">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="搜索标签…"
+            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-amber-500"
+            autoFocus
+          />
+        </div>
+
+        {/* 已选 chips */}
+        {selected.length > 0 && (
+          <div className="px-4 pb-2 shrink-0">
+            <div className="flex flex-wrap gap-1.5">
+              {selected.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => toggle(t)}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-[11px] text-amber-700"
+                >
+                  <span>#{t}</span>
+                  <X size={10} />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 内容区:未输入显示推荐;有输入显示联想 */}
+        <div className="flex-1 overflow-y-auto px-4 pb-3">
+          {input.trim().length === 0 ? (
+            <div>
+              <p className="text-[11px] text-slate-400 mb-2">推荐标签</p>
+              {recommendList.length === 0 ? (
+                <p className="text-xs text-slate-400 py-6 text-center">暂无推荐</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {recommendList.map((t) => {
+                    const active = selected.includes(t.tag);
+                    return (
+                      <button
+                        key={t.tag}
+                        type="button"
+                        onClick={() => toggle(t.tag)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[12px] border transition ${
+                          active
+                            ? 'bg-amber-500 text-white border-amber-500'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-amber-400'
+                        }`}
+                      >
+                        <span>#{t.tag}</span>
+                        <span className={`text-[10px] ${active ? 'text-white/80' : 'text-slate-400'}`}>{t.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : suggestions.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">无匹配标签</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {suggestions.map((t) => {
+                const active = selected.includes(t);
+                const count = recommendCountMap.get(t);
+                return (
+                  <li key={t}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(t)}
+                      className="w-full flex items-center justify-between px-2 py-2 hover:bg-amber-50 rounded text-left"
+                    >
+                      <span className={`text-sm ${active ? 'text-amber-600 font-medium' : 'text-slate-700'}`}>
+                        #{t}
+                      </span>
+                      <span className="text-[11px] text-slate-400 shrink-0">
+                        {typeof count === 'number' ? count : ''}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* 底部确认 */}
+        <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between shrink-0">
+          <span className="text-[11px] text-slate-500">
+            已选 {selected.length}{multi ? `/${maxTags}` : ''}（最少 {minTags}）
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-100"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirm}
+              disabled={!canConfirm}
+              className="px-3 py-1.5 text-xs rounded-full bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              确认并发送
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 /* ─── Thinking Indicator (replaces tool call cards) ─── */
 
 const ThinkingBubble = ({ toolCount, subagentCount }) => {
@@ -682,16 +996,19 @@ const ThinkingBubble = ({ toolCount, subagentCount }) => {
 
 /* ─── AI Message Component ─── */
 
-const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
+const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision, onSubmitQuickMessage }) => {
   // 提取 canvas-it 块，渲染为 React 卡片
   const canvasItBlocks = useMemo(() => extractAllCanvasItBlocks(msg.content), [msg.content]);
   // 提取 task-it 块，渲染为 React 卡片
   const taskItBlocks = useMemo(() => extractAllTaskItBlocks(msg.content), [msg.content]);
+  // 提取 tag-select-it 块，渲染为 React 卡片
+  const tagSelectBlocks = useMemo(() => extractAllTagSelectBlocks(msg.content), [msg.content]);
   const strippedText = useMemo(() => {
     const raw = typeof msg.content === 'string' ? msg.content : '';
     return raw
       .replace(/```canvas-it[\s\S]*?```/gi, '')
       .replace(/```task-it[\s\S]*?```/gi, '')
+      .replace(/```tag-select-it[\s\S]*?```/gi, '')
       .trim();
   }, [msg.content]);
   const hasRenderableText = strippedText.length > 0;
@@ -700,10 +1017,11 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
   const htmlContent = React.useMemo(() => {
     if (!msg.content) return { __html: '' };
     const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
-    // 移除 canvas-it / task-it 块（已由 React 卡片渲染）
+    // 移除 canvas-it / task-it / tag-select-it 块（已由 React 卡片渲染）
     const stripped = String(msg.content)
       .replace(/```canvas-it[\s\S]*?```/gi, '')
       .replace(/```task-it[\s\S]*?```/gi, '')
+      .replace(/```tag-select-it[\s\S]*?```/gi, '')
       .trim();
     // 1. 把纯 URL 转成 markdown 图片语法
     let converted = stripped.replace(imgPattern, (url) => `![](${url})`);
@@ -823,8 +1141,23 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision }) => {
         />
       ))}
 
+      {/* Tag-select-it 内联卡片（点击展开搜索弹窗，确认后以用户消息回传） */}
+      {tagSelectBlocks.map(payload => (
+        <TagSelectCard
+          key={payload.selectorId}
+          payload={payload}
+          onSubmit={(tags) => {
+            if (typeof onSubmitQuickMessage !== 'function') return;
+            const list = Array.isArray(tags) ? tags : [];
+            if (list.length === 0) return;
+            const text = `我选定标签：${list.map((t) => `#${t}`).join(' ')}`;
+            onSubmitQuickMessage(text);
+          }}
+        />
+      ))}
+
     {/* Show empty placeholder while loading, no content yet, no error */}
-    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && taskItBlocks.length === 0 && (
+    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && taskItBlocks.length === 0 && tagSelectBlocks.length === 0 && (
       <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
         <span className="text-sm text-slate-400">（无内容）</span>
       </div>
@@ -1104,10 +1437,14 @@ const ChatBIView = ({
   };
 
   /* ─── Send message with SSE streaming ─── */
-  const handleSend = async () => {
-    if (!inputValue.trim() || isLoading) return;
+  const handleSend = async (overrideText) => {
+    // 支持传入文本（如来自 TagSelectCard 卡片回写），否则取输入框值
+    const raw = typeof overrideText === 'string' && overrideText.trim()
+      ? overrideText.trim()
+      : inputValue.trim();
+    if (!raw || isLoading) return;
 
-    const userText = inputValue.trim();
+    const userText = raw;
     setInputValue('');
 
     // 1. Ensure remote session exists
@@ -1229,10 +1566,9 @@ const ChatBIView = ({
 
     } catch (error) {
       console.error('Chat error:', error);
-      const reason =
-        error && typeof error === 'object' && typeof error.message === 'string'
-          ? error.message
-          : '未知错误';
+      const errName = error && typeof error === 'object' && typeof error.name === 'string' ? error.name : '';
+      const errMsg = error && typeof error === 'object' && typeof error.message === 'string' ? error.message : '未知错误';
+      const reason = errName && errName !== 'Error' ? `${errName}: ${errMsg}` : errMsg;
       // Record error in the already-created AI message (not a new one)
       setMessages(prev => prev.map(msg =>
         msg.id === aiMsgId
@@ -1429,6 +1765,7 @@ const ChatBIView = ({
                       setActiveCanvasType(type || 'article');
                     }}
                     onOpenDecision={(id) => setActiveDecisionCardId(id)}
+                    onSubmitQuickMessage={(text) => handleSend(text)}
                   />
                 )}
               </div>

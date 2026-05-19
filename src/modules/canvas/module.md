@@ -44,13 +44,12 @@ Canvas服务。
 
 ### canvas-image-group.service.ts
 图片组生成服务。
-- `generateImageGroups` — 根据文章 tag 批量匹配图库配图，按版式分配图片组
+- `generateImageGroups` — 根据文章 tag 严格匹配图库配图（**不再跨 tag 随机补图**），按版式分配图片组。**完成后调用 `gallery.markUsedBatch` 标记本批次所有源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截不足量场景)
 - `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]）
 - `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
 - `buildAiCoverPrompt` — 构建封面元信息骨架（选题/文章标题/封面主/副标题/封面版式）+ 强化版封面视觉调性指令（13 条：风格定位/视觉张力/动画化改造/表情动作动画化/主体表达/动态视觉特效/装饰丰富度/色彩/光影质感/文案表现/构图/情绪锚定/严禁项），鼓励大胆改造与动画化重绘（2D 插画/3D Q版/港漫/手绘等），不调 LLM 推演主题；通用图生图硬约束由 AgentService.buildMeituEditPrompt 在下游补齐
 - `tryGenerateAiCoverToGallery` — 调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit）
-- `fetchImagePool` — tag匹配+随机补充图片池（过滤默认动态封面/动态拼图分组）
-- `supplementPoolWithRelatedTags` — 图片不足时使用“相近标签”补池，避免纯随机导致语义偏移
+- `fetchImagePool` — tag匹配取图（过滤默认动态封面/动态拼图分组）。**已移除"不足时补随机/相近标签"逻辑**,只严格按 tags 取池,不足由上游工具预检+用户决策
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
 - `pickPortrait` — 从池中选竖图（优先未使用，其次降级复用）
 - `pickAndMakeCollage` — 选 2 张横图动态合成拼图（上下拼，640x853，等比缩放不裁切）

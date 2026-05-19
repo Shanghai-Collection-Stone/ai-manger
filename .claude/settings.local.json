@@ -8,7 +8,17 @@
       "Bash(pnpm add:*)",
       "Bash(npx tsc:*)",
       "WebFetch(domain:www.npmjs.com)",
-      "Bash(xargs wc *)"
+      "Bash(xargs wc *)",
+      "WebSearch",
+      "WebFetch(domain:www.volcengine.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:help.apiyi.com)",
+      "WebFetch(domain:docs.evolink.ai)",
+      "WebFetch(domain:api.volcengine.com)",
+      "WebFetch(domain:www.cometapi.com)",
+      "WebFetch(domain:apidoc.cometapi.com)",
+      "WebFetch(domain:pinkyapi.apidog.io)"
     ]
   }
 }

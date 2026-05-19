@@ -38,6 +38,14 @@ export interface GalleryImageEntity {
     height: number;
     dpi: number;
   };
+  /**
+   * @description 是否已被生成消耗（动态拼图/生图组等任意一次参与后置 true）。一旦标记 true,
+   * 后续 searchByTags 默认会排除该图,避免重复使用。需重新启用可调 markUsedBatch(reset=true)。
+   * @keyword-en gallery-image isUsed flag for one-shot consumption
+   */
+  isUsed?: boolean;
+  /** @description 首次被标记 isUsed=true 的时间 */
+  usedAt?: Date;
   embedding: number[];
   createdAt: Date;
   updatedAt: Date;

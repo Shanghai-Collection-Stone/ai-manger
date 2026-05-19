@@ -132,6 +132,26 @@ export const chatService = {
     }
   },
 
+  /**
+   * @description 获取图库标签列表（供 tag-select 弹窗联想搜索使用）
+   * @keyword-en list gallery tags for tag-select autocomplete
+   */
+  async listGalleryTags({ userId, limit } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (userId) params.set('userId', String(userId));
+      if (typeof limit === 'number') params.set('limit', String(limit));
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/gallery/tags${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return { tags: [] };
+      return await res.json();
+    } catch {
+      return { tags: [] };
+    }
+  },
+
   async getDecisionCard(cardId) {
     if (!cardId) return { card: null };
     try {

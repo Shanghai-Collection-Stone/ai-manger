@@ -50,6 +50,7 @@
     "migrate-mongo": "^14.0.7",
     "mongodb": "^6.21.0",
     "multer": "^2.0.2",
+    "node-stream-zip": "^1.15.0",
     "openai": "^6.9.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",

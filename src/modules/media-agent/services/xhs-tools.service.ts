@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { CreateAgentParams } from 'langchain';
 import { tool } from 'langchain';
 import * as z from 'zod';
 import { CanvasService } from '../../canvas/services/canvas.service.js';
+import { GalleryService } from '../../gallery/services/gallery.service.js';
 import type {
   CanvasArticleEntity,
   CanvasImageGroup,
@@ -20,8 +22,71 @@ export class XhsToolsService {
   private readonly IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE = 6;
   private readonly IMAGE_GROUP_MAX_IMAGES_PER_ARTICLE = 8;
   private readonly MAX_GROUP_COUNT = 20;
+  /** @description 每个图组消耗的源图最少数量（用于不足量预检；含拼图来源图） */
+  private readonly MIN_SOURCE_IMAGES_PER_GROUP = 6;
 
-  constructor(private readonly canvasService: CanvasService) {}
+  constructor(
+    private readonly canvasService: CanvasService,
+    private readonly gallery: GalleryService,
+  ) {}
+
+  /**
+   * @description 不足量预检：根据 articles 总 tags 统计当前可用图片(已排除 isUsed),
+   *  返回是否充足 + 总可用数 + 预计可生成组数。中断由调用方根据结果决定。
+   * @keyword-en precheck image capacity for image-group generation
+   */
+  private async precheckImageCapacity(input: {
+    userId: string;
+    tenantId?: string;
+    articles: Array<{ title: string; tags: string[] }>;
+  }): Promise<{
+    sufficient: boolean;
+    available: number;
+    expectedGroups: number;
+    expectedMinImages: number;
+    estimatedGroups: number;
+    tags: string[];
+    byTag: Record<string, number>;
+  }> {
+    const tagSet = new Set<string>();
+    for (const a of input.articles) {
+      for (const t of a.tags ?? []) {
+        const v = String(t ?? '').trim();
+        if (v) tagSet.add(v);
+      }
+    }
+    const tags = Array.from(tagSet);
+    const expectedGroups = input.articles.length;
+    const expectedMinImages = expectedGroups * this.MIN_SOURCE_IMAGES_PER_GROUP;
+
+    if (tags.length === 0) {
+      return {
+        sufficient: false,
+        available: 0,
+        expectedGroups,
+        expectedMinImages,
+        estimatedGroups: 0,
+        tags,
+        byTag: {},
+      };
+    }
+    const { total, byTag } = await this.gallery.countAvailableByTags({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      tags,
+      imageType: 'regular',
+    });
+    const estimatedGroups = Math.floor(total / this.MIN_SOURCE_IMAGES_PER_GROUP);
+    return {
+      sufficient: total >= expectedMinImages,
+      available: total,
+      expectedGroups,
+      expectedMinImages,
+      estimatedGroups,
+      tags,
+      byTag,
+    };
+  }
 
   /**
   * @description 将输入文章数量对齐到 groupCount 或 articles 数量，不强制 6-8。
@@ -145,13 +210,106 @@ export class XhsToolsService {
    * @since 2026-03-23
    */
   getHandle(
-    scope?: { tenantId?: string; userId?: string },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
   ): CreateAgentParams['tools'] {
     return [
       this.createListCanvasesTool(scope),
       this.createGetCanvasDetailTool(scope),
       this.createImageGroupCanvasTool(scope),
+      this.createTagSelectRequestTool(scope),
     ];
+  }
+
+  /**
+   * @description 发出 tag 选择卡片工具。调用后通过 earlyEmit 推送 markdown fence
+   *  ` ```tag-select-it ... ``` `，前端识别后渲染为卡片;点击卡片打开搜索/推荐弹窗,
+   *  用户选完通过用户消息回写。生成图组/拼图前可强制调用本工具收集 tags。
+   * @keyword-en emit tag-select card request fence to chat stream
+   */
+  private createTagSelectRequestTool(
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
+  ) {
+    return tool(
+      async (input: {
+        purpose?: string;
+        title?: string;
+        hint?: string;
+        minTags?: number;
+        maxTags?: number;
+        multi?: boolean;
+        recommendCount?: number;
+      }) => {
+        const recommendLimit = Math.max(
+          3,
+          Math.min(20, Math.trunc(Number(input.recommendCount ?? 10))),
+        );
+        let recommendTags: Array<{ tag: string; count: number }> = [];
+        try {
+          recommendTags = await this.gallery.listTopTagsWithCount({
+            userId: scope?.userId,
+            tenantId: scope?.tenantId,
+            limit: recommendLimit,
+            imageType: 'regular',
+          });
+        } catch (e) {
+          this.logger.warn(`[tag_select_request] listTopTagsWithCount failed: ${String(e)}`);
+        }
+
+        const payload = {
+          selectorId: randomUUID(),
+          title: String(input.title ?? '请选择素材标签').trim() || '请选择素材标签',
+          hint:
+            String(input.hint ?? '').trim() ||
+            (input.purpose
+              ? `用于：${String(input.purpose).trim()}`
+              : '选择本次生成所要匹配的标签（可多选）'),
+          purpose: String(input.purpose ?? '').trim() || undefined,
+          minTags: Math.max(1, Math.trunc(Number(input.minTags ?? 1))),
+          maxTags: Math.max(1, Math.trunc(Number(input.maxTags ?? 8))),
+          multi: input.multi !== false,
+          recommendTags,
+        };
+        const fence = `\`\`\`tag-select-it\n${JSON.stringify(payload)}\n\`\`\``;
+        try {
+          scope?.earlyEmit?.(fence);
+        } catch {
+          // 推送失败不影响主流程
+        }
+        // 仅返回简短文字给 LLM,fence 已通过 earlyEmit 直接推到前端,无需 LLM 二次输出
+        return '已向用户发出 tag 选择卡片(已直接推送给前端,无需在回复中重复 fence)。请用一句简短中文告诉用户卡片已弹出,等待用户在卡片内多选 tags 并以"我选定标签：#A #B"形式回传后,再调用 xhs_create_image_group_canvas 继续生成。';
+      },
+      {
+        name: 'tag_select_request',
+        description:
+          '当用户请求生成图组/拼图/封面**但未明确提供具体 tags** 时,先调用本工具向用户发出 tag 选择卡片收集标签。前端会渲染卡片+搜索弹窗,提供热门 tag 推荐供多选。用户选完会以"我选定标签：#X #Y"消息回传,之后再调用 xhs_create_image_group_canvas 走生成流程。**如果用户消息中已明确给出 tags(如"用#团建生成图组"、"我选定标签：#X")则跳过本工具直接生成**,避免无意义重复发卡。本工具每次对话最多调用 1 次。',
+        schema: z.object({
+          purpose: z
+            .string()
+            .optional()
+            .describe('本次 tag 选择的用途，例如"生成小红书图组"、"生成动态拼图封面"'),
+          title: z.string().optional().describe('卡片标题，默认"请选择素材标签"'),
+          hint: z.string().optional().describe('卡片提示文字'),
+          minTags: z.number().int().min(1).optional().describe('最少选择数，默认 1'),
+          maxTags: z.number().int().min(1).optional().describe('最多选择数，默认 8'),
+          multi: z.boolean().optional().describe('是否多选，默认 true'),
+          recommendCount: z
+            .number()
+            .int()
+            .min(3)
+            .max(20)
+            .optional()
+            .describe('推荐 tag 数量，默认 10'),
+        }),
+      },
+    );
   }
 
   /**
@@ -244,7 +402,11 @@ export class XhsToolsService {
    * @keyword-en create image group canvas tool
    */
   private createImageGroupCanvasTool(
-    scope?: { tenantId?: string; userId?: string },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
   ) {
     return tool(
       async (input: {
@@ -296,6 +458,36 @@ export class XhsToolsService {
                     tags: Array.isArray(a.tags) ? a.tags : [],
                   })),
                 });
+
+          // 不足量预检：图源不足直接中断，返回结构化结果给 LLM 让其用自然语言询问用户
+          // 预检失败(异常)时降级为放行,不阻断主生成链路
+          let capacity = null;
+          try {
+            capacity = await this.precheckImageCapacity({
+              userId: scope.userId,
+              tenantId: scope.tenantId,
+              articles: sourceArticles,
+            });
+          } catch (e) {
+            this.logger.warn(`[xhs_create_image_group_canvas] precheck failed (degraded to allow): ${String(e)}`);
+          }
+          if (capacity && !capacity.sufficient) {
+            this.logger.log(
+              `[xhs_create_image_group_canvas] insufficient available=${capacity.available} expected>=${capacity.expectedMinImages} estimatedGroups=${capacity.estimatedGroups}`,
+            );
+            return JSON.stringify({
+              status: 'insufficient_images',
+              canvasId: requestedCanvasId,
+              expectedGroups: capacity.expectedGroups,
+              expectedMinImages: capacity.expectedMinImages,
+              availableImages: capacity.available,
+              estimatedGroups: capacity.estimatedGroups,
+              tags: capacity.tags,
+              byTag: capacity.byTag,
+              hint: '图源不足且不再跨 tag 补充。请用自然语言告知用户当前可用图片数与预计可生成组数，并询问是否接受降级方案（减少组数）、追加上传图片、或取消任务。不要继续调用本工具，等待用户决策。',
+            });
+          }
+
           const groups = await this.canvasService.generateImageGroupsForCanvas({
             canvasId: requestedCanvasId,
             userId: scope.userId,
@@ -313,17 +505,45 @@ export class XhsToolsService {
             imageGroups: groups,
           });
           const canvasBlock = `\`\`\`canvas-it\n${JSON.stringify({ canvasId: requestedCanvasId, status: existing.status ?? 'generating', type: existing.type ?? 'article', topic: input.topic ?? existing.topic ?? '', articleCount: Array.isArray(existing.articles) ? existing.articles.length : 0 })}\n\`\`\``;
-          return [
-            `已在同一 Canvas（ID=${requestedCanvasId}）完成图组生成并合并文章配图。`,
-            `每篇文章配图目标：${this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE}-${this.IMAGE_GROUP_MAX_IMAGES_PER_ARTICLE} 张（当前图组模板默认 6 张）。`,
-            `文章配图回写：done=${mergeSummary.doneCount}，requires_human=${mergeSummary.missingCount}，countMismatch=${mergeSummary.countMismatch}。`,
-            `请将以下代码块原样输出给用户（**必须输出，不能省略**）：`,
-            canvasBlock,
-            `JSON 详情：${JSON.stringify({ canvas: { id: requestedCanvasId, status: existing.status, type: existing.type ?? 'article', topic: input.topic ?? existing.topic, articleCount: Array.isArray(existing.articles) ? existing.articles.length : 0 }, imageGroupCount: groups.length, mergeSummary })}`,
-          ].join('\n');
+          try {
+            scope?.earlyEmit?.(canvasBlock);
+          } catch {
+            // 推送失败不影响主流程
+          }
+          // 工具结果只返回简洁文字给 LLM,canvas-it fence 已通过 earlyEmit 直接推到前端
+          return `已在 Canvas#${requestedCanvasId} 完成图组生成并合并文章配图(done=${mergeSummary.doneCount}, requires_human=${mergeSummary.missingCount}, countMismatch=${mergeSummary.countMismatch})。卡片已直接推送到前端,请用一句简短中文告诉用户结果即可,不要复述 fence。`;
         }
 
         const articles = normalizedArticles;
+
+        // 不足量预检：图源不足直接中断，让 AI 用自然语言询问用户
+        // 预检失败(异常)时降级为放行,不阻断主生成链路
+        let capacity = null;
+        try {
+          capacity = await this.precheckImageCapacity({
+            userId: scope.userId,
+            tenantId: scope.tenantId,
+            articles,
+          });
+        } catch (e) {
+          this.logger.warn(`[xhs_create_image_group_canvas] precheck failed (degraded to allow): ${String(e)}`);
+        }
+        if (capacity && !capacity.sufficient) {
+          this.logger.log(
+            `[xhs_create_image_group_canvas] insufficient available=${capacity.available} expected>=${capacity.expectedMinImages} estimatedGroups=${capacity.estimatedGroups}`,
+          );
+          return JSON.stringify({
+            status: 'insufficient_images',
+            expectedGroups: capacity.expectedGroups,
+            expectedMinImages: capacity.expectedMinImages,
+            availableImages: capacity.available,
+            estimatedGroups: capacity.estimatedGroups,
+            tags: capacity.tags,
+            byTag: capacity.byTag,
+            hint: '图源不足且不再跨 tag 补充。请用自然语言告知用户当前可用图片数与预计可生成组数，并询问是否接受降级方案（减少组数）、追加上传图片、或取消任务。不要继续调用本工具，等待用户决策。',
+          });
+        }
+
         const canvas = await this.canvasService.createImageGroupCanvas({
           userId: scope.userId,
           tenantId: scope.tenantId,
@@ -331,13 +551,13 @@ export class XhsToolsService {
           articles: articles.map((a) => ({ title: a.title, tags: a.tags ?? [] })),
         });
         const canvasBlock = `\`\`\`canvas-it\n${JSON.stringify({ canvasId: canvas.id, status: 'generating', type: 'image-group', topic: canvas.topic ?? '', articleCount: Array.isArray(canvas.articles) ? canvas.articles.length : 0 })}\n\`\`\``;
-        return [
-          `图片组 Canvas 已创建（ID=${canvas.id}），正在后台匹配并生成图片。`,
-          `每篇文章配图目标：${this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE}-${this.IMAGE_GROUP_MAX_IMAGES_PER_ARTICLE} 张（当前图组模板默认 6 张）。`,
-          `请将以下代码块原样输出给用户（**必须输出，不能省略**）：`,
-          canvasBlock,
-          `JSON 详情：${JSON.stringify({ canvas: { id: canvas.id, status: canvas.status, type: canvas.type, topic: canvas.topic, articleCount: Array.isArray(canvas.articles) ? canvas.articles.length : 0 } })}`,
-        ].join('\n');
+        try {
+          scope?.earlyEmit?.(canvasBlock);
+        } catch {
+          // 推送失败不影响主流程
+        }
+        // 工具结果只返回简洁文字给 LLM,canvas-it fence 已通过 earlyEmit 直接推到前端
+        return `图片组 Canvas#${canvas.id} 已创建,正在后台匹配并生成图片。卡片已直接推送到前端,请用一句简短中文告诉用户已开始生成即可,不要复述 fence。`;
       },
       {
         name: 'xhs_create_image_group_canvas',

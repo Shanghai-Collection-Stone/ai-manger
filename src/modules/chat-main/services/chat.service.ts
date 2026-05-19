@@ -339,9 +339,40 @@ export class ChatMainService {
             );
           }
 
+          let fullText = '';
+
+          // canvas-it 提前推送通道:tool 内部创建 Canvas 完成的那一刻直接 push 到前端,
+          // 不再依赖 subagent/主 agent 的 LLM 二次解码,首屏几乎零延迟。
+          // 同步累加 fullText 以保证最终落库内容包含 canvas-it(appendCanvasItIfNeeded 仍会兜底去重)。
+          const emittedEarlyCanvasIds = new Set<number>();
+          const earlyEmitCanvasIt = (text: string) => {
+            if (shouldStop()) return;
+            const block = String(text ?? '').trim();
+            if (!block) return;
+            const m = /```canvas-it\s*([\s\S]*?)```/i.exec(block);
+            if (m) {
+              try {
+                const payload = JSON.parse(m[1]) as { canvasId?: unknown };
+                const cid = Number(payload?.canvasId);
+                if (Number.isFinite(cid)) {
+                  if (emittedEarlyCanvasIds.has(cid)) return;
+                  emittedEarlyCanvasIds.add(cid);
+                }
+              } catch {
+                // ignore parse errors;不阻塞推送
+              }
+            }
+            const payload = `\n\n${block}\n\n`;
+            fullText += payload;
+            subscriber.next({
+              data: { type: 'token', data: { text: payload, thread_id: sid } },
+            } as MessageEvent);
+          };
+
           const finalScope = {
             ...scope,
             category: scope?.sessionType?.startsWith('xhs') ? 'xhs' : undefined,
+            earlyEmit: earlyEmitCanvasIt,
           };
 
           const tools = this.getToolsForInput(
@@ -400,7 +431,6 @@ export class ChatMainService {
             },
           });
 
-          let fullText = '';
           let endToolCalls: unknown[] | undefined;
           let endToolResults:
             | { name?: unknown; output?: unknown }[]
@@ -463,10 +493,15 @@ export class ChatMainService {
               }
               case 'error': {
                 const errObj = step.data.error as
-                  | (Error & { code?: string })
+                  | (Error & { code?: string; cause?: unknown })
                   | undefined;
                 const errCode = errObj?.code || errObj?.name || 'STREAM_ERROR';
                 const errMsg = errObj?.message ?? 'STREAM_ERROR';
+                // 后端也完整打 log,避免前端能看到细节但后端只剩简短一行
+                this.logger.error(
+                  `[ChatMainService.stream] sid=${sid ?? ''} sessionType=${scope.sessionType} code=${errCode} message=${errMsg}`,
+                  errObj?.stack,
+                );
                 safeSend({
                   type: 'error',
                   data: { code: errCode, message: errMsg },
@@ -1124,16 +1159,16 @@ export class ChatMainService {
       '- 严禁在用户没明确要图文时自动连带触发图文生成。',
       '',
       '【子代理路由规则】：',
-      '- 用户要"生图/配图/图组/Canvas生成" → 委派 gallery_subagent',
+      '- 用户要"生图/配图/图组/Canvas生成" → **直接调 xhs_create_image_group_canvas**(已通过 fire-and-forget 异步生图,canvas-it 卡片由系统 earlyEmit 即时推到前端),不再委派 gallery_subagent(避免子代理 LLM 推理阻塞卡片到达)。gallery_subagent 只保留给图库搜图/详情查询等非创建场景。',
       '- 用户要"图文/正文/写文/全套" → 委派生文专家（topic_orchestrate）',
       '- 用户要"Canvas 存入文章库"或"获取文章库二维码" → 直接使用 article_library_list / canvas_store_to_article_library / article_library_get_push_qr；如果只给了库标题，先列候选再按标题或 id 操作。Canvas 仍在 generating 时提示完成后再入库。',
       '',
-      '【图片组Canvas创建规则（gallery_subagent 执行）】',
+      '【图片组Canvas创建规则（主 agent 直接执行 xhs_create_image_group_canvas）】',
       '   - 参数规则：groupCount 与 articles 数量保持一致；篇数按用户/LLM要求，不做 6-8 强制限制',
       '   - **数量缺省**：用户未明确说组数/篇数时，默认只生成 1 组（articles=1、groupCount=1）；"一组/一套/一份"就是 1 组，严禁把单一主题拆成多个子场景凑多组',
       `   - 质量目标：每篇文章配图数量应在 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前模板默认 6 张）`,
       '   - 严格禁止多次调用 xhs_create_image_group_canvas；用户说"N 组/N 篇"时一次性把 articles 长度=N、groupCount=N 传完，落到同一个 Canvas',
-      '   - 创建后必须将工具结果里的 canvas-it 代码块原样输出给用户',
+      '   - **canvas-it 卡片已被系统 earlyEmit 即时推到前端**,你只需输出一句简短确认(如"图组 Canvas 已创建,正在后台生成"),**严禁再输出 ```canvas-it``` 代码块**',
       '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi）。',
       '请根据用户需求，帮助他们创建高质量的小红书内容。',
     ].join('\n');
@@ -1376,7 +1411,7 @@ export class ChatMainService {
         '  3. **数量缺省规则**：用户未明确说"N 组/N 篇"时，默认只生成 1 组（articles 只传 1 篇，groupCount=1）。"一组/一套/一份"在中文里就是 1 组，严禁把"团建/美食/旅行"等单一主题自行拆成多个子场景来凑多组。',
         `  4. 每篇文章配图目标为 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前图组模板默认 6 张）。`,
         '  5. **一次调用 = 一个 Canvas**：用户说"N 组/N 篇"时，把全部 N 篇 articles 一次性传给 xhs_create_image_group_canvas（groupCount=N、articles 长度=N），落到同一个 Canvas；严禁循环调用 N 次产生 N 个 Canvas。',
-        '  6. 调用后把工具结果里的 canvas-it 代码块原样返回，不要再做其他工具调用。',
+        '  6. **canvas-it 已由系统提前推送给前端**，你只需输出一句简短确认（例如"图组 Canvas 已创建，正在后台生成"），**严禁再输出 ```canvas-it``` 代码块**，也不要再调用任何其他工具。',
         '【Canvas 工具】',
         '- canvas_search：搜索 Canvas 列表',
         '- xhs_get_canvas_detail：获取 Canvas 详情（含文章和图片组）',
@@ -1469,7 +1504,11 @@ export class ChatMainService {
    */
   private resolveSubagentToolSets(
     allTools: StructuredTool[],
-    scope?: { tenantId?: string; userId?: string },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
   ): {
     analysis: StructuredTool[];
     topicOrchestrate: StructuredTool[];
@@ -1606,11 +1645,13 @@ export class ChatMainService {
     const isTopicIntent =
       typeof input === 'string' && this.isTopicOrchestrateIntent(input);
     // default 模式：主agent不直接持有这些工具，全部交给对应subagent
+    // 注意:xhs_create_image_group_canvas 故意不在 subagentOnly 中,允许主 agent 直接调,
+    //   工具本身已经 fire-and-forget 异步生图 + earlyEmit 推 canvas-it,
+    //   避免被 gallery_subagent 的 LLM 二次推理阻塞前端 canvas-it 卡片到达时机。
     const subagentOnly = new Set([
       'topic_orchestrate', // → topic_orchestrate_subagent
-      'xhs_list_canvases', // → gallery_subagent
-      'xhs_get_canvas_detail', // → gallery_subagent
-      'xhs_create_image_group_canvas', // → gallery_subagent
+      'xhs_list_canvases', // → gallery_subagent (列表查询走 subagent)
+      'xhs_get_canvas_detail', // → gallery_subagent (详情查询走 subagent)
     ]);
     const topicDataCollectionOnly = new Set([
       'data_analysis',
@@ -1666,7 +1707,11 @@ export class ChatMainService {
   private buildDefaultSubagents(
     tools: CreateAgentParams['tools'],
     mode: ConversationSessionType,
-    scope?: { tenantId?: string; userId?: string },
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      earlyEmit?: (text: string) => void;
+    },
     env?: {
       sid: string;
       now: string;
@@ -1676,6 +1721,20 @@ export class ChatMainService {
   ): DeepAgentSubAgent[] {
     const allTools = this.normalizeSubagentTools(tools);
     const toolSets = this.resolveSubagentToolSets(allTools, scope);
+
+    // 给每个 subagent 注入主 agent 的 sanitize/诊断 middleware。
+    // deepagents 默认不会把主 agent 的 customMiddleware 透传给 subagent,
+    // 导致 subagent 内部 model 调用得不到 sanitize 兜底 + 诊断 log,
+    // 出错时只看到 patchToolCallsMiddleware 抛 `expected AIMessage or Command, got object` 而无原始数据。
+    const sanitizeMw = this.agent.buildSubagentSanitizeMiddleware();
+    const injectMiddleware = (subs: DeepAgentSubAgent[]): DeepAgentSubAgent[] =>
+      subs.map((s) => ({
+        ...s,
+        middleware: [
+          ...((s.middleware as unknown[]) ?? []),
+          sanitizeMw,
+        ] as DeepAgentSubAgent['middleware'],
+      }));
     const envStr = env
       ? [
           `SESSION_ID:${env.sid}`,
@@ -1689,7 +1748,7 @@ export class ChatMainService {
       : '';
 
     if (mode === 'thought') {
-      return [
+      return injectMiddleware([
         {
           name: 'analysis_subagent',
           description: '思维链/Schema 分析子代理',
@@ -1698,7 +1757,7 @@ export class ChatMainService {
             .join('\n\n'),
           tools: toolSets.analysis,
         },
-      ];
+      ]);
     }
 
     if (
@@ -1708,9 +1767,9 @@ export class ChatMainService {
       mode === 'xhs-article-expert' ||
       mode === 'xhs-image-expert'
     ) {
-      return [
+      return injectMiddleware([
         this.buildGallerySubagent(envStr, toolSets.gallery),
-      ];
+      ]);
     }
 
     const analysisSys = [
@@ -1784,7 +1843,7 @@ export class ChatMainService {
     ];
     if (envStr) analysisSys.unshift(envStr);
 
-    return [
+    return injectMiddleware([
       {
         name: 'analysis_subagent',
         description:
@@ -1850,7 +1909,7 @@ export class ChatMainService {
         tools: toolSets.ops,
       },
       this.buildGallerySubagent(envStr, toolSets.gallery),
-    ];
+    ]);
   }
 
   /**

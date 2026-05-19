@@ -5,8 +5,14 @@
 ## 文件清单
 
 ### ChatBIView.jsx
-AI 对话交互主视图。支持 canvas-it、task-it、decision-it 内联卡片（含异步轮询/详情 Modal）。
-- **关键词**: chat, ai, bi, commander, stream, canvas-it, task-it
+AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-select-it** 内联卡片（含异步轮询/详情 Modal/选标签弹窗）。`handleSend(overrideText?)` 接受可选参数,卡片回写时直接调用以用户消息形式发送 tags("我选定标签：#A #B")。
+- **关键词**: chat, ai, bi, commander, stream, canvas-it, task-it, tag-select-it, quick-message
+- **函数**:
+  - `extractAllCanvasItBlocks` / `extractAllTaskItBlocks` / `extractAllTagSelectBlocks`: 从消息文本提取对应 fence JSON 块
+  - `TagSelectCard`: tag 选择卡片(琥珀色徽章),展示标题/提示/推荐 chips 预览,点击触发 `TagSelectModal` 弹窗;确认后显示已选 chips 状态
+  - `TagSelectModal`: 顶部搜索框 + 已选 chips + 内容区(无输入显示推荐计数 chips,有输入显示联想下拉),底部确认按钮校验 minTags/maxTags;`chatService.listGalleryTags` 拉全量 tags 用于联想
+  - `AIMessage`: 多卡片渲染,strip 三种 fence 后走 markdown;新增 `onSubmitQuickMessage(text)` prop 用于卡片向 AI 回写用户消息
+  - `handleSend(overrideText?)`: 支持 override 参数,无 override 时取 inputValue;TagSelectCard 通过该回调把所选 tags 拼成自然语言消息发回 AI
 
 ### XhsSpecialistView.jsx
 小红书专家页面。任务列表（按 category=xhs 过滤）、子代理管理（主专家/数据追踪/发文执行/生文专家/生图专家）、AI 对话、任务详情全屏页面（含任务信息/执行节点/小红书数据三个 Tab）。
@@ -32,12 +38,14 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it 内联卡片
 - **关键词**: task, detail, page, timeline, info
 
 ### ToolsView.jsx
-工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库入口五大模块。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。
-- **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, article-library
+工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库入口五大模块。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。
+- **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, article-library, zip-import, responsive, icon-collapse
 - **函数**:
-  - `GalleryView`: 图库管理视图（含对话/图库/拼图/封面 Tab）
+  - `GalleryView`: 图库管理视图（含对话/图库/拼图/封面 Tab、ZIP 批量导入抽屉入口、单行响应式紧凑 Header）
+  - `TagFilterDropdown`: 标签筛选下拉（窄屏 w-20 / 宽屏 w-28 自适应）
   - `ToolsView`: 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/article-library）
   - `loadCanvases`: 加载 Canvas 列表，支持追加分页（append=true）、类型/标签过滤
+- **api 对象新增 ZIP 导入方法**: `uploadGalleryZip`、`listGalleryZipImports`、`cancelGalleryZipImport`、`deleteGalleryZipImport`(对接 `/gallery/zip-import/*` 后端)
 
 ### CanvasFeedView.jsx
 图文类型 Canvas 详情视图。展示文章列表与文章详情（含图片轮播）；头部提供"整份存入文章库"按钮，单篇详情提供"存入文章库"按钮，弹出 LibraryPickerDialog 选择目标库或新建。
@@ -77,6 +85,15 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it 内联卡片
   - `getPushQr`: 获取二维码 payload 与 `qrContent`
   - `listArticles` / `putArticles` / `updateArticleStatus` / `deleteArticle`: 文章 CRUD + 状态更新
   - `leaseNext`: 管理端队列领取（测试用）
+
+### GalleryZipImportPanel.jsx
+图库 ZIP 批量导入右侧抽屉面板。包含上传表单(选 zip + 分组下拉 + 标签输入)和任务历史列表(2s 轮询拉 `/gallery/zip-import/list`,展示 status / stage / progress / 错误明细;可取消运行中、删除完成态)。完成态触发 `onCompleted` 通知外部刷新图库与分组。
+- **关键词**: gallery-zip-import, drawer, multipart upload, polling, progress-bar, cancel, status-badge
+- **函数**:
+  - `GalleryZipImportPanel`: 主组件,props: `{ open, onClose, userId, groups, api, onCompleted }` /panel main entry
+  - `JobCard`: 单条任务卡片(状态徽章 + 进度条 + 错误折叠)/job card with progress
+  - `StatusBadge`: 状态徽章(进行中蓝 / 成功绿 / 失败红 / 取消灰)/status badge
+  - `formatBytes` / `formatTime`: 显示格式化 helpers
 
 ### AntiDetectionView.jsx
 图片去 AI 标识工具视图。支持拖拽 / 多选批量上传（≤20 张，单张 ≤20MB），可选**处理引擎**（浏览器本地 / 服务器）、强度档位 + 输出格式。浏览器模式逐张本地处理并显示进度；服务器模式单张走二进制接口、批量走 base64 JSON 接口。支持单张下载 / 全部下载（a.download 逐个触发）。

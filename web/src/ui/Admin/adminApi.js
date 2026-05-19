@@ -170,6 +170,11 @@ export const adminApi = {
       method: 'DELETE',
     });
   },
+  async testProvider(id) {
+    return request(`/ai-providers/${id}/test`, {
+      method: 'POST',
+    });
+  },
   async listTenants() {
     return request('/tenants');
   },

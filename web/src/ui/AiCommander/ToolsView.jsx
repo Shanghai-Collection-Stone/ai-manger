@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck, FileArchive
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import XhsSpecialistView from './XhsSpecialistView';
@@ -9,6 +9,7 @@ import ImageGroupCanvasView from './ImageGroupCanvasView';
 import ChatBIView from './ChatBIView';
 import ArticleLibraryView from './ArticleLibraryView';
 import AntiDetectionView from './AntiDetectionView';
+import GalleryZipImportPanel from './GalleryZipImportPanel';
 import { showToast } from './blocks/shared';
 
 /**
@@ -345,6 +346,118 @@ const api = {
     } catch (e) {
       showToast(`重建向量失败: ${e?.message || '网络错误'}`, 'error');
       return { updated: 0 };
+    }
+  },
+
+  /**
+   * @description 上传 zip 包到图库,入后台队列;返回 jobId
+   * @keyword-en uploadGalleryZip, multipart, queue
+   * @param {File} file - zip 文件
+   * @param {Object} body - { groupId, tags }
+   * @returns {Promise<Object>}
+   */
+  async uploadGalleryZip(file, body) {
+    try {
+      if (!file) {
+        showToast('请先选择 ZIP 文件', 'error');
+        return { job: null };
+      }
+      const fd = new FormData();
+      fd.append('file', file);
+      Object.entries(body || {}).forEach(([k, v]) => {
+        if (v === undefined || v === null || v === '') return;
+        fd.append(k, String(v));
+      });
+      const res = await fetch(`${API_BASE}/gallery/zip-import/upload`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: fd,
+      });
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `ZIP 上传失败 (${res.status})`, 'error');
+        return { job: null };
+      }
+      showToast('ZIP 已上传,正在后台解压', 'success');
+      return data;
+    } catch (e) {
+      showToast(`ZIP 上传失败: ${e?.message || '网络错误'}`, 'error');
+      return { job: null };
+    }
+  },
+
+  /**
+   * @description 列出当前作用域最近的 zip 导入任务
+   * @keyword-en listGalleryZipImports
+   */
+  async listGalleryZipImports({ userId, limit } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (userId) params.set('userId', userId);
+      if (typeof limit === 'number') params.set('limit', String(limit));
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/gallery/zip-import/list${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        return { jobs: [] };
+      }
+      return data;
+    } catch {
+      return { jobs: [] };
+    }
+  },
+
+  /**
+   * @description 取消单个 zip 导入任务
+   * @keyword-en cancelGalleryZipImport
+   */
+  async cancelGalleryZipImport(id) {
+    try {
+      const res = await fetch(`${API_BASE}/gallery/zip-import/${id}/cancel`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `取消失败 (${res.status})`, 'error');
+        return { ok: false };
+      }
+      return data;
+    } catch (e) {
+      showToast(`取消失败: ${e?.message || '网络错误'}`, 'error');
+      return { ok: false };
+    }
+  },
+
+  /**
+   * @description 删除一条 zip 导入任务记录(仅完成/失败/取消态)
+   * @keyword-en deleteGalleryZipImport
+   */
+  async deleteGalleryZipImport(id) {
+    try {
+      const res = await fetch(`${API_BASE}/gallery/zip-import/${id}/delete`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `删除失败 (${res.status})`, 'error');
+        return { ok: false };
+      }
+      return data;
+    } catch (e) {
+      showToast(`删除失败: ${e?.message || '网络错误'}`, 'error');
+      return { ok: false };
     }
   },
 
@@ -760,7 +873,7 @@ function TagFilterDropdown({ value, onChange, allTags }) {
   }, [onChange]);
 
   return (
-    <div className="relative">
+    <div className="relative shrink-0">
       <div className="flex items-center gap-1">
         <div className="relative flex-1">
           <input
@@ -769,8 +882,8 @@ function TagFilterDropdown({ value, onChange, allTags }) {
             onChange={(e) => { setInput(e.target.value); setOpen(true); }}
             onFocus={() => setOpen(true)}
             onBlur={() => setTimeout(() => setOpen(false), 200)}
-            placeholder="筛选标签"
-            className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-full sm:w-28 min-w-[100px] bg-white"
+            placeholder="标签"
+            className="px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-20 sm:w-28 bg-white"
           />
           {open && suggestions.length > 0 && (
             <div className="absolute left-0 right-0 top-full mt-1 bg-white border rounded-lg shadow-lg z-30 max-h-48 overflow-y-auto">
@@ -847,6 +960,9 @@ const GalleryView = ({ onBack }) => {
   const [coverText, setCoverText] = useState('');
   const [coverGenerating, setCoverGenerating] = useState(false);
   const [coverMessage, setCoverMessage] = useState('');
+
+  // ZIP Import Panel State
+  const [zipPanelOpen, setZipPanelOpen] = useState(false);
 
   // Batch Select State (gallery tab)
   const [batchSelectMode, setBatchSelectMode] = useState(false);
@@ -1760,102 +1876,123 @@ const GalleryView = ({ onBack }) => {
 
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between p-3 md:p-4 border-b border-slate-100 bg-white/90 gap-3 sm:gap-0">
-        <div className="flex items-center gap-2">
-          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0">
-            <ChevronLeft size={22} />
+      {/* Header - 双行布局：第一行=导航+主操作，第二行=筛选+次要工具 */}
+      <div className="border-b border-slate-100 bg-white/90">
+        <input
+          type="file"
+          multiple
+          accept="image/*"
+          className="hidden"
+          ref={fileRef}
+          onChange={onUploadFiles}
+        />
+        {/* 第一行：返回 + tabs + 上传主按钮 */}
+        <div className="flex items-center gap-2 px-2 sm:px-3 md:px-4 pt-2 sm:pt-3">
+          <button
+            onClick={onBack}
+            className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0"
+          >
+            <ChevronLeft size={20} />
           </button>
-          <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
+          <div className="inline-flex rounded-full bg-slate-100 p-0.5 sm:p-1 shrink-0">
             <button
               onClick={() => setTab('chat')}
-              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               对话
             </button>
             <button
               onClick={() => setTab('gallery')}
-              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
             </button>
             <button
               onClick={() => setTab('collage')}
-              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
             </button>
             <button
               onClick={() => setTab('cover')}
-              className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               封面
             </button>
           </div>
+          {/* 上传主按钮：仅在非 batch 模式下显示 */}
+          {!batchSelectMode && (
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+              title="上传图片"
+              className="ml-auto shrink-0 inline-flex items-center justify-center gap-1.5 bg-slate-900 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold hover:bg-slate-800 transition disabled:opacity-50 whitespace-nowrap"
+            >
+              {uploading ? <RefreshCw className="animate-spin" size={14} /> : <Upload size={14} />}
+              <span>上传</span>
+            </button>
+          )}
+          {batchSelectMode && (
+            <span className="ml-auto text-xs text-slate-500 whitespace-nowrap shrink-0">
+              已选 {visibleSelectedCount}/{visibleImageIds.length}
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-2 justify-end w-full sm:w-auto overflow-visible px-1 pb-1 sm:p-0">
-          <TagFilterDropdown
-            value={tagFilter}
-            onChange={(tag) => setTagFilter(tag)}
-            allTags={allTags}
-          />
-          <input
-            type="file"
-            multiple
-            accept="image/*"
-            className="hidden"
-            ref={fileRef}
-            onChange={onUploadFiles}
-          />
-          {/* 批量选择模式：显示操作栏 */}
+
+        {/* 第二行：筛选 + 次要工具 / batch 操作栏 */}
+        <div className="flex items-center flex-wrap gap-1.5 sm:gap-2 px-2 sm:px-3 md:px-4 py-2 sm:py-3">
           {batchSelectMode ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500 whitespace-nowrap">
-                已选 {visibleSelectedCount}/{visibleImageIds.length} 张
-              </span>
+            <>
               <button
                 onClick={toggleSelectAllVisible}
                 disabled={!hasVisibleImages}
-                className="px-3 py-2 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                className="px-3 py-1.5 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
               >
-                {allVisibleSelected ? '取消全选(当前筛选)' : '全选当前筛选'}
+                {allVisibleSelected ? '取消全选' : '全选当前筛选'}
               </button>
               <button
                 onClick={() => { setShowBatchTagModal(true); setBatchAddTags([]); setBatchRemoveTags([]); }}
                 disabled={batchSelectedIds.length === 0}
-                className="px-3 py-2 text-xs rounded-full bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                className="px-3 py-1.5 text-xs rounded-full bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
               >
-                批量改标签
+                批量改标签 ({batchSelectedIds.length})
               </button>
               <button
                 onClick={() => { setBatchSelectMode(false); setBatchSelectedIds([]); setBatchSelectAllActive(false); }}
-                className="px-3 py-2 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
+                className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-full border border-slate-200 text-slate-500 hover:bg-slate-100 whitespace-nowrap"
               >
-                取消
+                <X size={12} /> 退出
               </button>
-            </div>
+            </>
           ) : (
             <>
+              <TagFilterDropdown
+                value={tagFilter}
+                onChange={(tag) => setTagFilter(tag)}
+                allTags={allTags}
+              />
               <input
                 type="text"
                 value={uploadDraft.tags}
                 onChange={(e) => setUploadDraft({ ...uploadDraft, tags: e.target.value })}
-                placeholder="标签(逗号分隔)"
-                className="px-3 py-2 text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500 w-full sm:w-32 min-w-[120px]"
+                placeholder="上传标签(逗号分隔)"
+                className="flex-1 min-w-[120px] sm:flex-none sm:w-40 md:w-48 px-3 py-1.5 sm:py-2 text-xs sm:text-sm border border-slate-200 rounded-full focus:outline-none focus:border-blue-500"
               />
               <button
                 onClick={() => { setBatchSelectMode(true); setBatchSelectedIds([]); setBatchSelectAllActive(false); }}
-                className="shrink-0 px-4 py-2 rounded-full text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
+                title="批量选择"
+                className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
               >
-                批量选择
+                <Check size={14} />
+                <span>批量选择</span>
               </button>
-              <button 
-                onClick={() => fileRef.current?.click()}
-                disabled={uploading}
-                className="shrink-0 flex items-center justify-center gap-1.5 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-slate-800 transition shadow-lg shadow-slate-200 disabled:opacity-50 disabled:shadow-none whitespace-nowrap"
+              <button
+                onClick={() => setZipPanelOpen(true)}
+                title="ZIP 批量导入(队列任务)"
+                className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
               >
-                {uploading ? <RefreshCw className="animate-spin" size={16} /> : <Upload size={16} />}
-                <span>上传</span>
+                <FileArchive size={14} />
+                <span>ZIP 导入</span>
               </button>
             </>
           )}
@@ -2237,6 +2374,20 @@ const GalleryView = ({ onBack }) => {
           </div>
         </div>
       )}
+
+      {/* ZIP 批量导入抽屉:零散选 zip → 后台队列异步处理 → 实时进度轮询 */}
+      <GalleryZipImportPanel
+        open={zipPanelOpen}
+        onClose={() => setZipPanelOpen(false)}
+        userId={userId || 'default'}
+        groups={groups}
+        api={api}
+        onCompleted={() => {
+          loadImages({ append: false });
+          loadGroups();
+          loadTags();
+        }}
+      />
     </div>
   );
 };
