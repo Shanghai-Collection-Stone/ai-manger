@@ -497,6 +497,8 @@ export class XhsToolsService {
               title: a.title,
               tags: a.tags,
             })),
+            // 复用已有 Canvas 再生成 → 追加图组,不覆盖上一组生成结果
+            append: true,
           });
           const mergeSummary = await this.mergeImageGroupsToArticles({
             canvasId: requestedCanvasId,

@@ -8,6 +8,24 @@ import { ObjectId } from 'mongodb';
 export type ConversationSessionType = 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher' | 'xhs-article-expert' | 'xhs-image-expert';
 
 /**
+ * @title 动作专家会话 Action Session
+ * @description default sessionType 内部的"当前激活专家"持久化字段。
+ *   sessionType 是会话隔离边界(不能改,改了会话历史就丢了);actionSession 是
+ *   default sessionType 下 supervisor 路由出的当前 expert,跨多轮对话保持,
+ *   下次进同一会话直接路由到该 expert,跳过 supervisor LLM 二次决策。
+ *   null/undefined 表示当前由 supervisor 接管(还没路由 / 用户切回指挥官)。
+ * @keyword-en active expert agent persisted on conversation
+ */
+export type ConversationActionSession =
+  | 'image'
+  | 'article'
+  | 'data'
+  | 'frontend'
+  | 'publisher'
+  | 'task'
+  | null;
+
+/**
  * @title 会话实体 Conversation Entity
  * @description 表示一次AI对话的会话元信息。
  * @keywords-cn 会话, 实体, 上下文
@@ -17,6 +35,8 @@ export interface ConversationEntity {
   _id: ObjectId;
   sessionId: string;
   sessionType?: ConversationSessionType;
+  /** @description default 模式下 supervisor 路由出的当前激活专家(可跨多轮持久化) */
+  actionSession?: ConversationActionSession;
   tenantId?: string;
   userId?: string;
   title?: string;

@@ -8,6 +8,7 @@ import {
   CreateAgentParams,
   HumanMessage,
 } from 'langchain';
+import type { BaseMessageLike } from '@langchain/core/messages';
 import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
 import type { DeepAgentSubAgent } from '../../ai-agent/types/agent.types.js';
 import { ContextRole } from '../../context/enums/context.enums';
@@ -25,6 +26,11 @@ import type { ConversationSessionType } from '../../context/entities/conversatio
 import { SassService } from '../../sass/services/sass.service.js';
 import { DataSourceSchemaService } from '../../data-source/services/data-source-schema.service.js';
 import { MediaAgentService } from '../../media-agent/services/media-agent.service.js';
+import {
+  SupervisorGraphService,
+  type ExpertSpec,
+  type ExpertName,
+} from './supervisor-graph.service.js';
 
 /**
  * @title 主对话服务 Chat-Main Service
@@ -50,6 +56,7 @@ export class ChatMainService {
     private readonly sass: SassService,
     private readonly schemaService: DataSourceSchemaService,
     private readonly mediaAgent: MediaAgentService,
+    private readonly supervisorGraph: SupervisorGraphService,
   ) {}
 
   private readonly HITL_PLACEHOLDER = '##HITL_REQUIRED_FRONTEND##';
@@ -290,6 +297,15 @@ export class ChatMainService {
 
       void (async () => {
         let sid: string | null = null;
+        // 看门狗: 监控 stream 长时间无任何事件(LLM/工具/graph 节点 silent hang),
+        // 超时则主动 abort,让前端至少能收到 error 而不是永久卡死无反应。
+        let streamWatchdog: ReturnType<typeof setInterval> | null = null;
+        // fullText 提到 try 外: 含 earlyEmit 推送的所有 fence(canvas-it/handoff-it/
+        // tag-select-it) + LLM token。catch 分支需要它把"已产生内容"补落库,
+        // 否则 stream 中断时 assistant 消息从不入库 → 刷新后卡片全丢。
+        let fullText = '';
+        // 标记 assistant 消息是否已落库,避免正常路径 + catch 路径重复 append。
+        let assistantPersisted = false;
         try {
           const scope = this.getRequestScope(request);
           const updatesOnlyStream = this.shouldUseUpdatesOnlyStreamForInput(
@@ -339,20 +355,23 @@ export class ChatMainService {
             );
           }
 
-          let fullText = '';
+          // fullText 在 try 外声明(catch 需用它补落库),此处不再重新声明。
 
-          // canvas-it 提前推送通道:tool 内部创建 Canvas 完成的那一刻直接 push 到前端,
-          // 不再依赖 subagent/主 agent 的 LLM 二次解码,首屏几乎零延迟。
-          // 同步累加 fullText 以保证最终落库内容包含 canvas-it(appendCanvasItIfNeeded 仍会兜底去重)。
+          // 早期 fence 推送通道(canvas-it / handoff-it 等):tool 调用瞬间直接 push 到前端,
+          // 不依赖 LLM 二次解码,首屏零延迟。
+          // - canvas-it: xhs_create_image_group_canvas 创 Canvas 成功瞬间推
+          // - handoff-it: supervisor handoff_to_expert 调用瞬间推,前端显示切换提示卡片
+          // 同步累加 fullText 以保证最终落库包含 fence。canvas-it 按 canvasId 去重。
           const emittedEarlyCanvasIds = new Set<number>();
           const earlyEmitCanvasIt = (text: string) => {
             if (shouldStop()) return;
             const block = String(text ?? '').trim();
             if (!block) return;
-            const m = /```canvas-it\s*([\s\S]*?)```/i.exec(block);
-            if (m) {
+            // canvas-it 去重(按 canvasId)
+            const cm = /```canvas-it\s*([\s\S]*?)```/i.exec(block);
+            if (cm) {
               try {
-                const payload = JSON.parse(m[1]) as { canvasId?: unknown };
+                const payload = JSON.parse(cm[1]) as { canvasId?: unknown };
                 const cid = Number(payload?.canvasId);
                 if (Number.isFinite(cid)) {
                   if (emittedEarlyCanvasIds.has(cid)) return;
@@ -362,11 +381,17 @@ export class ChatMainService {
                 // ignore parse errors;不阻塞推送
               }
             }
+            // handoff-it / 其他 fence: 直接透传,前端自行去重
             const payload = `\n\n${block}\n\n`;
             fullText += payload;
             subscriber.next({
               data: { type: 'token', data: { text: payload, thread_id: sid } },
             } as MessageEvent);
+            // 诊断: 记录每次 earlyEmit 推送的 fence 类型 + 当前 fullText 长度
+            const fenceType = /```([a-z-]+)/i.exec(block)?.[1] ?? 'unknown';
+            this.logger.log(
+              `[fence-trace] earlyEmit type=${fenceType} blockLen=${block.length} fullTextLen=${fullText.length} sid=${sid ?? ''}`,
+            );
           };
 
           const finalScope = {
@@ -407,8 +432,115 @@ export class ChatMainService {
           );
           const checkpoint_id = meta?.lastCheckpointId ?? 'root';
 
+          // ─── default 模式: 意图识别 + 专家直派(不再用 LangGraph StateGraph)───
+          // 两步走:
+          //   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读**全部对话历史**,在
+          //      提示词强约束下只输出一个路由词,代码硬解析。不是 tool 调用、不是 graph。
+          //   ② buildExpertAgent —— 按路由词在代码层选定**单个专家** createReactAgent。
+          // 选定的专家 agent 当 preBuiltAgent 交给 agent.stream 正常流式消费,原有
+          // stream 处理逻辑(token 累加 / SSE / 落库)完全不变。
+          // 放弃 StateGraph: supervisor 作为图节点时 minimax 会被多代理执行上下文
+          // 带偏(模仿历史里的工具调用文本、不老实输出路由词),拆成两步后彻底解耦。
+          let preBuiltAgent:
+            | ReturnType<SupervisorGraphService['buildExpertAgent']>
+            | undefined;
+          // ⚠️ ctx.appendMessage 在 stream 入口已写入当前 user 输入,历史已含最新一条。
+          let streamMessages: BaseMessageLike[] = [
+            new HumanMessage(request.input),
+          ];
+          if (this.supervisorGraph.shouldUseSupervisor(scope.sessionType) && sid) {
+            const experts = this.mapSubagentsToExpertSpecs(subagents);
+            const currentAction = meta?.actionSession ?? null;
+            if (experts.length > 0) {
+              // 显式装填完整历史 —— 意图识别 + 专家执行共用同一份。
+              let loadedHistory: BaseMessage[] = [];
+              try {
+                loadedHistory = await this.loadHistoryAsBaseMessages(sid, scope);
+              } catch (e) {
+                this.logger.warn(
+                  `[chat.stream] load_history_failed sid=${sid}: ${String(e)}`,
+                );
+              }
+              const expertLLM = await this.agent.buildLLM({
+                temperature: request.temperature ?? 0.1,
+                tenantId: scope.tenantId,
+              });
+              const intentLLM = await this.agent.buildLLM({
+                temperature: 0,
+                tenantId: scope.tenantId,
+              });
+              const checkpointer =
+                this.agent.getCheckpointer() as unknown as Parameters<
+                  SupervisorGraphService['buildExpertAgent']
+                >[0]['checkpointer'];
+
+              // 简化历史: 剥掉卡片 fence / minimax 工具调用伪文本。
+              // 意图识别 + chat 专家用它,避免 minimax 被执行产物带偏去虚拟造 tool。
+              const cleanHistory =
+                this.simplifyHistoryForRouting(loadedHistory);
+
+              // ① 意图识别 —— 读简化后的全部历史,输出路由词
+              const route = await this.supervisorGraph.recognizeIntent({
+                systemPrompt: this.getSupervisorPromptCN(
+                  sysContent,
+                  currentAction,
+                ),
+                history: cleanHistory,
+                llm: intentLLM,
+                currentActionSession: currentAction,
+              });
+
+              // ② 专家直派 —— 按路由词构建单个专家 agent
+              preBuiltAgent = this.supervisorGraph.buildExpertAgent({
+                route,
+                experts,
+                chatExpertPrompt: this.getChatExpertPromptCN(sysContent),
+                expertLLM,
+                chatLLM: intentLLM,
+                checkpointer,
+              });
+
+              if (route !== 'chat') {
+                // 业务专家: earlyEmit handoff-it 切换卡片 + 持久化 actionSession;
+                // 喂**完整历史**(业务专家要靠执行上下文/卡片接着干活)。
+                try {
+                  const isContinuation = currentAction === route;
+                  const fence = `\`\`\`handoff-it\n${JSON.stringify({
+                    expert: route,
+                    expertNode: `${route}_expert`,
+                    reason: `意图识别路由: ${route}`,
+                    isContinuation,
+                    ts: Date.now(),
+                  })}\n\`\`\``;
+                  earlyEmitCanvasIt(fence);
+                } catch (e) {
+                  this.logger.warn(
+                    `[chat.stream] handoff_fence_emit_failed: ${String(e)}`,
+                  );
+                }
+                try {
+                  await this.ctx.setActionSession(sid, route, scope);
+                } catch (e) {
+                  this.logger.warn(
+                    `[chat.stream] action_session_persist_failed: ${String(e)}`,
+                  );
+                }
+                if (loadedHistory.length > 0) {
+                  streamMessages = loadedHistory;
+                }
+              } else {
+                // chat 专家: 喂**简化历史**,避免它看到历史里的卡片/工具调用后
+                // 跟着虚拟造一个 tool_call。
+                if (cleanHistory.length > 0) {
+                  streamMessages = cleanHistory;
+                }
+              }
+            }
+          }
+
           // ─── 消费 agent stream 事件 ───
           const iterable = this.agent.stream({
+            preBuiltAgent,
             config: {
               temperature: request.temperature ?? 0.1,
               tenantId: scope.tenantId,
@@ -420,7 +552,7 @@ export class ChatMainService {
               streamMode: updatesOnlyStream ? 'updates' : undefined,
               context: { threadId: sid, checkpointId: checkpoint_id },
             },
-            messages: [new HumanMessage(request.input)],
+            messages: streamMessages,
             callOption: {
               configurable: {
                 thread_id: sid,
@@ -444,7 +576,27 @@ export class ChatMainService {
             }
           };
 
+          // 启动看门狗: stream 连续 STREAM_IDLE_TIMEOUT_MS 无任何事件视为 hang。
+          // 阈值给 3 分钟,容忍 LLM thinking 与正常工具调用间隙;真正 silent hang
+          // (LLM/graph 节点无响应)会被打破 → abort → catch → 前端收到 error。
+          const STREAM_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+          let lastStreamEventAt = Date.now();
+          streamWatchdog = setInterval(() => {
+            const idle = Date.now() - lastStreamEventAt;
+            if (idle > STREAM_IDLE_TIMEOUT_MS) {
+              this.logger.error(
+                `[chat.stream] watchdog: ${idle}ms no stream event, aborting. sid=${sid ?? ''} sessionType=${scope.sessionType}`,
+              );
+              try {
+                abortController.abort();
+              } catch {
+                void 0;
+              }
+            }
+          }, 20 * 1000);
+
           for await (const step of iterable) {
+            lastStreamEventAt = Date.now();
             if (shouldStop()) break;
             switch (step.type) {
               case 'start':
@@ -549,6 +701,15 @@ export class ChatMainService {
           text = this.appendDecisionItIfNeeded(text, finalToolResults);
           text = this.ensureReadableNarrationIfNeeded(text, finalToolResults);
 
+          // graph 正常结束但零输出: 不要静默成前端"无内容",明确暴露异常。
+          if (!text.trim()) {
+            this.logger.error(
+              `[stream] empty output sid=${sid} sessionType=${scope.sessionType} — graph 正常结束但未产生任何内容(无 token / 无 fence / 无工具结果)`,
+            );
+            text =
+              '⚠️ AI 未产生有效回复(模型或路由可能异常),请重试一次。若反复出现请联系管理员。';
+          }
+
           // 推送最终 end 事件
           safeSend({
             type: 'end',
@@ -559,6 +720,15 @@ export class ChatMainService {
               thread_id: sid,
             },
           });
+
+          // 诊断: 落库前记录 text 是否含各类 fence,定位 fence 丢在落库前还是落库后
+          this.logger.log(
+            `[fence-trace] persist sid=${sid} textLen=${text.length}` +
+              ` canvas-it=${text.includes('```canvas-it')}` +
+              ` handoff-it=${text.includes('```handoff-it')}` +
+              ` tag-select-it=${text.includes('```tag-select-it')}` +
+              ` fullTextLen=${fullText.length}`,
+          );
 
           // 写入上下文
           await this.ctx.appendMessage(
@@ -574,6 +744,7 @@ export class ChatMainService {
             },
             scope,
           );
+          assistantPersisted = true;
 
           // 异步：标题、索引、checkpoint
           this.titleTools.ensureFirstTurnTitle(sid).catch(() => {});
@@ -590,6 +761,30 @@ export class ChatMainService {
             `[stream] failed sid=${sid ?? 'unknown'} sessionType=${request.sessionType ?? 'default'} userId=${request.userId ?? 'unknown'} tenantId=${request.tenantId ?? 'unknown'} inputLen=${request.input?.length ?? 0} message=${e.message}`,
             e.stack,
           );
+          // ⚠️ stream 中断补落库: assistant 消息未正常落库时(hang/abort/error),
+          // 把已产生的 fullText(含 earlyEmit 推送的 canvas-it/handoff-it/tag-select-it
+          // fence)写入 mongo,否则用户已经看到的卡片在刷新后全部消失。
+          if (!assistantPersisted && sid) {
+            try {
+              const partial = this.sanitizeFinalText(fullText).trim();
+              if (partial.length > 0) {
+                const recoveryScope = this.getRequestScope(request);
+                await this.ctx.appendMessage(
+                  sid,
+                  { role: ContextRole.Assistant, content: partial },
+                  recoveryScope,
+                );
+                assistantPersisted = true;
+                this.logger.warn(
+                  `[stream] partial assistant persisted on error sid=${sid} len=${partial.length}`,
+                );
+              }
+            } catch (persistErr) {
+              this.logger.warn(
+                `[stream] partial persist failed sid=${sid}: ${String(persistErr)}`,
+              );
+            }
+          }
           if (!subscriber.closed) {
             subscriber.next({
               data: {
@@ -599,6 +794,10 @@ export class ChatMainService {
             } as MessageEvent);
           }
         } finally {
+          if (streamWatchdog) {
+            clearInterval(streamWatchdog);
+            streamWatchdog = null;
+          }
           if (!subscriber.closed) subscriber.complete();
         }
       })();
@@ -723,9 +922,31 @@ export class ChatMainService {
         fingerprint,
       };
     });
-    return enriched.filter((m) =>
+    const result = enriched.filter((m) =>
       m.fingerprint ? !deleted.has(m.fingerprint) : true,
     );
+    // 诊断: 记录读取出的 assistant 消息是否含 fence,定位 fence 是落库后丢失还是读取处理丢失
+    for (const m of result) {
+      if (m.role !== ContextRole.Assistant) continue;
+      const c = typeof m.content === 'string' ? m.content : '';
+      if (
+        c.includes('```canvas-it') ||
+        c.includes('```handoff-it') ||
+        c.includes('```tag-select-it')
+      ) {
+        this.logger.log(
+          `[fence-trace] getMessages assistant has fence sid=${sessionId}` +
+            ` canvas-it=${c.includes('```canvas-it')}` +
+            ` handoff-it=${c.includes('```handoff-it')}` +
+            ` tag-select-it=${c.includes('```tag-select-it')}`,
+        );
+      } else {
+        this.logger.log(
+          `[fence-trace] getMessages assistant NO fence sid=${sessionId} contentLen=${c.length}`,
+        );
+      }
+    }
+    return result;
   }
 
   /**
@@ -1056,6 +1277,230 @@ export class ChatMainService {
   }
 
   /**
+   * @description supervisor LLM 系统提示词。仅负责路由决策,不持有业务工具。
+   *   规则尽量短:每个专家一句 + handoff 调用约束 + fallback 直接回答。
+   * @keyword-en supervisor system prompt for routing decisions
+   */
+  /**
+   * @description 把 ctx 存储的对话历史(ContextMessage[])转成 LangChain BaseMessage[]。
+   *   用于 supervisor graph / 直接 expert 路径在 stream 入口显式注入完整对话历史,
+   *   避免依赖 LangGraph checkpoint 跨 graph schema 共享(实测多 graph 切换时 checkpoint
+   *   读不到对方写入的 messages,导致 expert agent 看不到上下文 = "切换后从零开始")。
+   *   - user → HumanMessage / assistant → AIMessage / system → SystemMessage
+   *   - 跳过空 content 的消息(避免 LLM 端报"empty content")
+   *   - ctx.getMessages 已包含当前用户最新消息(stream 入口提前 appendMessage),无需额外 append
+   * @keyword-en load conversation history as base messages
+   */
+  private async loadHistoryAsBaseMessages(
+    sid: string,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<BaseMessage[]> {
+    const history = await this.ctx.getMessages(
+      sid,
+      undefined,
+      undefined,
+      scope,
+    );
+    const out: BaseMessage[] = [];
+    for (const m of history) {
+      const content =
+        typeof m?.content === 'string' ? m.content : String(m?.content ?? '');
+      if (!content.trim()) continue;
+      if (m.role === ContextRole.User) {
+        out.push(new HumanMessage({ content }));
+      } else if (m.role === ContextRole.Assistant) {
+        out.push(new AIMessage({ content }));
+      }
+      // system 消息不复用,会由 createReactAgent 的 prompt 参数自行注入
+    }
+    return out;
+  }
+
+  /**
+   * @description 把对话历史"简化"成纯自然语言对话 —— 剥掉所有 earlyEmit 卡片 fence
+   *   (canvas-it/handoff-it/tag-select-it/task-it/decision-it)和 minimax 私有工具调用
+   *   伪文本(<minimax:tool_call>/<invoke>/<parameter>)。
+   *   **用途**: 意图识别 LLM、chat 专家拿到的历史里若残留"执行产物"(卡片/工具调用),
+   *   minimax 会被带偏 —— 把自己当执行者去模仿、虚拟造一个 tag-select 卡片或 tool_call,
+   *   而不是老实做意图分类 / 闲聊。简化后只剩用户/AI 的自然语言,杜绝这种误触发。
+   *   业务专家**不**用简化历史(它们要靠执行上下文接着干活)。
+   * @keyword-en simplify history strip cards and tool-call artifacts for routing
+   */
+  private simplifyHistoryForRouting(history: BaseMessage[]): BaseMessage[] {
+    const stripArtifacts = (text: string): string =>
+      String(text ?? '')
+        // earlyEmit 卡片 fence(含未闭合兜底)
+        .replace(
+          /```(?:canvas-it|handoff-it|tag-select-it|tag-select|task-it|decision-it)\b[\s\S]*?(?:```|$)/gi,
+          '',
+        )
+        // minimax 私有工具调用伪文本
+        .replace(/<minimax:tool_call>[\s\S]*?(?:<\/minimax:tool_call>|$)/gi, '')
+        .replace(/<\s*invoke\b[\s\S]*?(?:<\/invoke>|$)/gi, '')
+        .replace(/<parameter\b[\s\S]*?(?:<\/parameter>|$)/gi, '')
+        .trim();
+    const out: BaseMessage[] = [];
+    for (const msg of history) {
+      const type = (msg as { _getType?: () => string })._getType?.();
+      // 用户输入保持原样(用户消息不会有执行产物,且可能含多模态图片)
+      if (type === 'human') {
+        out.push(msg);
+        continue;
+      }
+      if (type !== 'ai') continue;
+      const content = (msg as { content?: unknown }).content;
+      const rawText =
+        typeof content === 'string'
+          ? content
+          : Array.isArray(content)
+            ? content
+                .map((b) =>
+                  b && typeof b === 'object' && 'text' in b
+                    ? String((b as { text?: unknown }).text ?? '')
+                    : '',
+                )
+                .join(' ')
+            : '';
+      const cleaned = stripArtifacts(rawText);
+      // 清洗后为空(纯卡片回复) → 丢弃,不喂给路由/chat
+      if (cleaned) out.push(new AIMessage({ content: cleaned }));
+    }
+    return out;
+  }
+
+  private getSupervisorPromptCN(
+    envContext: string,
+    currentActionSession?:
+      | 'image'
+      | 'article'
+      | 'data'
+      | 'frontend'
+      | 'publisher'
+      | 'task'
+      | null,
+  ): string {
+    const expertLabel: Record<string, string> = {
+      image: '图组生图专家',
+      article: '文章生成专家',
+      data: '数据分析专家',
+      frontend: '前端可视化专家',
+      publisher: '批量发布专家',
+      task: '任务编排专家',
+    };
+    const actionCtx = currentActionSession
+      ? `【当前会话上下文】上一轮已激活「${expertLabel[currentActionSession] ?? currentActionSession}」(actionSession=${currentActionSession})。`
+      : '【当前会话上下文】当前无激活专家,由你从头判定。';
+    return [
+      envContext,
+      '',
+      '你是 AI 指挥官的「意图分析层」。你的**唯一**职责: 读完整对话历史,判定本轮用户意图,输出一个路由词。',
+      '',
+      '【⚠️ 输出格式 —— 极其重要,必须严格遵守】',
+      '你的回复**必须且只能**是下面 7 个英文单词中的**一个**,不带任何标点、引号、解释、前后缀:',
+      '  image    article    data    frontend    publisher    task    chat',
+      '正确示例(整条回复就这一个词): chat',
+      '错误示例: "chat"、handoff chat、路由到 chat、expert=chat、我认为应该选 chat',
+      '禁止输出多个词,禁止输出句子,禁止解释理由。',
+      '',
+      '【⚠️ 你只做分类,绝不执行任务】',
+      '你是分类器,不是执行者。无论用户要什么,你都**只输出一个路由词**。',
+      '严禁输出 ```tag-select```、```canvas-it``` 等任何代码块/卡片/JSON/工具调用 ——',
+      '那是专家干的活。你哪怕看到历史里有这些卡片,也绝不模仿、绝不生成。',
+      '',
+      actionCtx,
+      '',
+      '【判定规则】先归类本轮用户消息,再输出对应路由词:',
+      '- 闲聊/无意义/情绪词("哈哈""好的""嗯""厉害""6""hi""你好") → 输出 chat',
+      '- 询问指挥官自己("你是谁""你能做什么""怎么用") → 输出 chat',
+      '- 与 6 个专家领域都无关的通用问题 → 输出 chat',
+      '- 创建/生成/做/出 图组/拼图/封面/Canvas/配图 → 输出 image',
+      '- 写/生成/编排 文章/正文/选题/小红书内容 → 输出 article',
+      '- 查/统计/分析/趋势 数据/记录/聚合,或要方案/决策/策略/建议 → 输出 data',
+      '- 生成 图表/HTML/可视化页面/dashboard → 输出 frontend',
+      '- 批量发布/内容分发/指派 robot 发布执行 → 输出 publisher',
+      '- 创建/编排/查询 任务/待办/工单/排期 → 输出 task',
+      '⚠️ publisher 是"把内容发出去",task 是"管理待办与编排任务",两者不同,别混。',
+      '⚠️ 即使 actionSession 已有激活专家,只要本轮是闲聊/无关内容,也必须输出 chat。',
+      '激活专家不是"锁定",每轮都要重新判定。',
+      '',
+      '【延续性识别】结合完整对话历史判断,本轮是否在推进上一轮专家任务:',
+      '- 历史在做 image 并发出 tag-select 卡片,本轮"我选定标签：#X" → 输出 image',
+      '- 历史在做 data,本轮"换成 14 天"/"再细分一下" → 输出 data',
+      '- 本轮"再来一组"/"再生成一个"且历史在做图组 → 输出 image',
+      '',
+      '再次强调: 你的整条回复只能是 image/article/data/frontend/publisher/task/chat 其中一个词。',
+    ]
+      .filter((line) => typeof line === 'string')
+      .join('\n');
+  }
+
+  /**
+   * @description chat_expert(指挥官闲聊/通用对话节点)的系统提示词。supervisor 把
+   *   闲聊/打招呼/问能力/与业务无关的问题 handoff 到本节点,由本节点固有返回 ——
+   *   supervisor 自己绝不生成用户可见内容,所有面向用户的文字都由专家节点产出。
+   * @keyword-en build chat expert prompt for casual conversation node
+   */
+  private getChatExpertPromptCN(envContext: string): string {
+    return [
+      envContext,
+      '',
+      '你是 AI 指挥官,负责与用户做通用对话。意图分析层已判定本轮是闲聊/打招呼/询问能力/与业务无关的通用问题,转交给你直接回应。',
+      '',
+      '【你的能力】你统筹 6 个业务方向,可按用户需求调度:',
+      '- 图组生图: 创建图组 Canvas、配图、封面、拼图',
+      '- 文章生成: 写正文、编排选题、小红书内容',
+      '- 数据分析 & 决策建议: 查询统计、趋势分析、报表,并据此生成决策卡/方案建议',
+      '- 前端可视化: 生成图表、HTML 看板、dashboard',
+      '- 批量发布: 内容批量发布、分发、机器人发布执行',
+      '- 任务编排: 待办/工单的创建、编排、管理',
+      '',
+      '【回应要求】',
+      '- 闲聊/情绪词("哈哈""好的""厉害"): 自然地回一句,语气轻松',
+      '- 问"你是谁"/"你能做什么": 简洁介绍你能统筹的 6 个方向,引导用户提出具体需求',
+      '- 与业务无关的通用问题: 简短回答,或说明你更擅长上述 6 类任务',
+      '- 用中文,1-3 句即可,不要冗长,不要解释内部路由逻辑',
+    ]
+      .filter((line) => typeof line === 'string')
+      .join('\n');
+  }
+
+  /**
+   * @description 把 buildDefaultSubagents 返回的 SubAgent 数组映射到 SupervisorGraph
+   *   所需的 ExpertSpec 数组(零重复:直接复用现有 prompt+tools)。
+   * @keyword-en map default subagents to expert specs
+   */
+  private mapSubagentsToExpertSpecs(
+    subagents: DeepAgentSubAgent[],
+  ): ExpertSpec[] {
+    const nameMap: Record<string, ExpertName> = {
+      analysis_subagent: 'data',
+      topic_orchestrate_subagent: 'article',
+      frontend_subagent: 'frontend',
+      ops_subagent: 'publisher',
+      task_subagent: 'task',
+      gallery_subagent: 'image',
+    };
+    const specs: ExpertSpec[] = [];
+    for (const sub of subagents) {
+      const expertName = nameMap[sub.name];
+      if (!expertName) continue;
+      const tools = Array.isArray(sub.tools) ? sub.tools : [];
+      specs.push({
+        name: expertName,
+        description: sub.description,
+        systemPrompt:
+          typeof sub.systemPrompt === 'string' ? sub.systemPrompt : '',
+        tools,
+      });
+    }
+    return specs;
+  }
+
+  /**
    * @description 获取会话模式系统提示
    * @keyword-en resolve system prompt by session mode
    */
@@ -1071,8 +1516,10 @@ export class ChatMainService {
     }
     if (sessionType === 'xhs-tracker') return this.getXhsTrackerPromptCN();
     if (sessionType === 'xhs-publisher') return this.getXhsPublisherPromptCN();
-    if (sessionType === 'xhs-article-expert') return this.getXhsArticleExpertPromptCN();
-    if (sessionType === 'xhs-image-expert') return this.getXhsImageExpertPromptCN();
+    if (sessionType === 'xhs-article-expert')
+      return this.getXhsArticleExpertPromptCN();
+    if (sessionType === 'xhs-image-expert')
+      return this.getXhsImageExpertPromptCN();
     return this.getDataAnalysisPromptCN(tenantId);
   }
 
@@ -1514,6 +1961,7 @@ export class ChatMainService {
     topicOrchestrate: StructuredTool[];
     frontend: StructuredTool[];
     ops: StructuredTool[];
+    task: StructuredTool[];
     gallery: StructuredTool[];
   } {
     const pick = (...names: string[]): StructuredTool[] => {
@@ -1581,11 +2029,11 @@ export class ChatMainService {
         ),
       ],
       // 执行编排 — Todo 管理 + 机器人 + MCP 适配器执行工具 + 看板写入
+      // 批量发布 — robot 指派/内容分发/发布执行 + 剩余 MCP 自动化工具
       ops: [
-        ...pickPrefix('todo_'),
         ...pick('robot_list'),
         ...pick('dashboard_config_patch'),
-        // 剩余 MCP 适配器工具（非分析/前端/图库/搜索类），如自动化指令等
+        // 剩余 MCP 适配器工具（非分析/前端/图库/搜索/任务类），如自动化指令等
         ...allTools.filter((t) => {
           const n = t.name;
           return (
@@ -1608,6 +2056,8 @@ export class ChatMainService {
           );
         }),
       ],
+      // 任务编排 — 待办/工单的创建、编排、管理(todo_* 全家桶)
+      task: [...pickPrefix('todo_')],
       // 图库 + XHS Canvas — 完全独立来源
       gallery: [
         ...this.normalizeSubagentTools(
@@ -1834,6 +2284,10 @@ export class ChatMainService {
       '- 当需要查询多个表的结构时，使用 schema_batch_get 一次获取多个表的完整字段',
       '- 当需要从多个表或多条件查询数据时，使用 data_source_batch_query 并发执行多个查询',
       '- 批量查询返回时，若某个查询数据超量，会在 warning 中提示该查询条件和数据有误，请根据提示调整',
+      '【决策卡生成】当用户诉求属于"方案/决策/策略/建议"类时：',
+      '- 已有可支撑数据 → 调用 decision_card_generate 生成决策卡',
+      '- 数据不足 → 先按上述流程查数据，再生成决策卡',
+      '- 工具返回决策卡信息（cardId）后，回复中输出一个 ```decision-it``` JSON 代码块（至少含 cardId），供前端渲染',
       '【约束】',
       '- 默认 limit = 50，最大 200',
       '- 避免不必要的多轮工具调用',
@@ -1899,14 +2353,27 @@ export class ChatMainService {
       {
         name: 'ops_subagent',
         description:
-          '【批量发布·任务执行·机器人指派】触发批量发布 / 指派 robot 执行任务 → 委派此代理。',
+          '【批量发布·内容分发·机器人发布执行】触发批量发布 / 指派 robot 执行发布 → 委派此代理。不处理待办/任务编排。',
         systemPrompt: [
           envStr,
-          '你是执行编排子代理，专注批量发布与任务执行，严格遵守工具调用规则。',
+          '你是批量发布子代理，专注内容批量发布、分发与 robot 发布执行，严格遵守工具调用规则。',
         ]
           .filter(Boolean)
           .join('\n'),
         tools: toolSets.ops,
+      },
+      {
+        name: 'task_subagent',
+        description:
+          '【任务编排】创建/更新/查询/编排待办与工单 → 委派此代理。不处理批量发布。',
+        systemPrompt: [
+          envStr,
+          '你是任务编排子代理，负责待办/工单的创建、更新、查询与多步骤编排。',
+          '用 todo_* 工具落地任务，你只编排不直接执行业务；严格遵守工具调用规则。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        tools: toolSets.task,
       },
       this.buildGallerySubagent(envStr, toolSets.gallery),
     ]);
@@ -2278,11 +2745,21 @@ export class ChatMainService {
           const t = todoObj as Record<string, unknown>;
           const idRaw = t['id'] ?? t['todoId'];
           const idNum =
-            typeof idRaw === 'number' ? idRaw : typeof idRaw === 'string' ? Number(idRaw) : NaN;
+            typeof idRaw === 'number'
+              ? idRaw
+              : typeof idRaw === 'string'
+                ? Number(idRaw)
+                : NaN;
           if (Number.isFinite(idNum) && !out.some((x) => x.todoId === idNum)) {
-            const status = typeof t['status'] === 'string' ? t['status'] : undefined;
-            const taskType = typeof t['type'] === 'string' ? t['type'] : undefined;
-            out.push({ todoId: idNum, status, ...(taskType ? { platform: taskType } : {}) });
+            const status =
+              typeof t['status'] === 'string' ? t['status'] : undefined;
+            const taskType =
+              typeof t['type'] === 'string' ? t['type'] : undefined;
+            out.push({
+              todoId: idNum,
+              status,
+              ...(taskType ? { platform: taskType } : {}),
+            });
           }
         }
         const nestedKeys = ['result', 'task', 'summary', 'data'];

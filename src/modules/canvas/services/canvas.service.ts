@@ -381,6 +381,8 @@ export class CanvasService {
     tenantId?: string;
     topic?: string;
     articles: CanvasImageGroupCreateInput['articles'];
+    /** true=追加到现有图组(复用 Canvas 再生成);false/缺省=覆盖(新建 Canvas 首次生成) */
+    append?: boolean;
   }): Promise<CanvasImageGroup[]> {
     const groups = await this.imageGroupService.generateImageGroups({
       userId: input.userId,
@@ -388,7 +390,12 @@ export class CanvasService {
       topic: input.topic,
       articles: input.articles,
     });
-    await this.updateImageGroups(input.canvasId, groups, input.tenantId);
+    await this.updateImageGroups(
+      input.canvasId,
+      groups,
+      input.tenantId,
+      input.append === true,
+    );
     return groups;
   }
 
@@ -499,14 +506,41 @@ export class CanvasService {
    * @returns {Promise<void>}
    * @keyword-en update canvas image groups
    */
+  /**
+   * @description 回写 Canvas 的图组。
+   *   - append=false(默认): 整组覆盖(新建 Canvas 首次生成)
+   *   - append=true: 追加到现有 imageGroups 之后(复用 Canvas 再生成新图组),
+   *     新图组 id 接续现有最大 id 重新编号,避免 id 冲突。
+   * @keyword-en update or append image groups on canvas
+   */
   async updateImageGroups(
     id: number,
     imageGroups: CanvasImageGroup[],
     tenantId?: string,
+    append = false,
   ): Promise<void> {
+    if (!append) {
+      await this.canvases.updateOne(
+        { id, ...this.buildTenantFilter(tenantId) },
+        { $set: { imageGroups, updatedAt: new Date() } },
+      );
+      return;
+    }
+    const existing = await this.get(id, tenantId);
+    const old = Array.isArray(existing?.imageGroups)
+      ? existing.imageGroups
+      : [];
+    const maxId = old.reduce(
+      (m, g) => Math.max(m, Number((g as { id?: unknown }).id) || 0),
+      0,
+    );
+    const renumbered = imageGroups.map((g, idx) => ({
+      ...g,
+      id: maxId + idx + 1,
+    }));
     await this.canvases.updateOne(
       { id, ...this.buildTenantFilter(tenantId) },
-      { $set: { imageGroups, updatedAt: new Date() } },
+      { $set: { imageGroups: [...old, ...renumbered], updatedAt: new Date() } },
     );
   }
 

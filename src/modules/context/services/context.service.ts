@@ -12,6 +12,7 @@ import { MessageEntity } from '../entities/message.entity';
 import {
   ConversationEntity,
   ConversationSessionType,
+  ConversationActionSession,
 } from '../entities/conversation.entity';
 import { ContextRole } from '../enums/context.enums';
 
@@ -160,6 +161,9 @@ export class ContextService {
       sessionId,
       tenantId: scope?.tenantId,
       userId: scope?.userId,
+      // 写入 sessionType,使 messages doc 自带会话类型(历史 doc 无此字段,
+      // getMessages 查询已去掉 sessionType 过滤兼容新老数据)。
+      sessionType: this.normalizeSessionType(scope?.sessionType),
       role: message.role,
       content: message.content,
       name: message.name,
@@ -199,7 +203,13 @@ export class ContextService {
     },
   ): Promise<ContextMessage[]> {
     await this.assertSessionScope(sessionId, scope);
+    // ⚠️ messages 集合的 doc 不含 sessionType 字段(appendMessage 不写入),
+    // 所以查 storedMessages 时必须去掉 sessionType 过滤,否则永远查空 ——
+    // 这会让 supervisor graph 模式下 earlyEmit fence(canvas-it/handoff-it/
+    // tag-select-it)的兜底失效(fence 只存 mongo content,不在 checkpoint)。
+    // sessionId 已全局唯一,sessionId + tenant + user 过滤足够。
     const messageFilter = this.buildConversationFilter(sessionId, scope);
+    delete messageFilter['sessionType'];
     const storedMessages = await this.messages
       .find(messageFilter)
       .sort({ timestamp: 1 })
@@ -238,6 +248,46 @@ export class ContextService {
     const arr = Array.isArray(stateMessages)
       ? (stateMessages as unknown[])
       : [];
+    // 优先用 mongo storedMessages 的两种情况:
+    // 1. checkpoint 顶层 messages 为空(supervisor graph 嵌套子图时 messages 在子图
+    //    namespace 下,父图顶层未聚合)
+    // 2. mongo 已存有 assistant 消息(对话正常完成落库)。此时 mongo content 才是权威 ——
+    //    它包含 earlyEmit 旁路推送的 fence(canvas-it / handoff-it / tag-select-it),
+    //    而这些 fence 不在 LLM 的 checkpoint messages 里,走 checkpoint 重建会丢失,
+    //    导致刷新后标签选择卡片/切换胶囊消失。
+    //    checkpoint 重建仅保留给"stream 中断、mongo 未存 assistant"的兜底场景。
+    const storedHasAssistant = storedMessages.some(
+      (m) => m.role === ContextRole.Assistant,
+    );
+    if (
+      (arr.length === 0 || storedHasAssistant) &&
+      storedMessages.length > 0
+    ) {
+      const fallback = storedMessages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : '',
+        name: typeof m.name === 'string' ? m.name : undefined,
+        tool_calls: Array.isArray(m.tool_calls) ? m.tool_calls : undefined,
+        tool_results: Array.isArray(m.tool_results)
+          ? m.tool_results
+          : undefined,
+        tool_summary: Array.isArray(m.tool_summary)
+          ? m.tool_summary
+          : undefined,
+        parts: Array.isArray(m.parts) ? (m.parts as MessagePart[]) : undefined,
+        timestamp: m.timestamp,
+      }));
+      const filtered =
+        opts && Array.isArray(opts.excludeRoles) && opts.excludeRoles.length > 0
+          ? fallback.filter((m) => !opts.excludeRoles!.includes(m.role))
+          : fallback;
+      const ordered = filtered.sort(
+        (a, b) => (a.timestamp?.getTime() ?? 0) - (b.timestamp?.getTime() ?? 0),
+      );
+      return typeof limit === 'number' && limit > 0
+        ? ordered.slice(-limit)
+        : ordered;
+    }
     const msgs: ContextMessage[] = [];
     const toolResultBuffer = new Map<
       string,
@@ -961,6 +1011,7 @@ export class ContextService {
           _id: 0,
           sessionId: 1,
           sessionType: 1,
+          actionSession: 1,
           title: 1,
           lastCheckpointId: 1,
           createdAt: 1,
@@ -969,6 +1020,35 @@ export class ContextService {
       },
     );
     return doc ?? null;
+  }
+
+  /**
+   * @title 设置 actionSession Set Action Session
+   * @description 持久化 default 模式下 supervisor 路由出的当前激活专家。
+   *   传 null 清空(回到 supervisor 待路由状态)。该字段跨多轮对话保持,
+   *   下次进同一会话 chat.service 优先按它直接路由到 expert,跳过 supervisor LLM 决策。
+   * @keyword-en set action session for default mode multi-agent routing
+   */
+  async setActionSession(
+    sessionId: string,
+    actionSession: ConversationActionSession,
+    scope?: {
+      tenantId?: string;
+      userId?: string;
+      sessionType?: ConversationSessionType;
+    },
+  ): Promise<void> {
+    const filter = this.buildConversationReadFilter(sessionId, scope);
+    if (actionSession === null) {
+      await this.conversations.updateOne(filter, {
+        $unset: { actionSession: '' as const },
+        $set: { updatedAt: new Date() },
+      } as unknown as Parameters<typeof this.conversations.updateOne>[1]);
+    } else {
+      await this.conversations.updateOne(filter, {
+        $set: { actionSession, updatedAt: new Date() },
+      });
+    }
   }
 
   /**

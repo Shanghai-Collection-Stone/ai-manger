@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { Agent as UndiciAgent } from 'undici';
+import { Agent as UndiciAgent, ProxyAgent as UndiciProxyAgent } from 'undici';
+import { resolveProxyUriFromEnv } from '../../../shared/network/proxy.js';
 import {
   AgentRunInput,
   AgentConfig,
@@ -57,19 +58,37 @@ type InteropZodObject =
 @Injectable()
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
+  /** @description LangGraph 状态持久化(MongoDB),按 thread_id 跨多轮对话延续 state。
+   *   外部(如 chat.service supervisor graph)需要复用同一 checkpointer 才能让多轮对话
+   *   看到完整历史 messages,通过 getCheckpointer() 公开访问。 */
   private readonly checkpointer: MongoDBSaver;
+  getCheckpointer(): MongoDBSaver {
+    return this.checkpointer;
+  }
   /**
    * @description 生图专用 undici dispatcher: gpt-image-* / dall-e-* / seedream 这类
    *  调用 OpenAI/Doubao 生图 API 的请求服务端处理常达 5-10 分钟,默认 undici
    *  headersTimeout=300s/bodyTimeout=300s 会在 5 分钟时抛 `HeadersTimeoutError:
    *  UND_ERR_HEADERS_TIMEOUT`。这里给 15 分钟,与 AbortSignal.timeout 配合。
-   * @keyword-en long-timeout undici dispatcher for image generation
+   *
+   *  **代理**: 生图 fetch 显式传 dispatcher 会覆盖 enableProxyFromEnv 设的全局
+   *  dispatcher,所以本 dispatcher 必须自己叠加代理。复用 resolveProxyUriFromEnv()
+   *  读取 .env 统一代理配置(DEV_HTTPS_PROXY / HTTPS_PROXY 等),不另开独立变量。
+   *  有代理 → ProxyAgent(长超时);无代理 → Agent(长超时直连)。
+   * @keyword-en long-timeout undici dispatcher for image generation, unified proxy
    */
-  private readonly imageGenDispatcher = new UndiciAgent({
-    headersTimeout: 15 * 60 * 1000,
-    bodyTimeout: 15 * 60 * 1000,
-    connectTimeout: 30 * 1000,
-  });
+  private readonly imageGenDispatcher: UndiciAgent | UndiciProxyAgent =
+    (() => {
+      const proxyUri = resolveProxyUriFromEnv();
+      const timeouts = {
+        headersTimeout: 15 * 60 * 1000,
+        bodyTimeout: 15 * 60 * 1000,
+      };
+      if (proxyUri) {
+        return new UndiciProxyAgent({ uri: proxyUri, ...timeouts });
+      }
+      return new UndiciAgent({ ...timeouts, connectTimeout: 30 * 1000 });
+    })();
 
   constructor(
     @Inject('CTX_MONGO_CLIENT') client: MongoClient,
@@ -93,6 +112,15 @@ export class AgentService {
       }
       return originalPutWrites(config, writes, taskId);
     };
+
+    // 启动时打印生图 dispatcher 是否走代理(复用 .env 统一代理配置),便于排查
+    // OpenAI 直连 ECONNREFUSED
+    const proxyUri = resolveProxyUriFromEnv();
+    this.logger.log(
+      proxyUri
+        ? `[image-dispatcher] proxy enabled via ${proxyUri} (.env 统一代理配置)`
+        : '[image-dispatcher] direct connection (代理未启用)。若 OpenAI 生图报 ECONNREFUSED,请检查 .env 的 DEV_PROXY_ENABLED / DEV_HTTPS_PROXY 配置',
+    );
   }
 
   /**
@@ -129,7 +157,30 @@ export class AgentService {
   }
 
   async buildLLM(config: AgentConfig): Promise<BaseChatModel> {
-    const runtime = await this.resolveDefaultRuntime();
+    // 配置来源: config 显式传入 provider+model 时优先用 config(如 keyword.service
+    // 的专用 LLM),否则回退 admin 默认 runtime。之前无条件用 resolveDefaultRuntime,
+    // 导致 config 传入的 provider/model/apiKey/baseUrl 被完全忽略。
+    const runtime: {
+      providerCode: string;
+      model?: string;
+      apiKey?: string;
+      baseUrl?: string;
+    } =
+      config.provider && config.model
+        ? {
+            providerCode: String(config.provider),
+            model: String(config.model),
+            apiKey:
+              typeof config.apiKey === 'string' && config.apiKey.trim()
+                ? config.apiKey.trim()
+                : undefined,
+            baseUrl:
+              String(config.baseUrl ?? '').trim() ||
+              this.resolveProviderDefaultBaseUrl(
+                String(config.provider).trim().toLowerCase(),
+              ),
+          }
+        : await this.resolveDefaultRuntime();
     const provider = String(runtime.providerCode).trim().toLowerCase();
     const rawModel = String(runtime.model ?? '').trim();
     if (!rawModel) throw new Error('AI_MODEL_NOT_CONFIGURED');
@@ -137,6 +188,11 @@ export class AgentService {
     const modelProvider = m?.[1];
     const modelName = (m?.[2] ?? rawModel).trim();
     if (!modelName) throw new Error('AI_MODEL_NOT_CONFIGURED');
+    // 可观测: 打印实际生效的 provider / baseUrl / model,便于排查 404 page not found
+    // 这类"请求打到错误 URL"问题(NVIDIA 等 OpenAI 兼容厂商 baseUrl 配错最常见)。
+    this.logger.log(
+      `[buildLLM] provider=${provider} model=${modelName} baseUrl=${runtime.baseUrl ?? '<sdk-default>'} source=${config.provider && config.model ? 'config' : 'admin-runtime'}`,
+    );
 
     // 防止生图模型被误配置为 chat 默认运行时:这类模型走 /v1/images/generations,
     // 不兼容 chat completions,塞进 LangChain agent 会触发 wrapModelCall 返回非
@@ -2206,10 +2262,15 @@ export class AgentService {
     const mergedSystem = [input.config.system, extracted.systemText]
       .filter((x) => typeof x === 'string' && x.trim().length > 0)
       .join('\n\n');
-    const agent = await this.buildChatModel({
-      ...input.config,
-      system: mergedSystem.length > 0 ? mergedSystem : undefined,
-    });
+    // 允许外部(chat.service supervisor 路径)传入已构建的 graph,跳过 buildChatModel;
+    // 否则按现有 deepagents 路径构建。
+    const agent = (input.preBuiltAgent ??
+      (await this.buildChatModel({
+        ...input.config,
+        system: mergedSystem.length > 0 ? mergedSystem : undefined,
+      }))) as ReturnType<AgentService['buildChatModel']> extends Promise<infer R>
+      ? R
+      : never;
     // 确保 configurable 字段始终存在
     const defaultConfigurable = {
       thread_id: `stream_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -2329,6 +2390,14 @@ export class AgentService {
           if (!message) continue;
 
           const msgType = message['type'] as string | undefined;
+          // ⚠️ message 是 AIMessageChunk **实例**时,`message['type']` 是 undefined
+          // (实例无 type 属性,只有 _getType() 方法),不能靠字符串比较判定 chunk。
+          // 真实的流式增量 chunk 用 constructor 名判定才可靠。
+          const ctorName = (
+            message as { constructor?: { name?: string } }
+          ).constructor?.name;
+          const isStreamingChunk =
+            ctorName === 'AIMessageChunk' || msgType === 'AIMessageChunk';
           const isAIChunk =
             msgType === 'AIMessageChunk' ||
             msgType === 'ai' ||
@@ -2379,12 +2448,44 @@ export class AgentService {
           }
 
           if (isAIChunk) {
-            const text = (message['text'] ??
-              message['content'] ??
-              '') as string;
-            const textStr = typeof text === 'string' ? text : '';
+            // ⚠️ content 可能是 Anthropic content block 数组(minimax 走 ChatAnthropic
+            // 返回 [{type:'thinking',...},{type:'text',text:'...'}])。必须从数组里
+            // 提取 type==='text' 的 block 文本,跳过 thinking;只认 string 会丢全部内容。
+            let textStr = '';
+            const rawText = message['text'];
+            const rawContent = message['content'];
+            if (typeof rawText === 'string' && rawText.length > 0) {
+              textStr = rawText;
+            } else if (typeof rawContent === 'string') {
+              textStr = rawContent;
+            } else if (Array.isArray(rawContent)) {
+              textStr = rawContent
+                .map((b) =>
+                  b &&
+                  typeof b === 'object' &&
+                  (b as { type?: unknown }).type === 'text' &&
+                  typeof (b as { text?: unknown }).text === 'string'
+                    ? (b as { text: string }).text
+                    : '',
+                )
+                .join('');
+            }
             if (textStr) {
-              if (!isSubagent) {
+              // ⚠️ preBuiltAgent(supervisor graph)模式: chat.service 把完整历史
+              // messages 显式注入 graph input,这些历史 message 会被 messages
+              // streamMode 当**完整 AIMessage**(constructor=AIMessage)emit 出来。
+              // 若累加,上一轮的 fence/文字会被"重放"进本轮 fullText。
+              // 只累加真正的流式增量 chunk(constructor=AIMessageChunk),完整
+              // AIMessage 跳过。⚠️ 用 constructor 名判定 —— 实例的 message['type']
+              // 是 undefined,旧代码 `msgType!=='AIMessageChunk'` 恒真会把每个 token
+              // 都跳过 → fullText 永远 0 → 前端"无内容"。
+              if (input.preBuiltAgent && !isStreamingChunk) {
+                continue;
+              }
+              // supervisor graph(preBuiltAgent)模式: supervisor / expert 节点的输出
+              // 都是面向用户的主输出,不存在 deepagents 那种"子代理思考过程"。
+              const treatAsMain = !!input.preBuiltAgent || !isSubagent;
+              if (treatAsMain) {
                 fullText += textStr;
                 yield { type: 'token', data: { text: textStr } };
               } else {

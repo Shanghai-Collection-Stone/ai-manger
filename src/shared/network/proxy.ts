@@ -1,12 +1,16 @@
 import { Agent, ProxyAgent, setGlobalDispatcher } from 'undici';
 import type { Dispatcher } from 'undici';
 /**
- * @title 代理启用 Proxy Enable
- * @description 启用基于环境变量的HTTP/HTTPS代理。
- * @keywords-cn 代理, v2ray, 网络
- * @keywords-en proxy, v2ray, network
+ * @title 解析代理地址 Resolve Proxy URI
+ * @description 按统一规则从环境变量解析当前生效的代理地址(.env 统一配置)。
+ *   - dev 环境读 DEV_PROXY_ENABLED / DEV_HTTPS_PROXY|DEV_HTTP_PROXY|DEV_ALL_PROXY
+ *   - 非 dev 读 PROXY_ENABLED / HTTPS_PROXY|HTTP_PROXY|ALL_PROXY
+ *   - PROXY_ENABLED=false 时返回 null(显式关闭)
+ *   供 enableProxyFromEnv(全局 dispatcher) 与生图专用 dispatcher 复用同一份配置,
+ *   避免各处各自读环境变量导致不一致。
+ * @keyword-en resolve proxy uri from env unified config
  */
-export function enableProxyFromEnv(): void {
+export function resolveProxyUriFromEnv(): string | null {
   const env = (process.env.NODE_ENV ?? '').toLowerCase();
   const isDev = env === 'development' || env === 'dev';
   let enabled = true;
@@ -17,7 +21,7 @@ export function enableProxyFromEnv(): void {
     const v = process.env.PROXY_ENABLED;
     if (typeof v !== 'undefined') enabled = v.toLowerCase() === 'true';
   }
-  if (!enabled) return;
+  if (!enabled) return null;
   const devProxy = isDev
     ? process.env.DEV_HTTPS_PROXY ||
       process.env.DEV_HTTP_PROXY ||
@@ -28,7 +32,21 @@ export function enableProxyFromEnv(): void {
     process.env.HTTPS_PROXY ||
     process.env.HTTP_PROXY ||
     process.env.ALL_PROXY;
-  if (!proxy || typeof proxy !== 'string' || proxy.length === 0) return;
+  if (!proxy || typeof proxy !== 'string' || proxy.trim().length === 0) {
+    return null;
+  }
+  return proxy.trim();
+}
+
+/**
+ * @title 代理启用 Proxy Enable
+ * @description 启用基于环境变量的HTTP/HTTPS代理。
+ * @keywords-cn 代理, v2ray, 网络
+ * @keywords-en proxy, v2ray, network
+ */
+export function enableProxyFromEnv(): void {
+  const proxy = resolveProxyUriFromEnv();
+  if (!proxy) return;
   try {
     const noProxy = parseNoProxyEnv([
       process.env.NO_PROXY,

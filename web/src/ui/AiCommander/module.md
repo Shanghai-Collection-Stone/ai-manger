@@ -5,13 +5,14 @@
 ## 文件清单
 
 ### ChatBIView.jsx
-AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-select-it** 内联卡片（含异步轮询/详情 Modal/选标签弹窗）。`handleSend(overrideText?)` 接受可选参数,卡片回写时直接调用以用户消息形式发送 tags("我选定标签：#A #B")。
-- **关键词**: chat, ai, bi, commander, stream, canvas-it, task-it, tag-select-it, quick-message
+AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-select-it**、**handoff-it** 内联卡片（含异步轮询/详情 Modal/选标签弹窗/supervisor 路由切换胶囊）。`handleSend(overrideText?)` 接受可选参数,卡片回写时直接调用以用户消息形式发送 tags("我选定标签：#A #B")。
+- **关键词**: chat, ai, bi, commander, stream, canvas-it, task-it, tag-select-it, handoff-it, supervisor, quick-message
 - **函数**:
-  - `extractAllCanvasItBlocks` / `extractAllTaskItBlocks` / `extractAllTagSelectBlocks`: 从消息文本提取对应 fence JSON 块
+  - `extractAllCanvasItBlocks` / `extractAllTaskItBlocks` / `extractAllTagSelectBlocks` / `extractAllHandoffBlocks`: 从消息文本提取对应 fence JSON 块
   - `TagSelectCard`: tag 选择卡片(琥珀色徽章),展示标题/提示/推荐 chips 预览,点击触发 `TagSelectModal` 弹窗;确认后显示已选 chips 状态
   - `TagSelectModal`: 顶部搜索框 + 已选 chips + 内容区(无输入显示推荐计数 chips,有输入显示联想下拉),底部确认按钮校验 minTags/maxTags;`chatService.listGalleryTags` 拉全量 tags 用于联想
-  - `AIMessage`: 多卡片渲染,strip 三种 fence 后走 markdown;新增 `onSubmitQuickMessage(text)` prop 用于卡片向 AI 回写用户消息
+  - `HandoffCard`: 🆕 意图识别 → expert 路由胶囊。展示`→ 已切换至 {专家名} + reason 副标题`,6 个专家映射颜色(image/violet, article/sky, data/emerald, frontend/indigo, publisher/amber, task/rose)+ emoji 图标(🎨/✍️/📊/📈/🚀/🗂️)。后端意图识别路由到业务专家时通过 earlyEmit 推送 `\`\`\`handoff-it\`\`\`` fence 到主 SSE,前端即时渲染让用户感知到路由切换
+  - `AIMessage`: 多卡片渲染,strip 四种 fence 后走 markdown;新增 `onSubmitQuickMessage(text)` prop 用于卡片向 AI 回写用户消息
   - `handleSend(overrideText?)`: 支持 override 参数,无 override 时取 inputValue;TagSelectCard 通过该回调把所选 tags 拼成自然语言消息发回 AI
 
 ### XhsSpecialistView.jsx

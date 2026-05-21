@@ -459,6 +459,25 @@ function extractAllTagSelectBlocks(text) {
   return blocks;
 }
 
+/**
+ * @description 从消息文本中提取所有 handoff-it JSON 块(supervisor 切换到 expert 的事件)
+ * @keyword-en extract handoff-it blocks for supervisor handoff display
+ */
+function extractAllHandoffBlocks(text) {
+  if (!text) return [];
+  const blocks = [];
+  const re = /```handoff-it\s*([\s\S]*?)```/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const payload = JSON.parse(m[1].trim());
+      const expert = typeof payload?.expert === 'string' ? payload.expert : '';
+      if (expert) blocks.push({ ...payload, expert });
+    } catch { /* skip */ }
+  }
+  return blocks;
+}
+
 /* ─── Task-it Inline Card ─── */
 
 /**
@@ -976,6 +995,63 @@ const TagSelectModal = ({
   );
 };
 
+/* ─── Handoff Inline Card (supervisor → expert 切换提示) ─── */
+
+const EXPERT_LABELS = {
+  image: { label: '图组生图专家', icon: '🎨', color: 'violet' },
+  article: { label: '文章生成专家', icon: '✍️', color: 'sky' },
+  data: { label: '数据分析专家', icon: '📊', color: 'emerald' },
+  frontend: { label: '前端可视化专家', icon: '📈', color: 'indigo' },
+  publisher: { label: '批量发布专家', icon: '🚀', color: 'amber' },
+  task: { label: '任务编排专家', icon: '🗂️', color: 'rose' },
+};
+
+/**
+ * @description 切换胶囊:supervisor handoff_to_expert 触发时渲染。
+ *   - 切换(isContinuation=false): 醒目样式 "→ 已切换至 X 专家" + reason
+ *   - 延续(isContinuation=true): 极简灰色细条 "X 专家继续处理",不喧宾夺主
+ * @keyword-en handoff inline card, distinguishes switch vs continuation
+ */
+const HandoffCard = React.memo(({ payload }) => {
+  const meta = EXPERT_LABELS[payload?.expert] || {
+    label: payload?.expert || '专家',
+    icon: '↪️',
+    color: 'slate',
+  };
+  const isContinuation = payload?.isContinuation === true;
+
+  // 延续同一专家: 极简单行灰条,不带 reason,降低视觉噪音
+  if (isContinuation) {
+    return (
+      <div className="my-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-50 border border-slate-150 text-[10px] text-slate-400">
+        <span className="leading-none">{meta.icon}</span>
+        <span>{meta.label}继续处理</span>
+      </div>
+    );
+  }
+
+  // 真正切换专家: 醒目彩色胶囊 + reason
+  const colorMap = {
+    violet: 'bg-violet-50 border-violet-200 text-violet-700',
+    sky: 'bg-sky-50 border-sky-200 text-sky-700',
+    emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+    indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
+    amber: 'bg-amber-50 border-amber-200 text-amber-700',
+    rose: 'bg-rose-50 border-rose-200 text-rose-700',
+    slate: 'bg-slate-50 border-slate-200 text-slate-700',
+  };
+  const reason = typeof payload?.reason === 'string' ? payload.reason : '';
+  return (
+    <div className={`my-2 inline-flex items-start gap-2 px-3 py-1.5 rounded-full border text-[11px] ${colorMap[meta.color] ?? colorMap.slate}`}>
+      <span className="text-sm leading-none">{meta.icon}</span>
+      <div className="flex flex-col leading-tight">
+        <span className="font-medium">→ 已切换至{meta.label}</span>
+        {reason && <span className="text-[10px] opacity-70 mt-0.5">{reason}</span>}
+      </div>
+    </div>
+  );
+});
+
 /* ─── Thinking Indicator (replaces tool call cards) ─── */
 
 const ThinkingBubble = ({ toolCount, subagentCount }) => {
@@ -1003,12 +1079,15 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision, onSubmitQuick
   const taskItBlocks = useMemo(() => extractAllTaskItBlocks(msg.content), [msg.content]);
   // 提取 tag-select-it 块，渲染为 React 卡片
   const tagSelectBlocks = useMemo(() => extractAllTagSelectBlocks(msg.content), [msg.content]);
+  // 提取 handoff-it 块,渲染 supervisor 切换提示
+  const handoffBlocks = useMemo(() => extractAllHandoffBlocks(msg.content), [msg.content]);
   const strippedText = useMemo(() => {
     const raw = typeof msg.content === 'string' ? msg.content : '';
     return raw
       .replace(/```canvas-it[\s\S]*?```/gi, '')
       .replace(/```task-it[\s\S]*?```/gi, '')
       .replace(/```tag-select-it[\s\S]*?```/gi, '')
+      .replace(/```handoff-it[\s\S]*?```/gi, '')
       .trim();
   }, [msg.content]);
   const hasRenderableText = strippedText.length > 0;
@@ -1017,11 +1096,12 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision, onSubmitQuick
   const htmlContent = React.useMemo(() => {
     if (!msg.content) return { __html: '' };
     const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
-    // 移除 canvas-it / task-it / tag-select-it 块（已由 React 卡片渲染）
+    // 移除 canvas-it / task-it / tag-select-it / handoff-it 块（已由 React 卡片渲染）
     const stripped = String(msg.content)
       .replace(/```canvas-it[\s\S]*?```/gi, '')
       .replace(/```task-it[\s\S]*?```/gi, '')
       .replace(/```tag-select-it[\s\S]*?```/gi, '')
+      .replace(/```handoff-it[\s\S]*?```/gi, '')
       .trim();
     // 1. 把纯 URL 转成 markdown 图片语法
     let converted = stripped.replace(imgPattern, (url) => `![](${url})`);
@@ -1156,8 +1236,16 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision, onSubmitQuick
         />
       ))}
 
+      {/* Handoff-it 切换胶囊(supervisor 路由到 expert) */}
+      {handoffBlocks.map((payload, idx) => (
+        <HandoffCard
+          key={`${payload.expert}-${payload.ts ?? idx}`}
+          payload={payload}
+        />
+      ))}
+
     {/* Show empty placeholder while loading, no content yet, no error */}
-    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && taskItBlocks.length === 0 && tagSelectBlocks.length === 0 && (
+    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && taskItBlocks.length === 0 && tagSelectBlocks.length === 0 && handoffBlocks.length === 0 && (
       <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
         <span className="text-sm text-slate-400">（无内容）</span>
       </div>

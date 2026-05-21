@@ -13,7 +13,10 @@
   - `createSession`: 创建会话/create session
   - `createSessionWithScope`: 创建范围会话/create scoped session
   - `appendMessage`: 追加消息/append message
-  - `getMessages`: 获取消息/get messages
+  - `getMessages`: 获取消息;checkpoint 存在但 channel_values.messages 为空、或 mongo 已有 assistant 消息时,**优先用 mongo storedMessages**(其 content 含 earlyEmit 旁路 fence canvas-it/handoff-it/tag-select-it,checkpoint 的 LLM messages 不含)。⚠️ **查 messages 集合时必须 delete 掉 sessionType 过滤** —— appendMessage 历史未写 sessionType 字段,带 sessionType 过滤会永远查空导致兜底失效;sessionId 全局唯一,sessionId+tenant+user 足够/get messages with storedMessages priority
+  - `appendMessage`: 追加消息;**写入 messages doc 时带 sessionType 字段**(normalizeSessionType(scope.sessionType)),新数据自带会话类型;历史 doc 无此字段,getMessages 已去掉 sessionType 过滤兼容/append message with session type
+  - `getConversation`: 获取会话元信息(返回 sessionId/sessionType/**actionSession**/title/lastCheckpointId)/get conversation meta
+  - `setActionSession`: 🆕 持久化 default 模式下意图识别最近一次路由到的专家(image/article/data/frontend/publisher/task),传 null 清空。sessionType 是会话隔离边界不能改,actionSession 是 default sessionType 下的"上轮激活专家"标记。**注意: actionSession 不用于"跳过意图识别直接路由"** —— 每轮对话仍都走意图识别(否则用户闲聊会被锁定专家误处理),actionSession 只作为意图识别的延续性判定上下文提示/persist last routed expert as intent context hint
   - `getScopedConversations`: 获取范围会话/get scoped conversations
   - `clearSessionWithScope`: 清空范围会话/clear scoped session
   - `clearSession`: 清空会话/clear session
@@ -28,11 +31,15 @@
 
 ### message.entity.ts
 消息实体定义。
-- **关键词**: message, entity
+- **关键词**: message, entity, session-type
+- `sessionType` 字段: 可选,新消息由 appendMessage 写入;历史 doc 无此字段
 
 ### conversation.entity.ts
 会话实体定义。
-- **关键词**: conversation, entity, session-type
+- **关键词**: conversation, entity, session-type, action-session
+- **字段**:
+  - `sessionType` (`ConversationSessionType`): 会话隔离边界(default/thought/xhs-* 等),决定会话历史/agent 路径
+  - `actionSession` (`ConversationActionSession`) 🆕: default 模式下意图识别最近一次路由到的专家(image/article/data/frontend/publisher/task),跨多轮持久化。sessionType 不变,actionSession 是会话内部"上轮激活专家"标记,仅作为下轮意图识别的延续判定上下文提示
 
 ### context.enums.ts
 枚举定义。

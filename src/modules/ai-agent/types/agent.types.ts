@@ -68,6 +68,17 @@ export interface AgentRunStreamInput {
   config: AgentConfig;
   messages: BaseMessageLike[] | BaseMessageLike;
   callOption?: AgentStreamOption;
+  /**
+   * @description 已构建的 LangGraph CompiledStateGraph(如 supervisor graph)。
+   *  传入时 AgentService.stream 跳过 buildChatModel,直接复用已 build 的 graph 跑流式,
+   *  以便 chat.service 把 supervisor multi-agent graph 接入现有 stream 事件处理。
+   */
+  preBuiltAgent?: {
+    stream: (
+      input: { messages: BaseMessageLike[] },
+      options: Record<string, unknown>,
+    ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+  };
 }
 
 /**

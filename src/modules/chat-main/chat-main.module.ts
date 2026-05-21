@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { ChatMainService } from './services/chat.service';
+import { SupervisorGraphService } from './services/supervisor-graph.service';
 import { ChatMainController } from './controller/chat.controller';
 import { ContextModule } from '../context/context.module';
 import { AiAgentModule } from '../ai-agent/ai-agent.module';
@@ -34,7 +35,7 @@ import { MediaAgentModule } from '../media-agent/media-agent.module.js';
     forwardRef(() => MediaAgentModule),
   ],
   controllers: [ChatMainController],
-  providers: [ChatMainService],
+  providers: [ChatMainService, SupervisorGraphService],
   exports: [ChatMainService],
 })
 export class ChatMainModule {}

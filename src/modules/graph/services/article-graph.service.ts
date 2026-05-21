@@ -60,7 +60,12 @@ type JimpModuleLike = {
   Jimp: {
     read: (input: string) => Promise<unknown>;
     rgbaToInt?: (r: number, g: number, b: number, a: number) => number;
-    intToRGBA?: (value: number) => { r: number; g: number; b: number; a: number };
+    intToRGBA?: (value: number) => {
+      r: number;
+      g: number;
+      b: number;
+      a: number;
+    };
   };
   loadFont?: (font: unknown) => Promise<unknown>;
   HorizontalAlign?: {
@@ -426,12 +431,12 @@ export class ArticleGraphService {
    */
   private deriveCoverText(title: string, tags?: string[]): string {
     const firstTag = Array.isArray(tags)
-      ? tags
-          .map((x) => String(x ?? '').trim())
-          .find((x) => x.length > 0)
+      ? tags.map((x) => String(x ?? '').trim()).find((x) => x.length > 0)
       : undefined;
     if (firstTag) return firstTag;
-    const clean = String(title || '').replace(/[\s\-_:：]+/g, ' ').trim();
+    const clean = String(title || '')
+      .replace(/[\s\-_:：]+/g, ' ')
+      .trim();
     if (!clean) return '示例文章';
     return clean;
   }
@@ -459,7 +464,10 @@ export class ArticleGraphService {
    * @returns {string[]} 文本行。
    * @keyword-en split text lines by visual width
    */
-  private splitTextByVisualWidth(text: string, maxUnitsPerLine: number): string[] {
+  private splitTextByVisualWidth(
+    text: string,
+    maxUnitsPerLine: number,
+  ): string[] {
     const s = String(text ?? '').trim();
     if (!s) return [];
     const max = Math.max(4, Math.floor(Number(maxUnitsPerLine) || 12));
@@ -490,16 +498,22 @@ export class ArticleGraphService {
    * @returns {string} 可渲染文案。
    * @keyword-en normalize cover text
    */
-  private normalizeCoverText(text: string, fallback: string, _maxLen: number): string {
+  private normalizeCoverText(
+    text: string,
+    fallback: string,
+    _maxLen: number,
+  ): string {
     const normalized = String(text ?? '')
       .replace(/[\u0000-\u001F\u007F]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (normalized.length > 0) return normalized;
-    return String(fallback || '')
-      .replace(/[\u0000-\u001F\u007F]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim() || '示例封面';
+    return (
+      String(fallback || '')
+        .replace(/[\u0000-\u001F\u007F]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || '示例封面'
+    );
   }
 
   /**
@@ -559,7 +573,9 @@ export class ArticleGraphService {
 
     const envLines = [
       input.currentDatetime ? `当前时间：${input.currentDatetime}` : '',
-      input.platformAiPrompt ? `【平台业务说明】\n${input.platformAiPrompt}` : '',
+      input.platformAiPrompt
+        ? `【平台业务说明】\n${input.platformAiPrompt}`
+        : '',
     ].filter((x) => x.length > 0);
 
     const sys = [
@@ -602,16 +618,8 @@ export class ArticleGraphService {
           `[cover-copy] llm_result titleLen=${rawTitle.length} subtitleLen=${rawSubtitle.length}`,
         );
         return {
-          title: this.normalizeCoverText(
-            rawTitle,
-            '沉浸式体验',
-            10,
-          ),
-          subtitle: this.normalizeCoverText(
-            rawSubtitle,
-            '现场氛围与互动',
-            16,
-          ),
+          title: this.normalizeCoverText(rawTitle, '沉浸式体验', 10),
+          subtitle: this.normalizeCoverText(rawSubtitle, '现场氛围与互动', 16),
           titleFromLlm: rawTitle.length > 0,
         };
       }
@@ -662,7 +670,9 @@ export class ArticleGraphService {
     currentDatetime?: string;
   }): Promise<string> {
     const appendCoverTextDirectives = (rawPrompt: string): string => {
-      const core = String(rawPrompt ?? '').replace(/\s+/g, ' ').trim();
+      const core = String(rawPrompt ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
       return [
         core,
         input.coverTitle ? `封面主标题:${input.coverTitle}` : '',
@@ -723,7 +733,9 @@ export class ArticleGraphService {
           })
           .join(' ');
       }
-      const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
+      const normalized = String(text ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (normalized.length >= 8) {
         return appendCoverTextDirectives(normalized.slice(0, 240));
       }
@@ -800,7 +812,9 @@ export class ArticleGraphService {
       });
       return img;
     } catch (err) {
-      this.logger.warn(`[assign-image] ai_cover_generate_failed reason=${String(err)}`);
+      this.logger.warn(
+        `[assign-image] ai_cover_generate_failed reason=${String(err)}`,
+      );
       return null;
     }
   }
@@ -815,7 +829,12 @@ export class ArticleGraphService {
     const s = String(url ?? '').trim();
     if (!s || /^https?:\/\//i.test(s)) return undefined;
     if (s.startsWith('/static/uploads/')) {
-      return join(process.cwd(), 'public', 'uploads', s.slice('/static/uploads/'.length));
+      return join(
+        process.cwd(),
+        'public',
+        'uploads',
+        s.slice('/static/uploads/'.length),
+      );
     }
     if (s.startsWith('/static/uploads_thumbs/')) {
       return join(
@@ -893,7 +912,8 @@ export class ArticleGraphService {
   }): Promise<boolean> {
     const safeTitle = String(input.title || '').trim() || '示例封面';
     const safeSubtitle = String(input.subtitle || '').trim();
-    const needsCjk = this.hasCjkChars(safeTitle) || this.hasCjkChars(safeSubtitle);
+    const needsCjk =
+      this.hasCjkChars(safeTitle) || this.hasCjkChars(safeSubtitle);
     const fontFaceCss = needsCjk
       ? await this.buildCustomFontFaceCssOrThrow()
       : '';
@@ -901,8 +921,14 @@ export class ArticleGraphService {
     try {
       const mod = (await import('sharp')) as unknown as {
         default: (input: string | Buffer) => {
-          resize: (w: number, h: number, opts?: Record<string, unknown>) => unknown;
-          composite: (layers: Array<{ input: Buffer; top?: number; left?: number }>) => unknown;
+          resize: (
+            w: number,
+            h: number,
+            opts?: Record<string, unknown>,
+          ) => unknown;
+          composite: (
+            layers: Array<{ input: Buffer; top?: number; left?: number }>,
+          ) => unknown;
           jpeg: (opts?: Record<string, unknown>) => unknown;
           toFile: (path: string) => Promise<unknown>;
         };
@@ -914,12 +940,24 @@ export class ArticleGraphService {
       const subtitleEscaped = this.escapeSvgText(subtitleForRender);
       const titleUnits = this.getVisualWidthUnits(safeTitle);
       const subtitleUnits = this.getVisualWidthUnits(subtitleForRender);
-      const titleFontSize = Math.max(34, Math.min(60, Math.floor(900 / Math.max(10, titleUnits))));
-      const subtitleFontSize = Math.max(22, Math.min(34, Math.floor(760 / Math.max(12, subtitleUnits))));
+      const titleFontSize = Math.max(
+        34,
+        Math.min(60, Math.floor(900 / Math.max(10, titleUnits))),
+      );
+      const subtitleFontSize = Math.max(
+        22,
+        Math.min(34, Math.floor(760 / Math.max(12, subtitleUnits))),
+      );
       const titleLines = this.splitTextByVisualWidth(safeTitle, 20);
       const subtitleLines = this.splitTextByVisualWidth(subtitleForRender, 28);
-      const titleStartY = Math.max(34, 41 - (Math.max(1, titleLines.length) - 1) * 4);
-      const subtitleStartY = Math.min(74, 54 + (Math.max(1, titleLines.length) - 1) * 3);
+      const titleStartY = Math.max(
+        34,
+        41 - (Math.max(1, titleLines.length) - 1) * 4,
+      );
+      const subtitleStartY = Math.min(
+        74,
+        54 + (Math.max(1, titleLines.length) - 1) * 3,
+      );
       const titleTspans = (titleLines.length > 0 ? titleLines : [''])
         .map(
           (line, idx) =>
@@ -943,13 +981,23 @@ export class ArticleGraphService {
   ${subtitleEscaped ? `<text x="50%" y="${subtitleStartY}%" text-anchor="middle" dominant-baseline="middle" class="s">${subtitleTspans}</text>` : ''}
 </svg>`;
 
-      await (sharpFn(input.collagePath) as unknown as {
-        resize: (w: number, h: number, opts?: Record<string, unknown>) => {
-          composite: (layers: Array<{ input: Buffer; top?: number; left?: number }>) => {
-            jpeg: (opts?: Record<string, unknown>) => { toFile: (path: string) => Promise<unknown> };
+      await (
+        sharpFn(input.collagePath) as unknown as {
+          resize: (
+            w: number,
+            h: number,
+            opts?: Record<string, unknown>,
+          ) => {
+            composite: (
+              layers: Array<{ input: Buffer; top?: number; left?: number }>,
+            ) => {
+              jpeg: (opts?: Record<string, unknown>) => {
+                toFile: (path: string) => Promise<unknown>;
+              };
+            };
           };
-        };
-      })
+        }
+      )
         .resize(COLLAGE_WIDTH, COLLAGE_HEIGHT, { fit: 'cover' })
         .composite([{ input: Buffer.from(svg, 'utf8'), top: 0, left: 0 }])
         .jpeg({ quality: 92 })
@@ -1039,9 +1087,15 @@ export class ArticleGraphService {
       const cacheDir = `${tmpDir}/cache`;
       await fs.mkdir(cacheDir, { recursive: true });
       const tmpFont = `${tmpDir}/cover-cjk.ttf`;
-      try { await fs.access(tmpFont); } catch { await fs.copyFile(fontFilePath, tmpFont); }
+      try {
+        await fs.access(tmpFont);
+      } catch {
+        await fs.copyFile(fontFilePath, tmpFont);
+      }
       const confPath = `${tmpDir}/fonts.conf`;
-      try { await fs.access(confPath); } catch {
+      try {
+        await fs.access(confPath);
+      } catch {
         const conf = [
           '<?xml version="1.0"?>',
           '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">',
@@ -1105,7 +1159,9 @@ export class ArticleGraphService {
     try {
       const mod = await this.getJimpModule();
       const JimpCtor = mod.Jimp as unknown as {
-        read: (input: string) => Promise<{ bitmap?: { width?: number; height?: number } }>;
+        read: (
+          input: string,
+        ) => Promise<{ bitmap?: { width?: number; height?: number } }>;
       };
       const img = await JimpCtor.read(src);
       const w = Number(img?.bitmap?.width ?? 0);
@@ -1186,7 +1242,10 @@ export class ArticleGraphService {
    * @returns {number} 差异分（0~1）。
    * @keyword-en score collage pair diversity
    */
-  private scoreImagePairDiversity(a: GalleryImageEntity, b: GalleryImageEntity): number {
+  private scoreImagePairDiversity(
+    a: GalleryImageEntity,
+    b: GalleryImageEntity,
+  ): number {
     const ta = this.buildImageSemanticTokens(a);
     const tb = this.buildImageSemanticTokens(b);
     if (ta.size === 0 && tb.size === 0) return 0.5;
@@ -1232,7 +1291,10 @@ export class ArticleGraphService {
    * @returns {Promise<{ fileName: string; absPath: string; url: string }>} 生成文件信息。
    * @keyword-en create dynamic collage file
    */
-  private async createDynamicCollageFile(pathA: string, pathB: string): Promise<{
+  private async createDynamicCollageFile(
+    pathA: string,
+    pathB: string,
+  ): Promise<{
     fileName: string;
     absPath: string;
     url: string;
@@ -1250,20 +1312,27 @@ export class ArticleGraphService {
       rgbaToInt?: (r: number, g: number, b: number, a: number) => number;
     };
 
-    const [imgA, imgB] = await Promise.all([JimpCtor.read(pathA), JimpCtor.read(pathB)]);
+    const [imgA, imgB] = await Promise.all([
+      JimpCtor.read(pathA),
+      JimpCtor.read(pathB),
+    ]);
 
     const topH = Math.floor(COLLAGE_HEIGHT / 2);
     const bottomH = COLLAGE_HEIGHT - topH;
 
     // 上图：等比缩到 topH 高度，不裁剪
-    const bitmapA = (imgA as unknown as { bitmap: { width: number; height: number } }).bitmap;
+    const bitmapA = (
+      imgA as unknown as { bitmap: { width: number; height: number } }
+    ).bitmap;
     const iwA = Math.max(1, Number(bitmapA?.width ?? 1));
     const ihA = Math.max(1, Number(bitmapA?.height ?? 1));
     const drawWA = Math.max(1, Math.round(iwA * (topH / ihA)));
     imgA.resize({ w: drawWA, h: topH });
 
     // 下图：等比缩到 bottomH 高度，不裁剪
-    const bitmapB = (imgB as unknown as { bitmap: { width: number; height: number } }).bitmap;
+    const bitmapB = (
+      imgB as unknown as { bitmap: { width: number; height: number } }
+    ).bitmap;
     const iwB = Math.max(1, Number(bitmapB?.width ?? 1));
     const ihB = Math.max(1, Number(bitmapB?.height ?? 1));
     const drawWB = Math.max(1, Math.round(iwB * (bottomH / ihB)));
@@ -1273,7 +1342,11 @@ export class ArticleGraphService {
       typeof JimpCtor.rgbaToInt === 'function'
         ? JimpCtor.rgbaToInt(0, 0, 0, 255)
         : 0x000000ff;
-    const out = new JimpCtor({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, color: black });
+    const out = new JimpCtor({
+      width: COLLAGE_WIDTH,
+      height: COLLAGE_HEIGHT,
+      color: black,
+    });
 
     // 水平居中合成：超出画布宽度时两侧自然溢出，不足时两侧留黑边
     const xA = Math.floor((COLLAGE_WIDTH - drawWA) / 2);
@@ -1316,8 +1389,16 @@ export class ArticleGraphService {
 
     const sharpOk = await this.renderCoverWithSharp({
       collagePath,
-      title: this.normalizeCoverText(String(coverTitle || '').trim(), '示例文章', 10),
-      subtitle: this.normalizeCoverText(String(coverSubtitle || '').trim(), '', 16),
+      title: this.normalizeCoverText(
+        String(coverTitle || '').trim(),
+        '示例文章',
+        10,
+      ),
+      subtitle: this.normalizeCoverText(
+        String(coverSubtitle || '').trim(),
+        '',
+        16,
+      ),
       outputPath: absPath,
     });
     if (sharpOk) {
@@ -1334,7 +1415,9 @@ export class ArticleGraphService {
         `COVER_RENDER_FAILED_WITH_CUSTOM_FONT: ${COVER_FONT_RELATIVE_PATH}`,
       );
     }
-    this.logger.warn('[cover-render] sharp_overlay_failed fallback_to_jimp=true');
+    this.logger.warn(
+      '[cover-render] sharp_overlay_failed fallback_to_jimp=true',
+    );
 
     const mod = await this.getJimpModule();
     const JimpCtor = mod.Jimp as unknown as {
@@ -1388,29 +1471,95 @@ export class ArticleGraphService {
         const alignX = mod.HorizontalAlign?.CENTER ?? 1;
         const alignY = mod.VerticalAlign?.MIDDLE ?? 1;
         const ty = Math.floor(COLLAGE_HEIGHT * 0.32);
-        const titleStyle = { text: title, alignmentX: alignX, alignmentY: alignY };
+        const titleStyle = {
+          text: title,
+          alignmentX: alignX,
+          alignmentY: alignY,
+        };
 
         if (fontTitleBlack) {
-          img.print(fontTitleBlack, 4, ty + 4, titleStyle, COLLAGE_WIDTH - 8, 160);
-          img.print(fontTitleBlack, -4, ty + 4, titleStyle, COLLAGE_WIDTH - 8, 160);
-          img.print(fontTitleBlack, 4, ty - 4, titleStyle, COLLAGE_WIDTH - 8, 160);
-          img.print(fontTitleBlack, -4, ty - 4, titleStyle, COLLAGE_WIDTH - 8, 160);
+          img.print(
+            fontTitleBlack,
+            4,
+            ty + 4,
+            titleStyle,
+            COLLAGE_WIDTH - 8,
+            160,
+          );
+          img.print(
+            fontTitleBlack,
+            -4,
+            ty + 4,
+            titleStyle,
+            COLLAGE_WIDTH - 8,
+            160,
+          );
+          img.print(
+            fontTitleBlack,
+            4,
+            ty - 4,
+            titleStyle,
+            COLLAGE_WIDTH - 8,
+            160,
+          );
+          img.print(
+            fontTitleBlack,
+            -4,
+            ty - 4,
+            titleStyle,
+            COLLAGE_WIDTH - 8,
+            160,
+          );
         }
         img.print(fontTitleWhite, 0, ty, titleStyle, COLLAGE_WIDTH, 160);
 
         if (subtitle && fontSubWhite) {
           const sy = ty + 126;
-          const subStyle = { text: subtitle, alignmentX: alignX, alignmentY: alignY };
+          const subStyle = {
+            text: subtitle,
+            alignmentX: alignX,
+            alignmentY: alignY,
+          };
           if (fontSubBlack) {
-            img.print(fontSubBlack, 3, sy + 3, subStyle, COLLAGE_WIDTH - 8, 120);
-            img.print(fontSubBlack, -3, sy + 3, subStyle, COLLAGE_WIDTH - 8, 120);
-            img.print(fontSubBlack, 3, sy - 3, subStyle, COLLAGE_WIDTH - 8, 120);
-            img.print(fontSubBlack, -3, sy - 3, subStyle, COLLAGE_WIDTH - 8, 120);
+            img.print(
+              fontSubBlack,
+              3,
+              sy + 3,
+              subStyle,
+              COLLAGE_WIDTH - 8,
+              120,
+            );
+            img.print(
+              fontSubBlack,
+              -3,
+              sy + 3,
+              subStyle,
+              COLLAGE_WIDTH - 8,
+              120,
+            );
+            img.print(
+              fontSubBlack,
+              3,
+              sy - 3,
+              subStyle,
+              COLLAGE_WIDTH - 8,
+              120,
+            );
+            img.print(
+              fontSubBlack,
+              -3,
+              sy - 3,
+              subStyle,
+              COLLAGE_WIDTH - 8,
+              120,
+            );
           }
           img.print(fontSubWhite, 0, sy, subStyle, COLLAGE_WIDTH, 120);
         }
       } else {
-        this.logger.warn('[cover-render] no_title_font_loaded skip_text_render');
+        this.logger.warn(
+          '[cover-render] no_title_font_loaded skip_text_render',
+        );
       }
     }
 
@@ -1459,7 +1608,10 @@ export class ArticleGraphService {
       generatedKind === 'collage';
 
     // 为生成的图片（拼图/封面）生成缩略图
-    const thumb = await this.gallery.generateThumbnail(input.absPath, input.fileName);
+    const thumb = await this.gallery.generateThumbnail(
+      input.absPath,
+      input.fileName,
+    );
 
     // 拼图/封面图片使用专用分组
     let finalGroupId = input.groupId;
@@ -1470,10 +1622,11 @@ export class ArticleGraphService {
       );
       finalGroupId = coverGroup.id;
     } else if (generatedKind === 'collage' || input.isCollage === true) {
-      const collageGroup = await this.galleryGroups.findOrCreateDynamicCollageGroup(
-        input.userId,
-        input.tenantId,
-      );
+      const collageGroup =
+        await this.galleryGroups.findOrCreateDynamicCollageGroup(
+          input.userId,
+          input.tenantId,
+        );
       finalGroupId = collageGroup.id;
     }
 
@@ -1511,23 +1664,20 @@ export class ArticleGraphService {
         tags: mergedTags,
         description: input.description,
         isCollage: markAsCollage,
-        collageSourceImageIds:
-          sourceIds.length > 0 ? sourceIds : undefined,
-        collageMeta:
-          markAsCollage
-            ? {
-                width: typeof width === 'number' ? width : COLLAGE_WIDTH,
-                height: typeof height === 'number' ? height : COLLAGE_HEIGHT,
-                dpi: COLLAGE_DPI,
-              }
-            : undefined,
+        collageSourceImageIds: sourceIds.length > 0 ? sourceIds : undefined,
+        collageMeta: markAsCollage
+          ? {
+              width: typeof width === 'number' ? width : COLLAGE_WIDTH,
+              height: typeof height === 'number' ? height : COLLAGE_HEIGHT,
+              dpi: COLLAGE_DPI,
+            }
+          : undefined,
         thumbFileName: thumb?.thumbFileName,
         thumbUrl: thumb?.thumbUrl,
       },
     ]);
     return Array.isArray(docs) && docs.length > 0 ? docs[0] : null;
   }
-
 
   async generateToCanvas(input: {
     userId: string;
@@ -1548,7 +1698,8 @@ export class ArticleGraphService {
       typeof input.count === 'number' && Number.isFinite(input.count)
         ? Math.max(ARTICLE_MIN_COUNT, Math.floor(input.count))
         : 3;
-    const imageMode = input.imageMode === 'image-group' ? 'image-group' : 'legacy';
+    const imageMode =
+      input.imageMode === 'image-group' ? 'image-group' : 'legacy';
     this.logger.log(
       `[article-gen] request userId=${input.userId} topic=${String(input.topic ?? '')} platform=${String(input.platform ?? '')} count=${count} imageMode=${imageMode}`,
     );
@@ -1565,7 +1716,8 @@ export class ArticleGraphService {
         ? input.userPrompt.trim()
         : undefined;
     const dataSummary =
-      typeof input.dataSummary === 'string' && input.dataSummary.trim().length > 0
+      typeof input.dataSummary === 'string' &&
+      input.dataSummary.trim().length > 0
         ? input.dataSummary.trim().slice(0, 8000)
         : undefined;
     const provider = undefined;
@@ -1821,7 +1973,11 @@ export class ArticleGraphService {
         merged.push(t);
       }
     }
-    return { ...article, markdown: clean, tags: merged.length > 0 ? merged : article.tags };
+    return {
+      ...article,
+      markdown: clean,
+      tags: merged.length > 0 ? merged : article.tags,
+    };
   }
 
   private async planArticleTasks(input: {
@@ -1895,7 +2051,9 @@ export class ArticleGraphService {
     ];
 
     const llm = await this.agent.buildLLM(config);
-    const invokeOption = this.buildLangChainInvokeOption(input.langchainContext);
+    const invokeOption = this.buildLangChainInvokeOption(
+      input.langchainContext,
+    );
     let plan = ZArticleBlueprintPlan.safeParse(undefined);
     try {
       const structured = llm.withStructuredOutput(ZArticleBlueprintPlan);
@@ -2135,7 +2293,10 @@ export class ArticleGraphService {
         excludedGroupIds: excludedGeneratedGroupIds,
       });
       // 批次级别贪心预分配图片 slice，全局 usedIds 去重，各篇文章用独立来源
-      imageSlices = this.preAssignImageSlices(imagePool, input.blueprints.length);
+      imageSlices = this.preAssignImageSlices(
+        imagePool,
+        input.blueprints.length,
+      );
     }
 
     // 2. 每篇文章正文并发生成；legacy 模式下继续并发配图
@@ -2150,7 +2311,7 @@ export class ArticleGraphService {
           const _matchedGroup =
             useImageGroupMode && preAssignedGroups.length > 0
               ? (preAssignedGroups.find((g) => g.articleId === bp.index + 1) ??
-                  preAssignedGroups[bpIdx])
+                preAssignedGroups[bpIdx])
               : undefined;
           const _imageGroupTags =
             _matchedGroup && _matchedGroup.images.length > 0
@@ -2228,9 +2389,13 @@ export class ArticleGraphService {
               articleId,
               {
                 imageIds:
-                  imageData.imageIds.length > 0 ? imageData.imageIds : undefined,
+                  imageData.imageIds.length > 0
+                    ? imageData.imageIds
+                    : undefined,
                 imageUrls:
-                  imageData.imageUrls.length > 0 ? imageData.imageUrls : undefined,
+                  imageData.imageUrls.length > 0
+                    ? imageData.imageUrls
+                    : undefined,
                 status: imageData.status,
                 doneNote: imageData.doneNote,
               },
@@ -2518,7 +2683,9 @@ export class ArticleGraphService {
     ];
 
     const llm = await this.agent.buildLLM(config);
-    const invokeOption = this.buildLangChainInvokeOption(input.langchainContext);
+    const invokeOption = this.buildLangChainInvokeOption(
+      input.langchainContext,
+    );
     let article = ZSingleArticle.safeParse(undefined);
     try {
       const structured = llm.withStructuredOutput(ZSingleArticle);
@@ -2630,10 +2797,14 @@ export class ArticleGraphService {
       dedup(byTags);
     }
     if (pool.length < wantCount) {
-      const more = await this.gallery.findAccessibleImages(input.userId, input.tenantId, {
-        imageType: 'regular',
-        limit: wantCount,
-      });
+      const more = await this.gallery.findAccessibleImages(
+        input.userId,
+        input.tenantId,
+        {
+          imageType: 'regular',
+          limit: wantCount,
+        },
+      );
       dedup(more);
     }
     this.logger.debug(
@@ -2680,7 +2851,10 @@ export class ArticleGraphService {
       let bestScore = -Infinity;
       for (let a = 0; a < cap; a++) {
         for (let b = a + 1; b < cap; b++) {
-          const score = this.scoreImagePairDiversity(remaining[a], remaining[b]);
+          const score = this.scoreImagePairDiversity(
+            remaining[a],
+            remaining[b],
+          );
           if (score > bestScore) {
             bestScore = score;
             bestA = remaining[a];
@@ -2691,8 +2865,14 @@ export class ArticleGraphService {
 
       const slice: GalleryImageEntity[] = [];
       const pairSet = new Set<GalleryImageEntity>();
-      if (bestA) { slice.push(bestA); pairSet.add(bestA); }
-      if (bestB) { slice.push(bestB); pairSet.add(bestB); }
+      if (bestA) {
+        slice.push(bestA);
+        pairSet.add(bestA);
+      }
+      if (bestB) {
+        slice.push(bestB);
+        pairSet.add(bestB);
+      }
       // 补足到 sliceSize（用于正文拼图候选）
       for (const img of remaining) {
         if (slice.length >= sliceSize) break;
@@ -2732,7 +2912,12 @@ export class ArticleGraphService {
     platformAiPrompt?: string;
     /** 当前时间字符串 */
     currentDatetime?: string;
-  }): Promise<{ imageIds: number[]; imageUrls: string[]; doneNote: string; status: 'done' | 'requires_human' }> {
+  }): Promise<{
+    imageIds: number[];
+    imageUrls: string[];
+    doneNote: string;
+    status: 'done' | 'requires_human';
+  }> {
     const queryText = input.imageQuery?.trim() || input.articleTitle;
     const targetImageCount = this.ARTICLE_TARGET_IMAGE_COUNT;
     const needRawSourceCount = 2;
@@ -2765,7 +2950,8 @@ export class ArticleGraphService {
       const tagSet = new Set(input.articleTags.map((t) => t.toLowerCase()));
       for (const img of input.imagePool) {
         if (pickedImages.length >= maxPickedImages) break;
-        if ((img.tags ?? []).some((t) => tagSet.has(t.toLowerCase()))) tryAdd(img);
+        if ((img.tags ?? []).some((t) => tagSet.has(t.toLowerCase())))
+          tryAdd(img);
       }
     }
     for (const img of input.imagePool) {
@@ -2782,11 +2968,17 @@ export class ArticleGraphService {
     const rawSources =
       input.preAssignedSources && input.preAssignedSources.length > 0
         ? input.preAssignedSources.filter(
-            (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x) && x?.isPortrait !== true,
+            (x) =>
+              x?.isCollage !== true &&
+              !this.isGeneratedCoverImage(x) &&
+              x?.isPortrait !== true,
           )
         : this.shuffleArray(
             pickedImages.filter(
-              (x) => x?.isCollage !== true && !this.isGeneratedCoverImage(x) && x?.isPortrait !== true,
+              (x) =>
+                x?.isCollage !== true &&
+                !this.isGeneratedCoverImage(x) &&
+                x?.isPortrait !== true,
             ),
           ).slice(0, Math.max(6, targetImageCount * 3));
     this.logger.debug(
@@ -2798,8 +2990,12 @@ export class ArticleGraphService {
     let coverTitleMissing = false;
     let coverPairKey: string | null = null;
 
-    const coverPair = this.pickMostDiversePair(rawSources.slice(0, Math.min(rawSources.length, 8)));
-    const coverSources = coverPair ? [coverPair[0], coverPair[1]] : rawSources.slice(0, 2);
+    const coverPair = this.pickMostDiversePair(
+      rawSources.slice(0, Math.min(rawSources.length, 8)),
+    );
+    const coverSources = coverPair
+      ? [coverPair[0], coverPair[1]]
+      : rawSources.slice(0, 2);
     const coverSourceIds = new Set(
       coverSources
         .map((x) => Number(x?.id ?? 0))
@@ -2830,7 +3026,10 @@ export class ArticleGraphService {
             url: collageFile.url,
             description: `Canvas动态拼图：#${coverSources[0]?.id ?? '-'} + #${coverSources[1]?.id ?? '-'}`,
             isCollage: true,
-            collageSourceImageIds: [coverSources[0]?.id, coverSources[1]?.id].filter(
+            collageSourceImageIds: [
+              coverSources[0]?.id,
+              coverSources[1]?.id,
+            ].filter(
               (x): x is number => typeof x === 'number' && Number.isFinite(x),
             ),
             generatedKind: 'collage',
@@ -2838,7 +3037,10 @@ export class ArticleGraphService {
           const aId = Number(coverSources[0]?.id ?? 0);
           const bId = Number(coverSources[1]?.id ?? 0);
           coverPairKey = `${Math.min(aId, bId)}-${Math.max(aId, bId)}`;
-          const diversity = this.scoreImagePairDiversity(coverSources[0], coverSources[1]);
+          const diversity = this.scoreImagePairDiversity(
+            coverSources[0],
+            coverSources[1],
+          );
           this.logger.debug(
             `[assign-image] collage_generated collageId=${String(collageImage?.id ?? '')} sourceA=${String(coverSources[0]?.id ?? '')} sourceB=${String(coverSources[1]?.id ?? '')} diversity=${diversity.toFixed(2)}`,
           );
@@ -2851,7 +3053,12 @@ export class ArticleGraphService {
 
     const needContentCollageCount = Math.max(0, targetImageCount - 1);
     if (contentSourcePool.length >= 2 && needContentCollageCount > 0) {
-      const pairs: Array<{ a: GalleryImageEntity; b: GalleryImageEntity; key: string; diversity: number }> = [];
+      const pairs: Array<{
+        a: GalleryImageEntity;
+        b: GalleryImageEntity;
+        key: string;
+        diversity: number;
+      }> = [];
       for (let i = 0; i < contentSourcePool.length; i++) {
         for (let j = i + 1; j < contentSourcePool.length; j++) {
           const a = contentSourcePool[i];
@@ -2860,23 +3067,35 @@ export class ArticleGraphService {
           const bId = Number(b?.id ?? 0);
           const key = `${Math.min(aId, bId)}-${Math.max(aId, bId)}`;
           if (coverPairKey && key === coverPairKey) continue;
-          pairs.push({ a, b, key, diversity: this.scoreImagePairDiversity(a, b) });
+          pairs.push({
+            a,
+            b,
+            key,
+            diversity: this.scoreImagePairDiversity(a, b),
+          });
         }
       }
 
       const orderedPairs = pairs
         .sort((x, y) => y.diversity - x.diversity)
-        .slice(0, Math.max(needContentCollageCount * 4, needContentCollageCount));
+        .slice(
+          0,
+          Math.max(needContentCollageCount * 4, needContentCollageCount),
+        );
       const usedContentSourceIds = new Set<number>();
       for (const pair of this.shuffleArray(orderedPairs)) {
         if (contentCollageImages.length >= needContentCollageCount) break;
         const aId = Number(pair.a?.id ?? 0);
         const bId = Number(pair.b?.id ?? 0);
         // 跳过：任一源图已在本轮内容拼图中使用（跨拼图去重）
-        if (Number.isFinite(aId) && aId > 0 && usedContentSourceIds.has(aId)) continue;
-        if (Number.isFinite(bId) && bId > 0 && usedContentSourceIds.has(bId)) continue;
-        const pa = pair.a.absPath || this.resolveLocalPathFromGalleryUrl(pair.a.url);
-        const pb = pair.b.absPath || this.resolveLocalPathFromGalleryUrl(pair.b.url);
+        if (Number.isFinite(aId) && aId > 0 && usedContentSourceIds.has(aId))
+          continue;
+        if (Number.isFinite(bId) && bId > 0 && usedContentSourceIds.has(bId))
+          continue;
+        const pa =
+          pair.a.absPath || this.resolveLocalPathFromGalleryUrl(pair.a.url);
+        const pb =
+          pair.b.absPath || this.resolveLocalPathFromGalleryUrl(pair.b.url);
         if (!pa || !pb) continue;
         try {
           const file = await this.createDynamicCollageFile(pa, pb);
@@ -2910,7 +3129,8 @@ export class ArticleGraphService {
 
     if (collageImage) {
       const collagePath =
-        collageImage.absPath || this.resolveLocalPathFromGalleryUrl(collageImage.url);
+        collageImage.absPath ||
+        this.resolveLocalPathFromGalleryUrl(collageImage.url);
       if (collagePath) {
         try {
           const coverCopy = await this.generateCoverCopyByLlm({
@@ -2946,7 +3166,10 @@ export class ArticleGraphService {
                 imageQuery: queryText,
                 coverTitle: finalCoverTitle,
                 coverSubtitle: coverCopy.subtitle,
-                sourceImageIds: [coverSources[0]?.id, coverSources[1]?.id].filter(
+                sourceImageIds: [
+                  coverSources[0]?.id,
+                  coverSources[1]?.id,
+                ].filter(
                   (x): x is number =>
                     typeof x === 'number' && Number.isFinite(x),
                 ),
@@ -2995,7 +3218,9 @@ export class ArticleGraphService {
 
     const finalImages: Array<GalleryImageEntity> = [];
     const finalImageKeys = new Set<string>();
-    const pushFinalImage = (img: GalleryImageEntity | null | undefined): void => {
+    const pushFinalImage = (
+      img: GalleryImageEntity | null | undefined,
+    ): void => {
       if (!img || typeof img !== 'object') return;
       const key =
         typeof img.id === 'number' && Number.isFinite(img.id)
@@ -3065,7 +3290,12 @@ export class ArticleGraphService {
       this.logger.warn(
         `[assign-image] no_image title="${input.articleTitle.slice(0, 30)}"`,
       );
-      return { imageIds: [], imageUrls: [], doneNote: 'NO_GALLERY_IMAGE', status: 'requires_human' };
+      return {
+        imageIds: [],
+        imageUrls: [],
+        doneNote: 'NO_GALLERY_IMAGE',
+        status: 'requires_human',
+      };
     }
   }
 }

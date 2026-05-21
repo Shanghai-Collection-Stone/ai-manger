@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb';
 import { ContextRole } from '../enums/context.enums';
+import type { ConversationSessionType } from './conversation.entity';
 
 /**
  * @title 消息实体 Message Entity
@@ -12,6 +13,8 @@ export interface MessageEntity {
   sessionId: string;
   tenantId?: string;
   userId?: string;
+  /** @description 会话类型(新消息写入,历史 doc 可能无此字段) */
+  sessionType?: ConversationSessionType;
   role: ContextRole;
   content: string;
   name?: string;
