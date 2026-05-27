@@ -21,8 +21,9 @@
 - **关键词**: graph-workflow, topic_orchestrate, canvas_append_article, canvas_execute, xhs_batch_publish, image-group
 - **函数**:
   - `normalizeRequestedArticleCount`: 归一化请求篇数（不强制 6-8）
-  - `buildTopicOrchestrateDedupKey`: 选题编排去重键（含 userPrompt/dataSummary）
+  - `buildTopicOrchestrateDedupKey`: 选题编排去重键（含 userPrompt/dataSummary/writingStyle）
   - `normalizePlatformType`: 归一化平台标签（小红书别名→xhs，软纠正）/normalize platform type alias
+  - `resolveTopicWritingStyle`: 从显式 writingStyle 或兼容的 style 对象中解析生文风格/resolve topic writing style
   - `getHandle`: 获取图工作流工具/get graph workflow tools
 
 ### tools.module.ts

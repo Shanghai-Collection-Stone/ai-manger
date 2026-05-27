@@ -1,7 +1,7 @@
 # Gallery-Zip-Import Module
 
 ## 模块描述
-图库 ZIP 批量导入模块:接收单个 zip 包 → 写入 `gallery_zip_imports` 集合(pending 任务) → 立即返回 jobId → 进程内串行后台流水线(打开 zip → 流式逐张解压到 `public/uploads/` → 调 `GalleryService.createMany` 分批入库 + 生成缩略图 + 写 embedding)→ 全程更新 `status / stage / progress`,前端 2s 轮询展示。
+图库 ZIP 批量导入模块:接收单个 zip 包 → 写入 `gallery_zip_imports` 集合(pending 任务) → 立即返回 jobId → 进程内串行后台流水线(打开 zip → 流式逐张解压到 `public/uploads/` → 保质量压缩(同批量上传口径) → 调 `GalleryService.createMany` 分批入库 + 生成缩略图 + 写 embedding)→ 全程更新 `status / stage / progress`,前端 2s 轮询展示。
 
 特点:
 - **单进程串行**:同时只跑一个 zip,避免大包互相挤垮内存
@@ -38,7 +38,7 @@
   - `cancel`: 写 `cancelRequested=true`,pending 态直接置 cancelled /cancel job
   - `remove`: 删除一条任务记录(仅限完成/失败/取消态)/delete job record
   - `processJob`: 进程内串行入口(等待当前任务结束后才跑下一个)/sequential processing entry
-  - `runJob`: 主流水线 — 打开 zip → 枚举图片 entry → 逐张解压 → 累积到 batch → 每 20 张 flush 到 `GalleryService.createMany` /run zip import pipeline
+  - `runJob`: 主流水线 — 打开 zip → 枚举图片 entry → 逐张解压 → 保质量压缩(`GalleryService.compressImageInPlace`,与普通批量上传同口径 1600x1600/q75) → 生成缩略图/读尺寸 → 累积到 batch → 每 20 张 flush 到 `GalleryService.createMany` /run zip import pipeline
   - `shouldCancel`: 实时从 db 取 `cancelRequested` 标志 /check cancel flag
   - `finalizeFailed` / `finalizeCancelled`: 写终态 + 清理 zip 临时文件 /finalize failed or cancelled
   - `isImageEntry`: 按扩展名筛选 zip 内的图片条目(忽略 `__MACOSX/` 和 `._` 元数据)/filter image entry

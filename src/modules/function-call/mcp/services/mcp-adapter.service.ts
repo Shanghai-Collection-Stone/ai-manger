@@ -87,8 +87,12 @@ export class McpAdaptersService implements OnModuleInit {
     }
     try {
       this.toolsCache = (await this.client.getTools()) ?? [];
-      const names = this.toolsCache.map((t) => (t as { name?: string }).name).filter(Boolean);
-      this.logger.log(`[MCP] Loaded tools: ${this.toolsCache.length} — ${names.join(', ')}`);
+      const names = this.toolsCache
+        .map((t) => (t as { name?: string }).name)
+        .filter(Boolean);
+      this.logger.log(
+        `[MCP] Loaded tools: ${this.toolsCache.length} — ${names.join(', ')}`,
+      );
     } catch (e) {
       this.toolsCache = [];
       const err = e instanceof Error ? e : new Error(String(e));
@@ -507,9 +511,11 @@ export class McpAdaptersService implements OnModuleInit {
         | 'sse'
         | 'streamable_http'
         | undefined;
-      const hasCommand = typeof entry['command'] === 'string' && entry['command'].length > 0;
+      const hasCommand =
+        typeof entry['command'] === 'string' && entry['command'].length > 0;
       const hasArgs = Array.isArray(entry['args']) && entry['args'].length > 0;
-      const hasUrl = typeof entry['url'] === 'string' && entry['url'].startsWith('http');
+      const hasUrl =
+        typeof entry['url'] === 'string' && entry['url'].startsWith('http');
 
       // 显式 transport
       if (transport === 'stdio') {
@@ -561,7 +567,11 @@ export class McpAdaptersService implements OnModuleInit {
         const url = entry['url'] as string;
         const headers = entry['headers'] as Record<string, string> | undefined;
         // 默认为 streamable_http，MCP SDK 会自动降级到 SSE
-        out[name] = { transport: 'streamable_http', url, headers } as HttpServer;
+        out[name] = {
+          transport: 'streamable_http',
+          url,
+          headers,
+        } as HttpServer;
       }
     }
     return Object.keys(out).length > 0 ? out : null;

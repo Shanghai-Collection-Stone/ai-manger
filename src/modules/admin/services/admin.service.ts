@@ -69,8 +69,9 @@ export class AdminService {
       db.collection<AdminAiProviderEntity>('admin_ai_providers');
     this.clawConfigs =
       db.collection<AdminClawConfigEntity>('admin_claw_configs');
-    this.agentConfigs =
-      db.collection<AdminAgentConfigEntity>('admin_agent_configs');
+    this.agentConfigs = db.collection<AdminAgentConfigEntity>(
+      'admin_agent_configs',
+    );
     this.llmSettings =
       db.collection<AdminLlmSettingEntity>('admin_llm_settings');
     this.xhsAccounts = db.collection<XhsAccountEntity>('admin_xhs_accounts');
@@ -240,7 +241,9 @@ export class AdminService {
    * @description 获取当前用户信息（含租户名）
    * @keyword-en get current admin user with tenant name
    */
-  async getMe(currentUser: AdminUserEntity): Promise<AdminUserPublic & { tenantName?: string }> {
+  async getMe(
+    currentUser: AdminUserEntity,
+  ): Promise<AdminUserPublic & { tenantName?: string }> {
     const base = this.toPublicUser(currentUser);
     if (currentUser.tenantId) {
       const tenant = await this.sassService.getTenant(currentUser.tenantId);
@@ -418,6 +421,14 @@ export class AdminService {
       isDefault: input.isDefault ?? false,
       updatedAt: now,
     };
+    // 先清掉同类目下其它默认项, 再 upsert 目标为默认, 避免与旧默认项同时
+    // 命中 partial unique index { modelCategory, isDefault:true } 触发 E11000。
+    if (doc.isDefault) {
+      await this.aiProviders.updateMany(
+        { modelCategory },
+        { $set: { isDefault: false, updatedAt: now } },
+      );
+    }
     const res = await this.aiProviders.findOneAndUpdate(
       filter,
       {
@@ -427,15 +438,6 @@ export class AdminService {
       { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
     if (!res.value) throw new BadRequestException('AI_PROVIDER_SAVE_FAILED');
-    if (res.value.isDefault) {
-      await this.aiProviders.updateMany(
-        {
-          _id: { $ne: res.value._id },
-          modelCategory: res.value.modelCategory,
-        },
-        { $set: { isDefault: false, updatedAt: now } },
-      );
-    }
     return res.value;
   }
 
@@ -474,7 +476,11 @@ export class AdminService {
     if (typeof input.model === 'string') {
       updates.model = input.model.trim() || undefined;
     }
-    if (input.modelCategory === 'llm' || input.modelCategory === 'em' || input.modelCategory === 'image') {
+    if (
+      input.modelCategory === 'llm' ||
+      input.modelCategory === 'em' ||
+      input.modelCategory === 'image'
+    ) {
       updates.modelCategory = input.modelCategory;
     }
     if (typeof input.apiKey === 'string') {
@@ -486,20 +492,26 @@ export class AdminService {
     if (typeof input.isDefault === 'boolean') {
       updates.isDefault = input.isDefault;
     }
+    // 先清掉同类目下其它默认项, 再把目标置为默认。
+    // 否则在 findOneAndUpdate 设默认的瞬间会与旧默认项同时满足
+    // partial unique index { modelCategory, isDefault:true }, 触发 E11000。
+    if (updates.isDefault === true) {
+      const effectiveCategory =
+        (updates.modelCategory as AdminAiProviderEntity['modelCategory']) ??
+        target.modelCategory;
+      await this.aiProviders.updateMany(
+        {
+          _id: { $ne: targetId },
+          modelCategory: effectiveCategory,
+        },
+        { $set: { isDefault: false, updatedAt: new Date() } },
+      );
+    }
     const res = await this.aiProviders.findOneAndUpdate(
       { _id: targetId },
       { $set: updates },
       { returnDocument: 'after', includeResultMetadata: true },
     );
-    if (res.value?.isDefault) {
-      await this.aiProviders.updateMany(
-        {
-          _id: { $ne: res.value._id },
-          modelCategory: res.value.modelCategory,
-        },
-        { $set: { isDefault: false, updatedAt: new Date() } },
-      );
-    }
     return res.value ?? null;
   }
 
@@ -544,7 +556,9 @@ export class AdminService {
     if (!provider) {
       throw new BadRequestException('AI_PROVIDER_NOT_FOUND');
     }
-    const code = String(provider.providerCode ?? '').toLowerCase().trim();
+    const code = String(provider.providerCode ?? '')
+      .toLowerCase()
+      .trim();
     const apiKey = String(provider.apiKey ?? '').trim();
     if (!apiKey) {
       return {
@@ -1467,7 +1481,9 @@ export class AdminService {
       const endpoint = `${baseUrl}/v1/chat/completions`;
       const reqBody = JSON.stringify({
         model: 'openclaw',
-        messages: [{ role: 'user', content: JSON.stringify({ type: 'skill-new-ping' }) }],
+        messages: [
+          { role: 'user', content: JSON.stringify({ type: 'skill-new-ping' }) },
+        ],
       });
       console.log('[PingClaw] →', endpoint, reqBody);
       const response = await fetch(endpoint, {
@@ -1512,13 +1528,22 @@ export class AdminService {
         }
       }
     } catch (err) {
-      console.log('[PingClaw] error', err instanceof Error ? err.message : String(err));
+      console.log(
+        '[PingClaw] error',
+        err instanceof Error ? err.message : String(err),
+      );
       status = 'error';
     }
 
     await this.clawConfigs.updateOne(
       { _id: new ObjectId(id) },
-      { $set: { connectStatus: status, connectCheckedAt: new Date(), updatedAt: new Date() } },
+      {
+        $set: {
+          connectStatus: status,
+          connectCheckedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
     );
     return { status };
   }
@@ -1763,7 +1788,10 @@ export class AdminService {
    * @returns {Promise<XhsAccountEntity[]>}
    * @keyword-en list social accounts with optional platform filter
    */
-  async listXhsAccounts(tenantId?: string, platform?: string): Promise<XhsAccountEntity[]> {
+  async listXhsAccounts(
+    tenantId?: string,
+    platform?: string,
+  ): Promise<XhsAccountEntity[]> {
     const filter: Record<string, unknown> = {};
     if (tenantId) filter.tenantId = tenantId;
     if (platform) filter.platform = platform;
@@ -1875,7 +1903,8 @@ export class AdminService {
     id: string,
     tenantId?: string,
   ): Promise<{ loginStatus: string; message?: string }> {
-    if (!ObjectId.isValid(id)) return { loginStatus: 'error', message: 'INVALID_ID' };
+    if (!ObjectId.isValid(id))
+      return { loginStatus: 'error', message: 'INVALID_ID' };
     const filter: Record<string, unknown> = { _id: new ObjectId(id) };
     if (tenantId) filter.tenantId = tenantId;
     const account = await this.xhsAccounts.findOne(filter);
@@ -1886,7 +1915,8 @@ export class AdminService {
     const clawConfig = await this.clawConfigs.findOne({
       _id: new ObjectId(account.clawConfigId),
     });
-    if (!clawConfig) return { loginStatus: 'error', message: 'CLAW_CONFIG_NOT_FOUND' };
+    if (!clawConfig)
+      return { loginStatus: 'error', message: 'CLAW_CONFIG_NOT_FOUND' };
     try {
       const agentId = account.clawAgentId || 'main';
       const url = `${clawConfig.serviceUrl.replace(/\/$/, '')}/api/agents/${agentId}/chat`;
@@ -1903,10 +1933,14 @@ export class AdminService {
         }),
         signal: AbortSignal.timeout(30000),
       });
-      const loginStatus: XhsAccountEntity['loginStatus'] = resp.ok ? 'online' : 'error';
+      const loginStatus: XhsAccountEntity['loginStatus'] = resp.ok
+        ? 'online'
+        : 'error';
       await this.xhsAccounts.updateOne(
         { _id: account._id },
-        { $set: { loginStatus, lastLoginAt: new Date(), updatedAt: new Date() } },
+        {
+          $set: { loginStatus, lastLoginAt: new Date(), updatedAt: new Date() },
+        },
       );
       return { loginStatus, message: resp.ok ? 'LOGIN_OK' : 'CLAW_ERROR' };
     } catch (err) {

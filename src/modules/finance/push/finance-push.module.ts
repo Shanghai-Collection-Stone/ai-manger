@@ -5,13 +5,16 @@ import { FinanceConfigModule } from '../config/finance-config.module.js';
 import { FinanceSourceModule } from '../source/finance-source.module.js';
 import { FinanceTransformModule } from '../transform/finance-transform.module.js';
 import { FinancePushAdminController } from './controller/finance-push-admin.controller.js';
+import { FinancePushWebhookController } from './controller/finance-push-webhook.controller.js';
 import { FinanceExternalService } from './services/finance-external.service.js';
 import { FinancePushConfigService } from './services/finance-push-config.service.js';
 import { FinancePushRunnerService } from './services/finance-push-runner.service.js';
+import { FinancePushWebhookService } from './services/finance-push-webhook.service.js';
 
 /**
  * @description 财务推送模块(每作用域一份 push config + 按 binding name 推送 + 外部资源透传)
- * @keyword-en finance push module, scoped config, run by name, external proxy
+ * @keyword-en finance-push-module, scoped-config, run-by-name, webhook-receiver
+ * @keyword-cn 财务推送模块, webhook接收
  */
 @Module({
   imports: [
@@ -21,16 +24,18 @@ import { FinancePushRunnerService } from './services/finance-push-runner.service
     FinanceSourceModule,
     FinanceTransformModule,
   ],
-  controllers: [FinancePushAdminController],
+  controllers: [FinancePushAdminController, FinancePushWebhookController],
   providers: [
     FinancePushConfigService,
     FinancePushRunnerService,
     FinanceExternalService,
+    FinancePushWebhookService,
   ],
   exports: [
     FinancePushConfigService,
     FinancePushRunnerService,
     FinanceExternalService,
+    FinancePushWebhookService,
   ],
 })
 export class FinancePushModule {}

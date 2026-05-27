@@ -178,7 +178,8 @@ export class McpStorageService {
       // Windows/不同来源大小写不一致时，做一次不区分大小写匹配
       const ents = await fs.readdir(dir, { withFileTypes: true });
       const byName = ents.find(
-        (ent) => ent.isFile() && ent.name.toLowerCase() === safeName.toLowerCase(),
+        (ent) =>
+          ent.isFile() && ent.name.toLowerCase() === safeName.toLowerCase(),
       );
       if (byName) return path.resolve(dir, byName.name);
 

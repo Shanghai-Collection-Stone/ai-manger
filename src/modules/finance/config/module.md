@@ -35,6 +35,7 @@ Transform 持久化实体。
 - **函数**:
   - `ensureIndexes`: 索引(tenantId+name 唯一,旧 category 索引静默清理)/ensure indexes
   - `list`: 当前用户可见列表 /list bindings
+  - `listByScope`: 按租户作用域列出全部 binding,供 webhook 未指定 binding 时跑全量同步 /list bindings by scope for webhook sync
   - `getByName`: 按 name 取单条 /get binding by name
   - `upsert`: Upsert(传 previousName 则触发改名;normalizeSources 强校验)/upsert with rename
   - `delete`: 按 name 删除 /delete by name

@@ -15,7 +15,10 @@ import type {
 } from '../entities/gallery-zip-import.entity.js';
 
 /** @description node-stream-zip 默认导出形态 */
-type StreamZipCtor = new (options: { file: string; storeEntries?: boolean }) => StreamZipInstance;
+type StreamZipCtor = new (options: {
+  file: string;
+  storeEntries?: boolean;
+}) => StreamZipInstance;
 interface StreamZipInstance {
   on(event: 'ready' | 'error', cb: (err?: unknown) => void): void;
   entries(): Record<string, StreamZipEntry>;
@@ -110,7 +113,9 @@ export class GalleryZipImportService {
    * @description 查询单条任务(去 _id)
    * @keyword-en get zip import job by id
    */
-  async getById(id: string): Promise<Omit<GalleryZipImportEntity, '_id'> | null> {
+  async getById(
+    id: string,
+  ): Promise<Omit<GalleryZipImportEntity, '_id'> | null> {
     const job = await this.jobs.findOne({ id }, { projection: { _id: 0 } });
     return (job as Omit<GalleryZipImportEntity, '_id'> | null) ?? null;
   }
@@ -152,7 +157,11 @@ export class GalleryZipImportService {
   async cancel(id: string): Promise<{ ok: boolean }> {
     const cur = await this.jobs.findOne({ id });
     if (!cur) return { ok: false };
-    if (cur.status === 'done' || cur.status === 'failed' || cur.status === 'cancelled') {
+    if (
+      cur.status === 'done' ||
+      cur.status === 'failed' ||
+      cur.status === 'cancelled'
+    ) {
       return { ok: false };
     }
     await this.jobs.updateOne(
@@ -337,6 +346,22 @@ export class GalleryZipImportService {
           const absPath = join(dir, fileName);
           await this.extractEntry(zip, entryName, absPath);
 
+          // 保质量压缩(就地替换),与普通批量上传同口径:1600x1600 / quality 75。
+          // 必须在生成缩略图、读取尺寸、统计大小之前,保证元数据与落盘文件一致。
+          const compressed = await this.gallery
+            .compressImageInPlace({
+              filePath: absPath,
+              maxWidth: 1600,
+              maxHeight: 1600,
+              quality: 75,
+            })
+            .catch(() => null);
+          if (compressed?.reason && compressed.reason !== 'not-smaller') {
+            console.error(
+              `[gallery-zip-compress-skip] ${entryName} :: ${compressed.reason}`,
+            );
+          }
+
           const thumb = await this.gallery
             .generateThumbnail(absPath, entryName)
             .catch(() => null);
@@ -404,7 +429,11 @@ export class GalleryZipImportService {
       { id },
       {
         $set: {
-          status: (allOk ? 'done' : success > 0 ? 'done' : 'failed') as GalleryZipImportStatus,
+          status: (allOk
+            ? 'done'
+            : success > 0
+              ? 'done'
+              : 'failed') as GalleryZipImportStatus,
           stage: allOk
             ? `导入完成(${success} 张)`
             : success > 0
@@ -469,9 +498,7 @@ export class GalleryZipImportService {
   ): Promise<void> {
     const update: Record<string, unknown> = {
       status: 'cancelled' as GalleryZipImportStatus,
-      stage: partial
-        ? `已取消(已入库 ${partial.success} 张)`
-        : '已取消',
+      stage: partial ? `已取消(已入库 ${partial.success} 张)` : '已取消',
       finishedAt: new Date(),
       updatedAt: new Date(),
     };
@@ -559,7 +586,11 @@ export class GalleryZipImportService {
     try {
       const mod = (await import('jimp')) as Record<string, unknown>;
       const Jimp = mod.Jimp as
-        | { read: (path: string) => Promise<{ bitmap?: { width?: number; height?: number } }> }
+        | {
+            read: (
+              path: string,
+            ) => Promise<{ bitmap?: { width?: number; height?: number } }>;
+          }
         | undefined;
       if (!Jimp) return null;
       const img = await Jimp.read(p);
@@ -594,7 +625,10 @@ export class GalleryZipImportService {
   private async loadStreamZip(): Promise<StreamZipCtor> {
     if (!this.streamZipCtorPromise) {
       this.streamZipCtorPromise = (async () => {
-        const mod = (await import('node-stream-zip')) as Record<string, unknown>;
+        const mod = (await import('node-stream-zip')) as Record<
+          string,
+          unknown
+        >;
         const Ctor = (mod.default ?? mod) as unknown;
         if (typeof Ctor !== 'function') {
           throw new Error('node-stream-zip ctor not found');

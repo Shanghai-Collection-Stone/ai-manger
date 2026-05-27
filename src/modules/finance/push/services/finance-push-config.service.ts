@@ -25,7 +25,7 @@ export class FinancePushConfigService {
   }
 
   /**
-   * @description 索引(tenantId 唯一);迁移旧"每作用域 × 每 category 一份"为"每作用域一份"(保留最新 updatedAt 那条)
+   * @description 索引(tenantId 唯一,externalTenantId 唯一);迁移旧"每作用域 × 每 category 一份"为"每作用域一份"(保留最新 updatedAt 那条)
    * @keyword-en ensure push config indexes with legacy category dedup
    */
   async ensureIndexes(): Promise<void> {
@@ -37,7 +37,13 @@ export class FinancePushConfigService {
     // 迁移:同 tenantId 下若有多条(旧 category 维度),保留最新一条
     const dups = await this.collection
       .aggregate([
-        { $group: { _id: '$tenantId', count: { $sum: 1 }, ids: { $push: '$_id' } } },
+        {
+          $group: {
+            _id: '$tenantId',
+            count: { $sum: 1 },
+            ids: { $push: '$_id' },
+          },
+        },
         { $match: { count: { $gt: 1 } } },
       ])
       .toArray();
@@ -58,6 +64,14 @@ export class FinancePushConfigService {
       { tenantId: 1 },
       { unique: true, name: 'tenantId_1' },
     );
+    await this.collection.createIndex(
+      { externalTenantId: 1 },
+      {
+        unique: true,
+        name: 'externalTenantId_1',
+        partialFilterExpression: { externalTenantId: { $type: 'string' } },
+      },
+    );
   }
 
   /**
@@ -69,7 +83,20 @@ export class FinancePushConfigService {
   }
 
   /**
-   * @description Upsert push config
+   * @description 通过外部财务系统租户 ID 查找本系统作用域配置
+   * @keyword-cn 外部租户映射, 推送配置
+   * @keyword-en get-push-config-by-external-tenant, external-tenant-mapping
+   */
+  async getByExternalTenantId(
+    externalTenantId: string,
+  ): Promise<FinancePushConfigEntity | null> {
+    const normalized = externalTenantId.trim();
+    if (!normalized) return null;
+    return this.collection.findOne({ externalTenantId: normalized });
+  }
+
+  /**
+   * @description Upsert push config,including external tenant mapping for webhooks
    * @keyword-en upsert finance push config
    */
   async upsert(
@@ -77,25 +104,65 @@ export class FinancePushConfigService {
     input: FinancePushConfigInput,
   ): Promise<FinancePushConfigEntity> {
     const tenantId = this.resolveScopeId(currentUser);
-    const baseUrl = String(input.baseUrl ?? '').trim().replace(/\/+$/, '');
+    const baseUrl = String(input.baseUrl ?? '')
+      .trim()
+      .replace(/\/+$/, '');
     const apiKey = String(input.apiKey ?? '').trim();
+    const externalTenantId = String(input.externalTenantId ?? '').trim();
     if (!baseUrl) throw new BadRequestException('PUSH_BASE_URL_REQUIRED');
     if (!apiKey) throw new BadRequestException('PUSH_API_KEY_REQUIRED');
     const now = new Date();
-    const res = await this.collection.findOneAndUpdate(
-      { tenantId },
-      {
-        $set: { baseUrl, apiKey, updatedAt: now },
-        $setOnInsert: {
-          _id: new ObjectId(),
-          tenantId,
-          createdAt: now,
+    try {
+      const res = await this.collection.findOneAndUpdate(
+        { tenantId },
+        {
+          $set: {
+            baseUrl,
+            apiKey,
+            updatedAt: now,
+            ...(externalTenantId ? { externalTenantId } : {}),
+          },
+          ...(externalTenantId ? {} : { $unset: { externalTenantId: '' } }),
+          $setOnInsert: {
+            _id: new ObjectId(),
+            tenantId,
+            createdAt: now,
+          },
         },
-      },
-      { upsert: true, returnDocument: 'after', includeResultMetadata: true },
+        { upsert: true, returnDocument: 'after', includeResultMetadata: true },
+      );
+      if (!res.value) throw new BadRequestException('PUSH_CONFIG_SAVE_FAILED');
+      return res.value;
+    } catch (err) {
+      if (this.isDuplicateExternalTenantError(err)) {
+        throw new BadRequestException('PUSH_EXTERNAL_TENANT_ALREADY_BOUND');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * @description 判断是否为 externalTenantId 唯一索引冲突
+   * @keyword-cn 外部租户映射, 重复键
+   * @keyword-en detect-external-tenant-duplicate, external-tenant-mapping
+   */
+  private isDuplicateExternalTenantError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const candidate = error as {
+      code?: unknown;
+      keyPattern?: unknown;
+      message?: unknown;
+    };
+    const keyPattern = candidate.keyPattern;
+    const message =
+      typeof candidate.message === 'string' ? candidate.message : '';
+    return (
+      candidate.code === 11000 &&
+      ((!!keyPattern &&
+        typeof keyPattern === 'object' &&
+        'externalTenantId' in keyPattern) ||
+        message.includes('externalTenantId'))
     );
-    if (!res.value) throw new BadRequestException('PUSH_CONFIG_SAVE_FAILED');
-    return res.value;
   }
 
   /**

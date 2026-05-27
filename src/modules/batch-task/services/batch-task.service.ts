@@ -351,10 +351,17 @@ export class BatchTaskService {
    * @keyword-en batch-task, mcp, open
    * @since 2026-02-04
    */
-  async openMcpTask(id: number, tenantId?: string): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id, ...this.buildTenantFilter(tenantId) });
+  async openMcpTask(
+    id: number,
+    tenantId?: string,
+  ): Promise<BatchTaskEntity | null> {
+    const doc = await this.tasks.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
     if (!doc) return null;
-    if (doc.mcpTaskId && doc.mcpTaskId.length > 0) return await this.get(id, tenantId);
+    if (doc.mcpTaskId && doc.mcpTaskId.length > 0)
+      return await this.get(id, tenantId);
 
     // batch_task_open 工具不接受任何参数，只返回任务ID
     console.log('[openMcpTask] Calling batch_task_open with empty input');
@@ -420,7 +427,10 @@ export class BatchTaskService {
     input: BatchTaskAddPostsInput,
     tenantId?: string,
   ): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id, ...this.buildTenantFilter(tenantId) });
+    const doc = await this.tasks.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
     if (!doc) return null;
     if (!doc.todoId) throw new Error('BATCH_TASK_TODO_NOT_FOUND');
     if (!doc.mcpTaskId) throw new Error('BATCH_TASK_MCP_NOT_OPENED');
@@ -934,7 +944,10 @@ export class BatchTaskService {
     input: BatchTaskRunInput,
     tenantId?: string,
   ): Promise<BatchTaskEntity | null> {
-    const doc = await this.tasks.findOne({ id, ...this.buildTenantFilter(tenantId) });
+    const doc = await this.tasks.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
     if (!doc) return null;
     if (!doc.mcpTaskId) throw new Error('BATCH_TASK_MCP_NOT_OPENED');
 

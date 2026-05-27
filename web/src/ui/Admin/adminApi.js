@@ -526,7 +526,7 @@ export const adminApi = {
   },
 
   /**
-   * @description Upsert 推送配置(每作用域一份)
+   * @description Upsert 推送配置(每作用域一份,含 webhook 外部租户映射)
    * @keyword-en upsert finance push config
    */
   async upsertFinancePushConfig(payload) {
@@ -592,6 +592,10 @@ export const adminApi = {
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
+    /**
+     * @description 分发财务 Agent SSE 事件到对应回调
+     * @keyword-en finance-push-sse-dispatch, sse-event
+     */
     const dispatch = (event, dataRaw) => {
       let payload = dataRaw;
       try {
@@ -610,6 +614,10 @@ export const adminApi = {
       }
     };
     // SSE 帧:`event: NAME\ndata: JSON\n\n`;以空行分割,逐帧解析
+    /**
+     * @description 解析财务 Agent SSE 文本帧
+     * @keyword-en finance-push-sse-parse, sse-frame
+     */
     const parseChunk = () => {
       let idx;
       while ((idx = buffer.indexOf('\n\n')) !== -1) {
@@ -700,5 +708,106 @@ export const adminApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  },
+
+  /**
+   * @description 财务 Agent 流式聊天(SSE;实时回调 token 与 tool 调用事件)
+   * @keyword-en finance-agent-chat-stream, sse-chat
+   */
+  async chatFinanceAgentStream(payload, callbacks = {}) {
+    const { signal, ...bodyPayload } =
+      payload && typeof payload === 'object' ? payload : {};
+    const token = getAdminToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/admin/finance/agent/chat/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(bodyPayload),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      let message = `请求失败(${res.status})`;
+      try {
+        const data = await res.json();
+        message = data.message || data.error || message;
+      } catch {
+        // ignore json parse error
+      }
+      throw new Error(message);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    /**
+     * @description 分发财务 Agent SSE 事件到对应回调
+     * @keyword-en finance-agent-sse-dispatch, sse-event
+     */
+    const dispatch = (event, dataRaw) => {
+      let payloadData = dataRaw;
+      try {
+        payloadData = JSON.parse(dataRaw);
+      } catch {
+        // 兼容空 data
+      }
+      if (typeof callbacks.onEvent === 'function') {
+        callbacks.onEvent(event, payloadData);
+      }
+      const handlerMap = {
+        start: callbacks.onStart,
+        token: callbacks.onToken,
+        tool_narration: callbacks.onToolNarration,
+        reasoning: callbacks.onReasoning,
+        tool_start: callbacks.onToolStart,
+        tool_chunk: callbacks.onToolChunk,
+        tool_end: callbacks.onToolEnd,
+        subagent: callbacks.onSubagent,
+        end: callbacks.onEnd,
+        error: callbacks.onError,
+      };
+      const handler = handlerMap[event];
+      if (typeof handler === 'function') handler(payloadData);
+    };
+    /**
+     * @description 解析财务 Agent SSE 文本帧
+     * @keyword-en finance-agent-sse-parse, sse-frame
+     */
+    const parseChunk = () => {
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let event = 'message';
+        const dataLines = [];
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('event:')) {
+            event = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+        dispatch(event, dataLines.join('\n'));
+      }
+    };
+    try {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        parseChunk();
+      }
+      buffer += decoder.decode();
+      parseChunk();
+    } finally {
+      try {
+        reader.releaseLock?.();
+      } catch {
+        // ignore
+      }
+    }
   },
 };

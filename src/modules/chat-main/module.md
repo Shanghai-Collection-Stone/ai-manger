@@ -1,7 +1,7 @@
 # Chat-Main Module
 
 ## 模块描述
-主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。针对生图/图组等工具密集链路，支持 updates-only 流模式与连接关闭后的中断保护。topic_orchestrate_subagent 支持数据收集链路（analysis_subagent/task + data_analysis + duckduckgo 类 MCP 搜索）后再发起编排。主 LLM 与小红书生文专家支持文章库工具（列库、按标题/ID取二维码、Canvas 入库）。
+主对话模块：支持流式与非流式交互，并提供上下文会话的增删改查能力；流式工具调用带超时保护，但 topic_orchestrate 不做超时限制。针对生图/图组等工具密集链路，支持 updates-only 流模式与连接关闭后的中断保护。topic_orchestrate_subagent 支持 tag_select_request 收集 tags，并支持数据收集链路（analysis_subagent/task + data_analysis + duckduckgo 类 MCP 搜索）后再发起编排。主 LLM 与小红书生文专家支持文章库工具（列库、按标题/ID取二维码、Canvas 入库）。
 
 **🆕 LangGraph Supervisor 架构(仅 default 模式)**：
 - default 模式不再用 deepagents 的 task-tool 合流式 subagent,改用 LangGraph `StateGraph` + `Command(goto, graph=PARENT)` 真正切换控制权
@@ -12,6 +12,7 @@
 - 其他 sessionType (xhs-image-expert / xhs-tracker 等)保持原 deepagents 路径不动
 
 **canvas-it 提前推送**：stream 路径在 finalScope 上注入 `earlyEmit(text)` 函数，xhs_create_image_group_canvas tool 在 createCanvas 成功的瞬间直接调用 earlyEmit，把 canvas-it 代码块作为 `token` 事件 push 到前端 SSE，并累加到 fullText；不再依赖子代理/主 agent 的 LLM 二次解码，首屏几乎零延迟。按 canvasId 去重，避免重复推送；最终落库由 `appendCanvasItIfNeeded` 兜底确保只保留一份 canvas-it。supervisor graph 模式下 earlyEmit 同样透传(scope 注入到所有 expert 节点的 tool 实例)。
+图文生成专家在调用 topic_orchestrate 前必须确认生文风格；若最后一条用户要求未明确平台/文风，则先向用户询问“小红书/知乎/公众号/通用专业”等文风选择，并将确认后的 writingStyle 透传到选题与生文节点。
 文件路径: `src/modules/chat-main`
 
 ## 功能描述及关键词
@@ -39,12 +40,12 @@
   - `getDataAnalysisPromptCN`: 系统提示/data analysis prompt
   - `getSystemPromptCN`: 模式提示/system prompt
   - `getThoughtPromptCN`: 思维链提示/thought prompt
-  - `buildGallerySubagent`: 构建图库子代理(仅负责图库搜图/详情查询;**图组 Canvas 创建已改为主 agent 直接调 xhs_create_image_group_canvas**,避免 subagent LLM 推理阻塞 canvas-it earlyEmit 推送)/build gallery subagent
+  - `buildGallerySubagent`: 构建图库子代理(仅负责图库搜图/详情查询;**图组 Canvas 创建已改为主 agent 直接调 xhs_create_image_group_canvas**,避免 subagent LLM 推理阻塞 canvas-it earlyEmit 推送;明确图文/正文/全套请求交给图文生成专家)/build gallery subagent
   - `buildDefaultSubagents`: 子代理配置。default 模式 6 个子代理: analysis_subagent(数据查询/分析 + 决策卡)、topic_orchestrate_subagent(文章)、frontend_subagent(图表/看板)、ops_subagent(**批量发布·内容分发·robot 发布执行**)、task_subagent(**任务编排:待办/工单 todo_* 全家桶**)、gallery_subagent(图组/图库)。**统一通过 `injectMiddleware` 给每个 SubAgent 注入 `agent.buildSubagentSanitizeMiddleware()`** —— deepagents 1.8.2 不会把主 agent customMiddleware 透传给 subagent 的内部 createAgent,出错时只看到 patchToolCallsMiddleware 抛 `expected AIMessage or Command, got object` 而没有原始数据,故必须显式注入到每个 SubAgent.middleware 字段/build default subagents with sanitize middleware injection
-  - `resolveSubagentToolSets`: 把全量工具切成各专家工具集 —— analysis(数据源+搜索+决策卡)、topicOrchestrate、frontend、ops(robot_list+dashboard_config_patch+剩余 MCP,**不含 todo_**)、task(`todo_*` 全家桶)、gallery/resolve subagent tool sets
+  - `resolveSubagentToolSets`: 把全量工具切成各专家工具集 —— analysis(数据源+搜索+决策卡)、topicOrchestrate(topic_orchestrate + tag_select_request + 数据收集/搜索)、frontend、ops(robot_list+dashboard_config_patch+剩余 MCP,**不含 todo_**)、task(`todo_*` 全家桶)、gallery/resolve subagent tool sets
   - `loadHistoryAsBaseMessages(sid, scope)`: 🆕 从 ctx 拉对话历史(ContextMessage[]) 转 BaseMessage[](user→HumanMessage / assistant→AIMessage, system 不复用)。default 模式下完整历史喂给业务专家执行;其他 sessionType 保持 deepagents checkpoint 自动加载/load history as base messages
   - `simplifyHistoryForRouting(history)`: 🆕 把历史"简化"成纯自然语言对话 —— 剥掉 AI 消息里的 earlyEmit 卡片 fence(canvas-it/handoff-it/tag-select-it/task-it/decision-it,含未闭合兜底)和 minimax 私有工具调用伪文本(`<minimax:tool_call>`/`<invoke>`/`<parameter>`),清洗后为空的纯卡片回复直接丢弃;用户消息保持原样。**意图识别 + chat 专家用简化历史**(否则 minimax 看到历史里的卡片/工具调用会被带偏,把自己当执行者去虚拟造一个 tag-select 卡片或 tool_call,而非老实分类/闲聊);业务专家用完整历史/simplify history strip cards and tool-call artifacts
-  - `getSupervisorPromptCN(envContext, currentActionSession?)`: 🆕 意图识别 LLM 系统提示词。**固定格式输出**: 强约束 LLM **整条回复只能是一个路由词**(image/article/data/frontend/publisher/task/chat),不带标点/解释/前后缀;**明确"只做分类不执行",严禁输出 tag-select/canvas-it 等代码块/卡片/工具调用,哪怕历史里有也不模仿**。归类规则: 闲聊/问指挥官/与 6 专家无关 → chat;6 类业务请求 → 对应专家词(data 含方案/决策/策略;publisher=批量发布,task=任务编排,两者区分);延续上轮任务 → 对应专家词/intent recognition fixed-format prompt
+  - `getSupervisorPromptCN(envContext, currentActionSession?)`: 🆕 意图识别 LLM 系统提示词。**固定格式输出**: 强约束 LLM **整条回复只能是一个路由词**(image/article/data/frontend/publisher/task/chat),不带标点/解释/前后缀;**明确"只做分类不执行",严禁输出 tag-select/canvas-it 等代码块/卡片/工具调用,哪怕历史里有也不模仿**。归类规则: 闲聊/问指挥官/与 6 专家无关 → chat;明确图文/正文/文章/全套/也写文时 → article,即便同时出现配图/图组;纯图组/配图/封面 → image;tag-select 回传延续上一轮 image/article 专家;其他 6 类业务请求 → 对应专家词(data 含方案/决策/策略;publisher=批量发布,task=任务编排,两者区分);延续上轮任务 → 对应专家词/intent recognition fixed-format prompt
   - `getChatExpertPromptCN(envContext)`: 🆕 chat 专家(指挥官闲聊/通用对话)系统提示词。意图识别判定为闲聊/打招呼/问能力/与业务无关时由 chat 专家 createReactAgent(空工具)固有返回;自我介绍统筹 6 个方向(图组/文章/数据分析&决策/前端可视化/批量发布/任务编排)/build chat expert prompt
   - `mapSubagentsToExpertSpecs`: 🆕 把 buildDefaultSubagents 返回的 SubAgent 数组按 `name → ExpertName` 映射成 ExpertSpec 数组 (analysis_subagent→data, topic_orchestrate_subagent→article, frontend_subagent→frontend, ops_subagent→publisher, task_subagent→task, gallery_subagent→image),**零重复代码,直接复用现有 prompt+tools**/map subagents to expert specs
 
@@ -59,21 +60,21 @@
   - `BuildExpertAgentOptions`: buildExpertAgent 入参 (route + experts + chatExpertPrompt + expertLLM + chatLLM + checkpointer)
 - **函数(模块级)**:
   - `parseRouteToken(text)`: 从意图识别 LLM 纯文本回复硬解析路由 token(先 trim+lowercase 整体比对,再正则按单词边界取首个命中的 route 词)
-  - `inferExpertByKeyword(text)`: 关键词规则推断专家(图组/文章/数据+决策/图表/批量发布/任务编排),LLM 没吐出可识别 token 时兜底
+  - `inferExpertByKeyword(text)`: 关键词规则推断专家(图组/文章/数据+决策/图表/批量发布/任务编排),LLM 没吐出可识别 token 时兜底；图文/正文/文章/全套 等生文意图优先于配图/图组关键词
   - `isContinuationText(text)` / `extractMessageText(content)`: 延续口吻识别 / 从 string|多模态数组提取纯文本
 - **类方法**:
-  - `recognizeIntent(opts)`: 🆕 **第一步:意图识别**。一次独立的轻量 LLM `invoke([SystemMessage(prompt), ...全部历史])` —— 不是 tool 调用、不是 graph 节点。`parseRouteToken` 硬解析路由词;解析不到 → `inferExpertByKeyword` 关键词兜底 / 用户说"再来一组/我选定标签"+有 actionSession → 延续上轮专家;都没有 → 'chat'。**永远返回有效 RouteTarget,绝不抛错**/recognize intent via standalone llm call
+  - `recognizeIntent(opts)`: 🆕 **第一步:意图识别**。一次独立的轻量 LLM `invoke([SystemMessage(prompt), ...全部历史])` —— 不是 tool 调用、不是 graph 节点。`parseRouteToken` 硬解析路由词;解析不到 → `inferExpertByKeyword` 关键词兜底 / 用户说"再来一组/我选定标签"+有 actionSession → 延续上轮专家(支持 article 的 tag-select 回传);都没有 → 'chat'。**永远返回有效 RouteTarget,绝不抛错**/recognize intent via standalone llm call
   - `buildExpertAgent(opts)`: 🆕 **第二步:专家直派**。按 route 在代码层选定单个专家,构建 `createReactAgent` 实例(route='chat'→chatLLM+空工具+chatExpertPrompt;业务专家→expertLLM+spec.tools+spec.systemPrompt;绑 checkpointer)。返回值交给 `AgentService.stream` 当 `preBuiltAgent` 正常流式消费,**原有 stream 处理逻辑(token 累加/SSE/落库)完全不变**。放弃 StateGraph: supervisor 作图节点时 minimax 会被多代理执行上下文带偏(模仿历史里的工具调用文本、不老实输出路由词),拆成"独立意图调用+代码选专家"后路由层与执行层彻底解耦/build single expert agent by route
   - `shouldUseSupervisor(sessionType)`: 仅 'default' 返回 true,其他 sessionType 保留原 deepagents 路径
   - `filterSubagentOnlyTools`: subagentOnly 集合中**只保留 topic_orchestrate / xhs_list_canvases / xhs_get_canvas_detail**;xhs_create_image_group_canvas 故意从 subagentOnly 移除,允许主 agent 直接调,工具内部 fire-and-forget 异步生图 + earlyEmit 即时推 canvas-it,主 agent 路径无 LLM 阻塞/filter subagent only tools
   - `buildDefaultSubagents`: 子代理配置（xhs-specialist新增：xhs_data_tracking/xhs_publish）/build default subagents
   - `getTools`: 获取工具/get tools
   - `getRequestScope`: 解析租户范围/get request scope
-  - `getToolsForInput`: 工具过滤/get tools for input
+  - `getToolsForInput`: 工具过滤；图文/文章意图保留 topic_orchestrate + tag_select_request/get tools for input
   - `buildDefaultSubagents`: 子代理配置/build default subagents
   - `normalizeSubagentTools`: 规范工具/normalize subagent tools
   - `isBatchPublishIntent`: 批量发布意图/batch publish intent
-  - `isTopicOrchestrateIntent`: 选题编排意图/topic orchestrate intent
+  - `isTopicOrchestrateIntent`: 选题/图文/正文/文章编排意图/topic orchestrate intent
   - `shouldUseUpdatesOnlyStreamForInput`: updates-only 流模式判定/updates-only stream intent
   - `parseCanvasExecuteCanvasId`: 解析画布ID/parse canvas id
   - `extractCanvasItItems`: 解析画布块/extract canvas items

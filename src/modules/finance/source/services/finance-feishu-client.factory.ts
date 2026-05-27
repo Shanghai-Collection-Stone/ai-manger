@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import * as lark from '@larksuiteoapi/node-sdk';
 import { TenantCredentialService } from '../../../tenant-credential/services/tenant-credential.service.js';
+import { createFeishuHttpInstance } from '../../../../shared/network/feishu-http-instance.js';
 
 /**
  * @description 财务专用飞书 Client 工厂，按租户 appId/appSecret 取出 lark.Client，并做内存级缓存
@@ -8,7 +9,10 @@ import { TenantCredentialService } from '../../../tenant-credential/services/ten
  */
 @Injectable()
 export class FinanceFeishuClientFactory {
-  private readonly cache = new Map<string, { client: lark.Client; appId: string }>();
+  private readonly cache = new Map<
+    string,
+    { client: lark.Client; appId: string }
+  >();
 
   constructor(private readonly credentialService: TenantCredentialService) {}
 
@@ -31,6 +35,8 @@ export class FinanceFeishuClientFactory {
       appId: credential.appId,
       appSecret: credential.appSecret,
       disableTokenCache: false,
+      // 飞书境内直连,禁用 axios env 代理,避免经本地代理明文 HTTP 发往 HTTPS 端口
+      httpInstance: createFeishuHttpInstance(),
     });
     this.cache.set(id, { client, appId: credential.appId });
     return client;

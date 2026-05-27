@@ -7,7 +7,7 @@
  * 基础类型
  */
 export type DashboardCode = string; // e.g., 'ai-commander'
-export type BlockType = 
+export type BlockType =
   | 'ai_progress'
   | 'revenue_overview_card'
   | 'revenue_total_card'
@@ -31,7 +31,7 @@ export type BlockType =
   | 'customer_tag_cloud_card'
   | 'sales_rate_grid_card';
 
-export type QueryKey = 
+export type QueryKey =
   | 'revenueOverview'
   | 'dailyRevenue'
   | 'peopleStats'

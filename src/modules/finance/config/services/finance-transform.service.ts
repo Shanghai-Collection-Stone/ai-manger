@@ -37,7 +37,8 @@ export class FinanceTransformService {
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly validator: TransformValidatorService,
   ) {
-    this.collection = db.collection<FinanceTransformEntity>('finance_transforms');
+    this.collection =
+      db.collection<FinanceTransformEntity>('finance_transforms');
     void this.ensureIndexes();
   }
 
@@ -68,7 +69,10 @@ export class FinanceTransformService {
    */
   async list(currentUser: AdminUserEntity): Promise<FinanceTransformEntity[]> {
     const scopeId = this.resolveScopeId(currentUser);
-    return this.collection.find({ tenantId: scopeId }).sort({ name: 1 }).toArray();
+    return this.collection
+      .find({ tenantId: scopeId })
+      .sort({ name: 1 })
+      .toArray();
   }
 
   /**
@@ -143,7 +147,8 @@ export class FinanceTransformService {
       },
       { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
-    if (!res.value) throw new BadRequestException('FINANCE_TRANSFORM_SAVE_FAILED');
+    if (!res.value)
+      throw new BadRequestException('FINANCE_TRANSFORM_SAVE_FAILED');
     return res.value;
   }
 

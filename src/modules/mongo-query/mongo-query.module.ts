@@ -15,4 +15,3 @@ import { MongoQueryService } from './services/mongo-query.service.js';
   exports: [MongoQueryService],
 })
 export class MongoQueryModule {}
-

@@ -127,6 +127,19 @@ export class FinancePushRunnerService {
     opts: FinancePushRunOptions = {},
   ): Promise<FinancePushRunResult> {
     const scopeId = this.configService.resolveScopeId(currentUser);
+    return this.runByScope(scopeId, name, opts);
+  }
+
+  /**
+   * @description Execute one push by tenant scope id, used by webhook receivers and non-admin triggers.
+   * @keyword-en run-push-by-scope, webhook-trigger
+   * @keyword-cn 按作用域推送, webhook触发
+   */
+  async runByScope(
+    scopeId: string,
+    name: string,
+    opts: FinancePushRunOptions = {},
+  ): Promise<FinancePushRunResult> {
     const bindingName = this.bindingService.assertName(name);
     const startDate = this.normalizeDateOpt(opts.startDate);
     const endDate = this.normalizeDateOpt(opts.endDate);
@@ -155,7 +168,10 @@ export class FinancePushRunnerService {
     if (!binding?.sources?.length) {
       throw new BadRequestException('PUSH_BINDING_REQUIRED');
     }
-    const transform = await this.transformService.getByName(scopeId, bindingName);
+    const transform = await this.transformService.getByName(
+      scopeId,
+      bindingName,
+    );
     if (!transform?.dsl) {
       throw new BadRequestException('PUSH_TRANSFORM_REQUIRED');
     }
@@ -233,12 +249,18 @@ export class FinancePushRunnerService {
 
     const endpoint = this.joinUrl(config.baseUrl, EVENTS_UPSERT_PATH);
     const totalBatches = Math.ceil(records.length / BATCH_SIZE);
-    log('info', `准备推送 ${records.length} 条 · 切 ${totalBatches} 批 · 端点 ${endpoint}`);
+    log(
+      'info',
+      `准备推送 ${records.length} 条 · 切 ${totalBatches} 批 · 端点 ${endpoint}`,
+    );
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const chunk = records.slice(i, i + BATCH_SIZE);
       summary.batches += 1;
       const batchIndex = summary.batches - 1;
-      log('info', `推送批次 ${summary.batches}/${totalBatches}(${chunk.length} 条)...`);
+      log(
+        'info',
+        `推送批次 ${summary.batches}/${totalBatches}(${chunk.length} 条)...`,
+      );
       const res = await this.upsertBatch(endpoint, config.apiKey, chunk);
       if (res.ok) {
         summary.successCount += chunk.length;
@@ -257,7 +279,8 @@ export class FinancePushRunnerService {
       // log 里只放短摘要,完整内容由前端通过 failedBatch.rawResponseBody / payloadAll 拿
       const shortMsg =
         typeof res.message === 'string' && res.message.length > 200
-          ? res.message.slice(0, 200) + '...(完整见 failedBatch.rawResponseBody)'
+          ? res.message.slice(0, 200) +
+            '...(完整见 failedBatch.rawResponseBody)'
           : (res.message ?? '');
       log(
         'error',
@@ -332,7 +355,9 @@ export class FinancePushRunnerService {
     const s = String(value).trim();
     if (!s) return undefined;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-      throw new BadRequestException(`PUSH_DATE_FORMAT_INVALID:期望 YYYY-MM-DD,收到 ${s}`);
+      throw new BadRequestException(
+        `PUSH_DATE_FORMAT_INVALID:期望 YYYY-MM-DD,收到 ${s}`,
+      );
     }
     return s;
   }
@@ -429,7 +454,9 @@ export class FinancePushRunnerService {
    * @description amount 兜底取绝对值(目标 schema 用绝对值,正负看 flow)
    * @keyword-en push amount abs fallback
    */
-  private normalizeAmount(row: Record<string, unknown>): Record<string, unknown> {
+  private normalizeAmount(
+    row: Record<string, unknown>,
+  ): Record<string, unknown> {
     const v = row.amount;
     if (typeof v === 'number' && Number.isFinite(v)) {
       row.amount = Math.abs(v);
@@ -559,11 +586,14 @@ export class FinancePushRunnerService {
     body: unknown,
     rawText: string,
   ): { code?: string; message?: string } {
-    const code = this.pickCode(body) || (status >= 500 ? 'INTERNAL' : undefined);
+    const code =
+      this.pickCode(body) || (status >= 500 ? 'INTERNAL' : undefined);
     const picked = this.pickMessage(body);
-    const message = picked || (typeof rawText === 'string' ? rawText.slice(0, 16000) : undefined);
+    const message =
+      picked ||
+      (typeof rawText === 'string' ? rawText.slice(0, 16000) : undefined);
     if (
-      (status >= 400) &&
+      status >= 400 &&
       typeof rawText === 'string' &&
       /validation|required|expected|invalid_type|invalid_enum/i.test(rawText)
     ) {

@@ -129,7 +129,11 @@ export class TodoFunctionCallService {
           callbacks: (() => {
             if (Array.isArray(callbacks)) return callbacks;
             if (typeof callbacks === 'string' && callbacks.trim()) {
-              try { return JSON.parse(callbacks); } catch { /* ignore */ }
+              try {
+                return JSON.parse(callbacks);
+              } catch {
+                /* ignore */
+              }
             }
             return undefined;
           })(),
@@ -188,7 +192,9 @@ export class TodoFunctionCallService {
             .union([
               z.array(
                 z.object({
-                  event: z.string().describe('回调事件类型，如 update_process_task'),
+                  event: z
+                    .string()
+                    .describe('回调事件类型，如 update_process_task'),
                   params: z
                     .record(z.string(), z.unknown())
                     .optional()
@@ -393,7 +399,13 @@ export class TodoFunctionCallService {
             tenantId: this.resolveTenantId(tenantId, scope),
             title,
             description,
-            status: (status as 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled') ?? 'pending',
+            status:
+              (status as
+                | 'pending'
+                | 'in_progress'
+                | 'done'
+                | 'failed'
+                | 'cancelled') ?? 'pending',
             stage,
           });
           return JSON.stringify({ ok: true, item: { ...doc, _id: undefined } });
@@ -431,7 +443,14 @@ export class TodoFunctionCallService {
       },
     );
 
-    return [todoCreate, todoUpdate, todoDelete, todoGet, todoList, todoItemCreate];
+    return [
+      todoCreate,
+      todoUpdate,
+      todoDelete,
+      todoGet,
+      todoList,
+      todoItemCreate,
+    ];
   }
 
   /**

@@ -145,7 +145,14 @@ export class ChatMainController {
     @Query('model') model?: string,
     @Query('temperature') temperature?: number,
     @Query('recursionLimit') recursionLimit?: string,
-    @Query('sessionType') sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher',
+    @Query('sessionType')
+    sessionType?:
+      | 'default'
+      | 'thought'
+      | 'gallery-agent'
+      | 'xhs-specialist'
+      | 'xhs-tracker'
+      | 'xhs-publisher',
     @Req() req?: Request,
   ): Observable<MessageEvent> {
     // 设置默认模型为 kimi-k2-instruct
@@ -267,7 +274,17 @@ export class ChatMainController {
    * @returns `{ sessionId: string }`
    */
   async createSession(
-    @Body() body?: { sessionId?: string; sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher' },
+    @Body()
+    body?: {
+      sessionId?: string;
+      sessionType?:
+        | 'default'
+        | 'thought'
+        | 'gallery-agent'
+        | 'xhs-specialist'
+        | 'xhs-tracker'
+        | 'xhs-publisher';
+    },
     @Req() req?: Request,
   ): Promise<{ sessionId: string }> {
     const auth = await this.requireAuthContext(req);
@@ -291,7 +308,14 @@ export class ChatMainController {
   async getMessages(
     @Param('sessionId') sessionId: string,
     @Req() req: Request,
-    @Query('sessionType') sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher',
+    @Query('sessionType')
+    sessionType?:
+      | 'default'
+      | 'thought'
+      | 'gallery-agent'
+      | 'xhs-specialist'
+      | 'xhs-tracker'
+      | 'xhs-publisher',
   ): Promise<{ messages: Array<ContextMessage & { fingerprint: string }> }> {
     const auth = await this.requireAuthContext(req);
     const msgs = await this.chat.getMessages(sessionId, undefined, {
@@ -307,7 +331,14 @@ export class ChatMainController {
     @Param('sessionId') sessionId: string,
     @Body() body: { fingerprints?: string[]; indexes?: number[] },
     @Req() req: Request,
-    @Query('sessionType') sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher',
+    @Query('sessionType')
+    sessionType?:
+      | 'default'
+      | 'thought'
+      | 'gallery-agent'
+      | 'xhs-specialist'
+      | 'xhs-tracker'
+      | 'xhs-publisher',
   ): Promise<{ ok: boolean; deleted: number }> {
     const auth = await this.requireAuthContext(req);
     const res = await this.chat.deleteMessages(sessionId, body, {
@@ -330,7 +361,14 @@ export class ChatMainController {
   async clearSession(
     @Param('sessionId') sessionId: string,
     @Req() req: Request,
-    @Query('sessionType') sessionType?: 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher',
+    @Query('sessionType')
+    sessionType?:
+      | 'default'
+      | 'thought'
+      | 'gallery-agent'
+      | 'xhs-specialist'
+      | 'xhs-tracker'
+      | 'xhs-publisher',
   ): Promise<{ ok: boolean }> {
     const auth = await this.requireAuthContext(req);
     await this.chat.clearSession(sessionId, {

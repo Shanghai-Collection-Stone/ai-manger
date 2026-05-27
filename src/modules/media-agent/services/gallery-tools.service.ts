@@ -25,7 +25,9 @@ export class GalleryToolsService {
    * @keyword-en normalize text for tag matching
    */
   private normalizeTagText(value: string): string {
-    return String(value ?? '').trim().toLowerCase();
+    return String(value ?? '')
+      .trim()
+      .toLowerCase();
   }
 
   /**
@@ -71,8 +73,12 @@ export class GalleryToolsService {
       }
       const hit =
         (normalizedQuery.length > 0 &&
-          (tagNorm.includes(normalizedQuery) || normalizedQuery.includes(tagNorm))) ||
-        keywords.some((kw) => kw.length > 0 && (tagNorm.includes(kw) || kw.includes(tagNorm)));
+          (tagNorm.includes(normalizedQuery) ||
+            normalizedQuery.includes(tagNorm))) ||
+        keywords.some(
+          (kw) =>
+            kw.length > 0 && (tagNorm.includes(kw) || kw.includes(tagNorm)),
+        );
       if (hit) partial.push(tag);
     }
 
@@ -95,10 +101,9 @@ export class GalleryToolsService {
    * @returns {Array<{ tags?: string[]; description?: string }>} 匹配结果。
    * @keyword-en local tag keyword matching
    */
-  private matchImagesByTagKeywords<T extends { tags?: string[]; description?: string }>(
-    images: T[],
-    query: string,
-  ): T[] {
+  private matchImagesByTagKeywords<
+    T extends { tags?: string[]; description?: string },
+  >(images: T[], query: string): T[] {
     const keywords = this.extractQueryKeywords(query);
     const q = this.normalizeTagText(query);
     if (!q && keywords.length === 0) return [];
@@ -129,9 +134,10 @@ export class GalleryToolsService {
    * @keyword-en get gallery tools handle
    * @since 2026-03-23
    */
-  getHandle(
-    scope?: { tenantId?: string; userId?: string },
-  ): CreateAgentParams['tools'] {
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
     return [
       this.createSearchImagesTool(scope),
       this.createListTagsTool(scope),
@@ -146,9 +152,10 @@ export class GalleryToolsService {
    * @description 搜索图片工具
    * @keyword-en search images tool
    */
-  private createSearchImagesTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createSearchImagesTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }) {
     return tool(
       async (input: {
         query: string;
@@ -158,8 +165,14 @@ export class GalleryToolsService {
         tag?: string;
         group_id?: number;
       }) => {
-        const { query, limit = 8, min_score = 0.5, image_type = 'regular', tag, group_id } =
-          input;
+        const {
+          query,
+          limit = 8,
+          min_score = 0.5,
+          image_type = 'regular',
+          tag,
+          group_id,
+        } = input;
         try {
           const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
           const type =
@@ -217,10 +230,15 @@ export class GalleryToolsService {
               scope?.tenantId,
               {
                 imageType: type,
-                limit: 200,                groupId: group_id,
-                tag,              },
+                limit: 200,
+                groupId: group_id,
+                tag,
+              },
             );
-            const localMatched = this.matchImagesByTagKeywords(localPool, query);
+            const localMatched = this.matchImagesByTagKeywords(
+              localPool,
+              query,
+            );
             if (localMatched.length > 0) {
               finalResults = localMatched.slice(0, safeLimit).map((img) => ({
                 id: img.id,
@@ -273,7 +291,10 @@ export class GalleryToolsService {
         schema: z.object({
           query: z.string().describe('Text query for image search'),
           limit: z.number().optional().describe('Max results, default 8'),
-          min_score: z.number().optional().describe('Min similarity score, default 0.5'),
+          min_score: z
+            .number()
+            .optional()
+            .describe('Min similarity score, default 0.5'),
           image_type: z
             .enum(['all', 'regular', 'collage'])
             .optional()
@@ -289,9 +310,7 @@ export class GalleryToolsService {
    * @description 列出标签工具
    * @keyword-en list tags tool
    */
-  private createListTagsTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createListTagsTool(scope?: { tenantId?: string; userId?: string }) {
     return tool(
       async (input: { limit?: number }) => {
         const { limit = 500 } = input;
@@ -308,9 +327,13 @@ export class GalleryToolsService {
       },
       {
         name: 'gallery_list_tags',
-        description: 'List all distinct tags in gallery, optionally filtered by tenant',
+        description:
+          'List all distinct tags in gallery, optionally filtered by tenant',
         schema: z.object({
-          limit: z.number().optional().describe('Max tags to return, default 500'),
+          limit: z
+            .number()
+            .optional()
+            .describe('Max tags to return, default 500'),
         }),
       },
     );
@@ -320,9 +343,7 @@ export class GalleryToolsService {
    * @description 列出图片工具
    * @keyword-en list images tool
    */
-  private createListImagesTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createListImagesTool(scope?: { tenantId?: string; userId?: string }) {
     return tool(
       async (input: {
         group_id?: number;
@@ -392,14 +413,17 @@ export class GalleryToolsService {
       },
       {
         name: 'gallery_list_images',
-        description: 'List images from gallery. Use the "image_type" parameter to control what kind of images to return: "regular" (default) = only regular/non-collage images; "collage" = only collage/cover images; "all" = all images.',
+        description:
+          'List images from gallery. Use the "image_type" parameter to control what kind of images to return: "regular" (default) = only regular/non-collage images; "collage" = only collage/cover images; "all" = all images.',
         schema: z.object({
           group_id: z.number().optional().describe('Filter by group ID'),
           tag: z.string().optional().describe('Filter by tag'),
           image_type: z
             .enum(['all', 'regular', 'collage'])
             .optional()
-            .describe('Type of images to return: "regular" (default, excludes collage/cover), "collage" (only collage/cover), "all" (all images)'),
+            .describe(
+              'Type of images to return: "regular" (default, excludes collage/cover), "collage" (only collage/cover), "all" (all images)',
+            ),
           cursor_id: z.number().optional().describe('Cursor for pagination'),
           limit: z.number().optional().describe('Max results, default 24'),
         }),
@@ -411,9 +435,10 @@ export class GalleryToolsService {
    * @description 随机获取图片工具
    * @keyword-en random images tool
    */
-  private createRandomImagesTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createRandomImagesTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }) {
     return tool(
       async (input: { limit?: number; group_id?: number }) => {
         const { limit = 10, group_id } = input;
@@ -442,7 +467,8 @@ export class GalleryToolsService {
       },
       {
         name: 'gallery_random_images',
-        description: 'Get random images from gallery. Use this when user asks for random pictures or wants to browse sample images.',
+        description:
+          'Get random images from gallery. Use this when user asks for random pictures or wants to browse sample images.',
         schema: z.object({
           limit: z.number().optional().describe('Max results, default 10'),
           group_id: z.number().optional().describe('Filter by group ID'),
@@ -455,9 +481,7 @@ export class GalleryToolsService {
    * @description 列出图库分组工具
    * @keyword-en list gallery groups tool
    */
-  private createListGroupsTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createListGroupsTool(scope?: { tenantId?: string; userId?: string }) {
     return tool(
       async (input: { tag?: string; limit?: number }) => {
         const { tag, limit = 50 } = input;
@@ -484,7 +508,8 @@ export class GalleryToolsService {
       },
       {
         name: 'gallery_list_groups',
-        description: 'List gallery groups (albums/collections). Optionally filter by tag.',
+        description:
+          'List gallery groups (albums/collections). Optionally filter by tag.',
         schema: z.object({
           tag: z.string().optional().describe('Filter groups by tag'),
           limit: z.number().optional().describe('Max results, default 50'),
@@ -497,9 +522,10 @@ export class GalleryToolsService {
    * @description 搜索图库分组工具（向量相似度）
    * @keyword-en search gallery groups tool by vector similarity
    */
-  private createSearchGroupsTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createSearchGroupsTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }) {
     return tool(
       async (input: { query: string; limit?: number; min_score?: number }) => {
         const { query, limit = 8, min_score = 0.5 } = input;
@@ -528,11 +554,15 @@ export class GalleryToolsService {
       },
       {
         name: 'gallery_search_groups',
-        description: 'Search gallery groups by semantic similarity. Use when user wants to find an album or collection by description.',
+        description:
+          'Search gallery groups by semantic similarity. Use when user wants to find an album or collection by description.',
         schema: z.object({
           query: z.string().describe('Text query to search groups'),
           limit: z.number().optional().describe('Max results, default 8'),
-          min_score: z.number().optional().describe('Min similarity score, default 0.5'),
+          min_score: z
+            .number()
+            .optional()
+            .describe('Min similarity score, default 0.5'),
         }),
       },
     );

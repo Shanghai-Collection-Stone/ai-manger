@@ -85,7 +85,8 @@ export class FinanceConfigAdminController {
   @UseGuards(AdminAuthGuard)
   @Delete('bindings/:name')
   async deleteBinding(@Req() req: Request, @Param('name') name: string) {
-    if (!name?.trim()) throw new BadRequestException('FINANCE_BINDING_NAME_REQUIRED');
+    if (!name?.trim())
+      throw new BadRequestException('FINANCE_BINDING_NAME_REQUIRED');
     const ok = await this.bindingService.delete(
       this.requireUser(req),
       decodeURIComponent(name),
@@ -114,12 +115,15 @@ export class FinanceConfigAdminController {
     @Req() req: Request,
     @Body() body: UpsertFinanceTransformDto,
   ) {
-    const transform = await this.transformService.upsert(this.requireUser(req), {
-      name: body.name,
-      previousName: body.previousName,
-      dsl: body.dsl,
-      explanation: body.explanation,
-    });
+    const transform = await this.transformService.upsert(
+      this.requireUser(req),
+      {
+        name: body.name,
+        previousName: body.previousName,
+        dsl: body.dsl,
+        explanation: body.explanation,
+      },
+    );
     return { transform };
   }
 
@@ -130,7 +134,8 @@ export class FinanceConfigAdminController {
   @UseGuards(AdminAuthGuard)
   @Delete('transforms/:name')
   async deleteTransform(@Req() req: Request, @Param('name') name: string) {
-    if (!name?.trim()) throw new BadRequestException('FINANCE_TRANSFORM_NAME_REQUIRED');
+    if (!name?.trim())
+      throw new BadRequestException('FINANCE_TRANSFORM_NAME_REQUIRED');
     const ok = await this.transformService.delete(
       this.requireUser(req),
       decodeURIComponent(name),

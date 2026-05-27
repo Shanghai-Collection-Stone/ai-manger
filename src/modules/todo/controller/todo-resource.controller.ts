@@ -18,7 +18,10 @@ import { join } from 'path';
 import type { Request } from 'express';
 import { TodoService } from '../services/todo.service.js';
 import type { TodoEntity } from '../entities/todo.entity.js';
-import type { TodoItemCreateInput, TodoItemUpdateInput } from '../entities/todo-item.entity.js';
+import type {
+  TodoItemCreateInput,
+  TodoItemUpdateInput,
+} from '../entities/todo-item.entity.js';
 import { XhsPostStatService } from '../services/xhs-post-stat.service.js';
 import type {
   XhsPostStatCreateInput,
@@ -27,9 +30,21 @@ import type {
 import type { CanvasArticleEntity } from '../../canvas/entities/canvas.entity.js';
 
 /** 合法的任务状态枚举值 */
-const VALID_TODO_STATUSES = new Set(['pending', 'in_progress', 'done', 'failed', 'cancelled']);
+const VALID_TODO_STATUSES = new Set([
+  'pending',
+  'in_progress',
+  'done',
+  'failed',
+  'cancelled',
+]);
 /** 合法的节点状态枚举值 */
-const VALID_ITEM_STATUSES = new Set(['pending', 'in_progress', 'done', 'failed', 'cancelled']);
+const VALID_ITEM_STATUSES = new Set([
+  'pending',
+  'in_progress',
+  'done',
+  'failed',
+  'cancelled',
+]);
 
 /**
  * @description 状态别名归一化（AI 传入别名时自动转换）
@@ -61,7 +76,9 @@ function normalizeStatus(s: string): string {
  */
 function garbageDiag(label: string, value: unknown): Record<string, unknown> {
   if (typeof value !== 'string') return { label, type: typeof value };
-  const codes = Array.from(value.slice(0, 40)).map((c) => c.codePointAt(0) as number);
+  const codes = Array.from(value.slice(0, 40)).map(
+    (c) => c.codePointAt(0) as number,
+  );
   return {
     label,
     preview: value.slice(0, 120),
@@ -105,7 +122,8 @@ export class TodoResourceController {
     if (!todo) throw new UnauthorizedException('INVALID_TASK_TOKEN');
 
     // 验证 todoId 归属
-    if (todo.id !== todoId) throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
+    if (todo.id !== todoId)
+      throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
     return todo;
   }
 
@@ -142,8 +160,12 @@ export class TodoResourceController {
         };
       }
 
-      const { CanvasService } = await import('../../canvas/services/canvas.service.js');
-      const canvasService = this.moduleRef.get(CanvasService, { strict: false });
+      const { CanvasService } = await import(
+        '../../canvas/services/canvas.service.js'
+      );
+      const canvasService = this.moduleRef.get(CanvasService, {
+        strict: false,
+      });
       if (!canvasService) throw new Error('CANVAS_SERVICE_UNAVAILABLE');
 
       const canvas = await canvasService.get(canvasId, todo.tenantId);
@@ -155,17 +177,25 @@ export class TodoResourceController {
         };
       }
 
-      const articles: Array<Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }> = (
-        canvas.articles ?? []
-      ).map((article: CanvasArticleEntity) => ({
+      const articles: Array<
+        Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }
+      > = (canvas.articles ?? []).map((article: CanvasArticleEntity) => ({
         ...article,
-        imageUrls: (article.imageUrls ?? []).map((url: string) => this.resolveImageUrl(url) ?? url),
+        imageUrls: (article.imageUrls ?? []).map(
+          (url: string) => this.resolveImageUrl(url) ?? url,
+        ),
       }));
 
       return {
         resource: { type: 'canvas', id: canvas.id, associated: true },
         data: {
-          canvas: { id: canvas.id, topic: canvas.topic, status: canvas.status, createdAt: canvas.createdAt, updatedAt: canvas.updatedAt },
+          canvas: {
+            id: canvas.id,
+            topic: canvas.topic,
+            status: canvas.status,
+            createdAt: canvas.createdAt,
+            updatedAt: canvas.updatedAt,
+          },
           articles,
         },
       };
@@ -208,8 +238,12 @@ export class TodoResourceController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
-    const { _id, taskToken, ...rest } = todo as typeof todo & { _id?: unknown; taskToken?: unknown };
-    void _id; void taskToken;
+    const { _id, taskToken, ...rest } = todo as typeof todo & {
+      _id?: unknown;
+      taskToken?: unknown;
+    };
+    void _id;
+    void taskToken;
     return { todo: rest };
   }
 
@@ -220,7 +254,8 @@ export class TodoResourceController {
   @Patch(':todoId')
   async updateTask(
     @Param('todoId') todoId: string,
-    @Body() body: {
+    @Body()
+    body: {
       status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
       title?: string;
       description?: string;
@@ -236,25 +271,41 @@ export class TodoResourceController {
       const rawStatus = body.status as unknown as string;
       const normalized = normalizeStatus(rawStatus);
       if (normalized !== rawStatus) {
-        this.logger.log(`[updateTask] status alias: '${rawStatus}' → '${normalized}' (todoId=${todoId})`);
+        this.logger.log(
+          `[updateTask] status alias: '${rawStatus}' → '${normalized}' (todoId=${todoId})`,
+        );
         (body as Record<string, unknown>).status = normalized;
       }
       if (!VALID_TODO_STATUSES.has(normalized)) {
-        this.logger.warn(`[updateTask] INVALID status rejected: '${rawStatus}' (todoId=${todoId})`);
+        this.logger.warn(
+          `[updateTask] INVALID status rejected: '${rawStatus}' (todoId=${todoId})`,
+        );
         delete (body as Record<string, unknown>).status;
       }
     }
 
-    this.logger.log(`[updateTask] todoId=${todoId} body.keys=${Object.keys(body).join(',')}`);
+    this.logger.log(
+      `[updateTask] todoId=${todoId} body.keys=${Object.keys(body).join(',')}`,
+    );
     if (body.aiPlan !== undefined) {
-      this.logger.log(`[updateTask] aiPlan diag: ${JSON.stringify(garbageDiag('aiPlan', body.aiPlan))}`);
+      this.logger.log(
+        `[updateTask] aiPlan diag: ${JSON.stringify(garbageDiag('aiPlan', body.aiPlan))}`,
+      );
     }
 
     const todo = await this.resolveTodo(req, Number(todoId));
-    const updated = await this.todo.update({ id: todo.id, tenantId: todo.tenantId, ...body });
+    const updated = await this.todo.update({
+      id: todo.id,
+      tenantId: todo.tenantId,
+      ...body,
+    });
     if (!updated) return { ok: false };
-    const { _id, taskToken, ...rest } = updated as typeof updated & { _id?: unknown; taskToken?: unknown };
-    void _id; void taskToken;
+    const { _id, taskToken, ...rest } = updated as typeof updated & {
+      _id?: unknown;
+      taskToken?: unknown;
+    };
+    void _id;
+    void taskToken;
     return { ok: true, todo: rest };
   }
 
@@ -321,16 +372,24 @@ export class TodoResourceController {
     const rawStatus = body.status as unknown as string | undefined;
     if (!rawStatus || !VALID_ITEM_STATUSES.has(rawStatus)) {
       if (rawStatus) {
-        this.logger.warn(`[createItem] INVALID status coerced to in_progress: '${rawStatus}'`);
+        this.logger.warn(
+          `[createItem] INVALID status coerced to in_progress: '${rawStatus}'`,
+        );
       }
       (body as Record<string, unknown>).status = 'in_progress';
     }
 
     const todo = await this.resolveTodo(req, Number(todoId));
-    const item = await this.todo.createItem({ ...body, todoId: todo.id, tenantId: todo.tenantId });
+    const item = await this.todo.createItem({
+      ...body,
+      todoId: todo.id,
+      tenantId: todo.tenantId,
+    });
     const { _id, ...rest } = item as typeof item & { _id?: unknown };
     void _id;
-    this.logger.log(`[createItem] created itemId=${String(rest.id)} todoId=${todoId}`);
+    this.logger.log(
+      `[createItem] created itemId=${String(rest.id)} todoId=${todoId}`,
+    );
     return { item: rest };
   }
 
@@ -361,7 +420,11 @@ export class TodoResourceController {
     if (!item || item.todoId !== todo.id) {
       throw new UnauthorizedException('ITEM_NOT_BELONG_TO_TASK');
     }
-    const updated = await this.todo.updateItem({ ...body, id: Number(itemId), tenantId: todo.tenantId });
+    const updated = await this.todo.updateItem({
+      ...body,
+      id: Number(itemId),
+      tenantId: todo.tenantId,
+    });
     if (!updated) return { ok: false };
     const { _id, ...rest } = updated as typeof updated & { _id?: unknown };
     void _id;
@@ -396,7 +459,9 @@ export class TodoResourceController {
   private resolveImageUrl(url?: string): string | undefined {
     if (!url) return undefined;
     if (/^(https?|data:)/i.test(url)) return url;
-    const base = (process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011').replace(/\/$/, '');
+    const base = (
+      process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011'
+    ).replace(/\/$/, '');
     return `${base}/${url.replace(/^\//, '')}`;
   }
 
@@ -412,7 +477,9 @@ export class TodoResourceController {
     const todo = await this.resolveTodo(req, Number(todoId));
 
     // 从 associatedResources 中查找 canvas 类型的关联
-    const canvasResource = todo.associatedResources?.find((r) => r.type === 'canvas');
+    const canvasResource = todo.associatedResources?.find(
+      (r) => r.type === 'canvas',
+    );
     if (!canvasResource) {
       return {
         resource: { type: 'canvas', id: null, associated: false },
@@ -424,13 +491,19 @@ export class TodoResourceController {
     const canvasId = Number(canvasResource.resourceId);
     if (!Number.isFinite(canvasId) || canvasId <= 0) {
       return {
-        resource: { type: 'canvas', id: canvasResource.resourceId, associated: false },
+        resource: {
+          type: 'canvas',
+          id: canvasResource.resourceId,
+          associated: false,
+        },
         data: null,
         message: 'CANVAS_ID_INVALID',
       };
     }
 
-    const { CanvasService } = await import('../../canvas/services/canvas.service.js');
+    const { CanvasService } = await import(
+      '../../canvas/services/canvas.service.js'
+    );
     const canvasService = this.moduleRef.get(CanvasService, { strict: false });
     if (!canvasService) throw new Error('CANVAS_SERVICE_UNAVAILABLE');
 
@@ -443,17 +516,25 @@ export class TodoResourceController {
       };
     }
 
-    const articles: Array<Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }> = (
-      canvas.articles ?? []
-    ).map((article: CanvasArticleEntity) => ({
+    const articles: Array<
+      Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }
+    > = (canvas.articles ?? []).map((article: CanvasArticleEntity) => ({
       ...article,
-      imageUrls: (article.imageUrls ?? []).map((url: string) => this.resolveImageUrl(url) ?? url),
+      imageUrls: (article.imageUrls ?? []).map(
+        (url: string) => this.resolveImageUrl(url) ?? url,
+      ),
     }));
 
     return {
       resource: { type: 'canvas', id: canvas.id, associated: true },
       data: {
-        canvas: { id: canvas.id, topic: canvas.topic, status: canvas.status, createdAt: canvas.createdAt, updatedAt: canvas.updatedAt },
+        canvas: {
+          id: canvas.id,
+          topic: canvas.topic,
+          status: canvas.status,
+          createdAt: canvas.createdAt,
+          updatedAt: canvas.updatedAt,
+        },
         articles,
       },
     };
@@ -473,7 +554,12 @@ export class TodoResourceController {
     const todo = await this.resolveTodo(req, Number(todoId));
     const stats = await this.xhsPostStat.listByTodo(todo.id);
     return {
-      resource: { type: 'xhs_stats', id: null, associated: true, todoId: todo.id },
+      resource: {
+        type: 'xhs_stats',
+        id: null,
+        associated: true,
+        todoId: todo.id,
+      },
       data: { stats },
     };
   }
@@ -533,7 +619,8 @@ export class TodoResourceController {
   @Post(':todoId/xhs-stats/bulk')
   async bulkUpsertXhsStats(
     @Param('todoId') todoId: string,
-    @Body() body: { items?: Omit<XhsPostStatCreateInput, 'todoId'>[]; posts?: unknown },
+    @Body()
+    body: { items?: Omit<XhsPostStatCreateInput, 'todoId'>[]; posts?: unknown },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
@@ -548,7 +635,12 @@ export class TodoResourceController {
     }
 
     const items = body.items;
-    const badIndex = items.findIndex((x) => !x || typeof x.postTitle !== 'string' || x.postTitle.trim().length === 0);
+    const badIndex = items.findIndex(
+      (x) =>
+        !x ||
+        typeof x.postTitle !== 'string' ||
+        x.postTitle.trim().length === 0,
+    );
     if (badIndex >= 0) {
       throw new BadRequestException({
         code: 'INVALID_XHS_STATS_ITEM',
@@ -558,7 +650,12 @@ export class TodoResourceController {
 
     const result = await this.xhsPostStat.bulkUpsert(todo.id, items);
     return {
-      resource: { type: 'xhs_stats', id: null, associated: true, todoId: todo.id },
+      resource: {
+        type: 'xhs_stats',
+        id: null,
+        associated: true,
+        todoId: todo.id,
+      },
       data: { ok: true, upserted: result.upserted },
     };
   }
@@ -586,7 +683,10 @@ export class TodoResourceController {
     if (existing.todoId !== todo.id) {
       throw new UnauthorizedException('STAT_NOT_BELONG_TO_TASK');
     }
-    const updated = await this.xhsPostStat.update({ ...body, id: Number(statId) });
+    const updated = await this.xhsPostStat.update({
+      ...body,
+      id: Number(statId),
+    });
     if (!updated) return { ok: false };
     const { _id, ...rest } = updated as typeof updated & { _id?: unknown };
     void _id;

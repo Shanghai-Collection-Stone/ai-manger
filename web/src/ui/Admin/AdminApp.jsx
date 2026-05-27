@@ -16,6 +16,77 @@ const toText = (value) => (typeof value === 'string' ? value : '');
 const toLower = (value) => toText(value).toLowerCase();
 
 /**
+ * @description 将财务 Agent tool 参数/结果格式化为可展示文本
+ * @keyword-en finance-agent-tool-value, tool-display
+ * @param {unknown} value
+ * @returns {string}
+ */
+const formatFinanceToolValue = (value) => {
+  if (value === undefined || value === null) return '';
+  const text =
+    typeof value === 'string'
+      ? value
+      : (() => {
+          try {
+            return JSON.stringify(value, null, 2);
+          } catch {
+            return String(value);
+          }
+        })();
+  return text.length > 1200 ? `${text.slice(0, 1200)}\n...` : text;
+};
+
+/**
+ * @description 合并财务 Agent tool 流式事件到消息工具列表
+ * @keyword-en finance-agent-tool-event, tool-stream
+ * @param {Array<Record<string, unknown>>} tools
+ * @param {Record<string, unknown>} patch
+ * @returns {Array<Record<string, unknown>>}
+ */
+const mergeFinanceToolEvent = (tools = [], patch = {}) => {
+  const key = toText(patch.id) || `${toText(patch.name) || 'tool'}:${patch.index ?? 0}`;
+  const next = Array.isArray(tools) ? [...tools] : [];
+  const idx = next.findIndex((item) => {
+    const itemKey =
+      toText(item.id) || `${toText(item.name) || 'tool'}:${item.index ?? 0}`;
+    return itemKey === key;
+  });
+  const existing = idx >= 0 ? next[idx] : {};
+  const merged = {
+    ...existing,
+    ...patch,
+    id: toText(patch.id) || toText(existing.id) || key,
+    name: toText(patch.name) || toText(existing.name) || 'tool',
+  };
+  if (patch.argsChunk) {
+    merged.argsText = `${toText(existing.argsText)}${toText(patch.argsChunk)}`;
+    delete merged.argsChunk;
+  }
+  if (idx >= 0) {
+    next[idx] = merged;
+  } else {
+    next.push(merged);
+  }
+  return next;
+};
+
+/**
+ * @description 清洗发送给财务 Agent 后端的消息,只保留 DTO 允许的 role/content
+ * @keyword-en finance-agent-message-sanitize, chat-payload
+ * @param {Array<Record<string, unknown>>} messages
+ * @returns {Array<{role: string, content: string}>}
+ */
+const sanitizeFinanceAgentMessages = (messages = []) =>
+  (Array.isArray(messages) ? messages : [])
+    .map((message) => ({
+      role: ['user', 'assistant', 'system'].includes(message?.role)
+        ? message.role
+        : 'assistant',
+      content: toText(message?.content).trim(),
+    }))
+    .filter((message) => message.content.length > 0);
+
+/**
  * @description 读取后台管理当前tab（用于刷新保留）
  * @keyword-en read admin active tab
  * @returns {string}
@@ -380,6 +451,7 @@ const AdminApp = () => {
     financePush: {
       baseUrl: '',
       apiKey: '',
+      externalTenantId: '',
     },
   });
 
@@ -506,6 +578,7 @@ const AdminApp = () => {
           financePush: {
             baseUrl: pushConfig?.baseUrl || '',
             apiKey: pushConfig?.apiKey || '',
+            externalTenantId: pushConfig?.externalTenantId || '',
           },
         }));
       } catch {
@@ -558,7 +631,15 @@ const AdminApp = () => {
       const persisted = {};
       for (const [k, v] of Object.entries(financeChat || {})) {
         if (Array.isArray(v?.messages) && v.messages.length > 0) {
-          persisted[k] = { messages: v.messages };
+          persisted[k] = {
+            messages: v.messages.map((m) => ({
+              role: m.role,
+              content: toText(m.content),
+              ...(Array.isArray(m.tools) && m.tools.length > 0
+                ? { tools: m.tools }
+                : {}),
+            })),
+          };
         }
       }
       window.localStorage.setItem('finance_chat_history', JSON.stringify(persisted));
@@ -985,21 +1066,129 @@ const AdminApp = () => {
     const current = financeChat[name] || { messages: [], input: '', loading: false };
     const text = toText(current.input).trim();
     if (!text) return;
-    const nextHistory = [...current.messages, { role: 'user', content: text }];
+    const displayHistory = [...current.messages, { role: 'user', content: text }];
+    const requestHistory = sanitizeFinanceAgentMessages(displayHistory);
+    const assistantIndex = displayHistory.length;
+    const initialAssistant = {
+      role: 'assistant',
+      content: '',
+      tools: [],
+      streaming: true,
+      status: 'Agent 已开始处理...',
+    };
+    const initialMessages = [...displayHistory, initialAssistant];
     setFinanceChat((prev) => ({
       ...prev,
-      [name]: { messages: nextHistory, input: '', loading: true },
+      [name]: { messages: initialMessages, input: '', loading: true },
     }));
+
+    /**
+     * @description 更新当前财务 Agent 流式 assistant 消息
+     * @keyword-en finance-agent-stream-message, streaming-ui
+     * @param {(message: Record<string, unknown>) => Record<string, unknown>} updater
+     * @returns {void}
+     */
+    const patchAssistant = (updater) => {
+      setFinanceChat((prev) => {
+        const prevState = prev[name] || {};
+        const messages = [...(prevState.messages || initialMessages)];
+        const currentMessage = messages[assistantIndex] || initialAssistant;
+        messages[assistantIndex] = updater(currentMessage);
+        return {
+          ...prev,
+          [name]: {
+            ...prevState,
+            messages,
+            input: '',
+            loading: true,
+          },
+        };
+      });
+    };
     try {
-      const res = await adminApi.chatFinanceAgent({ name, messages: nextHistory });
-      const reply = toText(res?.reply).trim();
+      await adminApi.chatFinanceAgentStream(
+        { name, messages: requestHistory },
+        {
+          onStart: () => {
+            patchAssistant((m) => ({ ...m, status: 'Agent 已连接,等待模型输出...' }));
+          },
+          onToken: (payload) => {
+            const chunk = toText(payload?.text);
+            if (!chunk) return;
+            patchAssistant((m) => ({
+              ...m,
+              content: `${toText(m.content)}${chunk}`,
+              status: '正在生成回复...',
+            }));
+          },
+          onToolStart: (payload) => {
+            const toolName = toText(payload?.name) || 'tool';
+            patchAssistant((m) => ({
+              ...m,
+              tools: mergeFinanceToolEvent(m.tools, {
+                id: payload?.id,
+                name: toolName,
+                input: payload?.input,
+                status: 'running',
+              }),
+              status: `正在调用工具: ${toolName}`,
+            }));
+          },
+          onToolChunk: (payload) => {
+            const toolName = toText(payload?.name) || 'tool';
+            patchAssistant((m) => ({
+              ...m,
+              tools: mergeFinanceToolEvent(m.tools, {
+                id: payload?.id,
+                name: toolName,
+                index: payload?.index,
+                argsChunk: payload?.args,
+                status: 'running',
+              }),
+              status: `正在组装工具参数: ${toolName}`,
+            }));
+          },
+          onToolEnd: (payload) => {
+            const toolName = toText(payload?.name) || 'tool';
+            patchAssistant((m) => ({
+              ...m,
+              tools: mergeFinanceToolEvent(m.tools, {
+                id: payload?.id,
+                name: toolName,
+                output: payload?.output,
+                status: 'completed',
+              }),
+              status: `工具已完成: ${toolName}`,
+            }));
+          },
+          onEnd: (payload) => {
+            patchAssistant((m) => ({
+              ...m,
+              content: toText(m.content).trim()
+                ? m.content
+                : toText(payload?.text).trim() || '(空回复)',
+              streaming: false,
+              status: payload?.ok === false ? '调用失败' : '已完成',
+              toolResults: payload?.tool_results,
+            }));
+          },
+          onError: (payload) => {
+            const message = payload?.message || String(payload || '调用失败');
+            patchAssistant((m) => ({
+              ...m,
+              content: toText(m.content).trim()
+                ? `${toText(m.content)}\n\n❌ 调用失败:${message}`
+                : `❌ 调用失败:${message}`,
+              streaming: false,
+              status: '调用失败',
+            }));
+          },
+        },
+      );
       setFinanceChat((prev) => ({
         ...prev,
         [name]: {
-          messages: [
-            ...nextHistory,
-            { role: 'assistant', content: reply || '(空回复)' },
-          ],
+          ...(prev[name] || {}),
           input: '',
           loading: false,
         },
@@ -1010,7 +1199,7 @@ const AdminApp = () => {
         ...prev,
         [name]: {
           messages: [
-            ...nextHistory,
+            ...displayHistory,
             { role: 'assistant', content: `❌ 调用失败:${err.message || String(err)}` },
           ],
           input: '',
@@ -1044,16 +1233,21 @@ const AdminApp = () => {
   };
 
   /**
-   * @description 保存全局推送配置(每作用域一份)
+   * @description 保存全局推送配置(每作用域一份,含 webhook 外部租户映射)
    * @keyword-en submit finance push config
    */
   const onSubmitFinancePushConfig = async () => {
     const baseUrl = toText(forms.financePush.baseUrl).trim();
     const apiKey = toText(forms.financePush.apiKey).trim();
+    const externalTenantId = toText(forms.financePush.externalTenantId).trim();
     if (!baseUrl || !apiKey) throw new Error('baseUrl 和 apiKey 必填');
     setFinancePushPending((prev) => ({ ...prev, save: true }));
     try {
-      const res = await adminApi.upsertFinancePushConfig({ baseUrl, apiKey });
+      const res = await adminApi.upsertFinancePushConfig({
+        baseUrl,
+        apiKey,
+        externalTenantId,
+      });
       setFinancePushConfig(res.config);
       setNotice('推送配置已保存');
     } finally {
@@ -3033,6 +3227,9 @@ const AdminApp = () => {
                       {pushConfig ? (
                         <span className="text-xs text-slate-500 truncate font-mono">
                           {pushConfig.baseUrl}
+                          {pushConfig.externalTenantId
+                            ? ` · ${pushConfig.externalTenantId}`
+                            : ''}
                         </span>
                       ) : (
                         <span className="text-xs text-amber-600">未配置</span>
@@ -3055,14 +3252,14 @@ const AdminApp = () => {
                   {!financePushCollapsed ? (
                     <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
                       <p className="text-xs text-slate-500">
-                        外部财务系统的 API 前缀(含 <code>/api/v1</code>) + API Key。统一推到 <code className="text-slate-700">/events/upsert</code>,探活打 <code className="text-slate-700">/me</code>。
+                        外部财务系统的 API 前缀(含 <code>/api/v1</code>) + API Key。外部租户 ID 用于 webhook tenantId 映射。统一推到 <code className="text-slate-700">/events/upsert</code>,探活打 <code className="text-slate-700">/me</code>。
                       </p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <label className="text-xs text-slate-600 space-y-1">
                           <div>baseUrl</div>
                           <input
                             className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
-                            placeholder="https://your-server.example.com/api/v1"
+                            placeholder="http(s)://your-server.example.com/api/v1"
                             value={pushForm.baseUrl}
                             onChange={(e) => updateForm('financePush', 'baseUrl', e.target.value)}
                           />
@@ -3075,6 +3272,17 @@ const AdminApp = () => {
                             placeholder="fa_xxxxxxxxxxxx.yyyyyyyy"
                             value={pushForm.apiKey}
                             onChange={(e) => updateForm('financePush', 'apiKey', e.target.value)}
+                          />
+                        </label>
+                        <label className="text-xs text-slate-600 space-y-1">
+                          <div>外部租户ID</div>
+                          <input
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                            placeholder="t_demo"
+                            value={pushForm.externalTenantId}
+                            onChange={(e) =>
+                              updateForm('financePush', 'externalTenantId', e.target.value)
+                            }
                           />
                         </label>
                       </div>
@@ -3517,6 +3725,54 @@ const AdminApp = () => {
                                   source={toText(m.content)}
                                   style={{ background: 'transparent', fontSize: 13 }}
                                 />
+                                {Array.isArray(m.tools) && m.tools.length > 0 ? (
+                                  <div className="mt-2 space-y-2">
+                                    {m.tools.map((tool, toolIndex) => {
+                                      const argsText = formatFinanceToolValue(
+                                        tool.argsText || tool.input,
+                                      );
+                                      const outputText = formatFinanceToolValue(tool.output);
+                                      const isDone = tool.status === 'completed';
+                                      return (
+                                        <div
+                                          key={tool.id || `${tool.name}-${toolIndex}`}
+                                          className="rounded border border-blue-100 bg-blue-50/70 px-2 py-1.5 text-xs text-slate-700"
+                                        >
+                                          <div className="flex items-center justify-between gap-2">
+                                            <span className="font-semibold text-blue-700">
+                                              Tool: {tool.name || 'tool'}
+                                            </span>
+                                            <span
+                                              className={
+                                                'rounded px-1.5 py-0.5 ' +
+                                                (isDone
+                                                  ? 'bg-emerald-100 text-emerald-700'
+                                                  : 'bg-amber-100 text-amber-700')
+                                              }
+                                            >
+                                              {isDone ? '完成' : '运行中'}
+                                            </span>
+                                          </div>
+                                          {argsText ? (
+                                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-1 font-mono text-[11px] text-slate-600">
+                                              {argsText}
+                                            </pre>
+                                          ) : null}
+                                          {outputText ? (
+                                            <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded bg-white p-1 font-mono text-[11px] text-slate-600">
+                                              {outputText}
+                                            </pre>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                                {m.role !== 'user' && m.status ? (
+                                  <div className="mt-2 text-xs text-slate-500">
+                                    {m.status}
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           ))

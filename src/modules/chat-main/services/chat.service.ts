@@ -448,14 +448,20 @@ export class ChatMainService {
           let streamMessages: BaseMessageLike[] = [
             new HumanMessage(request.input),
           ];
-          if (this.supervisorGraph.shouldUseSupervisor(scope.sessionType) && sid) {
+          if (
+            this.supervisorGraph.shouldUseSupervisor(scope.sessionType) &&
+            sid
+          ) {
             const experts = this.mapSubagentsToExpertSpecs(subagents);
             const currentAction = meta?.actionSession ?? null;
             if (experts.length > 0) {
               // 显式装填完整历史 —— 意图识别 + 专家执行共用同一份。
               let loadedHistory: BaseMessage[] = [];
               try {
-                loadedHistory = await this.loadHistoryAsBaseMessages(sid, scope);
+                loadedHistory = await this.loadHistoryAsBaseMessages(
+                  sid,
+                  scope,
+                );
               } catch (e) {
                 this.logger.warn(
                   `[chat.stream] load_history_failed sid=${sid}: ${String(e)}`,
@@ -1417,8 +1423,9 @@ export class ChatMainService {
       '- 闲聊/无意义/情绪词("哈哈""好的""嗯""厉害""6""hi""你好") → 输出 chat',
       '- 询问指挥官自己("你是谁""你能做什么""怎么用") → 输出 chat',
       '- 与 6 个专家领域都无关的通用问题 → 输出 chat',
-      '- 创建/生成/做/出 图组/拼图/封面/Canvas/配图 → 输出 image',
-      '- 写/生成/编排 文章/正文/选题/小红书内容 → 输出 article',
+      '- 同时含"图文/正文/文章/全套/也写文/一并出文"与配图/图组 → 输出 article',
+      '- 只创建/生成/做/出 图组/拼图/封面/Canvas/配图,且没有明确生文意图 → 输出 image',
+      '- 写/生成/编排 文章/正文/图文/选题/小红书内容 → 输出 article',
       '- 查/统计/分析/趋势 数据/记录/聚合,或要方案/决策/策略/建议 → 输出 data',
       '- 生成 图表/HTML/可视化页面/dashboard → 输出 frontend',
       '- 批量发布/内容分发/指派 robot 发布执行 → 输出 publisher',
@@ -1428,7 +1435,7 @@ export class ChatMainService {
       '激活专家不是"锁定",每轮都要重新判定。',
       '',
       '【延续性识别】结合完整对话历史判断,本轮是否在推进上一轮专家任务:',
-      '- 历史在做 image 并发出 tag-select 卡片,本轮"我选定标签：#X" → 输出 image',
+      '- 历史在做 image/article 并发出 tag-select 卡片,本轮"我选定标签：#X" → 延续对应专家；上一轮 article 输出 article,上一轮 image 输出 image',
       '- 历史在做 data,本轮"换成 14 天"/"再细分一下" → 输出 data',
       '- 本轮"再来一组"/"再生成一个"且历史在做图组 → 输出 image',
       '',
@@ -1600,9 +1607,9 @@ export class ChatMainService {
       '- 用户只说"图/图组/配图/拼图/封面"等图片词，没明确"图文/正文/全套/也写文/一并出文"时：',
       '  默认只委派 gallery_subagent 生成图组 Canvas，不要主动生成图文。',
       '  图组返回后，主动用一句话询问用户："是否需要基于此图组继续生成对应图文？"，等待用户确认。',
-      '- 仅当用户明确表态要"图文/正文/全套/也写文"时，才再委派给生文专家用 topic_orchestrate 生成图文。',
-      '  图文是另一个 Canvas，不要试图把它合并进图组 Canvas。',
-      '- 用户首次需求里就明确"图组+图文"或"图文带配图"时：先 gallery_subagent 出图组，再让生文专家用 topic_orchestrate 出图文（两个 Canvas，正常）。',
+      '- 仅当用户明确表态要"图文/正文/全套/也写文"时，交给图文生成专家用 topic_orchestrate 生成图文。',
+      '  图文生成专家负责完整图文 Canvas（正文+配图链路），不要先自动创建一个独立图组 Canvas，除非用户明确要求单独生成图组。',
+      '- 用户首次需求里明确"图文带配图"/"生成图文"时：直接交给图文生成专家；只有明确说"单独图组"或"只要图组"才走图组生图专家。',
       '- 严禁在用户没明确要图文时自动连带触发图文生成。',
       '',
       '【子代理路由规则】：',
@@ -1756,14 +1763,17 @@ export class ChatMainService {
       '- canvas_search 工具仅用于搜索定位，找到后输出 canvas-it 块即可，不再调用详情工具。',
       '',
       '【生文执行规则 - 异步工作流】',
-      '1. 生文必须使用 topic_orchestrate 工具发起异步工作流，不要同步展开正文。',
-      '2. tool 返回后，立即把其中的 canvas-it 代码块原样输出给用户，不要追加长篇解释。',
-      '3. 当用户明确指定图组 Canvas（如"用 554 和 555 生两篇图文"）时：',
+      '0. 如果用户要生成图文但没有明确 tags/素材方向，可先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，再调用 topic_orchestrate，并把选定 tags 写入 userPrompt。',
+      '1. 调用 topic_orchestrate 前必须确认生文风格；若用户未明确平台/文风（如小红书、知乎、公众号、通用专业），先只问一句："这组图文想按哪种文风写？小红书/知乎/公众号/通用专业？"，等待用户回答，不要先调用工具。',
+      '2. 用户已明确平台或文风时，将其写入 topic_orchestrate.writingStyle；userPrompt 必须以最后一条用户生成要求为准。',
+      '3. 生文必须使用 topic_orchestrate 工具发起异步工作流，不要同步展开正文。',
+      '4. tool 返回后，立即把其中的 canvas-it 代码块原样输出给用户，不要追加长篇解释。',
+      '5. 当用户明确指定图组 Canvas（如"用 554 和 555 生两篇图文"）时：',
       '   - 将指定 ID 放入 topic_orchestrate.imageGroupCanvasIds（number[]）',
       '   - count 按用户要求传入（例如 2）',
       '   - 由工作流将这些图组合并映射到新图文 Canvas。',
-      '4. 当用户未指定图组 Canvas 时：可先用 canvas_search(type=image-group) 搜索候选，再调用 topic_orchestrate。',
-      '5. 任何生文请求都不要退化成"仅搜索+口头计划"，必须实际调用 topic_orchestrate。',
+      '6. 当用户未指定图组 Canvas 时：可先用 canvas_search(type=image-group) 搜索候选，再调用 topic_orchestrate。',
+      '7. 任何生文请求都不要退化成"仅搜索+口头计划"，必须实际调用 topic_orchestrate。',
       '【N 篇文章 = 一次调用，一个 Canvas】',
       '- 用户说"生成 N 篇 / 来 N 篇 / 写 N 个选题"时，必须一次性调用 topic_orchestrate 并传 count=N，N 篇全部落到同一个 Canvas。',
       '- 严禁串行调用 N 次 topic_orchestrate（每次 count=1）来制造 N 个 Canvas，这是错误用法。',
@@ -1777,6 +1787,7 @@ export class ChatMainService {
       '- 每篇图文对应一组图片，tags 与图组 Canvas 中的 tags 保持一致',
       '',
       '【工具使用】',
+      '- tag_select_request：图文生成前收集 tags/素材方向（仅用户未明确 tags 时调用；已给 tags 时跳过）',
       '- canvas_search：搜索 Canvas（type 参数指定 image-group）',
       '- xhs_get_canvas_detail：按 ID 查看 Canvas 摘要信息',
       '- topic_orchestrate：发起异步生文并返回新 Canvas',
@@ -1848,7 +1859,7 @@ export class ChatMainService {
     return {
       name: 'gallery_subagent',
       description:
-        '⚡【图组Canvas(image-group)·图库搜图·素材】「图组」「图片组」「image-group」「配图集合」「图组Canvas」以及文章配图需求 → 委派此代理，优先级高于文章正文生成。',
+        '⚡【图组Canvas(image-group)·图库搜图·素材】「图组」「图片组」「image-group」「配图集合」「图组Canvas」以及仅配图需求 → 委派此代理；若用户明确要图文/正文/全套，交由图文生成专家处理。',
       systemPrompt: [
         envStr,
         '你是图库与图片素材子代理，同时负责创建图片组 Canvas（image-group 类型）并触发匹配生图。',
@@ -1929,6 +1940,7 @@ export class ChatMainService {
       const allow = new Set([
         'task',
         'topic_orchestrate',
+        'tag_select_request',
         'data_analysis',
         'mcp_list_resources',
         'mcp_read_resource',
@@ -1986,6 +1998,12 @@ export class ChatMainService {
       }
       return /duck|ddg|duckduckgo|web_search/i.test(n);
     });
+    const xhsTools = this.normalizeSubagentTools(
+      this.mediaAgent.getXhsToolsHandle(scope),
+    );
+    const tagSelectTools = xhsTools.filter(
+      (t) => t.name === 'tag_select_request',
+    );
 
     return {
       // 数据查询分析 — 独立来源（含 schema/data_source/js_calc/thought 等）
@@ -2007,6 +2025,7 @@ export class ChatMainService {
               'mcp_list_mcp_tools',
               'mcp_list_mcp_resources',
             ),
+            ...tagSelectTools,
             ...searchTools,
           ].map((t) => [t.name, t] as const),
         ).values(),
@@ -2063,9 +2082,7 @@ export class ChatMainService {
         ...this.normalizeSubagentTools(
           this.mediaAgent.getGalleryToolsHandle(scope),
         ),
-        ...this.normalizeSubagentTools(
-          this.mediaAgent.getXhsToolsHandle(scope),
-        ),
+        ...xhsTools,
         // 搜索工具仅用于图组素材搜集
         ...searchTools,
       ],
@@ -2308,17 +2325,20 @@ export class ChatMainService {
       {
         name: 'topic_orchestrate_subagent',
         description: [
-          '【仅限文章正文生成】用户要生成小红书/平台文章 委派此代理。禁止直接输出文章正文，必须调用 topic_orchestrate 工具写入 Canvas, Canvas 是异步加载的 不需要等待返回!',
+          '【图文/文章生成】用户要生成小红书/平台图文、正文、文章时委派此代理。禁止直接输出文章正文，必须调用 topic_orchestrate 工具写入 Canvas, Canvas 是异步加载的 不需要等待返回!',
           '该代理可先做数据收集：优先通过 task 委派 analysis_subagent，或直接用 data_analysis / duckduckgo 相关 MCP 搜索工具整理素材，再调用 topic_orchestrate。',
         ].join('\n'),
         systemPrompt: [
           envStr,
           '你是专项文章生成代理。',
+          '若用户要生成图文但未明确 tags/素材方向，可先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，把选定 tags 写入 topic_orchestrate.userPrompt 再生成。',
+          '调用 topic_orchestrate 前必须确认生文风格；如果最后一条用户要求没有明确平台/文风（小红书/知乎/公众号/通用专业等），先只问用户一句文风选择问题并等待回答，不要调用工具。',
+          '当用户已明确文风或平台时，把文风写入 topic_orchestrate.writingStyle；userPrompt 必须忠实压缩最后一条用户生成要求，不能只复用更早历史。',
           '在调用 topic_orchestrate 之前，先判断是否需要补充事实数据/案例/趋势。',
           '若信息不足：优先通过 task 委派 analysis_subagent 做结构化数据收集；如需外部实时信息，可调用 duckduckgo/web_search 类 MCP 工具检索。',
           '你也可以直接调用 data_analysis 完成数据库分析；但当任务较复杂时，优先使用 analysis_subagent 以获得更稳定的数据链路。',
           '完成数据收集后，必须将结果压缩为 dataSummary（建议 300-1200 字，包含数据来源、关键结论、可用于写作的要点），并在调用 topic_orchestrate 时一并传入。',
-          '调用 topic_orchestrate 时，同时传入 userPrompt（用户原始需求的精炼重述）和 dataSummary（你整理的数据摘要）。',
+          '调用 topic_orchestrate 时，同时传入 userPrompt（最后一条用户生成要求的精炼重述）、writingStyle（已确认文风）和 dataSummary（你整理的数据摘要）。',
           '多篇文章可以在一个Canvas里生成，给 topic_orchestrate 对应的数量参数即可，禁止通过重复调用来生成多篇文章。',
           'topic_orchestrate 工具会返回 canvas-it 代码 或 Canvas id,你需要立刻返回,不需要等待 Canvas执行结果,直接返回就可以了,告知用户正在生成中,并把 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
           '你的职责仅是整理参数并调用 topic_orchestrate 工具，禁止直接输出文章正文、标题列表、items JSON。',
@@ -2326,6 +2346,7 @@ export class ChatMainService {
           '所有文章产出都必须通过 topic_orchestrate 工具写入 Canvas，禁止直接返回文章正文或大纲。',
           '小红书正文要求：开头 1-2 句强钩子；短句短段；多要点列表；真实分享语气；末尾 3-6 个话题标签（#标签）；至少 200 字。',
           '工具调用规则：',
+          '  - tag_select_request 只在缺少 tags/素材方向时调用一次；用户已经给出 tags 或"我选定标签"时直接 topic_orchestrate',
           '  - topic_orchestrate 只调用一次，禁止重复',
           '  - 工具报错时原文返回用户，不重试',
           '  - ARTICLE_DRAFT_INVALID → 告知"生成未通过质量校验"，建议调整话题',
@@ -2390,7 +2411,9 @@ export class ChatMainService {
     const hasPlatform = /小红书|xhs|XHS/.test(s);
     const wantsBatchContent = /批量|多篇|几篇|一组|系列|连载/.test(s);
     const wantsPlanning =
-      /编排|选题|规划|策划|写(几)?篇|生成(几)?篇|产出|内容|软文|文案/.test(s);
+      /编排|选题|规划|策划|写(几)?篇|生成(几)?篇|产出|内容|图文|正文|文章|全套|写文|软文|文案/.test(
+        s,
+      );
     const wantsPromote = /推广|引流|转化|营销|投放/.test(s);
     return (
       (hasPlatform && (wantsBatchContent || wantsPlanning)) ||

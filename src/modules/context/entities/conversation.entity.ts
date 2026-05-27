@@ -5,7 +5,15 @@ import { ObjectId } from 'mongodb';
  * @description 区分默认对话、思维链路、图库Agent、小红书专家专用对话。
  * @keyword-en conversation session type
  */
-export type ConversationSessionType = 'default' | 'thought' | 'gallery-agent' | 'xhs-specialist' | 'xhs-tracker' | 'xhs-publisher' | 'xhs-article-expert' | 'xhs-image-expert';
+export type ConversationSessionType =
+  | 'default'
+  | 'thought'
+  | 'gallery-agent'
+  | 'xhs-specialist'
+  | 'xhs-tracker'
+  | 'xhs-publisher'
+  | 'xhs-article-expert'
+  | 'xhs-image-expert';
 
 /**
  * @title 动作专家会话 Action Session

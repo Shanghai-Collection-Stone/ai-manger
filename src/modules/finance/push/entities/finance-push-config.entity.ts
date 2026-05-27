@@ -13,13 +13,15 @@ export type FinancePushTestStatus =
   | 'unknown';
 
 /**
- * @description 财务推送配置(每作用域唯一一份;统一推送到 /api/v1/events/upsert)
+ * @description 财务推送配置(每作用域唯一一份;统一推送到 /api/v1/events/upsert;可绑定外部 webhook tenantId)
  * @keyword-en finance push config entity, scoped, unified events endpoint
  */
 export interface FinancePushConfigEntity {
   _id: ObjectId;
   tenantId: string;
-  /** 通常形如 https://server.com/api/v1;推送时拼到 /events/upsert */
+  /** 外部财务系统的租户 ID,用于 webhook tenantId -> 本系统作用域映射 */
+  externalTenantId?: string;
+  /** 通常形如 http(s)://server.com/api/v1;推送时拼到 /events/upsert */
   baseUrl: string;
   apiKey: string;
   lastTestedAt?: Date;
@@ -43,4 +45,5 @@ export interface FinancePushConfigEntity {
 export interface FinancePushConfigInput {
   baseUrl: string;
   apiKey: string;
+  externalTenantId?: string;
 }

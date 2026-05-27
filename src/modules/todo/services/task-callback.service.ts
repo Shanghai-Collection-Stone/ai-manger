@@ -124,7 +124,10 @@ export class TaskCallbackService {
     }
 
     // 获取最新的 target（含新 assignee）
-    const updatedTarget = await todoService.get(targetTodoId, sourceTodo.tenantId);
+    const updatedTarget = await todoService.get(
+      targetTodoId,
+      sourceTodo.tenantId,
+    );
     if (!updatedTarget) return;
 
     // 触发机器人执行

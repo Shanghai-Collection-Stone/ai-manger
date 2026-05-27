@@ -29,7 +29,11 @@ export class AnalysisFunctionCallService {
   private getCalculatorTools(): CreateAgentParams['tools'] {
     const jsCalc = tool(
       ({ expression, precision }) => {
-        if (!expression || typeof expression !== 'string' || expression.trim().length === 0) {
+        if (
+          !expression ||
+          typeof expression !== 'string' ||
+          expression.trim().length === 0
+        ) {
           return JSON.stringify({
             ok: false,
             error: 'EXPRESSION_REQUIRED',
@@ -123,7 +127,9 @@ export class AnalysisFunctionCallService {
             .min(1)
             .max(50)
             .optional()
-            .describe('List of JavaScript math expressions (required, 1-50 items)'),
+            .describe(
+              'List of JavaScript math expressions (required, 1-50 items)',
+            ),
           precision: z
             .number()
             .optional()
@@ -177,7 +183,9 @@ export class AnalysisFunctionCallService {
         });
         try {
           if (!this.shouldGenerateDecisionCard(question)) {
-            console.log('[decision_card_generate] Skipped - not a decision intent');
+            console.log(
+              '[decision_card_generate] Skipped - not a decision intent',
+            );
             return JSON.stringify({
               generated: false,
               reason: 'DECISION_INTENT_NOT_MATCHED',
@@ -190,7 +198,9 @@ export class AnalysisFunctionCallService {
                 : 'analysis',
             question: question.trim(),
             analysisData:
-              typeof analysisData === 'string' ? analysisData.trim() : undefined,
+              typeof analysisData === 'string'
+                ? analysisData.trim()
+                : undefined,
             capabilityBrief:
               typeof capabilityBrief === 'string'
                 ? capabilityBrief.trim()

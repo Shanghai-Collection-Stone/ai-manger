@@ -11,7 +11,7 @@ import { FinanceToolsService } from './services/finance-tools.service.js';
 
 /**
  * @description 财务 Agent 模块(工具句柄 + 系统提示词 + 后台 chat;依赖 push 模块的外部资源透传 service)
- * @keyword-en finance agent module, tools include external stores companies query
+ * @keyword-en finance-agent-module, external-resource-query
  */
 @Module({
   imports: [

@@ -15,7 +15,7 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 import multer from 'multer';
 import { extname, join } from 'path';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync } from 'fs';
 import { promises as fs } from 'fs';
 import { randomUUID } from 'crypto';
 import { GalleryService } from '../services/gallery.service.js';
@@ -81,18 +81,14 @@ function parseBooleanFlag(input: unknown): boolean | undefined {
 function detectGeneratedImageKindByName(
   name: string,
 ): 'cover' | 'collage' | undefined {
-  const s = String(name || '').trim().toLowerCase();
+  const s = String(name || '')
+    .trim()
+    .toLowerCase();
   if (!s) return undefined;
-  if (
-    /(^|[\/_\-.])(cover)([\/_\-.]|$)/i.test(s) ||
-    /封面/i.test(s)
-  ) {
+  if (/(^|[\/_\-.])(cover)([\/_\-.]|$)/i.test(s) || /封面/i.test(s)) {
     return 'cover';
   }
-  if (
-    /(^|[\/_\-.])(collage)([\/_\-.]|$)/i.test(s) ||
-    /拼图/i.test(s)
-  ) {
+  if (/(^|[\/_\-.])(collage)([\/_\-.]|$)/i.test(s) || /拼图/i.test(s)) {
     return 'collage';
   }
   return undefined;
@@ -121,186 +117,8 @@ async function mapLimit<T, R>(
   return results;
 }
 
-export async function compressImageFileInPlace(params: {
-  filePath: string;
-  maxWidth?: number;
-  maxHeight?: number;
-  quality?: number;
-}): Promise<{
-  changed: boolean;
-  beforeSize: number;
-  afterSize: number;
-  reason?: string;
-}> {
-  const filePath = String(params.filePath || '');
-  if (!filePath)
-    return { changed: false, beforeSize: 0, afterSize: 0, reason: 'no-path' };
-
-  let beforeSize = 0;
-  try {
-    const beforeStat = await fs.stat(filePath);
-    beforeSize = beforeStat.size;
-  } catch {
-    return {
-      changed: false,
-      beforeSize: 0,
-      afterSize: 0,
-      reason: 'stat-failed',
-    };
-  }
-
-  const maxWidth = Math.max(1, Math.floor(params.maxWidth ?? 1600));
-  const maxHeight = Math.max(1, Math.floor(params.maxHeight ?? 1600));
-  const quality = Math.min(95, Math.max(30, Math.floor(params.quality ?? 75)));
-
-  if (!jimpModulePromise)
-    jimpModulePromise = import('jimp') as Promise<unknown>;
-  const mod = await jimpModulePromise;
-  const Jimp = isRecord(mod) ? mod.Jimp : undefined;
-  if (!isJimpLike(Jimp)) {
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: 'jimp-unavailable',
-    };
-  }
-
-  let imgUnknown: unknown;
-  try {
-    imgUnknown = await Jimp.read(filePath);
-  } catch (e) {
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: errorMessage(e),
-    };
-  }
-
-  if (!isJimpImageLike(imgUnknown)) {
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: 'bad-image',
-    };
-  }
-
-  const img = imgUnknown;
-
-  const w = typeof img.bitmap?.width === 'number' ? img.bitmap.width : 0;
-  const h = typeof img.bitmap?.height === 'number' ? img.bitmap.height : 0;
-  if (w > 0 && h > 0) {
-    const ratio = Math.min(maxWidth / w, maxHeight / h, 1);
-    if (ratio < 1) {
-      const nw = Math.max(1, Math.floor(w * ratio));
-      const nh = Math.max(1, Math.floor(h * ratio));
-      img.resize({ w: nw, h: nh });
-    }
-  }
-
-  const ext = extname(filePath) || '.jpg';
-  const base = filePath.toLowerCase().endsWith(ext.toLowerCase())
-    ? filePath.slice(0, -ext.length)
-    : filePath;
-  const tmpPath = `${base}.__upload_compress_tmp__${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`;
-
-  try {
-    await img.write(tmpPath, { quality });
-  } catch (e) {
-    try {
-      if (existsSync(tmpPath)) await fs.unlink(tmpPath);
-    } catch {
-      void 0;
-    }
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: errorMessage(e),
-    };
-  }
-
-  let afterSize = beforeSize;
-  try {
-    const afterStat = await fs.stat(tmpPath);
-    afterSize = afterStat.size;
-  } catch {
-    try {
-      if (existsSync(tmpPath)) await fs.unlink(tmpPath);
-    } catch {
-      void 0;
-    }
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: 'tmp-stat-failed',
-    };
-  }
-
-  const improved = afterSize + 1024 < beforeSize;
-  if (!improved) {
-    try {
-      if (existsSync(tmpPath)) await fs.unlink(tmpPath);
-    } catch {
-      void 0;
-    }
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: 'not-smaller',
-    };
-  }
-
-  const bakPath = `${base}.__upload_compress_bak__${Date.now()}_${Math.random().toString(16).slice(2)}${ext}`;
-  try {
-    await fs.rename(filePath, bakPath);
-  } catch (e) {
-    try {
-      if (existsSync(tmpPath)) await fs.unlink(tmpPath);
-    } catch {
-      void 0;
-    }
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: errorMessage(e),
-    };
-  }
-  try {
-    await fs.rename(tmpPath, filePath);
-  } catch (e) {
-    try {
-      if (existsSync(bakPath)) await fs.rename(bakPath, filePath);
-    } catch {
-      void 0;
-    }
-    try {
-      if (existsSync(tmpPath)) await fs.unlink(tmpPath);
-    } catch {
-      void 0;
-    }
-    return {
-      changed: false,
-      beforeSize,
-      afterSize: beforeSize,
-      reason: errorMessage(e),
-    };
-  }
-  try {
-    if (existsSync(bakPath)) await fs.unlink(bakPath);
-  } catch {
-    void 0;
-  }
-
-  return { changed: true, beforeSize, afterSize };
-}
-
 async function compressUploadFiles(
+  gallery: GalleryService,
   files: Express.Multer.File[],
 ): Promise<void> {
   const list = Array.isArray(files) ? files : [];
@@ -310,7 +128,8 @@ async function compressUploadFiles(
   await mapLimit(list, concurrency, async (f) => {
     const p = f.path;
     if (!p) return;
-    const r = await compressImageFileInPlace({
+    // 复用 GalleryService.compressImageInPlace,与 ZIP 批量导入共用同一压缩口径
+    const r = await gallery.compressImageInPlace({
       filePath: p,
       maxWidth: 1600,
       maxHeight: 1600,
@@ -347,8 +166,14 @@ async function getImageDimensionsFromFile(
   try {
     const imgUnknown = await Jimp.read(src);
     if (!isJimpImageLike(imgUnknown)) return null;
-    const w = typeof imgUnknown.bitmap?.width === 'number' ? imgUnknown.bitmap.width : 0;
-    const h = typeof imgUnknown.bitmap?.height === 'number' ? imgUnknown.bitmap.height : 0;
+    const w =
+      typeof imgUnknown.bitmap?.width === 'number'
+        ? imgUnknown.bitmap.width
+        : 0;
+    const h =
+      typeof imgUnknown.bitmap?.height === 'number'
+        ? imgUnknown.bitmap.height
+        : 0;
     if (w <= 0 || h <= 0) return null;
     return { width: w, height: h, isPortrait: h > w };
   } catch {
@@ -365,9 +190,14 @@ async function getImageDimensionsFromFile(
  */
 async function extractUploadFileDimensions(
   files: Express.Multer.File[],
-): Promise<Map<string, { width: number; height: number; isPortrait: boolean }>> {
+): Promise<
+  Map<string, { width: number; height: number; isPortrait: boolean }>
+> {
   const list = Array.isArray(files) ? files : [];
-  const out = new Map<string, { width: number; height: number; isPortrait: boolean }>();
+  const out = new Map<
+    string,
+    { width: number; height: number; isPortrait: boolean }
+  >();
   if (list.length === 0) return out;
 
   const concurrency = 4;
@@ -535,13 +365,18 @@ export class GalleryController {
   ): GalleryGroupEntity[] {
     const list = Array.isArray(groups) ? groups : [];
     const idOrder = (Array.isArray(defaultIds) ? defaultIds : []).filter(
-      (id) => (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string',
+      (id) =>
+        (typeof id === 'number' && Number.isFinite(id)) ||
+        typeof id === 'string',
     );
     if (idOrder.length === 0) return list;
 
     const byId = new Map<string | number, GalleryGroupEntity>();
     for (const g of list) {
-      if ((typeof g?.id === 'number' || typeof g?.id === 'string') && !byId.has(g.id)) {
+      if (
+        (typeof g?.id === 'number' || typeof g?.id === 'string') &&
+        !byId.has(g.id)
+      ) {
         byId.set(g.id, g);
       }
     }
@@ -627,12 +462,16 @@ export class GalleryController {
       throw new BadRequestException('No image files uploaded');
     }
     if (files.length > 24) {
-      throw new BadRequestException(`最多只能同时上传 24 个文件，当前选择了 ${files.length} 个`);
+      throw new BadRequestException(
+        `最多只能同时上传 24 个文件，当前选择了 ${files.length} 个`,
+      );
     }
     const authScope = req ? await this.resolveAuthScope(req) : {};
-    const userId = String(body?.userId ?? '').trim() || authScope.userId || undefined;
+    const userId =
+      String(body?.userId ?? '').trim() || authScope.userId || undefined;
     if (!userId) throw new BadRequestException('userId is required');
-    const tenantId = authScope.tenantId || String(body?.tenantId ?? '').trim() || undefined;
+    const tenantId =
+      authScope.tenantId || String(body?.tenantId ?? '').trim() || undefined;
 
     const rawTags = String(body?.tags ?? '');
     const tags = rawTags
@@ -652,7 +491,9 @@ export class GalleryController {
       .slice(0, 2);
     if (explicitIsCollage) {
       if (files.length !== 1) {
-        throw new BadRequestException('collage upload requires exactly one file');
+        throw new BadRequestException(
+          'collage upload requires exactly one file',
+        );
       }
       if (collageSourceImageIds.length !== 2) {
         throw new BadRequestException(
@@ -687,7 +528,7 @@ export class GalleryController {
       dynamicCollageGroupId = defaults.collageGroup.id;
     }
 
-    await compressUploadFiles(files);
+    await compressUploadFiles(this.gallery, files);
     // 提取图片尺寸（压缩后），保证宽高元数据与落盘文件一致
     const dims = await extractUploadFileDimensions(files);
     const thumbs = await createUploadThumbnails(files);
@@ -703,7 +544,10 @@ export class GalleryController {
         ? dynamicCoverGroupId
         : markAsGenerated
           ? dynamicCollageGroupId
-          : groupId !== undefined && (typeof groupId === 'number' ? Number.isFinite(groupId) : typeof groupId === 'string')
+          : groupId !== undefined &&
+              (typeof groupId === 'number'
+                ? Number.isFinite(groupId)
+                : typeof groupId === 'string')
             ? groupId
             : undefined;
 
@@ -729,7 +573,9 @@ export class GalleryController {
         tags,
         description,
         isCollage: markAsGenerated,
-        collageSourceImageIds: explicitIsCollage ? collageSourceImageIds : undefined,
+        collageSourceImageIds: explicitIsCollage
+          ? collageSourceImageIds
+          : undefined,
         collageMeta: markAsGenerated
           ? {
               width: collageMetaWidth,
@@ -776,11 +622,13 @@ export class GalleryController {
     const includeCollageFlag = parseBooleanFlag(includeCollage);
     const resolvedImageType =
       imageType === 'regular' || imageType === 'collage' || imageType === 'all'
-        ? (imageType as 'regular' | 'collage' | 'all')
+        ? imageType
         : undefined;
     // groupId can be number (legacy) or string (default_group_image, default_collage_image)
     const resolvedGroupId = groupId
-      ? (Number.isFinite(Number(groupId)) ? Number(groupId) : groupId)
+      ? Number.isFinite(Number(groupId))
+        ? Number(groupId)
+        : groupId
       : undefined;
     const rows = await this.gallery.findAccessibleImages(
       userId ?? 'default',
@@ -790,7 +638,8 @@ export class GalleryController {
         tag,
         includeCollage: includeCollageFlag !== false,
         imageType: resolvedImageType,
-        cursorId: typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
+        cursorId:
+          typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
         limit: lim ?? 50,
       },
     );
@@ -988,8 +837,9 @@ export class GalleryController {
     ]);
     const safeLimit = Math.max(1, Math.min(200, Math.floor(lim)));
     return {
-      groups: merged
-        .slice(0, Math.max(safeLimit, 2)) as Array<Omit<GalleryGroupEntity, '_id'>>,
+      groups: merged.slice(0, Math.max(safeLimit, 2)) as Array<
+        Omit<GalleryGroupEntity, '_id'>
+      >,
     };
   }
 
@@ -1070,7 +920,13 @@ export class GalleryController {
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
-    const results = await this.groups.searchSimilar(query, userId, tid, lim, ms);
+    const results = await this.groups.searchSimilar(
+      query,
+      userId,
+      tid,
+      lim,
+      ms,
+    );
     return {
       results: results.map((r) => ({
         group: { ...r.group, _id: undefined },
@@ -1108,7 +964,13 @@ export class GalleryController {
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
-    const results = await this.gallery.searchSimilar(query, userId, tid, lim, ms);
+    const results = await this.gallery.searchSimilar(
+      query,
+      userId,
+      tid,
+      lim,
+      ms,
+    );
     return {
       results: results.map((r) => ({
         image: { ...r.image, _id: undefined },

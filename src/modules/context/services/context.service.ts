@@ -259,10 +259,7 @@ export class ContextService {
     const storedHasAssistant = storedMessages.some(
       (m) => m.role === ContextRole.Assistant,
     );
-    if (
-      (arr.length === 0 || storedHasAssistant) &&
-      storedMessages.length > 0
-    ) {
+    if ((arr.length === 0 || storedHasAssistant) && storedMessages.length > 0) {
       const fallback = storedMessages.map((m) => ({
         role: m.role,
         content: typeof m.content === 'string' ? m.content : '',
@@ -1230,7 +1227,16 @@ export class ContextService {
   private normalizeSessionType(
     sessionType?: ConversationSessionType,
   ): ConversationSessionType {
-    const validTypes: ConversationSessionType[] = ['default', 'thought', 'gallery-agent', 'xhs-specialist', 'xhs-tracker', 'xhs-publisher', 'xhs-article-expert', 'xhs-image-expert'];
+    const validTypes: ConversationSessionType[] = [
+      'default',
+      'thought',
+      'gallery-agent',
+      'xhs-specialist',
+      'xhs-tracker',
+      'xhs-publisher',
+      'xhs-article-expert',
+      'xhs-image-expert',
+    ];
     return validTypes.includes(sessionType as ConversationSessionType)
       ? (sessionType as ConversationSessionType)
       : 'default';

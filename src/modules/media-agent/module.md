@@ -36,7 +36,7 @@
   - `createListCanvasesTool` - 列出 Canvas 列表（xhs_list_canvases）
   - `createGetCanvasDetailTool` - 获取 Canvas 详情（xhs_get_canvas_detail）
   - `createImageGroupCanvasTool` - 创建图片组 Canvas，或传入 canvasId 在同一 Canvas 生成并合并文章配图（xhs_create_image_group_canvas）。**两个分支都先 precheckImageCapacity(失败时降级放行避免阻断主链路):不足量直接返回 `status: 'insufficient_images'` 结构化结果给 LLM,让其用自然语言询问用户(降级/补图/取消),不调用生成链路**。**canvas-it fence 仅通过 `scope.earlyEmit` 直接推到前端 SSE,工具 return 字符串不再嵌入 fence(避免 LLM 在 streaming response 中复述长 JSON 触发 LangChain `patchToolCallsMiddleware: expected AIMessage or Command, got object` 解析问题)**
-  - `createTagSelectRequestTool` - **新增 `tag_select_request` 工具**:用户请求生成图组但未明确给 tags 时调用,内部查 `gallery.listTopTagsWithCount`(失败降级空 recommendTags) 取热门 tags 作为推荐,通过 `scope.earlyEmit` 推送 ` ```tag-select-it ``` ` fence 到聊天流。前端识别后渲染卡片 + 搜索弹窗(推荐 chips + 联想下拉),用户多选确认后以"我选定标签：#A #B"用户消息回传,AI 据此继续调 xhs_create_image_group_canvas。**工具描述强调用户已明确 tags 时跳过本工具,每次对话最多调用 1 次;return 字符串不带 fence,只让 LLM 用一句话告知用户卡片已弹出**
+  - `createTagSelectRequestTool` - **新增 `tag_select_request` 工具**:用户请求生成图组/图文但未明确给 tags 时调用,内部查 `gallery.listTopTagsWithCount`(失败降级空 recommendTags) 取热门 tags 作为推荐,通过 `scope.earlyEmit` 推送 ` ```tag-select-it ``` ` fence 到聊天流。前端识别后渲染卡片 + 搜索弹窗(推荐 chips + 联想下拉),用户多选确认后以"我选定标签：#A #B"用户消息回传,AI 据此按场景继续调 topic_orchestrate(图文) 或 xhs_create_image_group_canvas(图组)。**工具描述强调用户已明确 tags 时跳过本工具,每次对话最多调用 1 次;return 字符串不带 fence,只让 LLM 用一句话告知用户卡片已弹出**
 
 ### media-agent.module.ts
 模块定义。

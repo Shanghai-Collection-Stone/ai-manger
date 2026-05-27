@@ -558,7 +558,10 @@ export class AdminController {
    */
   @UseGuards(AdminAuthGuard)
   @Put('llm-settings')
-  async upsertLlmSetting(@Req() req: Request, @Body() body: UpsertLlmSettingDto) {
+  async upsertLlmSetting(
+    @Req() req: Request,
+    @Body() body: UpsertLlmSettingDto,
+  ) {
     const setting = await this.adminService.upsertLlmSetting(
       this.requireUser(req),
       body,
@@ -572,7 +575,10 @@ export class AdminController {
    */
   @UseGuards(AdminAuthGuard)
   @Patch('llm-settings')
-  async updateLlmSetting(@Req() req: Request, @Body() body: UpdateLlmSettingDto) {
+  async updateLlmSetting(
+    @Req() req: Request,
+    @Body() body: UpdateLlmSettingDto,
+  ) {
     const setting = await this.adminService.updateLlmSetting(
       this.requireUser(req),
       body,
@@ -598,9 +604,15 @@ export class AdminController {
    */
   @UseGuards(AdminAuthGuard)
   @Get('social-accounts')
-  async listXhsAccounts(@Req() req: Request, @Query('platform') platform?: string) {
+  async listXhsAccounts(
+    @Req() req: Request,
+    @Query('platform') platform?: string,
+  ) {
     const user = this.requireUser(req);
-    const accounts = await this.adminService.listXhsAccounts(user.tenantId, platform);
+    const accounts = await this.adminService.listXhsAccounts(
+      user.tenantId,
+      platform,
+    );
     return { accounts };
   }
 
@@ -610,9 +622,15 @@ export class AdminController {
    */
   @UseGuards(AdminAuthGuard)
   @Post('social-accounts')
-  async createXhsAccount(@Req() req: Request, @Body() body: CreateXhsAccountDto) {
+  async createXhsAccount(
+    @Req() req: Request,
+    @Body() body: CreateXhsAccountDto,
+  ) {
     const user = this.requireUser(req);
-    const account = await this.adminService.createXhsAccount(body, user.tenantId);
+    const account = await this.adminService.createXhsAccount(
+      body,
+      user.tenantId,
+    );
     return { account };
   }
 
@@ -628,7 +646,11 @@ export class AdminController {
     @Body() body: UpdateXhsAccountDto,
   ) {
     const user = this.requireUser(req);
-    const account = await this.adminService.updateXhsAccount(id, body, user.tenantId);
+    const account = await this.adminService.updateXhsAccount(
+      id,
+      body,
+      user.tenantId,
+    );
     return { account };
   }
 

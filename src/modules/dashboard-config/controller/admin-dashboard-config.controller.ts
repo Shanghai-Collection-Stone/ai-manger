@@ -51,9 +51,12 @@ export class AdminDashboardConfigController {
    * @keyword-en upsert dashboard config mapping
    */
   @Post('mappings')
-  async upsert(@Req() req: Request, @Body() body: UpsertDashboardConfigMappingDto) {
+  async upsert(
+    @Req() req: Request,
+    @Body() body: UpsertDashboardConfigMappingDto,
+  ) {
     const user = this.requireUser(req as AdminRequest);
-    const tenantId = user.tenantId ? user.tenantId : body.tenantId ?? null;
+    const tenantId = user.tenantId ? user.tenantId : (body.tenantId ?? null);
     if (user.tenantId && body.tenantId && body.tenantId !== user.tenantId) {
       throw new ForbiddenException('CROSS_TENANT_FORBIDDEN');
     }

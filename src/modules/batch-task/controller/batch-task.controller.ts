@@ -107,7 +107,11 @@ export class BatchTaskController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
-    const doc = await this.batch.addPostsParallel(Number(id), input, authScope.tenantId);
+    const doc = await this.batch.addPostsParallel(
+      Number(id),
+      input,
+      authScope.tenantId,
+    );
     return { batchTask: doc };
   }
 
@@ -174,7 +178,9 @@ export class BatchTaskController {
     @Query('userId') userId?: string,
     @Req() req?: Request,
   ): Promise<Record<string, unknown>> {
-    const authScope = req ? await this.resolveAuthScope(req) : { tenantId: undefined };
+    const authScope = req
+      ? await this.resolveAuthScope(req)
+      : { tenantId: undefined };
     const rows = await this.batch.list(userId, authScope.tenantId);
     return { batchTasks: rows };
   }

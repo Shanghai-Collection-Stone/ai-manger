@@ -45,7 +45,9 @@ export class GalleryUploadExceptionFilter implements ExceptionFilter {
       return;
     }
 
-    response.status(HttpStatus.BAD_REQUEST).json({ message: '上传请求参数错误' });
+    response
+      .status(HttpStatus.BAD_REQUEST)
+      .json({ message: '上传请求参数错误' });
   }
 
   /**
@@ -65,7 +67,10 @@ export class GalleryUploadExceptionFilter implements ExceptionFilter {
       };
     }
 
-    if (error.code === 'LIMIT_FILE_COUNT' || error.code === 'LIMIT_UNEXPECTED_FILE') {
+    if (
+      error.code === 'LIMIT_FILE_COUNT' ||
+      error.code === 'LIMIT_UNEXPECTED_FILE'
+    ) {
       return {
         status: HttpStatus.BAD_REQUEST,
         message: '最多只能同时上传 24 个文件',

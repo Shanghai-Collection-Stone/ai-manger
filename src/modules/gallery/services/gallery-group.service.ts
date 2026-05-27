@@ -214,7 +214,9 @@ export class GalleryGroupService {
   ): Promise<GalleryGroupEntity | null> {
     const filter = this.buildTenantFilter(userId, tenantId);
     filter.name = name;
-    return this.groups.findOne(filter, { projection: { _id: 0 } }) as Promise<GalleryGroupEntity | null>;
+    return this.groups.findOne(filter, {
+      projection: { _id: 0 },
+    }) as Promise<GalleryGroupEntity | null>;
   }
 
   /**
@@ -381,7 +383,10 @@ export class GalleryGroupService {
   async ensureDefaultDynamicGroups(
     userId: string | undefined,
     tenantId?: string,
-  ): Promise<{ coverGroup: GalleryGroupEntity; collageGroup: GalleryGroupEntity }> {
+  ): Promise<{
+    coverGroup: GalleryGroupEntity;
+    collageGroup: GalleryGroupEntity;
+  }> {
     const [coverGroup, collageGroup] = await Promise.all([
       this.findOrCreateDynamicCoverGroup(userId, tenantId),
       this.findOrCreateDynamicCollageGroup(userId, tenantId),
@@ -554,9 +559,18 @@ export class GalleryGroupService {
     minScore = 0.5,
   ): Promise<GalleryGroupSearchResult[]> {
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
-    const queryEmbedding = await this.embedding.embedText(query, embeddingConfig);
+    const queryEmbedding = await this.embedding.embedText(
+      query,
+      embeddingConfig,
+    );
     if (this.isAtlasAvailable === false) {
-      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
+      return this.searchSimilarLocal(
+        queryEmbedding,
+        userId,
+        tenantId,
+        limit,
+        minScore,
+      );
     }
     try {
       const filter = this.buildTenantFilter(userId, tenantId);
@@ -584,7 +598,13 @@ export class GalleryGroupService {
         .map((r) => ({ group: r, score: r.score }));
     } catch {
       if (this.isAtlasAvailable === null) this.isAtlasAvailable = false;
-      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore);
+      return this.searchSimilarLocal(
+        queryEmbedding,
+        userId,
+        tenantId,
+        limit,
+        minScore,
+      );
     }
   }
 

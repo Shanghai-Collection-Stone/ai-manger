@@ -50,8 +50,7 @@ export function resolveMongoUri(config: ConfigService): {
   }
 
   // 兜底：完整 URI
-  const uri =
-    config.get<string>('MONGODB_URI') ?? 'mongodb://localhost:27017';
+  const uri = config.get<string>('MONGODB_URI') ?? 'mongodb://localhost:27017';
   const dbName = db ?? 'ai_system';
   return { uri, dbName };
 }

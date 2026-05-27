@@ -5,7 +5,10 @@ import type { AdminAgentConfigEntity } from '../../admin/entities/admin.entity.j
 import { AdminService } from '../../admin/services/admin.service.js';
 import type { TodoEntity } from '../../todo/entities/todo.entity.js';
 import { TodoService } from '../../todo/services/todo.service.js';
-import { BatchTaskGraphService, type PostWithAccount } from '../../graph/services/batch-task-graph.service.js';
+import {
+  BatchTaskGraphService,
+  type PostWithAccount,
+} from '../../graph/services/batch-task-graph.service.js';
 
 /** 长时 AI 任务专用 fetch dispatcher，超时设置为 60 分钟 */
 const LONG_RUNNING_AGENT = new Agent({

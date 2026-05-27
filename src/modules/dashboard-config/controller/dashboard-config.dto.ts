@@ -1,4 +1,10 @@
-import { IsBoolean, IsMongoId, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsMongoId,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
 
 /**
  * @description Upsert 看板配置映射请求体
@@ -21,4 +27,3 @@ export class UpsertDashboardConfigMappingDto {
   @IsBoolean()
   enabled?: boolean;
 }
-

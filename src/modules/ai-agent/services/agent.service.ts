@@ -77,18 +77,17 @@ export class AgentService {
    *  有代理 → ProxyAgent(长超时);无代理 → Agent(长超时直连)。
    * @keyword-en long-timeout undici dispatcher for image generation, unified proxy
    */
-  private readonly imageGenDispatcher: UndiciAgent | UndiciProxyAgent =
-    (() => {
-      const proxyUri = resolveProxyUriFromEnv();
-      const timeouts = {
-        headersTimeout: 15 * 60 * 1000,
-        bodyTimeout: 15 * 60 * 1000,
-      };
-      if (proxyUri) {
-        return new UndiciProxyAgent({ uri: proxyUri, ...timeouts });
-      }
-      return new UndiciAgent({ ...timeouts, connectTimeout: 30 * 1000 });
-    })();
+  private readonly imageGenDispatcher: UndiciAgent | UndiciProxyAgent = (() => {
+    const proxyUri = resolveProxyUriFromEnv();
+    const timeouts = {
+      headersTimeout: 15 * 60 * 1000,
+      bodyTimeout: 15 * 60 * 1000,
+    };
+    if (proxyUri) {
+      return new UndiciProxyAgent({ uri: proxyUri, ...timeouts });
+    }
+    return new UndiciAgent({ ...timeouts, connectTimeout: 30 * 1000 });
+  })();
 
   constructor(
     @Inject('CTX_MONGO_CLIENT') client: MongoClient,
@@ -153,7 +152,7 @@ export class AgentService {
     };
     return createDeepAgent(
       options as unknown as Parameters<typeof createDeepAgent>[0],
-    ) as DeepAgentReturn;
+    );
   }
 
   async buildLLM(config: AgentConfig): Promise<BaseChatModel> {
@@ -527,7 +526,9 @@ export class AgentService {
    * @keyword-en detect image-only model name to prevent chat misconfiguration
    */
   private isImageOnlyModel(modelName: string): boolean {
-    const name = String(modelName ?? '').trim().toLowerCase();
+    const name = String(modelName ?? '')
+      .trim()
+      .toLowerCase();
     if (!name) return false;
     return (
       name.startsWith('gpt-image-') ||
@@ -654,7 +655,9 @@ export class AgentService {
     if (/^https?:\/\//i.test(source)) {
       const response = await fetch(source);
       if (!response.ok) {
-        throw new Error(`IMAGE_EDIT_BASE_IMAGE_DOWNLOAD_FAILED:${response.status}`);
+        throw new Error(
+          `IMAGE_EDIT_BASE_IMAGE_DOWNLOAD_FAILED:${response.status}`,
+        );
       }
       const arrayBuffer = await response.arrayBuffer();
       const headerMime = String(response.headers.get('content-type') ?? '')
@@ -787,9 +790,72 @@ export class AgentService {
   }
 
   /**
+   * @description 判断 fetch 抛错是否为"瞬时网络错误",可重试。命中 socket 断开
+   *   (UND_ERR_SOCKET / other side closed)、连接重置(ECONNRESET/EPIPE)、连接握手
+   *   超时(UND_ERR_CONNECT_TIMEOUT)、DNS 抖动(EAI_AGAIN)、网络不可达(ENETUNREACH)。
+   *   显式排除 AbortError/请求体超时(那是 10 分钟整体超时,重试只会叠加等待)。
+   * @keyword-en transient fetch error detection
+   * @keyword-cn 瞬时网络错误判定
+   */
+  private isTransientFetchError(
+    e: Error & { code?: string },
+    causeStr: string,
+  ): boolean {
+    const hay =
+      `${e.name} ${e.code ?? ''} ${e.message ?? ''} ${causeStr}`.toUpperCase();
+    if (hay.includes('ABORTERROR') || hay.includes('HEADERS_TIMEOUT')) {
+      return false;
+    }
+    return (
+      hay.includes('UND_ERR_SOCKET') ||
+      hay.includes('OTHER SIDE CLOSED') ||
+      hay.includes('ECONNRESET') ||
+      hay.includes('EPIPE') ||
+      hay.includes('UND_ERR_CONNECT_TIMEOUT') ||
+      hay.includes('ENETUNREACH') ||
+      hay.includes('EAI_AGAIN')
+    );
+  }
+
+  /**
+   * @description 对生图 fetch 做有限次重试,仅针对 isTransientFetchError 命中的瞬时
+   *   网络错误(经本地代理隧道访问 OpenAI 时长连接易被中途断开)。每次重试都用
+   *   initFactory 重新构造 RequestInit —— FormData/Blob body 被消费后不可复用,
+   *   必须重建。HTTP 错误响应不在此处理(返回 Response 由调用方按 status 判定)。
+   * @keyword-en retry image fetch on transient socket error
+   * @keyword-cn 生图请求瞬时网络重试
+   */
+  private async fetchImageWithRetry(
+    endpoint: string,
+    initFactory: () => RequestInit,
+    label: string,
+    maxRetries = 2,
+  ): Promise<Response> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await fetch(endpoint, initFactory());
+      } catch (err) {
+        const e = err as Error & { cause?: unknown; code?: string };
+        const causeStr = this.formatFetchCause(e.cause);
+        if (this.isTransientFetchError(e, causeStr) && attempt < maxRetries) {
+          attempt += 1;
+          const delayMs = 1000 * 2 ** (attempt - 1);
+          this.logger.warn(
+            `[ai-cover][openai] ${label}_retry attempt=${attempt}/${maxRetries} delayMs=${delayMs} cause=${causeStr}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /**
    * @description 使用指定默认生图运行时发送提示词并返回本地图片路径。
    * @param {{ providerCode: string; model: string; apiKey: string; baseUrl?: string }} runtime - 生图运行时。
-    * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
    * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
    * @keyword-en generate image by configured provider runtime
    */
@@ -816,7 +882,9 @@ export class AgentService {
     const hasRuntimeEditInput =
       String(input.baseImagePath ?? '').trim().length > 0 ||
       (Array.isArray(input.baseImageCandidates) &&
-        input.baseImageCandidates.some((x) => String(x ?? '').trim().length > 0));
+        input.baseImageCandidates.some(
+          (x) => String(x ?? '').trim().length > 0,
+        ));
     const runtimeBaseImage = hasRuntimeEditInput
       ? this.resolveMeituEditableBaseImage({
           baseImagePath: input.baseImagePath,
@@ -830,7 +898,8 @@ export class AgentService {
     const provider = runtime.providerCode.toLowerCase();
 
     if (provider === 'gemini') {
-      const endpointBase = runtime.baseUrl?.trim() || 'https://generativelanguage.googleapis.com';
+      const endpointBase =
+        runtime.baseUrl?.trim() || 'https://generativelanguage.googleapis.com';
       const endpoint = `${endpointBase.replace(/\/$/, '')}/v1beta/models/${encodeURIComponent(runtime.model)}:generateContent?key=${encodeURIComponent(runtime.apiKey)}`;
       const parts: Array<Record<string, unknown>> = runtimeEditImage
         ? [
@@ -857,7 +926,7 @@ export class AgentService {
         const errorText = await response.text().catch(() => '');
         const requestType = runtimeEditImage ? 'EDIT' : 'REQUEST';
         throw new Error(
-          `IMAGE_GEMINI_${requestType}_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+          `IMAGE_GEMINI_${requestType}_FAILED:${response.status}:${errorText.slice(0, 1000)}`,
         );
       }
       const json = (await response.json()) as Record<string, unknown>;
@@ -888,9 +957,9 @@ export class AgentService {
           if (typeof data !== 'string' || data.trim().length === 0) continue;
           const mimeType =
             typeof inlineData?.['mimeType'] === 'string'
-              ? (inlineData['mimeType'] as string)
+              ? inlineData['mimeType']
               : typeof inlineData?.['mime_type'] === 'string'
-                ? (inlineData['mime_type'] as string)
+                ? inlineData['mime_type']
                 : 'image/png';
           const imagePath = await this.saveGeneratedImageBase64(data, mimeType);
           return {
@@ -903,12 +972,17 @@ export class AgentService {
       throw new Error('IMAGE_GEMINI_RESULT_EMPTY');
     }
 
-    if (provider === 'doubao' || provider === 'volcengine' || provider === 'ark') {
+    if (
+      provider === 'doubao' ||
+      provider === 'volcengine' ||
+      provider === 'ark'
+    ) {
       // ark Seedream 5.0 lite：文生图 / 图生图 共用 /images/generations endpoint（ark 无 /images/edits）。
       // 图生图时 body 追加 image 字段（单字符串，URL 或 data:<mime>;base64,<b64>）。
       // size 支持 2K / 4K / 比例(3:4) / 像素(1728x2304)；5.0 lite 像素下限 2560x1440，
       // 低于此值的像素用 resolveMeituRatioBySize 换算为比例。watermark 默认关闭。
-      const endpointBase = runtime.baseUrl?.trim() || 'https://ark.cn-beijing.volces.com/api/v3';
+      const endpointBase =
+        runtime.baseUrl?.trim() || 'https://ark.cn-beijing.volces.com/api/v3';
       const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
       // Seedream 5.0 lite size 接受两种格式（互斥）：
       //   1) 档位 '2K' | '3K'
@@ -944,8 +1018,7 @@ export class AgentService {
         }
         return best.size;
       };
-      const sizeRaw =
-        typeof input.size === 'string' ? input.size.trim() : '';
+      const sizeRaw = typeof input.size === 'string' ? input.size.trim() : '';
       const qualityTier = /^(2k|3k)$/i.exec(sizeRaw)?.[0]?.toUpperCase();
       const pixelMatch = /^(\d{2,5})x(\d{2,5})$/i.exec(sizeRaw);
       const normalizedSize = (() => {
@@ -1000,7 +1073,7 @@ export class AgentService {
         const errorText = await response.text().catch(() => '');
         const requestType = runtimeEditImage ? 'EDIT' : 'GENERATE';
         throw new Error(
-          `IMAGE_DOUBAO_${requestType}_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+          `IMAGE_DOUBAO_${requestType}_FAILED:${response.status}:${errorText.slice(0, 1000)}`,
         );
       }
       const json = (await response.json()) as Record<string, unknown>;
@@ -1013,9 +1086,9 @@ export class AgentService {
           : undefined;
       if (typeof first?.['b64_json'] === 'string') {
         const imagePath = await this.saveGeneratedImageBase64(
-          first['b64_json'] as string,
+          first['b64_json'],
           typeof first['mime_type'] === 'string'
-            ? (first['mime_type'] as string)
+            ? first['mime_type']
             : 'image/png',
         );
         return {
@@ -1025,7 +1098,7 @@ export class AgentService {
         };
       }
       if (typeof first?.['url'] === 'string') {
-        const imagePath = await this.downloadGeneratedImage(first['url'] as string);
+        const imagePath = await this.downloadGeneratedImage(first['url']);
         return {
           providerCode: runtime.providerCode,
           model: runtime.model,
@@ -1040,9 +1113,9 @@ export class AgentService {
       //  - 文生图: POST /v1/images/generations
       //  - 图生图(底图编辑): POST /v1/images/edits（multipart，image=底图二进制）
       // size 接受 1024x1024 / 1024x1536 / 1536x1024 / auto；其它尺寸按宽高比就近映射。
-      const endpointBase = runtime.baseUrl?.trim() || 'https://api.openai.com/v1';
-      const sizeRaw =
-        typeof input.size === 'string' ? input.size.trim() : '';
+      const endpointBase =
+        runtime.baseUrl?.trim() || 'https://api.openai.com/v1';
+      const sizeRaw = typeof input.size === 'string' ? input.size.trim() : '';
       const pixelMatch = /^(\d{2,5})x(\d{2,5})$/i.exec(sizeRaw);
       const normalizedSize = (() => {
         if (/^auto$/i.test(sizeRaw)) return 'auto';
@@ -1058,34 +1131,50 @@ export class AgentService {
 
       if (runtimeEditImage) {
         const endpoint = `${endpointBase.replace(/\/$/, '')}/images/edits`;
-        const form = new FormData();
-        form.append('model', runtime.model);
-        form.append('prompt', prompt);
-        form.append('size', normalizedSize);
-        form.append('n', '1');
-        form.append(
-          'image',
-          new Blob([new Uint8Array(runtimeEditImage.buffer)], {
-            type: runtimeEditImage.mimeType || 'image/png',
-          }),
-          runtimeEditImage.fileName || 'base.png',
-        );
         this.logger.log(
           `[ai-cover][openai] edit endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length} imageBytes=${runtimeEditImage.buffer.byteLength}`,
+        );
+        // 完整 prompt 原文(排查安全/版权拒绝时看实际发了什么)
+        this.logger.log(
+          `[ai-cover][openai] edit full_prompt >>>\n${prompt}\n<<< full_prompt_end`,
         );
         // gpt-image 系列生图服务端处理常 5-10 分钟。显式给 10 分钟 AbortSignal 超时,
         // 并用 imageGenDispatcher (headersTimeout/bodyTimeout=15min) 覆盖 undici
         // 默认 5 分钟 headersTimeout(否则会抛 `HeadersTimeoutError: UND_ERR_HEADERS_TIMEOUT`)。
+        // 经本地代理隧道访问 OpenAI 时 socket 易被中途断开,fetchImageWithRetry 对
+        // 瞬时网络错误重试;FormData/Blob body 消费后不可复用,故在 factory 内重建。
         let response: Response;
         try {
-          response = await fetch(endpoint, {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${runtime.apiKey}` },
-            body: form,
-            signal: AbortSignal.timeout(10 * 60 * 1000),
-            // @ts-expect-error undici extension on Node fetch
-            dispatcher: this.imageGenDispatcher,
-          });
+          response = await this.fetchImageWithRetry(
+            endpoint,
+            () => {
+              const form = new FormData();
+              form.append('model', runtime.model);
+              form.append('prompt', prompt);
+              form.append('size', normalizedSize);
+              form.append('n', '1');
+              // gpt-image-1 支持 moderation=low,放宽内容审核以减少 moderation_blocked 误拦
+              // (仅 gpt-image 系列支持,dall-e 传此参数会 400)。
+              if (/gpt-image/i.test(runtime.model)) {
+                form.append('moderation', 'low');
+              }
+              form.append(
+                'image',
+                new Blob([new Uint8Array(runtimeEditImage.buffer)], {
+                  type: runtimeEditImage.mimeType || 'image/png',
+                }),
+                runtimeEditImage.fileName || 'base.png',
+              );
+              return {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${runtime.apiKey}` },
+                body: form,
+                signal: AbortSignal.timeout(10 * 60 * 1000),
+                dispatcher: this.imageGenDispatcher,
+              } as RequestInit;
+            },
+            'edit',
+          );
         } catch (err) {
           const e = err as Error & { cause?: unknown; code?: string };
           const causeStr = this.formatFetchCause(e.cause);
@@ -1099,25 +1188,35 @@ export class AgentService {
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
           throw new Error(
-            `IMAGE_OPENAI_EDIT_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+            `IMAGE_OPENAI_EDIT_FAILED:${response.status}:${errorText.slice(0, 1000)}`,
           );
         }
         const json = (await response.json()) as Record<string, unknown>;
-        const dataArr = Array.isArray(json['data']) ? (json['data'] as unknown[]) : [];
+        const dataArr = Array.isArray(json['data'])
+          ? (json['data'] as unknown[])
+          : [];
         const first =
           dataArr.length > 0 && dataArr[0] && typeof dataArr[0] === 'object'
             ? (dataArr[0] as Record<string, unknown>)
             : undefined;
         if (typeof first?.['b64_json'] === 'string') {
           const imagePath = await this.saveGeneratedImageBase64(
-            first['b64_json'] as string,
+            first['b64_json'],
             'image/png',
           );
-          return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+          return {
+            providerCode: runtime.providerCode,
+            model: runtime.model,
+            imagePath,
+          };
         }
         if (typeof first?.['url'] === 'string') {
-          const imagePath = await this.downloadGeneratedImage(first['url'] as string);
-          return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+          const imagePath = await this.downloadGeneratedImage(first['url']);
+          return {
+            providerCode: runtime.providerCode,
+            model: runtime.model,
+            imagePath,
+          };
         }
         throw new Error('IMAGE_OPENAI_EDIT_RESULT_EMPTY');
       }
@@ -1129,22 +1228,35 @@ export class AgentService {
         size: normalizedSize,
         n: 1,
       };
+      // gpt-image-1 支持 moderation=low,放宽内容审核以减少 moderation_blocked 误拦
+      // (仅 gpt-image 系列支持,dall-e 传此参数会 400)。
+      if (/gpt-image/i.test(runtime.model)) {
+        body.moderation = 'low';
+      }
       this.logger.log(
         `[ai-cover][openai] generate endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length}`,
       );
+      // 完整 prompt 原文(排查安全/版权拒绝时看实际发了什么)
+      this.logger.log(
+        `[ai-cover][openai] generate full_prompt >>>\n${prompt}\n<<< full_prompt_end`,
+      );
       let response: Response;
       try {
-        response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${runtime.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(10 * 60 * 1000),
-          // @ts-expect-error undici extension on Node fetch
-          dispatcher: this.imageGenDispatcher,
-        });
+        response = await this.fetchImageWithRetry(
+          endpoint,
+          () =>
+            ({
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${runtime.apiKey}`,
+              },
+              body: JSON.stringify(body),
+              signal: AbortSignal.timeout(10 * 60 * 1000),
+              dispatcher: this.imageGenDispatcher,
+            }) as RequestInit,
+          'generate',
+        );
       } catch (err) {
         const e = err as Error & { cause?: unknown; code?: string };
         const causeStr = this.formatFetchCause(e.cause);
@@ -1158,25 +1270,35 @@ export class AgentService {
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         throw new Error(
-          `IMAGE_OPENAI_GENERATE_FAILED:${response.status}:${errorText.slice(0, 300)}`,
+          `IMAGE_OPENAI_GENERATE_FAILED:${response.status}:${errorText.slice(0, 1000)}`,
         );
       }
       const json = (await response.json()) as Record<string, unknown>;
-      const dataArr = Array.isArray(json['data']) ? (json['data'] as unknown[]) : [];
+      const dataArr = Array.isArray(json['data'])
+        ? (json['data'] as unknown[])
+        : [];
       const first =
         dataArr.length > 0 && dataArr[0] && typeof dataArr[0] === 'object'
           ? (dataArr[0] as Record<string, unknown>)
           : undefined;
       if (typeof first?.['b64_json'] === 'string') {
         const imagePath = await this.saveGeneratedImageBase64(
-          first['b64_json'] as string,
+          first['b64_json'],
           'image/png',
         );
-        return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+        return {
+          providerCode: runtime.providerCode,
+          model: runtime.model,
+          imagePath,
+        };
       }
       if (typeof first?.['url'] === 'string') {
-        const imagePath = await this.downloadGeneratedImage(first['url'] as string);
-        return { providerCode: runtime.providerCode, model: runtime.model, imagePath };
+        const imagePath = await this.downloadGeneratedImage(first['url']);
+        return {
+          providerCode: runtime.providerCode,
+          model: runtime.model,
+          imagePath,
+        };
       }
       throw new Error('IMAGE_OPENAI_GENERATE_RESULT_EMPTY');
     }
@@ -1196,24 +1318,28 @@ export class AgentService {
     prompt: string;
     size?: string;
   }): string {
-    const basePrompt = String(input.prompt ?? '').replace(/\s+/g, ' ').trim();
+    const basePrompt = String(input.prompt ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
     const size = String(input.size ?? '').trim();
     const sizeLine =
       size && /^\d{2,5}x\d{2,5}$/i.test(size)
         ? `尺寸规格:竖版封面 ${size}，严禁输出横版或方版`
         : '尺寸规格:竖版封面，严禁输出横版或方版';
 
-    const metaBlock = basePrompt.length > 0 ? `【封面元信息】\n${basePrompt}` : '';
+    const metaBlock =
+      basePrompt.length > 0 ? `【封面元信息】\n${basePrompt}` : '';
 
     const hardBlock = [
       '【硬性规格 - 必须严格遵守，违反即判为失败】',
       '1. 任务:基于所提供底图做二次编辑/重绘，鼓励大胆做风格化转换(写实→插画/卡通/3D/手绘/赛博等)与装饰夸张化处理；但严禁完全脱离底图生成无关画面，主体与场景的识别度必须保留(看得出"是谁/是什么/在哪/在做什么")。',
-      '2. 底图识别度:主体身份、场景关系、核心姿态/构图占位需可识别；允许风格化重绘、表情与动作适度夸张化、局部动画化处理；严禁替换主体身份、严禁抹除主体使其消失。',
+      '2. 底图识别度:主体身份、场景关系、核心姿态/构图占位需可识别；允许风格化重绘、表情与动作适度夸张化、局部动画化处理；严禁替换主体身份、严禁抹除主体使其消失。例外:若底图主体为受版权或商标保护的知名形象(如动漫/游戏角色、品牌吉祥物、明星肖像、logo),在不直接复刻原版权形象的前提下,通过风格化重绘与细节改造(调整配色/服饰/比例/造型等)转为致敬式的原创形象,并尽可能保留"一眼能联想到"的辨识特征与风格氛围——目标是合规的同时最大化神似,而非抹除特征。',
       '3. 文案呈现:必须将上文"封面主标题/封面副标题"以浮动文字形式清晰排版在画面中；主标题字号显著大于副标题；严禁被人物/物体/背景遮挡；严禁出现错别字、乱码、重复字、残缺字。',
       '4. 装饰元素:鼓励叠加贴纸类装饰(光斑、彩带、箭头、气泡、星芒、胶带、涂鸦、漫画对话框、拟声词等)提升封面活力与点击率；装饰不得遮盖主标题、副标题、主体面部。',
       '5. 风格:小红书爆款封面质感——清晰明快、生活方式感、高对比、画面饱满、适合移动端竖屏浏览；可走插画/卡通/3D/赛博等动画化方向；杜绝灰暗脏污、低分辨率、过度滤镜、保守复制无改造感。',
       `6. ${sizeLine}`,
       '7. 输出:仅输出最终编辑后的封面图本体，严禁在画面中加入水印、平台 logo、网址、二维码、无关文字。',
+      '8. 版权合规:不得 1:1 精确复刻受版权/商标保护的角色、卡通形象、品牌 logo、知名 IP 或明星肖像；如底图含此类元素,通过风格化改造转为致敬式原创形象,在不构成侵权的前提下尽量保留可识别特征与神韵,生成内容须为可商用的原创封面。',
     ].join('\n');
 
     return [metaBlock, hardBlock].filter((x) => x.length > 0).join('\n\n');
@@ -1305,8 +1431,12 @@ export class AgentService {
    * @returns {string | null} 映射后的工作区路径。
    * @keyword-en remap absolute public path to workspace
    */
-  private remapAbsolutePublicPathToWorkspace(absolutePath: string): string | null {
-    const normalized = String(absolutePath ?? '').trim().replace(/\\/g, '/');
+  private remapAbsolutePublicPathToWorkspace(
+    absolutePath: string,
+  ): string | null {
+    const normalized = String(absolutePath ?? '')
+      .trim()
+      .replace(/\\/g, '/');
     if (!normalized) return null;
     const lower = normalized.toLowerCase();
     const marker = '/public/';
@@ -1327,7 +1457,9 @@ export class AgentService {
    * @returns {string | null} 命中的真实路径。
    * @keyword-en resolve existing path by case-insensitive walk
    */
-  private resolveCaseInsensitiveExistingPath(targetPath: string): string | null {
+  private resolveCaseInsensitiveExistingPath(
+    targetPath: string,
+  ): string | null {
     const raw = String(targetPath ?? '').trim();
     if (!raw) return null;
     const absPath = path.resolve(raw);
@@ -1392,9 +1524,12 @@ export class AgentService {
 
     for (const candidate of candidates) {
       const exists = fs.existsSync(candidate);
-      this.logger.log(`[meitu][file-resolve] existsSync(${candidate})=${exists}`);
+      this.logger.log(
+        `[meitu][file-resolve] existsSync(${candidate})=${exists}`,
+      );
       if (exists) return candidate;
-      const byInsensitiveWalk = this.resolveCaseInsensitiveExistingPath(candidate);
+      const byInsensitiveWalk =
+        this.resolveCaseInsensitiveExistingPath(candidate);
       this.logger.log(
         `[meitu][file-resolve] caseInsensitive(${candidate})=${byInsensitiveWalk ?? 'null'}`,
       );
@@ -1440,11 +1575,15 @@ export class AgentService {
         this.logger.log(`[meitu][base-image] hit=local resolved=${localPath}`);
         return localPath;
       }
-      this.logger.warn(`[meitu][base-image] miss candidate=${candidate} normalized=${normalized}`);
+      this.logger.warn(
+        `[meitu][base-image] miss candidate=${candidate} normalized=${normalized}`,
+      );
     }
 
     const summary = candidates.join('|').slice(0, 260);
-    this.logger.error(`[meitu][base-image] not_found cwd=${process.cwd()} summary=${summary}`);
+    this.logger.error(
+      `[meitu][base-image] not_found cwd=${process.cwd()} summary=${summary}`,
+    );
     throw new Error(`MEITU_BASE_IMAGE_NOT_FOUND:${summary}`);
   }
 
@@ -1492,10 +1631,10 @@ export class AgentService {
    * @returns {Record<string, unknown> | null} 解析后的键值对，无效时返回 null。
    * @keyword-en parse meitu cli flat key value text
    */
-  private parseMeituKeyValueText(
-    text: string,
-  ): Record<string, unknown> | null {
-    const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
+  private parseMeituKeyValueText(text: string): Record<string, unknown> | null {
+    const raw = String(text ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!raw) return null;
     const keyRe = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*/g;
     const hits: Array<{ key: string; start: number; valueStart: number }> = [];
@@ -1524,7 +1663,9 @@ export class AgentService {
    * @returns {string | null} 本地文件路径。
    * @keyword-en resolve meitu downloaded file path
    */
-  private resolveMeituDownloadedPath(payload: Record<string, unknown>): string | null {
+  private resolveMeituDownloadedPath(
+    payload: Record<string, unknown>,
+  ): string | null {
     const roots: Record<string, unknown>[] = [payload];
     const data = payload['data'];
     if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -1549,9 +1690,7 @@ export class AgentService {
             rec['localPath'],
             rec['path'],
           ];
-          const p = candidates.find((x) => typeof x === 'string') as
-            | string
-            | undefined;
+          const p = candidates.find((x) => typeof x === 'string');
           if (p && p.trim().length > 0) return p.trim();
         }
       }
@@ -1563,9 +1702,7 @@ export class AgentService {
         root['local_path'],
         root['localPath'],
       ];
-      const topPath = topPathCandidates.find((x) => typeof x === 'string') as
-        | string
-        | undefined;
+      const topPath = topPathCandidates.find((x) => typeof x === 'string');
       if (topPath && topPath.trim().length > 0) return topPath.trim();
     }
     return null;
@@ -1577,7 +1714,9 @@ export class AgentService {
    * @returns {string | null} URL。
    * @keyword-en resolve meitu media url
    */
-  private resolveMeituMediaUrl(payload: Record<string, unknown>): string | null {
+  private resolveMeituMediaUrl(
+    payload: Record<string, unknown>,
+  ): string | null {
     const roots: Record<string, unknown>[] = [payload];
     const data = payload['data'];
     if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -1590,9 +1729,7 @@ export class AgentService {
     for (const root of roots) {
       const mediaUrls = root['media_urls'];
       if (Array.isArray(mediaUrls)) {
-        const first = mediaUrls.find((x) => typeof x === 'string') as
-          | string
-          | undefined;
+        const first = mediaUrls.find((x) => typeof x === 'string');
         if (first && first.trim().length > 0) return first.trim();
       }
       const directCandidates = [
@@ -1604,9 +1741,7 @@ export class AgentService {
         root['outputUrl'],
         root['url'],
       ];
-      const direct = directCandidates.find((x) => typeof x === 'string') as
-        | string
-        | undefined;
+      const direct = directCandidates.find((x) => typeof x === 'string');
       if (direct && direct.trim().length > 0) return direct.trim();
       // meitu-cli 扁平输出下 result 直接是一个 URL 字符串（http(s) 才认，避免与对象型 result 冲突）
       const resultField = root['result'];
@@ -1668,7 +1803,10 @@ export class AgentService {
 
     if (configured) {
       push(configured);
-      if (process.platform === 'win32' && !/\.(cmd|exe|bat)$/i.test(configured)) {
+      if (
+        process.platform === 'win32' &&
+        !/\.(cmd|exe|bat)$/i.test(configured)
+      ) {
         push(`${configured}.cmd`);
       }
     }
@@ -1703,59 +1841,61 @@ export class AgentService {
    * @description 执行 meitu CLI 命令并返回 stdout/stderr（Windows 使用 shell 兼容 .cmd）。
    * @param {string} cliBin - 可执行命令。
    * @param {string[]} args - 参数列表。
-    * @returns {Promise<{ stdout: string; stderr: string; exitCode: number }>} 输出结果。
+   * @returns {Promise<{ stdout: string; stderr: string; exitCode: number }>} 输出结果。
    * @keyword-en run meitu cli command
    */
   private async runMeituCli(
     cliBin: string,
     args: string[],
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return await new Promise<{ stdout: string; stderr: string; exitCode: number }>(
-      (resolve, reject) => {
-        const child = spawn(cliBin, args, {
-          shell: process.platform === 'win32',
-          env: process.env,
-          windowsHide: true,
+    return await new Promise<{
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+    }>((resolve, reject) => {
+      const child = spawn(cliBin, args, {
+        shell: process.platform === 'win32',
+        env: process.env,
+        windowsHide: true,
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          void 0;
+        }
+        reject(new Error('MEITU_CLI_TIMEOUT'));
+      }, 120_000);
+
+      child.stdout.on('data', (chunk: Buffer | string) => {
+        const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        stdout += s;
+      });
+
+      child.stderr.on('data', (chunk: Buffer | string) => {
+        const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+        stderr += s;
+      });
+
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({
+          stdout,
+          stderr,
+          exitCode:
+            typeof code === 'number' && Number.isFinite(code) ? code : -1,
         });
-
-        let stdout = '';
-        let stderr = '';
-
-        const timer = setTimeout(() => {
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            void 0;
-          }
-          reject(new Error('MEITU_CLI_TIMEOUT'));
-        }, 120_000);
-
-        child.stdout.on('data', (chunk: Buffer | string) => {
-          const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-          stdout += s;
-        });
-
-        child.stderr.on('data', (chunk: Buffer | string) => {
-          const s = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-          stderr += s;
-        });
-
-        child.on('error', (error) => {
-          clearTimeout(timer);
-          reject(error);
-        });
-
-        child.on('close', (code) => {
-          clearTimeout(timer);
-          resolve({
-            stdout,
-            stderr,
-            exitCode:
-              typeof code === 'number' && Number.isFinite(code) ? code : -1,
-          });
-        });
-      },
-    );
+      });
+    });
   }
 
   /**
@@ -1782,7 +1922,13 @@ export class AgentService {
     });
 
     const cliCandidates = this.buildMeituCliCandidates();
-    const outputDir = path.join(process.cwd(), 'public', 'uploads', 'ai-generated', 'meitu');
+    const outputDir = path.join(
+      process.cwd(),
+      'public',
+      'uploads',
+      'ai-generated',
+      'meitu',
+    );
     await mkdir(outputDir, { recursive: true });
 
     const finalPrompt = prompt;
@@ -1806,7 +1952,13 @@ export class AgentService {
         const imageArg = quoteWinPathArg(baseImage);
         const downloadDirArg = quoteWinPathArg(outputDir);
 
-        const args = ['image-edit', '--image', imageArg, '--prompt', finalPrompt];
+        const args = [
+          'image-edit',
+          '--image',
+          imageArg,
+          '--prompt',
+          finalPrompt,
+        ];
         if (ratio) args.push('--ratio', ratio);
         args.push('--json', '--download-dir', downloadDirArg);
         const quoteArg = (value: string): string => {
@@ -1855,8 +2007,14 @@ export class AgentService {
             }
           }
 
-          const stdoutSnippet = stdoutText.replace(/\s+/g, ' ').trim().slice(0, 220);
-          const stderrSnippet = stderrText.replace(/\s+/g, ' ').trim().slice(0, 220);
+          const stdoutSnippet = stdoutText
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 220);
+          const stderrSnippet = stderrText
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 220);
           this.logger.error(
             `[ai-cover][meitu] cli_failed cli=${cliBin} code=${result.exitCode} command=${commandForLog} stdout=${stdoutSnippet} stderr=${stderrSnippet}`,
           );
@@ -1986,7 +2144,9 @@ export class AgentService {
     const hasEditBaseImage =
       String(input.baseImagePath ?? '').trim().length > 0 ||
       (Array.isArray(input.baseImageCandidates) &&
-        input.baseImageCandidates.some((x) => String(x ?? '').trim().length > 0));
+        input.baseImageCandidates.some(
+          (x) => String(x ?? '').trim().length > 0,
+        ));
     if (runtime) {
       this.logger.log(
         `[ai-cover][tool] use_default_runtime provider=${runtime.providerCode} model=${runtime.model}`,
@@ -2021,7 +2181,7 @@ export class AgentService {
         // 统一降级到 meitu-cli。错误模式：IMAGE_<PROVIDER>_(EDIT|GENERATE)_FAILED:...
         if (/^IMAGE_[A-Z]+_(EDIT|GENERATE)_FAILED/.test(msg)) {
           this.logger.warn(
-            `[ai-cover][tool] runtime_call_failed provider=${runtime.providerCode} fallback=meitu message=${msg.slice(0, 200)}`,
+            `[ai-cover][tool] runtime_call_failed provider=${runtime.providerCode} fallback=meitu message=${msg.slice(0, 1200)}`,
           );
           return this.generateImageByMeituSkill({
             prompt: finalPrompt,
@@ -2033,7 +2193,9 @@ export class AgentService {
         throw error;
       }
     }
-    this.logger.warn('[ai-cover][tool] default_image_runtime_missing, fallback=meitu');
+    this.logger.warn(
+      '[ai-cover][tool] default_image_runtime_missing, fallback=meitu',
+    );
     return this.generateImageByMeituSkill({
       prompt: finalPrompt,
       size: input.size,
@@ -2268,7 +2430,9 @@ export class AgentService {
       (await this.buildChatModel({
         ...input.config,
         system: mergedSystem.length > 0 ? mergedSystem : undefined,
-      }))) as ReturnType<AgentService['buildChatModel']> extends Promise<infer R>
+      }))) as ReturnType<AgentService['buildChatModel']> extends Promise<
+      infer R
+    >
       ? R
       : never;
     // 确保 configurable 字段始终存在
@@ -2320,9 +2484,7 @@ export class AgentService {
        * - mode='messages': data=[message, metadata] — LLM token / tool result
        * - mode='updates':  data={nodeName: nodeData}  — 子代理生命周期
        */
-      const isStreamMode = (
-        value: unknown,
-      ): value is 'messages' | 'updates' =>
+      const isStreamMode = (value: unknown): value is 'messages' | 'updates' =>
         value === 'messages' || value === 'updates';
 
       for await (const tuple of stream) {
@@ -2393,9 +2555,8 @@ export class AgentService {
           // ⚠️ message 是 AIMessageChunk **实例**时,`message['type']` 是 undefined
           // (实例无 type 属性,只有 _getType() 方法),不能靠字符串比较判定 chunk。
           // 真实的流式增量 chunk 用 constructor 名判定才可靠。
-          const ctorName = (
-            message as { constructor?: { name?: string } }
-          ).constructor?.name;
+          const ctorName = (message as { constructor?: { name?: string } })
+            .constructor?.name;
           const isStreamingChunk =
             ctorName === 'AIMessageChunk' || msgType === 'AIMessageChunk';
           const isAIChunk =
@@ -2625,7 +2786,9 @@ export class AgentService {
     while (current && depth < 8) {
       if (current instanceof Error) {
         const c = current as Error & { code?: string };
-        parts.push(`${c.name}:${c.code ?? ''}:${String(c.message ?? '').slice(0, 300)}`);
+        parts.push(
+          `${c.name}:${c.code ?? ''}:${String(c.message ?? '').slice(0, 300)}`,
+        );
         current = (c as Error & { cause?: unknown }).cause;
       } else {
         try {
@@ -2731,7 +2894,10 @@ export class AgentService {
    * @returns {boolean} 是否已包含。
    * @keyword-en detect duplicated platform supplement
    */
-  private hasPlatformSupplement(text: string, supplementBlock: string): boolean {
+  private hasPlatformSupplement(
+    text: string,
+    supplementBlock: string,
+  ): boolean {
     const src = String(text ?? '').trim();
     if (!src) return false;
     if (src.includes(supplementBlock)) return true;

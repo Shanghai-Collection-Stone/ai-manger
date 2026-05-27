@@ -129,10 +129,7 @@ export class ArticleLibraryController {
    * @keyword-en article library detail endpoint
    */
   @Get(':libraryId')
-  async getLibrary(
-    @Param('libraryId') libraryId: string,
-    @Req() req: Request,
-  ) {
+  async getLibrary(@Param('libraryId') libraryId: string, @Req() req: Request) {
     const scope = await this.resolveAuthScope(req);
     const id = Number(libraryId);
     const lib = await this.library.get(id, scope.tenantId);
@@ -149,10 +146,7 @@ export class ArticleLibraryController {
    * @keyword-en article library admin get push qr payload
    */
   @Get(':libraryId/push-qr')
-  async getPushQr(
-    @Param('libraryId') libraryId: string,
-    @Req() req: Request,
-  ) {
+  async getPushQr(@Param('libraryId') libraryId: string, @Req() req: Request) {
     const scope = await this.resolveAuthScope(req);
     const id = Number(libraryId);
     const lib = await this.library.get(id, scope.tenantId);
@@ -219,7 +213,9 @@ export class ArticleLibraryController {
     @Param('libraryId') libraryId: string,
     @Body()
     body: {
-      articles?: Array<Omit<ArticleCreateInput, 'libraryId' | 'userId' | 'tenantId'>>;
+      articles?: Array<
+        Omit<ArticleCreateInput, 'libraryId' | 'userId' | 'tenantId'>
+      >;
       article?: Omit<ArticleCreateInput, 'libraryId' | 'userId' | 'tenantId'>;
     },
     @Req() req: Request,
@@ -328,10 +324,7 @@ export class ArticleLibraryController {
    * @keyword-en article lease next endpoint admin
    */
   @Post(':libraryId/articles/lease-next')
-  async leaseNext(
-    @Param('libraryId') libraryId: string,
-    @Req() req: Request,
-  ) {
+  async leaseNext(@Param('libraryId') libraryId: string, @Req() req: Request) {
     const scope = await this.resolveAuthScope(req);
     const lib = await this.library.get(Number(libraryId), scope.tenantId);
     if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');

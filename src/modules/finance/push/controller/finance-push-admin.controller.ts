@@ -19,7 +19,10 @@ import type { AdminRequest } from '../../../admin/types/admin-request.types.js';
 import { FinanceExternalService } from '../services/finance-external.service.js';
 import { FinancePushConfigService } from '../services/finance-push-config.service.js';
 import { FinancePushRunnerService } from '../services/finance-push-runner.service.js';
-import { RunFinancePushDto, UpsertFinancePushConfigDto } from './finance-push.dto.js';
+import {
+  RunFinancePushDto,
+  UpsertFinancePushConfigDto,
+} from './finance-push.dto.js';
 
 /**
  * @description 财务推送后台控制器(挂载 `/admin/finance/push`)

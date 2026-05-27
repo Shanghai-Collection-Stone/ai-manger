@@ -598,9 +598,10 @@ export class DecisionCardService {
     const tenantId = scope?.tenantId?.trim();
     if (!tenantId) return [];
     const svc = this.adminService as unknown as {
-      listUsers?: (
-        currentUser: { tenantId?: string; _id?: unknown },
-      ) => Promise<Array<Record<string, unknown>>>;
+      listUsers?: (currentUser: {
+        tenantId?: string;
+        _id?: unknown;
+      }) => Promise<Array<Record<string, unknown>>>;
     };
     if (typeof svc.listUsers !== 'function') return [];
     try {
@@ -611,16 +612,18 @@ export class DecisionCardService {
           const id =
             typeof idRaw === 'string'
               ? idRaw
-              : idRaw && typeof (idRaw as { toString?: () => string }).toString === 'function'
+              : idRaw &&
+                  typeof (idRaw as { toString?: () => string }).toString ===
+                    'function'
                 ? String((idRaw as { toString: () => string }).toString())
                 : '';
           const name =
-            typeof row['name'] === 'string' && (row['name'] as string).trim().length > 0
-              ? (row['name'] as string)
+            typeof row['name'] === 'string' && row['name'].trim().length > 0
+              ? row['name']
               : typeof row['displayName'] === 'string'
-                ? (row['displayName'] as string)
+                ? row['displayName']
                 : typeof row['username'] === 'string'
-                  ? (row['username'] as string)
+                  ? row['username']
                   : '';
           const roleRaw = row['role'] ?? row['roleName'];
           const role = typeof roleRaw === 'string' ? roleRaw : undefined;

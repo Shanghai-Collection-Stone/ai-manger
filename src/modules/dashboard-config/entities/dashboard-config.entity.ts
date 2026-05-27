@@ -15,4 +15,3 @@ export interface DashboardConfigMappingEntity {
   createdAt: Date;
   updatedAt: Date;
 }
-

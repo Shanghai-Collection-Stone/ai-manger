@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { BaseMessageLike } from '@langchain/core/messages';
 import { CreateAgentParams } from 'langchain';
 import { AgentService } from '../../../ai-agent/services/agent.service.js';
+import type { AgentStreamEvent } from '../../../ai-agent/types/agent.types.js';
 import type { AdminUserEntity } from '../../../admin/entities/admin.entity.js';
 import { FinanceToolsService } from './finance-tools.service.js';
 
@@ -110,6 +111,13 @@ DSL 产出会推送到外部财务系统的 \`POST /api/v1/events/upsert\` 统�
 - **缺源字段的可选项不要写**:避免把 undefined / 空字符串推送出去
 - **externalId 必须给出**:默认 \`{"to":"externalId","from":"record_id","type":"string"}\`(每条样本都带),不要为了"美观"换其他字段
 
+## DSL 增强能力
+- 后续规则可以引用前序 computed 字段。例如先算 \`stageRaw\`,再用 \`{"to":"stage","compute":"lookup","from":"stageRaw","map":{...}}\`
+- \`if.then\` / \`if.else\` 可以写字段名字符串(命中当前行上下文时取字段值),也可以写嵌套 compute 对象,例如 \`{"compute":"lookup","from":"审批状态","map":{...}}\`
+- \`lookup.map\` 的 value 可以是常量,也可以是显式表达式对象,例如 \`{"from":"companyId"}\` 或 \`{"compute":"concat","fields":["A","B"],"sep":"-"}\`;不要把 literal id 写成字段名
+- filter/when 支持 \`or\` / \`and\` 分组:\`{"op":"or","conditions":[...]}\`,以及 \`between\`:\`{"field":"occurredAt","op":"between","value":["2026-01-01","2026-01-31"]}\`
+- 同名 \`to\` 字段会默认智能叠加;需要明确行为时加 \`merge:"replace|append|array|concat|sum|object|auto"\`
+
 ## 工具调用注意
 - \`finance_dry_run_transform\` 与 \`finance_set_transform\` 的 \`dsl\` 必须是 **JSON 对象**,不要 stringify。
   正确:\`{ "dsl": { "version":1, "fields":[...] } }\`
@@ -120,7 +128,7 @@ DSL 产出会推送到外部财务系统的 \`POST /api/v1/events/upsert\` 统�
 
 /**
  * @description 财务 Agent 服务(暴露工具句柄和系统提示词,由外层 chat 入口装入 DeepAgent)
- * @keyword-en finance agent service, tools handle, system prompt
+ * @keyword-en finance-agent-service, system-prompt
  */
 @Injectable()
 export class FinanceAgentService {
@@ -131,7 +139,7 @@ export class FinanceAgentService {
 
   /**
    * @description 获取财务工具句柄
-   * @keyword-en get finance tools handle
+   * @keyword-en finance-tools-handle, tool-scope
    */
   getToolsHandle(scope: {
     adminUser: AdminUserEntity;
@@ -142,7 +150,7 @@ export class FinanceAgentService {
 
   /**
    * @description 财务 Agent 系统提示词
-   * @keyword-en get finance agent system prompt
+   * @keyword-en finance-agent-system-prompt, system-prompt
    */
   getSystemPrompt(): string {
     return FINANCE_AGENT_SYSTEM_PROMPT;
@@ -150,7 +158,7 @@ export class FinanceAgentService {
 
   /**
    * @description 后台同步 chat:传完整历史 messages,返回 agent 最终回复
-   * @keyword-en finance agent chat one-shot
+   * @keyword-en finance-agent-chat, one-shot-chat
    */
   async chat(
     scope: { adminUser: AdminUserEntity; name: string },
@@ -158,7 +166,10 @@ export class FinanceAgentService {
   ): Promise<{ reply: string }> {
     const tools = this.tools.getHandle(scope);
     const langchainMessages: BaseMessageLike[] = messages
-      .filter((m) => m && typeof m.content === 'string' && m.content.trim().length > 0)
+      .filter(
+        (m) =>
+          m && typeof m.content === 'string' && m.content.trim().length > 0,
+      )
       .map((m) => [m.role, m.content] as BaseMessageLike);
     const ai = await this.agentService.runWithMessages({
       config: {
@@ -186,5 +197,30 @@ export class FinanceAgentService {
         .join('\n');
     }
     return { reply: reply.trim() };
+  }
+
+  /**
+   * @description 后台流式 chat:传完整历史 messages,逐步返回 token 与 tool 调用事件
+   * @keyword-en finance-agent-chat-stream, agent-stream
+   */
+  async *streamChat(
+    scope: { adminUser: AdminUserEntity; name: string },
+    messages: ChatMessage[],
+  ): AsyncIterable<AgentStreamEvent> {
+    const tools = this.tools.getHandle(scope);
+    const langchainMessages: BaseMessageLike[] = messages
+      .filter(
+        (m) =>
+          m && typeof m.content === 'string' && m.content.trim().length > 0,
+      )
+      .map((m) => [m.role, m.content] as BaseMessageLike);
+    yield* this.agentService.stream({
+      config: {
+        system: FINANCE_AGENT_SYSTEM_PROMPT,
+        tools,
+        tenantId: scope.adminUser.tenantId,
+      },
+      messages: langchainMessages,
+    });
   }
 }

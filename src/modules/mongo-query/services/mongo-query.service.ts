@@ -76,7 +76,9 @@ export class MongoQueryService {
    * @keyword-en build tenant prefix from tenantId
    */
   private buildTenantPrefix(tenantId: string): string {
-    const raw = String(tenantId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const raw = String(tenantId)
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
     const safe = raw.length > 0 ? raw : 'tn';
     return (safe + '0000').slice(0, 4);
   }
@@ -85,10 +87,16 @@ export class MongoQueryService {
    * @description 解析查询数据源类型（默认 mongo）
    * @keyword-en resolve query source type
    */
-  private resolveSourceType(input: MongoQueryRequest): 'mongo' | 'feishu-bitable' {
-    const sourceType = String(input.sourceType ?? '').trim().toLowerCase();
+  private resolveSourceType(
+    input: MongoQueryRequest,
+  ): 'mongo' | 'feishu-bitable' {
+    const sourceType = String(input.sourceType ?? '')
+      .trim()
+      .toLowerCase();
     if (sourceType === 'feishu-bitable') return 'feishu-bitable';
-    const sourceCode = String(input.sourceCode ?? '').trim().toLowerCase();
+    const sourceCode = String(input.sourceCode ?? '')
+      .trim()
+      .toLowerCase();
     if (sourceCode.includes('feishu')) return 'feishu-bitable';
     return 'mongo';
   }
@@ -106,16 +114,18 @@ export class MongoQueryService {
       operator: string;
       value?: string | string[];
     }>;
-  }): {
-    conjunction?: 'and' | 'or';
-    conditions?: Array<{
-      field?: string;
-      fieldName?: string;
-      field_name?: string;
-      operator: string;
-      value?: string | string[];
-    }>;
-  } | undefined {
+  }):
+    | {
+        conjunction?: 'and' | 'or';
+        conditions?: Array<{
+          field?: string;
+          fieldName?: string;
+          field_name?: string;
+          operator: string;
+          value?: string | string[];
+        }>;
+      }
+    | undefined {
     if (!value || !isObjectRecord(value)) return undefined;
     const conjunction = value.conjunction === 'or' ? 'or' : 'and';
     const conditions: Array<{
@@ -147,16 +157,16 @@ export class MongoQueryService {
    * @description 将简单 filter 转换为飞书过滤（等值）
    * @keyword-en convert simple filter to feishu filter
    */
-  private convertSimpleFilterToFeishuFilter(
-    value?: Record<string, unknown>,
-  ): {
-    conjunction: 'and' | 'or';
-    conditions: Array<{
-      field_name: string;
-      operator: string;
-      value: string[];
-    }>;
-  } | undefined {
+  private convertSimpleFilterToFeishuFilter(value?: Record<string, unknown>):
+    | {
+        conjunction: 'and' | 'or';
+        conditions: Array<{
+          field_name: string;
+          operator: string;
+          value: string[];
+        }>;
+      }
+    | undefined {
     if (!value || !isObjectRecord(value)) return undefined;
     const conditions: Array<{
       field_name: string;
@@ -213,19 +223,23 @@ export class MongoQueryService {
     }
     const tableId = this.assertCollectionName(input.collection);
     const requestedMode = input.mode;
-    const mode: 'list' | 'count' =
-      requestedMode === 'count' ? 'count' : 'list';
+    const mode: 'list' | 'count' = requestedMode === 'count' ? 'count' : 'list';
 
     const limit = this.normalizeLimit(input.limit, 500);
     const skip = this.normalizeSkip(input.skip);
-    const targetCount = mode === 'count' ? Number.MAX_SAFE_INTEGER : skip + limit;
+    const targetCount =
+      mode === 'count' ? Number.MAX_SAFE_INTEGER : skip + limit;
     const sort = this.normalizeSort(input.sort);
     const feishuSort = Array.isArray(input.feishuSort)
       ? input.feishuSort
       : this.toFeishuSort(sort);
     const simpleFilter = this.sanitizeSimpleFilter(input.filter);
-    const normalizedFeishuFilter = this.normalizeFeishuFilter(input.feishuFilter);
-    const feishuFilter = normalizedFeishuFilter ?? this.convertSimpleFilterToFeishuFilter(simpleFilter);
+    const normalizedFeishuFilter = this.normalizeFeishuFilter(
+      input.feishuFilter,
+    );
+    const feishuFilter =
+      normalizedFeishuFilter ??
+      this.convertSimpleFilterToFeishuFilter(simpleFilter);
 
     let hasMore = true;
     let pageToken: string | undefined;
@@ -259,7 +273,10 @@ export class MongoQueryService {
     }
 
     if (mode === 'count') {
-      return { count: typeof totalFromServer === 'number' ? totalFromServer : rows.length };
+      return {
+        count:
+          typeof totalFromServer === 'number' ? totalFromServer : rows.length,
+      };
     }
     const sliced = rows.slice(skip, skip + limit);
     return { rows: sliced };
@@ -269,7 +286,10 @@ export class MongoQueryService {
    * @description 执行查询（list / count / aggregate），并按租户注入隔离条件
    * @keyword-en execute mongo query
    */
-  async execute(req: Request, input: MongoQueryRequest): Promise<MongoQueryResponse> {
+  async execute(
+    req: Request,
+    input: MongoQueryRequest,
+  ): Promise<MongoQueryResponse> {
     const scope = await this.requireScope(req);
     const sourceType = this.resolveSourceType(input);
     if (sourceType === 'feishu-bitable') {
@@ -284,10 +304,11 @@ export class MongoQueryService {
 
     // 子租户白名单校验：只允许访问 sass_schema 中注册的逻辑表
     if (tenantId && tenantPrefix) {
-      const logicalName =
-        rawCollection.toLowerCase().startsWith(tenantPrefix + '_')
-          ? rawCollection.slice(tenantPrefix.length + 1)
-          : rawCollection;
+      const logicalName = rawCollection
+        .toLowerCase()
+        .startsWith(tenantPrefix + '_')
+        ? rawCollection.slice(tenantPrefix.length + 1)
+        : rawCollection;
       const allowed = await this.db
         .collection<{ table: string }>('sass_schema')
         .countDocuments({ table: logicalName }, { limit: 1 });
@@ -298,13 +319,18 @@ export class MongoQueryService {
 
     // 租户用户：若集合名不含租户前缀，视为逻辑表名（如 "orders"），自动补全为物理表名（如 "69a9_orders"）
     const collection =
-      tenantId && tenantPrefix && !rawCollection.toLowerCase().startsWith(tenantPrefix + '_')
+      tenantId &&
+      tenantPrefix &&
+      !rawCollection.toLowerCase().startsWith(tenantPrefix + '_')
         ? `${tenantPrefix}_${rawCollection}`
         : rawCollection;
 
     // 集合名以租户前缀开头时，集合本身已做租户隔离，无需注入字段过滤
-    const isPrefixIsolated = tenantPrefix ? collection.toLowerCase().startsWith(tenantPrefix + '_') : false;
-    const tenantMatch = tenantId && !isPrefixIsolated ? { [tenantField]: tenantId } : undefined;
+    const isPrefixIsolated = tenantPrefix
+      ? collection.toLowerCase().startsWith(tenantPrefix + '_')
+      : false;
+    const tenantMatch =
+      tenantId && !isPrefixIsolated ? { [tenantField]: tenantId } : undefined;
     const joins = Array.isArray(input.joins) ? input.joins : [];
 
     const limit = this.normalizeLimit(input.limit, 500);
@@ -373,7 +399,9 @@ export class MongoQueryService {
    * @description 要求解析出可用范围（Bearer token 或 API key）
    * @keyword-en require query scope
    */
-  private async requireScope(req: Request): Promise<{ tenantId?: string; userId?: string }> {
+  private async requireScope(
+    req: Request,
+  ): Promise<{ tenantId?: string; userId?: string }> {
     const authScope = await this.resolveAuthScope(req);
     if (authScope.userId) return authScope;
     const keyScope = await this.resolveApiKeyScope(req);
@@ -385,7 +413,9 @@ export class MongoQueryService {
    * @description 解析 Bearer token 范围
    * @keyword-en resolve bearer auth scope
    */
-  private async resolveAuthScope(req: Request): Promise<{ tenantId?: string; userId?: string }> {
+  private async resolveAuthScope(
+    req: Request,
+  ): Promise<{ tenantId?: string; userId?: string }> {
     const auth = req.headers.authorization;
     if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) return {};
     const token = auth.slice(7).trim();
@@ -399,7 +429,9 @@ export class MongoQueryService {
    * @description 解析 API key 范围（tenant-only）
    * @keyword-en resolve api key scope
    */
-  private async resolveApiKeyScope(req: Request): Promise<{ tenantId?: string }> {
+  private async resolveApiKeyScope(
+    req: Request,
+  ): Promise<{ tenantId?: string }> {
     const apiKey = parseApiKey(req);
     if (!apiKey) return {};
     const keyId = hashApiKey(apiKey);
@@ -408,7 +440,8 @@ export class MongoQueryService {
       .findOne({ keyId, revokedAt: { $exists: false } });
     if (!doc) return {};
     const expiresAt = doc['expiresAt'];
-    if (expiresAt instanceof Date && expiresAt.getTime() < Date.now()) return {};
+    if (expiresAt instanceof Date && expiresAt.getTime() < Date.now())
+      return {};
     const tenantId = doc['tenantId'];
     if (typeof tenantId !== 'string' || !tenantId.trim()) return {};
     return { tenantId: tenantId.trim() };
@@ -497,7 +530,9 @@ export class MongoQueryService {
    * @description 规范化projection
    * @keyword-en normalize projection
    */
-  private normalizeProjection(value: unknown): Record<string, 0 | 1> | undefined {
+  private normalizeProjection(
+    value: unknown,
+  ): Record<string, 0 | 1> | undefined {
     if (!isObjectRecord(value)) return undefined;
     const proj: Record<string, 0 | 1> = {};
     for (const [k, v] of Object.entries(value)) {
@@ -511,8 +546,11 @@ export class MongoQueryService {
    * @description 过滤并限制 filter 为“简单条件”（禁止 $ 操作符注入）
    * @keyword-en sanitize simple mongo filter
    */
-  private sanitizeSimpleFilter(value?: Record<string, unknown>): Record<string, unknown> | undefined {
-    if (!value || !isObjectRecord(value) || Object.keys(value).length === 0) return undefined;
+  private sanitizeSimpleFilter(
+    value?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    if (!value || !isObjectRecord(value) || Object.keys(value).length === 0)
+      return undefined;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
       const field = this.assertFieldPath(k, 'INVALID_FILTER_FIELD');
@@ -553,10 +591,15 @@ export class MongoQueryService {
    * @description 构建where节点为Mongo filter
    * @keyword-en parse where node to mongo filter
    */
-  private parseWhereNode(node: MongoWhereNode): Filter<Record<string, unknown>> {
+  private parseWhereNode(
+    node: MongoWhereNode,
+  ): Filter<Record<string, unknown>> {
     const asCondition = node as MongoWhereCondition;
     if (typeof asCondition.field === 'string') {
-      const field = this.assertFieldPath(asCondition.field, 'INVALID_FILTER_FIELD');
+      const field = this.assertFieldPath(
+        asCondition.field,
+        'INVALID_FILTER_FIELD',
+      );
       const op = asCondition.op ?? 'eq';
       const v = this.coerceValue(asCondition.value);
       if (op === 'eq') return { [field]: v };
@@ -566,15 +609,24 @@ export class MongoQueryService {
       if (op === 'lt') return { [field]: { $lt: v } };
       if (op === 'lte') return { [field]: { $lte: v } };
       if (op === 'in') {
-        const values = Array.isArray(asCondition.values) ? asCondition.values.map((v) => this.coerceValue(v)) : [];
+        const values = Array.isArray(asCondition.values)
+          ? asCondition.values.map((v) => this.coerceValue(v))
+          : [];
         return { [field]: { $in: values } };
       }
       if (op === 'nin') {
-        const values = Array.isArray(asCondition.values) ? asCondition.values.map((v) => this.coerceValue(v)) : [];
+        const values = Array.isArray(asCondition.values)
+          ? asCondition.values.map((v) => this.coerceValue(v))
+          : [];
         return { [field]: { $nin: values } };
       }
       if (op === 'between') {
-        return { [field]: { $gte: this.coerceValue(asCondition.min), $lte: this.coerceValue(asCondition.max) } };
+        return {
+          [field]: {
+            $gte: this.coerceValue(asCondition.min),
+            $lte: this.coerceValue(asCondition.max),
+          },
+        };
       }
       if (op === 'exists') {
         return { [field]: { $exists: Boolean(asCondition.value) } };
@@ -586,7 +638,10 @@ export class MongoQueryService {
         return {
           [field]: {
             $regex: asCondition.value,
-            $options: typeof asCondition.options === 'string' ? asCondition.options : 'i',
+            $options:
+              typeof asCondition.options === 'string'
+                ? asCondition.options
+                : 'i',
           },
         };
       }
@@ -635,7 +690,8 @@ export class MongoQueryService {
     const list: Filter<Record<string, unknown>>[] = [];
     if (filter && Object.keys(filter).length > 0) list.push(filter);
     if (where) list.push(this.parseWhereNode(where));
-    if (tenantMatch && Object.keys(tenantMatch).length > 0) list.push(tenantMatch);
+    if (tenantMatch && Object.keys(tenantMatch).length > 0)
+      list.push(tenantMatch);
     if (list.length === 0) return {};
     if (list.length === 1) return list[0];
     return { $and: list };
@@ -650,7 +706,8 @@ export class MongoQueryService {
   ): Record<string, unknown>[] {
     if (typeof value === 'undefined') return [];
     const parseStages = (input: unknown): Record<string, unknown>[] => {
-      if (!Array.isArray(input)) throw new BadRequestException('INVALID_PIPELINE');
+      if (!Array.isArray(input))
+        throw new BadRequestException('INVALID_PIPELINE');
       const stages: Record<string, unknown>[] = [];
       const forbidden = new Set(['$out', '$merge']);
       for (const stage of input) {
@@ -658,7 +715,8 @@ export class MongoQueryService {
           throw new BadRequestException('INVALID_PIPELINE_STAGE');
         }
         const stageKeys = Object.keys(stage);
-        if (stageKeys.length === 0) throw new BadRequestException('INVALID_PIPELINE_STAGE');
+        if (stageKeys.length === 0)
+          throw new BadRequestException('INVALID_PIPELINE_STAGE');
         for (const k of stageKeys) {
           if (forbidden.has(k.toLowerCase())) {
             throw new BadRequestException('FORBIDDEN_PIPELINE_STAGE');
@@ -758,15 +816,28 @@ export class MongoQueryService {
    * @description 构建 $lookup + unwind 阶段
    * @keyword-en build lookup stages
    */
-  private buildLookupStages(join: MongoQueryJoin, tenantId?: string): Record<string, unknown>[] {
+  private buildLookupStages(
+    join: MongoQueryJoin,
+    tenantId?: string,
+  ): Record<string, unknown>[] {
     const from = this.assertCollectionName(join.from);
     const as = this.assertFieldPath(join.as, 'INVALID_JOIN_AS');
-    const localField = this.assertFieldPath(join.localField, 'INVALID_JOIN_LOCAL_FIELD');
-    const foreignField = this.assertFieldPath(join.foreignField, 'INVALID_JOIN_FOREIGN_FIELD');
+    const localField = this.assertFieldPath(
+      join.localField,
+      'INVALID_JOIN_LOCAL_FIELD',
+    );
+    const foreignField = this.assertFieldPath(
+      join.foreignField,
+      'INVALID_JOIN_FOREIGN_FIELD',
+    );
     const joinTenantField = this.normalizeTenantField(join.tenantField);
 
     const filter = this.sanitizeSimpleFilter(join.filter);
-    const match = this.buildFinalFilter(filter, join.where, tenantId ? { [joinTenantField]: tenantId } : undefined);
+    const match = this.buildFinalFilter(
+      filter,
+      join.where,
+      tenantId ? { [joinTenantField]: tenantId } : undefined,
+    );
 
     const projection = this.normalizeProjection(join.projection);
     const sort = this.normalizeSort(join.sort);
@@ -796,12 +867,16 @@ export class MongoQueryService {
 
     if (join.unwind) {
       if (typeof join.unwind === 'boolean') {
-        stages.push({ $unwind: { path: `$${as}`, preserveNullAndEmptyArrays: true } });
+        stages.push({
+          $unwind: { path: `$${as}`, preserveNullAndEmptyArrays: true },
+        });
       } else {
         stages.push({
           $unwind: {
             path: `$${as}`,
-            preserveNullAndEmptyArrays: Boolean(join.unwind.preserveNullAndEmptyArrays ?? true),
+            preserveNullAndEmptyArrays: Boolean(
+              join.unwind.preserveNullAndEmptyArrays ?? true,
+            ),
           },
         });
       }

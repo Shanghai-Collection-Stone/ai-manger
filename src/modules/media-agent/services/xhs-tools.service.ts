@@ -76,7 +76,9 @@ export class XhsToolsService {
       tags,
       imageType: 'regular',
     });
-    const estimatedGroups = Math.floor(total / this.MIN_SOURCE_IMAGES_PER_GROUP);
+    const estimatedGroups = Math.floor(
+      total / this.MIN_SOURCE_IMAGES_PER_GROUP,
+    );
     return {
       sufficient: total >= expectedMinImages,
       available: total,
@@ -89,7 +91,7 @@ export class XhsToolsService {
   }
 
   /**
-  * @description 将输入文章数量对齐到 groupCount 或 articles 数量，不强制 6-8。
+   * @description 将输入文章数量对齐到 groupCount 或 articles 数量，不强制 6-8。
    * @param {object} input - 输入参数。
    * @returns {Array<{ title: string; tags: string[] }>} 归一化后的文章列表。
    * @keyword-en normalize image-group articles
@@ -101,7 +103,10 @@ export class XhsToolsService {
   }): Array<{ title: string; tags: string[] }> {
     const normalizedGroupCount =
       typeof input.groupCount === 'number' && Number.isFinite(input.groupCount)
-        ? Math.max(1, Math.min(this.MAX_GROUP_COUNT, Math.trunc(input.groupCount)))
+        ? Math.max(
+            1,
+            Math.min(this.MAX_GROUP_COUNT, Math.trunc(input.groupCount)),
+          )
         : undefined;
     const safeInputArticles = Array.isArray(input.articles)
       ? input.articles.slice(0, this.MAX_GROUP_COUNT)
@@ -132,7 +137,7 @@ export class XhsToolsService {
   /**
    * @description 将 imageGroups 的图片结果回写到同一 Canvas 的文章字段。
    * @param {object} input - 回写参数。
-  * @returns {Promise<{ doneCount: number; missingCount: number; countMismatch: number }>} 回写统计。
+   * @returns {Promise<{ doneCount: number; missingCount: number; countMismatch: number }>} 回写统计。
    * @keyword-en merge image groups into canvas articles
    */
   private async mergeImageGroupsToArticles(input: {
@@ -140,7 +145,11 @@ export class XhsToolsService {
     tenantId?: string;
     articles: CanvasArticleEntity[];
     imageGroups: CanvasImageGroup[];
-  }): Promise<{ doneCount: number; missingCount: number; countMismatch: number }> {
+  }): Promise<{
+    doneCount: number;
+    missingCount: number;
+    countMismatch: number;
+  }> {
     const orderedArticles = [...(input.articles ?? [])].sort(
       (a, b) => Number(a.id) - Number(b.id),
     );
@@ -172,6 +181,8 @@ export class XhsToolsService {
           group?.status === 'done' && isImageCountValid
             ? 'done'
             : 'requires_human';
+        const isInsufficientSourceImages =
+          group?.status === 'failed' && imageUrls.length === 0;
         if (status === 'done') doneCount++;
         else missingCount++;
         if (!isImageCountValid) countMismatch++;
@@ -188,9 +199,11 @@ export class XhsToolsService {
             doneNote:
               status === 'done'
                 ? 'AUTO_CANVAS_IMAGE_GROUP_IMAGES'
-                : isImageCountValid
-                  ? 'AUTO_CANVAS_IMAGE_GROUP_MISSING'
-                  : 'AUTO_CANVAS_IMAGE_GROUP_COUNT_MISMATCH',
+                : isInsufficientSourceImages
+                  ? 'AUTO_CANVAS_IMAGE_GROUP_INSUFFICIENT_SOURCE_IMAGES'
+                  : isImageCountValid
+                    ? 'AUTO_CANVAS_IMAGE_GROUP_MISSING'
+                    : 'AUTO_CANVAS_IMAGE_GROUP_COUNT_MISMATCH',
           },
           input.tenantId,
         );
@@ -209,13 +222,11 @@ export class XhsToolsService {
    * @keyword-en get XHS tools handle
    * @since 2026-03-23
    */
-  getHandle(
-    scope?: {
-      tenantId?: string;
-      userId?: string;
-      earlyEmit?: (text: string) => void;
-    },
-  ): CreateAgentParams['tools'] {
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }): CreateAgentParams['tools'] {
     return [
       this.createListCanvasesTool(scope),
       this.createGetCanvasDetailTool(scope),
@@ -227,16 +238,14 @@ export class XhsToolsService {
   /**
    * @description 发出 tag 选择卡片工具。调用后通过 earlyEmit 推送 markdown fence
    *  ` ```tag-select-it ... ``` `，前端识别后渲染为卡片;点击卡片打开搜索/推荐弹窗,
-   *  用户选完通过用户消息回写。生成图组/拼图前可强制调用本工具收集 tags。
+   *  用户选完通过用户消息回写。生成图组/图文/拼图前可强制调用本工具收集 tags。
    * @keyword-en emit tag-select card request fence to chat stream
    */
-  private createTagSelectRequestTool(
-    scope?: {
-      tenantId?: string;
-      userId?: string;
-      earlyEmit?: (text: string) => void;
-    },
-  ) {
+  private createTagSelectRequestTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }) {
     return tool(
       async (input: {
         purpose?: string;
@@ -260,12 +269,15 @@ export class XhsToolsService {
             imageType: 'regular',
           });
         } catch (e) {
-          this.logger.warn(`[tag_select_request] listTopTagsWithCount failed: ${String(e)}`);
+          this.logger.warn(
+            `[tag_select_request] listTopTagsWithCount failed: ${String(e)}`,
+          );
         }
 
         const payload = {
           selectorId: randomUUID(),
-          title: String(input.title ?? '请选择素材标签').trim() || '请选择素材标签',
+          title:
+            String(input.title ?? '请选择素材标签').trim() || '请选择素材标签',
           hint:
             String(input.hint ?? '').trim() ||
             (input.purpose
@@ -284,21 +296,36 @@ export class XhsToolsService {
           // 推送失败不影响主流程
         }
         // 仅返回简短文字给 LLM,fence 已通过 earlyEmit 直接推到前端,无需 LLM 二次输出
-        return '已向用户发出 tag 选择卡片(已直接推送给前端,无需在回复中重复 fence)。请用一句简短中文告诉用户卡片已弹出,等待用户在卡片内多选 tags 并以"我选定标签：#A #B"形式回传后,再调用 xhs_create_image_group_canvas 继续生成。';
+        return '已向用户发出 tag 选择卡片(已直接推送给前端,无需在回复中重复 fence)。请用一句简短中文告诉用户卡片已弹出,等待用户在卡片内多选 tags 并以"我选定标签：#A #B"形式回传后,再按场景调用对应生成工具继续生成: 图文用 topic_orchestrate, 图组用 xhs_create_image_group_canvas。';
       },
       {
         name: 'tag_select_request',
         description:
-          '当用户请求生成图组/拼图/封面**但未明确提供具体 tags** 时,先调用本工具向用户发出 tag 选择卡片收集标签。前端会渲染卡片+搜索弹窗,提供热门 tag 推荐供多选。用户选完会以"我选定标签：#X #Y"消息回传,之后再调用 xhs_create_image_group_canvas 走生成流程。**如果用户消息中已明确给出 tags(如"用#团建生成图组"、"我选定标签：#X")则跳过本工具直接生成**,避免无意义重复发卡。本工具每次对话最多调用 1 次。',
+          '当用户请求生成图组/拼图/封面/图文**但未明确提供具体 tags** 时,先调用本工具向用户发出 tag 选择卡片收集标签。前端会渲染卡片+搜索弹窗,提供热门 tag 推荐供多选。用户选完会以"我选定标签：#X #Y"消息回传,之后按场景调用对应生成工具: 图文用 topic_orchestrate,图组用 xhs_create_image_group_canvas。**如果用户消息中已明确给出 tags(如"用#团建生成图组"、"我选定标签：#X")则跳过本工具直接生成**,避免无意义重复发卡。本工具每次对话最多调用 1 次。',
         schema: z.object({
           purpose: z
             .string()
             .optional()
-            .describe('本次 tag 选择的用途，例如"生成小红书图组"、"生成动态拼图封面"'),
-          title: z.string().optional().describe('卡片标题，默认"请选择素材标签"'),
+            .describe(
+              '本次 tag 选择的用途，例如"生成小红书图文"、"生成小红书图组"、"生成动态拼图封面"',
+            ),
+          title: z
+            .string()
+            .optional()
+            .describe('卡片标题，默认"请选择素材标签"'),
           hint: z.string().optional().describe('卡片提示文字'),
-          minTags: z.number().int().min(1).optional().describe('最少选择数，默认 1'),
-          maxTags: z.number().int().min(1).optional().describe('最多选择数，默认 8'),
+          minTags: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe('最少选择数，默认 1'),
+          maxTags: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe('最多选择数，默认 8'),
           multi: z.boolean().optional().describe('是否多选，默认 true'),
           recommendCount: z
             .number()
@@ -316,9 +343,10 @@ export class XhsToolsService {
    * @description 列出 Canvas 列表工具
    * @keyword-en list canvases tool
    */
-  private createListCanvasesTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createListCanvasesTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }) {
     return tool(
       async (input: { limit?: number }) => {
         const { limit = 50 } = input;
@@ -334,7 +362,9 @@ export class XhsToolsService {
             status: c.status,
             type: c.type ?? 'article',
             articleCount: Array.isArray(c.articles) ? c.articles.length : 0,
-            imageGroupCount: Array.isArray(c.imageGroups) ? c.imageGroups.length : 0,
+            imageGroupCount: Array.isArray(c.imageGroups)
+              ? c.imageGroups.length
+              : 0,
             createdAt: c.createdAt,
           })),
           total: canvases.length,
@@ -342,7 +372,8 @@ export class XhsToolsService {
       },
       {
         name: 'xhs_list_canvases',
-        description: 'List all available Canvas collections for content management',
+        description:
+          'List all available Canvas collections for content management',
         schema: z.object({
           limit: z.number().optional().describe('Max results, default 50'),
         }),
@@ -354,9 +385,10 @@ export class XhsToolsService {
    * @description 获取 Canvas 详情工具
    * @keyword-en get canvas detail tool
    */
-  private createGetCanvasDetailTool(
-    scope?: { tenantId?: string; userId?: string },
-  ) {
+  private createGetCanvasDetailTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }) {
     return tool(
       async (input: { canvas_id: number }) => {
         const { canvas_id } = input;
@@ -389,7 +421,8 @@ export class XhsToolsService {
       },
       {
         name: 'xhs_get_canvas_detail',
-        description: 'Get detailed information about a specific Canvas including its articles and image groups',
+        description:
+          'Get detailed information about a specific Canvas including its articles and image groups',
         schema: z.object({
           canvas_id: z.number().describe('Canvas ID to retrieve'),
         }),
@@ -401,13 +434,11 @@ export class XhsToolsService {
    * @description 创建图片组 Canvas 工具（异步生成，立即返回 generating 状态）
    * @keyword-en create image group canvas tool
    */
-  private createImageGroupCanvasTool(
-    scope?: {
-      tenantId?: string;
-      userId?: string;
-      earlyEmit?: (text: string) => void;
-    },
-  ) {
+  private createImageGroupCanvasTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }) {
     return tool(
       async (input: {
         canvasId?: number | string;
@@ -416,7 +447,9 @@ export class XhsToolsService {
         articles?: Array<{ title: string; tags?: string[] }>;
       }) => {
         if (!scope?.userId) {
-          return JSON.stringify({ error: 'USER_REQUIRED: userId is required for canvas creation' });
+          return JSON.stringify({
+            error: 'USER_REQUIRED: userId is required for canvas creation',
+          });
         }
         const requestedCanvasId = Number(input.canvasId);
         const hasCanvasId = Number.isFinite(requestedCanvasId);
@@ -469,7 +502,9 @@ export class XhsToolsService {
               articles: sourceArticles,
             });
           } catch (e) {
-            this.logger.warn(`[xhs_create_image_group_canvas] precheck failed (degraded to allow): ${String(e)}`);
+            this.logger.warn(
+              `[xhs_create_image_group_canvas] precheck failed (degraded to allow): ${String(e)}`,
+            );
           }
           if (capacity && !capacity.sufficient) {
             this.logger.log(
@@ -528,7 +563,9 @@ export class XhsToolsService {
             articles,
           });
         } catch (e) {
-          this.logger.warn(`[xhs_create_image_group_canvas] precheck failed (degraded to allow): ${String(e)}`);
+          this.logger.warn(
+            `[xhs_create_image_group_canvas] precheck failed (degraded to allow): ${String(e)}`,
+          );
         }
         if (capacity && !capacity.sufficient) {
           this.logger.log(
@@ -550,7 +587,10 @@ export class XhsToolsService {
           userId: scope.userId,
           tenantId: scope.tenantId,
           topic: input.topic,
-          articles: articles.map((a) => ({ title: a.title, tags: a.tags ?? [] })),
+          articles: articles.map((a) => ({
+            title: a.title,
+            tags: a.tags ?? [],
+          })),
         });
         const canvasBlock = `\`\`\`canvas-it\n${JSON.stringify({ canvasId: canvas.id, status: 'generating', type: 'image-group', topic: canvas.topic ?? '', articleCount: Array.isArray(canvas.articles) ? canvas.articles.length : 0 })}\n\`\`\``;
         try {
@@ -569,19 +609,33 @@ export class XhsToolsService {
           canvasId: z
             .union([z.number(), z.string()])
             .optional()
-            .describe('已有 Canvas ID；传入后在同一 Canvas 内生成并合并图组配图'),
+            .describe(
+              '已有 Canvas ID；传入后在同一 Canvas 内生成并合并图组配图',
+            ),
           topic: z.string().optional().describe('Canvas 主题，可选'),
-          groupCount: z.number().int().min(1).max(20).optional()
-            .describe('图片组数量（与 articles 数量保持一致；未传时取 articles 长度）'),
+          groupCount: z
+            .number()
+            .int()
+            .min(1)
+            .max(20)
+            .optional()
+            .describe(
+              '图片组数量（与 articles 数量保持一致；未传时取 articles 长度）',
+            ),
           articles: z
             .array(
               z.object({
                 title: z.string().describe('文章标题'),
-                tags: z.array(z.string()).optional().describe('标签列表，用于图片匹配（标签越准确匹配越好）'),
+                tags: z
+                  .array(z.string())
+                  .optional()
+                  .describe('标签列表，用于图片匹配（标签越准确匹配越好）'),
               }),
             )
             .optional()
-            .describe('文章列表，每篇对应一个 imageGroup。传入 canvasId 且未传 articles 时，会使用该 Canvas 现有文章作为图组输入。'),
+            .describe(
+              '文章列表，每篇对应一个 imageGroup。传入 canvasId 且未传 articles 时，会使用该 Canvas 现有文章作为图组输入。',
+            ),
         }),
       },
     );

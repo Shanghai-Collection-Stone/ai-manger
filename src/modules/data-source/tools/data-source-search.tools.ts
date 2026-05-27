@@ -80,7 +80,12 @@ export class DataSourceSearchToolsService {
     pipeline?: string | Record<string, unknown>[];
     key?: string;
     scope?: { tenantId?: string; userId?: string };
-  }): Promise<{ collection: string; sourceCode: string; data: unknown; error?: string }> {
+  }): Promise<{
+    collection: string;
+    sourceCode: string;
+    data: unknown;
+    error?: string;
+  }> {
     const {
       sourceCode,
       tenantId,
@@ -119,7 +124,12 @@ export class DataSourceSearchToolsService {
       try {
         pipeline = JSON.parse(rawPipeline);
       } catch {
-        return { collection, sourceCode, data: null, error: `Invalid pipeline JSON: ${rawPipeline}` };
+        return {
+          collection,
+          sourceCode,
+          data: null,
+          error: `Invalid pipeline JSON: ${rawPipeline}`,
+        };
       }
     } else {
       pipeline = rawPipeline;
@@ -140,9 +150,16 @@ export class DataSourceSearchToolsService {
       );
 
       // tenant-mongo: 从 sass_schema 获取字段信息用于验证
-      let schemaMap: Record<string, 'string' | 'number' | 'boolean' | 'date' | 'object' | 'array'> | undefined;
+      let schemaMap:
+        | Record<
+            string,
+            'string' | 'number' | 'boolean' | 'date' | 'object' | 'array'
+          >
+        | undefined;
       if (finalSourceCode === 'tenant-mongo' && finalTenantId) {
-        const sassDoc = await this.db.collection('sass_schema').findOne({ table: logicalCollectionName });
+        const sassDoc = await this.db
+          .collection('sass_schema')
+          .findOne({ table: logicalCollectionName });
         if (sassDoc && sassDoc.tableField) {
           schemaMap = {};
           for (const [name] of Object.entries(sassDoc.tableField)) {
@@ -210,7 +227,12 @@ export class DataSourceSearchToolsService {
         }
         const values = await col.distinct(key, finalFilter);
         result = this.safeTruncate(JSON.stringify(values));
-      } else if (type === 'min' || type === 'max' || type === 'sum' || type === 'avg') {
+      } else if (
+        type === 'min' ||
+        type === 'max' ||
+        type === 'sum' ||
+        type === 'avg'
+      ) {
         if (!key || typeof key !== 'string') {
           return {
             collection,
@@ -231,17 +253,28 @@ export class DataSourceSearchToolsService {
           { $group: { _id: null, value: { [op]: `$${key}` } } },
         ];
         const docs = await col.aggregate(aggPipeline).toArray();
-        result = [{ [type]: docs.length > 0 ? (docs[0] as Record<string, unknown>).value : undefined }];
+        result = [
+          {
+            [type]:
+              docs.length > 0
+                ? (docs[0] as Record<string, unknown>).value
+                : undefined,
+          },
+        ];
       } else if (type === 'aggregate') {
         if (!pipeline || !Array.isArray(pipeline)) {
           return {
             collection,
             sourceCode: finalSourceCode,
             data: null,
-            error: 'PIPELINE_REQUIRED: Pipeline is required for aggregate operation',
+            error:
+              'PIPELINE_REQUIRED: Pipeline is required for aggregate operation',
           };
         }
-        const normalized = this.normalizeAggregationPipeline(pipeline, schemaMap);
+        const normalized = this.normalizeAggregationPipeline(
+          pipeline,
+          schemaMap,
+        );
         const finalPipeline = [...normalized, { $limit: safeLimit }];
         const docs = await col.aggregate(finalPipeline).toArray();
         result = this.safeTruncate(JSON.stringify(docs));
@@ -488,11 +521,23 @@ export class DataSourceSearchToolsService {
       sourceCode: z.string().optional().describe('数据源代码，默认 main-mongo'),
       collection: z.string().describe('Collection name to query'),
       type: z
-        .enum(['find', 'count', 'aggregate', 'distinct', 'min', 'max', 'sum', 'avg'])
+        .enum([
+          'find',
+          'count',
+          'aggregate',
+          'distinct',
+          'min',
+          'max',
+          'sum',
+          'avg',
+        ])
         .optional()
         .default('find')
         .describe('Operation type'),
-      filter: z.record(z.string(), z.unknown()).optional().describe('Query filter'),
+      filter: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe('Query filter'),
       projection: z
         .record(z.string(), z.union([z.literal(0), z.literal(1)]))
         .optional()
@@ -500,8 +545,12 @@ export class DataSourceSearchToolsService {
       limit: z.number().optional().describe('Max results'),
       sort: z
         .union([
-          z.record(z.string(), z.union([z.literal(1), z.literal(-1)])).describe('Sort as record'),
-          z.array(z.string()).describe('Sort as array like ["field ASC", "field2 DESC"]'),
+          z
+            .record(z.string(), z.union([z.literal(1), z.literal(-1)]))
+            .describe('Sort as record'),
+          z
+            .array(z.string())
+            .describe('Sort as array like ["field ASC", "field2 DESC"]'),
         ])
         .optional()
         .describe('Sort order'),
@@ -533,7 +582,9 @@ export class DataSourceSearchToolsService {
           });
         }
 
-        const parsedQueries = batchQueriesSchema.safeParse(normalizedInput.queries);
+        const parsedQueries = batchQueriesSchema.safeParse(
+          normalizedInput.queries,
+        );
         if (!parsedQueries.success) {
           return JSON.stringify({
             success: false,
@@ -544,7 +595,10 @@ export class DataSourceSearchToolsService {
         }
 
         const validatedQueries = parsedQueries.data;
-        console.log('[data_source_batch_query] Batch queries:', validatedQueries.length);
+        console.log(
+          '[data_source_batch_query] Batch queries:',
+          validatedQueries.length,
+        );
 
         // 并发执行所有查询
         const results = await Promise.all(
@@ -572,7 +626,7 @@ export class DataSourceSearchToolsService {
         // 检查是否有超量查询
         const oversizedResults = results.filter((r) => {
           if (!r.data || typeof r.data !== 'string') return false;
-          const dataStr = r.data as string;
+          const dataStr = r.data;
           // 检测是否包含截断标记
           return (
             dataStr.includes('_truncated') ||
@@ -627,7 +681,9 @@ export class DataSourceSearchToolsService {
         schema: z.object({
           queries: z
             .unknown()
-            .describe('查询列表。必须是数组（不要传 JSON 字符串）。若参数不合法，工具会返回可纠错的结构化错误。'),
+            .describe(
+              '查询列表。必须是数组（不要传 JSON 字符串）。若参数不合法，工具会返回可纠错的结构化错误。',
+            ),
           tenantId: z.string().optional().describe('租户ID'),
         }),
       },
@@ -640,7 +696,9 @@ export class DataSourceSearchToolsService {
    * @description 规范化批量查询入参，避免参数类型错误导致工具直接失败。
    * @keyword-en normalize batch query input
    */
-  private normalizeBatchQueriesInput(input: unknown):
+  private normalizeBatchQueriesInput(
+    input: unknown,
+  ):
     | { success: true; queries: unknown[] }
     | { success: false; error: string; message: string; hint?: string } {
     if (Array.isArray(input)) {
@@ -670,7 +728,8 @@ export class DataSourceSearchToolsService {
         return {
           success: false,
           error: 'QUERIES_STRING_INVALID_JSON',
-          message: 'queries 收到字符串且不是合法 JSON。请传数组，不要传字符串。',
+          message:
+            'queries 收到字符串且不是合法 JSON。请传数组，不要传字符串。',
           hint: '示例：{"queries":[{"collection":"users","type":"find","filter":{},"limit":20}]}',
         };
       }
@@ -850,13 +909,17 @@ export class DataSourceSearchToolsService {
         throw new Error('TENANT_ID_REQUIRED: tenant-mongo requires tenantId');
       }
       // 先从 sass_schema 获取实际表名
-      const sassDoc = await this.db.collection('sass_schema').findOne({ table: collectionName });
+      const sassDoc = await this.db
+        .collection('sass_schema')
+        .findOne({ table: collectionName });
       const actualTable = sassDoc ? sassDoc.table : collectionName;
       const prefix = this.buildSaasTenantPrefix(tenantId);
       const physicalCollectionName = `${prefix}_${actualTable}`;
       return {
         source: null as unknown as DataSourceEntity,
-        col: this.db.collection<Record<string, unknown>>(physicalCollectionName),
+        col: this.db.collection<Record<string, unknown>>(
+          physicalCollectionName,
+        ),
         logicalCollectionName: actualTable,
       };
     }
@@ -875,7 +938,9 @@ export class DataSourceSearchToolsService {
     const configPrefix = conn.localCollectionPrefix?.trim() || '';
     // main/local 模式下：若无显式前缀配置，则按 tenantId 自动推导 SaaS 4 字符前缀
     const autoPrefix =
-      !configPrefix && tenantId && (conn.mode === 'main' || conn.mode === 'local')
+      !configPrefix &&
+      tenantId &&
+      (conn.mode === 'main' || conn.mode === 'local')
         ? this.buildSaasTenantPrefix(tenantId) + '_'
         : '';
     const effectivePrefix = configPrefix || autoPrefix;
@@ -972,7 +1037,9 @@ export class DataSourceSearchToolsService {
    * @keyword-en build tenant collection prefix
    */
   private buildSaasTenantPrefix(tenantId: string): string {
-    const raw = String(tenantId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const raw = String(tenantId)
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
     const safe = raw.length > 0 ? raw : 'tn';
     return (safe + '0000').slice(0, 4);
   }

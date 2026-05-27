@@ -16,4 +16,3 @@ import { DashboardConfigService } from './services/dashboard-config.service.js';
   exports: [DashboardConfigService],
 })
 export class DashboardConfigModule {}
-

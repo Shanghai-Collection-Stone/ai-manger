@@ -142,7 +142,14 @@ export class SkillThoughtToolsService {
      * 产生/更新思维链 - 异步模式
      */
     const generateThought = tool(
-      async ({ content, sessionId, toolsUsed, category, allowGenerate, asyncMode }) => {
+      async ({
+        content,
+        sessionId,
+        toolsUsed,
+        category,
+        allowGenerate,
+        asyncMode,
+      }) => {
         try {
           if (allowGenerate === false) {
             return JSON.stringify({
@@ -177,7 +184,8 @@ export class SkillThoughtToolsService {
               return JSON.stringify({
                 success: true,
                 action: 'merged',
-                message: 'Content merged into existing thought (async processing)',
+                message:
+                  'Content merged into existing thought (async processing)',
                 thoughtId: merged._id.toString(),
                 status: 'pending',
                 similarityScore: existingThought.score,
@@ -248,7 +256,9 @@ export class SkillThoughtToolsService {
           asyncMode: z
             .boolean()
             .optional()
-            .describe('异步模式：true=立即返回，后台生成摘要关键词(默认)；false=同步等待完成')
+            .describe(
+              '异步模式：true=立即返回，后台生成摘要关键词(默认)；false=同步等待完成',
+            )
             .default(true),
           sessionId: z
             .string()

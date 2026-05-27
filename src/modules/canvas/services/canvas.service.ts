@@ -9,7 +9,10 @@ import type {
   CanvasImageGroupCreateInput,
   CanvasStatus,
 } from '../entities/canvas.entity.js';
-import { CanvasImageGroupService } from './canvas-image-group.service.js';
+import {
+  CanvasImageGroupService,
+  type ImageGroupSourcePreparation,
+} from './canvas-image-group.service.js';
 
 @Injectable()
 export class CanvasService {
@@ -140,7 +143,14 @@ export class CanvasService {
    * @keyword canvas, list, user-filter, pagination
    * @since 2026-02-04
    */
-  async list(userId?: string, tenantId?: string, limit = 50, type?: string, skip = 0, tag?: string): Promise<CanvasEntity[]> {
+  async list(
+    userId?: string,
+    tenantId?: string,
+    limit = 50,
+    type?: string,
+    skip = 0,
+    tag?: string,
+  ): Promise<CanvasEntity[]> {
     const filter = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
     if (type) filter.type = type;
@@ -169,7 +179,10 @@ export class CanvasService {
     input: CanvasAddArticlesInput,
     tenantId?: string,
   ): Promise<CanvasEntity | null> {
-    const cur = await this.canvases.findOne({ id, ...this.buildTenantFilter(tenantId) });
+    const cur = await this.canvases.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+    });
     if (!cur) return null;
     const start = (cur.articles?.length ?? 0) + 1;
     const incoming: CanvasArticleEntity[] = (input.articles ?? []).map(
@@ -281,7 +294,11 @@ export class CanvasService {
     if (typeof patch.doneNote === 'string')
       upd['articles.$.doneNote'] = patch.doneNote;
     await this.canvases.updateOne(
-      { id: canvasId, 'articles.id': articleId, ...this.buildTenantFilter(tenantId) },
+      {
+        id: canvasId,
+        'articles.id': articleId,
+        ...this.buildTenantFilter(tenantId),
+      },
       { $set: upd },
     );
     return await this.get(canvasId, tenantId);
@@ -323,7 +340,11 @@ export class CanvasService {
     if (typeof patch.doneNote === 'string')
       upd['articles.$.doneNote'] = patch.doneNote;
     await this.canvases.updateOne(
-      { id: canvasId, 'articles.id': articleId, ...this.buildTenantFilter(tenantId) },
+      {
+        id: canvasId,
+        'articles.id': articleId,
+        ...this.buildTenantFilter(tenantId),
+      },
       { $set: upd },
     );
     return await this.get(canvasId, tenantId);
@@ -361,7 +382,9 @@ export class CanvasService {
       updatedAt: now,
     };
     await this.canvases.insertOne(doc);
-    this.logger.debug(`[image-group] created canvasId=${id} topic=${input.topic ?? ''} articleCount=${doc.articles.length}`);
+    this.logger.debug(
+      `[image-group] created canvasId=${id} topic=${input.topic ?? ''} articleCount=${doc.articles.length}`,
+    );
 
     // 异步后台生成图片组，不阻塞接口返回
     void this.runImageGroupGeneration(id, input);
@@ -400,6 +423,61 @@ export class CanvasService {
   }
 
   /**
+   * @description 为指定 Canvas 预先准备图片组源图分配，不生成封面/拼图文件，用于图文生成前置不足量拦截。
+   * @param {{ canvasId: number; userId: string; tenantId?: string; topic?: string; articles: CanvasImageGroupCreateInput['articles']; }} input - 分配参数。
+   * @returns {Promise<ImageGroupSourcePreparation>} 源图分配结果。
+   * @keyword-en prepare, allocation, canvas
+   */
+  async prepareImageGroupsForCanvas(input: {
+    canvasId: number;
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articles: CanvasImageGroupCreateInput['articles'];
+  }): Promise<ImageGroupSourcePreparation> {
+    void input.canvasId;
+    return await this.imageGroupService.prepareImageGroupSources({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      topic: input.topic,
+      articles: input.articles,
+    });
+  }
+
+  /**
+   * @description 根据预分配结果渲染图片组并回写到 Canvas。
+   * @param {{ canvasId: number; userId: string; tenantId?: string; topic?: string; articles: CanvasImageGroupCreateInput['articles']; preparation: Extract<ImageGroupSourcePreparation, {ok: true}>; append?: boolean }} input - 渲染参数。
+   * @returns {Promise<CanvasImageGroup[]>} 渲染后的图片组。
+   * @keyword-en render, prepared, image-group
+   */
+  async renderPreparedImageGroupsForCanvas(input: {
+    canvasId: number;
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articles: CanvasImageGroupCreateInput['articles'];
+    preparation: Extract<ImageGroupSourcePreparation, { ok: true }>;
+    append?: boolean;
+  }): Promise<CanvasImageGroup[]> {
+    const groups = await this.imageGroupService.renderPreparedImageGroups(
+      {
+        userId: input.userId,
+        tenantId: input.tenantId,
+        topic: input.topic,
+        articles: input.articles,
+      },
+      input.preparation,
+    );
+    await this.updateImageGroups(
+      input.canvasId,
+      groups,
+      input.tenantId,
+      input.append === true,
+    );
+    return groups;
+  }
+
+  /**
    * @description 后台异步执行图片组生成并回写 Canvas。
    * @param {number} canvasId - Canvas ID。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
@@ -410,7 +488,9 @@ export class CanvasService {
     canvasId: number,
     input: CanvasImageGroupCreateInput,
   ): Promise<void> {
-    this.logger.debug(`[image-group] generation_start canvasId=${canvasId} articleCount=${input.articles?.length ?? 0}`);
+    this.logger.debug(
+      `[image-group] generation_start canvasId=${canvasId} articleCount=${input.articles?.length ?? 0}`,
+    );
     try {
       const groups = await this.generateImageGroupsForCanvas({
         canvasId,
@@ -421,17 +501,23 @@ export class CanvasService {
       });
       const doneCount = groups.filter((g) => g.status === 'done').length;
       const failedCount = groups.filter((g) => g.status === 'failed').length;
-      this.logger.debug(`[image-group] generation_done canvasId=${canvasId} groupsTotal=${groups.length} done=${doneCount} failed=${failedCount}`);
+      this.logger.debug(
+        `[image-group] generation_done canvasId=${canvasId} groupsTotal=${groups.length} done=${doneCount} failed=${failedCount}`,
+      );
+      const finalStatus = failedCount > 0 ? 'requires_human' : 'completed';
       await this.canvases.updateOne(
         { id: canvasId },
-        { $set: { status: 'completed', updatedAt: new Date() } },
+        { $set: { status: finalStatus, updatedAt: new Date() } },
       );
     } catch (err) {
       await this.canvases.updateOne(
         { id: canvasId },
         { $set: { status: 'failed', updatedAt: new Date() } },
       );
-      this.logger.error(`[image-group] generation_failed canvasId=${canvasId}`, err);
+      this.logger.error(
+        `[image-group] generation_failed canvasId=${canvasId}`,
+        err,
+      );
     }
   }
 
@@ -453,7 +539,9 @@ export class CanvasService {
     type?: string;
     limit?: number;
   }): Promise<{ canvases: CanvasEntity[]; matchMode: 'keyword' | 'text' }> {
-    const tags = (input.tags ?? []).map((t) => String(t).trim()).filter(Boolean);
+    const tags = (input.tags ?? [])
+      .map((t) => String(t).trim())
+      .filter(Boolean);
     const lim = Math.max(1, Math.min(100, Math.floor(input.limit ?? 20)));
     const baseFilter = this.buildTenantFilter(input.tenantId);
     if (input.userId) baseFilter.userId = input.userId;
@@ -474,7 +562,9 @@ export class CanvasService {
 
     // 兜底：topic 或文章 title 文本 regex 搜索
     if (tags.length > 0) {
-      const regexParts = tags.map((t) => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
+      const regexParts = tags.map(
+        (t) => new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
+      );
       const orConditions = regexParts.flatMap((re) => [
         { topic: { $regex: re } },
         { 'articles.title': { $regex: re } },
@@ -561,7 +651,11 @@ export class CanvasService {
   ): Promise<CanvasEntity | null> {
     const now = sentAt ?? new Date();
     await this.canvases.updateOne(
-      { id: canvasId, 'articles.id': articleId, ...this.buildTenantFilter(tenantId) },
+      {
+        id: canvasId,
+        'articles.id': articleId,
+        ...this.buildTenantFilter(tenantId),
+      },
       { $set: { 'articles.$.sentAt': now, updatedAt: new Date() } },
     );
     return await this.get(canvasId, tenantId);
@@ -597,7 +691,10 @@ export class CanvasService {
   ): Promise<CanvasEntity | null> {
     await this.canvases.updateOne(
       { id: canvasId, ...this.buildTenantFilter(tenantId) },
-      { $pull: { articles: { id: articleId } }, $set: { updatedAt: new Date() } } as any,
+      {
+        $pull: { articles: { id: articleId } },
+        $set: { updatedAt: new Date() },
+      } as any,
     );
     return await this.get(canvasId, tenantId);
   }
@@ -618,8 +715,15 @@ export class CanvasService {
     tenantId?: string,
   ): Promise<CanvasEntity | null> {
     await this.canvases.updateOne(
-      { id: canvasId, 'imageGroups.id': groupId, ...this.buildTenantFilter(tenantId) },
-      { $pull: { 'imageGroups.$.images': { imageId } }, $set: { updatedAt: new Date() } } as any,
+      {
+        id: canvasId,
+        'imageGroups.id': groupId,
+        ...this.buildTenantFilter(tenantId),
+      },
+      {
+        $pull: { 'imageGroups.$.images': { imageId } },
+        $set: { updatedAt: new Date() },
+      } as any,
     );
     return await this.get(canvasId, tenantId);
   }

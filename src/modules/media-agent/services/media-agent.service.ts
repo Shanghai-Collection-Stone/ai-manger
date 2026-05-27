@@ -25,13 +25,11 @@ export class MediaAgentService {
    * @keyword-en get gallery tools handle
    * @since 2026-03-23
    */
-  getGalleryToolsHandle(
-    scope?: {
-      tenantId?: string;
-      userId?: string;
-      earlyEmit?: (text: string) => void;
-    },
-  ): CreateAgentParams['tools'] {
+  getGalleryToolsHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }): CreateAgentParams['tools'] {
     return this.galleryTools.getHandle(scope);
   }
 
@@ -42,13 +40,11 @@ export class MediaAgentService {
    * @keyword-en get XHS tools handle
    * @since 2026-03-23
    */
-  getXhsToolsHandle(
-    scope?: {
-      tenantId?: string;
-      userId?: string;
-      earlyEmit?: (text: string) => void;
-    },
-  ): CreateAgentParams['tools'] {
+  getXhsToolsHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }): CreateAgentParams['tools'] {
     return this.xhsTools.getHandle(scope);
   }
 }

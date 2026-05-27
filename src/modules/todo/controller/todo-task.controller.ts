@@ -19,9 +19,21 @@ import type {
 } from '../entities/xhs-post-stat.entity.js';
 
 /** 合法的任务状态枚举值（运行时校验用） */
-const VALID_TODO_STATUSES = new Set(['pending', 'in_progress', 'done', 'failed', 'cancelled']);
+const VALID_TODO_STATUSES = new Set([
+  'pending',
+  'in_progress',
+  'done',
+  'failed',
+  'cancelled',
+]);
 /** 合法的节点状态枚举值（运行时校验用） */
-const VALID_ITEM_STATUSES = new Set(['pending', 'in_progress', 'done', 'failed', 'cancelled']);
+const VALID_ITEM_STATUSES = new Set([
+  'pending',
+  'in_progress',
+  'done',
+  'failed',
+  'cancelled',
+]);
 
 /**
  * @description 将 AI 可能传入的别名状态归一化为数据库在1值
@@ -49,7 +61,10 @@ function normalizeStatus(s: string): string {
 }
 import type { Request } from 'express';
 import { TodoService } from '../services/todo.service.js';
-import type { TodoItemCreateInput, TodoItemUpdateInput } from '../entities/todo-item.entity.js';
+import type {
+  TodoItemCreateInput,
+  TodoItemUpdateInput,
+} from '../entities/todo-item.entity.js';
 import type { CanvasArticleEntity } from '../../canvas/entities/canvas.entity.js';
 import type { TodoCallback } from '../entities/todo.entity.js';
 
@@ -59,7 +74,9 @@ import type { TodoCallback } from '../entities/todo.entity.js';
  */
 function garbageDiag(label: string, value: unknown): Record<string, unknown> {
   if (typeof value !== 'string') return { label, type: typeof value };
-  const codes = Array.from(value.slice(0, 40)).map((c) => c.codePointAt(0) as number);
+  const codes = Array.from(value.slice(0, 40)).map(
+    (c) => c.codePointAt(0) as number,
+  );
   return {
     label,
     preview: value.slice(0, 120),
@@ -98,7 +115,8 @@ export class TodoTaskController {
     if (!token) throw new UnauthorizedException('TASK_TOKEN_REQUIRED');
     const todo = await this.todo.getByTaskToken(token);
     if (!todo) throw new UnauthorizedException('INVALID_TASK_TOKEN');
-    if (todo.id !== todoId) throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
+    if (todo.id !== todoId)
+      throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
     return todo;
   }
 
@@ -112,8 +130,12 @@ export class TodoTaskController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
-    const { _id, taskToken, ...rest } = todo as typeof todo & { _id?: unknown; taskToken?: unknown };
-    void _id; void taskToken;
+    const { _id, taskToken, ...rest } = todo as typeof todo & {
+      _id?: unknown;
+      taskToken?: unknown;
+    };
+    void _id;
+    void taskToken;
     return { todo: rest };
   }
 
@@ -124,7 +146,8 @@ export class TodoTaskController {
   @Patch(':todoId')
   async updateTask(
     @Param('todoId') todoId: string,
-    @Body() body: {
+    @Body()
+    body: {
       status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
       title?: string;
       description?: string;
@@ -141,7 +164,9 @@ export class TodoTaskController {
       const rawStatus = body.status as unknown as string;
       const normalized = normalizeStatus(rawStatus);
       if (normalized !== rawStatus) {
-        this.logger.log(`[updateTask] status alias: '${rawStatus}' → '${normalized}' (todoId=${todoId})`);
+        this.logger.log(
+          `[updateTask] status alias: '${rawStatus}' → '${normalized}' (todoId=${todoId})`,
+        );
         (body as Record<string, unknown>).status = normalized;
       }
       if (!VALID_TODO_STATUSES.has(normalized)) {
@@ -157,16 +182,24 @@ export class TodoTaskController {
       `[updateTask] todoId=${todoId} body.keys=${Object.keys(body).join(',')} status=${body.status ?? '-'}`,
     );
     if (body.aiPlan !== undefined) {
-      this.logger.log(`[updateTask] aiPlan diag: ${JSON.stringify(garbageDiag('aiPlan', body.aiPlan))}`);
+      this.logger.log(
+        `[updateTask] aiPlan diag: ${JSON.stringify(garbageDiag('aiPlan', body.aiPlan))}`,
+      );
     }
     if (body.description !== undefined) {
-      this.logger.log(`[updateTask] description diag: ${JSON.stringify(garbageDiag('description', body.description))}`);
+      this.logger.log(
+        `[updateTask] description diag: ${JSON.stringify(garbageDiag('description', body.description))}`,
+      );
     }
     if (body.taskResult !== undefined) {
-      this.logger.log(`[updateTask] taskResult diag: ${JSON.stringify(garbageDiag('taskResult', body.taskResult))}`);
+      this.logger.log(
+        `[updateTask] taskResult diag: ${JSON.stringify(garbageDiag('taskResult', body.taskResult))}`,
+      );
     }
     if (body.abnormalReason !== undefined) {
-      this.logger.log(`[updateTask] abnormalReason diag: ${JSON.stringify(garbageDiag('abnormalReason', body.abnormalReason))}`);
+      this.logger.log(
+        `[updateTask] abnormalReason diag: ${JSON.stringify(garbageDiag('abnormalReason', body.abnormalReason))}`,
+      );
     }
 
     const todo = await this.resolveTodo(req, Number(todoId));
@@ -179,8 +212,12 @@ export class TodoTaskController {
       this.logger.warn(`[updateTask] update returned null, todoId=${todoId}`);
       return { ok: false };
     }
-    const { _id, taskToken, ...rest } = updated as typeof updated & { _id?: unknown; taskToken?: unknown };
-    void _id; void taskToken;
+    const { _id, taskToken, ...rest } = updated as typeof updated & {
+      _id?: unknown;
+      taskToken?: unknown;
+    };
+    void _id;
+    void taskToken;
     // --- 接口响应日志 ---
     this.logger.log(
       `[updateTask] ok todoId=${todoId} status=${String(rest.status)} aiPlan.len=${typeof rest.aiPlan === 'string' ? rest.aiPlan.length : '-'}`,
@@ -251,7 +288,9 @@ export class TodoTaskController {
     const rawStatus = body.status as unknown as string | undefined;
     if (!rawStatus || !VALID_ITEM_STATUSES.has(rawStatus)) {
       if (rawStatus) {
-        this.logger.warn(`[createItem] INVALID status coerced to in_progress: '${rawStatus}' (todoId=${todoId})`);
+        this.logger.warn(
+          `[createItem] INVALID status coerced to in_progress: '${rawStatus}' (todoId=${todoId})`,
+        );
       }
       (body as Record<string, unknown>).status = 'in_progress';
     }
@@ -260,10 +299,14 @@ export class TodoTaskController {
       `[createItem] todoId=${todoId} title=${JSON.stringify(body.title)} status=${body.status ?? '-'} stage=${body.stage ?? '-'}`,
     );
     if (body.title !== undefined) {
-      this.logger.log(`[createItem] title diag: ${JSON.stringify(garbageDiag('title', body.title))}`);
+      this.logger.log(
+        `[createItem] title diag: ${JSON.stringify(garbageDiag('title', body.title))}`,
+      );
     }
     if (body.description !== undefined) {
-      this.logger.log(`[createItem] description diag: ${JSON.stringify(garbageDiag('description', body.description))}`);
+      this.logger.log(
+        `[createItem] description diag: ${JSON.stringify(garbageDiag('description', body.description))}`,
+      );
     }
 
     const todo = await this.resolveTodo(req, Number(todoId));
@@ -274,7 +317,9 @@ export class TodoTaskController {
     });
     const { _id, ...rest } = item as typeof item & { _id?: unknown };
     void _id;
-    this.logger.log(`[createItem] created itemId=${String(rest.id)} todoId=${todoId}`);
+    this.logger.log(
+      `[createItem] created itemId=${String(rest.id)} todoId=${todoId}`,
+    );
     return { item: rest };
   }
 
@@ -294,7 +339,9 @@ export class TodoTaskController {
       const rawStatus = body.status as unknown as string;
       const normalized = normalizeStatus(rawStatus);
       if (normalized !== rawStatus) {
-        this.logger.log(`[updateItem] status alias: '${rawStatus}' → '${normalized}' (itemId=${itemId})`);
+        this.logger.log(
+          `[updateItem] status alias: '${rawStatus}' → '${normalized}' (itemId=${itemId})`,
+        );
         (body as Record<string, unknown>).status = normalized;
       }
       if (!VALID_ITEM_STATUSES.has(normalized)) {
@@ -309,10 +356,14 @@ export class TodoTaskController {
       `[updateItem] todoId=${todoId} itemId=${itemId} body.keys=${Object.keys(body).join(',')} status=${body.status ?? '-'}`,
     );
     if (body.doneNote !== undefined) {
-      this.logger.log(`[updateItem] doneNote diag: ${JSON.stringify(garbageDiag('doneNote', body.doneNote))}`);
+      this.logger.log(
+        `[updateItem] doneNote diag: ${JSON.stringify(garbageDiag('doneNote', body.doneNote))}`,
+      );
     }
     if (body.title !== undefined) {
-      this.logger.log(`[updateItem] title diag: ${JSON.stringify(garbageDiag('title', body.title))}`);
+      this.logger.log(
+        `[updateItem] title diag: ${JSON.stringify(garbageDiag('title', body.title))}`,
+      );
     }
 
     const todo = await this.resolveTodo(req, Number(todoId));
@@ -331,7 +382,9 @@ export class TodoTaskController {
     }
     const { _id, ...rest } = updated as typeof updated & { _id?: unknown };
     void _id;
-    this.logger.log(`[updateItem] ok itemId=${itemId} status=${String(rest.status)}`);
+    this.logger.log(
+      `[updateItem] ok itemId=${itemId} status=${String(rest.status)}`,
+    );
     return { ok: true, item: rest };
   }
 
@@ -358,7 +411,13 @@ export class TodoTaskController {
    * @description 从 todo 文本中提取 Canvas ID
    * @keyword-en extract canvas id from todo text fields
    */
-  private extractCanvasId(todo: { title?: string; description?: string; aiConsideration?: string; decisionReason?: string; aiPlan?: string }): number | undefined {
+  private extractCanvasId(todo: {
+    title?: string;
+    description?: string;
+    aiConsideration?: string;
+    decisionReason?: string;
+    aiPlan?: string;
+  }): number | undefined {
     const text = [
       todo.title,
       todo.description,
@@ -386,7 +445,9 @@ export class TodoTaskController {
     // 如果已经是完整路径（http/https/data:开头），直接返回
     if (/^(https?|data:)/i.test(url)) return url;
     // 拼接完整路径
-    const base = (process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011').replace(/\/$/, '');
+    const base = (
+      process.env.TASK_API_BASE_URL ?? 'http://127.0.0.1:3011'
+    ).replace(/\/$/, '');
     return `${base}/${url.replace(/^\//, '')}`;
   }
 
@@ -402,11 +463,17 @@ export class TodoTaskController {
     const todo = await this.resolveTodo(req, Number(todoId));
     const canvasId = this.extractCanvasId(todo);
     if (!canvasId) {
-      return { canvas: null, articles: [], message: 'CANVAS_ID_NOT_FOUND_IN_TASK' };
+      return {
+        canvas: null,
+        articles: [],
+        message: 'CANVAS_ID_NOT_FOUND_IN_TASK',
+      };
     }
 
     // 通过 ModuleRef 获取 CanvasService（懒加载避免循环依赖）
-    const { CanvasService } = await import('../../canvas/services/canvas.service.js');
+    const { CanvasService } = await import(
+      '../../canvas/services/canvas.service.js'
+    );
     const canvasService = this.moduleRef.get(CanvasService, { strict: false });
     if (!canvasService) {
       throw new Error('CANVAS_SERVICE_UNAVAILABLE');
@@ -418,11 +485,13 @@ export class TodoTaskController {
     }
 
     // 转换图片地址为完整路径
-    const articles: Array<Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }> = (
-      canvas.articles ?? []
-    ).map((article: CanvasArticleEntity) => ({
+    const articles: Array<
+      Omit<CanvasArticleEntity, 'imageUrls'> & { imageUrls: string[] }
+    > = (canvas.articles ?? []).map((article: CanvasArticleEntity) => ({
       ...article,
-      imageUrls: (article.imageUrls ?? []).map((url: string) => this.resolveImageUrl(url) ?? url),
+      imageUrls: (article.imageUrls ?? []).map(
+        (url: string) => this.resolveImageUrl(url) ?? url,
+      ),
     }));
 
     return {
@@ -459,7 +528,9 @@ export class TodoTaskController {
     if (!canvasId) {
       return { ok: false, message: 'CANVAS_ID_NOT_FOUND_IN_TASK' };
     }
-    const { CanvasService } = await import('../../canvas/services/canvas.service.js');
+    const { CanvasService } = await import(
+      '../../canvas/services/canvas.service.js'
+    );
     const canvasService = this.moduleRef.get(CanvasService, { strict: false });
     if (!canvasService) {
       throw new Error('CANVAS_SERVICE_UNAVAILABLE');
@@ -474,7 +545,9 @@ export class TodoTaskController {
     if (!canvas) {
       return { ok: false, message: 'CANVAS_NOT_FOUND' };
     }
-    const article = canvas.articles.find((a: CanvasArticleEntity) => a.id === Number(articleId));
+    const article = canvas.articles.find(
+      (a: CanvasArticleEntity) => a.id === Number(articleId),
+    );
     return { ok: true, article: article ?? null };
   }
 
@@ -536,7 +609,9 @@ export class TodoTaskController {
     const stat = await this.xhsPostStat.create({ ...body, todoId: todo.id });
     const { _id, ...rest } = stat as typeof stat & { _id?: unknown };
     void _id;
-    this.logger.log(`[createXhsStat] statId=${String(rest.id)} todoId=${todoId}`);
+    this.logger.log(
+      `[createXhsStat] statId=${String(rest.id)} todoId=${todoId}`,
+    );
     return { stat: rest };
   }
 
@@ -551,7 +626,8 @@ export class TodoTaskController {
   @Post(':todoId/xhs-stats/bulk')
   async bulkUpsertXhsStats(
     @Param('todoId') todoId: string,
-    @Body() body: { items?: Omit<XhsPostStatCreateInput, 'todoId'>[]; posts?: unknown },
+    @Body()
+    body: { items?: Omit<XhsPostStatCreateInput, 'todoId'>[]; posts?: unknown },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const todo = await this.resolveTodo(req, Number(todoId));
@@ -567,7 +643,10 @@ export class TodoTaskController {
 
     const items = body.items;
     const badIndex = items.findIndex(
-      (x) => !x || typeof x.postTitle !== 'string' || x.postTitle.trim().length === 0,
+      (x) =>
+        !x ||
+        typeof x.postTitle !== 'string' ||
+        x.postTitle.trim().length === 0,
     );
     if (badIndex >= 0) {
       throw new BadRequestException({
@@ -603,7 +682,10 @@ export class TodoTaskController {
     if (!existing || existing.todoId !== todo.id) {
       throw new UnauthorizedException('STAT_NOT_BELONG_TO_TASK');
     }
-    const updated = await this.xhsPostStat.update({ ...body, id: Number(statId) });
+    const updated = await this.xhsPostStat.update({
+      ...body,
+      id: Number(statId),
+    });
     if (!updated) return { ok: false };
     const { _id, ...rest } = updated as typeof updated & { _id?: unknown };
     void _id;

@@ -27,7 +27,11 @@ const VALID_STRENGTHS = new Set<AntiDetectionStrength>([
   'strong',
 ]);
 /** 合法输出格式 */
-const VALID_FORMATS = new Set<AntiDetectionOutputFormat>(['keep', 'jpeg', 'png']);
+const VALID_FORMATS = new Set<AntiDetectionOutputFormat>([
+  'keep',
+  'jpeg',
+  'png',
+]);
 /** 批量单次上限 */
 const BATCH_LIMIT = 20;
 /** 单文件大小上限 20MB */
@@ -38,7 +42,9 @@ const FILE_SIZE_LIMIT = 20 * 1024 * 1024;
  * @keyword-en normalize strength param
  */
 const normalizeStrength = (input: unknown): AntiDetectionStrength => {
-  const v = String(input ?? '').trim().toLowerCase();
+  const v = String(input ?? '')
+    .trim()
+    .toLowerCase();
   return VALID_STRENGTHS.has(v as AntiDetectionStrength)
     ? (v as AntiDetectionStrength)
     : 'standard';
@@ -49,7 +55,9 @@ const normalizeStrength = (input: unknown): AntiDetectionStrength => {
  * @keyword-en normalize output format param
  */
 const normalizeFormat = (input: unknown): AntiDetectionOutputFormat => {
-  const v = String(input ?? '').trim().toLowerCase();
+  const v = String(input ?? '')
+    .trim()
+    .toLowerCase();
   return VALID_FORMATS.has(v as AntiDetectionOutputFormat)
     ? (v as AntiDetectionOutputFormat)
     : 'keep';
@@ -145,7 +153,10 @@ export class AntiDetectionController {
       jpegQualityMax: parseQuality(body?.jpegQualityMax),
       tag: 'anti-detection-api',
     });
-    const outName = deriveOutName(file.originalname ?? 'image', result.mimeType);
+    const outName = deriveOutName(
+      file.originalname ?? 'image',
+      result.mimeType,
+    );
     res
       .status(200)
       .set({
@@ -224,7 +235,10 @@ export class AntiDetectionController {
       const result = await this.antiDetection.process(file.buffer, opts);
       items.push({
         originalName: file.originalname ?? 'image',
-        outputName: deriveOutName(file.originalname ?? 'image', result.mimeType),
+        outputName: deriveOutName(
+          file.originalname ?? 'image',
+          result.mimeType,
+        ),
         mimeType: result.mimeType,
         size: result.buffer.length,
         processed: result.processed,

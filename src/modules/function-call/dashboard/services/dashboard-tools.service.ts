@@ -4,7 +4,11 @@ import * as z from 'zod';
 import type { Filter } from 'mongodb';
 import { Db } from 'mongodb';
 import { DashboardConfigService } from '../../../dashboard-config/services/dashboard-config.service.js';
-import type { MongoWhereCondition, MongoWhereGroup, MongoWhereNode } from '../../../mongo-query/types/mongo-query.types.js';
+import type {
+  MongoWhereCondition,
+  MongoWhereGroup,
+  MongoWhereNode,
+} from '../../../mongo-query/types/mongo-query.types.js';
 
 /**
  * @description 看板数据工具服务，为 AI 指挥官提供租户隔离的表结构查询、数据查询、看板配置读写能力
@@ -24,7 +28,9 @@ export class DashboardToolsService {
    * @keyword-en build tenant prefix
    */
   private buildTenantPrefix(tenantId: string): string {
-    const raw = String(tenantId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const raw = String(tenantId)
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toLowerCase();
     const safe = raw.length > 0 ? raw : 'tn';
     return (safe + '0000').slice(0, 4);
   }
@@ -54,7 +60,8 @@ export class DashboardToolsService {
   private assertCollectionName(name: string): string {
     const value = String(name ?? '').trim();
     if (!value) throw new Error('COLLECTION_REQUIRED');
-    if (!/^[a-zA-Z0-9_]+$/.test(value)) throw new Error('INVALID_COLLECTION_NAME');
+    if (!/^[a-zA-Z0-9_]+$/.test(value))
+      throw new Error('INVALID_COLLECTION_NAME');
     if (value.startsWith('system_') || value.startsWith('system.')) {
       throw new Error('INVALID_COLLECTION_NAME');
     }
@@ -114,7 +121,9 @@ export class DashboardToolsService {
    * @description 规范化 projection
    * @keyword-en normalize projection
    */
-  private normalizeProjection(value: unknown): Record<string, 0 | 1> | undefined {
+  private normalizeProjection(
+    value: unknown,
+  ): Record<string, 0 | 1> | undefined {
     if (!this.isObjectRecord(value)) return undefined;
     const projection: Record<string, 0 | 1> = {};
     for (const [k, v] of Object.entries(value)) {
@@ -141,12 +150,20 @@ export class DashboardToolsService {
    * @description 过滤简单 filter（禁止 $ 操作符注入）
    * @keyword-en sanitize simple filter
    */
-  private sanitizeSimpleFilter(value?: Record<string, unknown>): Record<string, unknown> | undefined {
-    if (!value || !this.isObjectRecord(value) || Object.keys(value).length === 0) return undefined;
+  private sanitizeSimpleFilter(
+    value?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    if (
+      !value ||
+      !this.isObjectRecord(value) ||
+      Object.keys(value).length === 0
+    )
+      return undefined;
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
       const field = this.assertFieldPath(k, 'INVALID_FILTER_FIELD');
-      if (this.containsMongoOperator(v)) throw new Error('FILTER_OPERATOR_FORBIDDEN');
+      if (this.containsMongoOperator(v))
+        throw new Error('FILTER_OPERATOR_FORBIDDEN');
       out[field] = v;
     }
     return Object.keys(out).length > 0 ? out : undefined;
@@ -164,10 +181,15 @@ export class DashboardToolsService {
    * @description 解析 where DSL 为 Mongo filter
    * @keyword-en parse where dsl
    */
-  private parseWhereNode(node: MongoWhereNode): Filter<Record<string, unknown>> {
+  private parseWhereNode(
+    node: MongoWhereNode,
+  ): Filter<Record<string, unknown>> {
     const asCondition = node as MongoWhereCondition;
     if (typeof asCondition.field === 'string') {
-      const field = this.assertFieldPath(asCondition.field, 'INVALID_FILTER_FIELD');
+      const field = this.assertFieldPath(
+        asCondition.field,
+        'INVALID_FILTER_FIELD',
+      );
       const op = asCondition.op ?? 'eq';
       const value = this.coerceValue(asCondition.value);
       if (op === 'eq') return { [field]: value };
@@ -200,24 +222,31 @@ export class DashboardToolsService {
         return { [field]: { $exists: Boolean(asCondition.value) } };
       }
       if (op === 'regex') {
-        if (typeof asCondition.value !== 'string') throw new Error('INVALID_REGEX_VALUE');
+        if (typeof asCondition.value !== 'string')
+          throw new Error('INVALID_REGEX_VALUE');
         return {
           [field]: {
             $regex: asCondition.value,
-            $options: typeof asCondition.options === 'string' ? asCondition.options : 'i',
+            $options:
+              typeof asCondition.options === 'string'
+                ? asCondition.options
+                : 'i',
           },
         };
       }
       if (op === 'contains') {
-        if (typeof asCondition.value !== 'string') throw new Error('INVALID_CONTAINS_VALUE');
+        if (typeof asCondition.value !== 'string')
+          throw new Error('INVALID_CONTAINS_VALUE');
         return { [field]: { $regex: asCondition.value, $options: 'i' } };
       }
       if (op === 'starts_with') {
-        if (typeof asCondition.value !== 'string') throw new Error('INVALID_STARTS_WITH_VALUE');
+        if (typeof asCondition.value !== 'string')
+          throw new Error('INVALID_STARTS_WITH_VALUE');
         return { [field]: { $regex: `^${asCondition.value}`, $options: 'i' } };
       }
       if (op === 'ends_with') {
-        if (typeof asCondition.value !== 'string') throw new Error('INVALID_ENDS_WITH_VALUE');
+        if (typeof asCondition.value !== 'string')
+          throw new Error('INVALID_ENDS_WITH_VALUE');
         return { [field]: { $regex: `${asCondition.value}$`, $options: 'i' } };
       }
       throw new Error('INVALID_FILTER_OPERATOR');
@@ -256,7 +285,8 @@ export class DashboardToolsService {
    * @keyword-en normalize python literals to json literals
    */
   private normalizePythonLiterals(raw: string): string {
-    const isWord = (ch: string | undefined): boolean => !!ch && /[A-Za-z0-9_]/.test(ch);
+    const isWord = (ch: string | undefined): boolean =>
+      !!ch && /[A-Za-z0-9_]/.test(ch);
     const tokenMap: Array<[string, string]> = [
       ['None', 'null'],
       ['True', 'true'],
@@ -293,7 +323,8 @@ export class DashboardToolsService {
       for (const [token, value] of tokenMap) {
         if (!raw.startsWith(token, i)) continue;
         const prev = i > 0 ? raw[i - 1] : undefined;
-        const next = i + token.length < raw.length ? raw[i + token.length] : undefined;
+        const next =
+          i + token.length < raw.length ? raw[i + token.length] : undefined;
         if (isWord(prev) || isWord(next)) continue;
         out += value;
         i += token.length;
@@ -312,7 +343,9 @@ export class DashboardToolsService {
    * @keyword-en normalize dashboard patch input
    */
   private normalizePatchInput(value: unknown): Record<string, unknown> {
-    const unwrapPatchObject = (obj: Record<string, unknown>): Record<string, unknown> => {
+    const unwrapPatchObject = (
+      obj: Record<string, unknown>,
+    ): Record<string, unknown> => {
       const configVal = obj['config'];
       if (
         Object.keys(obj).length === 1 &&
@@ -387,7 +420,10 @@ export class DashboardToolsService {
    * @returns {CreateAgentParams['tools']} 工具集合
    * @keyword-en dashboard tools handle tenant scope
    */
-  getHandle(scope?: { tenantId?: string; userId?: string }): CreateAgentParams['tools'] {
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
     const tenantId = scope?.tenantId;
 
     /**
@@ -434,7 +470,7 @@ export class DashboardToolsService {
         const prefix = this.buildTenantPrefix(tenantId);
         const collection = `${prefix}_${table}`;
         const filter: Record<string, unknown> =
-          where && typeof where === 'object' ? (where as Record<string, unknown>) : {};
+          where && typeof where === 'object' ? where : {};
         const col = this.db.collection(collection);
         if (mode === 'count') {
           const count = await col.countDocuments(filter);
@@ -443,8 +479,11 @@ export class DashboardToolsService {
         if (mode === 'aggregate') {
           // pipeline 优先；未提供时自动构建简单 match+count pipeline
           const agg = Array.isArray(pipeline)
-            ? (pipeline as Record<string, unknown>[])
-            : ([{ $match: filter }, { $count: 'total' }] as Record<string, unknown>[]);
+            ? pipeline
+            : ([{ $match: filter }, { $count: 'total' }] as Record<
+                string,
+                unknown
+              >[]);
           const rows = await col.aggregate(agg).toArray();
           return JSON.stringify({ rows });
         }
@@ -458,20 +497,25 @@ export class DashboardToolsService {
       },
       {
         name: 'tenant_query',
-        description:
-          '查询租户专属表数据（sass_schema 中的表，自动加前缀）。',
+        description: '查询租户专属表数据（sass_schema 中的表，自动加前缀）。',
         schema: z.object({
           table: z
             .string()
-            .describe('Logical table name, e.g. "orders", "order_usages" (no prefix)'),
+            .describe(
+              'Logical table name, e.g. "orders", "order_usages" (no prefix)',
+            ),
           mode: z
             .enum(['count', 'list', 'aggregate'])
             .default('count')
-            .describe('count=total docs; list=fetch rows; aggregate=run aggregation pipeline'),
+            .describe(
+              'count=total docs; list=fetch rows; aggregate=run aggregation pipeline',
+            ),
           where: z
             .record(z.string(), z.unknown())
             .optional()
-            .describe('MongoDB filter for count/list mode, e.g. {"channelName": "抖音"}'),
+            .describe(
+              'MongoDB filter for count/list mode, e.g. {"channelName": "抖音"}',
+            ),
           pipeline: z
             .array(z.record(z.string(), z.unknown()))
             .optional()
@@ -521,13 +565,16 @@ export class DashboardToolsService {
           const safeSort = this.normalizeSort(sort);
           const safeProjection = this.normalizeProjection(projection);
           const safeFilter = this.sanitizeSimpleFilter(
-            filter && typeof filter === 'object' ? (filter as Record<string, unknown>) : undefined,
+            filter && typeof filter === 'object' ? filter : undefined,
           );
           const finalFilter = this.buildFinalFilter(
             safeFilter,
-            where && typeof where === 'object' ? (where as MongoWhereNode) : undefined,
+            where && typeof where === 'object'
+              ? (where as MongoWhereNode)
+              : undefined,
           );
-          const col = this.db.collection<Record<string, unknown>>(physicalCollection);
+          const col =
+            this.db.collection<Record<string, unknown>>(physicalCollection);
           if (mode === 'count') {
             const count = await col.countDocuments(finalFilter);
             return JSON.stringify({
@@ -541,7 +588,9 @@ export class DashboardToolsService {
             const normalizedPipeline = this.normalizePipelineInput(pipeline);
             const aggregatePipeline: Record<string, unknown>[] = [];
             if (Object.keys(finalFilter).length > 0) {
-              aggregatePipeline.push({ $match: finalFilter as Record<string, unknown> });
+              aggregatePipeline.push({
+                $match: finalFilter as Record<string, unknown>,
+              });
             }
             aggregatePipeline.push(...normalizedPipeline);
             if (safeSkip > 0) aggregatePipeline.push({ $skip: safeSkip });
@@ -555,7 +604,10 @@ export class DashboardToolsService {
             });
           }
           const rows = await col
-            .find(finalFilter, safeProjection ? { projection: safeProjection } : undefined)
+            .find(
+              finalFilter,
+              safeProjection ? { projection: safeProjection } : undefined,
+            )
             .sort(safeSort ?? { _id: -1 })
             .skip(safeSkip)
             .limit(safeLimit)
@@ -567,7 +619,8 @@ export class DashboardToolsService {
             rows,
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           return JSON.stringify({
             error: 'DASHBOARD_MONGO_SEARCH_INVALID_INPUT',
             message,
@@ -584,7 +637,9 @@ export class DashboardToolsService {
         schema: z.object({
           collection: z
             .string()
-            .describe('Logical collection name, e.g. "todo_items" (no tenant prefix).'),
+            .describe(
+              'Logical collection name, e.g. "todo_items" (no tenant prefix).',
+            ),
           mode: z.enum(['list', 'count', 'aggregate']).default('list'),
           filter: z
             .record(z.string(), z.unknown())
@@ -620,7 +675,8 @@ export class DashboardToolsService {
      */
     const dashboardConfigView = tool(
       async ({ dashboardCode }) => {
-        const safeDashboardCode = this.normalizeDashboardCodeForTool(dashboardCode);
+        const safeDashboardCode =
+          this.normalizeDashboardCodeForTool(dashboardCode);
         const result = await this.dashboardConfig.getScopedConfig({
           tenantId,
           dashboardCode: safeDashboardCode,
@@ -649,7 +705,8 @@ export class DashboardToolsService {
     const dashboardConfigPatch = tool(
       async ({ dashboardCode, patch }) => {
         try {
-          const safeDashboardCode = this.normalizeDashboardCodeForTool(dashboardCode);
+          const safeDashboardCode =
+            this.normalizeDashboardCodeForTool(dashboardCode);
           const safePatch = this.normalizePatchInput(patch);
           await this.dashboardConfig.patchConfig({
             tenantId,
@@ -658,7 +715,8 @@ export class DashboardToolsService {
           });
           return JSON.stringify({ ok: true });
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message =
+            error instanceof Error ? error.message : String(error);
           return JSON.stringify({
             error: 'DASHBOARD_CONFIG_PATCH_INVALID_INPUT',
             message,

@@ -4,7 +4,7 @@ import { TransformValidatorService } from './services/transform-validator.servic
 
 /**
  * @description 财务 Transform 引擎模块(纯函数 + 校验,无外部依赖)
- * @keyword-en finance transform module, dsl engine, validator
+ * @keyword-en finance-transform-module, dsl-engine, validator
  */
 @Module({
   providers: [TransformEngineService, TransformValidatorService],

@@ -14,7 +14,7 @@ import { TransformValidatorService } from '../../transform/services/transform-va
 
 /**
  * @description Agent 工具作用域(admin user + binding name)
- * @keyword-en finance tools scope
+ * @keyword-en finance-tools-scope, tool-scope
  */
 export interface FinanceToolsScope {
   adminUser: AdminUserEntity;
@@ -23,7 +23,7 @@ export interface FinanceToolsScope {
 
 /**
  * @description 财务 Agent 工具集(按 admin user + binding name 维度构建,closure 校验租户)
- * @keyword-en finance agent tools, langchain, transform crud, source sample, dry run
+ * @keyword-en finance-agent-tools, langchain-tools
  */
 @Injectable()
 export class FinanceToolsService {
@@ -39,7 +39,7 @@ export class FinanceToolsService {
 
   /**
    * @description 获取财务工具句柄
-   * @keyword-en get finance tools handle by scope
+   * @keyword-en finance-tools-handle, tool-scope
    */
   getHandle(scope: FinanceToolsScope): CreateAgentParams['tools'] {
     return [
@@ -55,14 +55,17 @@ export class FinanceToolsService {
 
   /**
    * @description 取当前 binding(让 agent 知道有哪些源 + 默认 flow/partyType)
-   * @keyword-en get binding tool
+   * @keyword-en binding-tool, tool-read
    */
   private createGetBindingTool(scope: FinanceToolsScope) {
     return tool(
       async () => {
         try {
           const tenantId = this.resolveScopeId(scope.adminUser);
-          const binding = await this.bindingService.getByName(tenantId, scope.name);
+          const binding = await this.bindingService.getByName(
+            tenantId,
+            scope.name,
+          );
           return JSON.stringify({
             name: scope.name,
             flowDefault: binding?.flowDefault,
@@ -85,14 +88,17 @@ export class FinanceToolsService {
 
   /**
    * @description 拉源数据样本(给 agent 推断字段使用)
-   * @keyword-en read source sample tool
+   * @keyword-en source-sample-tool, alias-injection
    */
   private createReadSourceSampleTool(scope: FinanceToolsScope) {
     return tool(
       async (input: { sourceIndex?: number; sampleSize?: number }) => {
         try {
           const tenantId = this.resolveScopeId(scope.adminUser);
-          const binding = await this.bindingService.getByName(tenantId, scope.name);
+          const binding = await this.bindingService.getByName(
+            tenantId,
+            scope.name,
+          );
           if (!binding?.sources?.length) {
             return JSON.stringify({ error: 'NO_BINDING_SOURCES' });
           }
@@ -103,7 +109,10 @@ export class FinanceToolsService {
           const source = binding.sources[idx];
           const sampleSize = Math.max(1, Math.min(20, input.sampleSize ?? 5));
           const result = await this.fetchSample(tenantId, source, sampleSize);
-          const rows = this.injectSourceAlias(result.rows.slice(0, sampleSize), source.alias);
+          const rows = this.injectSourceAlias(
+            result.rows.slice(0, sampleSize),
+            source.alias,
+          );
           return JSON.stringify({
             sourceIndex: idx,
             source,
@@ -134,7 +143,7 @@ export class FinanceToolsService {
 
   /**
    * @description 取已保存的 transform DSL(供 agent 解读)
-   * @keyword-en get transform tool
+   * @keyword-en transform-get-tool, dsl-read
    */
   private createGetTransformTool(scope: FinanceToolsScope) {
     return tool(
@@ -165,17 +174,20 @@ export class FinanceToolsService {
 
   /**
    * @description 保存 transform DSL(落库前 validator 校验)
-   * @keyword-en set transform tool
+   * @keyword-en transform-set-tool, dsl-save
    */
   private createSetTransformTool(scope: FinanceToolsScope) {
     return tool(
       async (input: { dsl: unknown; explanation?: string }) => {
         try {
-          const transform = await this.transformService.upsert(scope.adminUser, {
-            name: scope.name,
-            dsl: input.dsl,
-            explanation: input.explanation,
-          });
+          const transform = await this.transformService.upsert(
+            scope.adminUser,
+            {
+              name: scope.name,
+              dsl: input.dsl,
+              explanation: input.explanation,
+            },
+          );
           return JSON.stringify({
             ok: true,
             name: transform.name,
@@ -191,7 +203,7 @@ export class FinanceToolsService {
       {
         name: 'finance_set_transform',
         description:
-          'Save the transform DSL for the current binding name. Pass `dsl` as a JSON OBJECT (NOT stringified). Schema: { version:1, filter?:[{field,op,value}], fields:[{to, from?, type?, format?, default?, compute?, fields?, sep?, when?, then?, else?, value?, map?}] }. Compute ops: concat / sum / coalesce / if / const / lookup. On failure returns { ok:false, error:"<code>:<detail>" }; read `error` to fix the DSL and retry.',
+          'Save the transform DSL for the current binding name. Pass `dsl` as a JSON OBJECT (NOT stringified). Schema: { version:1, filter?:[{field,op,value,conditions?}], fields:[{to, from?, type?, format?, default?, merge?, compute?, fields?, sep?, when?, then?, else?, value?, map?}] }. Compute ops: concat / sum / coalesce / if / const / lookup. Filters support or/and groups and between. Later rules can reference earlier computed fields; if.then/else and lookup map values may contain nested compute or {from}. On failure returns { ok:false, error:"<code>:<detail>" }; read `error` to fix the DSL and retry.',
         schema: z.object({
           dsl: z
             .any()
@@ -207,7 +219,7 @@ export class FinanceToolsService {
 
   /**
    * @description 试运行 transform(传 DSL + 拉部分样本,返回转换结果,不落库)
-   * @keyword-en dry run transform tool
+   * @keyword-en transform-dry-run-tool, dsl-validate
    */
   private createDryRunTransformTool(scope: FinanceToolsScope) {
     return tool(
@@ -219,7 +231,10 @@ export class FinanceToolsService {
         try {
           const tenantId = this.resolveScopeId(scope.adminUser);
           const dsl = this.transformValidator.validate(input.dsl);
-          const binding = await this.bindingService.getByName(tenantId, scope.name);
+          const binding = await this.bindingService.getByName(
+            tenantId,
+            scope.name,
+          );
           if (!binding?.sources?.length) {
             return JSON.stringify({ error: 'NO_BINDING_SOURCES' });
           }
@@ -249,10 +264,15 @@ export class FinanceToolsService {
       {
         name: 'finance_dry_run_transform',
         description:
-          'Validate a transform DSL and dry-run it against a sample from a bound source. Pass `dsl` as a JSON OBJECT. Returns counts, error preview, output preview, or { error:"<code>:<detail>" } on schema failure. Does NOT persist.',
+          'Validate a transform DSL and dry-run it against a sample from a bound source. Supports nested compute, computed-field references, duplicate-field merge, or/and, and between. Pass `dsl` as a JSON OBJECT. Returns counts, error preview, output preview, or { error:"<code>:<detail>" } on schema failure. Does NOT persist.',
         schema: z.object({
-          dsl: z.any().describe('DSL as a JSON object (OBJECT, not stringified)'),
-          sourceIndex: z.number().optional().describe('Source index, default 0'),
+          dsl: z
+            .any()
+            .describe('DSL as a JSON object (OBJECT, not stringified)'),
+          sourceIndex: z
+            .number()
+            .optional()
+            .describe('Source index, default 0'),
           sampleSize: z
             .number()
             .optional()
@@ -264,7 +284,7 @@ export class FinanceToolsService {
 
   /**
    * @description 列外部 stores(让 agent 写 compute:lookup 的 map 时知道目标系统有哪些 storeId)
-   * @keyword-en list external stores tool
+   * @keyword-en external-stores-tool, lookup-source
    */
   private createListExternalStoresTool(scope: FinanceToolsScope) {
     return tool(
@@ -295,13 +315,15 @@ export class FinanceToolsService {
 
   /**
    * @description 列外部 companies
-   * @keyword-en list external companies tool
+   * @keyword-en external-companies-tool, lookup-source
    */
   private createListExternalCompaniesTool(scope: FinanceToolsScope) {
     return tool(
       async () => {
         try {
-          const companies = await this.externalService.listCompanies(scope.adminUser);
+          const companies = await this.externalService.listCompanies(
+            scope.adminUser,
+          );
           return JSON.stringify({
             companies: companies.map((c) => ({
               id: c.id,
@@ -326,7 +348,7 @@ export class FinanceToolsService {
 
   /**
    * @description 通用样本拉取(按源类型分发)
-   * @keyword-en fetch sample by source item
+   * @keyword-en source-sample-fetch, source-dispatch
    */
   private async fetchSample(
     tenantId: string,
@@ -351,10 +373,16 @@ export class FinanceToolsService {
 
   /**
    * @description 把 source.alias 作为 source_alias 字段注入到每行 fields(与 record_id 同风格;用户列里若已有同名字段则保留)
-   * @keyword-en inject source alias as virtual row field
+   * @keyword-en source-alias-inject, virtual-field
    */
   private injectSourceAlias(
-    rows: ReadonlyArray<{ id: string; fields: Record<string, unknown>; sourceType: 'bitable' | 'approval'; createdAt?: number; updatedAt?: number }>,
+    rows: ReadonlyArray<{
+      id: string;
+      fields: Record<string, unknown>;
+      sourceType: 'bitable' | 'approval';
+      createdAt?: number;
+      updatedAt?: number;
+    }>,
     alias: string | undefined,
   ) {
     if (!alias) return rows.map((r) => ({ ...r }));
@@ -369,7 +397,7 @@ export class FinanceToolsService {
 
   /**
    * @description 解析当前 admin 用户的作用域 ID
-   * @keyword-en resolve scope id from admin user
+   * @keyword-en scope-id-resolve, tenant-scope
    */
   private resolveScopeId(adminUser: AdminUserEntity): string {
     const tenantId = String(adminUser.tenantId ?? '').trim();

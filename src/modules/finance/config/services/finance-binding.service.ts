@@ -85,7 +85,19 @@ export class FinanceBindingService {
    */
   async list(currentUser: AdminUserEntity): Promise<FinanceBindingEntity[]> {
     const scopeId = this.resolveScopeId(currentUser);
-    return this.collection.find({ tenantId: scopeId }).sort({ name: 1 }).toArray();
+    return this.listByScope(scopeId);
+  }
+
+  /**
+   * @description List all bindings for a tenant scope, used by webhook-driven sync.
+   * @keyword-en list-bindings-by-scope, webhook-sync
+   * @keyword-cn 按作用域列出绑定, webhook同步
+   */
+  async listByScope(scopeId: string): Promise<FinanceBindingEntity[]> {
+    return this.collection
+      .find({ tenantId: scopeId })
+      .sort({ name: 1 })
+      .toArray();
   }
 
   /**
@@ -141,7 +153,8 @@ export class FinanceBindingService {
         },
       );
       const renamed = await this.collection.findOne({ _id: existed._id });
-      if (!renamed) throw new BadRequestException('FINANCE_BINDING_SAVE_FAILED');
+      if (!renamed)
+        throw new BadRequestException('FINANCE_BINDING_SAVE_FAILED');
       return renamed;
     }
 
@@ -164,7 +177,8 @@ export class FinanceBindingService {
       },
       { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
-    if (!res.value) throw new BadRequestException('FINANCE_BINDING_SAVE_FAILED');
+    if (!res.value)
+      throw new BadRequestException('FINANCE_BINDING_SAVE_FAILED');
     return res.value;
   }
 

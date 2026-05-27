@@ -10,6 +10,7 @@ import {
   FEISHU_FIELD_TYPE_MAP,
 } from './feishu-bitable.config.js';
 import { FieldMeta } from '../../types/data-source.types.js';
+import { createFeishuHttpInstance } from '../../../../shared/network/feishu-http-instance.js';
 
 type FeishuBitableFilterCondition = {
   field?: string;
@@ -136,6 +137,8 @@ export class FeishuBitableSourceService {
       appId: first.appId,
       appSecret: first.appSecret,
       disableTokenCache: false,
+      // 飞书境内直连,禁用 axios env 代理,避免经本地代理明文 HTTP 发往 HTTPS 端口
+      httpInstance: createFeishuHttpInstance(),
     });
 
     return this.client;

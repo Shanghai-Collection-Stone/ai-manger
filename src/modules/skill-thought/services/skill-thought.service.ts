@@ -39,7 +39,10 @@ export class SkillThoughtService {
    * @param input - 创建参数
    * @param asyncMode - 是否异步模式（默认false），异步模式不会等待向量生成
    */
-  async create(input: SkillThoughtCreateInput, asyncMode = false): Promise<SkillThoughtEntity> {
+  async create(
+    input: SkillThoughtCreateInput,
+    asyncMode = false,
+  ): Promise<SkillThoughtEntity> {
     const now = new Date();
     const entity: SkillThoughtEntity = {
       _id: new ObjectId(),
@@ -69,7 +72,10 @@ export class SkillThoughtService {
       // 同步模式：生成向量
       const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
       const textForEmbedding = `${input.summary ?? input.content} ${(input.keywords ?? []).join(' ')}`;
-      entity.embedding = await this.embeddingService.embedText(textForEmbedding, embeddingConfig);
+      entity.embedding = await this.embeddingService.embedText(
+        textForEmbedding,
+        embeddingConfig,
+      );
       await this.collection.insertOne(entity);
     }
 
@@ -93,7 +99,10 @@ export class SkillThoughtService {
       // 3. 生成向量
       const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
       const textForEmbedding = `${summary} ${keywords.join(' ')}`;
-      const embedding = await this.embeddingService.embedText(textForEmbedding, embeddingConfig);
+      const embedding = await this.embeddingService.embedText(
+        textForEmbedding,
+        embeddingConfig,
+      );
 
       // 4. 更新记录
       await this.collection.updateOne(
@@ -108,9 +117,14 @@ export class SkillThoughtService {
           },
         },
       );
-      console.log(`[SkillThoughtService] Thought ${id} async processing completed`);
+      console.log(
+        `[SkillThoughtService] Thought ${id} async processing completed`,
+      );
     } catch (error) {
-      console.error(`[SkillThoughtService] Thought ${id} async processing failed:`, error);
+      console.error(
+        `[SkillThoughtService] Thought ${id} async processing failed:`,
+        error,
+      );
       await this.collection.updateOne(
         { _id: new ObjectId(id) },
         { $set: { status: 'failed', updatedAt: new Date() } },

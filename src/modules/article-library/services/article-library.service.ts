@@ -73,9 +73,13 @@ export class ArticleLibraryService {
   ): ArticleLibraryPushConfig {
     const statusFilter: ArticlePublishStatus[] = ['unpublished'];
     const pushUrl =
-      typeof input?.pushUrl === 'string' ? input!.pushUrl.trim() || undefined : undefined;
+      typeof input?.pushUrl === 'string'
+        ? input.pushUrl.trim() || undefined
+        : undefined;
     const qrToken =
-      typeof input?.qrToken === 'string' ? input!.qrToken.trim() || undefined : undefined;
+      typeof input?.qrToken === 'string'
+        ? input.qrToken.trim() || undefined
+        : undefined;
     return { statusFilter, pushUrl, qrToken };
   }
 
@@ -83,7 +87,9 @@ export class ArticleLibraryService {
    * @description 创建文章库
    * @keyword-en article library create
    */
-  async create(input: ArticleLibraryCreateInput): Promise<ArticleLibraryEntity> {
+  async create(
+    input: ArticleLibraryCreateInput,
+  ): Promise<ArticleLibraryEntity> {
     const now = new Date();
     const scope: ArticleLibraryScope = input.scope ?? 'tenant';
     const id = await this.nextId();
@@ -272,10 +278,7 @@ export class ArticleLibraryService {
    * @description 取文章库缩略图所需的前 N 篇文章首图
    * @keyword-en article library thumbnail sources by first image
    */
-  async getThumbnailImages(
-    libraryId: number,
-    limit = 4,
-  ): Promise<string[]> {
+  async getThumbnailImages(libraryId: number, limit = 4): Promise<string[]> {
     const safeLimit = Math.max(1, Math.min(limit, 9));
     const docs = await this.articles
       .find(

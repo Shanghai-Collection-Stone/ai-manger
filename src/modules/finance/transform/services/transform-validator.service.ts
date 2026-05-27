@@ -19,6 +19,9 @@ const VALID_FILTER_OPS = new Set([
   'contains',
   'isEmpty',
   'isNotEmpty',
+  'between',
+  'or',
+  'and',
 ]);
 
 const VALID_COMPUTE_OPS = new Set([
@@ -32,15 +35,25 @@ const VALID_COMPUTE_OPS = new Set([
 
 const VALID_TYPES = new Set(['string', 'number', 'boolean', 'date', 'array']);
 
+const VALID_MERGE_MODES = new Set([
+  'auto',
+  'replace',
+  'append',
+  'array',
+  'concat',
+  'sum',
+  'object',
+]);
+
 /**
  * @description Transform DSL 校验器（落库前/Agent 输出后调用）
- * @keyword-en transform validator, dsl schema check
+ * @keyword-en transform-validator, dsl-schema-check
  */
 @Injectable()
 export class TransformValidatorService {
   /**
    * @description 校验 DSL 结构合法性，抛 BadRequestException；string 入参自动 JSON.parse 兜底（LLM 常 stringify）
-   * @keyword-en validate dsl structure with string fallback
+   * @keyword-en dsl-validate, string-fallback
    */
   validate(dsl: unknown): TransformDsl {
     let parsed: unknown = dsl;
@@ -62,7 +75,11 @@ export class TransformValidatorService {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new BadRequestException(
         `TRANSFORM_DSL_INVALID:期望 object，收到 ${
-          parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed
+          parsed === null
+            ? 'null'
+            : Array.isArray(parsed)
+              ? 'array'
+              : typeof parsed
         }`,
       );
     }
@@ -79,9 +96,7 @@ export class TransformValidatorService {
         'TRANSFORM_DSL_FIELDS_REQUIRED:fields 必须是非空数组',
       );
     }
-    const fields = fieldsRaw.map((rule, idx) =>
-      this.validateField(rule, idx),
-    );
+    const fields = fieldsRaw.map((rule, idx) => this.validateField(rule, idx));
     const filterRaw = obj.filter;
     let filter: TransformFilterCondition[] | undefined;
     if (typeof filterRaw !== 'undefined' && filterRaw !== null) {
@@ -90,14 +105,16 @@ export class TransformValidatorService {
           'TRANSFORM_DSL_FILTER_INVALID:filter 必须是数组（或省略）',
         );
       }
-      filter = filterRaw.map((c, idx) => this.validateCondition(c, `filter[${idx}]`));
+      filter = filterRaw.map((c, idx) =>
+        this.validateCondition(c, `filter[${idx}]`),
+      );
     }
     return { version, filter, fields };
   }
 
   /**
    * @description 校验单条字段规则
-   * @keyword-en validate field rule
+   * @keyword-en field-rule-validate, dsl-field
    */
   private validateField(input: unknown, idx: number): TransformFieldRule {
     if (!input || typeof input !== 'object') {
@@ -137,22 +154,32 @@ export class TransformValidatorService {
             : undefined,
         type: this.validateType(obj.type, `field[${idx}]`),
         default: obj.default,
+        merge: this.validateMerge(obj.merge, `field[${idx}]`),
       };
       if (op === 'if' && !rule.when) {
         throw new BadRequestException(`TRANSFORM_FIELD_IF_NEEDS_WHEN:${idx}`);
       }
-      if ((op === 'concat' || op === 'sum' || op === 'coalesce') && (!rule.fields || rule.fields.length === 0)) {
+      if (
+        (op === 'concat' || op === 'sum' || op === 'coalesce') &&
+        (!rule.fields || rule.fields.length === 0)
+      ) {
         throw new BadRequestException(`TRANSFORM_FIELD_FIELDS_REQUIRED:${idx}`);
       }
       if (op === 'const' && typeof rule.value === 'undefined') {
-        throw new BadRequestException(`TRANSFORM_FIELD_CONST_NEEDS_VALUE:${idx}`);
+        throw new BadRequestException(
+          `TRANSFORM_FIELD_CONST_NEEDS_VALUE:${idx}`,
+        );
       }
       if (op === 'lookup') {
         if (!rule.from) {
-          throw new BadRequestException(`TRANSFORM_FIELD_LOOKUP_NEEDS_FROM:${idx}`);
+          throw new BadRequestException(
+            `TRANSFORM_FIELD_LOOKUP_NEEDS_FROM:${idx}`,
+          );
         }
         if (!rule.map) {
-          throw new BadRequestException(`TRANSFORM_FIELD_LOOKUP_NEEDS_MAP:${idx}`);
+          throw new BadRequestException(
+            `TRANSFORM_FIELD_LOOKUP_NEEDS_MAP:${idx}`,
+          );
         }
       }
       return rule;
@@ -167,13 +194,14 @@ export class TransformValidatorService {
       type: this.validateType(obj.type, `field[${idx}]`),
       format: typeof obj.format === 'string' ? obj.format : undefined,
       default: obj.default,
+      merge: this.validateMerge(obj.merge, `field[${idx}]`),
     };
     return rule;
   }
 
   /**
    * @description 校验过滤条件
-   * @keyword-en validate filter condition
+   * @keyword-en filter-condition-validate, filter-op
    */
   private validateCondition(
     input: unknown,
@@ -185,11 +213,26 @@ export class TransformValidatorService {
     const obj = input as Record<string, unknown>;
     const field = String(obj.field ?? '').trim();
     const op = String(obj.op ?? '');
-    if (!field) {
-      throw new BadRequestException(`TRANSFORM_CONDITION_FIELD_REQUIRED:${label}`);
-    }
     if (!VALID_FILTER_OPS.has(op)) {
       throw new BadRequestException(`TRANSFORM_CONDITION_OP_INVALID:${label}`);
+    }
+    if (op === 'or' || op === 'and') {
+      if (!Array.isArray(obj.conditions) || obj.conditions.length === 0) {
+        throw new BadRequestException(
+          `TRANSFORM_CONDITION_GROUP_REQUIRED:${label}`,
+        );
+      }
+      return {
+        op: op as TransformFilterCondition['op'],
+        conditions: obj.conditions.map((item, idx) =>
+          this.validateCondition(item, `${label}.conditions[${idx}]`),
+        ),
+      };
+    }
+    if (!field) {
+      throw new BadRequestException(
+        `TRANSFORM_CONDITION_FIELD_REQUIRED:${label}`,
+      );
     }
     return {
       field,
@@ -200,7 +243,7 @@ export class TransformValidatorService {
 
   /**
    * @description 校验类型字段
-   * @keyword-en validate value type
+   * @keyword-en value-type-validate, value-cast
    */
   private validateType(
     value: unknown,
@@ -212,5 +255,21 @@ export class TransformValidatorService {
       throw new BadRequestException(`TRANSFORM_TYPE_INVALID:${label}`);
     }
     return str as TransformMapRule['type'];
+  }
+
+  /**
+   * @description 校验同名输出字段合并策略
+   * @keyword-en merge-mode-validate, duplicate-field
+   */
+  private validateMerge(
+    value: unknown,
+    label: string,
+  ): TransformMapRule['merge'] {
+    if (typeof value === 'undefined') return undefined;
+    const str = String(value);
+    if (!VALID_MERGE_MODES.has(str)) {
+      throw new BadRequestException(`TRANSFORM_MERGE_INVALID:${label}`);
+    }
+    return str as TransformMapRule['merge'];
   }
 }

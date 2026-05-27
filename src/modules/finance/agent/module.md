@@ -1,57 +1,59 @@
 # Finance-Agent Module
 
-## 模块描述
-财务 Agent 模块。围绕**单个 binding name** 提供「设定 / 解读 transform」对话能力。
-**system prompt 内含外部财务系统的 financial_event 目标 schema**(对齐 api.md §6:`flow / stage / partyType / occurredAt / dueAt / settledAt / storeId / companyId / ...`),让 agent 生成的 DSL 直接合规。
-- 工具集:`finance_get_binding` / `finance_read_source_sample` / `finance_get_transform` / `finance_set_transform` / `finance_dry_run_transform` / `finance_list_external_stores` / `finance_list_external_companies`
-- storeId/companyId 不在 source 级别绑定。Agent 通过 `finance_list_external_stores/companies` 工具拿目标系统 ID 列表,然后用 `compute: lookup` 从源行字段(如"门店"、"商户号"、"备注")映射
-- **每个 source 的 `alias` 就是表定义**(用户起的名字本身已携带语义,如"云境上海银行流水")。tools 拉行后把 alias 注入到每行 fields 的 `source_alias` 保留字段(与 `record_id` 同风格),DSL 通过 `from: "source_alias"` 行级引用 + `compute: lookup` 映射成 companyId/bankAccount 等
-- 暴露 `getToolsHandle(scope)` 与 `getSystemPrompt()`(可供其他 chat 入口接入)
-- **后台 chat 入口**:`POST /admin/finance/agent/chat`,传 `{ name, messages[] }`,返回 `{ reply }`
-- 工具内部 closure 校验租户边界(基于 admin user)
+## 模块名称 (Module Name)
+Finance-Agent
 
-文件路径: `src/modules/finance/agent`
+## 概述 (Overview)
+财务 Agent 围绕单个 binding name 提供 Transform DSL 设计、解释、试运行与保存能力。后台接口支持同步 chat 和 SSE 流式 chat;流式 chat 会返回 token、tool_start、tool_chunk、tool_end、end/error 等事件,让前端实时展示模型输出和工具调用进度。
 
-## 功能描述及关键词
+## 文件清单 (File List)
+- `finance-agent.module.ts` — Nest 模块定义,聚合 Agent、配置、源、Transform 与推送依赖。
+- `services/finance-agent.service.ts` — 财务 Agent 对外服务,提供系统提示词、工具句柄、同步 chat 与流式 chat。
+- `services/finance-tools.service.ts` — LangChain 工具集合,封装 binding、source sample、transform CRUD、dry-run、外部 stores/companies 查询。
+- `controller/finance-agent-admin.controller.ts` — 后台管理端财务 Agent 控制器。
+- `controller/finance-agent.dto.ts` — 财务 Agent chat DTO。
 
-### services/finance-tools.service.ts
-LangChain 工具集合(zod schema + tool() 包装),按 admin user + binding name 维度构建。
-- **关键词**: finance agent tools, langchain, zod schema, transform crud by name, source sample, dry run, external stores companies query
-- **类型**: `FinanceToolsScope`: `{ adminUser, name }`
-- **函数**:
-  - `getHandle`: 返回工具数组(7 个)/get tools handle
-  - `createGetBindingTool`: 取当前 name 绑定(sources/flowDefault/partyTypeDefault)/get binding tool
-  - `createReadSourceSampleTool`: 拉源样本(默认 5 行,自动注入 source_alias 到样本 fields)/read source sample with alias injection
-  - `createGetTransformTool`: 取已保存 DSL /get transform tool
-  - `createSetTransformTool`: 保存 DSL(落库前 validator 校验)/set transform tool
-  - `createDryRunTransformTool`: 试运行 DSL(自动注入 source_alias,不落库)/dry run transform tool with alias injection
-  - `injectSourceAlias`: 把 source.alias 注入到样本行 fields 的 source_alias 字段(私有 helper)/inject source alias into row fields
-  - `createListExternalStoresTool`: 列外部 stores(给 Agent 写 lookup map 用)/list external stores
-  - `createListExternalCompaniesTool`: 列外部 companies /list external companies
-  - `fetchSample`: 按源类型分发 /fetch sample dispatch
-  - `resolveScopeId`: 解析作用域 ID /resolve scope id
+## 函数清单 (Function List)
+- `FinanceAgentModule()` — 财务 Agent Nest 模块 | keywords: finance-agent-module, external-resource-query
+- `FinanceAgentService()` — 财务 Agent 服务类 | keywords: finance-agent-service, system-prompt
+- `getToolsHandle(scope)` — 获取带 binding name 与 admin 作用域的工具集合 | keywords: finance-tools-handle, tool-scope
+- `getSystemPrompt()` — 返回财务 Agent 系统提示词 | keywords: finance-agent-system-prompt, system-prompt
+- `chat(scope,messages)` — 同步执行完整历史聊天并返回最终 reply | keywords: finance-agent-chat, one-shot-chat
+- `streamChat(scope,messages)` — 流式执行聊天并透传 token/tool 事件 | keywords: finance-agent-chat-stream, agent-stream
+- `FinanceToolsService()` — 财务 Agent 工具服务类 | keywords: finance-agent-tools, langchain-tools
+- `getHandle(scope)` — 返回全部财务工具数组 | keywords: finance-tools-handle, tool-scope
+- `createGetBindingTool(scope)` — 构建读取当前 binding 的工具 | keywords: binding-tool, tool-read
+- `createReadSourceSampleTool(scope)` — 构建读取源样本并注入 source_alias 的工具 | keywords: source-sample-tool, alias-injection
+- `createGetTransformTool(scope)` — 构建读取已保存 Transform DSL 的工具 | keywords: transform-get-tool, dsl-read
+- `createSetTransformTool(scope)` — 构建校验并保存 Transform DSL 的工具 | keywords: transform-set-tool, dsl-save
+- `createDryRunTransformTool(scope)` — 构建 DSL 校验与样本试运行工具 | keywords: transform-dry-run-tool, dsl-validate
+- `createListExternalStoresTool(scope)` — 构建外部门店列表工具 | keywords: external-stores-tool, lookup-source
+- `createListExternalCompaniesTool(scope)` — 构建外部公司列表工具 | keywords: external-companies-tool, lookup-source
+- `fetchSample(tenantId,source,sampleSize)` — 按源类型读取样本 | keywords: source-sample-fetch, source-dispatch
+- `injectSourceAlias(rows,alias?)` — 向源行 fields 注入 `source_alias` | keywords: source-alias-inject, virtual-field
+- `resolveScopeId(adminUser)` — 解析 admin user 的财务作用域 ID | keywords: scope-id-resolve, tenant-scope
+- `FinanceAgentAdminController()` — 后台财务 Agent 控制器类 | keywords: finance-agent-admin-controller, admin-chat
+- `chat(req,body)` — `POST /admin/finance/agent/chat` 同步聊天入口 | keywords: finance-agent-chat-endpoint, one-shot-chat
+- `chatStream(req,res,body)` — `POST /admin/finance/agent/chat/stream` SSE 流式聊天入口 | keywords: finance-agent-chat-stream, sse-endpoint
+- `write(event,data)` — 写出单个 SSE 事件 | keywords: finance-agent-sse-write, sse-event
 
-### services/finance-agent.service.ts
-对外服务(暴露工具句柄、system prompt,以及后台同步 chat)。
-- **关键词**: finance agent service, financial_event schema prompt, tools handle, chat one-shot
-- **system prompt 重点**:产出 financial_event 字段、stage 中文 → 枚举映射、强制 const 表达 flow/partyType、storeId/companyId 通过 lookup 从源行字段映射(先调 list_external_stores/companies 拿 ID 列表,再设计 lookup map);**externalId 默认用 `from: "record_id"`(每条源行 fields 自动带,飞书 record_id 或审批 instance_code 的统一 key)**
-- **函数**:
-  - `getToolsHandle`: 工具句柄(含 binding name)/get tools handle
-  - `getSystemPrompt`: 系统提示词 /get system prompt
-  - `chat`: 后台同步聊天(传完整历史 messages)/finance agent chat
+## 关键词索引 (Keyword Index)
+| 中文 | English |
+|---|---|
+| 财务 Agent | finance-agent-service |
+| 流式聊天 | finance-agent-chat-stream |
+| 工具事件 | sse-event |
+| 工具集合 | finance-agent-tools |
+| DSL 保存 | dsl-save |
+| DSL 试运行 | dsl-validate |
+| 源样本 | source-sample-fetch |
+| 外部映射来源 | lookup-source |
+| 租户作用域 | tenant-scope |
 
-### controller/finance-agent-admin.controller.ts
-后台 chat 控制器,挂 `/admin/finance/agent`。
-- **关键词**: finance agent admin controller, chat by name, admin auth guard
-- **函数**: `chat`: POST /chat 传 `{ name, messages }` 同步聊天 /finance agent chat endpoint
+## 类型导出 (Type Exports)
+- `FinanceToolsScope` — 工具构建作用域 | keywords: finance-tools-scope, tool-scope
+- `FinanceAgentChatMessageDto` — 单条 chat 消息 DTO | keywords: finance-agent-message-dto, chat-dto
+- `FinanceAgentChatDto` — chat 请求 DTO | keywords: finance-agent-chat-dto, chat-dto
 
-### controller/finance-agent.dto.ts
-DTO 定义。
-- **关键词**: finance agent dto, chat by binding name, class-validator
-- **类型**:
-  - `FinanceAgentChatMessageDto`: 单条消息(role + content)
-  - `FinanceAgentChatDto`: 聊天请求(`name + messages[]`)
-
-### finance-agent.module.ts
-模块定义。
-- **关键词**: finance agent module, providers, controllers, exports
+## 模块功能描述 (Module Feature Description)
+控制器负责 admin 鉴权和 HTTP/SSE 输出;服务层负责把前端历史消息转换为 LangChain message 并装入系统提示词与财务工具。工具层始终基于 admin user 解析租户边界,并在 source sample/dry-run 时注入 `source_alias`,便于 DSL 行级映射 companyId、storeId 与 bankAccount。

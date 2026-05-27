@@ -117,7 +117,10 @@ export class TodoController {
       tenantId: authUser?.tenantId,
     });
     void this.triggerRobotIfNeeded(doc).catch((err) => {
-      console.error('[TodoController] robot trigger failed', err instanceof Error ? err.message : String(err));
+      console.error(
+        '[TodoController] robot trigger failed',
+        err instanceof Error ? err.message : String(err),
+      );
     });
     return { todo: await this.toApiTodo(doc) };
   }
@@ -134,7 +137,8 @@ export class TodoController {
   ): Promise<Record<string, unknown>> {
     const authUser = await this.resolveAuthUser(req);
     const canViewAll = this.canViewAllTasks(authUser?.role);
-    const filterAssignee = assignee ?? (canViewAll ? undefined : authUser?.displayName);
+    const filterAssignee =
+      assignee ?? (canViewAll ? undefined : authUser?.displayName);
     const rows = await this.todo.listByScope({
       canViewAll,
       tenantId: authUser?.tenantId,
@@ -143,8 +147,12 @@ export class TodoController {
       category: category || undefined,
     });
     const agentConfigs = await this.adminService.listAgentConfigs();
-    const agentMap = new Map<string, string>(agentConfigs.map((a) => [String(a._id), a.name]));
-    return { todos: await Promise.all(rows.map((x) => this.toApiTodo(x, agentMap))) };
+    const agentMap = new Map<string, string>(
+      agentConfigs.map((a) => [String(a._id), a.name]),
+    );
+    return {
+      todos: await Promise.all(rows.map((x) => this.toApiTodo(x, agentMap))),
+    };
   }
 
   /**
@@ -212,7 +220,10 @@ export class TodoController {
       authUser?.tenantId,
     );
     void this.triggerRobotIfNeeded(doc).catch((err) => {
-      console.error('[TodoController] robot trigger failed', err instanceof Error ? err.message : String(err));
+      console.error(
+        '[TodoController] robot trigger failed',
+        err instanceof Error ? err.message : String(err),
+      );
     });
     return { todo: doc ? await this.toApiTodo(doc) : null };
   }
@@ -255,7 +266,10 @@ export class TodoController {
       tenantId: authUser?.tenantId,
     });
     void this.triggerRobotIfNeeded(doc).catch((err) => {
-      console.error('[TodoController] robot trigger failed', err instanceof Error ? err.message : String(err));
+      console.error(
+        '[TodoController] robot trigger failed',
+        err instanceof Error ? err.message : String(err),
+      );
     });
     return { todo: doc ? await this.toApiTodo(doc) : null };
   }
@@ -360,7 +374,7 @@ export class TodoController {
     void _id;
     return {
       ...rest,
-      assigneeDisplayName: displayName || (assignee || undefined),
+      assigneeDisplayName: displayName || assignee || undefined,
     };
   }
 }

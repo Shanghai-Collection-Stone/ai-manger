@@ -37,6 +37,7 @@
   - `searchSimilar`: 向量相似检索/search similar
   - `rebuildEmbeddings`: 批量重建向量/rebuild embeddings
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
+  - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
   - `generateThumbnail`: 生成缩略图
   - `searchByTags`: 按 tags 查询(**默认排除 isUsed=true,传 includeUsed=true 关闭**)/search images by tags excluding used
   - `sampleRandom`: 随机获取图片(**默认排除 isUsed=true,传 includeUsed=true 关闭**)/random sample excluding used

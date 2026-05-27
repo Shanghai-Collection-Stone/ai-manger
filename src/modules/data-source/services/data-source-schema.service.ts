@@ -238,7 +238,9 @@ export class DataSourceSchemaService {
     if (opts?.tenantId?.trim()) {
       const tid = opts.tenantId.trim();
       return rows
-        .filter((r) => r.scope === 'tenant' && (r.tenantId ?? '').trim() === tid)
+        .filter(
+          (r) => r.scope === 'tenant' && (r.tenantId ?? '').trim() === tid,
+        )
         .map((r) => r.code);
     }
 
@@ -633,7 +635,11 @@ export class DataSourceSchemaService {
     // 子租户：额外包含 sass_schema 表定义（sourceCode=tenant-mongo）
     if (opts?.tenantId?.trim() && entities.length < limit) {
       const sassRows = await this.db
-        .collection<{ table: string; tableDesc?: string; tableField?: Record<string, string> }>('sass_schema')
+        .collection<{
+          table: string;
+          tableDesc?: string;
+          tableField?: Record<string, string>;
+        }>('sass_schema')
         .find({})
         .limit(limit - entities.length)
         .toArray();

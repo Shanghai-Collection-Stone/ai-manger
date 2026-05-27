@@ -94,9 +94,7 @@ export class ArticleService {
    * @description 批量入库（例如把整个 canvas 的所有文章存入库）
    * @keyword-en article bulk create from canvas
    */
-  async bulkCreate(
-    inputs: ArticleCreateInput[],
-  ): Promise<ArticleEntity[]> {
+  async bulkCreate(inputs: ArticleCreateInput[]): Promise<ArticleEntity[]> {
     const out: ArticleEntity[] = [];
     for (const input of inputs) {
       out.push(await this.create(input));
@@ -271,13 +269,10 @@ export class ArticleService {
     if (typeof opts.libraryId === 'number' && Number.isFinite(opts.libraryId)) {
       filter.libraryId = opts.libraryId;
     }
-    const res = await this.articles.updateOne(
-      filter,
-      {
-        $set: { updatedAt: new Date() },
-        $unset: { lockExpireAt: '' },
-      },
-    );
+    const res = await this.articles.updateOne(filter, {
+      $set: { updatedAt: new Date() },
+      $unset: { lockExpireAt: '' },
+    });
     return res.modifiedCount === 1;
   }
 }

@@ -1,6 +1,6 @@
 /**
  * @description Transform DSL 顶层结构
- * @keyword-en transform dsl root
+ * @keyword-en transform-dsl-root, dsl-schema
  */
 export interface TransformDsl {
   version: number;
@@ -12,13 +12,13 @@ export interface TransformDsl {
 
 /**
  * @description 字段规则 = 直接映射 | 计算
- * @keyword-en transform field rule
+ * @keyword-en transform-field-rule, dsl-field
  */
 export type TransformFieldRule = TransformMapRule | TransformComputeRule;
 
 /**
  * @description 直接映射:from → to + 类型转换
- * @keyword-en transform map rule
+ * @keyword-en transform-map-rule, field-map
  */
 export interface TransformMapRule {
   to: string;
@@ -28,11 +28,13 @@ export interface TransformMapRule {
   format?: string;
   /** 缺失值兜底 */
   default?: unknown;
+  /** 同名 to 字段的合并策略;留空时使用智能叠加 */
+  merge?: TransformMergeMode;
 }
 
 /**
  * @description 计算规则:concat / sum / if / coalesce / const / lookup
- * @keyword-en transform compute rule
+ * @keyword-en transform-compute-rule, compute-rule
  */
 export interface TransformComputeRule {
   to: string;
@@ -54,22 +56,26 @@ export interface TransformComputeRule {
   /** 类型 */
   type?: TransformValueType;
   default?: unknown;
+  /** 同名 to 字段的合并策略;留空时使用智能叠加 */
+  merge?: TransformMergeMode;
 }
 
 /**
  * @description 过滤条件
- * @keyword-en transform filter condition
+ * @keyword-en transform-filter-condition, filter-condition
  */
 export interface TransformFilterCondition {
-  field: string;
+  field?: string;
   op: TransformFilterOp;
   /** in/notIn 用 array;其他单值 */
   value?: unknown;
+  /** or/and 分组条件 */
+  conditions?: TransformFilterCondition[];
 }
 
 /**
  * @description 过滤操作符
- * @keyword-en transform filter operator
+ * @keyword-en transform-filter-operator, filter-op
  */
 export type TransformFilterOp =
   | 'eq'
@@ -82,11 +88,14 @@ export type TransformFilterOp =
   | 'lte'
   | 'contains'
   | 'isEmpty'
-  | 'isNotEmpty';
+  | 'isNotEmpty'
+  | 'between'
+  | 'or'
+  | 'and';
 
 /**
  * @description 计算操作符
- * @keyword-en transform compute operator
+ * @keyword-en transform-compute-operator, compute-op
  */
 export type TransformComputeOp =
   | 'concat'
@@ -98,13 +107,31 @@ export type TransformComputeOp =
 
 /**
  * @description 值类型转换
- * @keyword-en transform value type
+ * @keyword-en transform-value-type, value-cast
  */
-export type TransformValueType = 'string' | 'number' | 'boolean' | 'date' | 'array';
+export type TransformValueType =
+  | 'string'
+  | 'number'
+  | 'boolean'
+  | 'date'
+  | 'array';
+
+/**
+ * @description 同名输出字段合并策略
+ * @keyword-en transform-merge-mode, duplicate-field
+ */
+export type TransformMergeMode =
+  | 'auto'
+  | 'replace'
+  | 'append'
+  | 'array'
+  | 'concat'
+  | 'sum'
+  | 'object';
 
 /**
  * @description 引擎执行结果
- * @keyword-en transform engine result
+ * @keyword-en transform-engine-result, run-result
  */
 export interface TransformResult<T = Record<string, unknown>> {
   rows: T[];
@@ -115,7 +142,7 @@ export interface TransformResult<T = Record<string, unknown>> {
 
 /**
  * @description 单行异常
- * @keyword-en transform row error
+ * @keyword-en transform-row-error, row-error
  */
 export interface TransformError {
   rowIndex: number;

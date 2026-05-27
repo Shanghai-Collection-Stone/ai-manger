@@ -57,7 +57,7 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
   - `LibraryPickerDialog`: 文章库选择器弹窗（支持即时新建）
 
 ### ImageGroupCanvasView.jsx
-图片组类型 Canvas 详情视图。展示图片组版式与图片预览（ImageLightbox）。
+图片组类型 Canvas 详情视图。展示图片组版式与图片预览（ImageLightbox），识别全拼图版式 collage-cover-5collage。
 - **关键词**: canvas, image-group, layout, lightbox, preview
 
 ### ArticleLibraryView.jsx

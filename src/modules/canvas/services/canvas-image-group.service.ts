@@ -1,6 +1,13 @@
 import { extname, join } from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import { readFile, mkdir, access, copyFile, writeFile, stat } from 'node:fs/promises';
+import {
+  readFile,
+  mkdir,
+  access,
+  copyFile,
+  writeFile,
+  stat,
+} from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
@@ -28,10 +35,19 @@ const LAYOUT_SPECS: Record<
     cover: 'collage',
     inner: ['portrait', 'portrait', 'collage', 'portrait', 'portrait'],
   },
+  'collage-cover-5collage': {
+    cover: 'collage',
+    inner: ['collage', 'collage', 'collage', 'collage', 'collage'],
+  },
 };
 
 /** @description 内页不允许使用的封面标签集合（系统写入的精确封面标记） */
-const COVER_TAG_SET = new Set(['\u5c01\u9762', '\u62fc\u56fe\u5c01\u9762', '\u81ea\u52a8\u5c01\u9762', 'canvas\u5c01\u9762']);
+const COVER_TAG_SET = new Set([
+  '\u5c01\u9762',
+  '\u62fc\u56fe\u5c01\u9762',
+  '\u81ea\u52a8\u5c01\u9762',
+  'canvas\u5c01\u9762',
+]);
 
 /** @description 拼图标准尺寸 */
 const COLLAGE_WIDTH = 640;
@@ -47,6 +63,72 @@ const ALTERNATING_LAYOUTS: ImageGroupLayout[] = [
   'portrait-cover-5inner',
   'collage-cover-5inner',
 ];
+
+export type ImageGroupImageRole = CanvasGroupImage['role'];
+
+type ImageGroupSlotRequirement = {
+  kind: 'portrait' | 'collage';
+  role: ImageGroupImageRole;
+};
+
+type ImageGroupAllocationRequest = {
+  articleIndex: number;
+  articleTitle?: string;
+  layout: ImageGroupLayout;
+  slots: ImageGroupSlotRequirement[];
+};
+
+export type ImageGroupPlannedSlot =
+  | { kind: 'portrait'; role: ImageGroupImageRole; image: GalleryImageEntity }
+  | {
+      kind: 'collage';
+      role: ImageGroupImageRole;
+      imgA: GalleryImageEntity;
+      imgB: GalleryImageEntity;
+    };
+
+export interface ImageGroupAllocationPlan {
+  articleIndex: number;
+  articleTitle?: string;
+  layout: ImageGroupLayout;
+  slots: ImageGroupPlannedSlot[];
+}
+
+export interface ImageGroupAllocationStats {
+  requiredPortrait: number;
+  availablePortrait: number;
+  missingPortrait: number;
+  requiredLandscape: number;
+  availableLandscape: number;
+  missingLandscape: number;
+}
+
+export type ImageGroupAllocationResult =
+  | {
+      ok: true;
+      plans: ImageGroupAllocationPlan[];
+      stats: ImageGroupAllocationStats;
+    }
+  | {
+      ok: false;
+      stats: ImageGroupAllocationStats;
+    };
+
+export type ImageGroupSourcePreparation =
+  | {
+      ok: true;
+      plans: ImageGroupAllocationPlan[];
+      stats: ImageGroupAllocationStats;
+      imageContexts: Array<{ tags: string[]; descriptions: string[] }>;
+      dynamicCoverGroupId: string | number;
+      dynamicCollageGroupId: string | number;
+      aiCoverEnabled: boolean;
+    }
+  | {
+      ok: false;
+      imageGroups: CanvasImageGroup[];
+      stats: ImageGroupAllocationStats;
+    };
 
 /**
  * @description Canvas 图片组生成服务
@@ -67,6 +149,46 @@ export class CanvasImageGroupService {
     private readonly sassService: SassService,
   ) {}
 
+  private coercePlainText(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (
+      typeof value === 'number' ||
+      typeof value === 'boolean' ||
+      typeof value === 'bigint'
+    ) {
+      return String(value);
+    }
+    return '';
+  }
+
+  private copyUnknownArray(value: unknown): unknown[] | null {
+    if (!Array.isArray(value)) return null;
+    const items: unknown[] = [];
+    for (const item of value as unknown[]) {
+      items.push(item);
+    }
+    return items;
+  }
+
+  private describeUnknown(value: unknown): string {
+    if (value instanceof Error) {
+      const details = value.stack?.trim() || value.message || value.name;
+      if (details) return details;
+    }
+
+    const text = this.coercePlainText(value).trim();
+    if (text) return text;
+
+    try {
+      const json = JSON.stringify(value);
+      if (typeof json === 'string' && json.trim()) return json;
+    } catch {
+      void 0;
+    }
+
+    return Object.prototype.toString.call(value);
+  }
+
   /**
    * @description 生成所有图片组（供 CanvasService 后台异步调用）。
    * 先收集全部 tag，一次性拿足图片池（无重复），再按版式分配。
@@ -77,8 +199,39 @@ export class CanvasImageGroupService {
   async generateImageGroups(
     input: CanvasImageGroupCreateInput,
   ): Promise<CanvasImageGroup[]> {
+    const preparation = await this.prepareImageGroupSources(input);
+    if (!preparation.ok) return preparation.imageGroups;
+    return await this.renderPreparedImageGroups(input, preparation);
+  }
+
+  /**
+   * @description 仅做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件。
+   * @param {CanvasImageGroupCreateInput} input - 创建入参。
+   * @returns {Promise<ImageGroupSourcePreparation>} 分配结果；不足时返回 failed 图组。
+   * @keyword-en prepare, source-allocation, no-render
+   */
+  async prepareImageGroupSources(
+    input: CanvasImageGroupCreateInput,
+  ): Promise<ImageGroupSourcePreparation> {
     const articles = input.articles ?? [];
-    if (articles.length === 0) return [];
+    if (articles.length === 0) {
+      return {
+        ok: true,
+        plans: [],
+        stats: {
+          requiredPortrait: 0,
+          availablePortrait: 0,
+          missingPortrait: 0,
+          requiredLandscape: 0,
+          availableLandscape: 0,
+          missingLandscape: 0,
+        },
+        imageContexts: [],
+        dynamicCoverGroupId: 0,
+        dynamicCollageGroupId: 0,
+        aiCoverEnabled: false,
+      };
+    }
 
     // --- 1. 收集全部 tag ---
     const allTags: string[] = [];
@@ -106,13 +259,13 @@ export class CanvasImageGroupService {
       );
     const dynamicCoverGroupId = defaultGeneratedGroups.coverGroup.id;
     const dynamicCollageGroupId = defaultGeneratedGroups.collageGroup.id;
-    const aiCoverEnabled = await this.isAiCoverEnabled(input.tenantId);
     const excludedGeneratedGroupIds: (string | number)[] = [
       dynamicCoverGroupId,
       dynamicCollageGroupId,
     ].filter(
       (id): id is string | number =>
-        (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string',
+        (typeof id === 'number' && Number.isFinite(id)) ||
+        typeof id === 'string',
     );
     // 严格按 tags 取池：图源不足不再跨 tag 补充（不足量由上游工具预检并询问用户）
     const pool = await this.fetchImagePool(
@@ -124,30 +277,70 @@ export class CanvasImageGroupService {
     );
     // 对图片池进行随机打乱，避免封面和内页出现顺序性重复
     this.shuffleArray(pool);
-    this.logger.debug(`[image-group] pool_ready pool=${pool.length} tags=${allTags.length}`);
+    this.logger.debug(
+      `[image-group] pool_ready pool=${pool.length} tags=${allTags.length}`,
+    );
 
-    // --- 3. 全局去重集合 ---
-    // 全局已使用图片 ID 集合（跨图组去重）
-    const globalUsedIds = new Set<number>();
-    // 全局已使用横图 ID 集合（拼图去重：避免同一张横图用于多个拼图）
-    const globalUsedPortraitIds = new Set<number>();
-    // 全局已使用竖图 ID 集合（避免同一张竖图用于多个位置）
-    const globalUsedLandscapeIds = new Set<number>();
+    // --- 3. 先做 Canvas 级统一分配；不足时整体进入补图流程，不再跨组复用 ---
+    const allocation = this.planImageGroupAllocation(pool, articles);
+    if (!allocation.ok) {
+      this.logger.warn(
+        `[image-group] insufficient_source_images articleCount=${articles.length} ` +
+          `portrait=${allocation.stats.availablePortrait}/${allocation.stats.requiredPortrait} ` +
+          `landscape=${allocation.stats.availableLandscape}/${allocation.stats.requiredLandscape}`,
+      );
+      return {
+        ok: false,
+        imageGroups: this.buildInsufficientImageGroups(articles),
+        stats: allocation.stats,
+      };
+    }
 
-    // --- 4. 按文章分配图片组 ---
+    const imageContexts = allocation.plans.map((plan) =>
+      this.summarizeImageContext(this.collectPlanSourceImages(plan)),
+    );
+    return {
+      ok: true,
+      plans: allocation.plans,
+      stats: allocation.stats,
+      imageContexts,
+      dynamicCoverGroupId,
+      dynamicCollageGroupId,
+      aiCoverEnabled: await this.isAiCoverEnabled(input.tenantId),
+    };
+  }
+
+  /**
+   * @description 根据已完成的源图分配渲染图组：生成拼图、封面文案、AI 封面或烧字封面，并写入图库。
+   * @param {CanvasImageGroupCreateInput} input - 创建入参。
+   * @param {Extract<ImageGroupSourcePreparation, {ok: true}>} preparation - 已完成的源图分配结果。
+   * @returns {Promise<CanvasImageGroup[]>} 渲染后的图片组。
+   * @keyword-en render, prepared, image-group
+   */
+  async renderPreparedImageGroups(
+    input: CanvasImageGroupCreateInput,
+    preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
+  ): Promise<CanvasImageGroup[]> {
+    const articles = input.articles ?? [];
     const groups: CanvasImageGroup[] = [];
-    for (let i = 0; i < articles.length; i++) {
+    const usedSourceIds = new Set<number>();
+    const addUsedSourceIds = (ids: number[]): void => {
+      for (const id of ids) {
+        if (Number.isFinite(id) && id > 0) usedSourceIds.add(id);
+      }
+    };
+    for (const plan of preparation.plans) {
+      const i = plan.articleIndex;
       const art = articles[i];
-      const layout =
-        art.layout ?? ALTERNATING_LAYOUTS[i % ALTERNATING_LAYOUTS.length];
-      const spec = LAYOUT_SPECS[layout];
-
-      // 当前图组内已使用图片 ID（组内去重）
-      const localUsedIds = new Set<number>();
+      const layout = plan.layout;
+      const coverSlot = plan.slots.find((slot) => slot.role === 'cover');
+      const innerSlots = plan.slots.filter((slot) => slot.role !== 'cover');
       const groupImages: CanvasGroupImage[] = [];
       const contextImages: GalleryImageEntity[] = [];
       const contextImageIds = new Set<number>();
-      const collectContextImage = (img: GalleryImageEntity | null | undefined): void => {
+      const collectContextImage = (
+        img: GalleryImageEntity | null | undefined,
+      ): void => {
         if (!img) return;
         if (contextImageIds.has(img.id)) return;
         contextImageIds.add(img.id);
@@ -157,22 +350,30 @@ export class CanvasImageGroupService {
 
       // 封面
       let coverPlan:
-        | { kind: 'collage'; image: GalleryImageEntity; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string }
-        | { kind: 'portrait'; image: GalleryImageEntity; alreadyDesigned: boolean }
+        | {
+            kind: 'collage';
+            image: GalleryImageEntity;
+            imgA: GalleryImageEntity;
+            imgB: GalleryImageEntity;
+            collageUrl: string;
+          }
+        | {
+            kind: 'portrait';
+            image: GalleryImageEntity;
+            alreadyDesigned: boolean;
+          }
         | null = null;
-      if (spec.cover === 'collage') {
-        // 动态拼图封面：选 2 张横图合成
-        const collageResult = await this.pickAndMakeCollage(
-          pool,
-          localUsedIds,
-          globalUsedIds,
-          globalUsedLandscapeIds,
-          input,
-          excludedGeneratedGroupIds,
-          art.tags,
-          dynamicCoverGroupId,
-          'cover',
-        );
+      if (!coverSlot) {
+        ok = false;
+      } else if (coverSlot.kind === 'collage') {
+        const collageResult = await this.persistPlannedCollage({
+          userId: input.userId,
+          tenantId: input.tenantId,
+          imgA: coverSlot.imgA,
+          imgB: coverSlot.imgB,
+          targetGroupId: preparation.dynamicCoverGroupId,
+          generatedKind: 'cover',
+        });
         if (collageResult) {
           coverPlan = {
             kind: 'collage',
@@ -183,89 +384,67 @@ export class CanvasImageGroupService {
           };
           collectContextImage(collageResult.imgA);
           collectContextImage(collageResult.imgB);
-          // 拼图来源图加入全局去重
-          for (const sid of collageResult.sourceIds) {
-            localUsedIds.add(sid);
-            globalUsedIds.add(sid);
-            globalUsedLandscapeIds.add(sid);
-          }
+          addUsedSourceIds(collageResult.sourceIds);
+        } else {
+          ok = false;
         }
       } else {
-        // 单竖图封面
-        const coverImg = this.pickPortrait(pool, localUsedIds, globalUsedIds, globalUsedPortraitIds);
-        if (coverImg) {
-          const alreadyDesigned = this.hasCoverTag(coverImg);
-          coverPlan = {
-            kind: 'portrait',
-            image: coverImg,
-            alreadyDesigned,
-          };
-          collectContextImage(coverImg);
-          localUsedIds.add(coverImg.id);
-          globalUsedIds.add(coverImg.id);
-          globalUsedPortraitIds.add(coverImg.id);
-        }
+        const coverImg = coverSlot.image;
+        const alreadyDesigned = this.hasCoverTag(coverImg);
+        coverPlan = {
+          kind: 'portrait',
+          image: coverImg,
+          alreadyDesigned,
+        };
+        collectContextImage(coverImg);
+        addUsedSourceIds([coverImg.id]);
       }
       if (!coverPlan) ok = false;
 
       // 内页
-      const roleTypes: Array<'cover' | 'inner-1' | 'inner-2' | 'inner-3' | 'inner-4' | 'inner-5'> = ['inner-1', 'inner-2', 'inner-3', 'inner-4', 'inner-5'];
-      for (let r = 0; r < spec.inner.length; r++) {
-        const role = spec.inner[r];
-        if (role === 'collage') {
-          // 动态合成拼图：选 2 张横图合成
-          const collageResult = await this.pickAndMakeCollage(
-            pool,
-            localUsedIds,
-            globalUsedIds,
-            globalUsedLandscapeIds,
-            input,
-            excludedGeneratedGroupIds,
-            art.tags,
-            dynamicCollageGroupId,
-            'collage',
-          );
+      for (const slot of innerSlots) {
+        if (slot.kind === 'collage') {
+          const collageResult = await this.persistPlannedCollage({
+            userId: input.userId,
+            tenantId: input.tenantId,
+            imgA: slot.imgA,
+            imgB: slot.imgB,
+            targetGroupId: preparation.dynamicCollageGroupId,
+            generatedKind: 'collage',
+          });
           if (collageResult) {
-            groupImages.push(this.toGroupImage(collageResult.image, roleTypes[r]));
+            groupImages.push(this.toGroupImage(collageResult.image, slot.role));
             collectContextImage(collageResult.imgA);
             collectContextImage(collageResult.imgB);
-            // 合成图本身 ID=0 不加入任何集合，但要把来源图 ID 加入组内和全局去重集合
-            for (const sid of collageResult.sourceIds) {
-              localUsedIds.add(sid);
-              globalUsedIds.add(sid);
-              globalUsedLandscapeIds.add(sid);
-            }
+            addUsedSourceIds(collageResult.sourceIds);
           } else {
             ok = false;
           }
         } else {
-          // portrait：选竖图
-          const portraitImg = this.pickPortrait(pool, localUsedIds, globalUsedIds, globalUsedPortraitIds);
-          if (portraitImg) {
-            groupImages.push(this.toGroupImage(portraitImg, roleTypes[r]));
-            collectContextImage(portraitImg);
-            localUsedIds.add(portraitImg.id);
-            globalUsedIds.add(portraitImg.id);
-            globalUsedPortraitIds.add(portraitImg.id);
-          } else {
-            ok = false;
-          }
+          const portraitImg = slot.image;
+          groupImages.push(this.toGroupImage(portraitImg, slot.role));
+          collectContextImage(portraitImg);
+          addUsedSourceIds([portraitImg.id]);
         }
       }
 
       // 封面文案：按“本组最终配图”语义生成（tags + description 汇总）
       if (coverPlan) {
-        const imageContext = this.summarizeImageContext(contextImages);
-        const coverText =
-          (await this.generateCoverTexts(
-            input.topic,
-            [art],
-            [imageContext],
-            input.tenantId,
-          ))[0] ??
-          this.buildCoverText(art.title, i);
+        const imageContext =
+          preparation.imageContexts[i] ??
+          this.summarizeImageContext(contextImages);
+        const rawCoverText =
+          (
+            await this.generateCoverTexts(
+              input.topic,
+              [art],
+              [imageContext],
+              input.tenantId,
+            )
+          )[0] ?? this.buildCoverText(art.title, i);
+        const coverText = this.sanitizeCoverText(rawCoverText);
 
-        const aiCover = aiCoverEnabled
+        const aiCover = preparation.aiCoverEnabled
           ? await this.tryGenerateAiCoverToGallery({
               userId: input.userId,
               tenantId: input.tenantId,
@@ -279,7 +458,7 @@ export class CanvasImageGroupService {
                 coverPlan.kind === 'collage'
                   ? [coverPlan.imgA, coverPlan.imgB]
                   : [coverPlan.image],
-              dynamicCoverGroupId,
+              dynamicCoverGroupId: preparation.dynamicCoverGroupId,
             })
           : null;
 
@@ -305,22 +484,25 @@ export class CanvasImageGroupService {
             coverText,
           );
           const finalUrl = burnedUrl ?? coverPlan.collageUrl;
-          const persistedCover = finalUrl === coverPlan.image.url
-            ? coverPlan.image
-            : await this.persistGeneratedAssetToGallery({
-                userId: input.userId,
-                tenantId: input.tenantId,
-                url: finalUrl,
-                generatedKind: 'cover',
-                groupId: dynamicCoverGroupId,
-                sourceImageIds: [coverPlan.imgA.id, coverPlan.imgB.id],
-                sourceImages: [coverPlan.imgA, coverPlan.imgB],
-                description: burnedUrl
-                  ? '画布拼图封面（已烧录文案）'
-                  : '画布拼图封面',
-              });
+          const persistedCover =
+            finalUrl === coverPlan.image.url
+              ? coverPlan.image
+              : await this.persistGeneratedAssetToGallery({
+                  userId: input.userId,
+                  tenantId: input.tenantId,
+                  url: finalUrl,
+                  generatedKind: 'cover',
+                  groupId: preparation.dynamicCoverGroupId,
+                  sourceImageIds: [coverPlan.imgA.id, coverPlan.imgB.id],
+                  sourceImages: [coverPlan.imgA, coverPlan.imgB],
+                  description: burnedUrl
+                    ? '画布拼图封面（已烧录文案）'
+                    : '画布拼图封面',
+                });
           const finalCover = persistedCover ?? coverPlan.image;
-          groupImages.unshift(this.toGroupImage(finalCover, 'cover', coverText));
+          groupImages.unshift(
+            this.toGroupImage(finalCover, 'cover', coverText),
+          );
         } else {
           const burnedUrl = coverPlan.alreadyDesigned
             ? null
@@ -331,7 +513,7 @@ export class CanvasImageGroupService {
                 tenantId: input.tenantId,
                 url: burnedUrl,
                 generatedKind: 'cover',
-                groupId: dynamicCoverGroupId,
+                groupId: preparation.dynamicCoverGroupId,
                 sourceImageIds: [coverPlan.image.id],
                 sourceImages: [coverPlan.image],
                 description: '画布单图封面（已烧录文案）',
@@ -339,7 +521,9 @@ export class CanvasImageGroupService {
             : null;
           const finalCover = persistedCover ?? coverPlan.image;
           const coverCopy =
-            coverPlan.alreadyDesigned || !persistedCover ? undefined : coverText;
+            coverPlan.alreadyDesigned || !persistedCover
+              ? undefined
+              : coverText;
           groupImages.unshift(
             this.toGroupImage(finalCover, 'cover', coverCopy),
           );
@@ -354,14 +538,18 @@ export class CanvasImageGroupService {
         images: groupImages,
         status: ok ? 'done' : 'failed',
       });
-      this.logger.debug(`[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`);
+      this.logger.debug(
+        `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`,
+      );
     }
 
     // 一次性标记本批次消耗的所有源图为 isUsed=true，全局不再被默认查询命中
-    if (globalUsedIds.size > 0) {
+    if (usedSourceIds.size > 0) {
       try {
-        await this.gallery.markUsedBatch({ ids: Array.from(globalUsedIds) });
-        this.logger.debug(`[image-group] mark_used count=${globalUsedIds.size}`);
+        await this.gallery.markUsedBatch({ ids: Array.from(usedSourceIds) });
+        this.logger.debug(
+          `[image-group] mark_used count=${usedSourceIds.size}`,
+        );
       } catch (e) {
         this.logger.warn(`[image-group] mark_used failed: ${String(e)}`);
       }
@@ -371,16 +559,314 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 选 2 张横图并动态合成拼图（优先横图，不够时从图库补充随机横图）
+   * @description 在 Canvas 级别一次性规划所有图组的源图，严格全局去重，不做跨组复用。
+   * @param {GalleryImageEntity[]} pool - 已按 tags 取回并打乱的图片池。
+   * @param {CanvasImageGroupCreateInput['articles']} articles - 图组文章列表。
+   * @returns {ImageGroupAllocationResult} 分配结果与缺口统计。
+   * @keyword-en plan, allocation, no-reuse
+   */
+  private planImageGroupAllocation(
+    pool: GalleryImageEntity[],
+    articles: CanvasImageGroupCreateInput['articles'],
+  ): ImageGroupAllocationResult {
+    const portraitPool = this.dedup(
+      pool.filter((img) => img.isPortrait === true),
+    );
+    const landscapePool = this.dedup(
+      pool.filter(
+        (img) => img.isPortrait !== true && this.isLocalImageReadable(img),
+      ),
+    );
+
+    let requestedGroups = this.buildImageGroupAllocationRequests(articles);
+    let stats = this.summarizeImageGroupAllocationStats(
+      requestedGroups,
+      portraitPool.length,
+      landscapePool.length,
+    );
+
+    const hasExplicitLayout = articles.some(
+      (art) => typeof art.layout === 'string' && art.layout.length > 0,
+    );
+    if (stats.missingPortrait > 0 && !hasExplicitLayout) {
+      const collageOnlyGroups = this.buildImageGroupAllocationRequests(
+        articles,
+        {
+          forceAutoLayout: 'collage-cover-5collage',
+        },
+      );
+      const collageOnlyStats = this.summarizeImageGroupAllocationStats(
+        collageOnlyGroups,
+        portraitPool.length,
+        landscapePool.length,
+      );
+      if (collageOnlyStats.missingPortrait === 0) {
+        this.logger.debug(
+          `[image-group] allocation_layout_fallback layout=collage-cover-5collage ` +
+            `portrait=${collageOnlyStats.availablePortrait}/${collageOnlyStats.requiredPortrait} ` +
+            `landscape=${collageOnlyStats.availableLandscape}/${collageOnlyStats.requiredLandscape}`,
+        );
+        requestedGroups = collageOnlyGroups;
+        stats = collageOnlyStats;
+      }
+    }
+
+    if (stats.missingPortrait > 0 || stats.missingLandscape > 0) {
+      return { ok: false, stats };
+    }
+
+    return this.allocateRequestedImageGroups(
+      requestedGroups,
+      portraitPool,
+      landscapePool,
+      stats,
+    );
+  }
+
+  /**
+   * @description 根据文章列表生成图组版式槽位需求；未显式指定版式时可由调用方强制使用自适应版式。
+   * @param {CanvasImageGroupCreateInput['articles']} articles - 图组文章列表。
+   * @param {{ forceAutoLayout?: ImageGroupLayout }} [options] - 自动版式覆盖参数。
+   * @returns {ImageGroupAllocationRequest[]} 每个图组的槽位需求。
+   * @keyword-en plan, allocation, layout
+   */
+  private buildImageGroupAllocationRequests(
+    articles: CanvasImageGroupCreateInput['articles'],
+    options?: { forceAutoLayout?: ImageGroupLayout },
+  ): ImageGroupAllocationRequest[] {
+    const innerRoles: ImageGroupImageRole[] = [
+      'inner-1',
+      'inner-2',
+      'inner-3',
+      'inner-4',
+      'inner-5',
+    ];
+    return articles.map((art, articleIndex) => {
+      const layout =
+        art.layout ??
+        options?.forceAutoLayout ??
+        ALTERNATING_LAYOUTS[articleIndex % ALTERNATING_LAYOUTS.length];
+      const spec = LAYOUT_SPECS[layout];
+      const slots: ImageGroupSlotRequirement[] = [
+        { kind: spec.cover, role: 'cover' },
+        ...spec.inner.map(
+          (kind, idx): ImageGroupSlotRequirement => ({
+            kind,
+            role: innerRoles[idx] ?? 'inner-5',
+          }),
+        ),
+      ];
+      return {
+        articleIndex,
+        articleTitle: art.title,
+        layout,
+        slots,
+      };
+    });
+  }
+
+  /**
+   * @description 统计一次图组分配所需的竖图/横图数量以及当前素材池缺口。
+   * @param {ImageGroupAllocationRequest[]} requestedGroups - 图组槽位需求。
+   * @param {number} availablePortrait - 可用竖图数量。
+   * @param {number} availableLandscape - 可用横图数量。
+   * @returns {ImageGroupAllocationStats} 分配需求与缺口统计。
+   * @keyword-en stats, allocation, shortage
+   */
+  private summarizeImageGroupAllocationStats(
+    requestedGroups: ImageGroupAllocationRequest[],
+    availablePortrait: number,
+    availableLandscape: number,
+  ): ImageGroupAllocationStats {
+    const requiredPortrait = requestedGroups.reduce(
+      (sum, group) =>
+        sum + group.slots.filter((slot) => slot.kind === 'portrait').length,
+      0,
+    );
+    const requiredLandscape = requestedGroups.reduce(
+      (sum, group) =>
+        sum + group.slots.filter((slot) => slot.kind === 'collage').length * 2,
+      0,
+    );
+    return {
+      requiredPortrait,
+      availablePortrait,
+      missingPortrait: Math.max(0, requiredPortrait - availablePortrait),
+      requiredLandscape,
+      availableLandscape,
+      missingLandscape: Math.max(0, requiredLandscape - availableLandscape),
+    };
+  }
+
+  /**
+   * @description 按已确认的槽位需求实际领取源图，保证同一 Canvas 内源图不跨组复用。
+   * @param {ImageGroupAllocationRequest[]} requestedGroups - 图组槽位需求。
+   * @param {GalleryImageEntity[]} portraitPool - 去重后的竖图池。
+   * @param {GalleryImageEntity[]} landscapePool - 去重后的横图池。
+   * @param {ImageGroupAllocationStats} stats - 已计算的需求统计。
+   * @returns {ImageGroupAllocationResult} 分配好的图组计划。
+   * @keyword-en allocate, no-reuse, image-group
+   */
+  private allocateRequestedImageGroups(
+    requestedGroups: ImageGroupAllocationRequest[],
+    portraitPool: GalleryImageEntity[],
+    landscapePool: GalleryImageEntity[],
+    stats: ImageGroupAllocationStats,
+  ): ImageGroupAllocationResult {
+    let portraitCursor = 0;
+    let landscapeCursor = 0;
+    const usedSourceIds = new Set<number>();
+    const takePortrait = (): GalleryImageEntity | null => {
+      while (portraitCursor < portraitPool.length) {
+        const img = portraitPool[portraitCursor++];
+        if (usedSourceIds.has(img.id)) continue;
+        usedSourceIds.add(img.id);
+        return img;
+      }
+      return null;
+    };
+    const takeLandscape = (): GalleryImageEntity | null => {
+      while (landscapeCursor < landscapePool.length) {
+        const img = landscapePool[landscapeCursor++];
+        if (usedSourceIds.has(img.id)) continue;
+        usedSourceIds.add(img.id);
+        return img;
+      }
+      return null;
+    };
+
+    const plans: ImageGroupAllocationPlan[] = [];
+    for (const group of requestedGroups) {
+      const slots: ImageGroupPlannedSlot[] = [];
+      for (const slot of group.slots) {
+        if (slot.kind === 'portrait') {
+          const image = takePortrait();
+          if (!image) return { ok: false, stats };
+          slots.push({ kind: 'portrait', role: slot.role, image });
+          continue;
+        }
+        const imgA = takeLandscape();
+        const imgB = takeLandscape();
+        if (!imgA || !imgB) return { ok: false, stats };
+        slots.push({ kind: 'collage', role: slot.role, imgA, imgB });
+      }
+      plans.push({
+        articleIndex: group.articleIndex,
+        articleTitle: group.articleTitle,
+        layout: group.layout,
+        slots,
+      });
+    }
+
+    return { ok: true, plans, stats };
+  }
+
+  /**
+   * @description 构造图源不足时的失败图组，让上游把文章/Canvas 标记为需要人工补图。
+   * @param {CanvasImageGroupCreateInput['articles']} articles - 图组文章列表。
+   * @returns {CanvasImageGroup[]} 空图片失败图组列表。
+   * @keyword-en insufficient, requires-human, image-group
+   */
+  private buildInsufficientImageGroups(
+    articles: CanvasImageGroupCreateInput['articles'],
+  ): CanvasImageGroup[] {
+    return articles.map((art, idx) => ({
+      id: idx + 1,
+      articleId: art.title ? undefined : undefined,
+      articleTitle: art.title,
+      layout:
+        art.layout ?? ALTERNATING_LAYOUTS[idx % ALTERNATING_LAYOUTS.length],
+      images: [],
+      status: 'failed',
+    }));
+  }
+
+  /**
+   * @description 收集一个图组分配计划中的全部源图，用于文章正文和封面文案共享图片语义。
+   * @param {ImageGroupAllocationPlan} plan - 已分配的图组计划。
+   * @returns {GalleryImageEntity[]} 去重后的源图列表。
+   * @keyword-en collect, allocation, image-context
+   */
+  private collectPlanSourceImages(
+    plan: ImageGroupAllocationPlan,
+  ): GalleryImageEntity[] {
+    const map = new Map<number, GalleryImageEntity>();
+    for (const slot of plan.slots) {
+      if (slot.kind === 'portrait') {
+        map.set(slot.image.id, slot.image);
+        continue;
+      }
+      map.set(slot.imgA.id, slot.imgA);
+      map.set(slot.imgB.id, slot.imgB);
+    }
+    return Array.from(map.values());
+  }
+
+  /**
+   * @description 将已经统一分配好的两张横图合成为拼图并入库。
+   * @param {object} input - 拼图生成与入库参数。
+   * @returns {Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string } | null>} 入库后的拼图信息。
+   * @keyword-en collage, allocation, gallery
+   */
+  private async persistPlannedCollage(input: {
+    userId: string;
+    tenantId?: string;
+    imgA: GalleryImageEntity;
+    imgB: GalleryImageEntity;
+    targetGroupId?: string | number;
+    generatedKind: 'cover' | 'collage';
+  }): Promise<{
+    image: GalleryImageEntity;
+    sourceIds: number[];
+    imgA: GalleryImageEntity;
+    imgB: GalleryImageEntity;
+    collageUrl: string;
+  } | null> {
+    const collageUrl = await this.createDynamicCollageFile(
+      input.imgA,
+      input.imgB,
+    );
+    if (!collageUrl) return null;
+    const sourceIds = [input.imgA.id, input.imgB.id];
+    const persisted = await this.persistGeneratedAssetToGallery({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      url: collageUrl,
+      generatedKind: input.generatedKind,
+      groupId: input.targetGroupId,
+      sourceImageIds: sourceIds,
+      sourceImages: [input.imgA, input.imgB],
+      description:
+        input.generatedKind === 'cover'
+          ? '画布动态拼图封面'
+          : '画布动态拼图内页',
+    });
+    if (!persisted) {
+      this.logger.warn(
+        `[image-group] generated collage not persisted, skip pair a=${input.imgA.id} b=${input.imgB.id}`,
+      );
+      return null;
+    }
+    return {
+      image: persisted,
+      sourceIds,
+      imgA: input.imgA,
+      imgB: input.imgB,
+      collageUrl: persisted.url,
+    };
+  }
+
+  /**
+   * @description 选 2 张横图并动态合成拼图（仅接受横图，不降级为竖图或任意方向图片）
    * @param {GalleryImageEntity[]} pool - 图片池
    * @param {Set<number>} localUsedIds - 组内已使用 ID
    * @param {Set<number>} globalUsedIds - 全局已使用 ID
    * @param {Set<number>} globalLandscapeIds - 全局已使用横图 ID
    * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 用户信息
-  * @param {number[]} [excludedGroupIds] - 需排除的默认动态分组ID
-  * @param {string[]} [relatedTags] - 本篇文章相关标签（用于相近标签补池）
-  * @param {string | number} [targetGroupId] - 生成图入库目标分组ID
-  * @param {'cover'|'collage'} [generatedKind='collage'] - 生成图类型
+   * @param {number[]} [excludedGroupIds] - 需排除的默认动态分组ID
+   * @param {string[]} [relatedTags] - 本篇文章相关标签（用于相近标签补池）
+   * @param {string | number} [targetGroupId] - 生成图入库目标分组ID
+   * @param {'cover'|'collage'} [generatedKind='collage'] - 生成图类型
    * @returns {Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string } | null>}
    * @keyword-en pick two landscape images and make collage
    */
@@ -394,7 +880,13 @@ export class CanvasImageGroupService {
     relatedTags?: string[],
     targetGroupId?: string | number,
     generatedKind: 'cover' | 'collage' = 'collage',
-  ): Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string } | null> {
+  ): Promise<{
+    image: GalleryImageEntity;
+    sourceIds: number[];
+    imgA: GalleryImageEntity;
+    imgB: GalleryImageEntity;
+    collageUrl: string;
+  } | null> {
     const pairKey = (a: GalleryImageEntity, b: GalleryImageEntity): string =>
       a.id < b.id ? `${a.id}-${b.id}` : `${b.id}-${a.id}`;
 
@@ -416,10 +908,12 @@ export class CanvasImageGroupService {
           if (tried.has(k)) continue;
 
           if (options.requireBothFreshLandscape) {
-            if (globalLandscapeIds.has(a.id) || globalLandscapeIds.has(b.id)) continue;
+            if (globalLandscapeIds.has(a.id) || globalLandscapeIds.has(b.id))
+              continue;
           }
           if (options.requireAtLeastOneFreshLandscape) {
-            if (globalLandscapeIds.has(a.id) && globalLandscapeIds.has(b.id)) continue;
+            if (globalLandscapeIds.has(a.id) && globalLandscapeIds.has(b.id))
+              continue;
           }
           return [a, b];
         }
@@ -429,14 +923,14 @@ export class CanvasImageGroupService {
 
     const buildCandidates = (
       allowGlobalReuse: boolean,
-    ): { landscape: GalleryImageEntity[]; any: GalleryImageEntity[] } => {
-      const any = pool.filter((img) => {
+    ): { landscape: GalleryImageEntity[] } => {
+      const landscape = pool.filter((img) => {
         if (localUsedIds.has(img.id)) return false;
         if (!allowGlobalReuse && globalUsedIds.has(img.id)) return false;
+        if (img.isPortrait === true) return false;
         return this.isLocalImageReadable(img);
       });
-      const landscape = any.filter((img) => img.isPortrait !== true);
-      return { landscape, any };
+      return { landscape };
     };
 
     const triedPairs = new Set<string>();
@@ -447,25 +941,27 @@ export class CanvasImageGroupService {
       // 1) 横图 + 两张都未占用（全局唯一优先）
       {
         const { landscape } = buildCandidates(false);
-        const pair = pickPair(landscape, { requireBothFreshLandscape: true }, triedPairs);
+        const pair = pickPair(
+          landscape,
+          { requireBothFreshLandscape: true },
+          triedPairs,
+        );
         if (pair) return pair;
       }
       // 2) 横图 + 至少一张未占用
       {
         const { landscape } = buildCandidates(false);
-        const pair = pickPair(landscape, { requireAtLeastOneFreshLandscape: true }, triedPairs);
+        const pair = pickPair(
+          landscape,
+          { requireAtLeastOneFreshLandscape: true },
+          triedPairs,
+        );
         if (pair) return pair;
       }
-      // 3) 任意方向 + 两张都未占用（仍保持全局唯一）
+      // 3) 横图 + 两张都未占用（仍保持全局唯一）
       {
-        const { any } = buildCandidates(false);
-        const pair = pickPair(any, {}, triedPairs);
-        if (pair) return pair;
-      }
-      // 4) 最后降级：允许跨组复用，但仍要求组内不重复，且绝不允许同图双拼
-      {
-        const { any } = buildCandidates(true);
-        const pair = pickPair(any, {}, triedPairs);
+        const { landscape } = buildCandidates(false);
+        const pair = pickPair(landscape, {}, triedPairs);
         if (pair) return pair;
       }
       return null;
@@ -527,6 +1023,88 @@ export class CanvasImageGroupService {
   }
 
   /**
+   * @description 将封面文案/生图提示中的高风险 IP、商标和角色专名替换为版权安全泛化表达。
+   * @param {unknown} raw - 原始文本。
+   * @returns {string} 可用于封面文案和生图提示的安全文本。
+   * @keyword-en sanitize, copyright-safe, image-prompt
+   */
+  private sanitizeCopyrightRiskText(raw: unknown): string {
+    let text = this.coercePlainText(raw)
+      .replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, ' ')
+      .replace(/[\u0020\u0009\u3000]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (!text) return '';
+    const replacements: Array<[RegExp, string]> = [
+      [/哈利\s*波特|harry\s*potter/gi, '魔法学院风'],
+      [/霍格沃茨|hogwarts/gi, '魔法学院场景'],
+      [/格兰芬多|斯莱特林|赫奇帕奇|拉文克劳/gi, '学院分组'],
+      [/迪士尼|disney/gi, '童话乐园风'],
+      [/米奇|米妮|mickey|minnie/gi, '经典卡通风'],
+      [/冰雪奇缘|艾莎|安娜公主|frozen|elsa/gi, '冰雪童话风'],
+      [
+        /漫威|复仇者联盟|钢铁侠|蜘蛛侠|spider[-\s]?man|iron\s*man|marvel/gi,
+        '超级英雄风',
+      ],
+      [/奥特曼|ultraman/gi, '光之英雄风'],
+      [/星球大战|star\s*wars/gi, '太空冒险风'],
+      [/马里奥|超级玛丽|mario/gi, '经典像素游戏风'],
+      [/宝可梦|精灵宝可梦|口袋妖怪|皮卡丘|pok[eé]mon|pikachu/gi, '萌宠冒险风'],
+      [/哆啦A梦|机器猫|doraemon/gi, '未来伙伴风'],
+      [/蜡笔小新|樱桃小丸子|名侦探柯南|海贼王|火影忍者|龙珠/gi, '日系动漫风'],
+      [/小黄人|minions?/gi, '黄色萌趣角色风'],
+      [/芭比|barbie/gi, '粉色时尚玩偶风'],
+      [/变形金刚|transformers?/gi, '机甲科幻风'],
+      [/hello\s*kitty|凯蒂猫/gi, '可爱猫咪风'],
+      [/史努比|snoopy/gi, '简笔卡通风'],
+    ];
+    for (const [pattern, replacement] of replacements) {
+      text = text.replace(pattern, replacement);
+    }
+    return text
+      .replace(/知名\s*IP|原版角色|官方角色|同款角色|复刻角色/gi, '通用主题')
+      .replace(/[ \t\u3000]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  /**
+   * @description 清洗列表型封面上下文，去重后返回版权安全表达。
+   * @param {unknown[] | undefined} items - 原始列表。
+   * @returns {string[]} 安全文案列表。
+   * @keyword-en sanitize, copyright-safe, list
+   */
+  private sanitizeCopyrightRiskList(items?: unknown[]): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of Array.isArray(items) ? items : []) {
+      const text = this.sanitizeCopyrightRiskText(item);
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        out.push(text);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * @description 清洗封面主副标题，避免可见文案携带 IP/商标专名。
+   * @param {{ title: string; subtitle: string }} coverText - 原始封面文案。
+   * @returns {{ title: string; subtitle: string }} 安全封面文案。
+   * @keyword-en sanitize, cover-copy, copyright-safe
+   */
+  private sanitizeCoverText(coverText: { title: string; subtitle: string }): {
+    title: string;
+    subtitle: string;
+  } {
+    return {
+      title: this.sanitizeCopyrightRiskText(coverText.title) || '沉浸式体验',
+      subtitle:
+        this.sanitizeCopyrightRiskText(coverText.subtitle) || '现场氛围与互动',
+    };
+  }
+
+  /**
    * @description 构建封面生图提示词。封面元信息骨架（选题/文章标题/封面主副标题/封面版式）
    * 之外，显式注入封面专属的视觉调性（小红书生活方式封面感、动态视觉元素、装饰丰富度、文案
    * 排版、活力色彩、情绪氛围等）—— 让底图编辑模型在保持底图主体的前提下产出更"封面化、
@@ -542,39 +1120,39 @@ export class CanvasImageGroupService {
     coverText: { title: string; subtitle: string };
     coverType: 'portrait' | 'collage';
   }): string {
-    // 1) 封面元信息：调用方可识别字段，主体内容
-    const meta = [
+    const safeTopic = this.sanitizeCopyrightRiskText(input.topic);
+    const safeArticleTitle = this.sanitizeCopyrightRiskText(input.articleTitle);
+    const safeCoverText = this.sanitizeCoverText(input.coverText);
+    // 封面视觉调性：实景优先，轻设计增强。
+    const themeAnchor = safeTopic || safeArticleTitle || '所给主题';
+    const styleDirectives = [
+      '【封面视觉要求 - 实景照片优先，轻量封面设计】',
+      '- 第一优先级:保持真实摄影/现场实拍质感，保留原图人物、空间、活动氛围和真实光影，不改成插画、卡通、3D Q版、漫画、像素、赛博或二次元风格。',
+      '- 画面增强:只做轻量修图与封面化处理，包括适度提亮、清晰度增强、自然色彩校正、轻微景深、局部对比和干净排版。',
+      '- 主体表达:主体保持真实比例和真实动作，允许轻微优化表情与姿态，但不要夸张变形、不要新增夸张肢体动作。',
+      '- 装饰控制:最多 1-2 个轻量标签、箭头或简洁色块作为辅助，禁止大量贴纸、emoji、手绘涂鸦、漫画气泡和密集几何拼贴。',
+      '- 特效控制:不要流动光带、爆裂粒子、速度线、漫画冲击线、拟声词图形、故障艺术、霓虹大片光效；如需氛围，只允许自然光晕或柔和高光。',
+      '- 色彩:真实、明亮、干净，适合小红书生活方式封面；避免过饱和撞色、糖果色堆叠和强烈渐变。',
+      '- 文案表现:封面主标题清晰可读，使用干净粗体或描边字体；副标题用小字辅助；文字不要遮挡人物脸部、产品或关键场景。',
+      '- 构图:以真实场景中的人物/空间/活动为核心，三分法或居中构图，留出文字区域，画面自然有呼吸感。',
+      `- 情绪锚定:贴合"${themeAnchor}"的核心情绪，表达真实、轻松、沉浸、有现场感的体验。`,
+      '- 严禁:动画化、漫画化、游戏化、夸张特效、虚构角色、过度滤镜、过度磨皮、低清晰度、脏污背景、复杂装饰堆砌。',
+    ].join('\n');
+
+    const safeMeta = [
       input.coverType === 'collage' ? '封面版式:拼图封面' : '封面版式:单图封面',
-      input.topic ? `选题:${input.topic}` : '',
-      input.articleTitle ? `文章标题:${input.articleTitle}` : '',
-      input.coverText.title ? `封面主标题:${input.coverText.title}` : '',
-      input.coverText.subtitle ? `封面副标题:${input.coverText.subtitle}` : '',
+      safeTopic ? `选题:${safeTopic}` : '',
+      safeArticleTitle ? `文章标题:${safeArticleTitle}` : '',
+      safeCoverText.title ? `封面主标题:${safeCoverText.title}` : '',
+      safeCoverText.subtitle ? `封面副标题:${safeCoverText.subtitle}` : '',
+      '版权安全:不得出现或模仿任何具体 IP、商标、影视动漫游戏角色、官方徽章、制服、学院组织名、经典道具或官方视觉符号；只保留通用氛围。',
     ]
       .filter((x) => x.length > 0)
       .join('；');
 
-    // 2) 封面视觉调性：强化"风格 / 动态视觉 / 装饰丰富 / 光影质感 / 文案表现"全方位指令
-    const themeAnchor =
-      input.topic?.trim() ?? input.articleTitle?.trim() ?? '所给主题';
-    const styleDirectives = [
-      '【封面视觉要求 - 鼓励大胆改造、部分动画化重绘，禁止平淡输出】',
-      '- 文字放中间一点,留白承载文案，避免贴边；主体突出，画面层次分明，氛围鲜明有记忆点',
-      '- 风格定位:小红书爆款封面 / 生活方式感 / 第一眼吸睛 / 强情绪驱动 / 画面饱满有层次',
-      '- 视觉张力:通过尺度对比、明暗对比、虚实对比制造冲击力，画面要有呼吸感与节奏感，杜绝平铺直叙',
-      '- 动画化改造(鼓励大胆):可将主体从写实转为 2D 扁平插画 / 3D Q版渲染 / 港漫卡通 / 厚涂插画 / 手绘水彩 / 像素动画 / 赛博潮酷等动画化风格，只要主体身份与场景识别度保留即可，风格化可大胆',
-      '- 表情与动作动画化:允许适度夸张主体表情(惊喜/眨眼/wink/笑哭/呆萌)、加上动态肢体(挥手/比心/跳跃/奔跑/V 字手势)、动作幅度可夸张以强化情绪',
-      '- 主体表达:主体特写或近景突出，保留底图核心识别度的同时大胆做风格化与表情夸张',
-      '- 动态视觉特效:必须加入流动光带 / 光晕散射 / 爆裂粒子 / 星芒 / 动感线条 / 彩带飘动 / 聚焦光圈 / 速度线 / 漫画风冲击线 / 拟声词图形(POW! BOOM! WOW!) 等动效，让静态画面读起来"会动"',
-      '- 装饰丰富度(3-6 个组合):贴纸、标签便签、手撕胶带、手绘涂鸦、emoji 表情符号、色块拼贴、几何图案、箭头标注、引号气泡、便利贴、漫画对话框 —— 多种类组合避免重复',
-      '- 色彩:高饱和 + 强对比，撞色或渐变虹彩，主色调统一形成记忆点；可叠加金属光泽 / 霓虹高光 / 糖果色点缀 / 故障艺术(glitch)色块',
-      '- 光影质感:明确的主光 + 轮廓光，层次分明；叠加光斑、镜头光晕、烟雾质感、磨砂玻璃、二次元角色描边光，让画面有质感颗粒而非扁平贴图',
-      '- 文案表现:封面主标题用粗体 / 描边 / 双色叠层 / 烫金 / 不规则手写体 / 漫画拟声体，字号显著、与背景形成清晰层级；副标题以小字标签或手写体辅助；严禁错别字、乱码、字符叠加遮挡',
-      '- 构图:三分法或对角线构图，留白承载文字；主体不贴边；画面分层(前景装饰 / 中景主体 / 背景氛围)；可使用动漫常见的运镜如低角度仰拍 / 鱼眼透视 / 漫画分镜',
-      `- 情绪锚定:贴合"${themeAnchor}"的核心情绪(燃 / 治愈 / 心动 / 反差 / 惊艳 / 沉浸 / 中二热血 等择一突出)，第一眼让人读懂氛围`,
-      '- 严禁:平淡极简、性冷淡风、灰暗低对比、商务中性、单调重复堆砌、模糊脏污、低分辨率、过度滤镜导致细节丢失、保守复制原图无改造感',
-    ].join('\n');
-
-    return [meta, styleDirectives].filter((x) => x.length > 0).join('\n\n');
+    return [safeMeta, this.sanitizeCopyrightRiskText(styleDirectives)]
+      .filter((x) => x.length > 0)
+      .join('\n\n');
   }
 
   /**
@@ -596,14 +1174,18 @@ export class CanvasImageGroupService {
     dynamicCoverGroupId: string | number;
   }): Promise<GalleryImageEntity | null> {
     try {
-      const prompt = this.buildAiCoverPrompt({
-        topic: input.topic,
-        articleTitle: input.articleTitle,
-        coverText: input.coverText,
-        coverType: input.coverType,
-      });
+      const prompt = this.sanitizeCopyrightRiskText(
+        this.buildAiCoverPrompt({
+          topic: input.topic,
+          articleTitle: input.articleTitle,
+          coverText: input.coverText,
+          coverType: input.coverType,
+        }),
+      );
       const baseImageCandidates = input.sourceImages
-        .map((img) => this.resolveLocalPath(img) ?? String(img.url ?? '').trim())
+        .map(
+          (img) => this.resolveLocalPath(img) ?? String(img.url ?? '').trim(),
+        )
         .filter((x): x is string => String(x ?? '').trim().length > 0)
         .slice(0, 6);
 
@@ -612,6 +1194,23 @@ export class CanvasImageGroupService {
         size: '640x853',
         baseImageCandidates,
       });
+      const generatedRecord =
+        generated && typeof generated === 'object'
+          ? (generated as Record<string, unknown>)
+          : {};
+      const imagePath = this.coercePlainText(generatedRecord.imagePath).trim();
+      if (!imagePath) {
+        this.logger.warn(
+          '[image-group] ai_cover_generate_failed: empty imagePath',
+        );
+        return null;
+      }
+      const providerLabel = [
+        this.coercePlainText(generatedRecord.providerCode).trim(),
+        this.coercePlainText(generatedRecord.model).trim(),
+      ]
+        .filter((part) => part.length > 0)
+        .join(':');
 
       const sourceImageIds = input.sourceImages
         .map((img) => Number(img?.id))
@@ -621,15 +1220,17 @@ export class CanvasImageGroupService {
       return await this.persistGeneratedAssetToGallery({
         userId: input.userId,
         tenantId: input.tenantId,
-        url: generated.imagePath,
+        url: imagePath,
         generatedKind: 'cover',
         groupId: input.dynamicCoverGroupId,
         sourceImageIds,
         sourceImages: input.sourceImages,
-        description: `AI生成封面（${generated.providerCode}:${generated.model}）`,
+        description: `AI生成封面（${providerLabel || 'unknown'}）`,
       });
     } catch (err) {
-      this.logger.warn(`[image-group] ai_cover_generate_failed: ${err}`);
+      this.logger.warn(
+        `[image-group] ai_cover_generate_failed: ${this.describeUnknown(err)}`,
+      );
       return null;
     }
   }
@@ -649,15 +1250,21 @@ export class CanvasImageGroupService {
     const pathA = this.resolveLocalPath(imgA);
     const pathB = this.resolveLocalPath(imgB);
     if (!pathA || !pathB) {
-      this.logger.warn(`[image-group] burnCollageCoverText skip: no local path resolved imgA=${imgA.id} imgB=${imgB.id}`);
+      this.logger.warn(
+        `[image-group] burnCollageCoverText skip: no local path resolved imgA=${imgA.id} imgB=${imgB.id}`,
+      );
       return null;
     }
     if (!existsSync(pathA)) {
-      this.logger.warn(`[image-group] burnCollageCoverText skip: file not exist imgA=${imgA.id} pathA=${pathA}`);
+      this.logger.warn(
+        `[image-group] burnCollageCoverText skip: file not exist imgA=${imgA.id} pathA=${pathA}`,
+      );
       return null;
     }
     if (!existsSync(pathB)) {
-      this.logger.warn(`[image-group] burnCollageCoverText skip: file not exist imgB=${imgB.id} pathB=${pathB}`);
+      this.logger.warn(
+        `[image-group] burnCollageCoverText skip: file not exist imgB=${imgB.id} pathB=${pathB}`,
+      );
       return null;
     }
     try {
@@ -676,7 +1283,10 @@ export class CanvasImageGroupService {
 
       // 计算文本视觉宽度
       const visualWidth = (s: string): number =>
-        [...String(s)].reduce((n, c) => n + (/[\u3400-\u9fff\uff00-\uffef]/.test(c) ? 2 : 1), 0);
+        [...String(s)].reduce(
+          (n, c) => n + (/[\u3400-\u9fff\uff00-\uffef]/.test(c) ? 2 : 1),
+          0,
+        );
 
       // 按视觉宽度拆行
       const splitLines = (s: string, maxUnits: number): string[] => {
@@ -685,8 +1295,14 @@ export class CanvasImageGroupService {
         let curUnits = 0;
         for (const ch of s) {
           const w = /[\u3400-\u9fff\uff00-\uffef]/.test(ch) ? 2 : 1;
-          if (curUnits + w > maxUnits && cur.length > 0) { lines.push(cur); cur = ch; curUnits = w; }
-          else { cur += ch; curUnits += w; }
+          if (curUnits + w > maxUnits && cur.length > 0) {
+            lines.push(cur);
+            cur = ch;
+            curUnits = w;
+          } else {
+            cur += ch;
+            curUnits += w;
+          }
         }
         if (cur.length > 0) lines.push(cur);
         return lines;
@@ -696,14 +1312,27 @@ export class CanvasImageGroupService {
       const bottomH = COLLAGE_HEIGHT - topH;
 
       // 上图：等比缩到 topH 高度，不裁剪
-      const bufA = await sharp(pathA).resize({ width: COLLAGE_WIDTH, height: topH }).toBuffer();
+      const bufA = await sharp(pathA)
+        .resize({ width: COLLAGE_WIDTH, height: topH })
+        .toBuffer();
       // 下图：等比缩到 bottomH 高度，不裁剪
-      const bufB = await sharp(pathB).resize({ width: COLLAGE_WIDTH, height: bottomH }).toBuffer();
+      const bufB = await sharp(pathB)
+        .resize({ width: COLLAGE_WIDTH, height: bottomH })
+        .toBuffer();
 
       // 计算字体大小
-      const titleFontSize = Math.max(34, Math.min(60, Math.floor(900 / Math.max(10, visualWidth(safeTitle)))));
+      const titleFontSize = Math.max(
+        34,
+        Math.min(60, Math.floor(900 / Math.max(10, visualWidth(safeTitle)))),
+      );
       const subtitleFontSize = safeSubtitle
-        ? Math.max(22, Math.min(34, Math.floor(760 / Math.max(12, visualWidth(safeSubtitle)))))
+        ? Math.max(
+            22,
+            Math.min(
+              34,
+              Math.floor(760 / Math.max(12, visualWidth(safeSubtitle))),
+            ),
+          )
         : 28;
 
       // 标题最多 30 个视觉字（字体大小已自适应，不强制截断）
@@ -721,22 +1350,31 @@ export class CanvasImageGroupService {
       // 中线遮挡带：弱化拼接缝并提升文字可读性
       const seamMaskHeight = safeSubtitle
         ? Math.min(
-          280,
-          Math.max(
-            150,
-            titleFontSize * Math.max(1, titleLines.length) +
-            subtitleFontSize * Math.max(1, subtitleLines.length) +
-            56,
-          ),
-        )
-        : Math.min(220, Math.max(110, titleFontSize * Math.max(1, titleLines.length) + 48));
+            280,
+            Math.max(
+              150,
+              titleFontSize * Math.max(1, titleLines.length) +
+                subtitleFontSize * Math.max(1, subtitleLines.length) +
+                56,
+            ),
+          )
+        : Math.min(
+            220,
+            Math.max(110, titleFontSize * Math.max(1, titleLines.length) + 48),
+          );
       const seamMaskY = Math.floor((COLLAGE_HEIGHT - seamMaskHeight) / 2);
 
       const titleTspans = (titleLines.length > 0 ? titleLines : [''])
-        .map((line, idx) => `<tspan x="50%" dy="${idx === 0 ? 0 : 1.15}em">${this.escapeSvgText(line)}</tspan>`)
+        .map(
+          (line, idx) =>
+            `<tspan x="50%" dy="${idx === 0 ? 0 : 1.15}em">${this.escapeSvgText(line)}</tspan>`,
+        )
         .join('');
       const subtitleTspans = subtitleLines
-        .map((line, idx) => `<tspan x="50%" dy="${idx === 0 ? 0 : 1.2}em">${this.escapeSvgText(line)}</tspan>`)
+        .map(
+          (line, idx) =>
+            `<tspan x="50%" dy="${idx === 0 ? 0 : 1.2}em">${this.escapeSvgText(line)}</tspan>`,
+        )
         .join('');
 
       const fontFamily = `'ProjectCoverCJK','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Source Han Sans SC','SimHei',Arial,Helvetica,sans-serif`;
@@ -778,17 +1416,18 @@ export class CanvasImageGroupService {
 
       return `/static/uploads/canvas-covers/${outName}`;
     } catch (err) {
-      this.logger.warn(`[image-group] burnCollageCoverText error: ${err}`);
+      this.logger.warn(
+        `[image-group] burnCollageCoverText error: ${this.describeUnknown(err)}`,
+      );
       return null;
     }
   }
 
   /**
-   * @description 选一张竖图（优先未使用的）
+   * @description 选一张竖图（优先未使用的；不降级为横图）
    * @param {GalleryImageEntity[]} pool - 图片池
    * @param {Set<number>} localUsedIds - 组内已使用 ID
    * @param {Set<number>} globalUsedIds - 全局已使用 ID
-   * @param {Set<number>} globalPortraitIds - 全局已使用竖图 ID
    * @returns {GalleryImageEntity | null}
    * @keyword-en pick one portrait image
    */
@@ -796,7 +1435,6 @@ export class CanvasImageGroupService {
     pool: GalleryImageEntity[],
     localUsedIds: Set<number>,
     globalUsedIds: Set<number>,
-    globalPortraitIds: Set<number>,
   ): GalleryImageEntity | null {
     // 优先：竖图 + 未在全局使用
     const p1 = pool.find(
@@ -805,21 +1443,7 @@ export class CanvasImageGroupService {
         !globalUsedIds.has(img.id) &&
         img.isPortrait === true,
     );
-    if (p1) return p1;
-    // 降级1：竖图 + 仅未在全局使用
-    const p2 = pool.find(
-      (img) =>
-        !localUsedIds.has(img.id) &&
-        img.isPortrait === true,
-    );
-    if (p2) return p2;
-    // 降级2：任意未使用图片
-    const p3 = pool.find(
-      (img) => !localUsedIds.has(img.id) && !globalUsedIds.has(img.id),
-    );
-    if (p3) return p3;
-    // 最终降级：任意未使用
-    return pool.find((img) => !localUsedIds.has(img.id)) ?? null;
+    return p1 ?? null;
   }
 
   /**
@@ -878,9 +1502,10 @@ export class CanvasImageGroupService {
    * @returns {{ tags: string[]; descriptions: string[] }}
    * @keyword-en summarize image semantic context for cover copy
    */
-  private summarizeImageContext(
-    images: GalleryImageEntity[],
-  ): { tags: string[]; descriptions: string[] } {
+  private summarizeImageContext(images: GalleryImageEntity[]): {
+    tags: string[];
+    descriptions: string[];
+  } {
     const tagSet = new Set<string>();
     const descSet = new Set<string>();
 
@@ -923,15 +1548,25 @@ export class CanvasImageGroupService {
       });
       const titlesBlock = articles
         .map((a, i) => {
-          const articleTags = Array.isArray(a.tags) ? a.tags.filter((t) => String(t ?? '').trim().length > 0) : [];
+          const articleTags = this.sanitizeCopyrightRiskList(
+            Array.isArray(a.tags) ? a.tags : [],
+          );
           const ctx = imageContexts?.[i];
-          const ctxTags = Array.isArray(ctx?.tags) ? ctx!.tags.slice(0, 24) : [];
-          const ctxDescs = Array.isArray(ctx?.descriptions) ? ctx!.descriptions.slice(0, 6) : [];
+          const ctxTags = this.sanitizeCopyrightRiskList(
+            Array.isArray(ctx?.tags) ? ctx.tags : [],
+          ).slice(0, 24);
+          const ctxDescs = this.sanitizeCopyrightRiskList(
+            Array.isArray(ctx?.descriptions) ? ctx.descriptions : [],
+          ).slice(0, 6);
           const parts = [
             `${i + 1}. 文章标题：${a.title}`,
-            articleTags.length > 0 ? `   文章标签：${articleTags.join('、')}` : '',
+            articleTags.length > 0
+              ? `   文章标签：${articleTags.join('、')}`
+              : '',
             ctxTags.length > 0 ? `   配图标签汇总：${ctxTags.join('、')}` : '',
-            ctxDescs.length > 0 ? `   配图描述汇总：${ctxDescs.join('；')}` : '',
+            ctxDescs.length > 0
+              ? `   配图描述汇总：${ctxDescs.join('；')}`
+              : '',
           ].filter((x) => x.length > 0);
           return parts.join('\n');
         })
@@ -954,16 +1589,17 @@ export class CanvasImageGroupService {
       ].join('\n');
       const res = await llm.invoke(prompt);
       const parseArray = (input: unknown): unknown[] | null => {
-        if (Array.isArray(input)) {
-          const looksLikeCoverItems = input.every(
+        const inputArray = this.copyUnknownArray(input);
+        if (inputArray) {
+          const looksLikeCoverItems = inputArray.every(
             (item) =>
               item &&
               typeof item === 'object' &&
               !Array.isArray(item) &&
               ('title' in item || 'subtitle' in item),
           );
-          if (looksLikeCoverItems) return input;
-          const stitched = input
+          if (looksLikeCoverItems) return inputArray;
+          const stitched = inputArray
             .map((item) => {
               if (typeof item === 'string') return item;
               if (!item || typeof item !== 'object') return '';
@@ -980,10 +1616,13 @@ export class CanvasImageGroupService {
 
         if (input && typeof input === 'object') {
           const rec = input as Record<string, unknown>;
-          if (Array.isArray(rec.items)) return rec.items;
-          if (Array.isArray(rec.data)) return rec.data;
-          if (Array.isArray(rec.content)) {
-            const parsed = parseArray(rec.content);
+          const items = this.copyUnknownArray(rec.items);
+          if (items) return items;
+          const data = this.copyUnknownArray(rec.data);
+          if (data) return data;
+          const contentItems = this.copyUnknownArray(rec.content);
+          if (contentItems) {
+            const parsed = parseArray(contentItems);
             if (parsed) return parsed;
           }
           if (typeof rec.content === 'string') {
@@ -1005,11 +1644,14 @@ export class CanvasImageGroupService {
         const parseRawJson = (text: string): unknown[] | null => {
           try {
             const parsed = JSON.parse(text) as unknown;
-            if (Array.isArray(parsed)) return parsed;
+            const direct = this.copyUnknownArray(parsed);
+            if (direct) return direct;
             if (parsed && typeof parsed === 'object') {
               const rec = parsed as Record<string, unknown>;
-              if (Array.isArray(rec.items)) return rec.items;
-              if (Array.isArray(rec.data)) return rec.data;
+              const items = this.copyUnknownArray(rec.items);
+              if (items) return items;
+              const data = this.copyUnknownArray(rec.data);
+              if (data) return data;
             }
           } catch {
             void 0;
@@ -1036,24 +1678,33 @@ export class CanvasImageGroupService {
       };
 
       const arr = parseArray(res.content);
-      if (!arr || arr.length === 0) return fallback;
+      if (!arr || arr.length === 0)
+        return fallback.map((fb) => this.sanitizeCoverText(fb));
       return fallback.map((fb, i) => {
         const v = arr[i];
         if (v && typeof v === 'object' && !Array.isArray(v)) {
           const item = v as Record<string, unknown>;
-          const rawTitle = String(item.title ?? '').trim();
-          const rawSubtitle = String(item.subtitle ?? '').trim();
+          const rawTitle = this.coercePlainText(item.title).trim();
+          const rawSubtitle = this.coercePlainText(item.subtitle).trim();
           // 清理破折号、连接号等奇怪符号
-          const cleanDash = (s: string): string => s.replace(/[—–−‐‑‒–ー]/g, '');
-          const title = cleanDash(rawTitle);
-          const subtitle = cleanDash(rawSubtitle);
-          return { title: title.length >= 2 ? title : fb.title, subtitle };
+          const cleanDash = (s: string): string =>
+            s.replace(/[—–−‐‑‒–ー]/g, '');
+          const title = this.sanitizeCopyrightRiskText(cleanDash(rawTitle));
+          const subtitle = this.sanitizeCopyrightRiskText(
+            cleanDash(rawSubtitle),
+          );
+          return this.sanitizeCoverText({
+            title: title.length >= 2 ? title : fb.title,
+            subtitle,
+          });
         }
-        return fb;
+        return this.sanitizeCoverText(fb);
       });
     } catch (err) {
-      this.logger.warn(`[image-group] LLM cover text failed, using fallback: ${err}`);
-      return fallback;
+      this.logger.warn(
+        `[image-group] LLM cover text failed, using fallback: ${this.describeUnknown(err)}`,
+      );
+      return fallback.map((fb) => this.sanitizeCoverText(fb));
     }
   }
 
@@ -1064,7 +1715,10 @@ export class CanvasImageGroupService {
    * @returns {string} 封面文案
    * @keyword-en build cover text from article title
    */
-  private buildCoverText(title: string | undefined, index: number): { title: string; subtitle: string } {
+  private buildCoverText(
+    title: string | undefined,
+    index: number,
+  ): { title: string; subtitle: string } {
     // 标题：不截断，保持完整
     const safeTitle = title?.trim() || `第 ${index + 1} 篇`;
     // 副标题：使用文章标题的描述性关键词，不从标题中间截取
@@ -1092,10 +1746,17 @@ export class CanvasImageGroupService {
       return join(process.cwd(), abs);
     }
     // 从 URL 解析
-    const url = String(img.url ?? '').trim().replace(/\\/g, '/');
+    const url = String(img.url ?? '')
+      .trim()
+      .replace(/\\/g, '/');
     if (!url || /^https?:\/\//i.test(url)) return undefined;
     if (url.startsWith('/static/uploads/')) {
-      return join(process.cwd(), 'public', 'uploads', url.slice('/static/uploads/'.length));
+      return join(
+        process.cwd(),
+        'public',
+        'uploads',
+        url.slice('/static/uploads/'.length),
+      );
     }
     if (url.startsWith('/uploads/')) {
       return join(process.cwd(), 'public', url.slice(1));
@@ -1103,7 +1764,7 @@ export class CanvasImageGroupService {
     if (url.startsWith('/')) {
       return join(process.cwd(), 'public', url.slice(1));
     }
-    return undefined
+    return undefined;
   }
 
   /**
@@ -1135,7 +1796,9 @@ export class CanvasImageGroupService {
   ): Promise<string | null> {
     const srcPath = this.resolveLocalPath(img);
     if (!srcPath || !existsSync(srcPath)) {
-      this.logger.warn(`[image-group] burnCoverText skip: no local file for imgId=${img.id}`);
+      this.logger.warn(
+        `[image-group] burnCoverText skip: no local file for imgId=${img.id}`,
+      );
       return null;
     }
     try {
@@ -1155,7 +1818,10 @@ export class CanvasImageGroupService {
 
       /** @description 计算文本视觉宽度单位（CJK=2, ASCII=1）*/
       const visualWidth = (s: string): number =>
-        [...String(s)].reduce((n, c) => n + (/[\u3400-\u9fff\uff00-\uffef]/.test(c) ? 2 : 1), 0);
+        [...String(s)].reduce(
+          (n, c) => n + (/[\u3400-\u9fff\uff00-\uffef]/.test(c) ? 2 : 1),
+          0,
+        );
 
       /** @description 按视觉宽度拆行 */
       const splitLines = (s: string, maxUnits: number): string[] => {
@@ -1164,29 +1830,58 @@ export class CanvasImageGroupService {
         let curUnits = 0;
         for (const ch of s) {
           const w = /[\u3400-\u9fff\uff00-\uffef]/.test(ch) ? 2 : 1;
-          if (curUnits + w > maxUnits && cur.length > 0) { lines.push(cur); cur = ch; curUnits = w; }
-          else { cur += ch; curUnits += w; }
+          if (curUnits + w > maxUnits && cur.length > 0) {
+            lines.push(cur);
+            cur = ch;
+            curUnits = w;
+          } else {
+            cur += ch;
+            curUnits += w;
+          }
         }
         if (cur.length > 0) lines.push(cur);
         return lines;
       };
 
-      const titleFontSize = Math.max(34, Math.min(60, Math.floor(900 / Math.max(10, visualWidth(safeTitle)))));
+      const titleFontSize = Math.max(
+        34,
+        Math.min(60, Math.floor(900 / Math.max(10, visualWidth(safeTitle)))),
+      );
       const subtitleFontSize = safeSubtitle
-        ? Math.max(22, Math.min(34, Math.floor(760 / Math.max(12, visualWidth(safeSubtitle)))))
+        ? Math.max(
+            22,
+            Math.min(
+              34,
+              Math.floor(760 / Math.max(12, visualWidth(safeSubtitle))),
+            ),
+          )
         : 28;
       const titleLines = splitLines(safeTitle, 30);
       const subtitleLines = safeSubtitle ? splitLines(safeSubtitle, 30) : [];
-      const titleStartY = Math.max(34, 41 - (Math.max(1, titleLines.length) - 1) * 4);
-      const subtitleStartY = Math.min(74, 54 + (Math.max(1, titleLines.length) - 1) * 3);
+      const titleStartY = Math.max(
+        34,
+        41 - (Math.max(1, titleLines.length) - 1) * 4,
+      );
+      const subtitleStartY = Math.min(
+        74,
+        54 + (Math.max(1, titleLines.length) - 1) * 3,
+      );
 
       const titleTspans = (titleLines.length > 0 ? titleLines : [''])
-        .map((line, idx) => `<tspan x="50%" dy="${idx === 0 ? 0 : 1.18}em">${this.escapeSvgText(line)}</tspan>`)
+        .map(
+          (line, idx) =>
+            `<tspan x="50%" dy="${idx === 0 ? 0 : 1.18}em">${this.escapeSvgText(line)}</tspan>`,
+        )
         .join('');
       const subtitleTspans = subtitleLines
-        .map((line, idx) => `<tspan x="50%" dy="${idx === 0 ? 0 : 1.2}em">${this.escapeSvgText(line)}</tspan>`)
+        .map(
+          (line, idx) =>
+            `<tspan x="50%" dy="${idx === 0 ? 0 : 1.2}em">${this.escapeSvgText(line)}</tspan>`,
+        )
         .join('');
-      const subtitleEscaped = safeSubtitle ? this.escapeSvgText(safeSubtitle) : '';
+      const subtitleEscaped = safeSubtitle
+        ? this.escapeSvgText(safeSubtitle)
+        : '';
 
       const fontFamily = `'ProjectCoverCJK','Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Source Han Sans SC','SimHei',Arial,Helvetica,sans-serif`;
       const svg = `
@@ -1208,7 +1903,9 @@ export class CanvasImageGroupService {
 
       return `/static/uploads/canvas-covers/${outName}`;
     } catch (err) {
-      this.logger.warn(`[image-group] burnCoverText error imgId=${img.id}: ${err}`);
+      this.logger.warn(
+        `[image-group] burnCoverText error imgId=${img.id}: ${this.describeUnknown(err)}`,
+      );
       return null;
     }
   }
@@ -1233,7 +1930,9 @@ export class CanvasImageGroupService {
           _coverFontBase64 = Buffer.from(buf).toString('base64');
           _coverFontPath = p;
           break;
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
     if (!_coverFontBase64) return '';
@@ -1252,9 +1951,15 @@ export class CanvasImageGroupService {
       const cacheDir = `${tmpDir}/cache`;
       await mkdir(cacheDir, { recursive: true });
       const tmpFont = `${tmpDir}/cover-cjk.ttf`;
-      try { await access(tmpFont); } catch { await copyFile(fontFilePath, tmpFont); }
+      try {
+        await access(tmpFont);
+      } catch {
+        await copyFile(fontFilePath, tmpFont);
+      }
       const confPath = `${tmpDir}/fonts.conf`;
-      try { await access(confPath); } catch {
+      try {
+        await access(confPath);
+      } catch {
         const conf = [
           '<?xml version="1.0"?>',
           '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">',
@@ -1331,7 +2036,9 @@ export class CanvasImageGroupService {
   private resolveGeneratedUploadFileInfo(
     url: string,
   ): { fileName: string; absPath: string; normalizedUrl: string } | null {
-    const raw = String(url ?? '').trim().replace(/\\/g, '/');
+    const raw = String(url ?? '')
+      .trim()
+      .replace(/\\/g, '/');
     if (!raw || /^https?:\/\//i.test(raw)) return null;
 
     const staticPrefix = '/static/uploads/';
@@ -1344,7 +2051,8 @@ export class CanvasImageGroupService {
       rel = raw.slice(uploadPrefix.length);
     } else if (raw.startsWith('/')) {
       rel = raw.replace(/^\/+/, '');
-      if (rel.startsWith('static/uploads/')) rel = rel.slice('static/uploads/'.length);
+      if (rel.startsWith('static/uploads/'))
+        rel = rel.slice('static/uploads/'.length);
       if (rel.startsWith('uploads/')) rel = rel.slice('uploads/'.length);
     } else {
       rel = raw;
@@ -1405,7 +2113,7 @@ export class CanvasImageGroupService {
     const seen = new Set<string>();
     const out: string[] = [];
     const push = (raw: unknown): void => {
-      const t = String(raw ?? '').trim();
+      const t = this.coercePlainText(raw).trim();
       if (!t) return;
       if (seen.has(t)) return;
       seen.add(t);
@@ -1458,13 +2166,16 @@ export class CanvasImageGroupService {
 
     const isValidGroupId = (id: unknown): id is string | number =>
       (typeof id === 'number' && Number.isFinite(id)) || typeof id === 'string';
-    let finalGroupId = isValidGroupId(input.groupId) ? input.groupId : undefined;
+    let finalGroupId = isValidGroupId(input.groupId)
+      ? input.groupId
+      : undefined;
     if (finalGroupId === undefined) {
       if (input.generatedKind === 'cover') {
-        const coverGroup = await this.galleryGroups.findOrCreateDynamicCoverGroup(
-          input.userId,
-          input.tenantId,
-        );
+        const coverGroup =
+          await this.galleryGroups.findOrCreateDynamicCoverGroup(
+            input.userId,
+            input.tenantId,
+          );
         finalGroupId = coverGroup.id;
       } else {
         const collageGroup =
@@ -1493,7 +2204,10 @@ export class CanvasImageGroupService {
 
     const ext = extname(file.fileName).toLowerCase();
     const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
-    const thumb = await this.gallery.generateThumbnail(file.absPath, file.fileName);
+    const thumb = await this.gallery.generateThumbnail(
+      file.absPath,
+      file.fileName,
+    );
 
     const sourceIds = Array.isArray(input.sourceImageIds)
       ? input.sourceImageIds
@@ -1502,7 +2216,10 @@ export class CanvasImageGroupService {
           .slice(0, 2)
       : [];
 
-    const tags = this.buildGeneratedAssetTags(input.generatedKind, input.sourceImages);
+    const tags = this.buildGeneratedAssetTags(
+      input.generatedKind,
+      input.sourceImages,
+    );
     const originalName = file.fileName.includes('/')
       ? file.fileName.slice(file.fileName.lastIndexOf('/') + 1)
       : file.fileName;
@@ -1543,8 +2260,9 @@ export class CanvasImageGroupService {
         isPortrait,
       } as GalleryImageEntity;
     } catch (error) {
+      const normalizedUrl = this.coercePlainText(file.normalizedUrl).trim();
       this.logger.warn(
-        `[image-group] persistGeneratedAssetToGallery failed url=${file.normalizedUrl} err=${error}`,
+        `[image-group] persistGeneratedAssetToGallery failed url=${normalizedUrl} err=${this.describeUnknown(error)}`,
       );
       return null;
     }
@@ -1570,12 +2288,14 @@ export class CanvasImageGroupService {
     try {
       const mod = (await import('sharp')) as unknown;
       const maybeDefault = (mod as { default?: unknown }).default;
-      const sharp = (typeof maybeDefault === 'function' ? maybeDefault : mod) as unknown;
+      const sharp = typeof maybeDefault === 'function' ? maybeDefault : mod;
       if (typeof sharp === 'function') return sharp as typeof import('sharp');
       this.logger.warn('[image-group] sharp module is not callable');
       return null;
     } catch (err) {
-      this.logger.warn(`[image-group] sharp load failed: ${err}`);
+      this.logger.warn(
+        `[image-group] sharp load failed: ${this.describeUnknown(err)}`,
+      );
       return null;
     }
   }
@@ -1587,19 +2307,28 @@ export class CanvasImageGroupService {
    * @returns {Promise<string | null>} 合成图 URL 或 null
    * @keyword-en create dynamic collage file
    */
-  private async createDynamicCollageFile(imgA: GalleryImageEntity, imgB: GalleryImageEntity): Promise<string | null> {
+  private async createDynamicCollageFile(
+    imgA: GalleryImageEntity,
+    imgB: GalleryImageEntity,
+  ): Promise<string | null> {
     const pathA = this.resolveLocalPath(imgA);
     const pathB = this.resolveLocalPath(imgB);
     if (!pathA || !pathB) {
-      this.logger.warn(`[image-group] createDynamicCollageFile skip: no local path resolved for imgA=${imgA.id} imgB=${imgB.id}`);
+      this.logger.warn(
+        `[image-group] createDynamicCollageFile skip: no local path resolved for imgA=${imgA.id} imgB=${imgB.id}`,
+      );
       return null;
     }
     if (!existsSync(pathA)) {
-      this.logger.warn(`[image-group] createDynamicCollageFile skip: file not exist imgA=${imgA.id} pathA=${pathA}`);
+      this.logger.warn(
+        `[image-group] createDynamicCollageFile skip: file not exist imgA=${imgA.id} pathA=${pathA}`,
+      );
       return null;
     }
     if (!existsSync(pathB)) {
-      this.logger.warn(`[image-group] createDynamicCollageFile skip: file not exist imgB=${imgB.id} pathB=${pathB}`);
+      this.logger.warn(
+        `[image-group] createDynamicCollageFile skip: file not exist imgB=${imgB.id} pathB=${pathB}`,
+      );
       return null;
     }
     try {
@@ -1610,11 +2339,20 @@ export class CanvasImageGroupService {
       const bottomH = COLLAGE_HEIGHT - topH;
 
       // 上图：等比缩到 topH 高度，不裁剪
-      const bufA = await sharp(pathA).resize({ width: COLLAGE_WIDTH, height: topH }).toBuffer();
+      const bufA = await sharp(pathA)
+        .resize({ width: COLLAGE_WIDTH, height: topH })
+        .toBuffer();
       // 下图：等比缩到 bottomH 高度，不裁剪
-      const bufB = await sharp(pathB).resize({ width: COLLAGE_WIDTH, height: bottomH }).toBuffer();
+      const bufB = await sharp(pathB)
+        .resize({ width: COLLAGE_WIDTH, height: bottomH })
+        .toBuffer();
 
-      const outDir = join(process.cwd(), 'public', 'uploads', 'canvas-collages');
+      const outDir = join(
+        process.cwd(),
+        'public',
+        'uploads',
+        'canvas-collages',
+      );
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
       const outName = `collage-${randomUUID()}.png`;
       const outPath = join(outDir, outName);
@@ -1629,7 +2367,9 @@ export class CanvasImageGroupService {
 
       return `/static/uploads/canvas-collages/${outName}`;
     } catch (err) {
-      this.logger.warn(`[image-group] createDynamicCollageFile error imgA=${imgA.id} imgB=${imgB.id}: ${err}`);
+      this.logger.warn(
+        `[image-group] createDynamicCollageFile error imgA=${imgA.id} imgB=${imgB.id}: ${this.describeUnknown(err)}`,
+      );
       return null;
     }
   }
@@ -1655,7 +2395,9 @@ export class CanvasImageGroupService {
       isPortrait: img.isPortrait,
       tags: Array.isArray(img.tags) ? img.tags : [],
       role,
-      ...(coverCopy?.title ? { text: coverCopy.title, subtitle: coverCopy.subtitle } : {}),
+      ...(coverCopy?.title
+        ? { text: coverCopy.title, subtitle: coverCopy.subtitle }
+        : {}),
     };
   }
 }

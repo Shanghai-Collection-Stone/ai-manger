@@ -29,46 +29,50 @@ export class GraphWorkflowFunctionCallService {
     private readonly gallery: GalleryService,
   ) {}
 
-    /**
-     * @description 判定标签/描述是否包含封面语义。
-     * @param {string[]} tags - 标签数组。
-     * @param {string | undefined} description - 图片描述。
-     * @returns {boolean} 是否封面语义。
-     * @keyword-en detect cover-like semantics
-     */
-    private isCoverLike(tags: string[], description?: string): boolean {
-      const text = [
-        ...(Array.isArray(tags) ? tags : []),
-        typeof description === 'string' ? description : '',
-      ]
-        .map((x) => String(x ?? '').trim().toLowerCase())
-        .filter((x) => x.length > 0)
-        .join(' ');
-      if (!text) return false;
-      return /(封面|拼图封面|自动封面|canvas封面|cover)/i.test(text);
-    }
+  /**
+   * @description 判定标签/描述是否包含封面语义。
+   * @param {string[]} tags - 标签数组。
+   * @param {string | undefined} description - 图片描述。
+   * @returns {boolean} 是否封面语义。
+   * @keyword-en detect cover-like semantics
+   */
+  private isCoverLike(tags: string[], description?: string): boolean {
+    const text = [
+      ...(Array.isArray(tags) ? tags : []),
+      typeof description === 'string' ? description : '',
+    ]
+      .map((x) =>
+        String(x ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+      .filter((x) => x.length > 0)
+      .join(' ');
+    if (!text) return false;
+    return /(封面|拼图封面|自动封面|canvas封面|cover)/i.test(text);
+  }
 
-    /**
-     * @description 按目标图片类型判断是否命中。
-     * @param {{ isCollage?: boolean; tags?: string[]; description?: string }} image - 图片对象。
-     * @param {'all' | 'regular' | 'collage' | undefined} type - 目标类型。
-     * @returns {boolean} 是否命中类型。
-     * @keyword-en classify image by type
-     */
-    private isMatchedImageType(
-      image: { isCollage?: boolean; tags?: string[]; description?: string },
-      type: 'all' | 'regular' | 'collage' | undefined,
-    ): boolean {
-      const resolvedType = type ?? 'regular';
-      const isCollage = image?.isCollage === true;
-      if (resolvedType === 'all') return true;
-      if (resolvedType === 'collage') {
-        return isCollage || this.isCoverLike(image.tags ?? [], image.description);
-      }
-      if (isCollage) return false;
-      if (this.isCoverLike(image.tags ?? [], image.description)) return false;
-      return true;
+  /**
+   * @description 按目标图片类型判断是否命中。
+   * @param {{ isCollage?: boolean; tags?: string[]; description?: string }} image - 图片对象。
+   * @param {'all' | 'regular' | 'collage' | undefined} type - 目标类型。
+   * @returns {boolean} 是否命中类型。
+   * @keyword-en classify image by type
+   */
+  private isMatchedImageType(
+    image: { isCollage?: boolean; tags?: string[]; description?: string },
+    type: 'all' | 'regular' | 'collage' | undefined,
+  ): boolean {
+    const resolvedType = type ?? 'regular';
+    const isCollage = image?.isCollage === true;
+    if (resolvedType === 'all') return true;
+    if (resolvedType === 'collage') {
+      return isCollage || this.isCoverLike(image.tags ?? [], image.description);
     }
+    if (isCollage) return false;
+    if (this.isCoverLike(image.tags ?? [], image.description)) return false;
+    return true;
+  }
 
   private normalizeKeyString(v: unknown): string {
     if (typeof v === 'string') return v.trim().toLowerCase();
@@ -97,6 +101,7 @@ export class GraphWorkflowFunctionCallService {
     topic?: string;
     userPrompt?: string;
     dataSummary?: string;
+    writingStyle?: string;
     outline?: Record<string, unknown>;
     style?: Record<string, unknown>;
     count?: number;
@@ -111,6 +116,7 @@ export class GraphWorkflowFunctionCallService {
       this.normalizeKeyString(input.topic),
       this.normalizeKeyString(input.userPrompt),
       this.normalizeKeyString(input.dataSummary),
+      this.normalizeKeyString(input.writingStyle),
       this.stableStringify(input.outline),
       this.stableStringify(input.style),
       Number.isFinite(Number(input.count)) ? String(Number(input.count)) : '',
@@ -211,6 +217,36 @@ export class GraphWorkflowFunctionCallService {
   }
 
   /**
+   * @description 从显式 writingStyle 或兼容的 style 对象中解析生文风格。
+   * @param {string | undefined} writingStyle - 工具显式文风参数。
+   * @param {Record<string, unknown> | undefined} style - 兼容旧 style 对象。
+   * @param {string | undefined} platform - 平台标签。
+   * @returns {string | undefined} 解析后的文风。
+   * @keyword-en resolve topic writing style
+   */
+  private resolveTopicWritingStyle(
+    writingStyle: string | undefined,
+    style: Record<string, unknown> | undefined,
+    platform: string | undefined,
+  ): string | undefined {
+    const explicit =
+      typeof writingStyle === 'string' ? writingStyle.trim() : '';
+    if (explicit) return explicit.slice(0, 120);
+    const styleKeys = ['writingStyle', 'writing_style', 'articleStyle', 'tone'];
+    for (const key of styleKeys) {
+      const value = style?.[key];
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim().slice(0, 120);
+      }
+    }
+    if (platform && /知乎|zhihu/i.test(platform)) return '知乎理性分析文风';
+    if (platform && /公众号|wechat|weixin/i.test(platform))
+      return '公众号深度叙事文风';
+    if (platform && /小红书|xhs/i.test(platform)) return '小红书真实分享文风';
+    return undefined;
+  }
+
+  /**
    * @description 返回 Graph 工作流相关的工具句柄集合（topic_orchestrate）。
    * @param {(msg: string) => void} [streamWriter] - 可选的流式日志输出。
    * @returns {CreateAgentParams['tools']} 工具集合。
@@ -224,9 +260,16 @@ export class GraphWorkflowFunctionCallService {
     /** LLM 有时将 outline/style 序列化为 JSON 字符串，此处统一反序列化 */
     const coerceRecord = (v: unknown): Record<string, unknown> | undefined => {
       if (!v) return undefined;
-      if (typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+      if (typeof v === 'object' && !Array.isArray(v))
+        return v as Record<string, unknown>;
       if (typeof v === 'string') {
-        try { const p = JSON.parse(v); if (p && typeof p === 'object' && !Array.isArray(p)) return p as Record<string, unknown>; } catch { /* ignore */ }
+        try {
+          const p = JSON.parse(v);
+          if (p && typeof p === 'object' && !Array.isArray(p))
+            return p as Record<string, unknown>;
+        } catch {
+          /* ignore */
+        }
       }
       return undefined;
     };
@@ -238,6 +281,7 @@ export class GraphWorkflowFunctionCallService {
         topic,
         userPrompt,
         dataSummary,
+        writingStyle,
         outline: outlineRaw,
         style: styleRaw,
         count,
@@ -248,6 +292,11 @@ export class GraphWorkflowFunctionCallService {
       }) => {
         const outline = coerceRecord(outlineRaw);
         const style = coerceRecord(styleRaw);
+        const finalWritingStyle = this.resolveTopicWritingStyle(
+          writingStyle,
+          style,
+          platform,
+        );
         const requestedCount = this.normalizeRequestedArticleCount(count);
         const normalizedImageGroupCanvasIds = Array.isArray(imageGroupCanvasIds)
           ? Array.from(
@@ -260,9 +309,14 @@ export class GraphWorkflowFunctionCallService {
             )
           : [];
         if (typeof galleryGroupId === 'string') {
-          const msg = '[topic_orchestrate] galleryGroupId must be a number (group ID), not a string. Please provide the numeric group ID. You may need to look up the group ID first using gallery_group_find.';
+          const msg =
+            '[topic_orchestrate] galleryGroupId must be a number (group ID), not a string. Please provide the numeric group ID. You may need to look up the group ID first using gallery_group_find.';
           this.logger.warn(msg);
-          return JSON.stringify({ ok: false, error: 'GALLERY_GROUP_ID_MUST_BE_NUMBER', message: msg });
+          return JSON.stringify({
+            ok: false,
+            error: 'GALLERY_GROUP_ID_MUST_BE_NUMBER',
+            message: msg,
+          });
         }
         if (streamWriter) streamWriter('[Graph] Orchestrating topic workflow');
         const finalUserId = this.resolveScopedUserId(userId, scope);
@@ -282,6 +336,7 @@ export class GraphWorkflowFunctionCallService {
           topic,
           userPrompt,
           dataSummary,
+          writingStyle: finalWritingStyle,
           outline,
           style,
           count: requestedCount,
@@ -315,6 +370,7 @@ export class GraphWorkflowFunctionCallService {
             topic,
             userPrompt,
             dataSummary,
+            writingStyle: finalWritingStyle,
             count: requestedCount,
             imageMode: 'image-group',
             galleryUserId: finalGalleryUserId,
@@ -374,16 +430,20 @@ export class GraphWorkflowFunctionCallService {
           );
 
           // 拼接 canvas-it 代码块（与 xhs_create_image_group_canvas 保持一致），让子代理原样透传给上层，前端立即渲染看板入口
-          const cid = typeof canvasId === 'number' ? canvasId : Number(canvasId);
-          const canvasBlock =
-            Number.isFinite(cid)
-              ? `\`\`\`canvas-it\n${JSON.stringify({ canvasId: cid, status: base.status ?? 'generating', type: 'article', topic: String(topic ?? ''), articleCount: base.articleCount ?? 0 })}\n\`\`\``
-              : '';
+          const cid =
+            typeof canvasId === 'number' ? canvasId : Number(canvasId);
+          const canvasBlock = Number.isFinite(cid)
+            ? `\`\`\`canvas-it\n${JSON.stringify({ canvasId: cid, status: base.status ?? 'generating', type: 'article', topic: String(topic ?? ''), articleCount: base.articleCount ?? 0 })}\n\`\`\``
+            : '';
           return [
             JSON.stringify(base),
-            canvasBlock ? `请将以下代码块原样输出给用户（**必须输出，不可省略**）：` : '',
+            canvasBlock
+              ? `请将以下代码块原样输出给用户（**必须输出，不可省略**）：`
+              : '',
             canvasBlock,
-          ].filter(Boolean).join('\n');
+          ]
+            .filter(Boolean)
+            .join('\n');
         })();
         this.orchestrateInFlight.set(dedupKey, runPromise);
         try {
@@ -402,17 +462,32 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Topic Orchestration Tool. Generates articles in a SINGLE Canvas based on user requirements and merges image-group matching into each article. Article count follows user/LLM request when provided. **CRITICAL — ONE CALL PER REQUEST**: when user asks for N articles, set count=N and call this tool ONCE; the N articles all live in the same Canvas. Never loop-call this tool to produce multiple Canvases for the same request.',
         schema: z.object({
-          userId: z.string().optional().describe('Target user id (injected from session scope if omitted)'),
+          userId: z
+            .string()
+            .optional()
+            .describe(
+              'Target user id (injected from session scope if omitted)',
+            ),
           platform: z.string().optional().describe('Publishing platform label'),
           topic: z.string().optional().describe('Topic for the canvas'),
           userPrompt: z
             .string()
             .optional()
-            .describe('User original intent/prompt summary for article generation context'),
+            .describe(
+              'User original intent/prompt summary for article generation context',
+            ),
           dataSummary: z
             .string()
             .optional()
-            .describe('Collected data summary (facts/trends/evidence) used to ground article generation'),
+            .describe(
+              'Collected data summary (facts/trends/evidence) used to ground article generation',
+            ),
+          writingStyle: z
+            .string()
+            .optional()
+            .describe(
+              'Confirmed article writing style, e.g. 小红书真实分享、知乎理性分析、公众号深度叙事. Ask user before calling if unclear.',
+            ),
           outline: z
             .union([z.record(z.string(), z.any()), z.string()])
             .optional()
@@ -424,7 +499,9 @@ export class GraphWorkflowFunctionCallService {
           count: z
             .number()
             .optional()
-            .describe('Article count for THIS Canvas (set to total N when user asks for N articles; do NOT split into multiple count=1 calls)'),
+            .describe(
+              'Article count for THIS Canvas (set to total N when user asks for N articles; do NOT split into multiple count=1 calls)',
+            ),
           galleryUserId: z
             .string()
             .optional()
@@ -440,7 +517,9 @@ export class GraphWorkflowFunctionCallService {
           imageGroupCanvasIds: z
             .array(z.number().int().positive())
             .optional()
-            .describe('Optional image-group canvas IDs. When provided, reuse these canvas image groups as article image sources by order.'),
+            .describe(
+              'Optional image-group canvas IDs. When provided, reuse these canvas image groups as article image sources by order.',
+            ),
         }),
       },
     );
@@ -456,13 +535,21 @@ export class GraphWorkflowFunctionCallService {
         intervalMinutes,
         concurrency,
         callbackUrl,
-          payload,
+        payload,
       }) => {
         if (!userId) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'userId 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'userId 参数必填',
+          });
         }
         if (!canvasId) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'canvasId 参数必填',
+          });
         }
         const finalUserId = this.resolveScopedUserId(userId, scope);
         const finalPlatformExec = this.normalizePlatformType(platform);
@@ -526,7 +613,10 @@ export class GraphWorkflowFunctionCallService {
           'Canvas Execute Tool. Runs batch publishing / execution from an existing Canvas.',
         schema: z.object({
           userId: z.string().optional().describe('Target user id (required)'),
-          canvasId: z.union([z.number(), z.string()]).optional().describe('Canvas id (required)'),
+          canvasId: z
+            .union([z.number(), z.string()])
+            .optional()
+            .describe('Canvas id (required)'),
           platform: z.string().optional().describe('Publishing platform label'),
           galleryUserId: z
             .string()
@@ -579,13 +669,25 @@ export class GraphWorkflowFunctionCallService {
         taskCount,
       }) => {
         if (!userId) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'userId 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'userId 参数必填',
+          });
         }
         if (!canvasId) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'canvasId 参数必填',
+          });
         }
         if (taskCount === undefined || taskCount === null) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'taskCount 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'taskCount 参数必填',
+          });
         }
         const finalUserId = this.resolveScopedUserId(userId, scope);
         const finalPlatformXhs = this.normalizePlatformType(platform);
@@ -653,8 +755,14 @@ export class GraphWorkflowFunctionCallService {
           'XHS Batch Publish Tool. Creates an async queue job, then runs the publish graph in the background. IMPORTANT: Provide taskCount; Canvas articles are only references for generation.',
         schema: z.object({
           userId: z.string().optional().describe('Target user id (required)'),
-          canvasId: z.union([z.number(), z.string()]).optional().describe('Canvas id (required)'),
-          taskCount: z.number().optional().describe('Number of posts to generate (required)'),
+          canvasId: z
+            .union([z.number(), z.string()])
+            .optional()
+            .describe('Canvas id (required)'),
+          taskCount: z
+            .number()
+            .optional()
+            .describe('Number of posts to generate (required)'),
           platform: z
             .string()
             .optional()
@@ -873,13 +981,25 @@ export class GraphWorkflowFunctionCallService {
     const canvasAppendArticle = tool(
       async ({ canvasId, title, tags, markdown, imageQuery, meta }) => {
         if (!canvasId) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'canvasId 参数必填',
+          });
         }
         if (!title) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'title 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'title 参数必填',
+          });
         }
         if (!markdown) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'markdown 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'markdown 参数必填',
+          });
         }
         const canvasIdNum = Number(canvasId);
         if (!Number.isFinite(canvasIdNum)) {
@@ -923,10 +1043,16 @@ export class GraphWorkflowFunctionCallService {
         description:
           'Canvas Append Article Tool. Writes exactly one article into a canvas each call.',
         schema: z.object({
-          canvasId: z.union([z.number(), z.string()]).optional().describe('Canvas id (required)'),
+          canvasId: z
+            .union([z.number(), z.string()])
+            .optional()
+            .describe('Canvas id (required)'),
           title: z.string().optional().describe('Article title (required)'),
           tags: z.array(z.string()).optional().describe('Article tags'),
-          markdown: z.string().optional().describe('Article markdown content (required)'),
+          markdown: z
+            .string()
+            .optional()
+            .describe('Article markdown content (required)'),
           imageQuery: z.string().optional().describe('Image retrieval query'),
           meta: z
             .record(z.string(), z.any())
@@ -940,7 +1066,11 @@ export class GraphWorkflowFunctionCallService {
     const getCanvasDetail = tool(
       async ({ canvasId }) => {
         if (!canvasId) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'canvasId 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'canvasId 参数必填',
+          });
         }
         const canvasIdNum = Number(canvasId);
         if (!Number.isFinite(canvasIdNum)) {
@@ -954,7 +1084,10 @@ export class GraphWorkflowFunctionCallService {
           }
           const scopedUserId = scope?.userId?.trim();
           if (scopedUserId && c.userId !== scopedUserId) {
-            return JSON.stringify({ ok: false, error: 'CANVAS_SCOPE_FORBIDDEN' });
+            return JSON.stringify({
+              ok: false,
+              error: 'CANVAS_SCOPE_FORBIDDEN',
+            });
           }
 
           const articles = Array.isArray(c.articles) ? c.articles : [];
@@ -1032,14 +1165,20 @@ export class GraphWorkflowFunctionCallService {
         const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
-          groupId !== undefined && ((typeof groupId === 'number' && Number.isFinite(groupId)) || typeof groupId === 'string')
+          groupId !== undefined &&
+          ((typeof groupId === 'number' && Number.isFinite(groupId)) ||
+            typeof groupId === 'string')
             ? groupId
             : undefined;
         const lim =
           typeof limit === 'number' && Number.isFinite(limit)
             ? Math.max(1, Math.min(5000, Math.floor(limit)))
             : 500;
-        const tags = await this.gallery.listDistinctTagsWithTenant(uid, tid, lim);
+        const tags = await this.gallery.listDistinctTagsWithTenant(
+          uid,
+          tid,
+          lim,
+        );
         return JSON.stringify({ ok: true, tags });
       },
       {
@@ -1048,7 +1187,12 @@ export class GraphWorkflowFunctionCallService {
           'Gallery Tags Tool. Lists all distinct image tags in the gallery, optionally filtered by userId and tenantId.',
         schema: z.object({
           userId: z.string().optional().describe('Gallery owner user id'),
-          groupId: z.number().optional().describe('Gallery group id filter (deprecated, use tenant isolation)'),
+          groupId: z
+            .number()
+            .optional()
+            .describe(
+              'Gallery group id filter (deprecated, use tenant isolation)',
+            ),
           limit: z
             .number()
             .optional()
@@ -1060,12 +1204,18 @@ export class GraphWorkflowFunctionCallService {
     const gallerySearchImages = tool(
       async ({ userId, groupId, tags, limit, matchCollage, image_type }) => {
         if (!tags) {
-          return JSON.stringify({ ok: false, error: 'PARAM_REQUIRED', message: 'tags 参数必填' });
+          return JSON.stringify({
+            ok: false,
+            error: 'PARAM_REQUIRED',
+            message: 'tags 参数必填',
+          });
         }
         const uid = this.resolveScopedOptionalUserId(userId, scope);
         const tid = scope?.tenantId?.trim() || undefined;
         const gid =
-          groupId !== undefined && ((typeof groupId === 'number' && Number.isFinite(groupId)) || typeof groupId === 'string')
+          groupId !== undefined &&
+          ((typeof groupId === 'number' && Number.isFinite(groupId)) ||
+            typeof groupId === 'string')
             ? groupId
             : undefined;
         const lim =
@@ -1087,9 +1237,7 @@ export class GraphWorkflowFunctionCallService {
                 ? matchCollage
                 : false;
         const fetchLimit =
-          imageType === 'collage'
-            ? Math.max(lim, Math.min(200, lim * 4))
-            : lim;
+          imageType === 'collage' ? Math.max(lim, Math.min(200, lim * 4)) : lim;
         const tagList = Array.isArray(tags)
           ? tags.map((t) => String(t ?? '').trim()).filter((t) => t.length > 0)
           : [];
@@ -1111,9 +1259,10 @@ export class GraphWorkflowFunctionCallService {
         return (finalImages ?? [])
           .map((img) => {
             const displayUrl = img.thumbUrl || img.url;
-            const desc = typeof img.description === 'string' && img.description.trim()
-              ? img.description.trim()
-              : '';
+            const desc =
+              typeof img.description === 'string' && img.description.trim()
+                ? img.description.trim()
+                : '';
             return `![${desc}](${displayUrl})`;
           })
           .join('\n');
@@ -1125,7 +1274,10 @@ export class GraphWorkflowFunctionCallService {
         schema: z.object({
           userId: z.string().optional().describe('Gallery owner user id'),
           groupId: z.number().optional().describe('Gallery group id filter'),
-          tags: z.array(z.string()).optional().describe('Selected tags (required)'),
+          tags: z
+            .array(z.string())
+            .optional()
+            .describe('Selected tags (required)'),
           image_type: z
             .enum(['all', 'regular', 'collage'])
             .optional()
@@ -1133,7 +1285,9 @@ export class GraphWorkflowFunctionCallService {
           matchCollage: z
             .boolean()
             .optional()
-            .describe('Deprecated: whether to include collage images (default false unless image_type overrides)'),
+            .describe(
+              'Deprecated: whether to include collage images (default false unless image_type overrides)',
+            ),
           limit: z
             .number()
             .optional()

@@ -259,7 +259,9 @@ export class ToolsService {
   }
 
   private normalizeLibraryTitle(value: unknown): string {
-    return String(value ?? '').trim().toLowerCase();
+    return String(value ?? '')
+      .trim()
+      .toLowerCase();
   }
 
   /**
@@ -332,7 +334,9 @@ export class ToolsService {
         error: 'ARTICLE_LIBRARY_AMBIGUOUS',
         message: '文章库标题匹配到多个结果，请改用 libraryId 或更完整标题',
         candidates: await Promise.all(
-          matched.slice(0, 20).map((lib) => this.buildArticleLibrarySummary(lib)),
+          matched
+            .slice(0, 20)
+            .map((lib) => this.buildArticleLibrarySummary(lib)),
         ),
       };
     }
@@ -345,7 +349,9 @@ export class ToolsService {
     };
   }
 
-  private extractCanvasArticleText(article: CanvasArticleEntity): string | undefined {
+  private extractCanvasArticleText(
+    article: CanvasArticleEntity,
+  ): string | undefined {
     const content = article.contentJson ?? {};
     const markdown = content['markdown'];
     if (typeof markdown === 'string' && markdown.trim().length > 0) {
@@ -415,8 +421,13 @@ export class ToolsService {
           titleKeyword: z
             .string()
             .optional()
-            .describe('Optional fuzzy title/name keyword for article library search.'),
-          type: z.string().optional().describe('Optional article library type filter.'),
+            .describe(
+              'Optional fuzzy title/name keyword for article library search.',
+            ),
+          type: z
+            .string()
+            .optional()
+            .describe('Optional article library type filter.'),
           limit: z.number().int().min(1).max(50).optional(),
           offset: z.number().int().min(0).optional(),
         }),
@@ -452,7 +463,8 @@ export class ToolsService {
           lib.id,
           scope?.tenantId,
         );
-        const latest = (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
+        const latest =
+          (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
         const qrPayload = { token, articleLibraryId: lib.id };
         return JSON.stringify({
           ok: true,
@@ -476,11 +488,10 @@ export class ToolsService {
           title: z
             .string()
             .optional()
-            .describe('Article library title/name, fuzzy matched when id is omitted.'),
-          libraryTitle: z
-            .string()
-            .optional()
-            .describe('Alias of title.'),
+            .describe(
+              'Article library title/name, fuzzy matched when id is omitted.',
+            ),
+          libraryTitle: z.string().optional().describe('Alias of title.'),
           name: z.string().optional().describe('Alias of title.'),
         }),
       },
@@ -523,7 +534,8 @@ export class ToolsService {
           return JSON.stringify({
             ok: false,
             error: 'CANVAS_NOT_READY',
-            message: 'Canvas 仍在生成中，完成后再入库；如用户明确要求保存当前占位内容，可传 allowGenerating=true。',
+            message:
+              'Canvas 仍在生成中，完成后再入库；如用户明确要求保存当前占位内容，可传 allowGenerating=true。',
             canvas: {
               id: canvas.id,
               topic: canvas.topic,
@@ -562,7 +574,9 @@ export class ToolsService {
           return JSON.stringify({
             ok: false,
             error: 'CANVAS_ARTICLES_EMPTY',
-            message: idSet ? '指定 articleIds 未匹配到文章' : 'Canvas 中没有可入库文章',
+            message: idSet
+              ? '指定 articleIds 未匹配到文章'
+              : 'Canvas 中没有可入库文章',
           });
         }
 
@@ -586,7 +600,8 @@ export class ToolsService {
           },
         }));
         const created = await this.article.bulkCreate(batch);
-        const latest = (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
+        const latest =
+          (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
         let qrPayload: { token: string; articleLibraryId: number } | undefined;
         let qrContent: string | undefined;
         if (returnPushQr === true) {
@@ -634,15 +649,21 @@ export class ToolsService {
           articleIds: z
             .array(z.union([z.number().int().positive(), z.string()]))
             .optional()
-            .describe('Optional canvas article ids to store. Omit to store the whole canvas.'),
+            .describe(
+              'Optional canvas article ids to store. Omit to store the whole canvas.',
+            ),
           returnPushQr: z
             .boolean()
             .optional()
-            .describe('When true, also return qrPayload and qrContent for the target library.'),
+            .describe(
+              'When true, also return qrPayload and qrContent for the target library.',
+            ),
           allowGenerating: z
             .boolean()
             .optional()
-            .describe('Default false. Only set true if the user explicitly wants to store a still-generating Canvas.'),
+            .describe(
+              'Default false. Only set true if the user explicitly wants to store a still-generating Canvas.',
+            ),
         }),
       },
     );
@@ -654,9 +675,19 @@ export class ToolsService {
    * @description 构建 canvas_search tool，支持多 tag 关键词匹配或兜底文本搜索
    * @keyword-en build canvas search tool, tag keyword match, text fallback
    */
-  private buildCanvasSearchTool(scope?: FunctionCallScope): NonNullable<CreateAgentParams['tools']>[number] {
+  private buildCanvasSearchTool(
+    scope?: FunctionCallScope,
+  ): NonNullable<CreateAgentParams['tools']>[number] {
     return tool(
-      async ({ tags, type, limit }: { tags: string[]; type?: string; limit?: number }) => {
+      async ({
+        tags,
+        type,
+        limit,
+      }: {
+        tags: string[];
+        type?: string;
+        limit?: number;
+      }) => {
         const result = await this.canvas.searchByKeywords({
           tags,
           userId: scope?.userId,
@@ -688,7 +719,9 @@ export class ToolsService {
           tags: z
             .array(z.string())
             .min(1)
-            .describe('One or more keyword tags to search for (any match counts).'),
+            .describe(
+              'One or more keyword tags to search for (any match counts).',
+            ),
           type: z
             .enum(['article', 'image-group'])
             .optional()
@@ -741,7 +774,9 @@ export class ToolsService {
     return tool(
       async ({ platform }: { platform?: string }) => {
         // 软归一化：小红书相关都视为 xhs
-        const p = String(platform ?? 'xhs').trim().toLowerCase();
+        const p = String(platform ?? 'xhs')
+          .trim()
+          .toLowerCase();
         const normalized = /小红书|xhs/.test(p) ? 'xhs' : p;
         if (normalized !== 'xhs') {
           return JSON.stringify({
@@ -751,7 +786,10 @@ export class ToolsService {
           });
         }
         try {
-          const accounts = await this.admin.listXhsAccounts(scope?.tenantId, 'xhs');
+          const accounts = await this.admin.listXhsAccounts(
+            scope?.tenantId,
+            'xhs',
+          );
           return JSON.stringify({
             ok: true,
             platform: 'xhs',
@@ -768,7 +806,11 @@ export class ToolsService {
           });
         } catch (err: unknown) {
           const e = err instanceof Error ? err : new Error(String(err));
-          return JSON.stringify({ ok: false, error: 'ACCOUNT_POOL_ERROR', message: e.message });
+          return JSON.stringify({
+            ok: false,
+            error: 'ACCOUNT_POOL_ERROR',
+            message: e.message,
+          });
         }
       },
       {
@@ -791,7 +833,9 @@ export class ToolsService {
    * @description 获取小红书专家专用工具集（canvas 搜索 + todo + robot_list）
    * @keyword-en XHS specialist tools with canvas search, todo, robot_list
    */
-  private getXhsSpecialistTools(scope?: FunctionCallScope): CreateAgentParams['tools'] {
+  private getXhsSpecialistTools(
+    scope?: FunctionCallScope,
+  ): CreateAgentParams['tools'] {
     const tTodo = this.todo.getHandle(scope) ?? [];
     const todoTools = tTodo.filter((t) =>
       ['todo_create', 'todo_list', 'todo_get'].includes(
@@ -836,7 +880,8 @@ export class ToolsService {
     scope?: FunctionCallScope,
   ): CreateAgentParams['tools'] {
     const tTodo = this.todo.getHandle(scope) ?? [];
-    const tGraphWorkflowAll = this.graphWorkflow.getHandle(undefined, scope) ?? [];
+    const tGraphWorkflowAll =
+      this.graphWorkflow.getHandle(undefined, scope) ?? [];
     const tTopicAndCanvas = tGraphWorkflowAll.filter((t) => {
       const name = (t as { name?: string }).name ?? '';
       return name === 'topic_orchestrate' || name === 'xhs_get_canvas_detail';

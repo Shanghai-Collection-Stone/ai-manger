@@ -179,7 +179,8 @@ export class ApprovalReaderService {
         if (status && !wantStatuses.has(status)) continue;
         rows.push(row);
         for (const key of Object.keys(row.fields)) {
-          if (!columnSet.has(key)) columnSet.set(key, this.guessType(row.fields[key]));
+          if (!columnSet.has(key))
+            columnSet.set(key, this.guessType(row.fields[key]));
         }
       }
     }

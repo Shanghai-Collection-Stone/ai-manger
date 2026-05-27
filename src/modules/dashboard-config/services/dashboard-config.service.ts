@@ -9,8 +9,13 @@ import { AdminService } from '../../admin/services/admin.service.js';
 import type { DashboardConfigMappingEntity } from '../entities/dashboard-config.entity.js';
 
 const DEFAULT_DASHBOARD_CODE = 'ai-commander';
-const DASHBOARD_CONFIG_BASE_DIR = path.resolve(process.cwd(), 'config', 'dashboards');
-const DEFAULT_PLATFORM_CONFIG_PATH = 'config/dashboards/platform.dashboard.json';
+const DASHBOARD_CONFIG_BASE_DIR = path.resolve(
+  process.cwd(),
+  'config',
+  'dashboards',
+);
+const DEFAULT_PLATFORM_CONFIG_PATH =
+  'config/dashboards/platform.dashboard.json';
 
 /**
  * @description 解析Header中的API Key（兼容 sass 的 x-request-id / x-api-key / Authorization: ApiKey）
@@ -80,7 +85,9 @@ export class DashboardConfigService {
    * @description 解析请求范围（Bearer 优先，其次 API key）
    * @keyword-en resolve request scope
    */
-  async resolveScope(req: Request): Promise<{ tenantId?: string; userId?: string }> {
+  async resolveScope(
+    req: Request,
+  ): Promise<{ tenantId?: string; userId?: string }> {
     const auth = req.headers.authorization;
     if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
       const token = auth.slice(7).trim();
@@ -98,7 +105,8 @@ export class DashboardConfigService {
       .findOne({ keyId, revokedAt: { $exists: false } });
     if (!doc) return {};
     const expiresAt = doc['expiresAt'];
-    if (expiresAt instanceof Date && expiresAt.getTime() < Date.now()) return {};
+    if (expiresAt instanceof Date && expiresAt.getTime() < Date.now())
+      return {};
     const tenantId = doc['tenantId'];
     if (typeof tenantId !== 'string' || !tenantId.trim()) return {};
     return { tenantId: tenantId.trim() };
@@ -141,14 +149,14 @@ export class DashboardConfigService {
     }
 
     const filePath =
-      (mapping && typeof mapping.filePath === 'string' && mapping.filePath.trim()
+      mapping && typeof mapping.filePath === 'string' && mapping.filePath.trim()
         ? mapping.filePath.trim()
-        : DEFAULT_PLATFORM_CONFIG_PATH);
+        : DEFAULT_PLATFORM_CONFIG_PATH;
 
     // AI 工具修改过的 customConfig 优先于文件
     const config: Record<string, unknown> =
       mapping?.customConfig && typeof mapping.customConfig === 'object'
-        ? (mapping.customConfig as Record<string, unknown>)
+        ? mapping.customConfig
         : await this.loadConfigJson(filePath);
 
     return {
@@ -172,7 +180,10 @@ export class DashboardConfigService {
       tenantId: input.tenantId,
       dashboardCode: input.dashboardCode,
     });
-    const merged = this.mergePatch(current.config, input.patch) as Record<string, unknown>;
+    const merged = this.mergePatch(current.config, input.patch) as Record<
+      string,
+      unknown
+    >;
     const dashboardCode = this.normalizeDashboardCode(input.dashboardCode);
     const tenantId = this.normalizeTenantId(input.tenantId) ?? null;
     await this.mappings.updateOne(
@@ -185,7 +196,10 @@ export class DashboardConfigService {
    * @description AI 工具：清除 customConfig，回退到文件配置
    * @keyword-en reset dashboard config to file
    */
-  async resetConfig(input: { tenantId?: string; dashboardCode?: string }): Promise<void> {
+  async resetConfig(input: {
+    tenantId?: string;
+    dashboardCode?: string;
+  }): Promise<void> {
     const dashboardCode = this.normalizeDashboardCode(input.dashboardCode);
     const tenantId = this.normalizeTenantId(input.tenantId) ?? null;
     await this.mappings.updateOne(
@@ -253,14 +267,18 @@ export class DashboardConfigService {
         for (const item of baseArr) {
           const p = patchById.get(item.id);
           if (p) {
-            const mergedItem = this.mergePatch(item, p) as Record<string, unknown>;
+            const mergedItem = this.mergePatch(item, p) as Record<
+              string,
+              unknown
+            >;
             if (!this.isMarkedRemove(mergedItem)) merged.push(mergedItem);
           } else {
             merged.push(item);
           }
         }
         for (const item of patchArr) {
-          if (!baseIds.has(item.id) && !this.isMarkedRemove(item)) merged.push(item);
+          if (!baseIds.has(item.id) && !this.isMarkedRemove(item))
+            merged.push(item);
         }
         return merged;
       }
@@ -293,7 +311,9 @@ export class DashboardConfigService {
    * @description 管理端：列出配置映射
    * @keyword-en list dashboard config mappings
    */
-  async listMappings(scope: { tenantId?: string }): Promise<DashboardConfigMappingEntity[]> {
+  async listMappings(scope: {
+    tenantId?: string;
+  }): Promise<DashboardConfigMappingEntity[]> {
     const filter: Record<string, unknown> = {};
     if (scope.tenantId) {
       filter.tenantId = scope.tenantId;
@@ -312,7 +332,8 @@ export class DashboardConfigService {
     enabled?: boolean;
   }): Promise<DashboardConfigMappingEntity> {
     const dashboardCode = this.normalizeDashboardCode(input.dashboardCode);
-    const tenantId = this.normalizeTenantId(input.tenantId ?? undefined) ?? null;
+    const tenantId =
+      this.normalizeTenantId(input.tenantId ?? undefined) ?? null;
     const filePath = this.normalizeFilePath(input.filePath);
     const enabled = typeof input.enabled === 'boolean' ? input.enabled : true;
 
@@ -337,7 +358,8 @@ export class DashboardConfigService {
    * @keyword-en delete dashboard config mapping
    */
   async deleteMapping(id: string): Promise<boolean> {
-    if (!ObjectId.isValid(id)) throw new BadRequestException('INVALID_MAPPING_ID');
+    if (!ObjectId.isValid(id))
+      throw new BadRequestException('INVALID_MAPPING_ID');
     const res = await this.mappings.deleteOne({ _id: new ObjectId(id) });
     return res.deletedCount === 1;
   }
@@ -346,7 +368,9 @@ export class DashboardConfigService {
    * @description 加载并解析 JSON 配置文件（限制在 config/dashboards 下）
    * @keyword-en load dashboard config json
    */
-  private async loadConfigJson(filePath: string): Promise<Record<string, unknown>> {
+  private async loadConfigJson(
+    filePath: string,
+  ): Promise<Record<string, unknown>> {
     const abs = this.resolveConfigAbsPath(filePath);
     const raw = await readFile(abs, 'utf-8');
     const parsed = JSON.parse(raw) as unknown;

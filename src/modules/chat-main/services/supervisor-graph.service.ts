@@ -50,14 +50,33 @@ export type RouteTarget = ExpertName | 'chat';
  */
 function inferExpertByKeyword(text: string): ExpertName | null {
   const s = String(text ?? '');
-  if (/图组|拼图|封面|配图|海报|生成图|做图|出图|图片组|标签|tag\s*选|选标签/i.test(s))
+  const wantsArticle =
+    /文章|正文|选题|文案|种草|小红书内容|写文|图文|全套|也写文|一并出文|生成\s*\d+\s*篇|写\s*\d+\s*篇|来\s*\d+\s*篇|生成[一二两三四五六七八九十几]篇|写[一二两三四五六七八九十几]篇|来[一二两三四五六七八九十几]篇/.test(
+      s,
+    );
+  const wantsImage =
+    /图组|图片组|image-group|拼图|封面|配图|海报|生成图|做图|出图|标签|tag\s*选|选标签/i.test(
+      s,
+    );
+  if (wantsArticle) return 'article';
+  if (wantsImage) return 'image';
+  if (
+    /图组|拼图|封面|配图|海报|生成图|做图|出图|图片组|标签|tag\s*选|选标签/i.test(
+      s,
+    )
+  )
     return 'image';
-  if (/文章|正文|选题|文案|种草|小红书内容|写[一几]?篇/.test(s)) return 'article';
+  if (/文章|正文|选题|文案|种草|小红书内容|写[一几]?篇/.test(s))
+    return 'article';
   if (/数据|统计|分析|趋势|业绩|订单|客流|报表|决策|方案|策略|建议/.test(s))
     return 'data';
   if (/图表|可视化|dashboard|看板页|html页/.test(s)) return 'frontend';
   if (/批量发布|定时发|发布任务|内容分发|批量任务/.test(s)) return 'publisher';
-  if (/待办|todo|工单|排期|任务编排|任务清单|任务列表|创建任务|新建任务|安排任务/i.test(s))
+  if (
+    /待办|todo|工单|排期|任务编排|任务清单|任务列表|创建任务|新建任务|安排任务/i.test(
+      s,
+    )
+  )
     return 'task';
   return null;
 }
@@ -200,15 +219,26 @@ export class SupervisorGraphService {
     );
 
     // 决策 1: 从纯文本回复硬解析路由 token(含 'chat')。
+    const userText = this.lastHumanText(history);
+    const isTagSelectionContinuation =
+      Boolean(currentActionSession) &&
+      /我选定标签|选定标签|已选标签|标签[:：]|tag[:：]|#[^\s#]+/i.test(
+        userText,
+      );
     const parsed = parseRouteToken(respText);
     if (parsed) {
-      this.logger.log(`[intent] → ${parsed} (LLM 路由)`);
-      return parsed;
+      const route =
+        isTagSelectionContinuation && parsed !== 'chat'
+          ? currentActionSession!
+          : parsed;
+      this.logger.log(`[intent] → ${route} (LLM 路由)`);
+      return route;
     }
 
     // 决策 2: 没解析出 token → 关键词规则 / 延续上轮专家兜底。
-    const userText = this.lastHumanText(history);
-    let fallback = inferExpertByKeyword(userText);
+    let fallback = isTagSelectionContinuation
+      ? currentActionSession!
+      : inferExpertByKeyword(userText);
     if (!fallback && currentActionSession && isContinuationText(userText)) {
       fallback = currentActionSession;
     }
@@ -227,8 +257,14 @@ export class SupervisorGraphService {
    * @keyword-en build single expert agent by route
    */
   buildExpertAgent(opts: BuildExpertAgentOptions) {
-    const { route, experts, chatExpertPrompt, expertLLM, chatLLM, checkpointer } =
-      opts;
+    const {
+      route,
+      experts,
+      chatExpertPrompt,
+      expertLLM,
+      chatLLM,
+      checkpointer,
+    } = opts;
     if (route === 'chat') {
       return createReactAgent({
         llm: chatLLM,

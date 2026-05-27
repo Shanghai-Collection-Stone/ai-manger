@@ -63,7 +63,8 @@ export class ArticleLibraryTaskController {
     if (!token) throw new UnauthorizedException('TASK_TOKEN_REQUIRED');
     const todo = await this.todo.getByTaskToken(token);
     if (!todo) throw new UnauthorizedException('INVALID_TASK_TOKEN');
-    if (todo.id !== todoId) throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
+    if (todo.id !== todoId)
+      throw new UnauthorizedException('TASK_TOKEN_MISMATCH');
     const bound = (todo.associatedResources ?? []).some(
       (r) =>
         r.type === RESOURCE_TYPE && Number(r.resourceId) === Number(libraryId),
@@ -76,12 +77,10 @@ export class ArticleLibraryTaskController {
    * @description 通过二维码携带的文章库 token 校验文章库
    * @keyword-en resolve article library by qr token
    */
-  private async resolveLibraryByQrToken(
-    token: string,
-    libraryId: number,
-  ) {
+  private async resolveLibraryByQrToken(token: string, libraryId: number) {
     const trimmed = String(token ?? '').trim();
-    if (!trimmed) throw new UnauthorizedException('ARTICLE_LIBRARY_TOKEN_REQUIRED');
+    if (!trimmed)
+      throw new UnauthorizedException('ARTICLE_LIBRARY_TOKEN_REQUIRED');
     const lib = await this.library.getByQrToken(libraryId, trimmed);
     if (!lib) throw new UnauthorizedException('INVALID_ARTICLE_LIBRARY_TOKEN');
     return lib;
@@ -156,7 +155,10 @@ export class ArticleLibraryTaskController {
     if (!Number.isFinite(libraryId) || libraryId <= 0) {
       throw new BadRequestException('ARTICLE_LIBRARY_ID_REQUIRED');
     }
-    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const lib = await this.resolveLibraryByQrToken(
+      body?.token ?? '',
+      libraryId,
+    );
     const stats = await this.library.getStats(lib.id);
     return { library: { ...lib, stats } };
   }
@@ -209,7 +211,10 @@ export class ArticleLibraryTaskController {
     if (!Number.isFinite(libraryId) || libraryId <= 0) {
       throw new BadRequestException('ARTICLE_LIBRARY_ID_REQUIRED');
     }
-    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const lib = await this.resolveLibraryByQrToken(
+      body?.token ?? '',
+      libraryId,
+    );
     const result = await this.article.leaseNext({
       libraryId,
       tenantId: lib.tenantId,
@@ -248,7 +253,10 @@ export class ArticleLibraryTaskController {
     if (!Number.isFinite(articleIdNum) || articleIdNum <= 0) {
       throw new BadRequestException('ARTICLE_ID_REQUIRED');
     }
-    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const lib = await this.resolveLibraryByQrToken(
+      body?.token ?? '',
+      libraryId,
+    );
     const status = body?.status as ArticlePublishStatus | undefined;
     if (!status || !VALID_PUBLISH_STATUSES.has(status)) {
       throw new BadRequestException('INVALID_STATUS');
@@ -260,7 +268,8 @@ export class ArticleLibraryTaskController {
         tenantId: lib.tenantId,
         libraryId: lib.id,
         leaseToken:
-          typeof body?.leaseToken === 'string' && body.leaseToken.trim().length > 0
+          typeof body?.leaseToken === 'string' &&
+          body.leaseToken.trim().length > 0
             ? body.leaseToken.trim()
             : undefined,
       },
@@ -302,7 +311,10 @@ export class ArticleLibraryTaskController {
     }
     const leaseToken = String(body?.leaseToken ?? '').trim();
     if (!leaseToken) throw new BadRequestException('LEASE_TOKEN_REQUIRED');
-    const lib = await this.resolveLibraryByQrToken(body?.token ?? '', libraryId);
+    const lib = await this.resolveLibraryByQrToken(
+      body?.token ?? '',
+      libraryId,
+    );
     const ok = await this.article.releaseLease(articleIdNum, leaseToken, {
       tenantId: lib.tenantId,
       libraryId: lib.id,
@@ -338,7 +350,8 @@ export class ArticleLibraryTaskController {
         tenantId: todo.tenantId,
         libraryId: Number(libraryId),
         leaseToken:
-          typeof body?.leaseToken === 'string' && body.leaseToken.trim().length > 0
+          typeof body?.leaseToken === 'string' &&
+          body.leaseToken.trim().length > 0
             ? body.leaseToken.trim()
             : undefined,
       },

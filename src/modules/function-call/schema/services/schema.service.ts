@@ -33,7 +33,12 @@ export class SchemaFunctionCallService {
       sourceCode: string;
       nameCn: string;
       keywords: string[];
-      fields: Array<{ name: string; type: string; nameCn: string; description: string }>;
+      fields: Array<{
+        name: string;
+        type: string;
+        nameCn: string;
+        description: string;
+      }>;
       score: number;
     }>
   > {
@@ -44,7 +49,9 @@ export class SchemaFunctionCallService {
     if (tokens.length === 0) return [];
 
     // 宽松关键词匹配：tableName | tableDesc 包含任意词
-    const regexStr = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const regexStr = tokens
+      .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|');
     const docs = await this.db
       .collection<{
         table: string;
@@ -72,7 +79,7 @@ export class SchemaFunctionCallService {
         collectionName: doc.table,
         sourceCode: 'tenant-mongo',
         nameCn: doc.tableDesc ?? doc.table,
-        keywords: [doc.table, doc.tableDesc].filter(Boolean) as string[],
+        keywords: [doc.table, doc.tableDesc].filter(Boolean),
         fields: Object.entries(doc.tableField ?? {}).map(([name, desc]) => ({
           name,
           type: 'string',
@@ -109,7 +116,10 @@ export class SchemaFunctionCallService {
           effectiveLimit,
           {
             tenantId: scopedTenantId,
-            sourceCode: sourceCode && sourceCode !== 'tenant-mongo' ? sourceCode : undefined,
+            sourceCode:
+              sourceCode && sourceCode !== 'tenant-mongo'
+                ? sourceCode
+                : undefined,
           },
         );
 
@@ -121,7 +131,8 @@ export class SchemaFunctionCallService {
 
         // 3. 合并结果
         const dsItems = dsResults.map((r) => ({
-          ...(r.schema.sourceCode === 'feishu-bitable' || r.schema.sourceCode === 'feishu-bitable-task'
+          ...(r.schema.sourceCode === 'feishu-bitable' ||
+          r.schema.sourceCode === 'feishu-bitable-task'
             ? { tableId: r.schema.collectionName }
             : { collectionName: r.schema.collectionName }),
           sourceCode: r.schema.sourceCode,
@@ -219,31 +230,43 @@ export class SchemaFunctionCallService {
               let searchResults: DataSourceSchemaSearchResult[] = [];
               if (sourceCode === 'tenant-mongo' && scopedTenantId) {
                 // 从 sass_schema 查找
-                const sassDoc = await this.db.collection('sass_schema').findOne({ table: collectionName });
+                const sassDoc = await this.db
+                  .collection('sass_schema')
+                  .findOne({ table: collectionName });
                 if (sassDoc) {
-                  searchResults = [{
-                    schema: {
-                      _id: new ObjectId(),
-                      collectionName: sassDoc.table,
-                      sourceCode: 'tenant-mongo',
-                      nameCn: sassDoc.tableDesc ?? sassDoc.table,
-                      keywords: [sassDoc.table, sassDoc.tableDesc].filter(Boolean),
-                      fields: Object.entries(sassDoc.tableField ?? {}).map(([name, desc]) => ({
-                        name,
-                        type: 'string',
-                        nameCn: name,
-                        description: String(desc ?? ''),
-                      })),
-                      version: 1,
-                      createdAt: new Date(),
-                      updatedAt: new Date(),
+                  searchResults = [
+                    {
+                      schema: {
+                        _id: new ObjectId(),
+                        collectionName: sassDoc.table,
+                        sourceCode: 'tenant-mongo',
+                        nameCn: sassDoc.tableDesc ?? sassDoc.table,
+                        keywords: [sassDoc.table, sassDoc.tableDesc].filter(
+                          Boolean,
+                        ),
+                        fields: Object.entries(sassDoc.tableField ?? {}).map(
+                          ([name, desc]) => ({
+                            name,
+                            type: 'string',
+                            nameCn: name,
+                            description: String(desc ?? ''),
+                          }),
+                        ),
+                        version: 1,
+                        createdAt: new Date(),
+                        updatedAt: new Date(),
+                      },
+                      score: 1,
+                      matchType: 'keyword' as const,
                     },
-                    score: 1,
-                    matchType: 'keyword' as const,
-                  }];
+                  ];
                 }
               } else {
-                searchResults = await this.schemaService.searchSchema(collectionName, sourceCode, 1);
+                searchResults = await this.schemaService.searchSchema(
+                  collectionName,
+                  sourceCode,
+                  1,
+                );
               }
 
               if (searchResults.length === 0) {
@@ -256,13 +279,18 @@ export class SchemaFunctionCallService {
                 };
               }
 
-              const schema = searchResults[0].schema as unknown as Record<string, unknown>;
+              const schema = searchResults[0].schema as unknown as Record<
+                string,
+                unknown
+              >;
               return {
                 success: true,
                 collectionName: String(schema.collectionName),
                 sourceCode: String(schema.sourceCode),
                 nameCn: String(schema.nameCn ?? ''),
-                keywords: Array.isArray(schema.keywords) ? schema.keywords as string[] : [],
+                keywords: Array.isArray(schema.keywords)
+                  ? (schema.keywords as string[])
+                  : [],
                 fields: Array.isArray(schema.fields) ? schema.fields : [],
               };
             } catch (err) {

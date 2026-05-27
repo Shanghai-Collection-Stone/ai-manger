@@ -7,6 +7,11 @@ import { ConfigService } from '@nestjs/config';
 import { existsSync } from 'fs';
 import { resolveMongoUri } from './shared/mongo/resolve-mongo-uri';
 
+/**
+ * @description Run pending Mongo migrations before the Nest app starts.
+ * @keyword-en app-migrations, startup-migrations
+ * @keyword-cn 应用迁移, 启动迁移
+ */
 async function runMigrations() {
   const configService = new ConfigService();
   const { uri, dbName } = resolveMongoUri(configService);
@@ -46,13 +51,18 @@ async function runMigrations() {
   }
 }
 
+/**
+ * @description Bootstrap the Nest app, static pages, redirects, CORS, and raw-body capture for webhooks.
+ * @keyword-en app-bootstrap, raw-body-webhooks
+ * @keyword-cn 应用启动, webhook原始请求体
+ */
 async function bootstrap() {
   enableProxyFromEnv();
 
   // Run migrations before starting the app
   await runMigrations();
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableCors();
 
   const publicPages = join(process.cwd(), 'public', 'pages');

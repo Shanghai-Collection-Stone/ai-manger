@@ -31,7 +31,10 @@ const ZArticleBlueprintPlan = z.object({
         index: z.number(),
         title: z.string().min(1),
         tags: z.array(z.string()).optional(),
+        mainIdea: z.string().optional(),
         angle: z.string().optional(),
+        imageIntent: z.string().optional(),
+        requirements: z.array(z.string()).optional(),
         imageQuery: z.string().optional(),
         notes: z.array(z.string()).optional(),
       }),
@@ -45,6 +48,18 @@ const ZSingleArticle = z.object({
   markdown: z.string().min(1),
   imageQuery: z.string().optional(),
 });
+
+type ArticleBlueprint = {
+  index: number;
+  title: string;
+  tags?: string[];
+  mainIdea?: string;
+  angle?: string;
+  imageIntent?: string;
+  requirements?: string[];
+  imageQuery?: string;
+  notes?: string[];
+};
 
 const ZCoverCopy = z.object({
   title: z.string().min(1),
@@ -136,6 +151,25 @@ export class ArticleGraphService {
       platform: input.platform,
       topic: input.topic,
     };
+  }
+
+  /**
+   * @description 归一化图文写作风格；未显式传入时按平台给出保守默认值。
+   * @param {string | undefined} writingStyle - 用户确认的文风。
+   * @param {string} platform - 平台标签。
+   * @returns {string} 归一化后的文风描述。
+   * @keyword-en normalize article writing style
+   */
+  private normalizeWritingStyle(
+    writingStyle: string | undefined,
+    platform: string,
+  ): string {
+    const style = String(writingStyle ?? '').trim();
+    if (style.length > 0) return style.slice(0, 120);
+    if (/知乎|zhihu/i.test(platform)) return '知乎理性分析文风';
+    if (/公众号|wechat|weixin/i.test(platform)) return '公众号深度叙事文风';
+    if (/小红书|xhs/i.test(platform)) return '小红书真实分享文风';
+    return '通用专业图文文风';
   }
 
   /**
@@ -319,12 +353,49 @@ export class ArticleGraphService {
           : typeof rec['desc'] === 'string'
             ? rec['desc']
             : undefined;
+      const mainIdea =
+        typeof rec['mainIdea'] === 'string'
+          ? rec['mainIdea']
+          : typeof rec['main_idea'] === 'string'
+            ? rec['main_idea']
+            : typeof rec['thesis'] === 'string'
+              ? rec['thesis']
+              : typeof rec['summary'] === 'string'
+                ? rec['summary']
+                : undefined;
+      const imageIntent =
+        typeof rec['imageIntent'] === 'string'
+          ? rec['imageIntent']
+          : typeof rec['image_intent'] === 'string'
+            ? rec['image_intent']
+            : typeof rec['visualIntent'] === 'string'
+              ? rec['visualIntent']
+              : undefined;
       const imageQuery =
         typeof rec['imageQuery'] === 'string'
           ? rec['imageQuery']
           : typeof rec['image_query'] === 'string'
             ? rec['image_query']
             : undefined;
+      const requirementsRaw = rec['requirements'] ?? rec['constraints'];
+      const requirements = Array.isArray(requirementsRaw)
+        ? requirementsRaw
+            .map((n) => {
+              if (
+                typeof n === 'string' ||
+                typeof n === 'number' ||
+                typeof n === 'boolean' ||
+                typeof n === 'bigint'
+              ) {
+                return String(n).trim();
+              }
+              return '';
+            })
+            .filter((x) => x.length > 0)
+            .slice(0, 12)
+        : typeof requirementsRaw === 'string'
+          ? [requirementsRaw.trim()].filter((x) => x.length > 0)
+          : undefined;
       const notesRaw = rec['notes'] ?? rec['bullets'] ?? rec['points'];
       const notes = Array.isArray(notesRaw)
         ? notesRaw
@@ -342,7 +413,16 @@ export class ArticleGraphService {
             .filter((x) => x.length > 0)
             .slice(0, 12)
         : undefined;
-      out.push({ title, tags, angle, imageQuery, notes });
+      out.push({
+        title,
+        tags,
+        mainIdea,
+        angle,
+        imageIntent,
+        requirements,
+        imageQuery,
+        notes,
+      });
     }
 
     while (out.length < count) {
@@ -375,7 +455,16 @@ export class ArticleGraphService {
         index,
         title: title.length > 0 ? title : `选题：方向${index + 1}`,
         tags,
+        mainIdea:
+          typeof rec['mainIdea'] === 'string' ? rec['mainIdea'] : undefined,
         angle: typeof rec['angle'] === 'string' ? rec['angle'] : undefined,
+        imageIntent:
+          typeof rec['imageIntent'] === 'string'
+            ? rec['imageIntent']
+            : undefined,
+        requirements: Array.isArray(rec['requirements'])
+          ? rec['requirements']
+          : undefined,
         imageQuery:
           typeof rec['imageQuery'] === 'string' ? rec['imageQuery'] : undefined,
         notes: Array.isArray(rec['notes']) ? rec['notes'] : undefined,
@@ -517,6 +606,93 @@ export class ArticleGraphService {
   }
 
   /**
+   * @description 将创作文案/生图提示词中的高风险 IP、商标、角色专名替换为版权安全的泛化表达。
+   * @param {unknown} raw - 原始文本。
+   * @returns {string} 泛化后的安全文本。
+   * @keyword-en sanitize, copyright-safe, image-prompt
+   */
+  private sanitizeCopyrightRiskText(raw: unknown): string {
+    let text = String(raw ?? '')
+      .replace(/[\u0000-\u0009\u000B-\u001F\u007F]/g, ' ')
+      .replace(/[ \t\u3000]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (!text) return '';
+    const replacements: Array<[RegExp, string]> = [
+      [/哈利\s*波特|harry\s*potter/gi, '魔法学院风'],
+      [/霍格沃茨|hogwarts/gi, '魔法学院场景'],
+      [/格兰芬多|斯莱特林|赫奇帕奇|拉文克劳/gi, '学院分组'],
+      [/迪士尼|disney/gi, '童话乐园风'],
+      [/米奇|米妮|mickey|minnie/gi, '经典卡通风'],
+      [/冰雪奇缘|艾莎|安娜公主|frozen|elsa/gi, '冰雪童话风'],
+      [
+        /漫威|复仇者联盟|钢铁侠|蜘蛛侠|spider[-\s]?man|iron\s*man|marvel/gi,
+        '超级英雄风',
+      ],
+      [/奥特曼|ultraman/gi, '光之英雄风'],
+      [/星球大战|star\s*wars/gi, '太空冒险风'],
+      [/马里奥|超级玛丽|mario/gi, '经典像素游戏风'],
+      [/宝可梦|精灵宝可梦|口袋妖怪|皮卡丘|pok[eé]mon|pikachu/gi, '萌宠冒险风'],
+      [/哆啦A梦|机器猫|doraemon/gi, '未来伙伴风'],
+      [/蜡笔小新|樱桃小丸子|名侦探柯南|海贼王|火影忍者|龙珠/gi, '日系动漫风'],
+      [/小黄人|minions?/gi, '黄色萌趣角色风'],
+      [/芭比|barbie/gi, '粉色时尚玩偶风'],
+      [/变形金刚|transformers?/gi, '机甲科幻风'],
+      [/hello\s*kitty|凯蒂猫/gi, '可爱猫咪风'],
+      [/史努比|snoopy/gi, '简笔卡通风'],
+    ];
+    for (const [pattern, replacement] of replacements) {
+      text = text.replace(pattern, replacement);
+    }
+    return text
+      .replace(/知名\s*IP|原版角色|官方角色|同款角色|复刻角色/gi, '通用主题')
+      .replace(/[ \t\u3000]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  /**
+   * @description 清洗列表型创作提示，去重后返回版权安全表达。
+   * @param {unknown[] | undefined} items - 原始列表。
+   * @returns {string[]} 泛化后的安全列表。
+   * @keyword-en sanitize, copyright-safe, list
+   */
+  private sanitizeCopyrightRiskList(items?: unknown[]): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of Array.isArray(items) ? items : []) {
+      const text = this.sanitizeCopyrightRiskText(item);
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        out.push(text);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * @description 为创作/生图提示词构造版权安全蓝图，保留业务主旨但泛化 IP 专名。
+   * @param {ArticleBlueprint} blueprint - 原始文章蓝图。
+   * @returns {ArticleBlueprint} 可传给 LLM 创作节点的安全蓝图。
+   * @keyword-en sanitize, blueprint, copyright-safe
+   */
+  private sanitizeBlueprintForCreativePrompt(
+    blueprint: ArticleBlueprint,
+  ): ArticleBlueprint {
+    return {
+      ...blueprint,
+      title: this.sanitizeCopyrightRiskText(blueprint.title),
+      tags: this.sanitizeCopyrightRiskList(blueprint.tags),
+      mainIdea: this.sanitizeCopyrightRiskText(blueprint.mainIdea),
+      angle: this.sanitizeCopyrightRiskText(blueprint.angle),
+      imageIntent: this.sanitizeCopyrightRiskText(blueprint.imageIntent),
+      requirements: this.sanitizeCopyrightRiskList(blueprint.requirements),
+      imageQuery: this.sanitizeCopyrightRiskText(blueprint.imageQuery),
+      notes: this.sanitizeCopyrightRiskList(blueprint.notes),
+    };
+  }
+
+  /**
    * @description 生成封面文案（主标题+副标题）。
    * @param {object} input - 文章信息。
    * @returns {Promise<{ title: string; subtitle: string }>} 封面文案。
@@ -563,11 +739,14 @@ export class ArticleGraphService {
     subtitle: string;
     titleFromLlm: boolean;
   }> {
+    const safeArticleTitle = this.sanitizeCopyrightRiskText(input.articleTitle);
+    const safeArticleTags = this.sanitizeCopyrightRiskList(input.articleTags);
+    const safeImageQuery = this.sanitizeCopyrightRiskText(input.imageQuery);
     const fallbackTitle = this.deriveCoverText(
-      input.articleTitle,
-      input.articleTags,
+      safeArticleTitle || input.articleTitle,
+      safeArticleTags,
     );
-    const fallbackSubtitle = String(input.imageQuery ?? '')
+    const fallbackSubtitle = String(safeImageQuery ?? '')
       .replace(/[\s\u3000]+/g, ' ')
       .trim();
 
@@ -586,6 +765,8 @@ export class ArticleGraphService {
       'subtitle 建议 12-24 字，语义必须完整，不要截断。',
       '不要使用引号、emoji、夸张营销词。',
       '封面文案必须与业务范围完全吻合，禁止涉及平台业务说明中未提及的服务或场景。',
+      '版权合规：title 与 subtitle 严禁出现受版权/商标保护的专有名词（知名 IP、动漫/游戏角色名、品牌名、明星姓名、品牌门店名除外）。',
+      '若输入涉及知名 IP/角色/品牌，只能输出泛化主题氛围，例如“魔法学院风”“冰雪童话风”“超级英雄风”，不得复刻或暗示具体角色、学院名、徽章、服装、道具。',
       ...envLines,
     ].join('\n');
 
@@ -602,9 +783,9 @@ export class ArticleGraphService {
           new SystemMessage(sys),
           new HumanMessage(
             JSON.stringify({
-              articleTitle: input.articleTitle,
-              articleTags: input.articleTags,
-              imageQuery: input.imageQuery,
+              articleTitle: safeArticleTitle,
+              articleTags: safeArticleTags,
+              imageQuery: safeImageQuery,
             }),
           ),
         ],
@@ -618,8 +799,16 @@ export class ArticleGraphService {
           `[cover-copy] llm_result titleLen=${rawTitle.length} subtitleLen=${rawSubtitle.length}`,
         );
         return {
-          title: this.normalizeCoverText(rawTitle, '沉浸式体验', 10),
-          subtitle: this.normalizeCoverText(rawSubtitle, '现场氛围与互动', 16),
+          title: this.normalizeCoverText(
+            this.sanitizeCopyrightRiskText(rawTitle),
+            '沉浸式体验',
+            10,
+          ),
+          subtitle: this.normalizeCoverText(
+            this.sanitizeCopyrightRiskText(rawSubtitle),
+            '现场氛围与互动',
+            16,
+          ),
           titleFromLlm: rawTitle.length > 0,
         };
       }
@@ -669,15 +858,27 @@ export class ArticleGraphService {
     /** 当前时间字符串 */
     currentDatetime?: string;
   }): Promise<string> {
+    const safeInput = {
+      ...input,
+      topic: this.sanitizeCopyrightRiskText(input.topic),
+      articleTitle: this.sanitizeCopyrightRiskText(input.articleTitle),
+      articleTags: this.sanitizeCopyrightRiskList(input.articleTags),
+      imageQuery: this.sanitizeCopyrightRiskText(input.imageQuery),
+      coverTitle: this.sanitizeCopyrightRiskText(input.coverTitle),
+      coverSubtitle: this.sanitizeCopyrightRiskText(input.coverSubtitle),
+    };
     const appendCoverTextDirectives = (rawPrompt: string): string => {
       const core = String(rawPrompt ?? '')
         .replace(/\s+/g, ' ')
         .trim();
       return [
-        core,
-        input.coverTitle ? `封面主标题:${input.coverTitle}` : '',
-        input.coverSubtitle ? `封面副标题:${input.coverSubtitle}` : '',
+        this.sanitizeCopyrightRiskText(core),
+        safeInput.coverTitle ? `封面主标题:${safeInput.coverTitle}` : '',
+        safeInput.coverSubtitle ? `封面副标题:${safeInput.coverSubtitle}` : '',
         '文案呈现:请将封面主标题与副标题以浮动文字形式显示在画面中，确保清晰可读且不被遮挡',
+        '视觉风格:实景照片优先，保持真实摄影、现场氛围、自然光影和真实人物比例；只做轻量封面化修图与干净排版',
+        '风格限制:不要动画化、卡通化、3D Q版、漫画冲击线、爆裂粒子、霓虹光带、密集贴纸或过度特效',
+        '版权安全:画面不得出现或模仿任何具体 IP、角色、品牌、影视/动漫/游戏元素、徽章、制服、学院名、官方道具；只保留通用氛围',
       ]
         .filter((x) => x.length > 0)
         .join('；');
@@ -685,14 +886,14 @@ export class ArticleGraphService {
 
     const fallback = [
       '小红书封面图',
-      input.topic ? `主题:${input.topic}` : '',
-      `标题:${input.coverTitle}`,
-      input.coverSubtitle ? `副标题:${input.coverSubtitle}` : '',
-      input.imageQuery ? `视觉线索:${input.imageQuery}` : '',
-      Array.isArray(input.articleTags) && input.articleTags.length > 0
-        ? `元素:${input.articleTags.slice(0, 10).join(',')}`
+      safeInput.topic ? `主题:${safeInput.topic}` : '',
+      `标题:${safeInput.coverTitle}`,
+      safeInput.coverSubtitle ? `副标题:${safeInput.coverSubtitle}` : '',
+      safeInput.imageQuery ? `视觉线索:${safeInput.imageQuery}` : '',
+      Array.isArray(safeInput.articleTags) && safeInput.articleTags.length > 0
+        ? `元素:${safeInput.articleTags.slice(0, 10).join(',')}`
         : '',
-      '竖版 640x853，高清，封面感强，适合移动端浏览',
+      '竖版 640x853，实景照片质感，真实现场氛围，高清，干净文字排版，适合移动端浏览',
     ]
       .filter((x) => x.length > 0)
       .join('；');
@@ -707,12 +908,15 @@ export class ArticleGraphService {
           '你是一名封面视觉提示词工程师。',
           '请根据输入信息输出 1 条可直接用于生图的中文提示词。',
           '要求：不超过 180 字，包含主体、风格、构图、光线、氛围。',
+          '视觉方向：实景照片优先，保持真实摄影质感、自然光影和现场感，只允许轻量封面设计。',
+          '严禁动画化、卡通化、3D Q版、漫画化、夸张特效、速度线、爆裂粒子、霓虹光带、密集贴纸。',
           '禁止输出 markdown、代码块、解释性内容。',
+          '版权安全硬约束：不得出现任何具体 IP/商标/动漫/游戏/影视角色/明星/品牌名，不得复刻角色服装、徽章、道具、学院名或官方视觉符号；遇到相关输入必须改写成通用氛围词。',
           input.currentDatetime ? `当前时间：${input.currentDatetime}` : '',
           input.platformAiPrompt
             ? `【平台业务说明 - 必须严格遵守，内容不得超出以下范围】\n${input.platformAiPrompt}`
             : '',
-          JSON.stringify(input),
+          JSON.stringify(safeInput),
         ]
           .filter((x) => typeof x === 'string' && x.trim().length > 0)
           .join('\n'),
@@ -737,7 +941,9 @@ export class ArticleGraphService {
         .replace(/\s+/g, ' ')
         .trim();
       if (normalized.length >= 8) {
-        return appendCoverTextDirectives(normalized.slice(0, 240));
+        return appendCoverTextDirectives(
+          this.sanitizeCopyrightRiskText(normalized).slice(0, 240),
+        );
       }
       return appendCoverTextDirectives(fallback);
     } catch {
@@ -1686,6 +1892,7 @@ export class ArticleGraphService {
     topic?: string;
     userPrompt?: string;
     dataSummary?: string;
+    writingStyle?: string;
     count?: number;
     imageMode?: 'legacy' | 'image-group';
     galleryUserId?: string;
@@ -1762,26 +1969,41 @@ export class ArticleGraphService {
       ...(input.langchainContext ?? {}),
     };
     const envCtx = await this.buildArticleEnvContext(tenantId);
+    const writingStyle = this.normalizeWritingStyle(
+      input.writingStyle,
+      platform,
+    );
 
     const canvas = await this.canvas.create({
       userId: input.userId,
       tenantId,
       topic,
       outline: { topic, platform, articleCount: count },
-      style: { platform, language: 'zh-CN' },
+      style: { platform, language: 'zh-CN', writingStyle },
     });
 
-    const blueprints = await this.planArticleTasks({
+    const plannedBlueprints = await this.planArticleTasks({
       provider,
       model,
       temperature,
       platform,
       topic,
+      userPrompt,
+      dataSummary,
+      writingStyle,
       count,
       platformAiPrompt: envCtx.platformAiPrompt,
       currentDatetime: envCtx.datetime,
       langchainContext,
     });
+    const explicitImageTags = this.extractExplicitImageTagsFromPrompt({
+      topic,
+      userPrompt,
+    });
+    const blueprints = this.mergeExplicitImageTagsIntoBlueprints(
+      plannedBlueprints,
+      explicitImageTags,
+    );
 
     // 批量预写文章存根（生成前先建列表，保证 ID 预分配），不阻塞接口返回
     await this.canvas.addArticles(
@@ -1806,6 +2028,7 @@ export class ArticleGraphService {
           articleCount: count,
           userPrompt,
           dataSummary,
+          writingStyle,
           blueprints,
         },
       },
@@ -1851,6 +2074,7 @@ export class ArticleGraphService {
       topic,
       userPrompt,
       dataSummary,
+      writingStyle,
       imageMode,
       tenantId,
       galleryUserId,
@@ -1891,7 +2115,10 @@ export class ArticleGraphService {
         index: number;
         title: string;
         tags?: string[];
+        mainIdea?: string;
         angle?: string;
+        imageIntent?: string;
+        requirements?: string[];
         imageQuery?: string;
         notes?: string[];
       }>;
@@ -1902,6 +2129,7 @@ export class ArticleGraphService {
       topic?: string;
       userPrompt?: string;
       dataSummary?: string;
+      writingStyle?: string;
       imageMode?: 'legacy' | 'image-group';
       tenantId?: string;
       galleryUserId: string;
@@ -1922,8 +2150,19 @@ export class ArticleGraphService {
     );
     try {
       await this.generateArticlesAndImages({ canvasId, ...input });
-      await this.canvas.updateStatus(canvasId, 'completed', input.tenantId);
-      this.logger.debug(`[article-gen] generation_done canvasId=${canvasId}`);
+      const latest = await this.canvas.get(canvasId, input.tenantId);
+      const requiresHuman =
+        latest?.articles?.some(
+          (article) => article.status === 'requires_human',
+        ) === true;
+      await this.canvas.updateStatus(
+        canvasId,
+        requiresHuman ? 'requires_human' : 'completed',
+        input.tenantId,
+      );
+      this.logger.debug(
+        `[article-gen] generation_done canvasId=${canvasId} status=${requiresHuman ? 'requires_human' : 'completed'}`,
+      );
     } catch (err) {
       await this.canvas.updateStatus(canvasId, 'failed', input.tenantId);
       this.logger.error(
@@ -1980,38 +2219,195 @@ export class ArticleGraphService {
     };
   }
 
+  /**
+   * @description 从最后用户要求中提取显式指定的图库标签，用于选题和配图硬约束。
+   * @param {{ topic?: string; userPrompt?: string }} input - 用户话题与原始生成要求。
+   * @returns {string[]} 去重后的显式图库标签。
+   * @keyword-en extract, explicit-tags, image-group
+   */
+  private extractExplicitImageTagsFromPrompt(input: {
+    topic?: string;
+    userPrompt?: string;
+  }): string[] {
+    const text = [input.userPrompt, input.topic]
+      .map((x) => String(x ?? '').trim())
+      .filter((x) => x.length > 0)
+      .join('\n');
+    if (!text) return [];
+
+    const tags: string[] = [];
+    const seen = new Set<string>();
+    const hashRe = /#([\u4e00-\u9fffA-Za-z0-9_-]{1,40})/g;
+    let hashMatch: RegExpExecArray | null;
+    while ((hashMatch = hashRe.exec(text)) !== null) {
+      const tag = this.normalizeExplicitImageTag(hashMatch[1]);
+      if (tag && !seen.has(tag)) {
+        seen.add(tag);
+        tags.push(tag);
+      }
+    }
+
+    const tagSectionRe =
+      /(?:tag|tags|标签|话题)\s*(?:带有|包含|包括|含有|为|是|:|：)?\s*([^。；;\n]+)/gi;
+    let sectionMatch: RegExpExecArray | null;
+    while ((sectionMatch = tagSectionRe.exec(text)) !== null) {
+      const segment =
+        String(sectionMatch[1] ?? '').split(
+          /的图片|图片|给我|用于|用来|生成|拼图|封面|做图|配图/,
+        )[0] ?? '';
+      for (const raw of segment.split(/[、,，/#\s]+/)) {
+        const tag = this.normalizeExplicitImageTag(raw);
+        if (tag && !seen.has(tag)) {
+          seen.add(tag);
+          tags.push(tag);
+        }
+      }
+    }
+
+    return tags.slice(0, 20);
+  }
+
+  /**
+   * @description 清洗显式图库标签 token，过滤连接词和动作词。
+   * @param {unknown} raw - 原始标签 token。
+   * @returns {string | null} 可用于图库匹配的标签。
+   * @keyword-en normalize, explicit-tags, token
+   */
+  private normalizeExplicitImageTag(raw: unknown): string | null {
+    const tag = String(raw ?? '')
+      .trim()
+      .replace(/^[：:，,、#\s]+|[：:，,、#\s]+$/g, '');
+    if (!tag || tag.length > 40) return null;
+    const lower = tag.toLowerCase();
+    const blocked = new Set([
+      'tag',
+      'tags',
+      '标签',
+      '话题',
+      '带有',
+      '包含',
+      '包括',
+      '含有',
+      '图片',
+      '生成',
+      '拼图',
+      '封面',
+      '配图',
+      '给我',
+      '用',
+      '和',
+      '以及',
+      '的',
+      '用于',
+      '用来',
+      '做图',
+    ]);
+    if (blocked.has(tag) || blocked.has(lower)) return null;
+    return tag;
+  }
+
+  /**
+   * @description 将用户显式指定的图库标签合并到每个选题蓝图，防止选题模型遗漏素材匹配条件。
+   * @param {ArticleBlueprint[]} blueprints - LLM 规划出的选题蓝图。
+   * @param {string[]} explicitTags - 用户显式指定的图库标签。
+   * @returns {ArticleBlueprint[]} 已透传显式标签和图片意图的选题蓝图。
+   * @keyword-en merge, explicit-tags, blueprint
+   */
+  private mergeExplicitImageTagsIntoBlueprints(
+    blueprints: ArticleBlueprint[],
+    explicitTags: string[],
+  ): ArticleBlueprint[] {
+    const fixedTags = explicitTags
+      .map((tag) => this.normalizeExplicitImageTag(tag))
+      .filter(
+        (tag): tag is string => typeof tag === 'string' && tag.length > 0,
+      );
+    if (fixedTags.length === 0) return blueprints;
+
+    const explicitText = fixedTags.join('、');
+    const safeExplicitText =
+      this.sanitizeCopyrightRiskText(explicitText) || '通用主题素材';
+    return blueprints.map((bp) => {
+      const tags: string[] = [];
+      const seen = new Set<string>();
+      for (const tag of [...fixedTags, ...(bp.tags ?? [])]) {
+        const normalized = this.normalizeExplicitImageTag(tag);
+        if (normalized && !seen.has(normalized)) {
+          seen.add(normalized);
+          tags.push(normalized);
+        }
+      }
+      const requirements = [
+        `图库匹配标签保留在 tags 字段；对外标题、正文、封面和生图提示词只使用版权安全泛化表达：${safeExplicitText}`,
+        ...(bp.requirements ?? []).map((item) =>
+          this.sanitizeCopyrightRiskText(item),
+        ),
+      ].filter((item) => String(item ?? '').trim().length > 0);
+      const safeImageIntent = this.sanitizeCopyrightRiskText(bp.imageIntent);
+      const imageIntent = safeImageIntent
+        ? `${safeImageIntent}；配图语义使用版权安全泛化表达：${safeExplicitText}`
+        : `配图语义使用版权安全泛化表达：${safeExplicitText}`;
+      return {
+        ...bp,
+        title: this.sanitizeCopyrightRiskText(bp.title) || bp.title,
+        mainIdea: this.sanitizeCopyrightRiskText(bp.mainIdea),
+        angle: this.sanitizeCopyrightRiskText(bp.angle),
+        tags,
+        requirements,
+        imageIntent,
+        imageQuery: this.sanitizeCopyrightRiskText(bp.imageQuery),
+        notes: this.sanitizeCopyrightRiskList(bp.notes),
+      };
+    });
+  }
+
+  /**
+   * @description LLM 规划文章蓝图，并继承用户最后要求、写作风格和显式图库标签。
+   * @param {object} input - 选题规划参数。
+   * @returns {Promise<ArticleBlueprint[]>} 文章蓝图列表。
+   * @keyword-en plan, blueprint, explicit-tags
+   */
   private async planArticleTasks(input: {
     provider?: 'gemini' | 'deepseek';
     model?: string;
     temperature: number;
     platform: string;
     topic?: string;
+    userPrompt?: string;
+    dataSummary?: string;
+    writingStyle?: string;
     count: number;
     /** 平台AI补充提示（从租户配置注入） */
     platformAiPrompt?: string;
     /** 当前时间字符串 */
     currentDatetime?: string;
     langchainContext: Record<string, unknown>;
-  }): Promise<
-    Array<{
-      index: number;
-      title: string;
-      tags?: string[];
-      angle?: string;
-      imageQuery?: string;
-      notes?: string[];
-    }>
-  > {
+  }): Promise<ArticleBlueprint[]> {
     const isXhs = /小红书|xhs/i.test(input.platform);
+    const explicitImageTags = this.extractExplicitImageTagsFromPrompt({
+      topic: input.topic,
+      userPrompt: input.userPrompt,
+    });
     const sys = [
       '你是文章选题规划器。根据平台和话题，规划多篇文章的选题与切入点。',
       '你必须只输出 JSON 对象，不要输出任何多余字符。',
       '严禁输出 markdown、代码块、解释、前后缀文字。',
       '输出必须可被 JSON.parse 直接解析。',
-      `输出 schema：{{ "items": [{{ "index": number, "title": string, "tags"?: string[], "angle"?: string, "imageQuery"?: string, "notes"?: string[] }}] }}。`,
+      `输出 schema：{{ "items": [{{ "index": number, "title": string, "tags"?: string[], "mainIdea"?: string, "angle"?: string, "imageIntent"?: string, "requirements"?: string[], "imageQuery"?: string, "notes"?: string[] }}] }}。`,
       `items 数组长度必须等于 ${input.count}，index 从 0 开始连续递增。`,
       '每篇文章必须是独立主题，不允许“第1篇/第2篇/上篇/下篇/续篇/连载”这类连续表达。',
       'title 必须简洁，最多 20 个字，超出则截短，不允许超出。',
+      '必须基于最后一条用户生成要求规划选题；若提供 userPrompt，userPrompt 的目标、对象、限制和语气优先级高于泛化平台经验。',
+      '选题必须紧贴用户最后要求中的业务主旨、目标人群、痛点和服务卖点；不要只写泛化氛围或玩法体验。',
+      '每个 item 必须包含 mainIdea：一句话说明该篇文章主旨；后续正文和封面都将以 title + mainIdea 为唯一锚点，禁止换题。',
+      '每个 item 必须包含 imageIntent：一句话说明配图应表达的画面方向，用于统一取图。',
+      'requirements 必须列出从用户要求继承到该篇文章的关键约束，尤其是文风、目标人群、禁忌和口径。',
+      `本次确认的生文风格：${input.writingStyle ?? '未指定'}`,
+      explicitImageTags.length > 0
+        ? `用户显式指定的图库标签：${explicitImageTags.join('、')}。所有 item.tags 必须完整包含这些原词，仅用于图库检索；如果其中含知名 IP/商标/角色名，严禁写入 title/mainIdea/imageIntent/imageQuery/requirements/notes，只能用版权安全的泛化表达。`
+        : undefined,
+      '版权合规硬约束：title/mainIdea/imageIntent/imageQuery/requirements/notes 严禁出现受版权/商标保护的专有名词（知名 IP、动漫/游戏角色名、品牌名、明星姓名等）；也不得规划复刻角色、官方服装、徽章、道具、学院/组织名称、经典造型等场景。',
+      '如用户提到知名 IP/角色/品牌，只能保留通用氛围和业务价值，例如“哈利波特”→“魔法学院风”，“马里奥”→“经典像素游戏风”，“迪士尼”→“童话乐园风”。',
       '若 human message context 中包含搜索结果或热点资讯，必须优先基于这些内容规划选题，确保标题与当前热点/趋势匹配。',
       input.currentDatetime ? `当前时间：${input.currentDatetime}` : undefined,
       input.platformAiPrompt
@@ -2045,6 +2441,10 @@ export class ArticleGraphService {
           task: 'Plan article tasks',
           platform: input.platform,
           topic: input.topic,
+          userPrompt: input.userPrompt,
+          dataSummary: input.dataSummary,
+          writingStyle: input.writingStyle,
+          explicitImageTags,
           count: input.count,
         }),
       ),
@@ -2081,6 +2481,10 @@ export class ArticleGraphService {
                 task: 'Plan article tasks',
                 platform: input.platform,
                 topic: input.topic,
+                userPrompt: input.userPrompt,
+                dataSummary: input.dataSummary,
+                writingStyle: input.writingStyle,
+                explicitImageTags,
                 count: input.count,
               }
             : attempt === 1
@@ -2089,7 +2493,7 @@ export class ArticleGraphService {
                   previousOutput: lastText,
                   required: {
                     schema:
-                      '{ "items": [{"index": number, "title": string, "tags"?: string[], "angle"?: string, "imageQuery"?: string, "notes"?: string[]}] }',
+                      '{ "items": [{"index": number, "title": string, "tags"?: string[], "mainIdea"?: string, "angle"?: string, "imageIntent"?: string, "requirements"?: string[], "imageQuery"?: string, "notes"?: string[]}] }',
                     must: [
                       'Only output JSON object',
                       `items length must be ${input.count}`,
@@ -2102,7 +2506,10 @@ export class ArticleGraphService {
                           index: i,
                           title: `标题${i + 1}`,
                           tags: ['tag1', 'tag2'],
+                          mainIdea: '文章主旨',
                           angle: '切入点',
+                          imageIntent: '配图画面方向',
+                          requirements: ['用户要求', '文风要求'],
                           imageQuery: '配图关键词',
                           notes: ['要点1', '要点2'],
                         }),
@@ -2114,6 +2521,10 @@ export class ArticleGraphService {
                   task: 'Rewrite from scratch to match schema strictly',
                   platform: input.platform,
                   topic: input.topic,
+                  userPrompt: input.userPrompt,
+                  dataSummary: input.dataSummary,
+                  writingStyle: input.writingStyle,
+                  explicitImageTags,
                   count: input.count,
                   required: {
                     must: [
@@ -2180,25 +2591,50 @@ export class ArticleGraphService {
 
     return items.map((it) => ({
       index: it.index,
-      title: enforceXhsTitleLimit(String(it.title || '')),
+      title: enforceXhsTitleLimit(
+        this.sanitizeCopyrightRiskText(String(it.title || '')),
+      ),
       tags: Array.isArray(it.tags)
         ? it.tags.map((t) => String(t ?? '').trim()).filter(Boolean)
         : undefined,
-      angle: it.angle,
-      imageQuery: it.imageQuery,
+      mainIdea:
+        typeof it.mainIdea === 'string'
+          ? this.sanitizeCopyrightRiskText(it.mainIdea)
+          : undefined,
+      angle: this.sanitizeCopyrightRiskText(it.angle),
+      imageIntent:
+        typeof it.imageIntent === 'string'
+          ? this.sanitizeCopyrightRiskText(it.imageIntent)
+          : undefined,
+      requirements: Array.isArray(it.requirements)
+        ? it.requirements
+            .map((r) => this.sanitizeCopyrightRiskText(r))
+            .filter(Boolean)
+            .slice(0, 12)
+        : undefined,
+      imageQuery: this.sanitizeCopyrightRiskText(it.imageQuery),
       notes: Array.isArray(it.notes)
-        ? it.notes.map((n) => String(n ?? '').trim()).filter(Boolean)
+        ? it.notes.map((n) => this.sanitizeCopyrightRiskText(n)).filter(Boolean)
         : undefined,
     }));
   }
 
+  /**
+   * @description 生成文章正文与配图；image-group 模式先统一分配源图，不足即停止生成正文。
+   * @param {object} input - 文章生成、图库和 Canvas 回写参数。
+   * @returns {Promise<void>}
+   * @keyword-en generate, image-group, pre-allocation
+   */
   private async generateArticlesAndImages(input: {
     canvasId: number;
     blueprints: Array<{
       index: number;
       title: string;
       tags?: string[];
+      mainIdea?: string;
       angle?: string;
+      imageIntent?: string;
+      requirements?: string[];
       imageQuery?: string;
       notes?: string[];
     }>;
@@ -2209,6 +2645,7 @@ export class ArticleGraphService {
     topic?: string;
     userPrompt?: string;
     dataSummary?: string;
+    writingStyle?: string;
     imageMode?: 'legacy' | 'image-group';
     tenantId?: string;
     galleryUserId: string;
@@ -2233,35 +2670,109 @@ export class ArticleGraphService {
     const orderedBlueprintsForImageGroup = useImageGroupMode
       ? [...input.blueprints].sort((a, b) => a.index - b.index)
       : [];
+    const articlesForImageGroup = orderedBlueprintsForImageGroup.map((bp) => ({
+      title: bp.title,
+      tags: Array.isArray(bp.tags)
+        ? bp.tags.map((t) => String(t ?? '').trim()).filter((t) => t.length > 0)
+        : [],
+    }));
     const preAssignedGroups =
       useImageGroupMode && Array.isArray(input.preAssignedImageGroups)
         ? input.preAssignedImageGroups
         : [];
-    const imageGroupPromise: Promise<CanvasImageGroup[]> | null =
-      useImageGroupMode
-        ? preAssignedGroups.length > 0
-          ? Promise.resolve(preAssignedGroups)
-          : input.strictImageGroupSource
-            ? Promise.resolve([])
-            : this.canvas.generateImageGroupsForCanvas({
-                canvasId: input.canvasId,
-                userId: input.galleryUserId,
-                tenantId: input.tenantId,
-                topic: input.topic,
-                articles: orderedBlueprintsForImageGroup.map((bp) => ({
-                  title: bp.title,
-                  tags: Array.isArray(bp.tags)
-                    ? bp.tags
-                        .map((t) => String(t ?? '').trim())
-                        .filter((t) => t.length > 0)
-                    : [],
-                })),
-              })
-        : null;
-    if (imageGroupPromise) {
-      this.logger.log(
-        `[article-gen] image_group_async_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length} mode=${preAssignedGroups.length > 0 ? 'preassigned' : input.strictImageGroupSource ? 'strict_preassigned' : 'generate'}`,
-      );
+    let imageGroupsForMerge: CanvasImageGroup[] | null = null;
+    let imageGroupRenderPromise: Promise<CanvasImageGroup[]> | null = null;
+    const imageGroupTagsByBlueprintIndex = new Map<number, string[]>();
+    const collectGroupTags = (groups: CanvasImageGroup[]): void => {
+      for (let idx = 0; idx < groups.length; idx++) {
+        const group = groups[idx];
+        const bp = orderedBlueprintsForImageGroup[idx];
+        if (!bp || !Array.isArray(group?.images)) continue;
+        const tags = [
+          ...new Set(
+            group.images
+              .flatMap((img) => img.tags ?? [])
+              .map((tag) => String(tag ?? '').trim())
+              .filter(Boolean),
+          ),
+        ];
+        if (tags.length > 0) imageGroupTagsByBlueprintIndex.set(bp.index, tags);
+      }
+    };
+
+    if (useImageGroupMode) {
+      if (preAssignedGroups.length > 0) {
+        imageGroupsForMerge = preAssignedGroups;
+        collectGroupTags(preAssignedGroups);
+        this.logger.log(
+          `[article-gen] image_group_preassigned canvasId=${input.canvasId} groups=${preAssignedGroups.length}`,
+        );
+      } else if (input.strictImageGroupSource) {
+        this.logger.warn(
+          `[article-gen] image_group_strict_empty canvasId=${input.canvasId}`,
+        );
+        await this.assignImageGroupsToCanvasArticles({
+          canvasId: input.canvasId,
+          tenantId: input.tenantId,
+          topic: input.topic,
+          galleryUserId: input.galleryUserId,
+          blueprints: orderedBlueprintsForImageGroup,
+          groups: [],
+          strictImageGroupSource: true,
+        });
+        return;
+      } else {
+        this.logger.log(
+          `[article-gen] image_group_prepare_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length}`,
+        );
+        const preparation = await this.canvas.prepareImageGroupsForCanvas({
+          canvasId: input.canvasId,
+          userId: input.galleryUserId,
+          tenantId: input.tenantId,
+          topic: input.topic,
+          articles: articlesForImageGroup,
+        });
+        if (!preparation.ok) {
+          await this.canvas.updateImageGroups(
+            input.canvasId,
+            preparation.imageGroups,
+            input.tenantId,
+          );
+          await this.assignImageGroupsToCanvasArticles({
+            canvasId: input.canvasId,
+            tenantId: input.tenantId,
+            topic: input.topic,
+            galleryUserId: input.galleryUserId,
+            blueprints: orderedBlueprintsForImageGroup,
+            groups: preparation.imageGroups,
+          });
+          this.logger.warn(
+            `[article-gen] image_group_insufficient_stop canvasId=${input.canvasId} ` +
+              `portrait=${preparation.stats.availablePortrait}/${preparation.stats.requiredPortrait} ` +
+              `landscape=${preparation.stats.availableLandscape}/${preparation.stats.requiredLandscape}`,
+          );
+          return;
+        }
+        for (let idx = 0; idx < preparation.imageContexts.length; idx++) {
+          const bp = orderedBlueprintsForImageGroup[idx];
+          if (!bp) continue;
+          const tags = preparation.imageContexts[idx]?.tags ?? [];
+          if (tags.length > 0)
+            imageGroupTagsByBlueprintIndex.set(bp.index, tags);
+        }
+        imageGroupRenderPromise =
+          this.canvas.renderPreparedImageGroupsForCanvas({
+            canvasId: input.canvasId,
+            userId: input.galleryUserId,
+            tenantId: input.tenantId,
+            topic: input.topic,
+            articles: articlesForImageGroup,
+            preparation,
+          });
+        this.logger.log(
+          `[article-gen] image_group_render_async_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length}`,
+        );
+      }
     }
     const excludedGeneratedGroupIds = !useImageGroupMode
       ? await this.getGeneratedAssetDefaultGroupIds(
@@ -2309,9 +2820,10 @@ export class ArticleGraphService {
         );
         try {
           const _matchedGroup =
-            useImageGroupMode && preAssignedGroups.length > 0
-              ? (preAssignedGroups.find((g) => g.articleId === bp.index + 1) ??
-                preAssignedGroups[bpIdx])
+            useImageGroupMode && Array.isArray(imageGroupsForMerge)
+              ? (imageGroupsForMerge.find(
+                  (g) => g.articleId === bp.index + 1,
+                ) ?? imageGroupsForMerge[bpIdx])
               : undefined;
           const _imageGroupTags =
             _matchedGroup && _matchedGroup.images.length > 0
@@ -2322,7 +2834,7 @@ export class ArticleGraphService {
                       .filter(Boolean),
                   ),
                 ]
-              : undefined;
+              : imageGroupTagsByBlueprintIndex.get(bp.index);
           const articlePromise = this.generateOneArticle({
             provider: input.provider,
             model: input.model,
@@ -2331,6 +2843,7 @@ export class ArticleGraphService {
             topic: input.topic,
             userPrompt: input.userPrompt,
             dataSummary: input.dataSummary,
+            writingStyle: input.writingStyle,
             blueprint: bp,
             langchainContext: input.langchainContext,
             platformAiPrompt: input.platformAiPrompt,
@@ -2363,19 +2876,32 @@ export class ArticleGraphService {
 
           // 提取正文中的 #标签 并清除，合并到 tags
           const processed = this.postProcessArticle(article);
+          const canonicalTitle =
+            String(bp.title ?? '').trim() || processed.title;
+          const mergedArticleTags = [
+            ...new Set(
+              [...(bp.tags ?? []), ...(processed.tags ?? [])]
+                .map((tag) => String(tag ?? '').trim())
+                .filter((tag) => tag.length > 0),
+            ),
+          ];
 
           // 先回写正文，配图根据模式分别处理
           await this.canvas.updateArticle(
             input.canvasId,
             articleId,
             {
-              title: processed.title,
-              tags: processed.tags,
+              title: canonicalTitle,
+              tags:
+                mergedArticleTags.length > 0
+                  ? mergedArticleTags
+                  : processed.tags,
               contentJson: {
                 platform: input.platform,
                 topic: input.topic,
                 userPrompt: input.userPrompt,
                 dataSummary: input.dataSummary,
+                writingStyle: input.writingStyle,
                 blueprint: bp,
                 markdown: processed.markdown,
                 imageQuery: processed.imageQuery,
@@ -2424,10 +2950,10 @@ export class ArticleGraphService {
     );
 
     if (useImageGroupMode) {
-      if (!imageGroupPromise) {
-        throw new Error('IMAGE_GROUP_PROMISE_MISSING');
+      if (!Array.isArray(imageGroupsForMerge) && !imageGroupRenderPromise) {
+        throw new Error('IMAGE_GROUP_RENDER_MISSING');
       }
-      const groups = await imageGroupPromise;
+      const groups = imageGroupsForMerge ?? (await imageGroupRenderPromise!);
       this.logger.log(
         `[article-gen] image_group_async_done canvasId=${input.canvasId} groups=${groups.length}`,
       );
@@ -2556,6 +3082,8 @@ export class ArticleGraphService {
           group?.status === 'done' && isImageCountValid
             ? 'done'
             : 'requires_human';
+        const isInsufficientSourceImages =
+          group?.status === 'failed' && imageUrls.length === 0;
         if (status === 'done') doneCount++;
         else missingCount++;
         if (!isImageCountValid) mismatchCount++;
@@ -2572,9 +3100,11 @@ export class ArticleGraphService {
             doneNote:
               status === 'done'
                 ? 'AUTO_CANVAS_IMAGE_GROUP_IMAGES'
-                : isImageCountValid
-                  ? 'AUTO_CANVAS_IMAGE_GROUP_MISSING'
-                  : 'AUTO_CANVAS_IMAGE_GROUP_COUNT_MISMATCH',
+                : isInsufficientSourceImages
+                  ? 'AUTO_CANVAS_IMAGE_GROUP_INSUFFICIENT_SOURCE_IMAGES'
+                  : isImageCountValid
+                    ? 'AUTO_CANVAS_IMAGE_GROUP_MISSING'
+                    : 'AUTO_CANVAS_IMAGE_GROUP_COUNT_MISMATCH',
           },
           input.tenantId,
         );
@@ -2585,6 +3115,12 @@ export class ArticleGraphService {
     );
   }
 
+  /**
+   * @description 根据单篇蓝图生成正文，并透传平台文风、主旨和配图意图。
+   * @param {object} input - 单篇文章生成参数。
+   * @returns {Promise<{ title: string; tags: string[]; markdown: string; imageQuery?: string }>}
+   * @keyword-en generate, article, writing-style
+   */
   private async generateOneArticle(input: {
     provider?: 'gemini' | 'deepseek';
     model?: string;
@@ -2593,6 +3129,7 @@ export class ArticleGraphService {
     topic?: string;
     userPrompt?: string;
     dataSummary?: string;
+    writingStyle?: string;
     langchainContext: Record<string, unknown>;
     /** 平台AI补充提示（从租户配置注入） */
     platformAiPrompt?: string;
@@ -2602,7 +3139,10 @@ export class ArticleGraphService {
       index: number;
       title: string;
       tags?: string[];
+      mainIdea?: string;
       angle?: string;
+      imageIntent?: string;
+      requirements?: string[];
       imageQuery?: string;
       notes?: string[];
     };
@@ -2615,6 +3155,15 @@ export class ArticleGraphService {
     imageQuery: string;
   }> {
     const isXhs = /小红书|xhs/i.test(input.platform);
+    const safeBlueprint = this.sanitizeBlueprintForCreativePrompt(
+      input.blueprint as ArticleBlueprint,
+    );
+    const safeTopic = this.sanitizeCopyrightRiskText(input.topic);
+    const safeUserPrompt = this.sanitizeCopyrightRiskText(input.userPrompt);
+    const safeDataSummary = this.sanitizeCopyrightRiskText(input.dataSummary);
+    const safeImageGroupTags = this.sanitizeCopyrightRiskList(
+      input.imageGroupTags,
+    );
     const sys = [
       '你是文章生成器。只负责生成可直接发布的文章正文，不要输出任何策划/方案/解释。',
       '你必须只输出 JSON 对象，不要输出任何多余字符。',
@@ -2623,19 +3172,25 @@ export class ArticleGraphService {
       '正文至少包含 2 段连续叙事段落，每段不少于 50 字。',
       '每篇文章必须独立成篇，不允许“第X篇/上篇/下篇/续篇”等连续叙事词。',
       '正文至少 120 字。',
+      `本篇必须采用的生文风格：${input.writingStyle ?? '通用专业图文文风'}`,
+      'blueprint.title 是唯一主标题锚点；正文语义、封面文案和配图都围绕它展开，禁止改写成另一个选题。',
+      '必须围绕 blueprint.mainIdea 展开正文；若 mainIdea 存在，不得只套用泛化模板。',
+      '必须继承 blueprint.requirements 中的全部关键约束。',
+      '若提供 blueprint.imageIntent 或 imageGroupTags，正文场景描写必须与图片意图/图片标签自然对应，避免图文不匹配。',
       '若提供了 userPrompt，必须结合其目标、语气、对象与限制生成正文，不得忽略。',
       '若提供了 dataSummary，必须将其中的数据事实、趋势结论与关键信息融合进正文；禁止杜撰与摘要冲突的数据。',
       'imageQuery 必须返回用于配图检索。',
       '若文章适合做“前后对比/双场景展示”，在 imageQuery 中明确两类元素，便于生成阶段即时完成拼图与封面处理。',
       '文章中不需要出现任何标签,但必须在 tags 字段返回与文章内容高度相关的标签列表，供平台发布时使用。',
+      '版权安全硬约束：title、markdown、imageQuery、tags 严禁出现知名 IP/商标/动漫/游戏/影视角色/明星名，也不得描述复刻角色服装、徽章、官方道具、学院/组织名称；相关输入必须泛化成风格氛围。',
       '若 human message context 中包含搜索摘要或参考资料，务必将其融入文章正文，增强内容的时效性与真实感；禁止直接抄录原文，需改写融合。',
       ...[
         input.currentDatetime ? `当前时间：${input.currentDatetime}` : '',
         input.platformAiPrompt
           ? `【平台业务说明 - 必须严格遵守，内容不得超出以下范围】\n${input.platformAiPrompt}`
           : '',
-        input.imageGroupTags && input.imageGroupTags.length > 0
-          ? `【配图关键词 - 必须融合到正文】\n本篇文章已关联以下图片标签：${input.imageGroupTags.join('、')}\n请将这些关键词自然融入正文内容与场景描述中，使文字与配图形成强关联，不要生硬堆砌。`
+        safeImageGroupTags.length > 0
+          ? `【配图关键词 - 必须融合到正文】\n本篇文章已关联以下版权安全图片语义：${safeImageGroupTags.join('、')}\n请将这些关键词自然融入正文内容与场景描述中，使文字与配图形成强关联，不要生硬堆砌。`
           : '',
       ].filter((x) => x.length > 0),
       isXhs
@@ -2673,11 +3228,12 @@ export class ArticleGraphService {
         JSON.stringify({
           task: 'Generate one article',
           platform: input.platform,
-          topic: input.topic,
-          userPrompt: input.userPrompt,
-          dataSummary: input.dataSummary,
-          index: input.blueprint.index,
-          blueprint: input.blueprint,
+          topic: safeTopic,
+          userPrompt: safeUserPrompt,
+          dataSummary: safeDataSummary,
+          writingStyle: input.writingStyle,
+          index: safeBlueprint.index,
+          blueprint: safeBlueprint,
         }),
       ),
     ];
@@ -2703,11 +3259,12 @@ export class ArticleGraphService {
             ? {
                 task: 'Generate one article',
                 platform: input.platform,
-                topic: input.topic,
-                userPrompt: input.userPrompt,
-                dataSummary: input.dataSummary,
-                index: input.blueprint.index,
-                blueprint: input.blueprint,
+                topic: safeTopic,
+                userPrompt: safeUserPrompt,
+                dataSummary: safeDataSummary,
+                writingStyle: input.writingStyle,
+                index: safeBlueprint.index,
+                blueprint: safeBlueprint,
               }
             : {
                 task: 'Fix previous output to match schema',
@@ -2747,13 +3304,13 @@ export class ArticleGraphService {
       : [];
 
     return {
-      title: String(article.data.title || '').trim(),
-      tags,
-      markdown: String(article.data.markdown || '').trim(),
+      title: this.sanitizeCopyrightRiskText(article.data.title),
+      tags: this.sanitizeCopyrightRiskList(tags),
+      markdown: this.sanitizeCopyrightRiskText(article.data.markdown),
       imageQuery:
-        article.data.imageQuery?.trim() ||
-        input.blueprint.imageQuery ||
-        `${input.topic || ''} ${input.blueprint.angle || ''} 场景`,
+        this.sanitizeCopyrightRiskText(article.data.imageQuery) ||
+        safeBlueprint.imageQuery ||
+        `${safeTopic || ''} ${safeBlueprint.angle || ''} 场景`,
     };
   }
 

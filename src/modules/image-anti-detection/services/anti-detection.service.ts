@@ -53,7 +53,8 @@ export class AntiDetectionService {
 
     try {
       const strength: AntiDetectionStrength = options.strength ?? 'standard';
-      const outputFormat: AntiDetectionOutputFormat = options.outputFormat ?? 'keep';
+      const outputFormat: AntiDetectionOutputFormat =
+        options.outputFormat ?? 'keep';
       const jpegMin = this.clampInt(options.jpegQualityMin ?? 82, 40, 100);
       const jpegMax = this.clampInt(options.jpegQualityMax ?? 90, jpegMin, 100);
 
@@ -100,9 +101,19 @@ export class AntiDetectionService {
 
       // L3: 颗粒 / 噪点叠加（SVG 稀疏噪点层）
       if (params.noiseAlpha > 0 && width > 0 && height > 0) {
-        const noiseSvg = this.buildNoiseSvg(width, height, params.noiseDensity, params.noiseAlpha);
+        const noiseSvg = this.buildNoiseSvg(
+          width,
+          height,
+          params.noiseDensity,
+          params.noiseAlpha,
+        );
         pipeline = pipeline.composite([
-          { input: Buffer.from(noiseSvg, 'utf8'), top: 0, left: 0, blend: 'over' },
+          {
+            input: Buffer.from(noiseSvg, 'utf8'),
+            top: 0,
+            left: 0,
+            blend: 'over',
+          },
         ]);
       }
 
@@ -110,11 +121,17 @@ export class AntiDetectionService {
       let outBuffer: Buffer;
       let outMime: string;
       if (finalFormat === 'png') {
-        outBuffer = await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer();
+        outBuffer = await pipeline
+          .png({ compressionLevel: 9, adaptiveFiltering: true })
+          .toBuffer();
         outMime = 'image/png';
       } else {
         outBuffer = await pipeline
-          .jpeg({ quality: params.jpegQuality, mozjpeg: true, chromaSubsampling: '4:2:0' })
+          .jpeg({
+            quality: params.jpegQuality,
+            mozjpeg: true,
+            chromaSubsampling: '4:2:0',
+          })
           .toBuffer();
         outMime = 'image/jpeg';
       }
@@ -123,10 +140,15 @@ export class AntiDetectionService {
         buffer: outBuffer,
         mimeType: outMime,
         processed: true,
-        appliedParams: params as unknown as Record<string, number | string | boolean>,
+        appliedParams: params as unknown as Record<
+          string,
+          number | string | boolean
+        >,
       };
     } catch (err) {
-      this.logger.warn(`[${tag}] anti-detection process failed, fallback to origin: ${err}`);
+      this.logger.warn(
+        `[${tag}] anti-detection process failed, fallback to origin: ${err}`,
+      );
       return { buffer, mimeType: 'image/jpeg', processed: false };
     }
   }
@@ -139,12 +161,21 @@ export class AntiDetectionService {
    * @returns {object} 参数集
    * @keyword-en pick randomized anti detection params
    */
-  private pickParams(strength: AntiDetectionStrength, jpegMin: number, jpegMax: number) {
-    const rand = (min: number, max: number): number => min + Math.random() * (max - min);
-    const jpegQuality = this.clampInt(Math.round(rand(jpegMin, jpegMax)), 40, 100);
+  private pickParams(
+    strength: AntiDetectionStrength,
+    jpegMin: number,
+    jpegMax: number,
+  ) {
+    const rand = (min: number, max: number): number =>
+      min + Math.random() * (max - min);
+    const jpegQuality = this.clampInt(
+      Math.round(rand(jpegMin, jpegMax)),
+      40,
+      100,
+    );
 
     // 默认 standard 档
-    let useModulate = true;
+    const useModulate = true;
     let brightness = rand(0.985, 1.015);
     let saturation = rand(0.97, 1.03);
     let resampleRatio = rand(0.992, 1.0);
@@ -206,7 +237,12 @@ export class AntiDetectionService {
    * @returns {string} SVG 字符串
    * @keyword-en build sparse noise svg layer
    */
-  private buildNoiseSvg(width: number, height: number, density: number, alpha: number): string {
+  private buildNoiseSvg(
+    width: number,
+    height: number,
+    density: number,
+    alpha: number,
+  ): string {
     const count = Math.max(
       80,
       Math.min(6000, Math.floor(width * height * density * 0.001)),
@@ -230,7 +266,10 @@ export class AntiDetectionService {
    * @returns {'jpeg' | 'png'} 输出格式
    * @keyword-en resolve final output format
    */
-  private resolveFinalFormat(pref: AntiDetectionOutputFormat, isSrcPng: boolean): 'jpeg' | 'png' {
+  private resolveFinalFormat(
+    pref: AntiDetectionOutputFormat,
+    isSrcPng: boolean,
+  ): 'jpeg' | 'png' {
     if (pref === 'jpeg') return 'jpeg';
     if (pref === 'png') return 'png';
     return isSrcPng ? 'png' : 'jpeg';
@@ -246,8 +285,9 @@ export class AntiDetectionService {
     try {
       const mod = (await import('sharp')) as unknown;
       const maybeDefault = (mod as { default?: unknown }).default;
-      const sharp = (typeof maybeDefault === 'function' ? maybeDefault : mod) as unknown;
-      this.sharpModule = typeof sharp === 'function' ? (sharp as typeof import('sharp')) : null;
+      const sharp = typeof maybeDefault === 'function' ? maybeDefault : mod;
+      this.sharpModule =
+        typeof sharp === 'function' ? (sharp as typeof import('sharp')) : null;
     } catch {
       this.sharpModule = null;
     }

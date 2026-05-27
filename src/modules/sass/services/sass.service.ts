@@ -122,7 +122,9 @@ export class SassService {
     this.tenants = db.collection<SassTenantEntity>('sass_tenants');
     this.apiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.logs = db.collection<SassDatabaseLogEntity>('sass_database_log');
-    this.platformInfos = db.collection<PlatformInfoEntity>('sass_platform_infos');
+    this.platformInfos = db.collection<PlatformInfoEntity>(
+      'sass_platform_infos',
+    );
     void this.ensureIndexes();
   }
 

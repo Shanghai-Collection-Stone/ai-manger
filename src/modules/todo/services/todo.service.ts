@@ -51,7 +51,10 @@ export class TodoService {
     await this.todos.createIndex({ type: 1 });
     await this.todos.createIndex({ category: 1 });
     await this.todos.createIndex({ assignee: 1 });
-    await this.todos.createIndex({ taskToken: 1 }, { unique: true, sparse: true });
+    await this.todos.createIndex(
+      { taskToken: 1 },
+      { unique: true, sparse: true },
+    );
     await this.todoItems.createIndex({ id: 1 }, { unique: true });
     await this.todoItems.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     await this.todoItems.createIndex({ todoId: 1 });
@@ -195,7 +198,9 @@ export class TodoService {
       if (typeof v !== 'undefined') upd[k] = v;
     }
     const nextAssignee =
-      typeof input.assignee !== 'undefined' ? input.assignee : existing.assignee;
+      typeof input.assignee !== 'undefined'
+        ? input.assignee
+        : existing.assignee;
     const nextType = this.normalizeTodoType(
       typeof input.type !== 'undefined' ? input.type : existing.type,
       nextAssignee,
@@ -265,7 +270,12 @@ export class TodoService {
    * @keyword todo, list, user
    * @since 2026-01-27
    */
-  async list(userId?: string, tenantId?: string, assignee?: string, category?: string): Promise<TodoEntity[]> {
+  async list(
+    userId?: string,
+    tenantId?: string,
+    assignee?: string,
+    category?: string,
+  ): Promise<TodoEntity[]> {
     const filter: Record<string, unknown> = this.buildTenantFilter(tenantId);
     if (userId) filter.userId = userId;
     if (assignee) filter.assignee = assignee;
@@ -288,7 +298,12 @@ export class TodoService {
     category?: string;
   }): Promise<TodoEntity[]> {
     if (input.canViewAll) {
-      return this.list(input.userId, input.tenantId, input.assignee, input.category);
+      return this.list(
+        input.userId,
+        input.tenantId,
+        input.assignee,
+        input.category,
+      );
     }
     const filter: Record<string, unknown> = {
       ...this.buildTenantFilter(input.tenantId),
@@ -447,11 +462,15 @@ export class TodoService {
    * @keyword-en normalize todo type
    */
   private normalizeTodoType(type?: string, assignee?: string): string {
-    const assigneeText = String(assignee ?? '').trim().toLowerCase();
+    const assigneeText = String(assignee ?? '')
+      .trim()
+      .toLowerCase();
     const isRobot = assigneeText.startsWith('robot:');
     if (isRobot) return 'auto_execute';
 
-    const t = String(type ?? '').trim().toLowerCase();
+    const t = String(type ?? '')
+      .trim()
+      .toLowerCase();
     if (!t) return 'other';
     if (['auto_execute', '自动执行', 'auto'].includes(t)) return 'auto_execute';
     if (
@@ -466,7 +485,8 @@ export class TodoService {
     ) {
       return 'offline_execute';
     }
-    if (['long_task', '长时任务', 'long-task', 'longtask'].includes(t)) return 'long_task';
+    if (['long_task', '长时任务', 'long-task', 'longtask'].includes(t))
+      return 'long_task';
     if (['other', '其他'].includes(t)) return 'other';
     return 'other';
   }

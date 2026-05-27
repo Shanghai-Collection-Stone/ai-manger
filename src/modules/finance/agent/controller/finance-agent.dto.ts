@@ -12,7 +12,7 @@ import { Type } from 'class-transformer';
 
 /**
  * @description 单条聊天消息
- * @keyword-en finance agent chat message dto
+ * @keyword-en finance-agent-message-dto, chat-dto
  */
 export class FinanceAgentChatMessageDto {
   @IsIn(['user', 'assistant', 'system'])
@@ -25,7 +25,7 @@ export class FinanceAgentChatMessageDto {
 
 /**
  * @description 后台财务 Agent 聊天请求
- * @keyword-en finance agent chat request dto
+ * @keyword-en finance-agent-chat-dto, chat-dto
  */
 export class FinanceAgentChatDto {
   @IsString()

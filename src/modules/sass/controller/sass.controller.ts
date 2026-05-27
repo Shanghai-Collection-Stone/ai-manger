@@ -140,9 +140,7 @@ export class SassController {
    * @keyword-en get platform info
    */
   @Get('platform-info')
-  async getPlatformInfo(
-    @Req() req: Request,
-  ): Promise<Record<string, unknown>> {
+  async getPlatformInfo(@Req() req: Request): Promise<Record<string, unknown>> {
     const tenantId = this.readTenantId(req);
     const info = await this.sass.getPlatformInfo(tenantId);
     return { platformInfo: info };

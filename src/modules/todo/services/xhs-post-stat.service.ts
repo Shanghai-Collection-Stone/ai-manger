@@ -34,7 +34,8 @@ export class XhsPostStatService {
     await this.stats.createIndex({ todoId: 1, postHash: 1 });
     await this.stats.createIndex({ dataAt: -1 });
     const exists = await this.counters.findOne({ _id: 'xhs_post_stats' });
-    if (!exists) await this.counters.insertOne({ _id: 'xhs_post_stats', seq: 0 });
+    if (!exists)
+      await this.counters.insertOne({ _id: 'xhs_post_stats', seq: 0 });
   }
 
   /**
@@ -68,7 +69,8 @@ export class XhsPostStatService {
     const now = new Date();
     const id = await this.nextId();
     const postHash =
-      input.postHash?.trim() || this.buildPostHash(input.postTitle, input.postUrl);
+      input.postHash?.trim() ||
+      this.buildPostHash(input.postTitle, input.postUrl);
     const doc: XhsPostStatEntity = {
       _id: new ObjectId(),
       id,
@@ -87,7 +89,9 @@ export class XhsPostStatService {
       updatedAt: now,
     };
     await this.stats.insertOne(doc);
-    this.logger.log(`[create] id=${id} todoId=${input.todoId} postHash=${postHash}`);
+    this.logger.log(
+      `[create] id=${id} todoId=${input.todoId} postHash=${postHash}`,
+    );
     return doc;
   }
 
@@ -95,11 +99,15 @@ export class XhsPostStatService {
    * @description 批量创建帖子数据（每次都新增，不判定重复）
    * @keyword-en bulk insert xhs post stats, always insert new record
    */
-  async bulkUpsert(todoId: number, inputs: Omit<XhsPostStatCreateInput, 'todoId'>[]): Promise<{ upserted: number }> {
+  async bulkUpsert(
+    todoId: number,
+    inputs: Omit<XhsPostStatCreateInput, 'todoId'>[],
+  ): Promise<{ upserted: number }> {
     let upserted = 0;
     for (const input of inputs) {
       const postHash =
-        input.postHash?.trim() || this.buildPostHash(input.postTitle, input.postUrl);
+        input.postHash?.trim() ||
+        this.buildPostHash(input.postTitle, input.postUrl);
       await this.create({ ...input, todoId, postHash });
       upserted++;
     }
@@ -110,19 +118,24 @@ export class XhsPostStatService {
    * @description 按序号ID更新帖子数据
    * @keyword-en update xhs post stat by id
    */
-  async update(input: XhsPostStatUpdateInput): Promise<XhsPostStatEntity | null> {
+  async update(
+    input: XhsPostStatUpdateInput,
+  ): Promise<XhsPostStatEntity | null> {
     const now = new Date();
     const upd: Record<string, unknown> = { updatedAt: now };
     for (const [k, v] of Object.entries(input)) {
       if (k === 'id') continue;
       if (v !== undefined) upd[k] = v;
     }
-    if (typeof input.postTitle === 'string' || typeof input.postUrl === 'string') {
+    if (
+      typeof input.postTitle === 'string' ||
+      typeof input.postUrl === 'string'
+    ) {
       const existing = await this.stats.findOne({ id: input.id });
       if (existing && !input.postHash) {
         upd.postHash = this.buildPostHash(
-          (input.postTitle ?? existing.postTitle),
-          (input.postUrl ?? existing.postUrl),
+          input.postTitle ?? existing.postTitle,
+          input.postUrl ?? existing.postUrl,
         );
       }
     }
@@ -148,7 +161,9 @@ export class XhsPostStatService {
    * @keyword-en get xhs post stat by id
    */
   async get(id: number): Promise<XhsPostStatEntity | null> {
-    return (await this.stats.findOne({ id }, { projection: { _id: 0 } })) ?? null;
+    return (
+      (await this.stats.findOne({ id }, { projection: { _id: 0 } })) ?? null
+    );
   }
 
   /**
@@ -166,9 +181,15 @@ export class XhsPostStatService {
    * @description 按 postHash 查找同 todoId 下的已有记录
    * @keyword-en get xhs post stat by hash
    */
-  async getByHash(todoId: number, postHash: string): Promise<XhsPostStatEntity | null> {
+  async getByHash(
+    todoId: number,
+    postHash: string,
+  ): Promise<XhsPostStatEntity | null> {
     return (
-      (await this.stats.findOne({ todoId, postHash }, { projection: { _id: 0 } })) ?? null
+      (await this.stats.findOne(
+        { todoId, postHash },
+        { projection: { _id: 0 } },
+      )) ?? null
     );
   }
 }

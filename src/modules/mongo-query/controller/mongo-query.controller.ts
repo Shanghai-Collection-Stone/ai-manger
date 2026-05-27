@@ -1,4 +1,11 @@
-import { Body, Controller, Post, Req, UsePipes, ValidationPipe } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  Req,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { MongoQueryService } from '../services/mongo-query.service.js';
 import { MongoQueryDto } from './mongo-query.dto.js';
@@ -28,4 +35,3 @@ export class MongoQueryController {
     return this.mongoQuery.execute(req, body);
   }
 }
-

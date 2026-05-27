@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { promises as fs } from 'fs';
-import { mkdirSync } from 'fs';
+import { mkdirSync, existsSync } from 'fs';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { randomUUID } from 'crypto';
 import { join, resolve, extname } from 'path';
@@ -19,7 +19,12 @@ export class GalleryService {
   private readonly VECTOR_INDEX_NAME = 'gallery_image_embedding_index';
   /** 精确封面标签枚举（系统写入的类型标记，非用户描述关键词） */
   private readonly COVER_TAGS = ['封面', '拼图封面', '自动封面', 'canvas封面'];
-  private readonly coverTagSet = new Set(['封面', '拼图封面', '自动封面', 'canvas封面']);
+  private readonly coverTagSet = new Set([
+    '封面',
+    '拼图封面',
+    '自动封面',
+    'canvas封面',
+  ]);
   private isAtlasAvailable: boolean | null = null;
   private jimpModulePromise: Promise<unknown> | null = null;
 
@@ -209,8 +214,12 @@ export class GalleryService {
     }
 
     const docs: GalleryImageEntity[] = inputs.map((input, idx) => {
-      const w = Number.isFinite(Number(input.width)) ? Math.floor(Number(input.width)) : undefined;
-      const h = Number.isFinite(Number(input.height)) ? Math.floor(Number(input.height)) : undefined;
+      const w = Number.isFinite(Number(input.width))
+        ? Math.floor(Number(input.width))
+        : undefined;
+      const h = Number.isFinite(Number(input.height))
+        ? Math.floor(Number(input.height))
+        : undefined;
       const isPortrait = w !== undefined && h !== undefined ? h > w : undefined;
       return {
         _id: new ObjectId(),
@@ -291,8 +300,14 @@ export class GalleryService {
       imageType?: 'all' | 'regular' | 'collage';
     },
   ): Promise<GalleryImageEntity[]> {
-    const { groupId, tag, cursorId, limit = 50, includeCollage = true, imageType } =
-      options ?? {};
+    const {
+      groupId,
+      tag,
+      cursorId,
+      limit = 50,
+      includeCollage = true,
+      imageType,
+    } = options ?? {};
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(userId, tenantId),
     ];
@@ -308,7 +323,12 @@ export class GalleryService {
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
-    console.log('findAccessibleImages filter:', JSON.stringify(filter), 'limit:', lim);
+    console.log(
+      'findAccessibleImages filter:',
+      JSON.stringify(filter),
+      'limit:',
+      lim,
+    );
     return this.images
       .find(filter, { projection: { _id: 0 } })
       .sort({ id: -1 })
@@ -324,7 +344,10 @@ export class GalleryService {
    * @keyword-en build tenant filter
    * @since 2026-03-23
    */
-  private buildTenantFilter(userId: string | undefined, tenantId?: string): Record<string, unknown> {
+  private buildTenantFilter(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Record<string, unknown> {
     const currentTenantId = tenantId?.trim();
     const base: Record<string, unknown> = {};
     // if (userId) base.userId = userId;
@@ -352,7 +375,9 @@ export class GalleryService {
    * @returns {Record<string, unknown>} MongoDB filter 对象。
    * @keyword-en build image type filter for mongodb query
    */
-  private buildImageTypeFilter(imageType: 'regular' | 'collage'): Record<string, unknown> {
+  private buildImageTypeFilter(
+    imageType: 'regular' | 'collage',
+  ): Record<string, unknown> {
     if (imageType === 'regular') {
       // Exclude: isCollage=true (actual collage images) AND cover-tagged images
       return {
@@ -361,10 +386,7 @@ export class GalleryService {
       };
     }
     return {
-      $or: [
-        { isCollage: true },
-        { tags: { $in: this.COVER_TAGS } },
-      ],
+      $or: [{ isCollage: true }, { tags: { $in: this.COVER_TAGS } }],
     };
   }
 
@@ -375,10 +397,15 @@ export class GalleryService {
    * @returns {boolean}
    * @keyword-en in-memory image type match
    */
-  private matchesImageType(image: GalleryImageEntity, imageType: 'all' | 'regular' | 'collage'): boolean {
+  private matchesImageType(
+    image: GalleryImageEntity,
+    imageType: 'all' | 'regular' | 'collage',
+  ): boolean {
     if (imageType === 'all') return true;
     const tags = Array.isArray(image.tags) ? image.tags : [];
-    const isCover = image.isCollage === true || tags.some((t) => this.coverTagSet.has(String(t ?? '').trim()));
+    const isCover =
+      image.isCollage === true ||
+      tags.some((t) => this.coverTagSet.has(String(t ?? '').trim()));
     if (imageType === 'regular') return !isCover;
     return isCover;
   }
@@ -392,7 +419,11 @@ export class GalleryService {
    * @keyword-en list tags with tenant filter
    * @since 2026-03-23
    */
-  async listDistinctTagsWithTenant(userId: string | undefined, tenantId?: string, limit = 500): Promise<string[]> {
+  async listDistinctTagsWithTenant(
+    userId: string | undefined,
+    tenantId?: string,
+    limit = 500,
+  ): Promise<string[]> {
     const filter = this.buildTenantFilter(userId, tenantId);
     const raw = await this.images.distinct('tags', filter);
     const list = (Array.isArray(raw) ? raw : [])
@@ -432,7 +463,13 @@ export class GalleryService {
   ): Promise<GalleryImageEntity[]> {
     const filter: Record<string, unknown> = {};
     if (userId) filter.userId = userId;
-    if (groupId !== undefined && (typeof groupId === 'number' ? Number.isFinite(groupId) : typeof groupId === 'string')) filter.groupId = groupId;
+    if (
+      groupId !== undefined &&
+      (typeof groupId === 'number'
+        ? Number.isFinite(groupId)
+        : typeof groupId === 'string')
+    )
+      filter.groupId = groupId;
     if (tag) filter.tags = tag;
     if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
       filter.id = { $lt: cursorId };
@@ -480,7 +517,12 @@ export class GalleryService {
   ): Promise<string[]> {
     const filter: Record<string, unknown> = {};
     if (userId) filter.userId = userId;
-    if (groupId !== undefined && (typeof groupId === 'number' ? Number.isFinite(groupId) : typeof groupId === 'string')) {
+    if (
+      groupId !== undefined &&
+      (typeof groupId === 'number'
+        ? Number.isFinite(groupId)
+        : typeof groupId === 'string')
+    ) {
       filter.groupId = groupId;
     }
     const raw = await this.images.distinct('tags', filter);
@@ -528,7 +570,11 @@ export class GalleryService {
     } else if (input.matchCollage === false) {
       clauses.push({ isCollage: { $ne: true } });
     }
-    if (input.groupId !== undefined && ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) || typeof input.groupId === 'string')) {
+    if (
+      input.groupId !== undefined &&
+      ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) ||
+        typeof input.groupId === 'string')
+    ) {
       clauses.push({ groupId: input.groupId });
     }
     if (input.includeUsed !== true) {
@@ -623,9 +669,10 @@ export class GalleryService {
       .filter((x) => Number.isFinite(x));
     if (ids.length === 0) return { matched: 0, modified: 0 };
     const now = new Date();
-    const update = input.reset === true
-      ? { $set: { isUsed: false, updatedAt: now }, $unset: { usedAt: '' } }
-      : { $set: { isUsed: true, usedAt: now, updatedAt: now } };
+    const update =
+      input.reset === true
+        ? { $set: { isUsed: false, updatedAt: now }, $unset: { usedAt: '' } }
+        : { $set: { isUsed: true, usedAt: now, updatedAt: now } };
     const res = await this.images.updateMany(
       { id: { $in: ids } },
       update as unknown as Record<string, unknown>,
@@ -648,7 +695,11 @@ export class GalleryService {
   }): Promise<GalleryImageEntity[]> {
     // 使用租户过滤构建基础 filter
     const baseFilter = this.buildTenantFilter(input.userId, input.tenantId);
-    if (input.groupId !== undefined && ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) || typeof input.groupId === 'string')) {
+    if (
+      input.groupId !== undefined &&
+      ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) ||
+        typeof input.groupId === 'string')
+    ) {
       baseFilter.groupId = input.groupId;
     }
     if (input.includeUsed !== true) {
@@ -846,7 +897,14 @@ export class GalleryService {
       embeddingConfig,
     );
     if (this.isAtlasAvailable === false) {
-      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore, imageType);
+      return this.searchSimilarLocal(
+        queryEmbedding,
+        userId,
+        tenantId,
+        limit,
+        minScore,
+        imageType,
+      );
     }
     try {
       const filter = this.buildTenantFilter(userId, tenantId);
@@ -875,7 +933,14 @@ export class GalleryService {
         .map((r) => ({ image: r, score: r.score }));
     } catch {
       if (this.isAtlasAvailable === null) this.isAtlasAvailable = false;
-      return this.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore, imageType);
+      return this.searchSimilarLocal(
+        queryEmbedding,
+        userId,
+        tenantId,
+        limit,
+        minScore,
+        imageType,
+      );
     }
   }
 
@@ -954,6 +1019,189 @@ export class GalleryService {
       apiKey: runtime.apiKey,
       baseUrl: runtime.baseUrl,
     };
+  }
+
+  /**
+   * @description 原图保质量压缩(就地替换)。限制最大边到 maxWidth/maxHeight、按 quality
+   *   重编码;仅当压缩后体积比原文件小 >1KB 时,才用临时文件原子替换原图(替换失败回滚到
+   *   备份),否则保留原图不动。jimp 不可用/读图失败/压缩反而更大等情况均安全跳过(返回
+   *   changed=false + reason)。供普通批量上传与 ZIP 批量导入共用,保证两条入库路径压缩口径一致。
+   * @param {{ filePath: string; maxWidth?: number; maxHeight?: number; quality?: number }} params - 压缩参数(默认 1600x1600 / quality 75)。
+   * @returns {Promise<{ changed: boolean; beforeSize: number; afterSize: number; reason?: string }>} 是否替换及前后体积。
+   * @keyword-en compress image in place keep quality
+   * @keyword-cn 原图保质量压缩, 就地替换
+   */
+  async compressImageInPlace(params: {
+    filePath: string;
+    maxWidth?: number;
+    maxHeight?: number;
+    quality?: number;
+  }): Promise<{
+    changed: boolean;
+    beforeSize: number;
+    afterSize: number;
+    reason?: string;
+  }> {
+    const filePath = String(params.filePath || '');
+    if (!filePath)
+      return { changed: false, beforeSize: 0, afterSize: 0, reason: 'no-path' };
+
+    let beforeSize = 0;
+    try {
+      const beforeStat = await fs.stat(filePath);
+      beforeSize = beforeStat.size;
+    } catch {
+      return {
+        changed: false,
+        beforeSize: 0,
+        afterSize: 0,
+        reason: 'stat-failed',
+      };
+    }
+
+    const maxWidth = Math.max(1, Math.floor(params.maxWidth ?? 1600));
+    const maxHeight = Math.max(1, Math.floor(params.maxHeight ?? 1600));
+    const quality = Math.min(
+      95,
+      Math.max(30, Math.floor(params.quality ?? 75)),
+    );
+
+    if (!this.jimpModulePromise) {
+      this.jimpModulePromise = import('jimp') as Promise<unknown>;
+    }
+    const mod = await this.jimpModulePromise;
+    const Jimp = (mod as Record<string, unknown>).Jimp as
+      | {
+          read: (path: string) => Promise<{
+            bitmap?: { width: number; height: number };
+            resize: (opts: { w: number; h: number }) => unknown;
+            write: (path: string, opts: { quality: number }) => Promise<void>;
+          }>;
+        }
+      | undefined;
+    if (!Jimp || typeof Jimp.read !== 'function') {
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: 'jimp-unavailable',
+      };
+    }
+
+    let img: Awaited<ReturnType<typeof Jimp.read>>;
+    try {
+      img = await Jimp.read(filePath);
+    } catch (e) {
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: e instanceof Error ? e.message : 'read-failed',
+      };
+    }
+    if (typeof img?.resize !== 'function' || typeof img?.write !== 'function') {
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: 'bad-image',
+      };
+    }
+
+    const w = typeof img.bitmap?.width === 'number' ? img.bitmap.width : 0;
+    const h = typeof img.bitmap?.height === 'number' ? img.bitmap.height : 0;
+    if (w > 0 && h > 0) {
+      const ratio = Math.min(maxWidth / w, maxHeight / h, 1);
+      if (ratio < 1) {
+        const nw = Math.max(1, Math.floor(w * ratio));
+        const nh = Math.max(1, Math.floor(h * ratio));
+        img.resize({ w: nw, h: nh });
+      }
+    }
+
+    const ext = extname(filePath) || '.jpg';
+    const base = filePath.toLowerCase().endsWith(ext.toLowerCase())
+      ? filePath.slice(0, -ext.length)
+      : filePath;
+    const rand = () => `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const tmpPath = `${base}.__upload_compress_tmp__${rand()}${ext}`;
+
+    const safeUnlink = async (p: string) => {
+      try {
+        if (existsSync(p)) await fs.unlink(p);
+      } catch {
+        void 0;
+      }
+    };
+
+    try {
+      await img.write(tmpPath, { quality });
+    } catch (e) {
+      await safeUnlink(tmpPath);
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: e instanceof Error ? e.message : 'write-failed',
+      };
+    }
+
+    let afterSize = beforeSize;
+    try {
+      const afterStat = await fs.stat(tmpPath);
+      afterSize = afterStat.size;
+    } catch {
+      await safeUnlink(tmpPath);
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: 'tmp-stat-failed',
+      };
+    }
+
+    // 压缩收益不足 1KB 视为无效,保留原图(避免无意义重写、避免把已优化图越压越糊)
+    if (afterSize + 1024 >= beforeSize) {
+      await safeUnlink(tmpPath);
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: 'not-smaller',
+      };
+    }
+
+    const bakPath = `${base}.__upload_compress_bak__${rand()}${ext}`;
+    try {
+      await fs.rename(filePath, bakPath);
+    } catch (e) {
+      await safeUnlink(tmpPath);
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: e instanceof Error ? e.message : 'backup-failed',
+      };
+    }
+    try {
+      await fs.rename(tmpPath, filePath);
+    } catch (e) {
+      // 替换失败:回滚备份,保证原图不丢
+      try {
+        if (existsSync(bakPath)) await fs.rename(bakPath, filePath);
+      } catch {
+        void 0;
+      }
+      await safeUnlink(tmpPath);
+      return {
+        changed: false,
+        beforeSize,
+        afterSize: beforeSize,
+        reason: e instanceof Error ? e.message : 'replace-failed',
+      };
+    }
+    await safeUnlink(bakPath);
+    return { changed: true, beforeSize, afterSize };
   }
 
   /**

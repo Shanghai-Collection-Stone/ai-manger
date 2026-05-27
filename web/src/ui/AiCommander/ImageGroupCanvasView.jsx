@@ -18,6 +18,7 @@ import { chatService } from './chatService';
 const LAYOUT_LABEL = {
   'portrait-cover-5inner': '竖封面 + 5 内页',
   'collage-cover-5inner': '拼图封面 + 5 内页',
+  'collage-cover-5collage': '拼图封面 + 5 拼图内页',
   'portrait-cover-2inner-collage': '竖封面 + 内页拼图',
   'collage-cover-2portrait-inner': '横拼图封面 + 竖内页',
 };

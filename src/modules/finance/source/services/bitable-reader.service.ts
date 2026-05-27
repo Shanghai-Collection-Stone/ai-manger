@@ -143,7 +143,9 @@ export class BitableReaderService {
           sourceType: 'bitable' as const,
           fields,
           createdAt:
-            typeof item.created_time === 'number' ? item.created_time : undefined,
+            typeof item.created_time === 'number'
+              ? item.created_time
+              : undefined,
           updatedAt:
             typeof item.last_modified_time === 'number'
               ? item.last_modified_time

@@ -114,10 +114,19 @@ export class CanvasController {
     @Query('tag') tag?: string,
     @Req() req?: Request,
   ): Promise<Record<string, unknown>> {
-    const authScope = req ? await this.resolveAuthScope(req) : { tenantId: undefined };
+    const authScope = req
+      ? await this.resolveAuthScope(req)
+      : { tenantId: undefined };
     const lim = limit ? Number(limit) : 50;
     const skp = skip ? Number(skip) : 0;
-    const rows = await this.canvas.list(userId, authScope.tenantId, lim, type, skp, tag);
+    const rows = await this.canvas.list(
+      userId,
+      authScope.tenantId,
+      lim,
+      type,
+      skp,
+      tag,
+    );
     return { canvases: rows };
   }
 
@@ -157,7 +166,11 @@ export class CanvasController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
-    const doc = await this.canvas.addArticles(Number(id), input, authScope.tenantId);
+    const doc = await this.canvas.addArticles(
+      Number(id),
+      input,
+      authScope.tenantId,
+    );
     return { canvas: doc };
   }
 
@@ -176,7 +189,11 @@ export class CanvasController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
-    const doc = await this.canvas.updateStatus(Number(id), input.status, authScope.tenantId);
+    const doc = await this.canvas.updateStatus(
+      Number(id),
+      input.status,
+      authScope.tenantId,
+    );
     return { canvas: doc };
   }
 
@@ -235,7 +252,10 @@ export class CanvasController {
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
-    const deleted = await this.canvas.deleteCanvas(Number(id), authScope.tenantId);
+    const deleted = await this.canvas.deleteCanvas(
+      Number(id),
+      authScope.tenantId,
+    );
     return { deleted };
   }
 

@@ -14,10 +14,12 @@ export type CanvasType = 'article' | 'image-group';
  * - portrait-cover-2inner-collage: 1竖封面单图 + 2内页拼图
  * - portrait-cover-5inner: 1竖封面 + 5内页（拼图+竖图混合）
  * - collage-cover-5inner: 1横拼图封面 + 5竖内页单图
+ * - collage-cover-5collage: 1横拼图封面 + 5横拼图内页
  */
 export type ImageGroupLayout =
   | 'portrait-cover-5inner'
-  | 'collage-cover-5inner';
+  | 'collage-cover-5inner'
+  | 'collage-cover-5collage';
 
 /** @description 图片组内单张图片信息（含版式角色） */
 export interface CanvasGroupImage {

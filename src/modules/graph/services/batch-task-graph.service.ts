@@ -245,12 +245,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
    */
   private deriveCoverText(title: string, tags?: string[]): string {
     const firstTag = Array.isArray(tags)
-      ? tags
-          .map((x) => String(x ?? '').trim())
-          .find((x) => x.length > 0)
+      ? tags.map((x) => String(x ?? '').trim()).find((x) => x.length > 0)
       : undefined;
     if (firstTag) return firstTag.slice(0, 14);
-    const clean = String(title || '').replace(/[\s\-_:：]+/g, ' ').trim();
+    const clean = String(title || '')
+      .replace(/[\s\-_:：]+/g, ' ')
+      .trim();
     if (!clean) return '发布封面';
     return clean.slice(0, 14);
   }
@@ -265,7 +265,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     const s = String(url ?? '').trim();
     if (!s || /^https?:\/\//i.test(s)) return undefined;
     if (s.startsWith('/static/uploads/')) {
-      return join(process.cwd(), 'public', 'uploads', s.slice('/static/uploads/'.length));
+      return join(
+        process.cwd(),
+        'public',
+        'uploads',
+        s.slice('/static/uploads/'.length),
+      );
     }
     if (s.startsWith('/static/uploads_thumbs/')) {
       return join(
@@ -294,7 +299,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     try {
       const mod = await this.getJimpModule();
       const JimpCtor = mod.Jimp as unknown as {
-        read: (input: string) => Promise<{ bitmap?: { width?: number; height?: number } }>;
+        read: (
+          input: string,
+        ) => Promise<{ bitmap?: { width?: number; height?: number } }>;
       };
       const img = await JimpCtor.read(src);
       const w = Number(img?.bitmap?.width ?? 0);
@@ -399,8 +406,14 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     try {
       const mod = (await import('sharp')) as unknown as {
         default: (input: string | Buffer) => {
-          resize: (w: number, h: number, opts?: Record<string, unknown>) => unknown;
-          composite: (layers: Array<{ input: Buffer; top?: number; left?: number }>) => unknown;
+          resize: (
+            w: number,
+            h: number,
+            opts?: Record<string, unknown>,
+          ) => unknown;
+          composite: (
+            layers: Array<{ input: Buffer; top?: number; left?: number }>,
+          ) => unknown;
           jpeg: (opts?: Record<string, unknown>) => unknown;
           toFile: (path: string) => Promise<unknown>;
         };
@@ -436,13 +449,23 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" class="t">${tspans}</text>
 </svg>`;
 
-      await (sharpFn(input.collagePath) as unknown as {
-        resize: (w: number, h: number, opts?: Record<string, unknown>) => {
-          composite: (layers: Array<{ input: Buffer; top?: number; left?: number }>) => {
-            jpeg: (opts?: Record<string, unknown>) => { toFile: (path: string) => Promise<unknown> };
+      await (
+        sharpFn(input.collagePath) as unknown as {
+          resize: (
+            w: number,
+            h: number,
+            opts?: Record<string, unknown>,
+          ) => {
+            composite: (
+              layers: Array<{ input: Buffer; top?: number; left?: number }>,
+            ) => {
+              jpeg: (opts?: Record<string, unknown>) => {
+                toFile: (path: string) => Promise<unknown>;
+              };
+            };
           };
-        };
-      })
+        }
+      )
         .resize(COLLAGE_WIDTH, COLLAGE_HEIGHT, { fit: 'cover' })
         .composite([{ input: Buffer.from(svg, 'utf8'), top: 0, left: 0 }])
         .jpeg({ quality: 92 })
@@ -460,7 +483,10 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
    * @returns {Promise<{ fileName: string; absPath: string; url: string }>} 文件信息。
    * @keyword-en create publish dynamic collage
    */
-  private async createDynamicCollageFile(pathA: string, pathB: string): Promise<{
+  private async createDynamicCollageFile(
+    pathA: string,
+    pathB: string,
+  ): Promise<{
     fileName: string;
     absPath: string;
     url: string;
@@ -480,12 +506,19 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       rgbaToInt?: (r: number, g: number, b: number, a: number) => number;
     };
 
-    const [imgA, imgB] = await Promise.all([JimpCtor.read(pathA), JimpCtor.read(pathB)]);
+    const [imgA, imgB] = await Promise.all([
+      JimpCtor.read(pathA),
+      JimpCtor.read(pathB),
+    ]);
     const white =
       typeof JimpCtor.rgbaToInt === 'function'
         ? JimpCtor.rgbaToInt(255, 255, 255, 255)
         : 0xffffffff;
-    const out = new JimpCtor({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, color: white });
+    const out = new JimpCtor({
+      width: COLLAGE_WIDTH,
+      height: COLLAGE_HEIGHT,
+      color: white,
+    });
 
     const drawHalf = (
       img: {
@@ -595,7 +628,10 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    const text = String(coverText || '').trim().slice(0, 16) || '发布封面';
+    const text =
+      String(coverText || '')
+        .trim()
+        .slice(0, 16) || '发布封面';
     if (typeof mod.loadFont === 'function') {
       const fontWhite = await this.loadJimpFontFallback(mod, [
         mod.FONT_SANS_64_WHITE,
@@ -717,9 +753,15 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const cacheDir = `${tmpDir}/cache`;
       await fs.mkdir(cacheDir, { recursive: true });
       const tmpFont = `${tmpDir}/cover-cjk.ttf`;
-      try { await fs.access(tmpFont); } catch { await fs.copyFile(fontFilePath, tmpFont); }
+      try {
+        await fs.access(tmpFont);
+      } catch {
+        await fs.copyFile(fontFilePath, tmpFont);
+      }
       const confPath = `${tmpDir}/fonts.conf`;
-      try { await fs.access(confPath); } catch {
+      try {
+        await fs.access(confPath);
+      } catch {
         const conf = [
           '<?xml version="1.0"?>',
           '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">',
@@ -774,7 +816,10 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       generatedKind === 'collage';
 
     // 为生成的图片（拼图/封面）生成缩略图
-    const thumb = await this.gallery.generateThumbnail(input.absPath, input.fileName);
+    const thumb = await this.gallery.generateThumbnail(
+      input.absPath,
+      input.fileName,
+    );
 
     // 拼图/封面图片使用专用分组
     let finalGroupId = input.groupId;
@@ -785,10 +830,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       );
       finalGroupId = coverGroup.id;
     } else if (generatedKind === 'collage' || input.isCollage === true) {
-      const collageGroup = await this.galleryGroups.findOrCreateDynamicCollageGroup(
-        input.userId,
-        input.tenantId,
-      );
+      const collageGroup =
+        await this.galleryGroups.findOrCreateDynamicCollageGroup(
+          input.userId,
+          input.tenantId,
+        );
       finalGroupId = collageGroup.id;
     }
 
@@ -826,16 +872,14 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         tags: mergedTags,
         description: input.description,
         isCollage: markAsCollage,
-        collageSourceImageIds:
-          sourceIds.length > 0 ? sourceIds : undefined,
-        collageMeta:
-          markAsCollage
-            ? {
-                width: typeof width === 'number' ? width : COLLAGE_WIDTH,
-                height: typeof height === 'number' ? height : COLLAGE_HEIGHT,
-                dpi: COLLAGE_DPI,
-              }
-            : undefined,
+        collageSourceImageIds: sourceIds.length > 0 ? sourceIds : undefined,
+        collageMeta: markAsCollage
+          ? {
+              width: typeof width === 'number' ? width : COLLAGE_WIDTH,
+              height: typeof height === 'number' ? height : COLLAGE_HEIGHT,
+              dpi: COLLAGE_DPI,
+            }
+          : undefined,
         thumbFileName: thumb?.thumbFileName,
         thumbUrl: thumb?.thumbUrl,
       },
@@ -1618,7 +1662,8 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const plannedAt = new Date(cursorMs).toISOString();
 
       // round-robin 分配账号 | assign account round-robin
-      const acct = accounts.length > 0 ? accounts[idx % accounts.length] : undefined;
+      const acct =
+        accounts.length > 0 ? accounts[idx % accounts.length] : undefined;
 
       postsInit.push({
         title,
@@ -1954,6 +1999,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           '不要在 content 里输出任何 #话题/#标签；话题标签必须通过 tags 字段返回。',
           '你必须参考 referenceMarkdown 的信息密度与写法，但必须改写为新的表达，避免逐句复刻。',
           'tags 若提供，必须从 availableTags 里选择 0-6 个；不确定就给空数组。',
+          '版权合规：title 与 content 尽量避免直接出现受版权/商标保护的专有名词（知名 IP、动漫/游戏角色名、品牌名、明星姓名等）；如主题确实涉及，用泛化、描述性或谐音表达替代（如“马里奥”→“经典像素游戏角色”“红帽水管工”），保留氛围但规避侵权。',
         ].join('\n');
 
         const basePayload = {
@@ -2100,7 +2146,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
             : [];
         const byTags = byTagsRaw.filter((img) => {
           const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
-          return !(Number.isFinite(gid) && excludedGeneratedGroupIdSet.has(gid));
+          return !(
+            Number.isFinite(gid) && excludedGeneratedGroupIdSet.has(gid)
+          );
         });
         const randomRaw = await this.gallery.sampleRandom({
           userId: state.galleryUserId,
@@ -2110,7 +2158,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         });
         const randomPool = randomRaw.filter((img) => {
           const gid = Number((img as { groupId?: unknown })?.groupId ?? NaN);
-          return !(Number.isFinite(gid) && excludedGeneratedGroupIdSet.has(gid));
+          return !(
+            Number.isFinite(gid) && excludedGeneratedGroupIdSet.has(gid)
+          );
         });
 
         const basePool = [...byTags, ...randomPool].filter((img) => {
@@ -2118,7 +2168,9 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           return true;
         });
 
-        const takeUnique = (items: GalleryImageEntity[]): GalleryImageEntity[] => {
+        const takeUnique = (
+          items: GalleryImageEntity[],
+        ): GalleryImageEntity[] => {
           const out: GalleryImageEntity[] = [];
           for (const it of items) {
             const id = typeof it.id === 'number' ? it.id : undefined;
@@ -2137,12 +2189,18 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
 
         const pickedBase = takeUnique(basePool);
         // 拼图必须使用横图（isPortrait !== true），不允许竖图参与拼图
-        const rawSources = pickedBase.filter((x) => x?.isCollage !== true && x?.isPortrait !== true).slice(0, 2);
+        const rawSources = pickedBase
+          .filter((x) => x?.isCollage !== true && x?.isPortrait !== true)
+          .slice(0, 2);
 
         let publishCollage: GalleryImageEntity | null = null;
         if (!wantsHistoricalCollage && rawSources.length === 2) {
-          const p0 = rawSources[0]?.absPath || this.resolveLocalPathFromGalleryUrl(rawSources[0]?.url);
-          const p1 = rawSources[1]?.absPath || this.resolveLocalPathFromGalleryUrl(rawSources[1]?.url);
+          const p0 =
+            rawSources[0]?.absPath ||
+            this.resolveLocalPathFromGalleryUrl(rawSources[0]?.url);
+          const p1 =
+            rawSources[1]?.absPath ||
+            this.resolveLocalPathFromGalleryUrl(rawSources[1]?.url);
           if (p0 && p1) {
             try {
               const collageFile = await this.createDynamicCollageFile(p0, p1);
@@ -2155,8 +2213,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
                 url: collageFile.url,
                 description: `发文动态拼图：#${rawSources[0]?.id ?? '-'} + #${rawSources[1]?.id ?? '-'}`,
                 isCollage: true,
-                collageSourceImageIds: [rawSources[0]?.id, rawSources[1]?.id].filter(
-                  (x): x is number => typeof x === 'number' && Number.isFinite(x),
+                collageSourceImageIds: [
+                  rawSources[0]?.id,
+                  rawSources[1]?.id,
+                ].filter(
+                  (x): x is number =>
+                    typeof x === 'number' && Number.isFinite(x),
                 ),
                 generatedKind: 'collage',
               });
@@ -2209,8 +2271,13 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           if (!it) return;
           const id = typeof it.id === 'number' ? it.id : undefined;
           const url = typeof it.url === 'string' ? it.url.trim() : '';
-          if (url && !images.imageUrls.includes(url)) images.imageUrls.push(url);
-          if (typeof id === 'number' && Number.isFinite(id) && !images.imageIds.includes(id)) {
+          if (url && !images.imageUrls.includes(url))
+            images.imageUrls.push(url);
+          if (
+            typeof id === 'number' &&
+            Number.isFinite(id) &&
+            !images.imageIds.includes(id)
+          ) {
             images.imageIds.push(id);
           }
         };

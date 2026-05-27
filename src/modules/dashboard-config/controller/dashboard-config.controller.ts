@@ -15,7 +15,10 @@ export class DashboardConfigController {
    * @keyword-en get current dashboard config
    */
   @Get('current')
-  async getCurrent(@Req() req: Request, @Query('dashboardCode') dashboardCode?: string) {
+  async getCurrent(
+    @Req() req: Request,
+    @Query('dashboardCode') dashboardCode?: string,
+  ) {
     const scope = await this.configs.resolveScope(req);
     return this.configs.getScopedConfig({
       tenantId: scope.tenantId,
@@ -23,4 +26,3 @@ export class DashboardConfigController {
     });
   }
 }
-
