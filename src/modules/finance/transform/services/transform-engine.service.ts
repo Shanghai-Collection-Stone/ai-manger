@@ -132,8 +132,40 @@ export class TransformEngineService {
         const bounds = this.toBetweenBounds(cond.value);
         return bounds ? this.isBetween(left, bounds[0], bounds[1]) : false;
       }
+      case 'regex': {
+        const re = this.toRegex(cond.value);
+        if (!re) return false;
+        return left == null ? false : re.test(String(left));
+      }
+      case 'notRegex': {
+        const re = this.toRegex(cond.value);
+        if (!re) return true;
+        return left == null ? true : !re.test(String(left));
+      }
       default:
         return false;
+    }
+  }
+
+  /**
+   * @description 把 filter value 编译成 RegExp;支持 \`"pattern"\` 或 \`{pattern, flags}\`,编译失败返回 null 由调用方决定语义
+   * @keyword-en regex-compile, condition-regex
+   */
+  private toRegex(value: unknown): RegExp | null {
+    let pattern: string | undefined;
+    let flags: string | undefined;
+    if (typeof value === 'string') {
+      pattern = value;
+    } else if (value && typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.pattern === 'string') pattern = obj.pattern;
+      if (typeof obj.flags === 'string') flags = obj.flags;
+    }
+    if (!pattern) return null;
+    try {
+      return new RegExp(pattern, flags);
+    } catch {
+      return null;
     }
   }
 
@@ -419,6 +451,32 @@ export class TransformEngineService {
         }
         break;
       }
+      case 'regex': {
+        if (!rule.from || !rule.pattern) {
+          result = null;
+          break;
+        }
+        const raw = this.toComparable(src[rule.from]);
+        if (raw == null || raw === '') {
+          result = null;
+          break;
+        }
+        let re: RegExp;
+        try {
+          re = new RegExp(rule.pattern, rule.flags);
+        } catch {
+          result = null;
+          break;
+        }
+        const m = String(raw).match(re);
+        if (!m) {
+          result = null;
+          break;
+        }
+        const idx = typeof rule.index === 'number' ? rule.index : 0;
+        result = m[idx] ?? null;
+        break;
+      }
       default:
         result = null;
     }
@@ -426,7 +484,7 @@ export class TransformEngineService {
       result = rule.default;
     }
     if (rule.type) {
-      const cast = this.castValue(result, rule.type, undefined);
+      const cast = this.castValue(result, rule.type, rule.format);
       // cast 失败(返回 null)仍然走 default 兜底,避免 default 被类型转换悄无声息地吞掉
       if (
         cast == null &&
@@ -542,21 +600,32 @@ export class TransformEngineService {
   }
 
   /**
-   * @description 日期归一（输出 ISO；format=YYYY-MM-DD 时只取日期）
-   * @keyword-en date-string, value-cast
+   * @description 日期归一(支持 ms/秒数字、纯数字字符串、ISO/常见日期字符串、Date 对象;format=YYYY-MM-DD 只取日期,默认输出 ISO)
+   * @keyword-en date-string, value-cast, timestamp-normalize
    */
   private toDate(value: unknown, format?: string): string | null {
     let ms: number | null = null;
-    if (typeof value === 'number') {
+    if (typeof value === 'number' && Number.isFinite(value)) {
       ms = value < 10_000_000_000 ? value * 1000 : value;
     } else if (typeof value === 'string') {
-      const parsed = Date.parse(value);
-      ms = Number.isNaN(parsed) ? null : parsed;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      // 纯数字字符串走时间戳分支(Date.parse 对 "1735660800000" 之类一律 NaN)
+      if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+        const num = Number(trimmed);
+        if (Number.isFinite(num)) {
+          ms = num < 10_000_000_000 ? num * 1000 : num;
+        }
+      } else {
+        const parsed = Date.parse(trimmed);
+        ms = Number.isNaN(parsed) ? null : parsed;
+      }
     } else if (value instanceof Date) {
       ms = value.getTime();
     }
-    if (ms == null) return null;
+    if (ms == null || !Number.isFinite(ms)) return null;
     const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return null;
     if (format === 'YYYY-MM-DD') {
       return d.toISOString().slice(0, 10);
     }

@@ -16,7 +16,8 @@ Finance-Transform
 - `TransformEngineService()` — 财务 Transform DSL 执行引擎类 | keywords: transform-engine, dsl-runner, finance-normalize
 - `run(rows,dsl)` — 执行 DSL 并返回转换行、错误与计数 | keywords: run-dsl, transform-result
 - `passesFilter(fields,conditions?)` — 以 and 语义判断顶层过滤条件 | keywords: filter-pass, and-conjunction
-- `matchCondition(row,cond)` — 匹配单个过滤条件,支持 or/and/between | keywords: condition-match, filter-op
+- `matchCondition(row,cond)` — 匹配单个过滤条件,支持 or/and/between/regex/notRegex | keywords: condition-match, filter-op
+- `toRegex(value)` — 把 filter value 编译成 RegExp(支持字符串或 `{pattern,flags}`) | keywords: regex-compile, condition-regex
 - `toBetweenBounds(value)` — 解析 between 的数组或对象边界 | keywords: between-bounds, filter-range
 - `isBetween(value,min,max)` — 判断值是否处于闭区间 | keywords: between-compare, filter-range
 - `toOrderNumber(value)` — 将数字或日期转为可排序数值 | keywords: order-number, range-compare
@@ -28,17 +29,19 @@ Finance-Transform
 - `isPlainObject(value)` — 判断普通对象以支持 object merge | keywords: plain-object, object-merge
 - `runMap(src,rule)` — 执行直接字段映射 | keywords: map-rule-run, default-fallback
 - `readFieldValue(src,field,fallback?,type?,format?)` — 从源字段或 computed 上下文读取字段 | keywords: context-field-read, computed-field
-- `runCompute(src,rule)` — 执行 concat/sum/if/coalesce/const/lookup | keywords: compute-rule-run, nested-compute
+- `runCompute(src,rule)` — 执行 concat/sum/if/coalesce/const/lookup/regex | keywords: compute-rule-run, nested-compute, regex-extract
 - `resolveExpressionValue(src,value,allowBareFieldRef?)` — 求值 then/else 中的字段引用或嵌套 compute | keywords: expression-resolve, nested-compute
 - `resolveMappedValue(src,value)` — 求值 lookup map 命中后的显式表达式 | keywords: lookup-value-resolve, nested-compute
 - `isComputeExpression(value)` — 判断嵌套 compute 表达式 | keywords: nested-compute-detect, expression-detect
 - `isFieldRefExpression(value)` — 判断 `{ from }` 字段引用表达式 | keywords: field-reference-detect, expression-detect
 - `castValue(value,type?,format?)` — 执行 string/number/boolean/date/array 类型转换 | keywords: value-cast, type-convert
-- `toDate(value,format?)` — 日期归一化为 ISO 或 YYYY-MM-DD | keywords: date-string, value-cast
+- `toDate(value,format?)` — 日期归一化(ms/秒数字、纯数字字符串、ISO 字符串、Date 都支持)为 ISO 或 YYYY-MM-DD | keywords: date-string, value-cast, timestamp-normalize
 - `TransformValidatorService()` — Transform DSL 结构校验器类 | keywords: transform-validator, dsl-schema-check
 - `validate(dsl)` — 校验顶层 DSL 并兼容 string JSON | keywords: dsl-validate, string-fallback
 - `validateField(input,idx)` — 校验字段规则与 compute 必填项 | keywords: field-rule-validate, dsl-field
-- `validateCondition(input,label)` — 校验过滤条件和分组条件 | keywords: filter-condition-validate, filter-op
+- `validateCondition(input,label)` — 校验过滤条件、分组条件与 regex 形态 | keywords: filter-condition-validate, filter-op, regex-shape
+- `readRegexValue(value)` — 从 filter value 读出 `{pattern, flags}` | keywords: regex-value-read, regex-shape
+- `assertRegexCompiles(pattern,flags,label)` — 落库期试编译 regex,失败即拒收 | keywords: regex-compile-check, dsl-validate
 - `validateType(value,label)` — 校验字段类型 | keywords: value-type-validate, value-cast
 - `validateMerge(value,label)` — 校验同名字段合并策略 | keywords: merge-mode-validate, duplicate-field
 
@@ -54,6 +57,7 @@ Finance-Transform
 | 类型转换 | value-cast |
 | 飞书字段拍平 | cell-flatten |
 | 结构校验 | dsl-schema-check |
+| 正则抽取/匹配 | regex-extract, condition-regex |
 
 ## 类型导出 (Type Exports)
 - `TransformDsl` — DSL 顶层结构 | keywords: transform-dsl-root, dsl-schema

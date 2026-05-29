@@ -1031,7 +1031,7 @@ const AdminApp = () => {
   };
 
   /**
-   * @description 刷新 transform 显示(agent 可能调用 set_transform 落库;按 name 索引)
+   * @description 刷新 transform 显示(agent 可能调用 patch_transform 落库;按 name 索引)
    * @keyword-en reload finance transforms after chat
    */
   const reloadFinanceTransforms = async () => {
@@ -1417,7 +1417,7 @@ const AdminApp = () => {
     }
     lines.push('');
     lines.push(
-      `请定位是哪几个字段不合 schema(对照 financial_event 的必填字段与枚举),改一下 DSL 后用 finance_dry_run_transform 试跑,确认无误再 finance_set_transform 落库。`,
+      `请先调 finance_get_transform 拿当前 DSL,定位是哪几个字段不合 schema(对照 financial_event 的必填字段与枚举),心算出预期 DSL 用 finance_dry_run_transform 试跑确认,再用 finance_patch_transform 走最窄路径的 ops 局部修补(不要根 replace、不要把整份 DSL 塞进 ops)。`,
     );
     return lines.join('\n');
   };

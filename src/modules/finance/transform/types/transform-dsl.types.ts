@@ -49,12 +49,20 @@ export interface TransformComputeRule {
   else?: unknown;
   /** const 直接产出的常量值 */
   value?: unknown;
-  /** lookup 时读取的源字段名 */
+  /** lookup / regex 时读取的源字段名 */
   from?: string;
   /** lookup 映射表 { 源值: 目标值 } */
   map?: Record<string, unknown>;
+  /** regex 模式串(JS RegExp 语法) */
+  pattern?: string;
+  /** regex 标志位,如 "i" / "im" */
+  flags?: string;
+  /** regex 捕获组下标:0 整段、1+ 捕获组,默认 0 */
+  index?: number;
   /** 类型 */
   type?: TransformValueType;
+  /** 日期格式(type=date 生效,留空用 ISO);例如 "YYYY-MM-DD" */
+  format?: string;
   default?: unknown;
   /** 同名 to 字段的合并策略;留空时使用智能叠加 */
   merge?: TransformMergeMode;
@@ -90,6 +98,8 @@ export type TransformFilterOp =
   | 'isEmpty'
   | 'isNotEmpty'
   | 'between'
+  | 'regex'
+  | 'notRegex'
   | 'or'
   | 'and';
 
@@ -103,7 +113,8 @@ export type TransformComputeOp =
   | 'if'
   | 'coalesce'
   | 'const'
-  | 'lookup';
+  | 'lookup'
+  | 'regex';
 
 /**
  * @description 值类型转换

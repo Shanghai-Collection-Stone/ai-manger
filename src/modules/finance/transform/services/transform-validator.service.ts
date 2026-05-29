@@ -20,6 +20,8 @@ const VALID_FILTER_OPS = new Set([
   'isEmpty',
   'isNotEmpty',
   'between',
+  'regex',
+  'notRegex',
   'or',
   'and',
 ]);
@@ -31,6 +33,7 @@ const VALID_COMPUTE_OPS = new Set([
   'coalesce',
   'const',
   'lookup',
+  'regex',
 ]);
 
 const VALID_TYPES = new Set(['string', 'number', 'boolean', 'date', 'array']);
@@ -125,7 +128,7 @@ export class TransformValidatorService {
     if (!to) {
       throw new BadRequestException(`TRANSFORM_FIELD_TO_REQUIRED:${idx}`);
     }
-    if (typeof obj.compute !== 'undefined') {
+    if (obj.compute != null) {
       const op = String(obj.compute);
       if (!VALID_COMPUTE_OPS.has(op)) {
         throw new BadRequestException(`TRANSFORM_FIELD_COMPUTE_INVALID:${idx}`);
@@ -138,7 +141,7 @@ export class TransformValidatorService {
           : undefined,
         sep: typeof obj.sep === 'string' ? obj.sep : undefined,
         when:
-          typeof obj.when !== 'undefined'
+          obj.when != null
             ? this.validateCondition(obj.when, `field[${idx}].when`)
             : undefined,
         then: obj.then,
@@ -152,7 +155,14 @@ export class TransformValidatorService {
           obj.map && typeof obj.map === 'object' && !Array.isArray(obj.map)
             ? (obj.map as Record<string, unknown>)
             : undefined,
+        pattern: typeof obj.pattern === 'string' ? obj.pattern : undefined,
+        flags: typeof obj.flags === 'string' ? obj.flags : undefined,
+        index:
+          typeof obj.index === 'number' && Number.isFinite(obj.index)
+            ? obj.index
+            : undefined,
         type: this.validateType(obj.type, `field[${idx}]`),
+        format: typeof obj.format === 'string' ? obj.format : undefined,
         default: obj.default,
         merge: this.validateMerge(obj.merge, `field[${idx}]`),
       };
@@ -181,6 +191,19 @@ export class TransformValidatorService {
             `TRANSFORM_FIELD_LOOKUP_NEEDS_MAP:${idx}`,
           );
         }
+      }
+      if (op === 'regex') {
+        if (!rule.from) {
+          throw new BadRequestException(
+            `TRANSFORM_FIELD_REGEX_NEEDS_FROM:${idx}`,
+          );
+        }
+        if (!rule.pattern) {
+          throw new BadRequestException(
+            `TRANSFORM_FIELD_REGEX_NEEDS_PATTERN:${idx}`,
+          );
+        }
+        this.assertRegexCompiles(rule.pattern, rule.flags, `field[${idx}]`);
       }
       return rule;
     }
@@ -234,11 +257,50 @@ export class TransformValidatorService {
         `TRANSFORM_CONDITION_FIELD_REQUIRED:${label}`,
       );
     }
+    if (op === 'regex' || op === 'notRegex') {
+      const { pattern, flags } = this.readRegexValue(obj.value);
+      if (!pattern) {
+        throw new BadRequestException(
+          `TRANSFORM_CONDITION_REGEX_NEEDS_PATTERN:${label}`,
+        );
+      }
+      this.assertRegexCompiles(pattern, flags, label);
+    }
     return {
       field,
       op: op as TransformFilterCondition['op'],
       value: obj.value,
     };
+  }
+
+  /**
+   * @description 从 filter condition 的 value 读出 regex { pattern, flags };支持纯字符串 pattern 或 \`{pattern, flags}\` 对象
+   * @keyword-en regex-value-read, regex-shape
+   */
+  readRegexValue(value: unknown): { pattern?: string; flags?: string } {
+    if (typeof value === 'string') return { pattern: value };
+    if (value && typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      return {
+        pattern: typeof obj.pattern === 'string' ? obj.pattern : undefined,
+        flags: typeof obj.flags === 'string' ? obj.flags : undefined,
+      };
+    }
+    return {};
+  }
+
+  /**
+   * @description 落库期编译一次 regex 失败即拒收,避免无效 pattern 进库后行级反复抛错
+   * @keyword-en regex-compile-check, dsl-validate
+   */
+  assertRegexCompiles(pattern: string, flags: string | undefined, label: string): void {
+    try {
+      new RegExp(pattern, flags);
+    } catch (err) {
+      throw new BadRequestException(
+        `TRANSFORM_REGEX_INVALID:${label}:${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -249,7 +311,7 @@ export class TransformValidatorService {
     value: unknown,
     label: string,
   ): TransformMapRule['type'] {
-    if (typeof value === 'undefined') return undefined;
+    if (value == null) return undefined;
     const str = String(value);
     if (!VALID_TYPES.has(str)) {
       throw new BadRequestException(`TRANSFORM_TYPE_INVALID:${label}`);
@@ -265,7 +327,7 @@ export class TransformValidatorService {
     value: unknown,
     label: string,
   ): TransformMapRule['merge'] {
-    if (typeof value === 'undefined') return undefined;
+    if (value == null) return undefined;
     const str = String(value);
     if (!VALID_MERGE_MODES.has(str)) {
       throw new BadRequestException(`TRANSFORM_MERGE_INVALID:${label}`);
