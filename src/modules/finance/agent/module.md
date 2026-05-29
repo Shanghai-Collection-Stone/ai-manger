@@ -25,7 +25,8 @@ Finance-Agent
 - `createGetBindingTool(scope)` — 构建读取当前 binding 的工具 | keywords: binding-tool, tool-read
 - `createReadSourceSampleTool(scope)` — 构建读取源样本并注入 source_alias 的工具 | keywords: source-sample-tool, alias-injection
 - `createGetTransformTool(scope)` — 构建读取已保存 Transform DSL 的工具 | keywords: transform-get-tool, dsl-read
-- `createSetTransformTool(scope)` — 构建校验并保存 Transform DSL 的工具 | keywords: transform-set-tool, dsl-save
+- `createPatchTransformTool(scope)` — 构建基于 JSON Pointer 局部修改或首次创建 DSL 的工具(ops + 可选 base) | keywords: transform-patch-tool, dsl-patch, json-pointer
+- `applyJsonPatch(doc,ops)` — 按 RFC 6901 对文档执行 replace/add/remove 操作 | keywords: json-pointer, dsl-patch, json-patch
 - `createDryRunTransformTool(scope)` — 构建 DSL 校验与样本试运行工具 | keywords: transform-dry-run-tool, dsl-validate
 - `createListExternalStoresTool(scope)` — 构建外部门店列表工具 | keywords: external-stores-tool, lookup-source
 - `createListExternalCompaniesTool(scope)` — 构建外部公司列表工具 | keywords: external-companies-tool, lookup-source
@@ -44,7 +45,7 @@ Finance-Agent
 | 流式聊天 | finance-agent-chat-stream |
 | 工具事件 | sse-event |
 | 工具集合 | finance-agent-tools |
-| DSL 保存 | dsl-save |
+| DSL 局部替换/创建 | dsl-patch, json-pointer |
 | DSL 试运行 | dsl-validate |
 | 源样本 | source-sample-fetch |
 | 外部映射来源 | lookup-source |

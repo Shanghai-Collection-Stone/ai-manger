@@ -10,7 +10,7 @@ export interface FinanceTransformEntity {
   tenantId: string;
   /** 与 binding 同名,一一对应 */
   name: string;
-  dsl: TransformDsl;
+  dsl: TransformDsl | null;
   /** 由 agent 生成的解读说明 */
   explanation?: string;
   createdAt: Date;

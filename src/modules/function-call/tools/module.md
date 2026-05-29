@@ -15,6 +15,7 @@
   - `buildArticleLibraryTools`: 构建文章库工具（列库 / 获取二维码 / Canvas 入库）/build article library tools
   - `buildAccountPoolTool`: 构建账号池查询工具（仅 xhs）/build account pool tool, xhs only
   - `getXhsSubAgentSessionTools`: 发布/追踪子会话工具集（含账号池、canvas详情）/xhs sub-agent session tools
+  - `getXhsArticleExpertSessionTools`: 生文专家子会话工具集（todo + canvas搜索 + topic_orchestrate + xhs_get_canvas_detail + buildArticleLibraryTools + **xhs_regenerate_article_images**）/xhs article expert session tools
 
 ### services/graph-workflow.service.ts
 图工作流工具服务，负责 Canvas 生成、单篇写入、发布编排。

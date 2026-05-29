@@ -130,6 +130,24 @@ export type ImageGroupSourcePreparation =
       stats: ImageGroupAllocationStats;
     };
 
+async function runConcurrent<T>(
+  tasks: Array<() => Promise<T>>,
+  concurrency: number,
+): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < tasks.length) {
+      const i = next++;
+      results[i] = await tasks[i]();
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tasks.length) }, worker),
+  );
+  return results;
+}
+
 /**
  * @description Canvas 图片组生成服务
  * 负责根据文章 Tag 从图库匹配配图，按固定版式组合成 ImageGroup，异步写入 Canvas。
@@ -312,238 +330,35 @@ export class CanvasImageGroupService {
 
   /**
    * @description 根据已完成的源图分配渲染图组：生成拼图、封面文案、AI 封面或烧字封面，并写入图库。
+   * 并发数由 IMAGE_GROUP_RENDER_CONCURRENCY 环境变量控制，默认 1（串行）。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
    * @param {Extract<ImageGroupSourcePreparation, {ok: true}>} preparation - 已完成的源图分配结果。
    * @returns {Promise<CanvasImageGroup[]>} 渲染后的图片组。
-   * @keyword-en render, prepared, image-group
+   * @keyword-en render, prepared, image-group, concurrency
    */
   async renderPreparedImageGroups(
     input: CanvasImageGroupCreateInput,
     preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
   ): Promise<CanvasImageGroup[]> {
-    const articles = input.articles ?? [];
+    const concurrency = Math.max(
+      1,
+      Number.parseInt(
+        process.env['IMAGE_GROUP_RENDER_CONCURRENCY'] ?? '1',
+        10,
+      ) || 1,
+    );
+    const tasks = preparation.plans.map(
+      (plan) => () => this.renderOnePlan(plan, input, preparation),
+    );
+    const results = await runConcurrent(tasks, concurrency);
+
     const groups: CanvasImageGroup[] = [];
     const usedSourceIds = new Set<number>();
-    const addUsedSourceIds = (ids: number[]): void => {
-      for (const id of ids) {
-        if (Number.isFinite(id) && id > 0) usedSourceIds.add(id);
-      }
-    };
-    for (const plan of preparation.plans) {
-      const i = plan.articleIndex;
-      const art = articles[i];
-      const layout = plan.layout;
-      const coverSlot = plan.slots.find((slot) => slot.role === 'cover');
-      const innerSlots = plan.slots.filter((slot) => slot.role !== 'cover');
-      const groupImages: CanvasGroupImage[] = [];
-      const contextImages: GalleryImageEntity[] = [];
-      const contextImageIds = new Set<number>();
-      const collectContextImage = (
-        img: GalleryImageEntity | null | undefined,
-      ): void => {
-        if (!img) return;
-        if (contextImageIds.has(img.id)) return;
-        contextImageIds.add(img.id);
-        contextImages.push(img);
-      };
-      let ok = true;
-
-      // 封面
-      let coverPlan:
-        | {
-            kind: 'collage';
-            image: GalleryImageEntity;
-            imgA: GalleryImageEntity;
-            imgB: GalleryImageEntity;
-            collageUrl: string;
-          }
-        | {
-            kind: 'portrait';
-            image: GalleryImageEntity;
-            alreadyDesigned: boolean;
-          }
-        | null = null;
-      if (!coverSlot) {
-        ok = false;
-      } else if (coverSlot.kind === 'collage') {
-        const collageResult = await this.persistPlannedCollage({
-          userId: input.userId,
-          tenantId: input.tenantId,
-          imgA: coverSlot.imgA,
-          imgB: coverSlot.imgB,
-          targetGroupId: preparation.dynamicCoverGroupId,
-          generatedKind: 'cover',
-        });
-        if (collageResult) {
-          coverPlan = {
-            kind: 'collage',
-            image: collageResult.image,
-            imgA: collageResult.imgA,
-            imgB: collageResult.imgB,
-            collageUrl: collageResult.collageUrl,
-          };
-          collectContextImage(collageResult.imgA);
-          collectContextImage(collageResult.imgB);
-          addUsedSourceIds(collageResult.sourceIds);
-        } else {
-          ok = false;
-        }
-      } else {
-        const coverImg = coverSlot.image;
-        const alreadyDesigned = this.hasCoverTag(coverImg);
-        coverPlan = {
-          kind: 'portrait',
-          image: coverImg,
-          alreadyDesigned,
-        };
-        collectContextImage(coverImg);
-        addUsedSourceIds([coverImg.id]);
-      }
-      if (!coverPlan) ok = false;
-
-      // 内页
-      for (const slot of innerSlots) {
-        if (slot.kind === 'collage') {
-          const collageResult = await this.persistPlannedCollage({
-            userId: input.userId,
-            tenantId: input.tenantId,
-            imgA: slot.imgA,
-            imgB: slot.imgB,
-            targetGroupId: preparation.dynamicCollageGroupId,
-            generatedKind: 'collage',
-          });
-          if (collageResult) {
-            groupImages.push(this.toGroupImage(collageResult.image, slot.role));
-            collectContextImage(collageResult.imgA);
-            collectContextImage(collageResult.imgB);
-            addUsedSourceIds(collageResult.sourceIds);
-          } else {
-            ok = false;
-          }
-        } else {
-          const portraitImg = slot.image;
-          groupImages.push(this.toGroupImage(portraitImg, slot.role));
-          collectContextImage(portraitImg);
-          addUsedSourceIds([portraitImg.id]);
-        }
-      }
-
-      // 封面文案：按“本组最终配图”语义生成（tags + description 汇总）
-      if (coverPlan) {
-        const imageContext =
-          preparation.imageContexts[i] ??
-          this.summarizeImageContext(contextImages);
-        const rawCoverText =
-          (
-            await this.generateCoverTexts(
-              input.topic,
-              [art],
-              [imageContext],
-              input.tenantId,
-            )
-          )[0] ?? this.buildCoverText(art.title, i);
-        const coverText = this.sanitizeCoverText(rawCoverText);
-
-        const aiCover = preparation.aiCoverEnabled
-          ? await this.tryGenerateAiCoverToGallery({
-              userId: input.userId,
-              tenantId: input.tenantId,
-              topic: input.topic,
-              articleTitle: art.title,
-              articleTags: art.tags,
-              imageContext,
-              coverText,
-              coverType: coverPlan.kind,
-              sourceImages:
-                coverPlan.kind === 'collage'
-                  ? [coverPlan.imgA, coverPlan.imgB]
-                  : [coverPlan.image],
-              dynamicCoverGroupId: preparation.dynamicCoverGroupId,
-            })
-          : null;
-
-        if (aiCover) {
-          groupImages.unshift(this.toGroupImage(aiCover, 'cover', coverText));
-          groups.push({
-            id: i + 1,
-            articleId: art.title ? undefined : undefined,
-            articleTitle: art.title,
-            layout,
-            images: groupImages,
-            status: ok ? 'done' : 'failed',
-          });
-          this.logger.debug(
-            `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'} cover=ai`,
-          );
-          continue;
-        }
-
-        if (coverPlan.kind === 'collage') {
-          const burnedUrl = await this.burnCollageCoverText(
-            { imgA: coverPlan.imgA, imgB: coverPlan.imgB },
-            coverText,
-          );
-          const finalUrl = burnedUrl ?? coverPlan.collageUrl;
-          const persistedCover =
-            finalUrl === coverPlan.image.url
-              ? coverPlan.image
-              : await this.persistGeneratedAssetToGallery({
-                  userId: input.userId,
-                  tenantId: input.tenantId,
-                  url: finalUrl,
-                  generatedKind: 'cover',
-                  groupId: preparation.dynamicCoverGroupId,
-                  sourceImageIds: [coverPlan.imgA.id, coverPlan.imgB.id],
-                  sourceImages: [coverPlan.imgA, coverPlan.imgB],
-                  description: burnedUrl
-                    ? '画布拼图封面（已烧录文案）'
-                    : '画布拼图封面',
-                });
-          const finalCover = persistedCover ?? coverPlan.image;
-          groupImages.unshift(
-            this.toGroupImage(finalCover, 'cover', coverText),
-          );
-        } else {
-          const burnedUrl = coverPlan.alreadyDesigned
-            ? null
-            : await this.burnCoverText(coverPlan.image, coverText);
-          const persistedCover = burnedUrl
-            ? await this.persistGeneratedAssetToGallery({
-                userId: input.userId,
-                tenantId: input.tenantId,
-                url: burnedUrl,
-                generatedKind: 'cover',
-                groupId: preparation.dynamicCoverGroupId,
-                sourceImageIds: [coverPlan.image.id],
-                sourceImages: [coverPlan.image],
-                description: '画布单图封面（已烧录文案）',
-              })
-            : null;
-          const finalCover = persistedCover ?? coverPlan.image;
-          const coverCopy =
-            coverPlan.alreadyDesigned || !persistedCover
-              ? undefined
-              : coverText;
-          groupImages.unshift(
-            this.toGroupImage(finalCover, 'cover', coverCopy),
-          );
-        }
-      }
-
-      groups.push({
-        id: i + 1,
-        articleId: art.title ? undefined : undefined,
-        articleTitle: art.title,
-        layout,
-        images: groupImages,
-        status: ok ? 'done' : 'failed',
-      });
-      this.logger.debug(
-        `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`,
-      );
+    for (const { group, usedIds } of results) {
+      groups.push(group);
+      for (const id of usedIds) usedSourceIds.add(id);
     }
 
-    // 一次性标记本批次消耗的所有源图为 isUsed=true，全局不再被默认查询命中
     if (usedSourceIds.size > 0) {
       try {
         await this.gallery.markUsedBatch({ ids: Array.from(usedSourceIds) });
@@ -556,6 +371,236 @@ export class CanvasImageGroupService {
     }
 
     return groups;
+  }
+
+  /**
+   * @description 渲染单个图组计划（封面、内页、封面文案、AI 封面或烧字）。供 renderPreparedImageGroups 并发调用。
+   * @keyword-en render, single-plan, image-group, cover-text
+   */
+  private async renderOnePlan(
+    plan: ImageGroupAllocationPlan,
+    input: CanvasImageGroupCreateInput,
+    preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
+  ): Promise<{ group: CanvasImageGroup; usedIds: number[] }> {
+    const articles = input.articles ?? [];
+    const i = plan.articleIndex;
+    const art = articles[i];
+    const layout = plan.layout;
+    const coverSlot = plan.slots.find((slot) => slot.role === 'cover');
+    const innerSlots = plan.slots.filter((slot) => slot.role !== 'cover');
+    const groupImages: CanvasGroupImage[] = [];
+    const contextImages: GalleryImageEntity[] = [];
+    const contextImageIds = new Set<number>();
+    const localUsedIds: number[] = [];
+
+    const collectContextImage = (
+      img: GalleryImageEntity | null | undefined,
+    ): void => {
+      if (!img) return;
+      if (contextImageIds.has(img.id)) return;
+      contextImageIds.add(img.id);
+      contextImages.push(img);
+    };
+    const addUsedIds = (ids: number[]): void => {
+      for (const id of ids) {
+        if (Number.isFinite(id) && id > 0) localUsedIds.push(id);
+      }
+    };
+
+    let ok = true;
+
+    // 封面
+    let coverPlan:
+      | {
+          kind: 'collage';
+          image: GalleryImageEntity;
+          imgA: GalleryImageEntity;
+          imgB: GalleryImageEntity;
+          collageUrl: string;
+        }
+      | {
+          kind: 'portrait';
+          image: GalleryImageEntity;
+          alreadyDesigned: boolean;
+        }
+      | null = null;
+    if (!coverSlot) {
+      ok = false;
+    } else if (coverSlot.kind === 'collage') {
+      const collageResult = await this.persistPlannedCollage({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        imgA: coverSlot.imgA,
+        imgB: coverSlot.imgB,
+        targetGroupId: preparation.dynamicCoverGroupId,
+        generatedKind: 'cover',
+      });
+      if (collageResult) {
+        coverPlan = {
+          kind: 'collage',
+          image: collageResult.image,
+          imgA: collageResult.imgA,
+          imgB: collageResult.imgB,
+          collageUrl: collageResult.collageUrl,
+        };
+        collectContextImage(collageResult.imgA);
+        collectContextImage(collageResult.imgB);
+        addUsedIds(collageResult.sourceIds);
+      } else {
+        ok = false;
+      }
+    } else {
+      const coverImg = coverSlot.image;
+      const alreadyDesigned = this.hasCoverTag(coverImg);
+      coverPlan = {
+        kind: 'portrait',
+        image: coverImg,
+        alreadyDesigned,
+      };
+      collectContextImage(coverImg);
+      addUsedIds([coverImg.id]);
+    }
+    if (!coverPlan) ok = false;
+
+    // 内页
+    for (const slot of innerSlots) {
+      if (slot.kind === 'collage') {
+        const collageResult = await this.persistPlannedCollage({
+          userId: input.userId,
+          tenantId: input.tenantId,
+          imgA: slot.imgA,
+          imgB: slot.imgB,
+          targetGroupId: preparation.dynamicCollageGroupId,
+          generatedKind: 'collage',
+        });
+        if (collageResult) {
+          groupImages.push(this.toGroupImage(collageResult.image, slot.role));
+          collectContextImage(collageResult.imgA);
+          collectContextImage(collageResult.imgB);
+          addUsedIds(collageResult.sourceIds);
+        } else {
+          ok = false;
+        }
+      } else {
+        const portraitImg = slot.image;
+        groupImages.push(this.toGroupImage(portraitImg, slot.role));
+        collectContextImage(portraitImg);
+        addUsedIds([portraitImg.id]);
+      }
+    }
+
+    // 封面文案：按”本组最终配图”语义生成（tags + description 汇总）
+    if (coverPlan) {
+      const imageContext =
+        preparation.imageContexts[i] ??
+        this.summarizeImageContext(contextImages);
+      const rawCoverText =
+        (
+          await this.generateCoverTexts(
+            input.topic,
+            [art],
+            [imageContext],
+            input.tenantId,
+          )
+        )[0] ?? this.buildCoverText(art.title, i);
+      const coverText = this.sanitizeCoverText(rawCoverText);
+
+      const aiCover = preparation.aiCoverEnabled
+        ? await this.tryGenerateAiCoverToGallery({
+            userId: input.userId,
+            tenantId: input.tenantId,
+            topic: input.topic,
+            articleTitle: art.title,
+            articleTags: art.tags,
+            imageContext,
+            coverText,
+            coverType: coverPlan.kind,
+            sourceImages:
+              coverPlan.kind === 'collage'
+                ? [coverPlan.imgA, coverPlan.imgB]
+                : [coverPlan.image],
+            dynamicCoverGroupId: preparation.dynamicCoverGroupId,
+          })
+        : null;
+
+      if (aiCover) {
+        groupImages.unshift(this.toGroupImage(aiCover, 'cover', coverText));
+        this.logger.debug(
+          `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'} cover=ai`,
+        );
+        return {
+          group: {
+            id: i + 1,
+            articleId: art.title ? undefined : undefined,
+            articleTitle: art.title,
+            layout,
+            images: groupImages,
+            status: ok ? 'done' : 'failed',
+          },
+          usedIds: localUsedIds,
+        };
+      }
+
+      if (coverPlan.kind === 'collage') {
+        const burnedUrl = await this.burnCollageCoverText(
+          { imgA: coverPlan.imgA, imgB: coverPlan.imgB },
+          coverText,
+        );
+        const finalUrl = burnedUrl ?? coverPlan.collageUrl;
+        const persistedCover =
+          finalUrl === coverPlan.image.url
+            ? coverPlan.image
+            : await this.persistGeneratedAssetToGallery({
+                userId: input.userId,
+                tenantId: input.tenantId,
+                url: finalUrl,
+                generatedKind: 'cover',
+                groupId: preparation.dynamicCoverGroupId,
+                sourceImageIds: [coverPlan.imgA.id, coverPlan.imgB.id],
+                sourceImages: [coverPlan.imgA, coverPlan.imgB],
+                description: burnedUrl
+                  ? '画布拼图封面（已烧录文案）'
+                  : '画布拼图封面',
+              });
+        const finalCover = persistedCover ?? coverPlan.image;
+        groupImages.unshift(this.toGroupImage(finalCover, 'cover', coverText));
+      } else {
+        const burnedUrl = coverPlan.alreadyDesigned
+          ? null
+          : await this.burnCoverText(coverPlan.image, coverText);
+        const persistedCover = burnedUrl
+          ? await this.persistGeneratedAssetToGallery({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              url: burnedUrl,
+              generatedKind: 'cover',
+              groupId: preparation.dynamicCoverGroupId,
+              sourceImageIds: [coverPlan.image.id],
+              sourceImages: [coverPlan.image],
+              description: '画布单图封面（已烧录文案）',
+            })
+          : null;
+        const finalCover = persistedCover ?? coverPlan.image;
+        const coverCopy =
+          coverPlan.alreadyDesigned || !persistedCover ? undefined : coverText;
+        groupImages.unshift(this.toGroupImage(finalCover, 'cover', coverCopy));
+      }
+    }
+
+    this.logger.debug(
+      `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`,
+    );
+    return {
+      group: {
+        id: i + 1,
+        articleId: art.title ? undefined : undefined,
+        articleTitle: art.title,
+        layout,
+        images: groupImages,
+        status: ok ? 'done' : 'failed',
+      },
+      usedIds: localUsedIds,
+    };
   }
 
   /**

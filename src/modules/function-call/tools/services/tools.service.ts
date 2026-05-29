@@ -873,7 +873,7 @@ export class ToolsService {
   }
 
   /**
-   * @description 生文专家子会话工具集（todo + canvas 搜索 + 生文编排）
+   * @description 生文专家子会话工具集（todo + canvas 搜索 + 生文编排 + 单篇图片重生成）
    * @keyword-en XHS article expert session tools
    */
   private getXhsArticleExpertSessionTools(
@@ -886,11 +886,16 @@ export class ToolsService {
       const name = (t as { name?: string }).name ?? '';
       return name === 'topic_orchestrate' || name === 'xhs_get_canvas_detail';
     });
+    const tXhsAll = this.mediaAgent.getXhsToolsHandle(scope) ?? [];
+    const tRegenerateArticle = tXhsAll.filter(
+      (t) => (t as { name?: string }).name === 'xhs_regenerate_article_images',
+    );
     return [
       ...tTodo,
       this.buildCanvasSearchTool(scope),
       ...tTopicAndCanvas,
       ...this.buildArticleLibraryTools(scope),
+      ...tRegenerateArticle,
     ];
   }
 }

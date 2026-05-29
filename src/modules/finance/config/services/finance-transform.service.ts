@@ -21,7 +21,7 @@ export interface FinanceTransformUpsertInput {
   name: string;
   /** 改名时传旧 name */
   previousName?: string;
-  dsl: unknown;
+  dsl: unknown | null;
   explanation?: string;
 }
 
@@ -97,7 +97,14 @@ export class FinanceTransformService {
     const tenantId = this.resolveScopeId(currentUser);
     const name = this.assertName(input.name);
     const previousName = input.previousName?.trim();
-    const dsl: TransformDsl = this.validator.validate(input.dsl);
+    const isEmptyDsl =
+      input.dsl == null ||
+      (typeof input.dsl === 'object' &&
+        !Array.isArray(input.dsl) &&
+        Object.keys(input.dsl as object).length === 0);
+    const dsl: TransformDsl | null = isEmptyDsl
+      ? null
+      : this.validator.validate(input.dsl);
     const now = new Date();
 
     if (previousName && previousName !== name) {

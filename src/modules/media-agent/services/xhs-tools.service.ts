@@ -232,6 +232,7 @@ export class XhsToolsService {
       this.createGetCanvasDetailTool(scope),
       this.createImageGroupCanvasTool(scope),
       this.createTagSelectRequestTool(scope),
+      this.createRegenerateArticleImagesTool(scope),
     ];
   }
 
@@ -425,6 +426,161 @@ export class XhsToolsService {
           'Get detailed information about a specific Canvas including its articles and image groups',
         schema: z.object({
           canvas_id: z.number().describe('Canvas ID to retrieve'),
+        }),
+      },
+    );
+  }
+
+  /**
+   * @description 重新为 Canvas 中某一篇文章生成配图。图源不足时返回 insufficient_images。
+   * @keyword-en regenerate single article images tool, canvas article index
+   */
+  private createRegenerateArticleImagesTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }) {
+    return tool(
+      async (input: { canvas_id: number; article_index: number }) => {
+        if (!scope?.userId) {
+          return JSON.stringify({ error: 'USER_REQUIRED' });
+        }
+        const canvas = await this.canvasService.get(
+          input.canvas_id,
+          scope.tenantId,
+        );
+        if (!canvas) {
+          return JSON.stringify({
+            error: 'CANVAS_NOT_FOUND',
+            canvas_id: input.canvas_id,
+          });
+        }
+        if (canvas.userId !== scope.userId) {
+          return JSON.stringify({
+            error: 'CANVAS_SCOPE_FORBIDDEN',
+            canvas_id: input.canvas_id,
+          });
+        }
+
+        const orderedArticles = [...(canvas.articles ?? [])].sort(
+          (a, b) => Number(a.id) - Number(b.id),
+        );
+        const article = orderedArticles[input.article_index];
+        if (!article) {
+          return JSON.stringify({
+            error: 'ARTICLE_INDEX_OUT_OF_RANGE',
+            canvas_id: input.canvas_id,
+            article_index: input.article_index,
+            articleCount: orderedArticles.length,
+          });
+        }
+
+        const singleArticle = {
+          title: article.title,
+          tags: Array.isArray(article.tags) ? article.tags : [],
+        };
+
+        // 不足量预检
+        let capacity = null;
+        try {
+          capacity = await this.precheckImageCapacity({
+            userId: scope.userId,
+            tenantId: scope.tenantId,
+            articles: [singleArticle],
+          });
+        } catch (e) {
+          this.logger.warn(
+            `[xhs_regenerate_article_images] precheck failed (degraded to allow): ${String(e)}`,
+          );
+        }
+        if (capacity && !capacity.sufficient) {
+          this.logger.log(
+            `[xhs_regenerate_article_images] insufficient canvas=${input.canvas_id} article_index=${input.article_index} available=${capacity.available} expected>=${capacity.expectedMinImages}`,
+          );
+          return JSON.stringify({
+            status: 'insufficient_images',
+            canvasId: input.canvas_id,
+            articleIndex: input.article_index,
+            articleTitle: article.title,
+            tags: capacity.tags,
+            availableImages: capacity.available,
+            expectedMinImages: capacity.expectedMinImages,
+            hint: '该文章的 tag 下图源不足。请用自然语言告知用户当前可用图片数，并询问是否补图或取消。不要继续调用本工具，等待用户决策。',
+          });
+        }
+
+        const groups = await this.canvasService.generateImageGroupsForCanvas({
+          canvasId: input.canvas_id,
+          userId: scope.userId,
+          tenantId: scope.tenantId,
+          topic: canvas.topic,
+          articles: [singleArticle],
+          append: true,
+        });
+
+        const group = groups[0];
+        const imageUrls = Array.isArray(group?.images)
+          ? group.images
+              .map((img) =>
+                typeof img?.url === 'string' ? img.url.trim() : '',
+              )
+              .filter((u) => u.length > 0)
+          : [];
+        const imageIds = Array.isArray(group?.images)
+          ? group.images
+              .map((img) => Number(img?.imageId))
+              .filter((n) => Number.isFinite(n) && n > 0)
+          : [];
+        const isImageCountValid =
+          imageUrls.length >= this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE &&
+          imageUrls.length <= this.IMAGE_GROUP_MAX_IMAGES_PER_ARTICLE;
+        const status =
+          group?.status === 'done' && isImageCountValid
+            ? 'done'
+            : 'requires_human';
+        const isInsufficientSourceImages =
+          group?.status === 'failed' && imageUrls.length === 0;
+
+        await this.canvasService.updateArticleImages(
+          input.canvas_id,
+          article.id,
+          {
+            imageIds: imageIds.length > 0 ? imageIds : undefined,
+            imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
+            status,
+            doneNote:
+              status === 'done'
+                ? 'AUTO_CANVAS_IMAGE_GROUP_IMAGES'
+                : isInsufficientSourceImages
+                  ? 'AUTO_CANVAS_IMAGE_GROUP_INSUFFICIENT_SOURCE_IMAGES'
+                  : isImageCountValid
+                    ? 'AUTO_CANVAS_IMAGE_GROUP_MISSING'
+                    : 'AUTO_CANVAS_IMAGE_GROUP_COUNT_MISMATCH',
+          },
+          scope.tenantId,
+        );
+
+        const canvasBlock = `\`\`\`canvas-it\n${JSON.stringify({ canvasId: input.canvas_id, status: canvas.status ?? 'generating', type: canvas.type ?? 'article', topic: canvas.topic ?? '', articleCount: orderedArticles.length })}\n\`\`\``;
+        try {
+          scope?.earlyEmit?.(canvasBlock);
+        } catch {
+          // 推送失败不影响主流程
+        }
+        return `已重新生成 Canvas#${input.canvas_id} 第${input.article_index + 1}篇（${article.title}）的配图（status=${status}, imageCount=${imageUrls.length}）。卡片已直接推送到前端，请用一句简短中文告诉用户结果即可，不要复述 fence。`;
+      },
+      {
+        name: 'xhs_regenerate_article_images',
+        description:
+          '重新为 Canvas 中某一篇文章生成配图（指定 canvas_id + article_index）。适用于：某篇图片不满意、生成失败需重试、或只更换单篇配图而不影响其他文章。**调用前必须先用 xhs_get_canvas_detail 获取 Canvas 详情**，article_index 即该接口返回的 articles 数组的下标（第一篇=0，第二篇=1，以此类推）。图源不足时返回 insufficient_images，等待用户决策，不阻断其他文章。',
+        schema: z.object({
+          canvas_id: z.number().describe('Canvas ID'),
+          article_index: z
+            .number()
+            .int()
+            .min(0)
+            .describe(
+              '文章在 xhs_get_canvas_detail 返回的 articles 数组中的下标（第一篇=0，第二篇=1，以此类推）',
+            ),
         }),
       },
     );

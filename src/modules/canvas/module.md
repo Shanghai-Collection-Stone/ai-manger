@@ -50,7 +50,8 @@ Canvas服务。
 图片组生成服务。
 - `generateImageGroups` — 根据文章 tag 严格匹配图库配图（**不再跨 tag 随机补图**），先在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重；图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
 - `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
-- `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组：生成拼图、封面文案、AI 封面或烧字封面，并写入图库 | keywords: render, prepared, image-group
+- `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1） | keywords: render, prepared, image-group, concurrency
+- `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面/内页/文案/AI封面/烧字），供并发调用 | keywords: render, single-plan, image-group, cover-text
 - `planImageGroupAllocation(pool, articles)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；自动版式可在竖图不足时切到全拼图版式 | keywords: plan, allocation, no-reuse
 - `buildImageGroupAllocationRequests(articles, options?)` — 根据文章列表生成图组版式槽位需求，支持自动版式覆盖 | keywords: plan, allocation, layout
 - `summarizeImageGroupAllocationStats(requestedGroups, availablePortrait, availableLandscape)` — 统计分配所需竖图/横图数量与素材缺口 | keywords: stats, allocation, shortage

@@ -62,8 +62,9 @@ export class UpsertFinanceTransformDto {
   @MaxLength(60)
   previousName?: string;
 
+  @IsOptional()
   @IsObject()
-  dsl!: Record<string, unknown>;
+  dsl?: Record<string, unknown> | null;
 
   @IsOptional()
   @IsString()

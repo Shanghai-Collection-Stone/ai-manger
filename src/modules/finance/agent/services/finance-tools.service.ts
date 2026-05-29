@@ -46,7 +46,7 @@ export class FinanceToolsService {
       this.createGetBindingTool(scope),
       this.createReadSourceSampleTool(scope),
       this.createGetTransformTool(scope),
-      this.createSetTransformTool(scope),
+      this.createPatchTransformTool(scope),
       this.createDryRunTransformTool(scope),
       this.createListExternalStoresTool(scope),
       this.createListExternalCompaniesTool(scope),
@@ -173,26 +173,45 @@ export class FinanceToolsService {
   }
 
   /**
-   * @description 保存 transform DSL(落库前 validator 校验)
-   * @keyword-en transform-set-tool, dsl-save
+   * @description 局部修改或首次创建 transform DSL(基于 JSON Pointer 路径的 patch 操作,避免全量传输)
+   * @keyword-en transform-patch-tool, dsl-patch, json-pointer
    */
-  private createSetTransformTool(scope: FinanceToolsScope) {
+  private createPatchTransformTool(scope: FinanceToolsScope) {
     return tool(
-      async (input: { dsl: unknown; explanation?: string }) => {
+      async (input: {
+        ops: Array<{
+          op: 'replace' | 'add' | 'remove';
+          path: string;
+          value?: unknown;
+        }>;
+        base?: unknown;
+        explanation?: string;
+      }) => {
         try {
+          const tenantId = this.resolveScopeId(scope.adminUser);
+          const existing = await this.transformService.getByName(
+            tenantId,
+            scope.name,
+          );
+
+          const baseDoc = existing?.dsl ?? input.base;
+          if (!baseDoc) {
+            return JSON.stringify({
+              ok: false,
+              error: 'NO_EXISTING_DSL: pass a `base` DSL object to create one from scratch',
+            });
+          }
+
+          const patched = this.applyJsonPatch(baseDoc, input.ops);
           const transform = await this.transformService.upsert(
             scope.adminUser,
             {
               name: scope.name,
-              dsl: input.dsl,
-              explanation: input.explanation,
+              dsl: patched,
+              explanation: input.explanation ?? existing?.explanation,
             },
           );
-          return JSON.stringify({
-            ok: true,
-            name: transform.name,
-            dsl: transform.dsl,
-          });
+          return JSON.stringify({ ok: true, name: transform.name, dsl: transform.dsl });
         } catch (err) {
           return JSON.stringify({
             ok: false,
@@ -201,20 +220,97 @@ export class FinanceToolsService {
         }
       },
       {
-        name: 'finance_set_transform',
+        name: 'finance_patch_transform',
         description:
-          'Save the transform DSL for the current binding name. Pass `dsl` as a JSON OBJECT (NOT stringified). Schema: { version:1, filter?:[{field,op,value,conditions?}], fields:[{to, from?, type?, format?, default?, merge?, compute?, fields?, sep?, when?, then?, else?, value?, map?}] }. Compute ops: concat / sum / coalesce / if / const / lookup. Filters support or/and groups and between. Later rules can reference earlier computed fields; if.then/else and lookup map values may contain nested compute or {from}. On failure returns { ok:false, error:"<code>:<detail>" }; read `error` to fix the DSL and retry.',
+          'Create or patch the transform DSL using JSON-Pointer operations. Works for both first-time creation and incremental edits — never requires sending the full DSL. ' +
+          'If a DSL already exists in the database it is used as the base automatically; pass `base` only when creating from scratch (no saved DSL yet). ' +
+          'ops is an array of { op, path, value } where path follows RFC 6901 (e.g. "/fields/2", "/fields/-", "/filter/0/op"). ' +
+          'Supported ops: replace (overwrite node), add (insert into array at index or "-" to append, or set object key), remove (delete node). ' +
+          'DSL schema: { version:1, filter?:[{field,op,value,conditions?}], fields:[{to, from?, type?, format?, default?, merge?, compute?, fields?, sep?, when?, then?, else?, value?, map?}] }. ' +
+          'Returns { ok:true, dsl } on success or { ok:false, error } on failure.',
         schema: z.object({
-          dsl: z
+          ops: z
+            .array(
+              z.object({
+                op: z.enum(['replace', 'add', 'remove']),
+                path: z
+                  .string()
+                  .describe(
+                    'RFC 6901 JSON Pointer, e.g. "/fields/2", "/fields/-", "/filter/0/op"',
+                  ),
+                value: z
+                  .any()
+                  .optional()
+                  .describe('New value (required for replace/add, omit for remove)'),
+              }),
+            )
+            .describe('Patch operations to apply in order'),
+          base: z
             .any()
-            .describe('Full DSL as a JSON object (OBJECT, not stringified).'),
+            .optional()
+            .describe(
+              'Starting DSL object — provide ONLY when no DSL has been saved yet (first-time creation). Ignored when an existing DSL is found in the database.',
+            ),
           explanation: z
             .string()
             .optional()
-            .describe('Optional human-readable explanation of this DSL'),
+            .describe('Human-readable explanation (optional, keeps existing if omitted)'),
         }),
       },
     );
+  }
+
+  /**
+   * @description 按 RFC 6901 JSON Pointer 路径对文档做 replace/add/remove 操作
+   * @keyword-en json-pointer, dsl-patch, json-patch
+   */
+  private applyJsonPatch(
+    doc: unknown,
+    ops: Array<{ op: 'replace' | 'add' | 'remove'; path: string; value?: unknown }>,
+  ): unknown {
+    let result: unknown = JSON.parse(JSON.stringify(doc));
+    for (const op of ops) {
+      const segments = op.path
+        .split('/')
+        .filter(Boolean)
+        .map((s) => s.replace(/~1/g, '/').replace(/~0/g, '~'));
+
+      if (segments.length === 0) {
+        if (op.op === 'remove') throw new Error('Cannot remove root document');
+        result = op.value;
+        continue;
+      }
+
+      let parent: unknown = result;
+      for (let i = 0; i < segments.length - 1; i++) {
+        const seg = segments[i];
+        parent = Array.isArray(parent)
+          ? (parent as unknown[])[parseInt(seg, 10)]
+          : (parent as Record<string, unknown>)[seg];
+        if (parent === null || parent === undefined) {
+          throw new Error(`Patch path not found at segment "${seg}" in "${op.path}"`);
+        }
+      }
+
+      const last = segments[segments.length - 1];
+      if (op.op === 'replace') {
+        if (Array.isArray(parent))
+          (parent as unknown[])[parseInt(last, 10)] = op.value;
+        else (parent as Record<string, unknown>)[last] = op.value;
+      } else if (op.op === 'add') {
+        if (Array.isArray(parent)) {
+          if (last === '-') (parent as unknown[]).push(op.value);
+          else (parent as unknown[]).splice(parseInt(last, 10), 0, op.value);
+        } else {
+          (parent as Record<string, unknown>)[last] = op.value;
+        }
+      } else {
+        if (Array.isArray(parent))
+          (parent as unknown[]).splice(parseInt(last, 10), 1);
+        else delete (parent as Record<string, unknown>)[last];
+      }
+    }
+    return result;
   }
 
   /**
