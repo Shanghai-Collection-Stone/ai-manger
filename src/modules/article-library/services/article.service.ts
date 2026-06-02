@@ -42,16 +42,57 @@ export class ArticleService {
       lockExpireAt: 1,
       createdAt: 1,
     });
-    const exists = await this.counters.findOne({ _id: this.COUNTER_KEY });
-    if (!exists)
-      await this.counters.insertOne({ _id: this.COUNTER_KEY, seq: 0 });
+    await this.ensureCounterAtLeast(await this.getMaxArticleId());
   }
 
   /**
-   * @description 自增 ID
-   * @keyword-en article next id
+   * @description 读取当前 articles 集合中的最大业务 ID，用于修复 counter 落后于真实数据的问题。
+   * @keyword-cn 文章入库, 计数器校准
+   * @keyword-en article-id-counter
+   */
+  private async getMaxArticleId(): Promise<number> {
+    const latest = await this.articles
+      .find({}, { projection: { id: 1 } })
+      .sort({ id: -1 })
+      .limit(1)
+      .next();
+    const id = Number(latest?.id);
+    return Number.isFinite(id) && id > 0 ? Math.floor(id) : 0;
+  }
+
+  /**
+   * @description 将 articles counter 至少推进到指定下限，防止后续自增号撞上已有文章 ID。
+   * @keyword-cn 文章入库, 计数器校准
+   * @keyword-en article-id-counter
+   */
+  private async ensureCounterAtLeast(seq: number): Promise<void> {
+    const nextSeq = Math.max(0, Math.floor(Number(seq) || 0));
+    await this.counters.updateOne(
+      { _id: this.COUNTER_KEY },
+      [
+        {
+          $set: {
+            seq: {
+              $cond: [
+                { $gte: [{ $ifNull: ['$seq', 0] }, nextSeq] },
+                '$seq',
+                nextSeq,
+              ],
+            },
+          },
+        },
+      ],
+      { upsert: true },
+    );
+  }
+
+  /**
+   * @description 分配新的文章业务 ID，分配前先把 counter 推进到已有最大文章 ID。
+   * @keyword-cn 文章入库, 计数器校准
+   * @keyword-en article-id-counter
    */
   private async nextId(): Promise<number> {
+    await this.ensureCounterAtLeast(await this.getMaxArticleId());
     const res = await this.counters.findOneAndUpdate(
       { _id: this.COUNTER_KEY },
       { $inc: { seq: 1 } },

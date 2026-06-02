@@ -215,12 +215,155 @@ export class CanvasController {
   }
 
   /**
+   * @description 重新生成图文 Canvas 指定文章封面，只替换首图并把 Canvas 暂置为 generating。
+   * @param {string} id - Canvas ID。
+   * @param {string} articleId - 文章 ID。
+   * @param {{ imageIds?: number[]; sourceImageIds?: number[]; prompt?: string }} body - 参考图片与提示词。
+   * @returns {Promise<Record<string, unknown>>} 进入生成中的 Canvas。
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en article-cover-only
+   */
+  @Post(':id/articles/:articleId/cover/regenerate')
+  async regenerateArticleCover(
+    @Param('id') id: string,
+    @Param('articleId') articleId: string,
+    @Body()
+    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : [];
+    const doc = await this.canvas.startArticleCoverRegeneration({
+      canvasId: Number(id),
+      articleId: Number(articleId),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+      prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+    });
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 直接使用图库图片设为图文 Canvas 单篇文章封面，只替换首图。
+   * @param {string} id - Canvas ID。
+   * @param {string} articleId - 文章 ID。
+   * @param {{ imageId?: number; imageIds?: number[]; sourceImageIds?: number[] }} body - 选中的图库图片。
+   * @returns {Promise<Record<string, unknown>>} 更新后的 Canvas。
+   * @keyword-cn 直接设为封面 图片选择
+   * @keyword-en cover-select
+   * @keyword-en article-cover-only
+   */
+  @Post(':id/articles/:articleId/cover/select')
+  async selectArticleCover(
+    @Param('id') id: string,
+    @Param('articleId') articleId: string,
+    @Body()
+    body: { imageId?: number; imageIds?: number[]; sourceImageIds?: number[] },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : body?.imageId !== undefined
+          ? [body.imageId]
+          : [];
+    const doc = await this.canvas.selectArticleCoverImage({
+      canvasId: Number(id),
+      articleId: Number(articleId),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+    });
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 重新生成图组 Canvas 指定图组封面，只替换 role=cover 图片并把 Canvas 暂置为 generating。
+   * @param {string} id - Canvas ID。
+   * @param {string} groupId - 图组 ID。
+   * @param {{ imageIds?: number[]; sourceImageIds?: number[]; prompt?: string }} body - 参考图片与提示词。
+   * @returns {Promise<Record<string, unknown>>} 进入生成中的 Canvas。
+   * @keyword-cn 封面重生成 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en image-group-cover-only
+   */
+  @Post(':id/image-groups/:groupId/cover/regenerate')
+  async regenerateImageGroupCover(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Body()
+    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : [];
+    const doc = await this.canvas.startImageGroupCoverRegeneration({
+      canvasId: Number(id),
+      groupId: Number(groupId),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+      prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+    });
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 直接使用图库图片设为图组 Canvas 指定图组封面，只替换 role=cover 图片。
+   * @param {string} id - Canvas ID。
+   * @param {string} groupId - 图组 ID。
+   * @param {{ imageId?: number; imageIds?: number[]; sourceImageIds?: number[] }} body - 选中的图库图片。
+   * @returns {Promise<Record<string, unknown>>} 更新后的 Canvas。
+   * @keyword-cn 直接设为封面 图片选择
+   * @keyword-en cover-select
+   * @keyword-en image-group-cover-only
+   */
+  @Post(':id/image-groups/:groupId/cover/select')
+  async selectImageGroupCover(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Body()
+    body: { imageId?: number; imageIds?: number[]; sourceImageIds?: number[] },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : body?.imageId !== undefined
+          ? [body.imageId]
+          : [];
+    const doc = await this.canvas.selectImageGroupCoverImage({
+      canvasId: Number(id),
+      groupId: Number(groupId),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+    });
+    return { canvas: doc };
+  }
+
+  /**
    * @description 将画布文章标记为已发送。
-   * @param {string} id - 画布ID。
-   * @param {string} articleId - 文章ID。
-   * @param {{ sentAt?: string }} body - 发送时间（ISO字符串，可选，默认当前时间）。
-   * @returns {Promise<Record<string, unknown>>} 更新后的画布实体。
-   * @keyword canvas, article, sent, mark
+   * @param {string} id - Canvas ID。
+   * @param {string} articleId - 文章 ID。
+   * @param {{ sentAt?: string }} body - 发送时间。
+   * @returns {Promise<Record<string, unknown>>} 更新后的 Canvas。
+   * @keyword-en canvas-article-sent
+   * @keyword-en mark-sent
    */
   @Patch(':id/articles/:articleId/sent')
   async markArticleSent(

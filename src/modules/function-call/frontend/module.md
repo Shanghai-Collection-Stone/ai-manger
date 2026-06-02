@@ -11,7 +11,7 @@
 - **关键词**: frontend, async, HITL, HTML, static, layout, service
 - **函数**:
   - `getHandle`: 工具句柄/get handle
-  - `generateHtmlAsync`: 异步生成/async generate
+  - `generateHtmlAsync(params)`: 异步生成,附加 `nostream` tag 避免子Agent/内部 LLM 事件透传到顶层流 | keywords: 异步生成, HTML, 去耦合, 工具内部非流, async-generate, html, decouple, internal-llm-nostream
   - `sanitizeHtmlOutput`: 清理输出/sanitize html
   - `minimalHtml`: 最小占位/minimal html
   - `getDefaultTemplate`: 默认模板/default template

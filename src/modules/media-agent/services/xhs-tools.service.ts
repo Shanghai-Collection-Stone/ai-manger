@@ -232,6 +232,7 @@ export class XhsToolsService {
       this.createGetCanvasDetailTool(scope),
       this.createImageGroupCanvasTool(scope),
       this.createTagSelectRequestTool(scope),
+      this.createRegenerateCanvasCoverTool(scope),
       this.createRegenerateArticleImagesTool(scope),
     ];
   }
@@ -426,6 +427,158 @@ export class XhsToolsService {
           'Get detailed information about a specific Canvas including its articles and image groups',
         schema: z.object({
           canvas_id: z.number().describe('Canvas ID to retrieve'),
+        }),
+      },
+    );
+  }
+
+  /**
+   * @description 只重生成 Canvas 封面的专用工具，不改正文、标签或内页图片。
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en canvas-cover-only-tool
+   */
+  private createRegenerateCanvasCoverTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+    earlyEmit?: (text: string) => void;
+  }) {
+    return tool(
+      async (input: {
+        canvas_id: number;
+        target_type: 'article' | 'image-group';
+        article_index?: number;
+        article_id?: number;
+        image_group_id?: number;
+        group_index?: number;
+        image_ids: number[];
+        prompt?: string;
+      }) => {
+        if (!scope?.userId) {
+          return JSON.stringify({ error: 'USER_REQUIRED' });
+        }
+        const canvas = await this.canvasService.get(
+          input.canvas_id,
+          scope.tenantId,
+        );
+        if (!canvas) {
+          return JSON.stringify({
+            error: 'CANVAS_NOT_FOUND',
+            canvas_id: input.canvas_id,
+          });
+        }
+        if (canvas.userId !== scope.userId) {
+          return JSON.stringify({
+            error: 'CANVAS_SCOPE_FORBIDDEN',
+            canvas_id: input.canvas_id,
+          });
+        }
+        const imageIds = (Array.isArray(input.image_ids)
+          ? input.image_ids
+          : []
+        )
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+        if (imageIds.length === 0) {
+          return JSON.stringify({
+            error: 'COVER_SOURCE_IMAGES_REQUIRED',
+            hint: '需要先选择一张或多张图库图片作为封面参考图。',
+          });
+        }
+
+        let targetLabel = '';
+        if (input.target_type === 'article') {
+          const orderedArticles = [...(canvas.articles ?? [])].sort(
+            (a, b) => Number(a.id) - Number(b.id),
+          );
+          const explicitArticleId = Number(input.article_id);
+          const article = Number.isFinite(explicitArticleId)
+            ? orderedArticles.find(
+                (item) => Number(item.id) === explicitArticleId,
+              )
+            : orderedArticles[Number(input.article_index ?? 0)];
+          if (!article) {
+            return JSON.stringify({
+              error: 'ARTICLE_TARGET_NOT_FOUND',
+              canvas_id: input.canvas_id,
+              articleCount: orderedArticles.length,
+            });
+          }
+          await this.canvasService.startArticleCoverRegeneration({
+            canvasId: input.canvas_id,
+            articleId: article.id,
+            userId: scope.userId,
+            tenantId: scope.tenantId,
+            imageIds,
+            prompt: input.prompt,
+          });
+          targetLabel = `第${orderedArticles.findIndex((item) => item.id === article.id) + 1}篇文章封面`;
+        } else {
+          const orderedGroups = [...(canvas.imageGroups ?? [])].sort(
+            (a, b) => Number(a.id) - Number(b.id),
+          );
+          const explicitGroupId = Number(input.image_group_id);
+          const group = Number.isFinite(explicitGroupId)
+            ? orderedGroups.find((item) => Number(item.id) === explicitGroupId)
+            : orderedGroups[Number(input.group_index ?? 0)];
+          if (!group) {
+            return JSON.stringify({
+              error: 'IMAGE_GROUP_TARGET_NOT_FOUND',
+              canvas_id: input.canvas_id,
+              groupCount: orderedGroups.length,
+            });
+          }
+          await this.canvasService.startImageGroupCoverRegeneration({
+            canvasId: input.canvas_id,
+            groupId: group.id,
+            userId: scope.userId,
+            tenantId: scope.tenantId,
+            imageIds,
+            prompt: input.prompt,
+          });
+          targetLabel = `图组#${group.id}封面`;
+        }
+
+        const canvasBlock = `\`\`\`canvas-it\n${JSON.stringify({ canvasId: input.canvas_id, status: 'generating', type: canvas.type ?? 'article', topic: canvas.topic ?? '', articleCount: Array.isArray(canvas.articles) ? canvas.articles.length : 0 })}\n\`\`\``;
+        try {
+          scope?.earlyEmit?.(canvasBlock);
+        } catch {
+          // ignore
+        }
+        return `已开始重生成 Canvas#${input.canvas_id} 的${targetLabel}，Canvas 已进入 generating；本次只会替换封面，其他图片和正文不会改动。`;
+      },
+      {
+        name: 'xhs_regenerate_canvas_cover',
+        description:
+          '只重生成 Canvas 封面的专用工具。适用于图文 Canvas 文章首图封面或图片组 Canvas role=cover 图片；必须传 image_ids(可多张)，这些图会合并为一次封面生成请求。不要用 xhs_regenerate_article_images 处理只换封面的需求。',
+        schema: z.object({
+          canvas_id: z.number().describe('Canvas ID'),
+          target_type: z
+            .enum(['article', 'image-group'])
+            .describe('封面所在目标类型：article=图文文章首图，image-group=图片组封面'),
+          article_index: z
+            .number()
+            .int()
+            .min(0)
+            .optional()
+            .describe('图文文章在 xhs_get_canvas_detail 返回 articles 数组中的下标'),
+          article_id: z
+            .number()
+            .optional()
+            .describe('图文文章 ID，可替代 article_index'),
+          image_group_id: z.number().optional().describe('图片组 ID'),
+          group_index: z
+            .number()
+            .int()
+            .min(0)
+            .optional()
+            .describe('图片组在 xhs_get_canvas_detail 返回 imageGroups 数组中的下标'),
+          image_ids: z
+            .array(z.number())
+            .min(1)
+            .max(8)
+            .describe('用户选择的图库图片 ID，可多张，会作为一次封面生成请求的参考图'),
+          prompt: z.string().optional().describe('用户输入的封面重生成提示词'),
         }),
       },
     );

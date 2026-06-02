@@ -22,10 +22,11 @@
 - **关键词**: graph-workflow, topic_orchestrate, canvas_append_article, canvas_execute, xhs_batch_publish, image-group
 - **函数**:
   - `normalizeRequestedArticleCount`: 归一化请求篇数（不强制 6-8）
+  - `extractArticleCountFromText`: 从 userPrompt/dataSummary/topic 提取显式篇数，防止确认续跑被压成 1 篇 | keywords: 篇数提取, 意图延续, 图文生成, extract-article-count, continuation-intent, article-generation
   - `buildTopicOrchestrateDedupKey`: 选题编排去重键（含 userPrompt/dataSummary/writingStyle）
   - `normalizePlatformType`: 归一化平台标签（小红书别名→xhs，软纠正）/normalize platform type alias
   - `resolveTopicWritingStyle`: 从显式 writingStyle 或兼容的 style 对象中解析生文风格/resolve topic writing style
-  - `getHandle`: 获取图工作流工具/get graph workflow tools
+  - `getHandle`: 获取图工作流工具；topic_orchestrate 返回简短状态 + canvas-it,不再返回完整 canvas/articles/items JSON；缺少显式图库 tags 或配图预检不足时不创建 Canvas 且不输出 canvas-it/get graph workflow tools
 
 ### tools.module.ts
 工具模块定义。

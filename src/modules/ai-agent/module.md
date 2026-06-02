@@ -8,16 +8,21 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
 
 ### agent.service.ts
 核心服务逻辑。
-- **关键词**: agent, deepagent, service, run, build model, provider-runtime, glm, z.ai, zhipu, openai-compatible, db-config, message convert, handle, stream, image generation, send prompt
+- **关键词**: agent, deepagent, service, run, build model, provider-runtime, glm, z.ai, zhipu, kimi, moonshot, openai-compatible, kimi-adapter, disable-thinking, db-config, message convert, handle, stream, image generation, send prompt
 - **函数**:
   - `getHandle`: 函数句柄/handle
-  - `buildChatModel`: 构建模型（GLM国际端z.ai走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）/build model
+  - `buildChatModel`: 构建模型（GLM国际端z.ai与Kimi/Moonshot走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）/build model
   - `getCheckpointer`: 🆕 公开 MongoDBSaver 实例,供 chat.service supervisor graph 复用同一个 checkpointer + 同一个 thread_id,实现 multi-agent graph 多轮对话 state 持久化(否则 supervisor 每次只看一条用户消息会导致路由误判)/expose checkpointer for supervisor graph
-  - `buildLLM`: 构建 BaseChatModel。**配置来源**: config 显式传入 provider+model 时优先用 config(如 keyword.service 的专用 LLM),否则回退 admin 默认 runtime —— 之前无条件用 resolveDefaultRuntime,导致 config 传入的 provider/model/apiKey/baseUrl 被忽略。启动时 logger.log 实际生效的 provider/model/baseUrl/source,便于排查 NVIDIA 等 OpenAI 兼容厂商 `404 page not found`(baseUrl 配错)问题/build llm with config override
+  - `buildLLM`: 构建 BaseChatModel。**配置来源**: config 显式传入 provider+model 时优先用 config(如 keyword.service 的专用 LLM),否则回退 admin 默认 runtime —— 之前无条件用 resolveDefaultRuntime,导致 config 传入的 provider/model/apiKey/baseUrl 被忽略。Kimi/Moonshot 命中专用适配器,注入禁用 thinking 的请求参数,避免 LangChain tool-call 历史缺 reasoning_content。启动时 logger.log 实际生效的 provider/model/baseUrl/source,便于排查 NVIDIA 等 OpenAI 兼容厂商 `404 page not found`(baseUrl 配错)问题/build llm with config override
+  - `isKimiProvider(provider)` — 识别 Kimi/Moonshot OpenAI 兼容厂商,决定是否走专用适配 | keywords: kimi-adapter, openai-compatible
+  - `buildKimiChatModel(input)` — 构建 Kimi 专用 ChatOpenAI,为 LangChain tool-call 兼容禁用 thinking | keywords: kimi-adapter, disable-thinking
+  - `resolveKimiModelKwargs(modelName)` — 生成 Kimi 请求扩展参数,禁用 thinking 避免多步工具调用历史缺 reasoning_content | keywords: kimi-adapter, disable-thinking
   - `isImageOnlyModel`: 识别 model 名是否生图专用模型(gpt-image-* / dall-e* / seedream / flux- / stable-diffusion / midjourney),用于 buildLLM 入口防止用户把生图模型误配为 chat 默认运行时(会导致 wrapModelCall 返回非 AIMessage 触发 `expected AIMessage or Command, got object`)/detect image-only model
-  - `resolveProviderDefaultBaseUrl`: 厂商默认baseUrl兜底（deepseek/nvidia/minimax/glm；glm默认走z.ai Coding Plan入口/api/coding/paas/v4）/resolve provider default base url
+  - `resolveProviderDefaultBaseUrl`: 厂商默认baseUrl兜底（deepseek/nvidia/minimax/glm/kimi；glm默认走z.ai Coding Plan入口/api/coding/paas/v4，kimi默认走 Moonshot OpenAI 兼容入口）/resolve provider default base url
   - `buildOpenAICompatSanitizeMiddleware`: 构建 deep agent middleware(挂在 wrapModelCall 钩子最内层)，在每次 model 调用前清洗 messages，避免 GLM/z.ai/DeepSeek 等 OpenAI 兼容端被 thinking/reasoning 等非标准 content block 拒收(400 content[0].type type error)。**handler 返回值也经 ensureValidModelResponse 兜底**，避免下游 patchToolCallsMiddleware 报 `expected AIMessage or Command, got object`/build openai compat sanitize middleware
   - `buildSubagentSanitizeMiddleware`: 公开版,供 chat.service 在构造 subagent 时调用,把 sanitize+诊断 middleware 也注入到每个 subagent 的 middleware 列表(deepagents 1.8.2 默认不会把主 agent 的 customMiddleware 透传给 subagent 内部的 createAgent,subagent 自己的 model 调用得不到 sanitize 兜底/诊断 log,故必须通过 SubAgent.middleware 字段显式注入)/expose sanitize middleware factory for subagent injection
+  - `mergeRunnableTags(existing, extras)`: 合并 LangChain RunnableConfig tags 并去重 | keywords: 流标签, 非流式隔离, merge-runnable-tags
+  - `buildNoStreamInvokeOption(option?)`: 生成工具内部/子代理内部 LLM 专用 invoke option,强制 `callbacks: []` 并附加 `nostream` tag,避免内部 LLM 继承主 SSE 的 `StreamMessagesHandler` | keywords: 工具内部非流, 子代理非流, internal-llm-nostream, subagent-no-stream
   - `sanitizeMessagesForOpenAICompat`: 清洗 messages content 数组——HumanMessage 保留多模态块(text/image_url/image/input_audio/file/data block)，其他角色只取 text 拍平字符串/sanitize messages for openai compat
   - `rebuildMessageWithContent`: 用原 message 同类型 constructor 重建消息(AIMessage/ToolMessage/SystemMessage/HumanMessage)，仅替换 content，保留 LangChain 内部 MESSAGE_SYMBOL 等 instance 标记，避免 wrapModelCall 链路报 `expected AIMessage or Command, got object`/rebuild message via constructor
   - `ensureValidModelResponse`: wrapModelCall handler 返回值类型适配。AIMessage/AIMessageChunk/Command/structuredResponse 原样放行;**`ChatMessage` / `ChatMessageChunk` 转为 `AIMessageChunk`** —— GLM/z.ai 等 OpenAI 兼容厂商在 cached_tokens 命中后的空 content chunk 中 `role` 字段不是 `"assistant"`,LangChain ChatOpenAI 用通用 ChatMessageChunk 包装(其 type === "generic" 不满足 `AIMessage.isInstance` 的 `type === "ai"` 检查),需要 rebuild 为 AIMessageChunk 保留 content/tool_calls/response_metadata/id/usage_metadata;其他未知类型把原始 result 完整 JSON 化(ctor name, keys) 用 logger.error 打印让框架自然抛错/convert ChatMessageChunk to AIMessageChunk for openai-compat providers
@@ -37,7 +42,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `sendPrompt`: 调用AI封面生成工具生图（入参为prompt/size/底图候选）/send prompt for image generation
   - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection
   - `run`: 运行/run
-  - `runWithMessages`: 消息运行/run with messages
+  - `runWithMessages(input)`: 消息运行;默认以 nonStreaming + `nostream` tag 执行,用于 tool 内部/子代理内部 LLM 时不绑定主流 token handler | keywords: 运行, 消息, 调用, 工具内部非流, run, messages, invoke, internal-llm-nostream
   - `runSubAgentWithMessages`: 子代理消息运行/run subagent with messages
   - `normalizeMessages`: 规范消息/normalize messages
   - `extractStateMessages`: 提取消息/extract state messages
@@ -46,7 +51,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `normalizeContextSchema`: 规范上下文schema/normalize context schema
   - `toAsyncIterable`: 规范流式/normalize stream iterable
   - `toMessages`: 消息转换/message convert
-  - `stream`: 流式;catch 用 this.logger.error 打完整 stack + 递归 cause chain(避免被 console.error 在某些 logger 环境下吞掉),确保后端日志能看到与前端 SSE 错误事件相同的完整诊断信息。**支持 `input.preBuiltAgent` 参数**:外部(chat.service supervisor 路径)可直接传入已构建的 LangGraph CompiledStateGraph(如 SupervisorGraph),跳过 buildChatModel,使 multi-agent graph 接入现有 [namespace, mode, data] 三元组 stream 事件处理逻辑。**🆕 isAIChunk 文本提取支持 Anthropic content block 数组** —— minimax 走 ChatAnthropic 返回 `[{type:'thinking',...},{type:'text',text:'...'}]`,旧代码 `typeof content==='string'` 失败 → textStr='' → fullText=0 → 前端"无内容";现按 string / block 数组分别提取(数组取 type==='text' 的 block,跳过 thinking)。**🆕 preBuiltAgent 模式**: (1) 所有 isAIChunk 一律按主输出处理(isSubagent 判定是为 deepagents task 子代理设计的,supervisor graph 节点输出都是主输出); (2) **只累加真正的流式增量 chunk,跳过完整 AIMessage**: chat.service 把完整历史 messages 注入 graph input,会被 messages streamMode 当完整 AIMessage emit,若累加会把上一轮 fence/文字"重放"进本轮 fullText。**⚠️ chunk 判定必须用 `message.constructor.name === 'AIMessageChunk'`,不能用 `message['type']`** —— message 是 AIMessageChunk 实例时 `['type']` 是 undefined(实例只有 `_getType()` 方法,无 type 属性),旧代码 `msgType!=='AIMessageChunk'` 恒真,把 preBuiltAgent 模式下**每个 token 都跳过** → fullText 永远 0 → 前端"无内容"(supervisor 直接回答 / chat_expert 闲聊全空的根因)/stream with pre-built agent main-output handling and history-replay guard
+  - `stream`: 流式;catch 用 this.logger.error 打完整 stack + 递归 cause chain(避免被 console.error 在某些 logger 环境下吞掉),确保后端日志能看到与前端 SSE 错误事件相同的完整诊断信息。**支持 `input.preBuiltAgent` 参数**:外部(chat.service supervisor 路径)可直接传入已构建的 LangGraph CompiledStateGraph(如 SupervisorGraph),跳过 buildChatModel,使 multi-agent graph 接入现有 [namespace, mode, data] 三元组 stream 事件处理逻辑。**🆕 isAIChunk 文本提取支持 Anthropic content block 数组** —— minimax 走 ChatAnthropic 返回 `[{type:'thinking',...},{type:'text',text:'...'}]`,旧代码 `typeof content==='string'` 失败 → textStr='' → fullText=0 → 前端"无内容";现按 string / block 数组分别提取(数组取 type==='text' 的 block,跳过 thinking)。**🆕 preBuiltAgent 模式**: (1) 跳过 `tools:*` 命名空间里的内部工具/子图 LLM 输出,避免 topic_orchestrate 生文 JSON(items) 混进用户可见 token; (2) **只累加真正的流式增量 chunk,跳过完整 AIMessage**: chat.service 把完整历史 messages 注入 graph input,会被 messages streamMode 当完整 AIMessage emit,若累加会把上一轮 fence/文字"重放"进本轮 fullText。**⚠️ chunk 判定必须用 `message.constructor.name === 'AIMessageChunk'`,不能用 `message['type']`** —— message 是 AIMessageChunk 实例时 `['type']` 是 undefined(实例只有 `_getType()` 方法,无 type 属性),旧代码 `msgType!=='AIMessageChunk'` 恒真,把 preBuiltAgent 模式下**每个 token 都跳过** → fullText 永远 0 → 前端"无内容"(supervisor 直接回答 / chat_expert 闲聊全空的根因)/stream with pre-built agent main-output handling and history-replay guard
   - `collectCauseChain`: 递归提取 Error.cause 链(undici fetch failed / langchain MiddlewareError 等多层嵌套),格式化为 `Name:Code:Message <- ...`/collect error cause chain
   - `normalizeStreamError`: 把 raw error 归一化成 {code, message} 给前端;code 提取 regex 要求 ≥3 个大写字母+冒号(避免把句首字母 "I" 误当 code)/normalize stream error
 

@@ -11,8 +11,10 @@ import {
 } from '@langchain/core/messages';
 import type { CreateAgentParams } from 'langchain';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import type { AgentInvokeOption } from '../../ai-agent/types/agent.types.js';
 import { TextFormatService } from '../../format/services/format.service';
 import { CanvasService } from '../../canvas/services/canvas.service.js';
+import type { ImageGroupSourcePreparation } from '../../canvas/services/canvas-image-group.service.js';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
 import { GalleryGroupService } from '../../gallery/services/gallery-group.service.js';
 import { SassService } from '../../sass/services/sass.service.js';
@@ -173,22 +175,22 @@ export class ArticleGraphService {
   }
 
   /**
-   * @description 组装 LangChain invoke 配置，统一附带 context/configurable。
+   * @description 组装 LangChain invoke 配置，统一附带 context/configurable，并阻断工具内部 LLM 继承主流 token handler。
    * @param {Record<string, unknown>} context - 运行上下文。
-   * @returns {{ context: Record<string, unknown>; configurable: Record<string, unknown>; }} invoke 配置。
-   * @keyword-en build langchain invoke option
+   * @returns {AgentInvokeOption} 内部 LLM 非流式 invoke 配置。
+   * @keyword-cn 工具内部非流, 图文生成
+   * @keyword-en internal-llm-nostream, invoke-option
    */
-  private buildLangChainInvokeOption(context: Record<string, unknown>): {
-    context: Record<string, unknown>;
-    configurable: Record<string, unknown>;
-  } {
-    return {
+  private buildLangChainInvokeOption(
+    context: Record<string, unknown>,
+  ): AgentInvokeOption {
+    return this.agent.buildNoStreamInvokeOption({
       context,
       configurable: {
         tenantId: context['tenantId'],
         userId: context['userId'],
       },
-    };
+    });
   }
 
   private parseJsonFromModelText(text: string): unknown {
@@ -789,7 +791,7 @@ export class ArticleGraphService {
             }),
           ),
         ],
-        { callbacks: [] },
+        this.agent.buildNoStreamInvokeOption(),
       );
       const parsed = ZCoverCopy.safeParse(output);
       if (parsed.success) {
@@ -920,6 +922,7 @@ export class ArticleGraphService {
         ]
           .filter((x) => typeof x === 'string' && x.trim().length > 0)
           .join('\n'),
+        this.agent.buildNoStreamInvokeOption(),
       );
       const content = res?.content;
       let text = '';
@@ -1973,14 +1976,30 @@ export class ArticleGraphService {
       input.writingStyle,
       platform,
     );
-
-    const canvas = await this.canvas.create({
-      userId: input.userId,
-      tenantId,
+    const explicitImageTags = this.extractExplicitImageTagsFromPrompt({
       topic,
-      outline: { topic, platform, articleCount: count },
-      style: { platform, language: 'zh-CN', writingStyle },
+      userPrompt,
     });
+    if (
+      imageMode === 'image-group' &&
+      imageGroupCanvasIds.length === 0 &&
+      explicitImageTags.length === 0
+    ) {
+      this.logger.warn(
+        `[article-gen] image_group_missing_explicit_tags topic=${String(topic ?? '')}`,
+      );
+      return {
+        ok: false,
+        status: 'missing_image_tags',
+        reason: '缺少明确图库标签，未创建图文 Canvas',
+        topic,
+        platform,
+        requestedCount: count,
+        articleCount: count,
+        canvasTags: [],
+        missing: ['图库标签'],
+      };
+    }
 
     const plannedBlueprints = await this.planArticleTasks({
       provider,
@@ -1996,14 +2015,110 @@ export class ArticleGraphService {
       currentDatetime: envCtx.datetime,
       langchainContext,
     });
-    const explicitImageTags = this.extractExplicitImageTagsFromPrompt({
-      topic,
-      userPrompt,
-    });
     const blueprints = this.mergeExplicitImageTagsIntoBlueprints(
       plannedBlueprints,
       explicitImageTags,
     );
+
+    const canvasTags = Array.from(
+      new Set(
+        blueprints
+          .flatMap((bp) => bp.tags ?? [])
+          .map((t) => String(t ?? '').trim())
+          .filter((t) => t.length > 0),
+      ),
+    ).slice(0, 50);
+
+    let preAssignedImageGroups: CanvasImageGroup[] = [];
+    let prePreparedImageGroupSources:
+      | Extract<ImageGroupSourcePreparation, { ok: true }>
+      | undefined;
+    const strictImageGroupSource =
+      imageMode === 'image-group' && imageGroupCanvasIds.length > 0;
+    if (imageMode === 'image-group') {
+      const articlesForImageGroup = blueprints.map((bp) => ({
+        title: bp.title,
+        tags: Array.isArray(bp.tags)
+          ? bp.tags.map((t) => String(t ?? '').trim()).filter(Boolean)
+          : [],
+      }));
+      if (strictImageGroupSource) {
+        preAssignedImageGroups = await this.collectImageGroupsFromCanvases({
+          canvasIds: imageGroupCanvasIds,
+          tenantId,
+        });
+        const usablePreAssignedGroups = preAssignedImageGroups.filter(
+          (group) =>
+            group.status !== 'failed' &&
+            Array.isArray(group.images) &&
+            group.images.length >= this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE,
+        );
+        if (usablePreAssignedGroups.length < articlesForImageGroup.length) {
+          this.logger.warn(
+            `[article-gen] image_group_precheck_source_missing requested=${articlesForImageGroup.length} available=${usablePreAssignedGroups.length}`,
+          );
+          return {
+            ok: false,
+            status: 'insufficient_image_groups',
+            reason: '指定的图组 Canvas 数量不足，未创建图文 Canvas',
+            topic,
+            platform,
+            requestedCount: count,
+            articleCount: blueprints.length,
+            canvasTags,
+            missing: ['图片组数量不足'],
+          };
+        }
+        preAssignedImageGroups = usablePreAssignedGroups.slice(
+          0,
+          articlesForImageGroup.length,
+        );
+      } else {
+        this.logger.log(
+          `[article-gen] image_group_precheck_start articleCount=${articlesForImageGroup.length}`,
+        );
+        const preparation = await this.canvas.prepareImageGroupsForCanvas({
+          canvasId: 0,
+          userId: galleryUserId,
+          tenantId,
+          topic,
+          articles: articlesForImageGroup,
+        });
+        if (!preparation.ok) {
+          this.logger.warn(
+            `[article-gen] image_group_precheck_insufficient ` +
+              `portrait=${preparation.stats.availablePortrait}/${preparation.stats.requiredPortrait} ` +
+              `landscape=${preparation.stats.availableLandscape}/${preparation.stats.requiredLandscape}`,
+          );
+          return {
+            ok: false,
+            status: 'insufficient_images',
+            reason: '图库源图不足，未创建图文 Canvas',
+            topic,
+            platform,
+            requestedCount: count,
+            articleCount: blueprints.length,
+            canvasTags,
+            missing: ['图片素材不足'],
+            imageStats: preparation.stats,
+          };
+        }
+        prePreparedImageGroupSources = preparation;
+        this.logger.log(
+          `[article-gen] image_group_precheck_ok articleCount=${articlesForImageGroup.length} ` +
+            `portrait=${preparation.stats.availablePortrait}/${preparation.stats.requiredPortrait} ` +
+            `landscape=${preparation.stats.availableLandscape}/${preparation.stats.requiredLandscape}`,
+        );
+      }
+    }
+
+    const canvas = await this.canvas.create({
+      userId: input.userId,
+      tenantId,
+      topic,
+      outline: { topic, platform, articleCount: count },
+      style: { platform, language: 'zh-CN', writingStyle },
+    });
 
     // 批量预写文章存根（生成前先建列表，保证 ID 预分配），不阻塞接口返回
     await this.canvas.addArticles(
@@ -2035,30 +2150,11 @@ export class ArticleGraphService {
       tenantId,
     );
 
-    // 从选题蓝图提取标签，立即可用，无需等待全文生成
-    const canvasTags = Array.from(
-      new Set(
-        blueprints
-          .flatMap((bp) => bp.tags ?? [])
-          .map((t) => String(t ?? '').trim())
-          .filter((t) => t.length > 0),
-      ),
-    ).slice(0, 50);
-
     this.logger.debug(
       `[article-gen] canvas_ready canvasId=${canvas.id} blueprints=${blueprints.length} tags=${canvasTags.length}`,
     );
 
-    const preAssignedImageGroups =
-      imageMode === 'image-group' && imageGroupCanvasIds.length > 0
-        ? await this.collectImageGroupsFromCanvases({
-            canvasIds: imageGroupCanvasIds,
-            tenantId,
-          })
-        : [];
-    const strictImageGroupSource =
-      imageMode === 'image-group' && imageGroupCanvasIds.length > 0;
-    if (imageMode === 'image-group' && imageGroupCanvasIds.length > 0) {
+    if (strictImageGroupSource) {
       this.logger.log(
         `[article-gen] preassigned_image_groups canvasId=${canvas.id} sourceCanvasCount=${imageGroupCanvasIds.length} groups=${preAssignedImageGroups.length}`,
       );
@@ -2080,6 +2176,7 @@ export class ArticleGraphService {
       galleryUserId,
       galleryGroupId,
       preAssignedImageGroups,
+      prePreparedImageGroupSources,
       strictImageGroupSource,
       platformAiPrompt: envCtx.platformAiPrompt,
       currentDatetime: envCtx.datetime,
@@ -2135,6 +2232,10 @@ export class ArticleGraphService {
       galleryUserId: string;
       galleryGroupId?: number;
       preAssignedImageGroups?: CanvasImageGroup[];
+      prePreparedImageGroupSources?: Extract<
+        ImageGroupSourcePreparation,
+        { ok: true }
+      >;
       /** 指定 imageGroupCanvasIds 时开启：禁止自动兜底生成图组 */
       strictImageGroupSource?: boolean;
       /** 平台AI补充提示（从租户配置注入） */
@@ -2651,6 +2752,10 @@ export class ArticleGraphService {
     galleryUserId: string;
     galleryGroupId?: number;
     preAssignedImageGroups?: CanvasImageGroup[];
+    prePreparedImageGroupSources?: Extract<
+      ImageGroupSourcePreparation,
+      { ok: true }
+    >;
     /** 指定 imageGroupCanvasIds 时开启：禁止自动兜底生成图组 */
     strictImageGroupSource?: boolean;
     /** 平台AI补充提示（从租户配置注入） */
@@ -2722,16 +2827,20 @@ export class ArticleGraphService {
         });
         return;
       } else {
-        this.logger.log(
-          `[article-gen] image_group_prepare_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length}`,
-        );
-        const preparation = await this.canvas.prepareImageGroupsForCanvas({
-          canvasId: input.canvasId,
-          userId: input.galleryUserId,
-          tenantId: input.tenantId,
-          topic: input.topic,
-          articles: articlesForImageGroup,
-        });
+        const preparation =
+          input.prePreparedImageGroupSources ??
+          (await (async () => {
+            this.logger.log(
+              `[article-gen] image_group_prepare_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length}`,
+            );
+            return await this.canvas.prepareImageGroupsForCanvas({
+              canvasId: input.canvasId,
+              userId: input.galleryUserId,
+              tenantId: input.tenantId,
+              topic: input.topic,
+              articles: articlesForImageGroup,
+            });
+          })());
         if (!preparation.ok) {
           await this.canvas.updateImageGroups(
             input.canvasId,
@@ -2770,7 +2879,7 @@ export class ArticleGraphService {
             preparation,
           });
         this.logger.log(
-          `[article-gen] image_group_render_async_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length}`,
+          `[article-gen] image_group_render_async_start canvasId=${input.canvasId} articleCount=${orderedBlueprintsForImageGroup.length} prechecked=${input.prePreparedImageGroupSources ? 'true' : 'false'}`,
         );
       }
     }

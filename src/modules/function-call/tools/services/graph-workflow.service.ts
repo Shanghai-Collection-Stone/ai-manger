@@ -160,6 +160,52 @@ export class GraphWorkflowFunctionCallService {
     return Math.max(1, parsed);
   }
 
+  /**
+   * @description 从用户提示、数据摘要或主题中提取显式文章篇数，防止“开始生成”等延续指令被模型压成 1 篇。
+   * @param {unknown[]} parts - 候选文本片段。
+   * @returns {number | undefined} 识别到的文章篇数。
+   * @keyword-cn 篇数提取, 意图延续, 图文生成
+   * @keyword-en extract-article-count, continuation-intent, article-generation
+   */
+  private extractArticleCountFromText(...parts: unknown[]): number | undefined {
+    const text = parts
+      .filter((part): part is string => typeof part === 'string')
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join('\n');
+    if (!text) return undefined;
+
+    const digitMatch = text.match(
+      /(?:生成|写|来|产出|出|做|准备|确认|共|总共|一共)?\s*(\d{1,2})\s*(?:篇|篇图文|篇文章|篇笔记|个选题|组图文|组笔记|组)/,
+    );
+    if (digitMatch) {
+      const n = Number.parseInt(digitMatch[1], 10);
+      if (Number.isFinite(n) && n > 0) return Math.min(20, n);
+    }
+
+    const cnMap: Record<string, number> = {
+      一: 1,
+      二: 2,
+      两: 2,
+      三: 3,
+      四: 4,
+      五: 5,
+      六: 6,
+      七: 7,
+      八: 8,
+      九: 9,
+      十: 10,
+    };
+    const cnMatch = text.match(
+      /(?:生成|写|来|产出|出|做|准备|确认|共|总共|一共)?\s*([一二两三四五六七八九十])\s*(?:篇|篇图文|篇文章|篇笔记|个选题|组图文|组笔记|组)/,
+    );
+    if (cnMatch) {
+      const n = cnMap[cnMatch[1]];
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return undefined;
+  }
+
   private resolveScopedUserId(
     userId: string | undefined,
     scope?: { tenantId?: string; userId?: string },
@@ -297,7 +343,19 @@ export class GraphWorkflowFunctionCallService {
           style,
           platform,
         );
-        const requestedCount = this.normalizeRequestedArticleCount(count);
+        const modelRequestedCount = this.normalizeRequestedArticleCount(count);
+        const explicitTextCount = this.extractArticleCountFromText(
+          userPrompt,
+          dataSummary,
+          topic,
+        );
+        const requestedCount =
+          explicitTextCount &&
+          (!modelRequestedCount ||
+            modelRequestedCount === 1 ||
+            explicitTextCount > modelRequestedCount)
+            ? explicitTextCount
+            : modelRequestedCount;
         const normalizedImageGroupCanvasIds = Array.isArray(imageGroupCanvasIds)
           ? Array.from(
               new Set(
@@ -397,48 +455,79 @@ export class GraphWorkflowFunctionCallService {
 
           const canvasId = genObj['canvasId'];
           const canvas = genObj['canvas'];
-          const canvasTags = genObj['canvasTags'];
           const canvasRec =
             canvas && typeof canvas === 'object'
               ? (canvas as Record<string, unknown>)
               : undefined;
+          const genStatus =
+            typeof genObj['status'] === 'string'
+              ? String(genObj['status'])
+              : undefined;
+          const imageStats =
+            genObj['imageStats'] && typeof genObj['imageStats'] === 'object'
+              ? (genObj['imageStats'] as Record<string, unknown>)
+              : undefined;
+          const articleCount =
+            typeof canvasRec?.['articleCount'] === 'number'
+              ? canvasRec['articleCount']
+              : typeof genObj['articleCount'] === 'number'
+                ? genObj['articleCount']
+                : undefined;
 
           const base: Record<string, unknown> = {
-            ok: true,
+            ok: genObj['ok'] !== false,
             canvasId,
-            canvas,
-            canvasTags: Array.isArray(canvasTags) ? canvasTags : [],
             platform: finalPlatform,
             topic,
             requestedCount,
             status:
               typeof canvasRec?.['status'] === 'string'
                 ? canvasRec['status']
-                : undefined,
-            articleCount:
-              typeof canvasRec?.['articleCount'] === 'number'
-                ? canvasRec['articleCount']
-                : undefined,
+                : genStatus,
+            articleCount,
             needHuman:
               needFields.length > 0 ||
-              canvasRec?.['status'] === 'requires_human',
+              canvasRec?.['status'] === 'requires_human' ||
+              genObj['ok'] === false ||
+              genStatus === 'missing_image_tags' ||
+              genStatus === 'insufficient_images' ||
+              genStatus === 'insufficient_image_groups',
             needFields,
             perArticleImageTarget: '6-8',
           };
-          this.logger.log(
-            `[topic_orchestrate] canvas_ready canvasId=${String(canvasId ?? '')} articleCount=${String(base.articleCount ?? '')} requestedCount=${requestedCount ?? 'auto'} needHuman=${base.needHuman ? 'true' : 'false'}`,
-          );
-
-          // 拼接 canvas-it 代码块（与 xhs_create_image_group_canvas 保持一致），让子代理原样透传给上层，前端立即渲染看板入口
           const cid =
             typeof canvasId === 'number' ? canvasId : Number(canvasId);
+          if (Number.isFinite(cid)) {
+            this.logger.log(
+              `[topic_orchestrate] canvas_ready canvasId=${String(canvasId ?? '')} articleCount=${String(base.articleCount ?? '')} requestedCount=${requestedCount ?? 'auto'} needHuman=${base.needHuman ? 'true' : 'false'}`,
+            );
+          } else {
+            this.logger.warn(
+              `[topic_orchestrate] canvas_not_created status=${String(base.status ?? 'unknown')} articleCount=${String(base.articleCount ?? '')} requestedCount=${requestedCount ?? 'auto'} needHuman=${base.needHuman ? 'true' : 'false'}`,
+            );
+          }
+
+          // 拼接 canvas-it 代码块（与 xhs_create_image_group_canvas 保持一致），让子代理原样透传给上层，前端立即渲染看板入口
           const canvasBlock = Number.isFinite(cid)
             ? `\`\`\`canvas-it\n${JSON.stringify({ canvasId: cid, status: base.status ?? 'generating', type: 'article', topic: String(topic ?? ''), articleCount: base.articleCount ?? 0 })}\n\`\`\``
             : '';
+          const statsText = imageStats
+            ? `竖图 ${String(imageStats['availablePortrait'] ?? 0)}/${String(imageStats['requiredPortrait'] ?? 0)}，横图 ${String(imageStats['availableLandscape'] ?? 0)}/${String(imageStats['requiredLandscape'] ?? 0)}`
+            : '';
+          const summary = Number.isFinite(cid)
+            ? `图文 Canvas 已创建并开始生成，canvasId=${cid}，文章数=${String(base.articleCount ?? requestedCount ?? 0)}，状态=${String(base.status ?? 'generating')}。`
+            : genStatus === 'missing_image_tags' ||
+                genStatus === 'insufficient_images' ||
+                genStatus === 'insufficient_image_groups'
+              ? `图文生成前置检查未通过，已停止创建图文 Canvas；文章数=${String(articleCount ?? requestedCount ?? 0)}，原因=${needFields.join('、') || String(genObj['reason'] ?? '图片素材不足')}。${statsText ? `素材情况：${statsText}。` : ''}`
+              : `图文 Canvas 未创建，状态=${String(base.status ?? 'unknown')}。`;
           return [
-            JSON.stringify(base),
+            summary,
+            base.needHuman && Number.isFinite(cid)
+              ? `当前 Canvas 可能需要人工补充素材：${needFields.join('、') || '图片素材不足'}。`
+              : '',
             canvasBlock
-              ? `请将以下代码块原样输出给用户（**必须输出，不可省略**）：`
+              ? `请只将以下 canvas-it 代码块原样输出给用户（不要输出工具 JSON、canvas 对象或文章 items）：`
               : '',
             canvasBlock,
           ]
@@ -448,7 +537,9 @@ export class GraphWorkflowFunctionCallService {
         this.orchestrateInFlight.set(dedupKey, runPromise);
         try {
           const result = await runPromise;
-          this.orchestrateRecent.set(dedupKey, { at: Date.now(), result });
+          if (result.includes('```canvas-it')) {
+            this.orchestrateRecent.set(dedupKey, { at: Date.now(), result });
+          }
           return result;
         } finally {
           this.logger.log(
@@ -460,7 +551,7 @@ export class GraphWorkflowFunctionCallService {
       {
         name: 'topic_orchestrate',
         description:
-          'Topic Orchestration Tool. Generates articles in a SINGLE Canvas based on user requirements and merges image-group matching into each article. Article count follows user/LLM request when provided. **CRITICAL — ONE CALL PER REQUEST**: when user asks for N articles, set count=N and call this tool ONCE; the N articles all live in the same Canvas. Never loop-call this tool to produce multiple Canvases for the same request.',
+          'Topic Orchestration Tool. Generates articles in a SINGLE Canvas based on user requirements and merges image-group matching into each article. Image matching requires explicit gallery tags in userPrompt (e.g. #月亮湾 #生日派对) unless imageGroupCanvasIds are provided; never invent/search tags yourself. Article count follows user/LLM request when provided; for continuation confirmations like "开始生成", preserve the count already confirmed in recent context. **CRITICAL — ONE CALL PER REQUEST**: when user asks for N articles, set count=N and call this tool ONCE; the N articles all live in the same Canvas. Never loop-call this tool to produce multiple Canvases for the same request.',
         schema: z.object({
           userId: z
             .string()
@@ -474,7 +565,7 @@ export class GraphWorkflowFunctionCallService {
             .string()
             .optional()
             .describe(
-              'User original intent/prompt summary for article generation context',
+              'User original intent/prompt summary for article generation context. Must include explicit gallery tags like #tag when image matching is needed and no imageGroupCanvasIds are provided.',
             ),
           dataSummary: z
             .string()
@@ -500,7 +591,7 @@ export class GraphWorkflowFunctionCallService {
             .number()
             .optional()
             .describe(
-              'Article count for THIS Canvas (set to total N when user asks for N articles; do NOT split into multiple count=1 calls)',
+              'Article count for THIS Canvas. Preserve previously confirmed N on continuation/confirmation messages; set total N when user asks for N articles; do NOT split into multiple count=1 calls.',
             ),
           galleryUserId: z
             .string()

@@ -152,6 +152,39 @@ export const chatService = {
     }
   },
 
+  /**
+   * @description 鑾峰彇鍥惧簱鍥剧墖锛堜緵 Canvas 灏侀潰閲嶇敓鎴愬弬鑰冨浘閫夋嫨锛?   * @keyword-cn 封面重生成, 图片选择
+   * @keyword-en cover-regenerate
+   * @keyword-en selected-source-images
+   */
+  async listGalleryImages({ userId, groupId, tag, includeCollage, imageType, cursorId, limit } = {}) {
+    try {
+      const params = new URLSearchParams();
+      if (userId) params.set('userId', String(userId));
+      if (groupId !== undefined && groupId !== null && `${groupId}` !== '') {
+        params.set('groupId', String(groupId));
+      }
+      if (tag) params.set('tag', String(tag));
+      if (imageType) {
+        params.set('imageType', String(imageType));
+      } else if (typeof includeCollage === 'boolean') {
+        params.set('includeCollage', includeCollage ? 'true' : 'false');
+      }
+      if (cursorId !== undefined && cursorId !== null && `${cursorId}` !== '') {
+        params.set('cursorId', String(cursorId));
+      }
+      if (typeof limit === 'number') params.set('limit', String(limit));
+      const qs = params.toString();
+      const res = await fetch(`${API_BASE}/gallery${qs ? `?${qs}` : ''}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) return { images: [] };
+      return await res.json();
+    } catch {
+      return { images: [] };
+    }
+  },
+
   async getDecisionCard(cardId) {
     if (!cardId) return { card: null };
     try {
@@ -278,11 +311,92 @@ export const chatService = {
   },
 
   /**
+   * @description 触发图文 Canvas 指定文章封面重生成，仅替换首图。
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en article-cover-only
+   */
+  async regenerateCanvasArticleCover(canvasId, articleId, payload) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/articles/${articleId}/cover/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * @description 直接使用图库图片设为图文 Canvas 单篇文章封面。
+   * @keyword-cn 直接设为封面, 图片选择
+   * @keyword-en cover-select
+   * @keyword-en article-cover-only
+   */
+  async selectCanvasArticleCover(canvasId, articleId, payload) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/articles/${articleId}/cover/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * @description 触发图片组 Canvas 指定图组封面重生成，仅替换 role=cover 图片。
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en image-group-cover-only
+   */
+  async regenerateCanvasImageGroupCover(canvasId, groupId, payload) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/image-groups/${groupId}/cover/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * @description 直接使用图库图片设为图组 Canvas 指定图组封面。
+   * @keyword-cn 直接设为封面, 图片选择
+   * @keyword-en cover-select
+   * @keyword-en image-group-cover-only
+   */
+  async selectCanvasImageGroupCover(canvasId, groupId, payload) {
+    try {
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/image-groups/${groupId}/cover/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
    * 删除图片组中的图片
    * @param {number} canvasId
    * @param {number} groupId
    * @param {number} imageId
    * @returns {Promise<{canvas: object|null}>}
+   * @keyword-en delete-canvas-group-image
    */
   async deleteCanvasGroupImage(canvasId, groupId, imageId) {
     try {

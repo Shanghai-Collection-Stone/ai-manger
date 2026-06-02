@@ -128,6 +128,7 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'nvidia', label: 'NVIDIA' },
   { value: 'minimax', label: 'MiniMax' },
   { value: 'glm', label: '智谱 GLM (z.ai 国际端)' },
+  { value: 'kimi', label: 'Kimi (Moonshot)' },
 ];
 
 const getRoleLabel = (role) => {

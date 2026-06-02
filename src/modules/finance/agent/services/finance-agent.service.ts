@@ -48,7 +48,8 @@ DSL 产出会推送到外部财务系统的 \`POST /api/v1/events/upsert\` 统�
 | partyType | ✓ \`'supplier'\` / \`'customer'\` / \`'employee'\` / \`'counterparty'\` | 主体分类 | 报销=employee,应付=supplier,应收=customer,银行流水=counterparty |
 | amount | ✓ number | 绝对值 | 运行时强制 abs,DSL 不必处理符号 |
 | category | ✓ string | 业务分类 | 差旅费 / 采购成本 / 门店收入 等(不是 binding 名) |
-| occurredAt | ✓ date YYYY-MM-DD | 业务发生日(权责) | 报销日 / 开票日 / 流水日 |
+| occurredAt | ✓ date YYYY-MM-DD | 交易/业务发生日期 | 报销日 / 开票日 / 流水日;只表示这笔交易或单据发生在哪一天 |
+| attributedPeriod | ✓ string YYYY-MM | 归属年月 | **实际归属月份字段**。用于损益、经营报表、月度归集;必须与 occurredAt/settledAt 分开维护 |
 | dueAt | ✗ date YYYY-MM-DD | 到期日 | 应收/应付才有 |
 | settledAt | ✗ date YYYY-MM-DD | 实际现金流日 | stage='settled' 必填,其他可省 |
 | bankAccount | ✗ string | 银行账户名 | 银行流水类高频 |
@@ -107,13 +108,14 @@ DSL 产出会推送到外部财务系统的 \`POST /api/v1/events/upsert\` 统�
   - 设计 lookup map: \`{"to":"storeId","compute":"lookup","from":"门店","map":{"月亮湾":"sto_xxx","丽宝":"sto_yyy"},"default":null}\`
   - 找不到匹配的行不要硬给一个 storeId,留 null 让数据进入 tenant 层级即可
   - companyId 同理
-- **occurredAt / dueAt / settledAt**:必须 \`type:'date'\` + \`format:'YYYY-MM-DD'\`。引擎 \`type:'date'\` 自动识别这些输入,**不要自己拼字符串**:
+- **occurredAt / attributedPeriod / dueAt / settledAt**:日期字段必须走 \`type:'date'\` + \`format\`。occurredAt/dueAt/settledAt 用 \`format:'YYYY-MM-DD'\`;attributedPeriod 用 \`format:'YYYY-MM'\`。引擎 \`type:'date'\` 自动识别这些输入,**不要自己拼字符串**:
   - 数字毫秒时间戳(\`1735660800000\`,飞书 bitable 日期列默认形态)
   - 数字秒时间戳(\`1735660800\`)
   - 纯数字字符串(\`"1735660800000"\`)
   - ISO / "YYYY-MM-DD" / "YYYY/MM/DD HH:mm:ss" 等 \`Date.parse\` 能识别的格式
   - JS \`Date\` 对象
-  无效或空值 + 配了 \`default:"2026-01-01"\` 才回退到 default。**\`compute:if/coalesce/const/lookup\` 的产出也同样支持 \`type:'date'\` + \`format:'YYYY-MM-DD'\`**,不要为了"安全"把日期 compute 后再套一层 concat 去拼 "YYYY-MM-DD"——直接给类型让引擎格式化。
+  无效或空值 + 配了 \`default:"2026-01-01"\` 才回退到 default。**\`compute:if/coalesce/const/lookup\` 的产出也同样支持 \`type:'date'\` + \`format:'YYYY-MM-DD'/'YYYY-MM'\`**,不要为了"安全"把日期 compute 后再套一层 concat 去拼 "YYYY-MM-DD" 或 "YYYY-MM"——直接给类型让引擎格式化。
+- **attributedPeriod(归属年月) 不是交易日期**:它表示这笔收入/成本/费用最终归属到哪个会计/经营月份,格式必须是 \`YYYY-MM\`。优先读取源里的"归属月/所属月份/账期/费用期间/营收月份/月结月份/服务月份"等字段;如果源只有交易/发生日期且用户没有特别说明跨月规则,才从 \`occurredAt\` 同源字段派生 \`YYYY-MM\`。报销补录、月结、跨月收款、银行结算延迟等场景里,attributedPeriod 可能与 occurredAt/settledAt 所在月份不同,不要混用。
 - **amount**:用 \`type:'number'\`;负号会被运行时去掉
 - **缺源字段的可选项不要写**:避免把 undefined / 空字符串推送出去
 - **externalId 必须给出**:默认 \`{"to":"externalId","from":"record_id","type":"string"}\`(每条样本都带),不要为了"美观"换其他字段

@@ -278,9 +278,9 @@ export class FrontendFunctionCallService {
 
   /**
    * @title 异步生成HTML Generate HTML Async
-   * @description 脱离工具句柄的异步生成逻辑，避免子Agent事件透传到顶层流。
-   * @keywords-cn 异步生成, HTML, 去耦合
-   * @keywords-en async generate, html, decouple
+   * @description 脱离工具句柄的异步生成逻辑，避免子Agent事件透传到顶层流，并附加 nostream tag。
+   * @keyword-cn 异步生成, HTML, 去耦合, 工具内部非流
+   * @keyword-en async-generate, html, decouple, internal-llm-nostream
    * @param params 生成参数集合
    */
   private async generateHtmlAsync(params: {
@@ -357,6 +357,7 @@ export class FrontendFunctionCallService {
             // 显式覆盖所有可能继承的配置
             signal: new AbortController().signal,
             callbacks: [],
+            tags: ['nostream'],
             runId: randomBytes(16).toString('hex'),
             configurable: {
               thread_id: `frontend:${params.hash}`,

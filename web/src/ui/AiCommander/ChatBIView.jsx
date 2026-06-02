@@ -1798,7 +1798,7 @@ const ChatBIView = ({
 
       {/* 消息列表区域 */}
       <div 
-        className="flex-1 overflow-y-auto custom-scrollbar px-2 pb-24 pt-4"
+        className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2 pb-4 pt-4"
         onTouchStart={(e) => {
           // 如果点击的是代码块、表格或任何可能横向滚动的容器，阻止冒泡
           const isScrollable = e.target.closest('pre, table, .ai-table-scroll, .overflow-x-auto');
@@ -1864,7 +1864,7 @@ const ChatBIView = ({
       </div>
 
       {/* 底部输入框区域 */}
-      <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#F7F9FC] via-[#F7F9FC] to-transparent pt-6 pb-4 px-4">
+      <div className="shrink-0 w-full bg-gradient-to-t from-[#F7F9FC] via-[#F7F9FC] to-transparent pt-4 pb-4 px-4">
         {showInlineSessionPicker && (
           <div className="max-w-2xl mx-auto mb-2 flex justify-end">
             <button

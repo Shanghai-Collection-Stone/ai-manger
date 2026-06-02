@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   X,
   Loader2,
@@ -11,8 +11,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Trash2,
+  Sparkles,
 } from 'lucide-react';
 import { chatService } from './chatService';
+import { showToast } from './blocks/shared';
+import CoverRegenerateDialog from './CoverRegenerateDialog';
 
 /* ━━━ 版式标签映射 ━━━ */
 const LAYOUT_LABEL = {
@@ -64,6 +67,9 @@ const ImageLightbox = ({ images, startIndex, onClose }) => {
     <div
       className="fixed inset-0 z-[80] bg-black/85 flex flex-col items-center justify-center"
       onClick={onClose}
+      onTouchStart={(event) => event.stopPropagation()}
+      onTouchMove={(event) => event.stopPropagation()}
+      onTouchEnd={(event) => event.stopPropagation()}
     >
       {/* 顶部关闭按钮 + 角色标签 */}
       <div className="absolute top-3 right-3 z-10">
@@ -119,7 +125,11 @@ const ImageLightbox = ({ images, startIndex, onClose }) => {
 
       {/* 底部缩略图条 */}
       {images.length > 1 && (
-        <div className="flex gap-2 mt-4 px-4 overflow-x-auto" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="flex gap-2 mt-4 px-4 overflow-x-auto overscroll-x-contain"
+          data-horizontal-scroll="true"
+          onClick={(e) => e.stopPropagation()}
+        >
           {images.map((im, i) => (
             <button
               key={im.imageId ?? i}
@@ -150,7 +160,7 @@ const ImageLightbox = ({ images, startIndex, onClose }) => {
  * @description 单个图片组卡片，展示版式、图片缩略图和角色标签；点击图片触发预览
  * @keyword-en image group card component
  */
-const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, deletingImageId }) => {
+const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, deletingImageId, onRegenerateCover }) => {
   const images = Array.isArray(group.images) ? group.images : [];
   const isFailed = group.status === 'failed';
 
@@ -217,7 +227,20 @@ const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, del
             </span>
             {/* 拼图标记 */}
             {img.isCollage && (
-              <span className="absolute top-1 right-1 w-3 h-3 rounded-full bg-indigo-500 pointer-events-none" title="拼图" />
+              <span
+                className={`absolute top-1 ${img.role === 'cover' && typeof onRegenerateCover === 'function' ? 'right-7' : 'right-1'} w-3 h-3 rounded-full bg-indigo-500 pointer-events-none`}
+                title="拼图"
+              />
+            )}
+            {img.role === 'cover' && typeof onRegenerateCover === 'function' && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onRegenerateCover(group); }}
+                title="重新生成封面"
+                className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-amber-500 transition"
+              >
+                <Sparkles size={9} />
+              </button>
             )}
             {/* 删除图片按钮 — hover 时显示 */}
             {typeof onDeleteImage === 'function' && (
@@ -268,6 +291,13 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
   const [lightbox, setLightbox] = useState(null);
   /** @description 正在删除中的图片 imageId */
   const [deletingImageId, setDeletingImageId] = useState(null);
+  /** @description 封面重生成弹窗目标图组 */
+  const [coverDialogTarget, setCoverDialogTarget] = useState(null);
+  /** @description 封面重生成提交状态 */
+  const [coverRegenerating, setCoverRegenerating] = useState(false);
+  /** @description 直接设封面提交状态 */
+  const [coverSelecting, setCoverSelecting] = useState(false);
+  const canvasTouchStartRef = useRef(null);
 
   /* 加载 canvas 数据 */
   const loadCanvas = useCallback(async () => {
@@ -362,6 +392,122 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
 
   const isGenerating = canvas?.status === 'generating';
 
+  /**
+   * @description 记录图组 Canvas 详情层触摸起点并阻断冒泡，避免外层全局 swipe 被误触发。
+   * @param {React.TouchEvent} event - 触摸事件。
+   * @returns {void}
+   * @keyword-cn Canvas详情, 禁止左右滑动冒泡
+   * @keyword-en canvas-detail-touch
+   * @keyword-en block-horizontal-swipe
+   */
+  const handleCanvasTouchStart = useCallback((event) => {
+    const touch = event.touches?.[0];
+    canvasTouchStartRef.current = touch
+      ? { x: touch.clientX, y: touch.clientY }
+      : null;
+    event.stopPropagation();
+  }, []);
+
+  /**
+   * @description 图组 Canvas 详情层内横向手势只在本层处理，不传给外层全局 swipe。
+   * @param {React.TouchEvent} event - 触摸事件。
+   * @returns {void}
+   * @keyword-cn Canvas详情, 禁止左右滑动冒泡
+   * @keyword-en canvas-detail-touch
+   * @keyword-en block-horizontal-swipe
+   */
+  const handleCanvasTouchMove = useCallback((event) => {
+    event.stopPropagation();
+    const target = event.target;
+    if (target?.closest?.('[data-horizontal-scroll="true"]')) return;
+    const start = canvasTouchStartRef.current;
+    const touch = event.touches?.[0];
+    if (!start || !touch) return;
+    const dx = Math.abs(touch.clientX - start.x);
+    const dy = Math.abs(touch.clientY - start.y);
+    if (dx > 8 && dx > dy) {
+      event.preventDefault();
+    }
+  }, []);
+
+  /**
+   * @description 清理图组 Canvas 详情层触摸状态并阻断触摸结束事件冒泡。
+   * @param {React.TouchEvent} event - 触摸事件。
+   * @returns {void}
+   * @keyword-cn Canvas详情, 禁止左右滑动冒泡
+   * @keyword-en canvas-detail-touch
+   * @keyword-en block-horizontal-swipe
+   */
+  const handleCanvasTouchEnd = useCallback((event) => {
+    canvasTouchStartRef.current = null;
+    event.stopPropagation();
+  }, []);
+
+  /**
+   * @description 打开图片组封面重生成弹窗，保留目标图组上下文。
+   * @keyword-cn 封面重生成, 图片组封面
+   * @keyword-en cover-regenerate
+   * @keyword-en image-group-cover-only
+   */
+  const openGroupCoverRegenerateDialog = useCallback((group) => {
+    if (!group || isGenerating) return;
+    setCoverDialogTarget(group);
+  }, [isGenerating]);
+
+  /**
+   * @description 提交图片组封面重生成请求，只让后端替换目标图组 role=cover 图片。
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en image-group-cover-only
+   */
+  const handleRegenerateGroupCover = useCallback(async (payload) => {
+    if (!coverDialogTarget?.id) return;
+    setCoverRegenerating(true);
+    try {
+      const res = await chatService.regenerateCanvasImageGroupCover(
+        Number(canvasId),
+        coverDialogTarget.id,
+        payload,
+      );
+      if (res?.canvas) {
+        setCanvas(res.canvas);
+        setCoverDialogTarget(null);
+        showToast('封面已开始重新生成', 'success');
+      } else {
+        showToast('封面重生成启动失败', 'error');
+      }
+    } finally {
+      setCoverRegenerating(false);
+    }
+  }, [canvasId, coverDialogTarget]);
+
+  /**
+   * @description 直接将弹窗中第一张已选图库图片设为当前图组封面。
+   * @keyword-cn 直接设为封面, 图片组封面
+   * @keyword-en cover-select
+   * @keyword-en image-group-cover-only
+   */
+  const handleSelectGroupCover = useCallback(async (payload) => {
+    if (!coverDialogTarget?.id) return;
+    setCoverSelecting(true);
+    try {
+      const res = await chatService.selectCanvasImageGroupCover(
+        Number(canvasId),
+        coverDialogTarget.id,
+        payload,
+      );
+      if (res?.canvas) {
+        setCanvas(res.canvas);
+        setCoverDialogTarget(null);
+        showToast('已设为封面', 'success');
+      } else {
+        showToast('设置封面失败', 'error');
+      }
+    } finally {
+      setCoverSelecting(false);
+    }
+  }, [canvasId, coverDialogTarget]);
+
   /** 删除图片组中的一张图片 */
   const handleDeleteImage = useCallback(async (groupId, imageId) => {
     if (!window.confirm('确定要删除这张图片吗？')) return;
@@ -376,7 +522,13 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
 
   return (
     /* 主容器 */
-    <div className="h-full flex flex-col bg-white animate-fade-in">
+    <div
+      className="h-full flex flex-col bg-white animate-fade-in overscroll-x-contain"
+      onTouchStart={handleCanvasTouchStart}
+      onTouchMove={handleCanvasTouchMove}
+      onTouchEnd={handleCanvasTouchEnd}
+      onTouchCancel={handleCanvasTouchEnd}
+    >
       {/* 顶部标题栏 */}
       <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90 shrink-0">
         <button
@@ -483,6 +635,7 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
                 onImageClick={(images, idx) => setLightbox({ images, startIndex: idx })}
                 onDeleteImage={handleDeleteImage}
                 deletingImageId={deletingImageId}
+                onRegenerateCover={isGenerating ? undefined : openGroupCoverRegenerateDialog}
               />
             ))}
           </div>
@@ -497,6 +650,21 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
           onClose={() => setLightbox(null)}
         />
       )}
+
+      <CoverRegenerateDialog
+        open={!!coverDialogTarget}
+        title="重新生成图组封面"
+        currentCoverUrl={
+          (coverDialogTarget?.images ?? []).find((img) => img.role === 'cover')?.url
+          || (coverDialogTarget?.images ?? []).find((img) => img.role === 'cover')?.thumbUrl
+          || ''
+        }
+        submitting={coverRegenerating}
+        selecting={coverSelecting}
+        onClose={() => setCoverDialogTarget(null)}
+        onSubmit={handleRegenerateGroupCover}
+        onSelectCover={handleSelectGroupCover}
+      />
     </div>
   );
 };

@@ -50,8 +50,10 @@
 文章服务：入库 / 列表 / 更新 / 状态切换 / FIFO 租约领取。
 - **关键词**: article, service, crud, lease, fifo, cas, 15-min
 - **函数**:
-  - `ensureIndexes`: 建索引（含租约扫描索引）/ensure indexes lease
-  - `nextId`: 自增ID/next id
+  - `ensureIndexes`: 建索引（含租约扫描索引）并把 articles counter 校准到当前最大文章 ID/ensure indexes lease counter calibration
+  - `getMaxArticleId`: 读取 articles 集合当前最大业务 ID，用于修复 counter 落后导致的 duplicate key/article max id counter calibration
+  - `ensureCounterAtLeast`: 将 articles counter 至少推进到指定下限，避免单篇入库撞上既有 id/article counter floor
+  - `nextId`: 自增ID；分配前先校准 counter 到已有最大文章 ID/next id with counter calibration
   - `create`: 文章入库（单篇）/create put into library
   - `bulkCreate`: 批量入库（canvas 整份搬运）/bulk create
   - `get`: 获取文章/get

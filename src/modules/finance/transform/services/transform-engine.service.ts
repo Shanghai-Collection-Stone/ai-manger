@@ -600,7 +600,7 @@ export class TransformEngineService {
   }
 
   /**
-   * @description 日期归一(支持 ms/秒数字、纯数字字符串、ISO/常见日期字符串、Date 对象;format=YYYY-MM-DD 只取日期,默认输出 ISO)
+   * @description 日期归一(支持 ms/秒数字、纯数字字符串、ISO/常见日期字符串、Date 对象;format=YYYY-MM-DD 只取日期,format=YYYY-MM 只取年月,默认输出 ISO)
    * @keyword-en date-string, value-cast, timestamp-normalize
    */
   private toDate(value: unknown, format?: string): string | null {
@@ -628,6 +628,9 @@ export class TransformEngineService {
     if (Number.isNaN(d.getTime())) return null;
     if (format === 'YYYY-MM-DD') {
       return d.toISOString().slice(0, 10);
+    }
+    if (format === 'YYYY-MM') {
+      return d.toISOString().slice(0, 7);
     }
     return d.toISOString();
   }

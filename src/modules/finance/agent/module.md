@@ -1,12 +1,15 @@
 # Finance-Agent Module
 
 ## 模块名称 (Module Name)
+
 Finance-Agent
 
 ## 概述 (Overview)
+
 财务 Agent 围绕单个 binding name 提供 Transform DSL 设计、解释、试运行与保存能力。后台接口支持同步 chat 和 SSE 流式 chat;流式 chat 会返回 token、tool_start、tool_chunk、tool_end、end/error 等事件,让前端实时展示模型输出和工具调用进度。
 
 ## 文件清单 (File List)
+
 - `finance-agent.module.ts` — Nest 模块定义,聚合 Agent、配置、源、Transform 与推送依赖。
 - `services/finance-agent.service.ts` — 财务 Agent 对外服务,提供系统提示词、工具句柄、同步 chat 与流式 chat。
 - `services/finance-tools.service.ts` — LangChain 工具集合,封装 binding、source sample、transform CRUD、dry-run、外部 stores/companies 查询。
@@ -14,6 +17,7 @@ Finance-Agent
 - `controller/finance-agent.dto.ts` — 财务 Agent chat DTO。
 
 ## 函数清单 (Function List)
+
 - `FinanceAgentModule()` — 财务 Agent Nest 模块 | keywords: finance-agent-module, external-resource-query
 - `FinanceAgentService()` — 财务 Agent 服务类 | keywords: finance-agent-service, system-prompt
 - `getToolsHandle(scope)` — 获取带 binding name 与 admin 作用域的工具集合 | keywords: finance-tools-handle, tool-scope
@@ -39,22 +43,25 @@ Finance-Agent
 - `write(event,data)` — 写出单个 SSE 事件 | keywords: finance-agent-sse-write, sse-event
 
 ## 关键词索引 (Keyword Index)
-| 中文 | English |
-|---|---|
-| 财务 Agent | finance-agent-service |
-| 流式聊天 | finance-agent-chat-stream |
-| 工具事件 | sse-event |
-| 工具集合 | finance-agent-tools |
-| DSL 局部替换/创建 | dsl-patch, json-pointer |
-| DSL 试运行 | dsl-validate |
-| 源样本 | source-sample-fetch |
-| 外部映射来源 | lookup-source |
-| 租户作用域 | tenant-scope |
+
+| 中文              | English                   |
+| ----------------- | ------------------------- |
+| 财务 Agent        | finance-agent-service     |
+| 流式聊天          | finance-agent-chat-stream |
+| 工具事件          | sse-event                 |
+| 工具集合          | finance-agent-tools       |
+| DSL 局部替换/创建 | dsl-patch, json-pointer   |
+| DSL 试运行        | dsl-validate              |
+| 源样本            | source-sample-fetch       |
+| 外部映射来源      | lookup-source             |
+| 租户作用域        | tenant-scope              |
 
 ## 类型导出 (Type Exports)
+
 - `FinanceToolsScope` — 工具构建作用域 | keywords: finance-tools-scope, tool-scope
 - `FinanceAgentChatMessageDto` — 单条 chat 消息 DTO | keywords: finance-agent-message-dto, chat-dto
 - `FinanceAgentChatDto` — chat 请求 DTO | keywords: finance-agent-chat-dto, chat-dto
 
 ## 模块功能描述 (Module Feature Description)
-控制器负责 admin 鉴权和 HTTP/SSE 输出;服务层负责把前端历史消息转换为 LangChain message 并装入系统提示词与财务工具。工具层始终基于 admin user 解析租户边界,并在 source sample/dry-run 时注入 `source_alias`,便于 DSL 行级映射 companyId、storeId 与 bankAccount。
+
+控制器负责 admin 鉴权和 HTTP/SSE 输出;服务层负责把前端历史消息转换为 LangChain message 并装入系统提示词与财务工具。工具层始终基于 admin user 解析租户边界,并在 source sample/dry-run 时注入 `source_alias`,便于 DSL 行级映射 companyId、storeId 与 bankAccount。系统提示词要求 financial_event 产出 `attributedPeriod` 归属年月(`YYYY-MM`),并明确它与交易/业务发生日期 `occurredAt`、现金流日期 `settledAt` 分开维护。

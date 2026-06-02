@@ -1,9 +1,10 @@
 # Finance Module
 
 ## 模块描述
+
 财务领域总目录。包含飞书源读取、Transform DSL 引擎、配置(用户自定义 name 命名的 binding + transform 持久化)、Agent 工具集、推送链路、外部资源透传。
 独立于 `data-source` 模块,凭证统一从 `tenant-credential` 取。
-**外部接入合约**:根目录 `api.md`(对方接收侧定义,统一 `financial_event` 模型),整批拒收语义,推送统一打到 `/api/v1/events/upsert`。
+**外部接入合约**:根目录 `api.md`(对方接收侧定义,统一 `financial_event` 模型),整批拒收语义,推送统一打到 `/api/v1/events/upsert`。`financial_event` 使用 `attributedPeriod` 表示实际归属年月(`YYYY-MM`),与交易/业务发生日期 `occurredAt`、现金流日期 `settledAt` 分开。
 
 文件路径: `src/modules/finance`
 

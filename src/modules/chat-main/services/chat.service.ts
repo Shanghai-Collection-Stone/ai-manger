@@ -434,8 +434,8 @@ export class ChatMainService {
 
           // ─── default 模式: 意图识别 + 专家直派(不再用 LangGraph StateGraph)───
           // 两步走:
-          //   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读**全部对话历史**,在
-          //      提示词强约束下只输出一个路由词,代码硬解析。不是 tool 调用、不是 graph。
+          //   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读 JSON 化最近 10 组
+          //      对话,在提示词强约束下只输出一个路由词,代码硬解析。不是 tool 调用、不是 graph。
           //   ② buildExpertAgent —— 按路由词在代码层选定**单个专家** createReactAgent。
           // 选定的专家 agent 当 preBuiltAgent 交给 agent.stream 正常流式消费,原有
           // stream 处理逻辑(token 累加 / SSE / 落库)完全不变。
@@ -485,7 +485,7 @@ export class ChatMainService {
               const cleanHistory =
                 this.simplifyHistoryForRouting(loadedHistory);
 
-              // ① 意图识别 —— 读简化后的全部历史,输出路由词
+              // ① 意图识别 —— 读简化历史压缩出的最近 10 组 JSON,输出路由词
               const route = await this.supervisorGraph.recognizeIntent({
                 systemPrompt: this.getSupervisorPromptCN(
                   sysContent,
@@ -1403,7 +1403,12 @@ export class ChatMainService {
     return [
       envContext,
       '',
-      '你是 AI 指挥官的「意图分析层」。你的**唯一**职责: 读完整对话历史,判定本轮用户意图,输出一个路由词。',
+      '你是 AI 指挥官的「意图分析层」。你的**唯一**职责: 读取一条 JSON 化上下文,判定本轮用户意图,输出一个路由词。',
+      '',
+      '【输入格式】你会收到一条 user 消息,内容是 JSON,包含:',
+      '- currentActionSession: 上一轮激活专家,只用于判断是否延续,不是锁定',
+      '- latestUserMessage: 本轮用户最新消息,这是本轮意图判定的第一优先级',
+      '- recentDialog: 最近 10 组 user/assistant 对话,用于理解承接关系',
       '',
       '【⚠️ 输出格式 —— 极其重要,必须严格遵守】',
       '你的回复**必须且只能**是下面 7 个英文单词中的**一个**,不带任何标点、引号、解释、前后缀:',
@@ -1419,7 +1424,7 @@ export class ChatMainService {
       '',
       actionCtx,
       '',
-      '【判定规则】先归类本轮用户消息,再输出对应路由词:',
+      '【判定规则】先归类 JSON.latestUserMessage,再结合 recentDialog 判断是否延续上一轮任务,最后输出对应路由词:',
       '- 闲聊/无意义/情绪词("哈哈""好的""嗯""厉害""6""hi""你好") → 输出 chat',
       '- 询问指挥官自己("你是谁""你能做什么""怎么用") → 输出 chat',
       '- 与 6 个专家领域都无关的通用问题 → 输出 chat',
@@ -1434,10 +1439,11 @@ export class ChatMainService {
       '⚠️ 即使 actionSession 已有激活专家,只要本轮是闲聊/无关内容,也必须输出 chat。',
       '激活专家不是"锁定",每轮都要重新判定。',
       '',
-      '【延续性识别】结合完整对话历史判断,本轮是否在推进上一轮专家任务:',
+      '【延续性识别】结合 recentDialog 判断,本轮是否在推进上一轮专家任务:',
       '- 历史在做 image/article 并发出 tag-select 卡片,本轮"我选定标签：#X" → 延续对应专家；上一轮 article 输出 article,上一轮 image 输出 image',
       '- 历史在做 data,本轮"换成 14 天"/"再细分一下" → 输出 data',
       '- 本轮"再来一组"/"再生成一个"且历史在做图组 → 输出 image',
+      '- 本轮"开始生成"/"确认"/"按这个执行"/"开始吧"且上一轮正在准备 article/image/data/task 等业务 → 延续上一轮专家',
       '',
       '再次强调: 你的整条回复只能是 image/article/data/frontend/publisher/task/chat 其中一个词。',
     ]
@@ -1763,19 +1769,21 @@ export class ChatMainService {
       '- canvas_search 工具仅用于搜索定位，找到后输出 canvas-it 块即可，不再调用详情工具。',
       '',
       '【生文执行规则 - 异步工作流】',
-      '0. 如果用户要生成图文但没有明确 tags/素材方向，可先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，再调用 topic_orchestrate，并把选定 tags 写入 userPrompt。',
+      '0. 如果用户要生成图文/配图文章但没有明确图库 tags，必须先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，再调用 topic_orchestrate，并把选定 tags 原样写入 userPrompt。',
       '1. 调用 topic_orchestrate 前必须确认生文风格；若用户未明确平台/文风（如小红书、知乎、公众号、通用专业），先只问一句："这组图文想按哪种文风写？小红书/知乎/公众号/通用专业？"，等待用户回答，不要先调用工具。',
       '2. 用户已明确平台或文风时，将其写入 topic_orchestrate.writingStyle；userPrompt 必须以最后一条用户生成要求为准。',
       '3. 生文必须使用 topic_orchestrate 工具发起异步工作流，不要同步展开正文。',
       '4. tool 返回后，立即把其中的 canvas-it 代码块原样输出给用户，不要追加长篇解释。',
+      '   - 若 tool 明确返回缺少图库标签/配图预检未通过/未创建 Canvas 且没有 canvas-it，只告知用户需要先选择标签、补图、减少篇数或更换标签，不要编造 Canvas 卡片。',
       '5. 当用户明确指定图组 Canvas（如"用 554 和 555 生两篇图文"）时：',
       '   - 将指定 ID 放入 topic_orchestrate.imageGroupCanvasIds（number[]）',
       '   - count 按用户要求传入（例如 2）',
       '   - 由工作流将这些图组合并映射到新图文 Canvas。',
-      '6. 当用户未指定图组 Canvas 时：可先用 canvas_search(type=image-group) 搜索候选，再调用 topic_orchestrate。',
+      '6. 当用户未指定图组 Canvas 时：必须确保 userPrompt 中有用户明确给出的图库 tags（如 #月亮湾店 #生日派对）；没有 tags 就调用 tag_select_request，禁止让 LLM 自己编 tags 或自行搜索图片。',
       '7. 任何生文请求都不要退化成"仅搜索+口头计划"，必须实际调用 topic_orchestrate。',
       '【N 篇文章 = 一次调用，一个 Canvas】',
       '- 用户说"生成 N 篇 / 来 N 篇 / 写 N 个选题"时，必须一次性调用 topic_orchestrate 并传 count=N，N 篇全部落到同一个 Canvas。',
+      '- 用户本轮只是"开始生成/确认/按这个执行/可以了"等延续上一轮方案时，必须继承最近对话里已确认的篇数；上一轮确认 3 篇就传 count=3，不得因为本轮短句或单数标题改成 1。',
       '- 严禁串行调用 N 次 topic_orchestrate（每次 count=1）来制造 N 个 Canvas，这是错误用法。',
       '- 如果模型怀疑要分批，立刻停止并改为单次 count=N 的调用。',
       '',
@@ -1787,7 +1795,7 @@ export class ChatMainService {
       '- 每篇图文对应一组图片，tags 与图组 Canvas 中的 tags 保持一致',
       '',
       '【工具使用】',
-      '- tag_select_request：图文生成前收集 tags/素材方向（仅用户未明确 tags 时调用；已给 tags 时跳过）',
+      '- tag_select_request：图文生成前收集图库 tags/素材方向（用户未明确 tags 时必须调用；已给 tags 时跳过）',
       '- canvas_search：搜索 Canvas（type 参数指定 image-group）',
       '- xhs_get_canvas_detail：按 ID 查看 Canvas 摘要信息',
       '- topic_orchestrate：发起异步生文并返回新 Canvas',
@@ -2331,7 +2339,8 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是专项文章生成代理。',
-          '若用户要生成图文但未明确 tags/素材方向，可先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，把选定 tags 写入 topic_orchestrate.userPrompt 再生成。',
+          '若用户要生成图文/配图文章但未明确图库 tags，必须先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，把选定 tags 原样写入 topic_orchestrate.userPrompt 再生成。',
+          '严禁让 LLM 自己编 tags、自己猜图库标签或自行搜索图片来配图；topic_orchestrate 的 image-group 链路只接受用户明确给出的 tags 或指定的 imageGroupCanvasIds。',
           '调用 topic_orchestrate 前必须确认生文风格；如果最后一条用户要求没有明确平台/文风（小红书/知乎/公众号/通用专业等），先只问用户一句文风选择问题并等待回答，不要调用工具。',
           '当用户已明确文风或平台时，把文风写入 topic_orchestrate.writingStyle；userPrompt 必须忠实压缩最后一条用户生成要求，不能只复用更早历史。',
           '在调用 topic_orchestrate 之前，先判断是否需要补充事实数据/案例/趋势。',
@@ -2340,17 +2349,20 @@ export class ChatMainService {
           '完成数据收集后，必须将结果压缩为 dataSummary（建议 300-1200 字，包含数据来源、关键结论、可用于写作的要点），并在调用 topic_orchestrate 时一并传入。',
           '调用 topic_orchestrate 时，同时传入 userPrompt（最后一条用户生成要求的精炼重述）、writingStyle（已确认文风）和 dataSummary（你整理的数据摘要）。',
           '多篇文章可以在一个Canvas里生成，给 topic_orchestrate 对应的数量参数即可，禁止通过重复调用来生成多篇文章。',
-          'topic_orchestrate 工具会返回 canvas-it 代码 或 Canvas id,你需要立刻返回,不需要等待 Canvas执行结果,直接返回就可以了,告知用户正在生成中,并把 canvas-it 代码块原样输出给用户，让前端渲染看板入口',
+          '如果本轮是"开始生成/确认/按这个执行/可以了"等延续上一轮方案，必须继承最近对话已确认的篇数和选题；上一轮确认 3 篇就传 count=3，不得因为本轮短句或单数标题传 count=1。',
+          'topic_orchestrate 工具会返回简短状态和 canvas-it 代码块；你只需要告知用户正在生成中,并把 canvas-it 代码块原样输出给用户，让前端渲染看板入口。禁止输出工具 JSON、canvas 对象、文章 items 或标题列表。',
+          '如果 topic_orchestrate 返回"缺少图库标签/配图预检未通过/未创建 Canvas"且没有 canvas-it，只能用一句话告知用户需要先选择标签、补图、减少篇数或更换标签，禁止编造 Canvas 入口。',
           '你的职责仅是整理参数并调用 topic_orchestrate 工具，禁止直接输出文章正文、标题列表、items JSON。',
           '【userId 来源】上方 CURRENT_USER_ID 字段即当前用户 ID，调用 topic_orchestrate 时必须把此值传给 userId 参数，禁止省略、禁止自造。',
           '所有文章产出都必须通过 topic_orchestrate 工具写入 Canvas，禁止直接返回文章正文或大纲。',
           '小红书正文要求：开头 1-2 句强钩子；短句短段；多要点列表；真实分享语气；末尾 3-6 个话题标签（#标签）；至少 200 字。',
           '工具调用规则：',
-          '  - tag_select_request 只在缺少 tags/素材方向时调用一次；用户已经给出 tags 或"我选定标签"时直接 topic_orchestrate',
+          '  - tag_select_request 在缺少图库 tags/素材方向时必须调用一次；用户已经给出 tags 或"我选定标签"时才可以直接 topic_orchestrate',
+          '  - 调用 topic_orchestrate 时 userPrompt 必须包含明确图库 tags，除非传了 imageGroupCanvasIds',
           '  - topic_orchestrate 只调用一次，禁止重复',
           '  - 工具报错时原文返回用户，不重试',
           '  - ARTICLE_DRAFT_INVALID → 告知"生成未通过质量校验"，建议调整话题',
-          '【重要】工具调用成功后，必须将工具返回结果中的 canvas-it 代码块原样输出给上层，让前端立即渲染 Canvas 入口卡片。不再调用其他工具。',
+          '【重要】工具调用成功后，只输出一句简短说明 + 工具返回结果中的 canvas-it 代码块，让前端立即渲染 Canvas 入口卡片。不再调用其他工具；不要复述任何 JSON 数据。',
         ]
           .filter(Boolean)
           .join('\n'),

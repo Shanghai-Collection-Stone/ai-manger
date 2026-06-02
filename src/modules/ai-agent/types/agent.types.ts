@@ -123,7 +123,7 @@ export interface AgentInstance {
  */
 export interface AgentInvokeOption
   extends RunnableConfig<Record<string, unknown>> {
-  context?: Record<string, string>;
+  context?: Record<string, unknown>;
   [key: string]: unknown;
 }
 

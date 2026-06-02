@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus, Library } from 'lucide-react';
+import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus, Library, Sparkles } from 'lucide-react';
 import { chatService } from './chatService';
 import { articleLibraryService } from './articleLibraryService';
 import { showToast } from './blocks/shared';
+import CoverRegenerateDialog from './CoverRegenerateDialog';
 
 const toTextPreview = (value) => {
   const s = String(value ?? '')
@@ -33,6 +34,158 @@ const readImage = (article) => {
   return images[0] || '';
 };
 
+/**
+ * @description 图文 Canvas 图片放大预览弹窗，支持左右切换和缩略图定位。
+ * @param {{ images: string[]; startIndex?: number; title?: string; onClose: () => void }} props - 预览参数。
+ * @returns {JSX.Element | null} 图片预览弹窗。
+ * @keyword-cn 图片放大, 图文Canvas
+ * @keyword-en image-lightbox
+ * @keyword-en article-canvas-preview
+ */
+const ImageLightbox = ({ images, startIndex = 0, title = '', onClose }) => {
+  const safeImages = useMemo(
+    () =>
+      (Array.isArray(images) ? images : [])
+        .map((url) => String(url ?? '').trim())
+        .filter((url) => url.length > 0),
+    [images],
+  );
+  const [idx, setIdx] = useState(startIndex);
+
+  useEffect(() => {
+    const max = Math.max(0, safeImages.length - 1);
+    setIdx(Math.max(0, Math.min(Number(startIndex) || 0, max)));
+  }, [safeImages.length, startIndex]);
+
+  /**
+   * @description 在图片预览弹窗内切到上一张图片。
+   * @returns {void}
+   * @keyword-cn 图片放大, 图文Canvas
+   * @keyword-en image-lightbox
+   * @keyword-en article-canvas-preview
+   */
+  const goPrev = useCallback(() => {
+    if (safeImages.length <= 1) return;
+    setIdx((current) =>
+      current <= 0 ? safeImages.length - 1 : current - 1,
+    );
+  }, [safeImages.length]);
+
+  /**
+   * @description 在图片预览弹窗内切到下一张图片。
+   * @returns {void}
+   * @keyword-cn 图片放大, 图文Canvas
+   * @keyword-en image-lightbox
+   * @keyword-en article-canvas-preview
+   */
+  const goNext = useCallback(() => {
+    if (safeImages.length <= 1) return;
+    setIdx((current) =>
+      current >= safeImages.length - 1 ? 0 : current + 1,
+    );
+  }, [safeImages.length]);
+
+  useEffect(() => {
+    /**
+     * @description 处理图片预览弹窗键盘快捷键。
+     * @param {KeyboardEvent} event - 键盘事件。
+     * @returns {void}
+     * @keyword-cn 图片放大, 键盘切换
+     * @keyword-en image-lightbox
+     * @keyword-en keyboard-navigation
+     */
+    const handleKeyDown = (event) => {
+      if (event.key === 'ArrowLeft') goPrev();
+      if (event.key === 'ArrowRight') goNext();
+      if (event.key === 'Escape') onClose?.();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [goNext, goPrev, onClose]);
+
+  const activeImage = safeImages[idx] || '';
+  if (!activeImage) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[95] bg-black/85 flex flex-col items-center justify-center p-4"
+      onClick={onClose}
+      onTouchStart={(event) => event.stopPropagation()}
+      onTouchMove={(event) => event.stopPropagation()}
+      onTouchEnd={(event) => event.stopPropagation()}
+    >
+      <div className="absolute top-3 right-3 z-10">
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition"
+          aria-label="关闭"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      <div className="absolute top-3 left-3 z-10 max-w-[70vw]">
+        <span className="inline-flex px-2 py-1 rounded-full bg-black/50 text-white text-xs truncate">
+          {title || '图片预览'} · {idx + 1}/{safeImages.length}
+        </span>
+      </div>
+
+      <div
+        className="relative flex items-center justify-center max-w-full max-h-full px-10"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {safeImages.length > 1 && (
+          <button
+            type="button"
+            onClick={goPrev}
+            className="absolute left-0 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition"
+            aria-label="上一张"
+          >
+            <ChevronLeft size={24} />
+          </button>
+        )}
+        <img
+          src={activeImage}
+          alt={title}
+          className="max-h-[80dvh] max-w-full object-contain rounded-xl shadow-2xl"
+        />
+        {safeImages.length > 1 && (
+          <button
+            type="button"
+            onClick={goNext}
+            className="absolute right-0 p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition"
+            aria-label="下一张"
+          >
+            <ChevronRight size={24} />
+          </button>
+        )}
+      </div>
+
+      {safeImages.length > 1 && (
+        <div
+          className="flex gap-2 mt-4 px-4 max-w-full overflow-x-auto overscroll-x-contain"
+          data-horizontal-scroll="true"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {safeImages.map((image, imageIndex) => (
+            <button
+              key={`${image}-${imageIndex}`}
+              type="button"
+              onClick={() => setIdx(imageIndex)}
+              className={`shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition ${
+                imageIndex === idx ? 'border-white' : 'border-transparent opacity-60'
+              }`}
+              aria-label={`查看第 ${imageIndex + 1} 张`}
+            >
+              <img src={image} alt="" className="w-full h-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const CanvasFeedView = ({ canvasId, onClose }) => {
   const [loading, setLoading] = useState(false);
   const [canvas, setCanvas] = useState(null);
@@ -55,7 +208,12 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
   const [deletingCanvas, setDeletingCanvas] = useState(false);
   // 存入文章库弹窗状态：target=null 关闭；target='all' 整份；target={articleId} 单篇
   const [libraryPickerFor, setLibraryPickerFor] = useState(null);
+  const [coverDialogTarget, setCoverDialogTarget] = useState(null);
+  const [coverRegenerating, setCoverRegenerating] = useState(false);
+  const [coverSelecting, setCoverSelecting] = useState(false);
+  const [lightbox, setLightbox] = useState(null);
   const pollingRef = useRef(null);
+  const canvasTouchStartRef = useRef(null);
 
   const loadCanvas = useCallback(async () => {
     const cid = Number(canvasId);
@@ -125,6 +283,24 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
       ? selectedImages[Math.max(0, Math.min(detailImageIndex, selectedImages.length - 1))]
       : '';
 
+  /**
+   * @description 打开图文 Canvas 当前文章图片放大预览。
+   * @param {number} startIndex - 初始图片下标。
+   * @returns {void}
+   * @keyword-cn 图片放大, 图文Canvas
+   * @keyword-en image-lightbox
+   * @keyword-en article-canvas-preview
+   */
+  const openArticleImageLightbox = useCallback((startIndex = detailImageIndex) => {
+    if (selectedImages.length === 0) return;
+    const max = Math.max(0, selectedImages.length - 1);
+    setLightbox({
+      images: selectedImages,
+      startIndex: Math.max(0, Math.min(Number(startIndex) || 0, max)),
+      title: selected?.title || '',
+    });
+  }, [detailImageIndex, selected?.title, selectedImages]);
+
   const goPrevImage = () => {
     if (selectedImages.length <= 1) return;
     setDetailImageIndex((prev) =>
@@ -138,6 +314,57 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
       prev >= selectedImages.length - 1 ? 0 : prev + 1,
     );
   };
+
+  /**
+   * @description 记录 Canvas 详情层触摸起点并阻断冒泡，避免外层卡片/Tab 手势被误触发。
+   * @param {React.TouchEvent} event - 触摸事件。
+   * @returns {void}
+   * @keyword-cn Canvas详情, 禁止左右滑动冒泡
+   * @keyword-en canvas-detail-touch
+   * @keyword-en block-horizontal-swipe
+   */
+  const handleCanvasTouchStart = useCallback((event) => {
+    const touch = event.touches?.[0];
+    canvasTouchStartRef.current = touch
+      ? { x: touch.clientX, y: touch.clientY }
+      : null;
+    event.stopPropagation();
+  }, []);
+
+  /**
+   * @description Canvas 详情层内横向手势只在本层处理，不传给外层全局 swipe。
+   * @param {React.TouchEvent} event - 触摸事件。
+   * @returns {void}
+   * @keyword-cn Canvas详情, 禁止左右滑动冒泡
+   * @keyword-en canvas-detail-touch
+   * @keyword-en block-horizontal-swipe
+   */
+  const handleCanvasTouchMove = useCallback((event) => {
+    event.stopPropagation();
+    const target = event.target;
+    if (target?.closest?.('[data-horizontal-scroll="true"]')) return;
+    const start = canvasTouchStartRef.current;
+    const touch = event.touches?.[0];
+    if (!start || !touch) return;
+    const dx = Math.abs(touch.clientX - start.x);
+    const dy = Math.abs(touch.clientY - start.y);
+    if (dx > 8 && dx > dy) {
+      event.preventDefault();
+    }
+  }, []);
+
+  /**
+   * @description 清理 Canvas 详情层触摸状态并阻断触摸结束事件冒泡。
+   * @param {React.TouchEvent} event - 触摸事件。
+   * @returns {void}
+   * @keyword-cn Canvas详情, 禁止左右滑动冒泡
+   * @keyword-en canvas-detail-touch
+   * @keyword-en block-horizontal-swipe
+   */
+  const handleCanvasTouchEnd = useCallback((event) => {
+    canvasTouchStartRef.current = null;
+    event.stopPropagation();
+  }, []);
 
   /** 删除整个 Canvas */
   const handleDeleteCanvas = async () => {
@@ -281,8 +508,93 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
     }
   };
 
+  /**
+   * @description 打开当前文章封面重生成弹窗，并切回首图预览。
+   * @param {object} article - Canvas 文章。
+   * @returns {void}
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en article-cover-only
+   */
+  const openCoverRegenerateDialog = (article) => {
+    if (!article) return;
+    setSelectedId(article.id);
+    setDetailImageIndex(0);
+    setCoverDialogTarget(article);
+  };
+
+  /**
+   * @description 提交文章封面重生成请求，仅替换 imageUrls/imageIds 的第一项。
+   * @param {{ imageIds: number[]; prompt?: string }} payload - 参考图和提示词。
+   * @returns {Promise<void>}
+   * @keyword-cn 封面重生成, 只改封面
+   * @keyword-en cover-regenerate
+   * @keyword-en article-cover-only
+   */
+  const handleRegenerateCover = async (payload) => {
+    const article = coverDialogTarget;
+    if (!article) return;
+    setCoverRegenerating(true);
+    try {
+      const res = await chatService.regenerateCanvasArticleCover(
+        Number(canvasId),
+        article.id,
+        payload,
+      );
+      if (res?.canvas) {
+        setCanvas(res.canvas);
+        setSelectedId(article.id);
+        setDetailImageIndex(0);
+        setCoverDialogTarget(null);
+        showToast('封面已开始重新生成', 'success');
+      } else {
+        showToast('封面重生成启动失败', 'error');
+      }
+    } finally {
+      setCoverRegenerating(false);
+    }
+  };
+
+  /**
+   * @description 直接将弹窗中第一张已选图库图片设为当前文章封面。
+   * @param {{ imageId?: number; imageIds?: number[] }} payload - 选中的图库图片。
+   * @returns {Promise<void>}
+   * @keyword-cn 直接设为封面, 图文Canvas
+   * @keyword-en cover-select
+   * @keyword-en article-cover-only
+   */
+  const handleSelectCover = async (payload) => {
+    const article = coverDialogTarget;
+    if (!article) return;
+    setCoverSelecting(true);
+    try {
+      const res = await chatService.selectCanvasArticleCover(
+        Number(canvasId),
+        article.id,
+        payload,
+      );
+      if (res?.canvas) {
+        setCanvas(res.canvas);
+        setSelectedId(article.id);
+        setDetailImageIndex(0);
+        setCoverDialogTarget(null);
+        showToast('已设为封面', 'success');
+      } else {
+        showToast('设置封面失败', 'error');
+      }
+    } finally {
+      setCoverSelecting(false);
+    }
+  };
+
   return (
-    <div className="h-full flex flex-col bg-white animate-fade-in">
+    <div
+      className="h-full flex flex-col bg-white animate-fade-in overscroll-x-contain"
+      onTouchStart={handleCanvasTouchStart}
+      onTouchMove={handleCanvasTouchMove}
+      onTouchEnd={handleCanvasTouchEnd}
+      onTouchCancel={handleCanvasTouchEnd}
+    >
       {/* Header 区域 — 返回按钮、标题、删除 Canvas 按钮 */}
       <div className="flex flex-col border-b border-slate-100 bg-white/90">
         <div className="flex items-center gap-2 p-3 md:p-4">
@@ -364,6 +676,7 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
           `}</style>
           <div
             className="md:border-r border-b md:border-b-0 border-slate-100 overflow-x-auto md:overflow-y-auto p-3 flex md:flex-col gap-3 bg-white shrink-0 canvas-hide-scrollbar"
+            data-horizontal-scroll="true"
             onTouchStart={(e) => e.stopPropagation()}
             onTouchEnd={(e) => e.stopPropagation()}
             onTouchMove={(e) => e.stopPropagation()}
@@ -416,6 +729,16 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                     </div>
                   </button>
                   {/* 删除文章按钮 */}
+                  {img && !isPending && !isFailed && !isGenerating && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); openCoverRegenerateDialog(a); }}
+                      title="重新生成封面"
+                      className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/45 text-white flex items-center justify-center hover:bg-rose-500 transition"
+                    >
+                      <Sparkles size={11} />
+                    </button>
+                  )}
                   <button
                     onClick={(e) => { e.stopPropagation(); handleDeleteArticle(a.id); }}
                     disabled={isDeleting}
@@ -436,10 +759,13 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                   <div
                     className="relative h-48 md:h-60 bg-slate-100 flex items-center justify-center overflow-hidden"
                     onTouchStart={(e) => {
+                      e.stopPropagation();
                       const p = e.touches?.[0]?.clientX;
                       if (typeof p === 'number') setTouchStartX(p);
                     }}
+                    onTouchMove={(e) => e.stopPropagation()}
                     onTouchEnd={(e) => {
+                      e.stopPropagation();
                       const endX = e.changedTouches?.[0]?.clientX;
                       if (typeof endX !== 'number' || typeof touchStartX !== 'number') {
                         setTouchStartX(null);
@@ -452,9 +778,19 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                       }
                       setTouchStartX(null);
                     }}
+                    onTouchCancel={(e) => {
+                      e.stopPropagation();
+                      setTouchStartX(null);
+                    }}
                   >
                     {activeImage ? (
-                      <img src={activeImage} alt={selected.title || ''} className="max-w-full max-h-full object-contain" />
+                      <img
+                        src={activeImage}
+                        alt={selected.title || ''}
+                        title="点击放大"
+                        className="max-w-full max-h-full object-contain cursor-zoom-in"
+                        onClick={() => openArticleImageLightbox(detailImageIndex)}
+                      />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center text-slate-300">
                         <ImageIcon size={24} />
@@ -482,13 +818,23 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                       </>
                     ) : null}
                     {/* 删除当前图片按钮 */}
+                    {activeImage && detailImageIndex === 0 && !isGenerating && (
+                      <button
+                        type="button"
+                        onClick={() => openCoverRegenerateDialog(selected)}
+                        title="重新生成封面"
+                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-rose-500 transition"
+                      >
+                        <Sparkles size={12} />
+                      </button>
+                    )}
                     {activeImage && (
                       <button
                         type="button"
                         onClick={() => handleDeleteImage(selected, detailImageIndex)}
                         disabled={deletingImageIdx === detailImageIndex}
                         title="删除此图"
-                        className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-red-500 transition"
+                        className={`absolute top-2 ${detailImageIndex === 0 && !isGenerating ? 'right-11' : 'right-2'} w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-red-500 transition`}
                       >
                         {deletingImageIdx === detailImageIndex
                           ? <Loader2 size={12} className="animate-spin" />
@@ -629,6 +975,24 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
           onPick={(libraryId) => handleStoreInto(libraryId, libraryPickerFor)}
         />
       )}
+      {lightbox && (
+        <ImageLightbox
+          images={lightbox.images}
+          startIndex={lightbox.startIndex}
+          title={lightbox.title}
+          onClose={() => setLightbox(null)}
+        />
+      )}
+      <CoverRegenerateDialog
+        open={!!coverDialogTarget}
+        title="重新生成文章封面"
+        currentCoverUrl={readImage(coverDialogTarget)}
+        submitting={coverRegenerating}
+        selecting={coverSelecting}
+        onClose={() => setCoverDialogTarget(null)}
+        onSubmit={handleRegenerateCover}
+        onSelectCover={handleSelectCover}
+      />
     </div>
   );
 };

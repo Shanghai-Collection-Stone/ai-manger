@@ -10,7 +10,10 @@ import {
   AgentConfig,
   AgentRunMessagesInput,
 } from '../types/agent.types';
-import type { AgentRunStreamInput } from '../types/agent.types';
+import type {
+  AgentInvokeOption,
+  AgentRunStreamInput,
+} from '../types/agent.types';
 import {
   BaseMessage,
   BaseMessageLike,
@@ -124,9 +127,9 @@ export class AgentService {
 
   /**
    * @title 构建聊天模型 Build Chat Model
-   * @description 根据提供方返回对应的LangChain聊天模型。GLM国际端(z.ai)走OpenAI兼容协议，baseUrl必填。
-   * @keywords-cn 构建模型, Gemini, DeepSeek, GLM, z.ai
-   * @keywords-en build model, Gemini, DeepSeek, GLM, z.ai
+   * @description 根据提供方返回对应的LangChain聊天模型。GLM国际端(z.ai)与 Kimi 走OpenAI兼容协议，baseUrl必填。
+   * @keywords-cn 构建模型, Gemini, DeepSeek, GLM, Kimi
+   * @keywords-en build model, Gemini, DeepSeek, GLM, Kimi
    */
   async buildChatModel(config: AgentConfig): Promise<DeepAgentReturn> {
     const llm = await this.buildLLM(config);
@@ -239,6 +242,15 @@ export class AgentService {
         streaming: !config.nonStreaming,
       });
     }
+    if (this.isKimiProvider(provider)) {
+      return this.buildKimiChatModel({
+        modelName,
+        apiKey: runtime.apiKey,
+        baseUrl: runtime.baseUrl,
+        temperature,
+        streaming: !config.nonStreaming,
+      });
+    }
     return new ChatOpenAI({
       model: modelName,
       apiKey: runtime.apiKey,
@@ -247,6 +259,51 @@ export class AgentService {
       useResponsesApi: false,
       configuration: runtime.baseUrl ? { baseURL: runtime.baseUrl } : undefined,
     });
+  }
+
+  /**
+   * @description Detect Kimi/Moonshot OpenAI-compatible providers that need request-level adapter options.
+   * @keyword-en kimi-adapter
+   * @keyword-en openai-compatible
+   */
+  private isKimiProvider(provider: string): boolean {
+    return ['kimi', 'moonshot', 'moonshotai'].includes(
+      String(provider ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  }
+
+  /**
+   * @description Build the Kimi OpenAI-compatible chat model with thinking disabled for LangChain tool-call compatibility.
+   * @keyword-en kimi-adapter
+   * @keyword-en disable-thinking
+   */
+  private buildKimiChatModel(input: {
+    modelName: string;
+    apiKey?: string;
+    baseUrl?: string;
+    temperature?: number;
+    streaming: boolean;
+  }): ChatOpenAI {
+    return new ChatOpenAI({
+      model: input.modelName,
+      apiKey: input.apiKey,
+      temperature: input.temperature,
+      streaming: input.streaming,
+      useResponsesApi: false,
+      configuration: input.baseUrl ? { baseURL: input.baseUrl } : undefined,
+      modelKwargs: this.resolveKimiModelKwargs(input.modelName),
+    });
+  }
+
+  /**
+   * @description Resolve Kimi extra request params; disabling thinking avoids missing reasoning_content in multi-step tool calls.
+   * @keyword-en kimi-adapter
+   * @keyword-en disable-thinking
+   */
+  private resolveKimiModelKwargs(_modelName: string): Record<string, unknown> {
+    return { thinking: { type: 'disabled' } };
   }
 
   /**
@@ -264,6 +321,32 @@ export class AgentService {
    */
   buildSubagentSanitizeMiddleware() {
     return this.buildOpenAICompatSanitizeMiddleware();
+  }
+
+  /**
+   * @description 合并 LangChain RunnableConfig 标签并去重。
+   * @keyword-cn 流标签, 非流式隔离
+   * @keyword-en merge-runnable-tags
+   */
+  private mergeRunnableTags(existing: unknown, extras: string[]): string[] {
+    const tags = Array.isArray(existing)
+      ? existing.filter((tag): tag is string => typeof tag === 'string')
+      : [];
+    return Array.from(new Set([...tags, ...extras]));
+  }
+
+  /**
+   * @description 构建内部 LLM 非流式调用配置，用 nostream 标签阻断 LangGraph StreamMessagesHandler 继承。
+   * @keyword-cn 工具内部非流, 子代理非流
+   * @keyword-en internal-llm-nostream
+   * @keyword-en subagent-no-stream
+   */
+  buildNoStreamInvokeOption(option: AgentInvokeOption = {}): AgentInvokeOption {
+    return {
+      ...option,
+      callbacks: [],
+      tags: this.mergeRunnableTags(option.tags, ['nostream']),
+    };
   }
 
   private buildOpenAICompatSanitizeMiddleware() {
@@ -557,6 +640,11 @@ export class AgentService {
       // 国内端可改为 https://open.bigmodel.cn/api/paas/v4
       case 'glm':
         return 'https://api.z.ai/api/coding/paas/v4';
+      case 'kimi':
+        return 'https://api.moonshot.cn/v1';
+      case 'moonshot':
+      case 'moonshotai':
+        return 'https://api.moonshot.ai/v1';
       default:
         return undefined;
     }
@@ -2307,11 +2395,12 @@ export class AgentService {
 
   /**
    * @title 运行Agent（消息） Run Agent With Messages
-   * @description 使用消息列表执行Agent并返回最后一条AI消息。
-   * @keywords-cn 运行, 消息, 调用
-   * @keywords-en run, messages, invoke
+   * @description 使用消息列表执行Agent并返回最后一条AI消息，默认不绑定主流 token handler。
+   * @keyword-cn 运行, 消息, 调用, 工具内部非流
+   * @keyword-en run, messages, invoke, internal-llm-nostream
    */
   async runWithMessages(input: AgentRunMessagesInput): Promise<AIMessage> {
+    const useNoStream = input.config.nonStreaming !== false;
     const callback: Callbacks = [
       {
         handleLLMNewToken() {},
@@ -2335,14 +2424,16 @@ export class AgentService {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
       option.configurable = { ...defaultConfigurable, ...existingConfigurable };
 
-      if (input.config.nonStreaming) {
+      if (useNoStream) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         option.callbacks = callback;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        option.tags = this.mergeRunnableTags(option.tags, ['nostream']);
       }
 
       if (input.config.noPostHook) {
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        option.tags = ['subagent'];
+        option.tags = this.mergeRunnableTags(option.tags, ['subagent']);
       }
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
@@ -2358,6 +2449,7 @@ export class AgentService {
       .join('\n\n');
     const agent = await this.buildChatModel({
       ...input.config,
+      nonStreaming: useNoStream,
       system: mergedSystem.length > 0 ? mergedSystem : undefined,
     });
     const state: unknown = await agent.invoke(
@@ -2643,10 +2735,13 @@ export class AgentService {
               if (input.preBuiltAgent && !isStreamingChunk) {
                 continue;
               }
-              // supervisor graph(preBuiltAgent)模式: supervisor / expert 节点的输出
-              // 都是面向用户的主输出,不存在 deepagents 那种"子代理思考过程"。
-              const treatAsMain = !!input.preBuiltAgent || !isSubagent;
-              if (treatAsMain) {
+              // preBuiltAgent 模式下仍可能看到 tools:* 命名空间里的内部 LLM
+              // 输出(例如 topic_orchestrate 内部生文 JSON)。这些不是面向用户的
+              // 最终回复,不能混入 token/fullText。
+              if (input.preBuiltAgent && isSubagent) {
+                continue;
+              }
+              if (!isSubagent) {
                 fullText += textStr;
                 yield { type: 'token', data: { text: textStr } };
               } else {

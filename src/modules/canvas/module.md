@@ -29,6 +29,10 @@ Canvas控制器。
 - `POST /canvas/:id/articles` — 追加文章 
 - `PATCH /canvas/:id/status` — 更新状态
 - `PATCH /canvas/:id/articles/:articleId` — 更新文章
+- `POST /canvas/:id/articles/:articleId/cover/regenerate` — 选择一张或多张图库图片重新生成图文 Canvas 单篇封面；仅替换首图并把 Canvas 暂置为 generating | keywords: cover-regenerate, article-cover-only
+- `POST /canvas/:id/articles/:articleId/cover/select` — 直接使用一张图库图片设为图文 Canvas 单篇封面；仅替换首图且不进入 generating | keywords: cover-select, article-cover-only
+- `POST /canvas/:id/image-groups/:groupId/cover/regenerate` — 选择一张或多张图库图片重新生成图片组 Canvas 指定图组 role=cover；仅替换封面并把 Canvas 暂置为 generating | keywords: cover-regenerate, image-group-cover-only
+- `POST /canvas/:id/image-groups/:groupId/cover/select` — 直接使用一张图库图片设为图片组 Canvas 指定图组 role=cover；不修改其他内页图 | keywords: cover-select, image-group-cover-only
 - `PATCH /canvas/:id/articles/:articleId/sent` — 标记文章已发送（写入 sentAt 时间戳）
 - **关键词**: canvas, articles, image-group, outline, style, content-json, image-ids, status, sent-at, mongo, controller
 
@@ -37,6 +41,15 @@ Canvas服务。
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）
 - `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)
+- `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项 | keywords: cover-regenerate, article-cover-only
+- `startImageGroupCoverRegeneration(input)` — 启动图片组 Canvas 单组封面重生成，立即置为 generating，后台仅替换目标组 role=cover 图片 | keywords: cover-regenerate, image-group-cover-only
+- `selectArticleCoverImage(input)` — 直接用图库图片替换图文 Canvas 单篇文章首图封面，不进入生成中状态 | keywords: cover-select, article-cover-only
+- `selectImageGroupCoverImage(input)` — 直接用图库图片替换图组 Canvas 指定图组 role=cover 图片，不修改其他内页图 | keywords: cover-select, image-group-cover-only
+- `loadSelectedCoverImage(input)` — 精确读取直接设封面所选的第一张当前租户可见图库图片 | keywords: cover-select, selected-cover-image
+- `resolveGalleryImageUrl(image)` — 从图库图片解析可写回 Canvas 的原图或缩略图地址 | keywords: cover-select, selected-cover-image
+- `toSelectedCoverGroupImage(image, currentCover?, articleTitle?)` — 将图库图片转换成图组 Canvas role=cover 图片结构并沿用原封面文案 | keywords: cover-select, image-group-cover-only
+- `runArticleCoverRegeneration(input)` / `runImageGroupCoverRegeneration(input)` — 后台执行封面重生成并在成功后恢复原状态，失败时标记 requires_human | keywords: cover-regenerate, cover-only
+- `replaceCoverImage(images, cover)` — 替换图片组内 role=cover 图片；原组没有封面时插入到第一位 | keywords: cover-regenerate, replace-cover-image
 - `prepareImageGroupsForCanvas(input)` — 只准备指定 Canvas 的图片组源图分配，不生成封面/拼图文件，用于图文生成前置不足量拦截 | keywords: prepare, allocation, canvas
 - `renderPreparedImageGroupsForCanvas(input)` — 根据预分配结果渲染图片组并回写 Canvas | keywords: render, prepared, image-group
 - `runImageGroupGeneration` — 后台异步生成图片组并回写；当统一分配发现图片不足或图组失败时将 Canvas 标记为 requires_human
@@ -49,6 +62,7 @@ Canvas服务。
 ### canvas-image-group.service.ts
 图片组生成服务。
 - `generateImageGroups` — 根据文章 tag 严格匹配图库配图（**不再跨 tag 随机补图**），先在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重；图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
+- `regenerateCoverImage(input)` — 基于用户多选图库图片一次性生成新的 3:4 Canvas 封面，并以“主题 + 补充提示词”的标准结构触发生图，写入动态封面图库；仅供封面替换链路调用 | keywords: cover-regenerate, selected-source-images
 - `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1） | keywords: render, prepared, image-group, concurrency
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面/内页/文案/AI封面/烧字），供并发调用 | keywords: render, single-plan, image-group, cover-text
@@ -59,7 +73,7 @@ Canvas服务。
 - `buildInsufficientImageGroups(articles)` — 构造图片不足时的 failed 空图组，供文章/Canvas 进入 requires_human 补图流程 | keywords: insufficient, requires-human, image-group
 - `collectPlanSourceImages(plan)` — 收集图组分配计划中的全部源图，用于文章正文和封面文案共享图片语义 | keywords: collect, allocation, image-context
 - `persistPlannedCollage(input)` — 将统一分配好的两张横图合成为动态拼图并入库 | keywords: collage, allocation, gallery
-- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]）
+- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流 | keywords: 封面文案, 工具内部非流, cover-text, internal-llm-nostream
 - `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
 - `sanitizeCopyrightRiskText(raw)` — 将封面文案/生图提示中的高风险 IP、商标和角色专名替换为版权安全泛化表达 | keywords: sanitize, copyright-safe, image-prompt
 - `sanitizeCopyrightRiskList(items?)` — 清洗列表型封面上下文，去重后返回版权安全表达 | keywords: sanitize, copyright-safe, list

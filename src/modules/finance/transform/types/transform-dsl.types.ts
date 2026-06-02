@@ -24,7 +24,7 @@ export interface TransformMapRule {
   to: string;
   from: string;
   type?: TransformValueType;
-  /** 日期格式(type=date 生效,留空用 ISO) */
+  /** 日期格式(type=date 生效,支持 YYYY-MM-DD / YYYY-MM,留空用 ISO) */
   format?: string;
   /** 缺失值兜底 */
   default?: unknown;
@@ -61,7 +61,7 @@ export interface TransformComputeRule {
   index?: number;
   /** 类型 */
   type?: TransformValueType;
-  /** 日期格式(type=date 生效,留空用 ISO);例如 "YYYY-MM-DD" */
+  /** 日期格式(type=date 生效,支持 YYYY-MM-DD / YYYY-MM,留空用 ISO) */
   format?: string;
   default?: unknown;
   /** 同名 to 字段的合并策略;留空时使用智能叠加 */

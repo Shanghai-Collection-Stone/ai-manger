@@ -26,7 +26,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 - 每个 source 没有额外的"表定义"配置 — `alias` 字段(如"云境上海银行流水")本身就是表定义。后端在拉行时把它注入到每行 fields 的 `source_alias` 保留字段(与 `record_id` 同风格),DSL 行级可用 `from: "source_alias"` + `compute: lookup` 映射成 companyId/bankAccount 等
 - **聊天记忆持久化**:`financeChat` 用 localStorage(`finance_chat_history` key)按 binding name 分别保存 messages,刷新页面不丢;只有点"清空"按钮才删该 binding 的历史
 - 子 Tab 内右 1/3:Agent 对话(sticky),**SSE 流式**显示回复 token、当前状态与 Tool 调用参数/结果摘要,避免等待期间无反馈
-- **关键词**: admin ui, tabs, crud, localStorage, dashboard config mapping, tenant isolation, ai provider, glm, z.ai, image category, ai cover toggle, ai provider test connection button, feishu credential single tenant, finance preset kinds (FINANCE_KINDS), expense payable sub tabs, hidden name flow partyType auto inject, collapsible push config, auto-loaded stores companies, collapsed dsl advanced
+- **关键词**: admin ui, tabs, crud, localStorage, dashboard config mapping, tenant isolation, ai provider, glm, z.ai, kimi, moonshot, image category, ai cover toggle, ai provider test connection button, feishu credential single tenant, finance preset kinds (FINANCE_KINDS), expense payable sub tabs, hidden name flow partyType auto inject, collapsible push config, auto-loaded stores companies, collapsed dsl advanced
 
 #### finance 相关常量与函数
 - `FINANCE_KINDS`: 子 Tab 预设(支出/应付,内含 id=name + flowDefault + partyTypeDefault + hint)/finance kinds preset

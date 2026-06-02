@@ -2,9 +2,10 @@
  * @title Supervisor Intent Service
  * @description 意图识别 + 专家直派。**不再使用 LangGraph StateGraph**。
  *   两步走:
- *   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读取**全部对话历史**,在提示词
- *      强约束下只输出一个路由词(image/article/data/frontend/publisher/chat),
- *      代码 parseRouteToken 硬解析,解析不到再走关键词/延续兜底。
+ *   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读取 JSON 化的最近 10 组
+ *      对话,在提示词强约束下只输出一个路由词
+ *      (image/article/data/frontend/publisher/task/chat),代码 parseRouteToken
+ *      硬解析,解析不到再走关键词/延续兜底。
  *   ② buildExpertAgent —— 按路由词在代码层选定单个专家,构建 createReactAgent
  *      实例(业务专家带真实工具 / chat 带空工具),交给 agent.service.stream
  *      当 preBuiltAgent 正常流式消费,原有处理逻辑完全不变。
@@ -16,7 +17,11 @@
  */
 import { Injectable, Logger } from '@nestjs/common';
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
-import { SystemMessage, type BaseMessage } from '@langchain/core/messages';
+import {
+  HumanMessage,
+  SystemMessage,
+  type BaseMessage,
+} from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 
 /**
@@ -86,8 +91,28 @@ function inferExpertByKeyword(text: string): ExpertName | null {
  * @keyword-en detect continuation intent
  */
 function isContinuationText(text: string): boolean {
-  return /再来|再生成|再做|再一?组|又一|多来|继续|接着|那再|下一?组|换一?组|选定标签|我选/.test(
+  return /再来|再生成|再做|再一?组|又一|多来|继续|接着|那再|下一?组|换一?组|选定标签|我选|开始生成|开始吧|开始|生成吧|开干|执行|派单|正式派单|确认|可以了|没问题|就这样|按这个|照这个|走起|搞起/.test(
     String(text ?? ''),
+  );
+}
+
+/**
+ * @description 判断本轮是否在询问 AI 指挥官身份、能力或用法。此类元问题必须走 chat,
+ *   不应受上一轮 actionSession 或 LLM 解释文本中的专家词影响。
+ * @keyword-cn 指挥官元问题, 能力询问, 意图识别
+ * @keyword-en commander-meta-question, capability-query, intent-routing
+ */
+function isCommanderMetaQuestion(text: string): boolean {
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  return (
+    /你是谁|你是(谁|什么)|你叫什么|介绍(一下)?你自己/.test(s) ||
+    /你(能|可以|会|擅长).{0,8}(干嘛|干什么|做什么|做些?啥|帮我做什么)/.test(
+      s,
+    ) ||
+    /(能干嘛|能做什么|可以做什么|会做什么|有什么功能|功能介绍|能力介绍|能力说明|怎么用|如何使用|使用说明)/.test(
+      s,
+    )
   );
 }
 
@@ -110,9 +135,90 @@ function extractMessageText(content: unknown): string {
 }
 
 /**
+ * @description 截断单条对话文本,避免弱上下文模型被过长历史稀释。
+ * @keyword-cn 意图识别, 上下文压缩
+ * @keyword-en intent-context, truncate-text
+ */
+function truncateIntentText(text: string, maxLength = 900): string {
+  const s = String(text ?? '').trim();
+  if (s.length <= maxLength) return s;
+  return `${s.slice(0, maxLength)}...`;
+}
+
+/**
+ * @description 把最近消息整理成最近 10 组 user/assistant 对话,用于以单条 JSON
+ *   user message 喂给意图识别模型。
+ * @keyword-cn 意图识别, 结构化上下文
+ * @keyword-en intent-context, json-history
+ */
+function buildRecentDialogTurns(history: BaseMessage[]): Array<{
+  assistant?: string;
+  user?: string;
+}> {
+  const turns: Array<{ assistant?: string; user?: string }> = [];
+  let current: { assistant?: string; user?: string } | null = null;
+
+  for (const msg of history) {
+    const type = (msg as { _getType?: () => string })._getType?.();
+    if (type !== 'human' && type !== 'ai') continue;
+    const text = truncateIntentText(
+      extractMessageText((msg as { content?: unknown }).content),
+    );
+    if (!text) continue;
+
+    if (type === 'human') {
+      current = { user: text };
+      turns.push(current);
+      continue;
+    }
+
+    if (!current || current.assistant) {
+      current = { assistant: text };
+      turns.push(current);
+      continue;
+    }
+    current.assistant = text;
+  }
+
+  return turns.slice(-10);
+}
+
+/**
+ * @description 构建意图识别专用 JSON 上下文消息。模型只看系统路由规则和这一条
+ *   JSON,不再靠普通多轮消息隐式理解历史。
+ * @keyword-cn 意图识别, 结构化上下文
+ * @keyword-en intent-context, json-history
+ */
+function buildIntentContextMessage(
+  history: BaseMessage[],
+  currentActionSession?: ExpertName | null,
+): HumanMessage {
+  const recentDialog = buildRecentDialogTurns(history);
+  const latestUserMessage = recentDialog
+    .slice()
+    .reverse()
+    .find((turn) => turn.user)?.user;
+  return new HumanMessage(
+    JSON.stringify(
+      {
+        instruction:
+          '请基于 currentActionSession、latestUserMessage 和 recentDialog 判断本轮用户意图。只输出 image/article/data/frontend/publisher/task/chat 之一。',
+        currentActionSession: currentActionSession ?? null,
+        latestUserMessage: latestUserMessage ?? '',
+        recentDialog,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/**
  * @description 从意图识别 LLM 的纯文本回复里硬解析路由 token。
- *   提示词约束它只输出 image/article/data/frontend/publisher/chat 之一,
- *   本函数容错: 先 trim+lowercase 整体比对,再正则取首个以单词边界命中的 route 词。
+ *   提示词约束它只输出 image/article/data/frontend/publisher/task/chat 之一,
+ *   本函数容错: 先 trim+lowercase 整体比对;若不是精确单词,只在全文唯一出现
+ *   一个 route 词时采信。若解释文本里同时出现 actionSession=image 与 chat,
+ *   返回 null 交给确定性兜底,避免被第一个专家词误导。
  *   不用 tool calling —— minimax 等模型对"长 prompt + bindTools"极不稳定。
  *   返回 null 表示没解析出有效路由。
  * @keyword-en parse route token from intent llm plain text reply
@@ -133,8 +239,11 @@ function parseRouteToken(text: string): RouteTarget | null {
   if (!s) return null;
   const exact = all.find((r) => r === s);
   if (exact) return exact;
-  const m = /\b(image|article|data|frontend|publisher|task|chat)\b/.exec(s);
-  return (m?.[1] as RouteTarget | undefined) ?? null;
+  const matches = Array.from(
+    s.matchAll(/\b(image|article|data|frontend|publisher|task|chat)\b/g),
+  ).map((m) => m[1] as RouteTarget);
+  const unique = Array.from(new Set(matches));
+  return unique.length === 1 ? unique[0] : null;
 }
 
 /**
@@ -164,7 +273,7 @@ type AgentCheckpointer = Parameters<typeof createReactAgent>[0]['checkpointer'];
 export interface RecognizeIntentOptions {
   /** @description 意图识别系统提示词(强约束只输出一个路由词) */
   systemPrompt: string;
-  /** @description 全部对话历史(意图识别必须看完整历史才能精准判定延续性) */
+  /** @description 清洗后的对话历史,会被压缩成最近 10 组 JSON 上下文 */
   history: BaseMessage[];
   /** @description 意图识别用的轻量 LLM(temperature=0) */
   llm: AgentLLM;
@@ -195,21 +304,31 @@ export class SupervisorGraphService {
   private readonly logger = new Logger(SupervisorGraphService.name);
 
   /**
-   * @description 第一步: 意图识别。一次独立的轻量 LLM 调用,读全部历史,在提示词
-   *   强约束下只输出一个路由词,代码 parseRouteToken 硬解析。**不是 tool 调用,不是
-   *   graph 节点** —— 就是一次普通的 invoke。解析不到 → 关键词规则 / 延续上轮专家
+   * @description 第一步: 意图识别。一次独立的轻量 LLM 调用,读 JSON 化最近 10
+   *   组对话,在提示词强约束下只输出一个路由词,代码 parseRouteToken 硬解析。
+   *   **不是 tool 调用,不是 graph 节点** —— 就是一次普通的 invoke。
+   *   解析不到 → 关键词规则 / 延续上轮专家
    *   兜底 → 都没有则 'chat'。永远返回一个有效 RouteTarget,绝不抛错。
    * @keyword-en recognize intent via standalone llm call
    */
   async recognizeIntent(opts: RecognizeIntentOptions): Promise<RouteTarget> {
     const { systemPrompt, history, llm, currentActionSession } = opts;
+    const userText = this.lastHumanText(history);
+    if (isCommanderMetaQuestion(userText)) {
+      this.logger.log(`[intent] → chat (指挥官元问题)`);
+      return 'chat';
+    }
+
     let respText = '';
     try {
       const resp = await (
         llm as unknown as {
           invoke: (msgs: BaseMessage[]) => Promise<{ content?: unknown }>;
         }
-      ).invoke([new SystemMessage(systemPrompt), ...history]);
+      ).invoke([
+        new SystemMessage(systemPrompt),
+        buildIntentContextMessage(history, currentActionSession),
+      ]);
       respText = extractMessageText(resp.content);
     } catch (e) {
       this.logger.warn(`[intent] llm invoke 失败: ${String(e)}`);
@@ -219,7 +338,6 @@ export class SupervisorGraphService {
     );
 
     // 决策 1: 从纯文本回复硬解析路由 token(含 'chat')。
-    const userText = this.lastHumanText(history);
     const isTagSelectionContinuation =
       Boolean(currentActionSession) &&
       /我选定标签|选定标签|已选标签|标签[:：]|tag[:：]|#[^\s#]+/i.test(

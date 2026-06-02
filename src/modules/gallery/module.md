@@ -34,6 +34,7 @@
   - `createMany`: 批量创建图片（含 width/height/isPortrait）/create many images
   - `list`: 图片列表/list images
   - `findAccessibleImages`: 按租户可见性查找图片
+  - `findAccessibleImagesByIds`: 按用户选择的图片 ID 精确读取当前租户可见图片，并按输入顺序返回，用于封面重生成/reference images by ids for cover regenerate
   - `searchSimilar`: 向量相似检索/search similar
   - `rebuildEmbeddings`: 批量重建向量/rebuild embeddings
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config

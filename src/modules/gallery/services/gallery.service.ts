@@ -39,6 +39,47 @@ export class GalleryService {
   }
 
   /**
+   * @description 按图片 ID 精确读取当前租户可见图片，并按输入 ID 顺序返回。
+   * @param {string | undefined} userId - 用户 ID。
+   * @param {string | undefined} tenantId - 租户 ID。
+   * @param {number[]} ids - 图片业务 ID 列表。
+   * @returns {Promise<GalleryImageEntity[]>} 可见图片列表。
+   * @keyword-cn 封面重生成, 图片选择
+   * @keyword-en cover-regenerate
+   * @keyword-en selected-source-images
+   */
+  async findAccessibleImagesByIds(
+    userId: string | undefined,
+    tenantId: string | undefined,
+    ids: number[],
+  ): Promise<GalleryImageEntity[]> {
+    const orderedIds = Array.from(
+      new Set(
+        (Array.isArray(ids) ? ids : [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.floor(id)),
+      ),
+    );
+    if (orderedIds.length === 0) return [];
+    const rows = await this.images
+      .find(
+        {
+          $and: [
+            this.buildTenantFilter(userId, tenantId),
+            { id: { $in: orderedIds } },
+          ],
+        },
+        { projection: { _id: 0 } },
+      )
+      .toArray();
+    const byId = new Map(rows.map((row) => [Number(row.id), row]));
+    return orderedIds
+      .map((id) => byId.get(id))
+      .filter((img): img is GalleryImageEntity => !!img);
+  }
+
+  /**
    * @description 创建 gallery_images 所需索引，并初始化自增计数器。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。

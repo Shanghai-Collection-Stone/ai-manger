@@ -223,6 +223,136 @@ export class CanvasImageGroupService {
   }
 
   /**
+   * @description 基于用户选择的一张或多张图库图片，一次性生成新的 Canvas 封面图并写入动态封面图库。
+   * @param {object} input - 封面重生成输入。
+   * @returns {Promise<CanvasGroupImage>} 可直接回写到 Canvas 的封面图片。
+   * @keyword-cn 封面重生成, 只改封面, 图片选择
+   * @keyword-en cover-regenerate
+   * @keyword-en selected-source-images
+   */
+  async regenerateCoverImage(input: {
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articleTitle?: string;
+    articleTags?: string[];
+    prompt?: string;
+    sourceImageIds: number[];
+    existingCoverText?: { title?: string; subtitle?: string };
+  }): Promise<CanvasGroupImage> {
+    const sourceImageIds = Array.from(
+      new Set(
+        (Array.isArray(input.sourceImageIds) ? input.sourceImageIds : [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.floor(id)),
+      ),
+    ).slice(0, 8);
+    if (sourceImageIds.length === 0) {
+      throw new Error('COVER_SOURCE_IMAGES_REQUIRED');
+    }
+
+    const sourceImages = await this.gallery.findAccessibleImagesByIds(
+      input.userId,
+      input.tenantId,
+      sourceImageIds,
+    );
+    if (sourceImages.length === 0) {
+      throw new Error('COVER_SOURCE_IMAGES_NOT_FOUND');
+    }
+
+    const baseImageCandidates = sourceImages
+      .map((img) => this.resolveLocalPath(img) ?? String(img.url ?? '').trim())
+      .filter((path): path is string => path.length > 0)
+      .slice(0, 6);
+    if (baseImageCandidates.length === 0) {
+      throw new Error('COVER_SOURCE_IMAGES_NOT_READABLE');
+    }
+
+    const rawPrompt = this.coercePlainText(input.prompt).trim();
+    const coverTheme =
+      this.coercePlainText(input.topic).trim() ||
+      this.coercePlainText(input.articleTitle).trim() ||
+      rawPrompt ||
+      'Canvas封面主题';
+    const standardPrompt = [
+      `主题:${coverTheme}`,
+      rawPrompt ? `补充提示词:${rawPrompt}` : '',
+    ]
+      .filter((part) => part.length > 0)
+      .join('\n');
+    const safeCoverText = this.sanitizeCoverText({
+      title:
+        this.coercePlainText(input.existingCoverText?.title).trim() ||
+        this.coercePlainText(input.articleTitle).trim() ||
+        coverTheme ||
+        '封面',
+      subtitle:
+        rawPrompt ||
+        this.coercePlainText(input.existingCoverText?.subtitle).trim() ||
+        coverTheme,
+    });
+    const tags = (Array.isArray(input.articleTags) ? input.articleTags : [])
+      .map((tag) => this.coercePlainText(tag).trim())
+      .filter((tag) => tag.length > 0)
+      .slice(0, 12);
+    const prompt = this.sanitizeCopyrightRiskText(
+      [
+        '请基于用户选择的参考图片一次性生成一张小红书图文封面。',
+        '多张参考图需要融合为同一张封面，不要分别出图，不要生成组图。',
+        '仅生成封面图：保持主体真实、画面清晰、构图适合 3:4 竖版封面。',
+        '可以做轻量修图、色彩校正、局部对比、干净排版和封面化增强。',
+        '不要改变原图核心主体身份，不要影响 Canvas 中除封面外的其他图片。',
+        `标准生图请求:\n${standardPrompt}`,
+        '封面必须首先服务于主题，参考图只作为人物、场景、物料与风格来源。',
+        '请围绕主题、文章标题和标签组织主体、场景和氛围，不要生成与主题无关的通用拼贴。',
+        '如果参考图与主题冲突，优先保持主题相关性。',
+        rawPrompt ? `用户提示词:${rawPrompt}` : '',
+        input.topic ? `Canvas主题:${input.topic}` : '',
+        input.articleTitle ? `文章标题:${input.articleTitle}` : '',
+        tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
+        safeCoverText.title ? `封面主标题:${safeCoverText.title}` : '',
+        safeCoverText.subtitle ? `封面副标题:${safeCoverText.subtitle}` : '',
+      ]
+        .filter((part) => part.length > 0)
+        .join('\n'),
+    );
+
+    const generated = await this.agentService.sendPrompt({
+      prompt,
+      size: '640x853',
+      baseImageCandidates,
+    });
+    const generatedRecord =
+      generated && typeof generated === 'object'
+        ? (generated as Record<string, unknown>)
+        : {};
+    const imagePath = this.coercePlainText(generatedRecord.imagePath).trim();
+    if (!imagePath) {
+      throw new Error('COVER_GENERATED_IMAGE_EMPTY');
+    }
+    const providerLabel = [
+      this.coercePlainText(generatedRecord.providerCode).trim(),
+      this.coercePlainText(generatedRecord.model).trim(),
+    ]
+      .filter((part) => part.length > 0)
+      .join(':');
+    const persisted = await this.persistGeneratedAssetToGallery({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      url: imagePath,
+      generatedKind: 'cover',
+      sourceImageIds,
+      sourceImages,
+      description: `Canvas封面重生成${providerLabel ? `(${providerLabel})` : ''}`,
+    });
+    if (!persisted) {
+      throw new Error('COVER_GENERATED_IMAGE_PERSIST_FAILED');
+    }
+    return this.toGroupImage(persisted, 'cover', safeCoverText);
+  }
+
+  /**
    * @description 仅做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
    * @returns {Promise<ImageGroupSourcePreparation>} 分配结果；不足时返回 failed 图组。
@@ -1576,7 +1706,8 @@ export class CanvasImageGroupService {
    * @param {Array<{ title: string; tags: string[] }>} articles - 文章列表
    * @param {Array<{ tags: string[]; descriptions: string[] }>} [imageContexts] - 每篇文章对应的配图语义上下文
    * @returns {Promise<Array<{title: string; subtitle: string}>>} 每篇文章对应的封面主副标题
-   * @keyword-en batch generate cover title and subtitle via LLM with fallback
+   * @keyword-cn 封面文案, 工具内部非流
+   * @keyword-en cover-text, internal-llm-nostream
    */
   private async generateCoverTexts(
     topic: string | undefined,
@@ -1632,7 +1763,10 @@ export class CanvasImageGroupService {
         '',
         `请严格用 JSON 数组格式回复，数量等于 ${articles.length}。示例：[{"title":"主标题1","subtitle":"副标题1"},{"title":"主标题2","subtitle":"副标题2"}]`,
       ].join('\n');
-      const res = await llm.invoke(prompt);
+      const res = await llm.invoke(
+        prompt,
+        this.agentService.buildNoStreamInvokeOption(),
+      );
       const parseArray = (input: unknown): unknown[] | null => {
         const inputArray = this.copyUnknownArray(input);
         if (inputArray) {
@@ -2258,7 +2392,7 @@ export class CanvasImageGroupService {
       ? input.sourceImageIds
           .map((x) => Number(x))
           .filter((x) => Number.isFinite(x))
-          .slice(0, 2)
+          .slice(0, 8)
       : [];
 
     const tags = this.buildGeneratedAssetTags(

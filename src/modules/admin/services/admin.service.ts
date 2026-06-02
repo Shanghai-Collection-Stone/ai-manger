@@ -532,7 +532,7 @@ export class AdminService {
   /**
    * @description 测试 AI 提供商连通性:用 GET /models 探活,验证 baseUrl + apiKey 可达且
    *   认证有效。不消耗 image/embedding/chat 配额。
-   *   - openai 兼容(openai/glm/deepseek/nvidia/minimax/doubao/...): GET ${baseUrl}/models, Bearer
+   *   - openai 兼容(openai/glm/deepseek/nvidia/minimax/doubao/kimi/...): GET ${baseUrl}/models, Bearer
    *   - gemini: GET ${baseUrl}/models?key=${apiKey}(baseUrl 已含 /v1beta)
    *   - anthropic: GET ${baseUrl}/v1/models, x-api-key
    *   返回 { ok, status, latencyMs, message, modelCount?, sample? }
@@ -685,6 +685,11 @@ export class AdminService {
       case 'doubao':
       case 'ark':
         return 'https://ark.cn-beijing.volces.com/api/v3';
+      case 'kimi':
+        return 'https://api.moonshot.cn/v1';
+      case 'moonshot':
+      case 'moonshotai':
+        return 'https://api.moonshot.ai/v1';
       default:
         return '';
     }
@@ -1281,6 +1286,13 @@ export class AdminService {
         name: 'GLM (z.ai Coding Plan)',
         baseUrl: 'https://api.z.ai/api/coding/paas/v4',
         model: 'glm-4.6',
+        modelCategory: 'llm' as const,
+      },
+      {
+        providerCode: 'kimi',
+        name: 'Kimi (Moonshot)',
+        baseUrl: 'https://api.moonshot.cn/v1',
+        model: 'kimi-k2.6',
         modelCategory: 'llm' as const,
       },
       {
