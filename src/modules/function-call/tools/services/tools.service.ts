@@ -128,7 +128,7 @@ export class ToolsService {
       return this.getGalleryAgentTools(scope);
     }
     if (mode === 'xhs-specialist') {
-      return this.getXhsSpecialistTools(scope);
+      return this.getXhsSupervisorTools(scope);
     }
     if (
       mode === 'xhs-tracker' ||
@@ -851,6 +851,31 @@ export class ToolsService {
   }
 
   /**
+   * @description 获取小红书主专家自动路由所需的完整工具池。
+   * @keyword-cn 小红书专家, 意图路由, 工具池
+   * @keyword-en xhs-supervisor-tools, intent-routing
+   */
+  private getXhsSupervisorTools(
+    scope?: FunctionCallScope,
+  ): CreateAgentParams['tools'] {
+    const tGraphWorkflowAll =
+      this.graphWorkflow.getHandle(undefined, scope) ?? [];
+    const grouped = [
+      ...(this.getXhsSpecialistTools(scope) ?? []),
+      ...(this.getXhsSubAgentSessionTools(scope) ?? []),
+      ...(this.getXhsArticleExpertSessionTools(scope) ?? []),
+      ...tGraphWorkflowAll,
+      ...(this.mediaAgent.getGalleryToolsHandle(scope) ?? []),
+      ...(this.mediaAgent.getXhsToolsHandle(scope) ?? []),
+    ];
+    return Array.from(
+      new Map(
+        grouped.map((t) => [(t as { name?: string }).name ?? '', t] as const),
+      ).values(),
+    ).filter((t) => Boolean((t as { name?: string }).name));
+  }
+
+  /**
    * @description 追踪/发布/生图子会话工具集（todo + canvas 搜索 + robot_list + 账号池 + 详情）
    * @keyword-en XHS tracker publisher image session tools: todo + canvas search + robot_list + account pool
    */
@@ -859,16 +884,23 @@ export class ToolsService {
   ): CreateAgentParams['tools'] {
     const tTodo = this.todo.getHandle(scope) ?? [];
     const tGraphAll = this.graphWorkflow.getHandle(undefined, scope) ?? [];
-    const canvasDetailTool = tGraphAll.find(
-      (t) => (t as { name?: string }).name === 'get_canvas_detail',
+    const extra = tGraphAll.filter((t) =>
+      ['get_canvas_detail', 'xhs_batch_publish', 'batch_publish'].includes(
+        (t as { name?: string }).name ?? '',
+      ),
     );
-    const extra = canvasDetailTool ? [canvasDetailTool] : [];
+    const tXhsAll = this.mediaAgent.getXhsToolsHandle(scope) ?? [];
+    const tUnusedImageGroups = tXhsAll.filter(
+      (t) =>
+        (t as { name?: string }).name === 'xhs_list_unused_image_groups',
+    );
     return [
       ...tTodo,
       this.buildCanvasSearchTool(scope),
       ...this.buildRobotListTools(),
       this.buildAccountPoolTool(scope),
       ...extra,
+      ...tUnusedImageGroups,
     ];
   }
 
@@ -887,15 +919,18 @@ export class ToolsService {
       return name === 'topic_orchestrate' || name === 'xhs_get_canvas_detail';
     });
     const tXhsAll = this.mediaAgent.getXhsToolsHandle(scope) ?? [];
-    const tRegenerateArticle = tXhsAll.filter(
-      (t) => (t as { name?: string }).name === 'xhs_regenerate_article_images',
+    const tArticleXhs = tXhsAll.filter((t) =>
+      [
+        'xhs_regenerate_article_images',
+        'xhs_list_unused_image_groups',
+      ].includes((t as { name?: string }).name ?? ''),
     );
     return [
       ...tTodo,
       this.buildCanvasSearchTool(scope),
       ...tTopicAndCanvas,
       ...this.buildArticleLibraryTools(scope),
-      ...tRegenerateArticle,
+      ...tArticleXhs,
     ];
   }
 }

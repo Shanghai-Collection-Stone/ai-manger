@@ -20,7 +20,7 @@ export type ConversationSessionType =
  * @description default sessionType 内部的"当前激活专家"持久化字段。
  *   sessionType 是会话隔离边界(不能改,改了会话历史就丢了);actionSession 是
  *   default sessionType 下 supervisor 路由出的当前 expert,跨多轮对话保持,
- *   下次进同一会话直接路由到该 expert,跳过 supervisor LLM 二次决策。
+ *   下次进同一会话会优先用于承上短句、业务追问、标签选择等确定性路由。
  *   null/undefined 表示当前由 supervisor 接管(还没路由 / 用户切回指挥官)。
  * @keyword-en active expert agent persisted on conversation
  */
@@ -43,7 +43,7 @@ export interface ConversationEntity {
   _id: ObjectId;
   sessionId: string;
   sessionType?: ConversationSessionType;
-  /** @description default 模式下 supervisor 路由出的当前激活专家(可跨多轮持久化) */
+  /** @description default/xhs-specialist 自动路由下当前激活专家(用于承上短句和业务追问) */
   actionSession?: ConversationActionSession;
   tenantId?: string;
   userId?: string;

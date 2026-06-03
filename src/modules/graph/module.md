@@ -15,7 +15,7 @@ Graph控制器。
 文章编排服务。
 - **关键词**: articles, canvas, gallery, service
 - **函数**:
-  - `generateToCanvas`: imageMode=image-group 时先要求用户显式图库 tags 或指定 imageGroupCanvasIds；再规划文章 blueprints 并做创建前源图预检，预检通过后才创建 Canvas、预存根并立即返回 generating，预检不足则不创建空壳 Canvas/async article canvas with required explicit tags and preflight image-group allocation
+  - `generateToCanvas`: imageMode=image-group 时先要求用户显式图库 tags 或指定 imageGroupCanvasIds；指定图组时跳过已 used 的 group 并记录被选中的 source canvas/groupIds，生文回写配图成功后自动标记源图组 partial/used；再规划文章 blueprints 并做创建前源图预检，预检通过后才创建 Canvas、预存根并立即返回 generating，预检不足则不创建空壳 Canvas/async article canvas with required explicit tags and preflight image-group allocation
   - `runArticleGeneration`: 后台异步执行正文+配图生成并回写状态/run article generation in background
   - `normalizeWritingStyle`: 归一化图文写作风格；未显式传入时按平台给出保守默认值/normalize article writing style
   - `buildLangChainInvokeOption(context)` — 组装 tool 内部 LLM 调用配置，附加 `nostream` tag 与空 callbacks，避免继承主 SSE token handler | keywords: 工具内部非流, 图文生成, internal-llm-nostream, invoke-option
@@ -26,8 +26,10 @@ Graph控制器。
   - `extractExplicitImageTagsFromPrompt(input)` — 从最后用户要求中提取 tag带有/标签/#tag 等显式图库标签，作为 image-group 生文配图硬门槛 | keywords: extract, explicit-tags, image-group
   - `normalizeExplicitImageTag(raw)` — 清洗显式图库标签 token 并过滤连接词 | keywords: normalize, explicit-tags, token
   - `mergeExplicitImageTagsIntoBlueprints(blueprints, explicitTags)` — 将用户显式图库标签合并进每个选题蓝图 | keywords: merge, explicit-tags, blueprint
-  - `generateArticlesAndImages(input)` — legacy 模式下并发正文+配图；image-group 模式复用创建前预检的源图分配并发执行正文生成与图组渲染，运行期不足仍停止并要求补图，最后统一合并 | keywords: generate, image-group, pre-allocation
+  - `generateArticlesAndImages(input)` — legacy 模式下并发正文+配图；image-group 模式复用创建前预检的源图分配或指定未使用图组，并发执行正文生成与图组渲染，运行期不足仍停止并要求补图，最后统一合并；指定图组消费完成后调用 CanvasService 标记来源图组已使用 | keywords: generate, image-group, pre-allocation, mark-used
   - `assignImageGroupsToCanvasArticles`: 在同一 Canvas 使用图组同源逻辑合并文章配图，并校验单篇 6-8 张目标/merge image-group results into article fields with per-article image count checks
+  - `collectImageGroupsFromCanvases(input)` — 从指定 image-group Canvas 收集尚未 used 的 group，按输入顺序返回 group 与 source canvasId | keywords: 未使用图组, collect-image-group-source
+  - `summarizeImageGroupUsageSources(items)` — 汇总被选中的 source canvas/groupIds，供生文消费完成后标记 partial/used | keywords: 图组已使用, source-summary
   - `fetchArticleImagePool`: 按所有蓝图tag一次性拉取regular图片池/fetch article image pool by blueprint tags once
   - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover（**拼图必须使用横图 isPortrait !== true，且过滤默认动态封面/动态拼图分组**）
   - `isAiCoverEnabled`: 读取租户 AI 封面开关/resolve ai cover toggle

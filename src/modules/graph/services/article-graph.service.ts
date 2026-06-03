@@ -63,6 +63,16 @@ type ArticleBlueprint = {
   notes?: string[];
 };
 
+type CollectedImageGroupSource = {
+  canvasId: number;
+  group: CanvasImageGroup;
+};
+
+type ImageGroupUsageSource = {
+  canvasId: number;
+  groupIds: number[];
+};
+
 const ZCoverCopy = z.object({
   title: z.string().min(1),
   subtitle: z.string().optional(),
@@ -2030,6 +2040,7 @@ export class ArticleGraphService {
     ).slice(0, 50);
 
     let preAssignedImageGroups: CanvasImageGroup[] = [];
+    let preAssignedImageGroupUsageSources: ImageGroupUsageSource[] = [];
     let prePreparedImageGroupSources:
       | Extract<ImageGroupSourcePreparation, { ok: true }>
       | undefined;
@@ -2043,15 +2054,15 @@ export class ArticleGraphService {
           : [],
       }));
       if (strictImageGroupSource) {
-        preAssignedImageGroups = await this.collectImageGroupsFromCanvases({
+        const collectedImageGroups = await this.collectImageGroupsFromCanvases({
           canvasIds: imageGroupCanvasIds,
           tenantId,
         });
-        const usablePreAssignedGroups = preAssignedImageGroups.filter(
-          (group) =>
-            group.status !== 'failed' &&
-            Array.isArray(group.images) &&
-            group.images.length >= this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE,
+        const usablePreAssignedGroups = collectedImageGroups.filter(
+          (item) =>
+            item.group.status !== 'failed' &&
+            Array.isArray(item.group.images) &&
+            item.group.images.length >= this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE,
         );
         if (usablePreAssignedGroups.length < articlesForImageGroup.length) {
           this.logger.warn(
@@ -2069,10 +2080,15 @@ export class ArticleGraphService {
             missing: ['图片组数量不足'],
           };
         }
-        preAssignedImageGroups = usablePreAssignedGroups.slice(
+        const selectedPreAssignedGroups = usablePreAssignedGroups.slice(
           0,
           articlesForImageGroup.length,
         );
+        preAssignedImageGroups = selectedPreAssignedGroups.map(
+          (item) => item.group,
+        );
+        preAssignedImageGroupUsageSources =
+          this.summarizeImageGroupUsageSources(selectedPreAssignedGroups);
       } else {
         this.logger.log(
           `[article-gen] image_group_precheck_start articleCount=${articlesForImageGroup.length}`,
@@ -2176,6 +2192,7 @@ export class ArticleGraphService {
       galleryUserId,
       galleryGroupId,
       preAssignedImageGroups,
+      preAssignedImageGroupUsageSources,
       prePreparedImageGroupSources,
       strictImageGroupSource,
       platformAiPrompt: envCtx.platformAiPrompt,
@@ -2232,6 +2249,7 @@ export class ArticleGraphService {
       galleryUserId: string;
       galleryGroupId?: number;
       preAssignedImageGroups?: CanvasImageGroup[];
+      preAssignedImageGroupUsageSources?: ImageGroupUsageSource[];
       prePreparedImageGroupSources?: Extract<
         ImageGroupSourcePreparation,
         { ok: true }
@@ -2752,6 +2770,7 @@ export class ArticleGraphService {
     galleryUserId: string;
     galleryGroupId?: number;
     preAssignedImageGroups?: CanvasImageGroup[];
+    preAssignedImageGroupUsageSources?: ImageGroupUsageSource[];
     prePreparedImageGroupSources?: Extract<
       ImageGroupSourcePreparation,
       { ok: true }
@@ -3075,6 +3094,23 @@ export class ArticleGraphService {
         groups,
         strictImageGroupSource: input.strictImageGroupSource,
       });
+      if (
+        input.strictImageGroupSource &&
+        Array.isArray(input.preAssignedImageGroupUsageSources) &&
+        input.preAssignedImageGroupUsageSources.length > 0
+      ) {
+        const modified = await this.canvas.markImageGroupCanvasesUsed({
+          sources: input.preAssignedImageGroupUsageSources,
+          tenantId: input.tenantId,
+          usedByCanvasId: input.canvasId,
+          usedByArticleIds: orderedBlueprintsForImageGroup.map(
+            (bp) => bp.index + 1,
+          ),
+        });
+        this.logger.log(
+          `[article-gen] image_group_sources_mark_used canvasId=${input.canvasId} sourceCanvasCount=${input.preAssignedImageGroupUsageSources.length} modified=${modified}`,
+        );
+      }
     }
 
     this.logger.log(
@@ -3085,14 +3121,14 @@ export class ArticleGraphService {
   /**
    * @description 从指定 image-group Canvas 列表提取图片组，按输入顺序合并返回。
    * @param {{ canvasIds: number[]; tenantId?: string }} input - 指定 Canvas ID 集合。
-   * @returns {Promise<CanvasImageGroup[]>} 合并后的图片组列表。
-   * @keyword-en collect image groups from specific canvases
+   * @returns {Promise<CollectedImageGroupSource[]>} 合并后的图片组列表及来源 Canvas。
+   * @keyword-en collect-image-groups, source-canvases
    */
   private async collectImageGroupsFromCanvases(input: {
     canvasIds: number[];
     tenantId?: string;
-  }): Promise<CanvasImageGroup[]> {
-    const groups: CanvasImageGroup[] = [];
+  }): Promise<CollectedImageGroupSource[]> {
+    const groups: CollectedImageGroupSource[] = [];
     for (const canvasId of input.canvasIds) {
       const canvas = await this.canvas.get(canvasId, input.tenantId);
       if (!canvas) {
@@ -3101,8 +3137,27 @@ export class ArticleGraphService {
         );
         continue;
       }
+      if (canvas.type !== 'image-group') {
+        this.logger.warn(
+          `[article-gen] preassigned_source_not_image_group canvasId=${canvasId}`,
+        );
+        continue;
+      }
+      if (canvas.imageGroupUsage?.status === 'used') {
+        this.logger.warn(
+          `[article-gen] preassigned_source_already_used canvasId=${canvasId}`,
+        );
+        continue;
+      }
+      const usedGroupIds = new Set(
+        (canvas.imageGroupUsage?.usedGroupIds ?? [])
+          .map((groupId) => Number(groupId))
+          .filter((groupId) => Number.isFinite(groupId) && groupId > 0),
+      );
       const sourceGroups = Array.isArray(canvas.imageGroups)
-        ? canvas.imageGroups
+        ? canvas.imageGroups.filter(
+            (group) => !usedGroupIds.has(Number(group?.id)),
+          )
         : [];
       if (sourceGroups.length === 0) {
         this.logger.warn(
@@ -3110,9 +3165,34 @@ export class ArticleGraphService {
         );
         continue;
       }
-      groups.push(...sourceGroups);
+      groups.push(...sourceGroups.map((group) => ({ canvasId, group })));
     }
     return groups;
+  }
+
+  /**
+   * @description 汇总被选中的图片组来源，用于生文成功消费后标记源图组 Canvas 已使用。
+   * @param {CollectedImageGroupSource[]} items - 已选中的来源图组。
+   * @returns {ImageGroupUsageSource[]} 按 Canvas 聚合的来源图组 ID。
+   * @keyword-cn 图组已使用, 来源汇总
+   * @keyword-en image-group-usage-source, source-summary
+   */
+  private summarizeImageGroupUsageSources(
+    items: CollectedImageGroupSource[],
+  ): ImageGroupUsageSource[] {
+    const map = new Map<number, Set<number>>();
+    for (const item of items) {
+      const canvasId = Number(item.canvasId);
+      const groupId = Number(item.group?.id);
+      if (!Number.isFinite(canvasId) || canvasId <= 0) continue;
+      const set = map.get(canvasId) ?? new Set<number>();
+      if (Number.isFinite(groupId) && groupId > 0) set.add(groupId);
+      map.set(canvasId, set);
+    }
+    return Array.from(map.entries()).map(([canvasId, groupIds]) => ({
+      canvasId,
+      groupIds: Array.from(groupIds),
+    }));
   }
 
   /**

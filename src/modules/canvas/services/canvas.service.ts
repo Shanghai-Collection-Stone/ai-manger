@@ -53,6 +53,14 @@ export class CanvasService {
     await this.canvases.createIndex({ createdAt: -1 });
     // 租户隔离索引
     await this.canvases.createIndex({ tenantId: 1, userId: 1 });
+    await this.canvases.createIndex({
+      tenantId: 1,
+      userId: 1,
+      type: 1,
+      status: 1,
+      'imageGroupUsage.status': 1,
+      updatedAt: -1,
+    });
     const exists = await this.counters.findOne({ _id: 'canvases' });
     if (!exists) await this.counters.insertOne({ _id: 'canvases', seq: 0 });
   }
@@ -169,6 +177,45 @@ export class CanvasService {
     const skp = Math.max(0, Math.floor(skip));
     return this.canvases
       .find(filter, { projection: { _id: 0 } })
+      .sort({ updatedAt: -1 })
+      .skip(skp)
+      .limit(lim)
+      .toArray();
+  }
+
+  /**
+   * @description 查询可被生文消费的未使用图片组 Canvas。
+   * @param {object} input - 查询条件。
+   * @returns {Promise<CanvasEntity[]>} 未使用图片组 Canvas 列表。
+   * @keyword-cn 未使用图组, 图片组查询
+   * @keyword-en unused-image-groups, image-group-query
+   */
+  async listUnusedImageGroupCanvases(input: {
+    userId?: string;
+    tenantId?: string;
+    limit?: number;
+    skip?: number;
+    tag?: string;
+    includeIncomplete?: boolean;
+  }): Promise<CanvasEntity[]> {
+    const filter: Record<string, unknown> = {
+      ...this.buildTenantFilter(input.tenantId),
+      type: 'image-group',
+      $or: [
+        { imageGroupUsage: { $exists: false } },
+        { 'imageGroupUsage.status': { $ne: 'used' } },
+      ],
+    };
+    if (input.userId) filter.userId = input.userId;
+    if (input.tag) filter.keywords = { $in: [input.tag] };
+    if (!input.includeIncomplete) {
+      filter.status = 'completed';
+      filter['imageGroups.0'] = { $exists: true };
+    }
+    const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 50)));
+    const skp = Math.max(0, Math.floor(input.skip ?? 0));
+    return this.canvases
+      .find(filter, { projection: { _id: 0, embeddingVector: 0 } })
       .sort({ updatedAt: -1 })
       .skip(skp)
       .limit(lim)
@@ -833,6 +880,7 @@ export class CanvasService {
         status: 'pending',
       })),
       imageGroups: [],
+      imageGroupUsage: { status: 'unused' },
       createdAt: now,
       updatedAt: now,
     };
@@ -1114,6 +1162,84 @@ export class CanvasService {
       { $set: { 'articles.$.sentAt': now, updatedAt: new Date() } },
     );
     return await this.get(canvasId, tenantId);
+  }
+
+  /**
+   * @description 将图片组 Canvas 标记为已被生文 Canvas 消费。
+   * @param {object} input - 使用标记参数。
+   * @returns {Promise<number>} 成功更新的 Canvas 数量。
+   * @keyword-cn 图组已使用, 生文消费
+   * @keyword-en mark-image-group-used, article-consumption
+   */
+  async markImageGroupCanvasesUsed(input: {
+    sources: Array<{ canvasId: number; groupIds?: number[] }>;
+    tenantId?: string;
+    usedByCanvasId?: number;
+    usedByArticleIds?: number[];
+    usedAt?: Date;
+  }): Promise<number> {
+    const sourceMap = new Map<number, Set<number>>();
+    for (const source of input.sources ?? []) {
+      const canvasId = Math.floor(Number(source?.canvasId));
+      if (!Number.isFinite(canvasId) || canvasId <= 0) continue;
+      const set = sourceMap.get(canvasId) ?? new Set<number>();
+      for (const rawGroupId of source.groupIds ?? []) {
+        const groupId = Math.floor(Number(rawGroupId));
+        if (Number.isFinite(groupId) && groupId > 0) set.add(groupId);
+      }
+      sourceMap.set(canvasId, set);
+    }
+    if (sourceMap.size === 0) return 0;
+
+    const usedAt = input.usedAt ?? new Date();
+    let modified = 0;
+    for (const [canvasId, groupIds] of sourceMap.entries()) {
+      const canvas = await this.get(canvasId, input.tenantId);
+      const allGroupIds = (canvas?.imageGroups ?? [])
+        .map((group) => Math.floor(Number(group?.id)))
+        .filter((id) => Number.isFinite(id) && id > 0);
+      const existingUsedGroupIds = new Set(
+        (canvas?.imageGroupUsage?.usedGroupIds ?? [])
+          .map((groupId) => Math.floor(Number(groupId)))
+          .filter((groupId) => Number.isFinite(groupId) && groupId > 0),
+      );
+      const groupIdsToMark =
+        groupIds.size > 0 ? Array.from(groupIds) : allGroupIds;
+      for (const groupId of groupIdsToMark) existingUsedGroupIds.add(groupId);
+      const nextUsedGroupIds = Array.from(existingUsedGroupIds).sort(
+        (a, b) => a - b,
+      );
+      const nextStatus =
+        allGroupIds.length > 0 &&
+        allGroupIds.every((groupId) => existingUsedGroupIds.has(groupId))
+          ? 'used'
+          : nextUsedGroupIds.length > 0
+            ? 'partial'
+            : 'unused';
+      const res = await this.canvases.updateOne(
+        {
+          id: canvasId,
+          type: 'image-group',
+          ...this.buildTenantFilter(input.tenantId),
+        },
+        {
+          $set: {
+            imageGroupUsage: {
+              status: nextStatus,
+              usedAt,
+              usedByCanvasId: input.usedByCanvasId,
+              usedByArticleIds: Array.isArray(input.usedByArticleIds)
+                ? input.usedByArticleIds
+                : undefined,
+              usedGroupIds: nextUsedGroupIds,
+            },
+            updatedAt: new Date(),
+          },
+        },
+      );
+      modified += res.modifiedCount;
+    }
+    return modified;
   }
 
   /**

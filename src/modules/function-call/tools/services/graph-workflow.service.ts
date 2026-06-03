@@ -609,7 +609,7 @@ export class GraphWorkflowFunctionCallService {
             .array(z.number().int().positive())
             .optional()
             .describe(
-              'Optional image-group canvas IDs. When provided, reuse these canvas image groups as article image sources by order.',
+              'Optional image-group canvas IDs. When provided, reuse currently unused canvas image groups as article image sources by order; after successful article image assignment, consumed source groups are automatically marked used.',
             ),
         }),
       },

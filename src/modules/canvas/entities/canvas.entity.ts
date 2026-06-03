@@ -47,6 +47,15 @@ export interface CanvasImageGroup {
   status: 'pending' | 'done' | 'failed';
 }
 
+/** @description 图片组 Canvas 使用状态；无字段的旧数据按 unused 处理 */
+export interface CanvasImageGroupUsage {
+  status: 'unused' | 'partial' | 'used';
+  usedAt?: Date;
+  usedByCanvasId?: number;
+  usedByArticleIds?: number[];
+  usedGroupIds?: number[];
+}
+
 export interface CanvasArticleEntity {
   id: number;
   title: string;
@@ -74,6 +83,8 @@ export interface CanvasEntity {
   articles: CanvasArticleEntity[];
   /** @description 图片组列表，仅 type=image-group 时有值 */
   imageGroups?: CanvasImageGroup[];
+  /** @description 图片组 Canvas 是否已被生文流程消费，仅 type=image-group 时有值 */
+  imageGroupUsage?: CanvasImageGroupUsage;
   /** 画布关键词，用于向量搜索与分类过滤 */
   keywords?: string[];
   /** 嵌入向量，用于语义相似度检索 */

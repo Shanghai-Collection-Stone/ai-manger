@@ -1,5 +1,23 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ChevronLeft, ChevronDown, RefreshCw, CheckCircle, Clock, AlertCircle, BookOpen, X, CircleDot, User, ArrowLeft, XCircle, Timer, ChevronRight, LayoutGrid, FileText, Images } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronDown,
+  RefreshCw,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  BookOpen,
+  X,
+  CircleDot,
+  User,
+  ArrowLeft,
+  XCircle,
+  Timer,
+  ChevronRight,
+  LayoutGrid,
+  FileText,
+  Images,
+} from 'lucide-react';
 import ChatBIView from './ChatBIView';
 import XhsDataTab from './XhsDataTab';
 import CanvasFeedView from './CanvasFeedView';
@@ -26,7 +44,7 @@ function getAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** @description 小红书子代理配置 subagent config list */
+/** @description 小红书专家会话配置，main 走后端 supervisor 自动分派，其他项供专业用户手动直达。 */
 const XHS_SUBAGENTS = [
   {
     id: 'main',
@@ -35,8 +53,12 @@ const XHS_SUBAGENTS = [
     sessionType: 'xhs-specialist',
     sessionStorageKey: 'ai_commander_xhs_session',
     welcomeTitle: '小红书专家',
-    welcomeDesc: '基于 Canvas 和图库，帮你生成和发布小红书内容',
-    quickPrompts: ['生成一组小红书文章', '查看我的 Canvas 列表', '创建发布计划'],
+    welcomeDesc: '基于 Canvas 和图库，帮你生成、追踪和发布小红书内容',
+    quickPrompts: [
+      '生成一组小红书文章',
+      '查看我的 Canvas 列表',
+      '创建发布计划',
+    ],
     inputPlaceholder: '输入问题，关于小红书内容创作...',
   },
   {
@@ -47,7 +69,11 @@ const XHS_SUBAGENTS = [
     sessionStorageKey: 'ai_commander_xhs_tracker_session',
     welcomeTitle: '数据追踪',
     welcomeDesc: '分析账号互动、爆文规律与粉丝增长趋势',
-    quickPrompts: ['分析近期爆款笔记特点', '查看账号粉丝增长趋势', '对比竞品账号数据'],
+    quickPrompts: [
+      '分析近期爆款笔记特点',
+      '查看账号粉丝增长趋势',
+      '对比竞品账号数据',
+    ],
     inputPlaceholder: '输入分析需求，关于小红书账号数据...',
   },
   {
@@ -58,7 +84,11 @@ const XHS_SUBAGENTS = [
     sessionStorageKey: 'ai_commander_xhs_publish_session',
     welcomeTitle: '发文执行',
     welcomeDesc: '将内容推入发布流程，批量派单执行',
-    quickPrompts: ['发布当前 Canvas 文章', '查看发布任务进度', '批量派发发布任务'],
+    quickPrompts: [
+      '发布当前 Canvas 文章',
+      '查看发布任务进度',
+      '批量派发发布任务',
+    ],
     inputPlaceholder: '输入发布指令...',
   },
   {
@@ -69,7 +99,11 @@ const XHS_SUBAGENTS = [
     sessionStorageKey: 'ai_commander_xhs_article_expert_session',
     welcomeTitle: '生文专家',
     welcomeDesc: '基于 Canvas 画布生成小红书图文内容，从主题到文章一键生成',
-    quickPrompts: ['生成一批图文Canvas', '基于已有Canvas补充文章', '查看图文Canvas列表'],
+    quickPrompts: [
+      '生成一批图文 Canvas',
+      '基于已有 Canvas 补充文章',
+      '查看图文 Canvas 列表',
+    ],
     inputPlaceholder: '输入主题或要求，生成小红书图文...',
   },
   {
@@ -80,7 +114,11 @@ const XHS_SUBAGENTS = [
     sessionStorageKey: 'ai_commander_xhs_image_expert_session',
     welcomeTitle: '生图专家',
     welcomeDesc: '基于图库和 Canvas 生成小红书图片组，匹配标签配图',
-    quickPrompts: ['生成一组图片Canvas', '为Canvas生成图片组', '查看图组Canvas列表'],
+    quickPrompts: [
+      '生成一组图片 Canvas',
+      '为 Canvas 生成图片组',
+      '查看图组 Canvas 列表',
+    ],
     inputPlaceholder: '输入要求，生成小红书图片组...',
   },
 ];
@@ -93,9 +131,7 @@ const XHS_SUBAGENTS = [
  */
 const XhsSpecialistView = ({ onBack }) => {
   const [tab, setTab] = useState('chat'); // 'chat' | 'tasks' | 'canvas'
-  // 当前激活的子代理 active subagent id
   const [activeAgent, setActiveAgent] = useState('main');
-  // 子代理下拉菜单开关 subagent dropdown open state
   const [agentDropOpen, setAgentDropOpen] = useState(false);
   const agentDropRef = useRef(null);
   const [tasks, setTasks] = useState([]);
@@ -112,7 +148,6 @@ const XhsSpecialistView = ({ onBack }) => {
   const [canvasTypeFilter, setCanvasTypeFilter] = useState('all'); // 'all' | 'article' | 'image-group'
   const [selectedCanvas, setSelectedCanvas] = useState(null); // { id, type } 打开的 canvas
 
-  // 关闭下拉菜单（点击外部区域时） close dropdown on outside click
   useEffect(() => {
     if (!agentDropOpen) return;
     const close = (e) => {
@@ -125,13 +160,15 @@ const XhsSpecialistView = ({ onBack }) => {
   }, [agentDropOpen]);
 
   /**
-   * @description 加载小红书任务列表，始终按 category=xhs 过滤（不受子代理影响）
+   * @description 加载小红书任务列表，始终按 category=xhs 过滤。
    * @keyword-en load xhs tasks by category
    */
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/todo?limit=100&category=xhs`, { headers: getAuthHeaders() });
+      const res = await fetch(`${API_BASE}/todo?limit=100&category=xhs`, {
+        headers: getAuthHeaders(),
+      });
       if (res.ok) {
         const data = await res.json();
         const allTasks = Array.isArray(data.todos) ? data.todos : [];
@@ -160,10 +197,15 @@ const XhsSpecialistView = ({ onBack }) => {
   const loadCanvases = useCallback(async () => {
     setCanvasLoading(true);
     try {
-      const opts = canvasTypeFilter !== 'all' ? { type: canvasTypeFilter, limit: 50 } : { limit: 50 };
+      const opts =
+        canvasTypeFilter !== 'all'
+          ? { type: canvasTypeFilter, limit: 50 }
+          : { limit: 50 };
       const data = await chatService.listCanvases(opts);
       const list = Array.isArray(data.canvases) ? data.canvases : [];
-      list.sort((a, b) => new Date(b.createdAt ?? 0) - new Date(a.createdAt ?? 0));
+      list.sort(
+        (a, b) => new Date(b.createdAt ?? 0) - new Date(a.createdAt ?? 0),
+      );
       setCanvases(list);
     } catch {
       setCanvases([]);
@@ -183,13 +225,15 @@ const XhsSpecialistView = ({ onBack }) => {
     let cancelled = false;
     setItemsLoading(true);
 
-    fetch(`${API_BASE}/todo/${selectedTask.id}/items`, { headers: getAuthHeaders() })
-      .then(res => {
+    fetch(`${API_BASE}/todo/${selectedTask.id}/items`, {
+      headers: getAuthHeaders(),
+    })
+      .then((res) => {
         if (cancelled) return null;
         if (!res.ok) return { items: [] };
         return res.json();
       })
-      .then(data => {
+      .then((data) => {
         if (cancelled || !data) return;
         setTaskItems(Array.isArray(data.items) ? data.items : []);
         setItemsFetched(true);
@@ -201,7 +245,9 @@ const XhsSpecialistView = ({ onBack }) => {
         if (!cancelled) setItemsLoading(false);
       });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedTask?.id, itemsFetched]);
 
   const handleSelectTask = (task) => {
@@ -235,14 +281,30 @@ const XhsSpecialistView = ({ onBack }) => {
     switch (status) {
       case 'done':
       case 'completed':
-        return { icon: <CheckCircle size={14} />, color: 'text-green-600', bgColor: 'bg-green-50 border-green-200' };
+        return {
+          icon: <CheckCircle size={14} />,
+          color: 'text-green-600',
+          bgColor: 'bg-green-50 border-green-200',
+        };
       case 'in_progress':
-        return { icon: <CircleDot size={14} />, color: 'text-blue-600', bgColor: 'bg-blue-50 border-blue-200' };
+        return {
+          icon: <CircleDot size={14} />,
+          color: 'text-blue-600',
+          bgColor: 'bg-blue-50 border-blue-200',
+        };
       case 'failed':
       case 'cancelled':
-        return { icon: <X size={14} />, color: 'text-red-600', bgColor: 'bg-red-50 border-red-200' };
+        return {
+          icon: <X size={14} />,
+          color: 'text-red-600',
+          bgColor: 'bg-red-50 border-red-200',
+        };
       default:
-        return { icon: <Clock size={14} />, color: 'text-slate-400', bgColor: 'bg-slate-50 border-slate-200' };
+        return {
+          icon: <Clock size={14} />,
+          color: 'text-slate-400',
+          bgColor: 'bg-slate-50 border-slate-200',
+        };
     }
   };
 
@@ -280,7 +342,10 @@ const XhsSpecialistView = ({ onBack }) => {
     if (!date) return '';
     const d = new Date(date);
     if (isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   // Task List Content
@@ -294,7 +359,8 @@ const XhsSpecialistView = ({ onBack }) => {
       );
     }
     if (tasks.length === 0) {
-      const agentLabel = XHS_SUBAGENTS.find(a => a.id === activeAgent)?.label ?? '小红书';
+      const agentLabel =
+        XHS_SUBAGENTS.find((a) => a.id === activeAgent)?.label ?? '小红书';
       return (
         <div className="text-center py-12 text-slate-400">
           <BookOpen size={32} className="mx-auto mb-2 opacity-50" />
@@ -343,10 +409,31 @@ const XhsSpecialistView = ({ onBack }) => {
    */
   const getItemStatusStyle = (status) => {
     switch (status) {
-      case 'done': return { icon: <CheckCircle size={14} />, color: 'text-green-600', bg: 'bg-green-50 border-green-200' };
-      case 'in_progress': return { icon: <CircleDot size={14} />, color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200' };
-      case 'failed': case 'cancelled': return { icon: <XCircle size={14} />, color: 'text-red-600', bg: 'bg-red-50 border-red-200' };
-      default: return { icon: <Timer size={14} />, color: 'text-slate-400', bg: 'bg-slate-50 border-slate-200' };
+      case 'done':
+        return {
+          icon: <CheckCircle size={14} />,
+          color: 'text-green-600',
+          bg: 'bg-green-50 border-green-200',
+        };
+      case 'in_progress':
+        return {
+          icon: <CircleDot size={14} />,
+          color: 'text-blue-600',
+          bg: 'bg-blue-50 border-blue-200',
+        };
+      case 'failed':
+      case 'cancelled':
+        return {
+          icon: <XCircle size={14} />,
+          color: 'text-red-600',
+          bg: 'bg-red-50 border-red-200',
+        };
+      default:
+        return {
+          icon: <Timer size={14} />,
+          color: 'text-slate-400',
+          bg: 'bg-slate-50 border-slate-200',
+        };
     }
   };
 
@@ -356,10 +443,19 @@ const XhsSpecialistView = ({ onBack }) => {
    */
   const renderDetailTimeline = () => {
     if (itemsLoading) {
-      return <div className="flex items-center justify-center py-16"><div className="w-6 h-6 border-2 border-rose-200 border-t-rose-500 rounded-full animate-spin" /></div>;
+      return (
+        <div className="flex items-center justify-center py-16">
+          <div className="w-6 h-6 border-2 border-rose-200 border-t-rose-500 rounded-full animate-spin" />
+        </div>
+      );
     }
     if (taskItems.length === 0) {
-      return <div className="flex flex-col items-center justify-center py-16 text-slate-400"><Clock size={32} className="mb-2 opacity-30" /><p className="text-sm">暂无执行节点</p></div>;
+      return (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+          <Clock size={32} className="mb-2 opacity-30" />
+          <p className="text-sm">暂无执行节点</p>
+        </div>
+      );
     }
     return (
       /* 执行节点时间轴 区域 */
@@ -371,18 +467,36 @@ const XhsSpecialistView = ({ onBack }) => {
               const style = getItemStatusStyle(item.status);
               return (
                 <div key={item.id} className="relative flex gap-3">
-                  <div className={`relative z-10 w-9 h-9 rounded-full border-2 flex items-center justify-center shrink-0 ${style.bg}`}>
+                  <div
+                    className={`relative z-10 w-9 h-9 rounded-full border-2 flex items-center justify-center shrink-0 ${style.bg}`}
+                  >
                     <span className={style.color}>{style.icon}</span>
                   </div>
                   <div className="flex-1 min-w-0 pb-1">
                     <div className="bg-white rounded-xl border border-slate-100 p-3 shadow-sm">
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <h4 className="text-sm font-medium text-slate-800 line-clamp-2">{item.title || '未命名节点'}</h4>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full border shrink-0 ${style.bg} ${style.color}`}>{getStatusText(item.status)}</span>
+                        <h4 className="text-sm font-medium text-slate-800 line-clamp-2">
+                          {item.title || '未命名节点'}
+                        </h4>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded-full border shrink-0 ${style.bg} ${style.color}`}
+                        >
+                          {getStatusText(item.status)}
+                        </span>
                       </div>
-                      {item.description && <p className="text-xs text-slate-500 line-clamp-2 mb-1">{item.description}</p>}
+                      {item.description && (
+                        <p className="text-xs text-slate-500 line-clamp-2 mb-1">
+                          {item.description}
+                        </p>
+                      )}
                       <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                        {item.plannedAt && <span className="flex items-center gap-1"><Clock size={10} />{formatDate(item.plannedAt)} {formatTime(item.plannedAt)}</span>}
+                        {item.plannedAt && (
+                          <span className="flex items-center gap-1">
+                            <Clock size={10} />
+                            {formatDate(item.plannedAt)}{' '}
+                            {formatTime(item.plannedAt)}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -391,7 +505,9 @@ const XhsSpecialistView = ({ onBack }) => {
             })}
           </div>
         </div>
-        <p className="text-center text-[10px] text-slate-400 mt-4">共 {taskItems.length} 个节点</p>
+        <p className="text-center text-[10px] text-slate-400 mt-4">
+          共 {taskItems.length} 个节点
+        </p>
       </div>
     );
   };
@@ -401,17 +517,28 @@ const XhsSpecialistView = ({ onBack }) => {
    * @keyword-en DetailInfo task basic info
    */
   const renderDetailInfo = () => {
-    const typeLabelMap = { auto_execute: '自动执行', offline_execute: '线下执行', long_task: '长时任务', other: '其他' };
+    const typeLabelMap = {
+      auto_execute: '自动执行',
+      offline_execute: '线下执行',
+      long_task: '长时任务',
+      other: '其他',
+    };
     return (
       /* 任务详情信息主体 区域 */
       <div className="p-4 space-y-4 pb-24">
         <div>
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">任务名称</div>
-          <p className="text-sm font-semibold text-slate-800">{selectedTask.title}</p>
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+            任务名称
+          </div>
+          <p className="text-sm font-semibold text-slate-800">
+            {selectedTask.title}
+          </p>
         </div>
         {selectedTask.description && (
           <div>
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">任务描述</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              任务描述
+            </div>
             <div className="mt-1 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap bg-slate-50 rounded-xl p-3 border border-slate-100 max-h-40 overflow-y-auto">
               {selectedTask.description}
             </div>
@@ -419,7 +546,9 @@ const XhsSpecialistView = ({ onBack }) => {
         )}
         {selectedTask.aiPlan && (
           <div>
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">执行计划</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              执行计划
+            </div>
             <div className="mt-1 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap bg-white rounded-xl p-3 border border-slate-200 max-h-56 overflow-y-auto">
               {selectedTask.aiPlan}
             </div>
@@ -427,12 +556,23 @@ const XhsSpecialistView = ({ onBack }) => {
         )}
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-slate-50 rounded-xl p-3">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">接单人</div>
-            <div className="flex items-center gap-1.5 text-sm text-slate-700"><User size={14} className="text-slate-400 shrink-0" />{selectedTask.assigneeDisplayName || selectedTask.assignee || '待分配'}</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              接单人
+            </div>
+            <div className="flex items-center gap-1.5 text-sm text-slate-700">
+              <User size={14} className="text-slate-400 shrink-0" />
+              {selectedTask.assigneeDisplayName ||
+                selectedTask.assignee ||
+                '待分配'}
+            </div>
           </div>
           <div className="bg-slate-50 rounded-xl p-3">
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">任务类型</div>
-            <span className="text-sm text-slate-700">{typeLabelMap[selectedTask.type] || '其他'}</span>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+              任务类型
+            </div>
+            <span className="text-sm text-slate-700">
+              {typeLabelMap[selectedTask.type] || '其他'}
+            </span>
           </div>
         </div>
       </div>
@@ -442,25 +582,45 @@ const XhsSpecialistView = ({ onBack }) => {
   const renderTaskDetail = () => {
     if (!selectedTask) return null;
     const dotColor = getStatusDotColor(selectedTask.status);
-    const typeLabelMap = { auto_execute: '自动执行', offline_execute: '线下执行', long_task: '长时任务', other: '其他' };
+    const typeLabelMap = {
+      auto_execute: '自动执行',
+      offline_execute: '线下执行',
+      long_task: '长时任务',
+      other: '其他',
+    };
 
     return (
       /* 任务详情全屏页面 区域 */
       <div className="fixed inset-0 z-50 bg-white flex flex-col">
         {/* 详情页头部 区域 */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 bg-white shrink-0">
-          <button onClick={handleCloseDetail} className="p-1.5 -ml-1 rounded-full hover:bg-slate-100 text-slate-600">
+          <button
+            onClick={handleCloseDetail}
+            className="p-1.5 -ml-1 rounded-full hover:bg-slate-100 text-slate-600"
+          >
             <ArrowLeft size={20} />
           </button>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`} />
-              <h2 className="font-bold text-slate-800 text-base truncate">{selectedTask.title || `任务 #${selectedTask.id}`}</h2>
+              <span
+                className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`}
+              />
+              <h2 className="font-bold text-slate-800 text-base truncate">
+                {selectedTask.title || `任务 #${selectedTask.id}`}
+              </h2>
             </div>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[10px] px-2 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">{typeLabelMap[selectedTask.type] || '其他'}</span>
-              <span className="text-[10px] px-2 py-0.5 rounded border bg-white text-slate-500 border-slate-200">{getStatusText(selectedTask.status)}</span>
-              {selectedTask.category === 'xhs' && <span className="text-[10px] px-2 py-0.5 rounded border bg-rose-50 text-rose-600 border-rose-200">小红书</span>}
+              <span className="text-[10px] px-2 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-200">
+                {typeLabelMap[selectedTask.type] || '其他'}
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded border bg-white text-slate-500 border-slate-200">
+                {getStatusText(selectedTask.status)}
+              </span>
+              {selectedTask.category === 'xhs' && (
+                <span className="text-[10px] px-2 py-0.5 rounded border bg-rose-50 text-rose-600 border-rose-200">
+                  小红书
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -468,14 +628,20 @@ const XhsSpecialistView = ({ onBack }) => {
         {/* 详情页 Tab 导航 区域 */}
         <div className="border-b border-slate-100 px-4 bg-white shrink-0">
           <div className="flex space-x-5 overflow-x-auto">
-            {[['info', '任务详情'], ['timeline', '执行节点'], ['xhs-data', '小红书数据']].map(([tabKey, label]) => (
+            {[
+              ['info', '任务详情'],
+              ['timeline', '执行节点'],
+              ['xhs-data', '小红书数据'],
+            ].map(([tabKey, label]) => (
               <button
                 key={tabKey}
                 onClick={() => setDetailTab(tabKey)}
                 className={`py-3 text-sm font-bold transition-colors relative whitespace-nowrap ${detailTab === tabKey ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600'}`}
               >
                 {label}
-                {detailTab === tabKey && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-slate-900 rounded-full" />}
+                {detailTab === tabKey && (
+                  <div className="absolute bottom-0 left-0 w-full h-0.5 bg-slate-900 rounded-full" />
+                )}
               </button>
             ))}
           </div>
@@ -491,12 +657,13 @@ const XhsSpecialistView = ({ onBack }) => {
     );
   };
 
-  // Chat Tab Content — 按当前子代理动态传入会话配置，key 强制切换时重载
+  // Chat Tab Content — main 自动路由；其他项为专业用户手动直达会话
   const renderChatTab = () => {
-    const cfg = XHS_SUBAGENTS.find(a => a.id === activeAgent) ?? XHS_SUBAGENTS[0];
+    const cfg =
+      XHS_SUBAGENTS.find((a) => a.id === activeAgent) ?? XHS_SUBAGENTS[0];
     return (
       <div className="flex-1 min-h-0">
-        {/* key 绑定 sessionType，切换子代理时强制重载 ChatBIView */}
+        {/* key 绑定 sessionType，切换手动专家时强制重载 ChatBIView */}
         <ChatBIView
           key={cfg.sessionType}
           sessionType={cfg.sessionType}
@@ -522,13 +689,17 @@ const XhsSpecialistView = ({ onBack }) => {
       { value: 'image-group', label: '图组', icon: <Images size={13} /> },
     ];
     const statusColor = (s) => {
-      if (s === 'completed') return 'text-green-600 bg-green-50 border-green-200';
+      if (s === 'completed')
+        return 'text-green-600 bg-green-50 border-green-200';
       if (s === 'generating') return 'text-blue-600 bg-blue-50 border-blue-200';
       if (s === 'failed') return 'text-red-600 bg-red-50 border-red-200';
       return 'text-slate-400 bg-slate-50 border-slate-200';
     };
-    const statusText = (s) => ({ completed: '完成', generating: '生成中', failed: '失败' }[s] ?? s ?? '');
-    const typeLabel = (t) => t === 'image-group' ? '图组' : '图文';
+    const statusText = (s) =>
+      ({ completed: '完成', generating: '生成中', failed: '失败' })[s] ??
+      s ??
+      '';
+    const typeLabel = (t) => (t === 'image-group' ? '图组' : '图文');
     const countLabel = (cv) => {
       if (cv.type === 'image-group') {
         const n = Array.isArray(cv.imageGroups) ? cv.imageGroups.length : 0;
@@ -540,7 +711,9 @@ const XhsSpecialistView = ({ onBack }) => {
     const formatDate = (d) => {
       if (!d) return '';
       const dt = new Date(d);
-      return isNaN(dt.getTime()) ? '' : dt.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+      return isNaN(dt.getTime())
+        ? ''
+        : dt.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
     };
 
     return (
@@ -549,13 +722,14 @@ const XhsSpecialistView = ({ onBack }) => {
         {/* 类型过滤栏 canvas type filter bar */}
         <div className="sticky top-0 z-10 bg-white border-b border-slate-100 px-4 py-2 flex items-center gap-2">
           <div className="flex rounded-full bg-slate-100 p-0.5 gap-0.5 text-xs">
-            {TYPE_OPTS.map(opt => (
+            {TYPE_OPTS.map((opt) => (
               <button
                 key={opt.value}
                 onClick={() => setCanvasTypeFilter(opt.value)}
                 className={`flex items-center gap-1 px-2.5 py-1 rounded-full transition ${canvasTypeFilter === opt.value ? 'bg-white shadow text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
               >
-                {opt.icon}{opt.label}
+                {opt.icon}
+                {opt.label}
               </button>
             ))}
           </div>
@@ -564,7 +738,10 @@ const XhsSpecialistView = ({ onBack }) => {
             disabled={canvasLoading}
             className="ml-auto p-1.5 hover:bg-slate-100 rounded-full text-slate-500 disabled:opacity-50"
           >
-            <RefreshCw size={14} className={canvasLoading ? 'animate-spin' : ''} />
+            <RefreshCw
+              size={14}
+              className={canvasLoading ? 'animate-spin' : ''}
+            />
           </button>
         </div>
 
@@ -572,7 +749,8 @@ const XhsSpecialistView = ({ onBack }) => {
         <div className="p-4">
           {canvasLoading ? (
             <div className="flex items-center justify-center py-12 text-slate-400">
-              <RefreshCw size={18} className="animate-spin mr-2" /><span className="text-sm">加载中...</span>
+              <RefreshCw size={18} className="animate-spin mr-2" />
+              <span className="text-sm">加载中...</span>
             </div>
           ) : canvases.length === 0 ? (
             <div className="text-center py-12 text-slate-400">
@@ -582,27 +760,42 @@ const XhsSpecialistView = ({ onBack }) => {
             </div>
           ) : (
             <div className="space-y-2">
-              {canvases.map(cv => (
+              {canvases.map((cv) => (
                 /* 单个 Canvas 卡片 canvas card */
                 <div
                   key={cv.id}
-                  onClick={() => setSelectedCanvas({ id: cv.id, type: cv.type })}
+                  onClick={() =>
+                    setSelectedCanvas({ id: cv.id, type: cv.type })
+                  }
                   className="p-3 bg-slate-50 rounded-xl border border-slate-100 hover:border-rose-200 transition cursor-pointer"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1.5 mb-1">
                         {/* 类型徽章 type badge */}
-                        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-rose-50 text-rose-600 border-rose-100">{typeLabel(cv.type)}</span>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${statusColor(cv.status)}`}>{statusText(cv.status)}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-rose-50 text-rose-600 border-rose-100">
+                          {typeLabel(cv.type)}
+                        </span>
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded border ${statusColor(cv.status)}`}
+                        >
+                          {statusText(cv.status)}
+                        </span>
                       </div>
-                      <div className="text-sm font-medium text-slate-800 truncate">{cv.title || `Canvas #${cv.id}`}</div>
+                      <div className="text-sm font-medium text-slate-800 truncate">
+                        {cv.title || `Canvas #${cv.id}`}
+                      </div>
                       <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
                         <span>{countLabel(cv)}</span>
-                        {formatDate(cv.createdAt) && <span>{formatDate(cv.createdAt)}</span>}
+                        {formatDate(cv.createdAt) && (
+                          <span>{formatDate(cv.createdAt)}</span>
+                        )}
                       </div>
                     </div>
-                    <ChevronRight size={16} className="text-slate-300 shrink-0 mt-1" />
+                    <ChevronRight
+                      size={16}
+                      className="text-slate-300 shrink-0 mt-1"
+                    />
                   </div>
                 </div>
               ))}
@@ -615,12 +808,15 @@ const XhsSpecialistView = ({ onBack }) => {
 
   // Tasks Tab Content
   const renderTasksTab = () => {
-    const agentLabel = XHS_SUBAGENTS.find(a => a.id === activeAgent)?.label ?? '小红书';
+    const agentLabel =
+      XHS_SUBAGENTS.find((a) => a.id === activeAgent)?.label ?? '小红书';
     return (
       <div className="flex-1 min-h-0 overflow-y-auto p-4">
         <div className="flex items-center justify-between mb-4">
           {/* 任务列表标题 tasks tab title */}
-          <h3 className="text-sm font-semibold text-slate-700">{agentLabel}任务</h3>
+          <h3 className="text-sm font-semibold text-slate-700">
+            {agentLabel}任务
+          </h3>
           <button
             onClick={loadTasks}
             disabled={loading}
@@ -636,7 +832,7 @@ const XhsSpecialistView = ({ onBack }) => {
 
   return (
     <div className="h-full flex flex-col bg-white animate-fade-in">
-      {/* 页头：返回按鈕 + 子代理下拉切换区域 + 任务列表 tab header area */}
+      {/* 页头：返回按钮 + 小红书主入口 + 任务/画布 tab */}
       <div className="flex items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
         {/* 返回按鈕 back button */}
         <button
@@ -646,20 +842,23 @@ const XhsSpecialistView = ({ onBack }) => {
           <ChevronLeft size={22} />
         </button>
 
-        {/* 字代理切换区域 subagent switcher + tasks tab */}
+        {/* 小红书主入口 + tasks/canvas tabs */}
         <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0 gap-0.5">
-
-          {/* 子代理下拉菜单 subagent dropdown */}
+          {/* 后端会按意图自动切换小红书子领域专家 */}
           <div className="relative" ref={agentDropRef}>
             <button
-              onClick={() => { setTab('chat'); setAgentDropOpen(prev => !prev); }}
+              onClick={() => {
+                setTab('chat');
+                setAgentDropOpen((prev) => !prev);
+              }}
               className={`flex items-center gap-1 px-3 py-1.5 text-xs rounded-full whitespace-nowrap transition ${
                 tab === 'chat'
                   ? 'bg-white shadow text-slate-800'
                   : 'text-slate-500 hover:text-slate-700'
               }`}
             >
-              {XHS_SUBAGENTS.find(a => a.id === activeAgent)?.label ?? '对话'}
+              {XHS_SUBAGENTS.find((a) => a.id === activeAgent)?.label ??
+                '小红书专家'}
               <ChevronDown
                 size={12}
                 className={`transition-transform ${
@@ -668,13 +867,16 @@ const XhsSpecialistView = ({ onBack }) => {
               />
             </button>
 
-            {/* 子代理选择列表面板 subagent selection panel */}
             {agentDropOpen && tab === 'chat' && (
-              <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden min-w-[120px]">
-                {XHS_SUBAGENTS.map(agent => (
+              <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden min-w-[132px]">
+                {XHS_SUBAGENTS.map((agent) => (
                   <button
                     key={agent.id}
-                    onClick={() => { setActiveAgent(agent.id); setAgentDropOpen(false); }}
+                    onClick={() => {
+                      setActiveAgent(agent.id);
+                      setAgentDropOpen(false);
+                      setTab('chat');
+                    }}
                     className={`w-full text-left px-4 py-2.5 text-xs transition hover:bg-rose-50 hover:text-rose-600 ${
                       activeAgent === agent.id
                         ? 'text-rose-600 bg-rose-50 font-medium'
@@ -690,7 +892,10 @@ const XhsSpecialistView = ({ onBack }) => {
 
           {/* 任务列表 tab tasks tab button */}
           <button
-            onClick={() => { setTab('tasks'); setAgentDropOpen(false); }}
+            onClick={() => {
+              setTab('tasks');
+              setAgentDropOpen(false);
+            }}
             className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap transition ${
               tab === 'tasks'
                 ? 'bg-white shadow text-slate-800'
@@ -702,7 +907,10 @@ const XhsSpecialistView = ({ onBack }) => {
 
           {/* Canvas 管理 tab canvas tab button */}
           <button
-            onClick={() => { setTab('canvas'); setAgentDropOpen(false); }}
+            onClick={() => {
+              setTab('canvas');
+              setAgentDropOpen(false);
+            }}
             className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap transition ${
               tab === 'canvas'
                 ? 'bg-white shadow text-slate-800'

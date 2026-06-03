@@ -15,7 +15,9 @@ export interface ChatRequest {
     | 'gallery-agent'
     | 'xhs-specialist'
     | 'xhs-tracker'
-    | 'xhs-publisher';
+    | 'xhs-publisher'
+    | 'xhs-article-expert'
+    | 'xhs-image-expert';
   provider?: string;
   model?: string;
   temperature?: number;

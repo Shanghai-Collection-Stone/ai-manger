@@ -29,11 +29,12 @@
 小红书工具服务，提供 Canvas 和批量发布相关的 LangChain 工具。注入 `CanvasService` 与 `GalleryService` 实现真实数据读写 + 不足量预检。
 - **关键词**: xhs, canvas, tools, langchain, image-group, tag-select, precheck, insufficient
 - **函数**:
-  - `getHandle` - 获取 XHS 工具列表（list、detail、create-image-group、**tag-select-request**）
+  - `getHandle` - 获取 XHS 工具列表（list、unused-image-groups、detail、create-image-group、**tag-select-request**）
   - `normalizeImageGroupArticles` - 对齐 groupCount 与 articles 数量（不强制 6-8 组）
   - `mergeImageGroupsToArticles` - 将图组结果回写到同一 Canvas 的文章字段，并校验单篇图片 6-8 张目标
   - `precheckImageCapacity` - **不足量预检**:聚合 articles 全部 tags,调 `gallery.countAvailableByTags`,按 `MIN_SOURCE_IMAGES_PER_GROUP=6 * groupCount` 阈值判定,返回 {sufficient, available, estimatedGroups, byTag} 用于 AI 自然语言反馈
   - `createListCanvasesTool` - 列出 Canvas 列表（xhs_list_canvases）
+  - `createListUnusedImageGroupsTool` - 查询未被生文消费的图片组 Canvas（xhs_list_unused_image_groups），返回 unused group 列表；生图专家/生文专家询问可用图组时优先调用 | keywords: 未使用图组, unused-image-groups
   - `createGetCanvasDetailTool` - 获取 Canvas 详情（xhs_get_canvas_detail）
   - `createImageGroupCanvasTool` - 创建图片组 Canvas，或传入 canvasId 在同一 Canvas 生成并合并文章配图（xhs_create_image_group_canvas）。**两个分支都先 precheckImageCapacity(失败时降级放行避免阻断主链路):不足量直接返回 `status: 'insufficient_images'` 结构化结果给 LLM,让其用自然语言询问用户(降级/补图/取消),不调用生成链路**。**canvas-it fence 仅通过 `scope.earlyEmit` 直接推到前端 SSE,工具 return 字符串不再嵌入 fence(避免 LLM 在 streaming response 中复述长 JSON 触发 LangChain `patchToolCallsMiddleware: expected AIMessage or Command, got object` 解析问题)**
   - `createRegenerateCanvasCoverTool` - `xhs_regenerate_canvas_cover` 专用封面重生成工具；支持图文 Canvas 文章首图和图片组 Canvas role=cover，必须传多选图库 `image_ids`，一次请求合并参考图，只替换封面不改正文/标签/内页 | keywords: cover-regenerate, canvas-cover-only-tool

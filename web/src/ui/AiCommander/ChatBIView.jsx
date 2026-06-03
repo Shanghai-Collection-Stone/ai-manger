@@ -1,7 +1,22 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { 
-  Sparkles, Zap, History, Plus, MessageSquare, X, 
-  AlertCircle, Loader2, BrainCircuit, Images, Download
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
+import {
+  Sparkles,
+  Zap,
+  History,
+  Plus,
+  MessageSquare,
+  X,
+  AlertCircle,
+  Loader2,
+  BrainCircuit,
+  Images,
+  Download,
 } from 'lucide-react';
 import { chatService } from './chatService';
 import { $currentSessionId } from './store';
@@ -16,15 +31,17 @@ const renderer = new marked.Renderer();
 // Override code block rendering: if it looks like plain text (no language specified
 // and no code-like patterns), render as a styled paragraph instead of <pre><code>
 const _origCode = renderer.code.bind(renderer);
-renderer.code = function({ text, lang }) {
+renderer.code = function ({ text, lang }) {
   if (lang === 'canvas-it') {
     try {
       const parsed = JSON.parse(text);
       const canvasId = Number(parsed?.canvasId);
-      const canvasType = typeof parsed?.type === 'string' ? parsed.type : 'article';
+      const canvasType =
+        typeof parsed?.type === 'string' ? parsed.type : 'article';
       const isImageGroup = canvasType === 'image-group';
       const status = typeof parsed?.status === 'string' ? parsed.status : '';
-      const platform = typeof parsed?.platform === 'string' ? parsed.platform : '';
+      const platform =
+        typeof parsed?.platform === 'string' ? parsed.platform : '';
       const topic = typeof parsed?.topic === 'string' ? parsed.topic : '';
       const articleCount = Number(parsed?.articleCount);
       const needFields = Array.isArray(parsed?.needFields)
@@ -52,9 +69,13 @@ renderer.code = function({ text, lang }) {
       const btnText = isImageGroup ? '查看图组详情' : '查看文章详情';
       const borderColor = isImageGroup ? 'border-violet-100' : 'border-sky-100';
       const bgColor = isImageGroup ? 'bg-violet-50/50' : 'bg-sky-50/50';
-      const tagBorderColor = isImageGroup ? 'border-violet-200' : 'border-sky-200';
+      const tagBorderColor = isImageGroup
+        ? 'border-violet-200'
+        : 'border-sky-200';
       const tagTextColor = isImageGroup ? 'text-violet-600' : 'text-sky-600';
-      const btnBgColor = isImageGroup ? 'bg-violet-600 hover:bg-violet-700' : 'bg-sky-600 hover:bg-sky-700';
+      const btnBgColor = isImageGroup
+        ? 'bg-violet-600 hover:bg-violet-700'
+        : 'bg-sky-600 hover:bg-sky-700';
       const hintText = isImageGroup
         ? '图组生成后可选择下载，每组图片对应一篇文章。'
         : '先在 Canvas 看板确认与修改内容，再决定是否发布。';
@@ -84,7 +105,8 @@ ${needFieldsHtml}
       const risks = Array.isArray(parsed?.risks)
         ? parsed.risks.filter((x) => typeof x === 'string').slice(0, 4)
         : [];
-      const status = typeof parsed?.status === 'string' ? parsed.status : 'generated';
+      const status =
+        typeof parsed?.status === 'string' ? parsed.status : 'generated';
       const esc = (v) =>
         String(v ?? '')
           .replace(/&/g, '&amp;')
@@ -111,11 +133,23 @@ ${cardId ? `<div class="mt-2 text-[10px] text-slate-400">cardId: ${esc(cardId)}<
       const parsed = JSON.parse(text);
       const todoId = Number(parsed?.todoId);
       if (!Number.isFinite(todoId)) return _origCode({ text, lang });
-      const esc = (v) => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const esc = (v) =>
+        String(v ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
       const status = typeof parsed?.status === 'string' ? parsed.status : '';
       const taskCount = Number(parsed?.taskCount);
-      const platform = typeof parsed?.platform === 'string' ? parsed.platform : '';
-      const statusLabel = status === 'in_progress' ? '执行中' : status === 'pending' ? '待接单' : status === 'done' ? '已完成' : status;
+      const platform =
+        typeof parsed?.platform === 'string' ? parsed.platform : '';
+      const statusLabel =
+        status === 'in_progress'
+          ? '执行中'
+          : status === 'pending'
+            ? '待接单'
+            : status === 'done'
+              ? '已完成'
+              : status;
       return `<section class="my-3 rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
 <div class="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-emerald-200 text-emerald-700 bg-white">任务看板</div>
 <h4 class="mt-2 mb-1 text-sm font-semibold text-slate-800">Todo#${todoId}${platform ? ` · ${esc(platform)}` : ''}${Number.isFinite(taskCount) ? ` · ${taskCount} 项` : ''}</h4>
@@ -128,10 +162,16 @@ ${statusLabel ? `<p class="text-xs text-slate-500">状态：${esc(statusLabel)}<
   }
   if (lang) return _origCode({ text, lang });
   // Heuristic: if text has no typical code patterns, treat as plain text
-  const looksLikeCode = /[{}[\];=<>]|function |const |let |var |import |class |=>|\.map\(|console\.|return /.test(text);
+  const looksLikeCode =
+    /[{}[\];=<>]|function |const |let |var |import |class |=>|\.map\(|console\.|return /.test(
+      text,
+    );
   if (!looksLikeCode) {
     // Render as normal text paragraph, preserving line breaks
-    const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
     return `<p style="white-space:pre-wrap">${escaped}</p>`;
   }
   return _origCode({ text, lang });
@@ -150,9 +190,17 @@ function parseSSEChunk(buffer) {
   const remainder = parts.pop() || '';
   for (const part of parts) {
     for (const line of part.split('\n')) {
-      const prefix = line.startsWith('data: ') ? 6 : line.startsWith('data:') ? 5 : 0;
+      const prefix = line.startsWith('data: ')
+        ? 6
+        : line.startsWith('data:')
+          ? 5
+          : 0;
       if (prefix) {
-        try { events.push(JSON.parse(line.slice(prefix))); } catch { /* skip */ }
+        try {
+          events.push(JSON.parse(line.slice(prefix)));
+        } catch {
+          /* skip */
+        }
       }
     }
   }
@@ -161,7 +209,8 @@ function parseSSEChunk(buffer) {
 
 function appendCanvasItIfNeeded(text, toolResults) {
   const inputText = typeof text === 'string' ? text : '';
-  if (inputText.includes('```canvas-it') || inputText.includes('```canvas_it')) return inputText;
+  if (inputText.includes('```canvas-it') || inputText.includes('```canvas_it'))
+    return inputText;
   if (!Array.isArray(toolResults)) return inputText;
   for (const tr of toolResults) {
     const out = tr && typeof tr === 'object' ? tr.output : undefined;
@@ -245,7 +294,9 @@ function extractAllCanvasItBlocks(text) {
       const payload = JSON.parse(m[1].trim());
       const canvasId = Number(payload?.canvasId);
       if (Number.isFinite(canvasId)) blocks.push({ ...payload, canvasId });
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   return blocks;
 }
@@ -266,7 +317,8 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
     if (!Number.isFinite(cid)) return null;
     try {
       const res = await chatService.getCanvas(cid);
-      const c = res?.canvas && typeof res.canvas === 'object' ? res.canvas : null;
+      const c =
+        res?.canvas && typeof res.canvas === 'object' ? res.canvas : null;
       setCanvas(c);
       return c;
     } catch {
@@ -299,14 +351,25 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
   const groupFailed = groups.filter((g) => g.status === 'failed').length;
 
   /* article 类型进度统计 */
-  const articleList = !isImageGroup ? (Array.isArray(canvas?.articles) ? canvas.articles : []) : [];
+  const articleList = !isImageGroup
+    ? Array.isArray(canvas?.articles)
+      ? canvas.articles
+      : []
+    : [];
   const articleTotal = articleList.length || initialPayload?.articleCount || 0;
-  const articleDone = articleList.filter(a => a.status === 'done' || a.status === 'requires_human').length;
-  const articleFailed = articleList.filter(a => a.status === 'failed').length;
+  const articleDone = articleList.filter(
+    (a) => a.status === 'done' || a.status === 'requires_human',
+  ).length;
+  const articleFailed = articleList.filter((a) => a.status === 'failed').length;
   /* 已完成文章的第一张封面图 */
   const doneArticleThumbs = articleList
-    .filter(a => (a.status === 'done' || a.status === 'requires_human') && Array.isArray(a.imageUrls) && a.imageUrls[0])
-    .map(a => a.imageUrls[0])
+    .filter(
+      (a) =>
+        (a.status === 'done' || a.status === 'requires_human') &&
+        Array.isArray(a.imageUrls) &&
+        a.imageUrls[0],
+    )
+    .map((a) => a.imageUrls[0])
     .slice(0, 6);
 
   /* ── 加载中：中性骨架，不预设颜色 ── */
@@ -319,8 +382,11 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
           <Loader2 size={13} className="animate-spin text-slate-300 shrink-0" />
         </div>
         <div className="flex gap-1.5 px-3 py-2">
-          {[1,2,3,4].map(i => (
-            <div key={i} className="h-14 w-14 rounded-lg bg-slate-100 shrink-0" />
+          {[1, 2, 3, 4].map((i) => (
+            <div
+              key={i}
+              className="h-14 w-14 rounded-lg bg-slate-100 shrink-0"
+            />
           ))}
         </div>
       </div>
@@ -329,16 +395,23 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
 
   return (
     /* 卡片外层容器 */
-    <div className={`mt-3 rounded-xl border overflow-hidden ${isImageGroup ? 'border-violet-100' : 'border-sky-100'}`}>
+    <div
+      className={`mt-3 rounded-xl border overflow-hidden ${isImageGroup ? 'border-violet-100' : 'border-sky-100'}`}
+    >
       {/* 头部：类型标签 + 标题 + 状态 */}
       <div className="flex items-center gap-2 px-3 py-2 bg-white border-b border-slate-100">
-        <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-medium bg-white ${
-          isImageGroup ? 'border-violet-200 text-violet-600' : 'border-sky-200 text-sky-600'
-        }`}>
+        <span
+          className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full border font-medium bg-white ${
+            isImageGroup
+              ? 'border-violet-200 text-violet-600'
+              : 'border-sky-200 text-sky-600'
+          }`}
+        >
           {isImageGroup ? '图组看板' : '内容看板'}
         </span>
         <span className="text-xs font-semibold text-slate-800 flex-1 truncate">
-          Canvas#{canvasId}{topic ? ` · ${topic}` : ''}
+          Canvas#{canvasId}
+          {topic ? ` · ${topic}` : ''}
         </span>
         {/* 状态指示 */}
         {isGenerating ? (
@@ -367,9 +440,17 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
             const cover = imgs.find((img) => img.role === 'cover') || imgs[0];
             const coverUrl = cover?.thumbUrl || cover?.url || '';
             return coverUrl ? (
-              <img key={g.id ?? i} src={coverUrl} className="h-16 w-16 object-cover rounded-lg shrink-0" alt="" />
+              <img
+                key={g.id ?? i}
+                src={coverUrl}
+                className="h-16 w-16 object-cover rounded-lg shrink-0"
+                alt=""
+              />
             ) : (
-              <div key={g.id ?? i} className="h-16 w-16 rounded-lg bg-slate-200 flex items-center justify-center shrink-0">
+              <div
+                key={g.id ?? i}
+                className="h-16 w-16 rounded-lg bg-slate-200 flex items-center justify-center shrink-0"
+              >
                 <Images size={14} className="text-slate-400" />
               </div>
             );
@@ -387,15 +468,29 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
         <div className="flex gap-1.5 px-3 py-2 bg-slate-50/30">
           {doneArticleThumbs.length > 0
             ? doneArticleThumbs.map((url, i) => (
-                <img key={i} src={url} className="h-16 w-16 object-cover rounded-lg shrink-0" alt="" />
+                <img
+                  key={i}
+                  src={url}
+                  className="h-16 w-16 object-cover rounded-lg shrink-0"
+                  alt=""
+                />
               ))
-            : [1,2,3,4].map(i => (
-                <div key={i} className="h-16 w-16 rounded-lg bg-slate-200/60 animate-pulse shrink-0" />
+            : [1, 2, 3, 4].map((i) => (
+                <div
+                  key={i}
+                  className="h-16 w-16 rounded-lg bg-slate-200/60 animate-pulse shrink-0"
+                />
               ))}
           {/* 剩余待生成格子 */}
-          {doneArticleThumbs.length > 0 && doneArticleThumbs.length < articleTotal &&
-            Array.from({ length: Math.min(4, articleTotal - doneArticleThumbs.length) }).map((_, i) => (
-              <div key={`pending-${i}`} className="h-16 w-16 rounded-lg bg-slate-200/60 animate-pulse shrink-0" />
+          {doneArticleThumbs.length > 0 &&
+            doneArticleThumbs.length < articleTotal &&
+            Array.from({
+              length: Math.min(4, articleTotal - doneArticleThumbs.length),
+            }).map((_, i) => (
+              <div
+                key={`pending-${i}`}
+                className="h-16 w-16 rounded-lg bg-slate-200/60 animate-pulse shrink-0"
+              />
             ))}
         </div>
       )}
@@ -405,9 +500,17 @@ const CanvasItCard = React.memo(({ canvasId, initialPayload, onOpenFull }) => {
         <div className="px-3 pb-2 pt-1">
           <button
             type="button"
-            onClick={() => onOpenFull && onOpenFull(Number(canvasId), canvas?.type || initialPayload?.type || 'article')}
+            onClick={() =>
+              onOpenFull &&
+              onOpenFull(
+                Number(canvasId),
+                canvas?.type || initialPayload?.type || 'article',
+              )
+            }
             className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-medium text-white ${
-              isImageGroup ? 'bg-violet-600 hover:bg-violet-700' : 'bg-sky-600 hover:bg-sky-700'
+              isImageGroup
+                ? 'bg-violet-600 hover:bg-violet-700'
+                : 'bg-sky-600 hover:bg-sky-700'
             }`}
           >
             <Download size={11} />
@@ -435,7 +538,9 @@ function extractAllTaskItBlocks(text) {
       const payload = JSON.parse(m[1].trim());
       const todoId = Number(payload?.todoId);
       if (Number.isFinite(todoId)) blocks.push({ ...payload, todoId });
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   return blocks;
 }
@@ -452,9 +557,12 @@ function extractAllTagSelectBlocks(text) {
   while ((m = re.exec(text)) !== null) {
     try {
       const payload = JSON.parse(m[1].trim());
-      const selectorId = typeof payload?.selectorId === 'string' ? payload.selectorId : '';
+      const selectorId =
+        typeof payload?.selectorId === 'string' ? payload.selectorId : '';
       if (selectorId) blocks.push({ ...payload, selectorId });
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   return blocks;
 }
@@ -473,7 +581,9 @@ function extractAllHandoffBlocks(text) {
       const payload = JSON.parse(m[1].trim());
       const expert = typeof payload?.expert === 'string' ? payload.expert : '';
       if (expert) blocks.push({ ...payload, expert });
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   return blocks;
 }
@@ -494,34 +604,50 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
     const tid = Number(todoId);
     if (!Number.isFinite(tid)) return null;
     try {
-      const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin : ''}/todo/${tid}`, {
-        headers: (() => {
-          const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') || '' : '';
-          return token ? { Authorization: `Bearer ${token}` } : {};
-        })(),
-      });
+      const res = await fetch(
+        `${typeof window !== 'undefined' ? window.location.origin : ''}/todo/${tid}`,
+        {
+          headers: (() => {
+            const token =
+              typeof window !== 'undefined'
+                ? localStorage.getItem('admin_token') || ''
+                : '';
+            return token ? { Authorization: `Bearer ${token}` } : {};
+          })(),
+        },
+      );
       if (!res.ok) return null;
       const data = await res.json();
       const t = data?.todo && typeof data.todo === 'object' ? data.todo : null;
       if (t) setTodo(t);
       return t;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }, [todoId]);
 
   const loadItems = useCallback(async () => {
     const tid = Number(todoId);
     if (!Number.isFinite(tid)) return;
     try {
-      const res = await fetch(`${typeof window !== 'undefined' ? window.location.origin : ''}/todo/${tid}/items`, {
-        headers: (() => {
-          const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') || '' : '';
-          return token ? { Authorization: `Bearer ${token}` } : {};
-        })(),
-      });
+      const res = await fetch(
+        `${typeof window !== 'undefined' ? window.location.origin : ''}/todo/${tid}/items`,
+        {
+          headers: (() => {
+            const token =
+              typeof window !== 'undefined'
+                ? localStorage.getItem('admin_token') || ''
+                : '';
+            return token ? { Authorization: `Bearer ${token}` } : {};
+          })(),
+        },
+      );
       if (!res.ok) return;
       const data = await res.json();
       setItems(Array.isArray(data.items) ? data.items : []);
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }, [todoId]);
 
   useEffect(() => {
@@ -534,7 +660,8 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
     if (status !== 'in_progress' && status !== 'pending') return;
     const timer = setInterval(async () => {
       const next = await loadTodo();
-      if (next?.status !== 'in_progress' && next?.status !== 'pending') clearInterval(timer);
+      if (next?.status !== 'in_progress' && next?.status !== 'pending')
+        clearInterval(timer);
     }, 6000);
     return () => clearInterval(timer);
   }, [todo?.status, loadTodo]);
@@ -549,38 +676,52 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
   const title = todo?.title || `Todo#${todoId}`;
   const taskType = todo?.type || '';
 
-  const statusColor = {
-    in_progress: 'text-blue-600',
-    pending: 'text-amber-600',
-    done: 'text-green-600',
-    completed: 'text-green-600',
-    failed: 'text-red-600',
-  }[status] || 'text-slate-400';
+  const statusColor =
+    {
+      in_progress: 'text-blue-600',
+      pending: 'text-amber-600',
+      done: 'text-green-600',
+      completed: 'text-green-600',
+      failed: 'text-red-600',
+    }[status] || 'text-slate-400';
 
-  const statusLabel = {
-    in_progress: '执行中',
-    pending: '待接单',
-    done: '已完成',
-    completed: '已完成',
-    failed: '失败',
-  }[status] || (status || '—');
+  const statusLabel =
+    {
+      in_progress: '执行中',
+      pending: '待接单',
+      done: '已完成',
+      completed: '已完成',
+      failed: '失败',
+    }[status] ||
+    status ||
+    '—';
 
-  const typeLabel = {
-    auto_execute: '自动执行',
-    offline_execute: '线下执行',
-    long_task: '长时任务',
-    other: '其他',
-  }[taskType] || taskType || '';
+  const typeLabel =
+    {
+      auto_execute: '自动执行',
+      offline_execute: '线下执行',
+      long_task: '长时任务',
+      other: '其他',
+    }[taskType] ||
+    taskType ||
+    '';
 
-  const getItemStatusColor = (s) => ({
-    done: 'text-green-600 bg-green-50 border-green-200',
-    in_progress: 'text-blue-600 bg-blue-50 border-blue-200',
-    failed: 'text-red-600 bg-red-50 border-red-200',
-  }[s] || 'text-slate-400 bg-slate-50 border-slate-200');
+  const getItemStatusColor = (s) =>
+    ({
+      done: 'text-green-600 bg-green-50 border-green-200',
+      in_progress: 'text-blue-600 bg-blue-50 border-blue-200',
+      failed: 'text-red-600 bg-red-50 border-red-200',
+    })[s] || 'text-slate-400 bg-slate-50 border-slate-200';
 
-  const getItemStatusLabel = (s) => ({
-    done: '完成', in_progress: '进行中', failed: '失败', pending: '待执行',
-  }[s] || s || '—');
+  const getItemStatusLabel = (s) =>
+    ({
+      done: '完成',
+      in_progress: '进行中',
+      failed: '失败',
+      pending: '待执行',
+    })[s] ||
+    s ||
+    '—';
 
   if (loading) {
     return (
@@ -603,27 +744,42 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
             {typeLabel || '任务看板'}
           </span>
           <span className="text-xs font-semibold text-slate-800 flex-1 truncate">
-            Todo#{todoId}{title !== `Todo#${todoId}` ? ` · ${title}` : ''}
+            Todo#{todoId}
+            {title !== `Todo#${todoId}` ? ` · ${title}` : ''}
           </span>
           {/* 状态指示 */}
           {isActive ? (
-            <span className={`flex items-center gap-1 text-[11px] shrink-0 ${statusColor}`}>
+            <span
+              className={`flex items-center gap-1 text-[11px] shrink-0 ${statusColor}`}
+            >
               <Loader2 size={11} className="animate-spin" />
               {statusLabel}
             </span>
           ) : (
-            <span className={`text-[11px] shrink-0 ${statusColor}`}>{statusLabel}</span>
+            <span className={`text-[11px] shrink-0 ${statusColor}`}>
+              {statusLabel}
+            </span>
           )}
         </div>
         {/* in_progress 时显示前几个进行中/已完成节点 */}
         {isActive && items.length > 0 && (
           <div className="px-3 py-2 bg-slate-50/30 space-y-1">
-            {items.filter(it => it.status === 'in_progress' || it.status === 'done').slice(0, 3).map((it) => (
-              <div key={it.id} className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg border ${getItemStatusColor(it.status)}`}>
-                {it.status === 'in_progress' && <Loader2 size={10} className="animate-spin shrink-0" />}
-                <span className="truncate">{it.title || '节点'}</span>
-              </div>
-            ))}
+            {items
+              .filter(
+                (it) => it.status === 'in_progress' || it.status === 'done',
+              )
+              .slice(0, 3)
+              .map((it) => (
+                <div
+                  key={it.id}
+                  className={`flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-lg border ${getItemStatusColor(it.status)}`}
+                >
+                  {it.status === 'in_progress' && (
+                    <Loader2 size={10} className="animate-spin shrink-0" />
+                  )}
+                  <span className="truncate">{it.title || '节点'}</span>
+                </div>
+              ))}
           </div>
         )}
         {/* 操作按钮 */}
@@ -646,18 +802,35 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
 
       {/* 任务详情 Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40" onClick={() => setShowModal(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40"
+          onClick={() => setShowModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal 头部 */}
             <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 shrink-0">
               <div className="flex-1 min-w-0">
-                <div className="font-bold text-slate-800 text-sm truncate">{title}</div>
+                <div className="font-bold text-slate-800 text-sm truncate">
+                  {title}
+                </div>
                 <div className="flex items-center gap-2 mt-0.5">
-                  {typeLabel && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{typeLabel}</span>}
-                  <span className={`text-[10px] ${statusColor}`}>{statusLabel}</span>
+                  {typeLabel && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                      {typeLabel}
+                    </span>
+                  )}
+                  <span className={`text-[10px] ${statusColor}`}>
+                    {statusLabel}
+                  </span>
                 </div>
               </div>
-              <button onClick={() => setShowModal(false)} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400">
+              <button
+                onClick={() => setShowModal(false)}
+                className="p-1.5 hover:bg-slate-100 rounded-full text-slate-400"
+              >
                 <X size={16} />
               </button>
             </div>
@@ -666,7 +839,9 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
               {/* 任务 aiPlan */}
               {todo?.aiPlan && (
                 <div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">执行计划</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    执行计划
+                  </div>
                   <div className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap bg-slate-50 rounded-xl p-3 border border-slate-100 max-h-40 overflow-y-auto">
                     {todo.aiPlan}
                   </div>
@@ -674,19 +849,39 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
               )}
               {/* 执行节点 */}
               <div>
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">执行节点</div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                  执行节点
+                </div>
                 {items.length === 0 ? (
-                  <div className="text-xs text-slate-400 text-center py-6">暂无执行节点</div>
+                  <div className="text-xs text-slate-400 text-center py-6">
+                    暂无执行节点
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {items.map((it) => (
-                      <div key={it.id} className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border text-xs ${getItemStatusColor(it.status)}`}>
-                        {it.status === 'in_progress' && <Loader2 size={12} className="animate-spin shrink-0 mt-0.5" />}
+                      <div
+                        key={it.id}
+                        className={`flex items-start gap-2 px-2.5 py-2 rounded-lg border text-xs ${getItemStatusColor(it.status)}`}
+                      >
+                        {it.status === 'in_progress' && (
+                          <Loader2
+                            size={12}
+                            className="animate-spin shrink-0 mt-0.5"
+                          />
+                        )}
                         <div className="flex-1 min-w-0">
-                          <div className="font-medium truncate">{it.title || '节点'}</div>
-                          {it.description && <div className="text-[10px] opacity-80 truncate mt-0.5">{it.description}</div>}
+                          <div className="font-medium truncate">
+                            {it.title || '节点'}
+                          </div>
+                          {it.description && (
+                            <div className="text-[10px] opacity-80 truncate mt-0.5">
+                              {it.description}
+                            </div>
+                          )}
                         </div>
-                        <span className="shrink-0 text-[10px]">{getItemStatusLabel(it.status)}</span>
+                        <span className="shrink-0 text-[10px]">
+                          {getItemStatusLabel(it.status)}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -739,7 +934,9 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
         <div className="text-[10px] inline-flex px-2 py-0.5 rounded-full border border-amber-200 text-amber-700 bg-white">
           标签选择
         </div>
-        <h4 className="mt-2 mb-1 text-sm font-semibold text-slate-800">{title}</h4>
+        <h4 className="mt-2 mb-1 text-sm font-semibold text-slate-800">
+          {title}
+        </h4>
         {hint && <p className="text-xs text-slate-600">{hint}</p>}
         {recommendTags.length > 0 && !submitted && (
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -753,7 +950,9 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
               </span>
             ))}
             {recommendTags.length > 6 && (
-              <span className="text-[11px] text-slate-400 self-center">+{recommendTags.length - 6}</span>
+              <span className="text-[11px] text-slate-400 self-center">
+                +{recommendTags.length - 6}
+              </span>
             )}
           </div>
         )}
@@ -762,7 +961,12 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
             <p className="text-[11px] text-emerald-600">已选定标签：</p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {submittedTags.map((t) => (
-                <span key={t} className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-700">#{t}</span>
+                <span
+                  key={t}
+                  className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-700"
+                >
+                  #{t}
+                </span>
               ))}
             </div>
           </div>
@@ -814,13 +1018,11 @@ const TagSelectModal = ({
 
   useEffect(() => {
     let aborted = false;
-    chatService
-      .listGalleryTags({ limit: 2000 })
-      .then((res) => {
-        if (aborted) return;
-        const list = Array.isArray(res?.tags) ? res.tags : [];
-        setAllTags(list);
-      });
+    chatService.listGalleryTags({ limit: 2000 }).then((res) => {
+      if (aborted) return;
+      const list = Array.isArray(res?.tags) ? res.tags : [];
+      setAllTags(list);
+    });
     return () => {
       aborted = true;
     };
@@ -839,7 +1041,9 @@ const TagSelectModal = ({
   }, [recommendList]);
 
   const suggestions = useMemo(() => {
-    const q = String(input || '').trim().toLowerCase();
+    const q = String(input || '')
+      .trim()
+      .toLowerCase();
     if (!q) return [];
     return allTags
       .filter((t) => typeof t === 'string' && t.toLowerCase().includes(q))
@@ -870,10 +1074,17 @@ const TagSelectModal = ({
       <div className="w-full max-w-md bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden flex flex-col max-h-[80vh]">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between shrink-0">
           <div className="min-w-0 pr-3">
-            <h3 className="text-sm font-semibold text-slate-800 truncate">{title}</h3>
-            {hint && <p className="text-[11px] text-slate-500 truncate">{hint}</p>}
+            <h3 className="text-sm font-semibold text-slate-800 truncate">
+              {title}
+            </h3>
+            {hint && (
+              <p className="text-[11px] text-slate-500 truncate">{hint}</p>
+            )}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 shrink-0">
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600 shrink-0"
+          >
             <X size={16} />
           </button>
         </div>
@@ -915,7 +1126,9 @@ const TagSelectModal = ({
             <div>
               <p className="text-[11px] text-slate-400 mb-2">推荐标签</p>
               {recommendList.length === 0 ? (
-                <p className="text-xs text-slate-400 py-6 text-center">暂无推荐</p>
+                <p className="text-xs text-slate-400 py-6 text-center">
+                  暂无推荐
+                </p>
               ) : (
                 <div className="flex flex-wrap gap-1.5">
                   {recommendList.map((t) => {
@@ -932,7 +1145,11 @@ const TagSelectModal = ({
                         }`}
                       >
                         <span>#{t.tag}</span>
-                        <span className={`text-[10px] ${active ? 'text-white/80' : 'text-slate-400'}`}>{t.count}</span>
+                        <span
+                          className={`text-[10px] ${active ? 'text-white/80' : 'text-slate-400'}`}
+                        >
+                          {t.count}
+                        </span>
                       </button>
                     );
                   })}
@@ -940,7 +1157,9 @@ const TagSelectModal = ({
               )}
             </div>
           ) : suggestions.length === 0 ? (
-            <p className="text-xs text-slate-400 py-6 text-center">无匹配标签</p>
+            <p className="text-xs text-slate-400 py-6 text-center">
+              无匹配标签
+            </p>
           ) : (
             <ul className="divide-y divide-slate-100">
               {suggestions.map((t) => {
@@ -953,7 +1172,9 @@ const TagSelectModal = ({
                       onClick={() => toggle(t)}
                       className="w-full flex items-center justify-between px-2 py-2 hover:bg-amber-50 rounded text-left"
                     >
-                      <span className={`text-sm ${active ? 'text-amber-600 font-medium' : 'text-slate-700'}`}>
+                      <span
+                        className={`text-sm ${active ? 'text-amber-600 font-medium' : 'text-slate-700'}`}
+                      >
                         #{t}
                       </span>
                       <span className="text-[11px] text-slate-400 shrink-0">
@@ -970,7 +1191,8 @@ const TagSelectModal = ({
         {/* 底部确认 */}
         <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between shrink-0">
           <span className="text-[11px] text-slate-500">
-            已选 {selected.length}{multi ? `/${maxTags}` : ''}（最少 {minTags}）
+            已选 {selected.length}
+            {multi ? `/${maxTags}` : ''}（最少 {minTags}）
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -1013,10 +1235,15 @@ const EXPERT_LABELS = {
  * @keyword-en handoff inline card, distinguishes switch vs continuation
  */
 const HandoffCard = React.memo(({ payload }) => {
-  const meta = EXPERT_LABELS[payload?.expert] || {
+  const baseMeta = EXPERT_LABELS[payload?.expert] || {
     label: payload?.expert || '专家',
     icon: '↪️',
     color: 'slate',
+  };
+  const meta = {
+    ...baseMeta,
+    label: payload?.expertLabel || baseMeta.label,
+    icon: payload?.icon || baseMeta.icon,
   };
   const isContinuation = payload?.isContinuation === true;
 
@@ -1042,11 +1269,15 @@ const HandoffCard = React.memo(({ payload }) => {
   };
   const reason = typeof payload?.reason === 'string' ? payload.reason : '';
   return (
-    <div className={`my-2 inline-flex items-start gap-2 px-3 py-1.5 rounded-full border text-[11px] ${colorMap[meta.color] ?? colorMap.slate}`}>
+    <div
+      className={`my-2 inline-flex items-start gap-2 px-3 py-1.5 rounded-full border text-[11px] ${colorMap[meta.color] ?? colorMap.slate}`}
+    >
       <span className="text-sm leading-none">{meta.icon}</span>
       <div className="flex flex-col leading-tight">
         <span className="font-medium">→ 已切换至{meta.label}</span>
-        {reason && <span className="text-[10px] opacity-70 mt-0.5">{reason}</span>}
+        {reason && (
+          <span className="text-[10px] opacity-70 mt-0.5">{reason}</span>
+        )}
       </div>
     </div>
   );
@@ -1060,89 +1291,109 @@ const ThinkingBubble = ({ toolCount, subagentCount }) => {
   if (subagentCount > 0) parts.push(`子代理 ${subagentCount}`);
   const hint = parts.length > 0 ? `（${parts.join(' · ')}）` : '...';
   return (
-  <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-sm mb-1 animate-pulse">
-    <BrainCircuit size={16} className="text-indigo-500" />
-    <span className="text-xs text-indigo-600 font-medium">
-      思考中{hint}
-    </span>
-    <Loader2 size={12} className="animate-spin text-indigo-400" />
-  </div>
+    <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-50/70 border border-indigo-100 rounded-2xl rounded-tl-sm mb-1 animate-pulse">
+      <BrainCircuit size={16} className="text-indigo-500" />
+      <span className="text-xs text-indigo-600 font-medium">思考中{hint}</span>
+      <Loader2 size={12} className="animate-spin text-indigo-400" />
+    </div>
   );
 };
 
 /* ─── AI Message Component ─── */
 
-const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision, onSubmitQuickMessage }) => {
-  // 提取 canvas-it 块，渲染为 React 卡片
-  const canvasItBlocks = useMemo(() => extractAllCanvasItBlocks(msg.content), [msg.content]);
-  // 提取 task-it 块，渲染为 React 卡片
-  const taskItBlocks = useMemo(() => extractAllTaskItBlocks(msg.content), [msg.content]);
-  // 提取 tag-select-it 块，渲染为 React 卡片
-  const tagSelectBlocks = useMemo(() => extractAllTagSelectBlocks(msg.content), [msg.content]);
-  // 提取 handoff-it 块,渲染 supervisor 切换提示
-  const handoffBlocks = useMemo(() => extractAllHandoffBlocks(msg.content), [msg.content]);
-  const strippedText = useMemo(() => {
-    const raw = typeof msg.content === 'string' ? msg.content : '';
-    return raw
-      .replace(/```canvas-it[\s\S]*?```/gi, '')
-      .replace(/```task-it[\s\S]*?```/gi, '')
-      .replace(/```tag-select-it[\s\S]*?```/gi, '')
-      .replace(/```handoff-it[\s\S]*?```/gi, '')
-      .trim();
-  }, [msg.content]);
-  const hasRenderableText = strippedText.length > 0;
-
-  // Parse markdown securely with URL→image conversion
-  const htmlContent = React.useMemo(() => {
-    if (!msg.content) return { __html: '' };
-    const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
-    // 移除 canvas-it / task-it / tag-select-it / handoff-it 块（已由 React 卡片渲染）
-    const stripped = String(msg.content)
-      .replace(/```canvas-it[\s\S]*?```/gi, '')
-      .replace(/```task-it[\s\S]*?```/gi, '')
-      .replace(/```tag-select-it[\s\S]*?```/gi, '')
-      .replace(/```handoff-it[\s\S]*?```/gi, '')
-      .trim();
-    // 1. 把纯 URL 转成 markdown 图片语法
-    let converted = stripped.replace(imgPattern, (url) => `![](${url})`);
-    let rawMarkup = marked.parse(converted);
-    // 2. 把 <a href="图片url"> 链接转成 <img>
-    rawMarkup = String(rawMarkup).replace(
-      /<a[^>]+href="(https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp))"[^>]*>([\s\S]*?)<\/a>/gi,
-      (_, url, inner) => `<img src="${url}" alt="${inner.trim()}" />`,
+const AIMessage = React.memo(
+  ({ msg, onOpenCanvas, onOpenDecision, onSubmitQuickMessage }) => {
+    // 提取 canvas-it 块，渲染为 React 卡片
+    const canvasItBlocks = useMemo(
+      () => extractAllCanvasItBlocks(msg.content),
+      [msg.content],
     );
-    // 3. 为所有 <img> 添加样式和点击事件
-    rawMarkup = rawMarkup.replace(
-      /<img([^>]+)>/g,
-      (match, attrs) => `<img${attrs} style="max-height:220px;max-width:100%;width:auto;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;display:block;" onclick="window.__galleryImageClick(this)" />`,
+    // 提取 task-it 块，渲染为 React 卡片
+    const taskItBlocks = useMemo(
+      () => extractAllTaskItBlocks(msg.content),
+      [msg.content],
     );
-    // 4. 把连续 <img> 用 flex 容器包裹实现并排
-    rawMarkup = rawMarkup.replace(
-      /((?:<img[^>]+>\s*)+)/g,
-      (match) => `<div class="img-flex-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0;">${match.replace(/<img([^>]+)>/g, '<img$1 style="flex:1 1 200px;max-height:220px;min-width:0;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;">')}</div>`,
+    // 提取 tag-select-it 块，渲染为 React 卡片
+    const tagSelectBlocks = useMemo(
+      () => extractAllTagSelectBlocks(msg.content),
+      [msg.content],
     );
-    // Wrap each <table> in a scrollable container
-    rawMarkup = rawMarkup.replace(/<table/g, '<div class="ai-table-scroll"><table');
-    rawMarkup = rawMarkup.replace(/<\/table>/g, '</table></div>');
-    return { __html: DOMPurify.sanitize(rawMarkup, { ADD_ATTR: ['onclick', 'style'] }) };
-  }, [msg.content]);
+    // 提取 handoff-it 块,渲染 supervisor 切换提示
+    const handoffBlocks = useMemo(
+      () => extractAllHandoffBlocks(msg.content),
+      [msg.content],
+    );
+    const strippedText = useMemo(() => {
+      const raw = typeof msg.content === 'string' ? msg.content : '';
+      return raw
+        .replace(/```canvas-it[\s\S]*?```/gi, '')
+        .replace(/```task-it[\s\S]*?```/gi, '')
+        .replace(/```tag-select-it[\s\S]*?```/gi, '')
+        .replace(/```handoff-it[\s\S]*?```/gi, '')
+        .trim();
+    }, [msg.content]);
+    const hasRenderableText = strippedText.length > 0;
 
-  return (
-    <div className="flex flex-col space-y-1 max-w-[90%] overflow-hidden">
-      {/* Thinking indicator — show when streaming and tools are being called */}
-      {msg.isStreaming && (msg.toolCount > 0 || msg.subagentCount > 0) && (
-        <ThinkingBubble
-          toolCount={msg.toolCount}
-          subagentCount={msg.subagentCount}
-        />
-      )}
+    // Parse markdown securely with URL→image conversion
+    const htmlContent = React.useMemo(() => {
+      if (!msg.content) return { __html: '' };
+      const imgPattern = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)/gi;
+      // 移除 canvas-it / task-it / tag-select-it / handoff-it 块（已由 React 卡片渲染）
+      const stripped = String(msg.content)
+        .replace(/```canvas-it[\s\S]*?```/gi, '')
+        .replace(/```task-it[\s\S]*?```/gi, '')
+        .replace(/```tag-select-it[\s\S]*?```/gi, '')
+        .replace(/```handoff-it[\s\S]*?```/gi, '')
+        .trim();
+      // 1. 把纯 URL 转成 markdown 图片语法
+      let converted = stripped.replace(imgPattern, (url) => `![](${url})`);
+      let rawMarkup = marked.parse(converted);
+      // 2. 把 <a href="图片url"> 链接转成 <img>
+      rawMarkup = String(rawMarkup).replace(
+        /<a[^>]+href="(https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp))"[^>]*>([\s\S]*?)<\/a>/gi,
+        (_, url, inner) => `<img src="${url}" alt="${inner.trim()}" />`,
+      );
+      // 3. 为所有 <img> 添加样式和点击事件
+      rawMarkup = rawMarkup.replace(
+        /<img([^>]+)>/g,
+        (match, attrs) =>
+          `<img${attrs} style="max-height:220px;max-width:100%;width:auto;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;display:block;" onclick="window.__galleryImageClick(this)" />`,
+      );
+      // 4. 把连续 <img> 用 flex 容器包裹实现并排
+      rawMarkup = rawMarkup.replace(
+        /((?:<img[^>]+>\s*)+)/g,
+        (match) =>
+          `<div class="img-flex-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0;">${match.replace(/<img([^>]+)>/g, '<img$1 style="flex:1 1 200px;max-height:220px;min-width:0;height:auto;object-fit:contain;cursor:pointer;border-radius:10px;">')}</div>`,
+      );
+      // Wrap each <table> in a scrollable container
+      rawMarkup = rawMarkup.replace(
+        /<table/g,
+        '<div class="ai-table-scroll"><table',
+      );
+      rawMarkup = rawMarkup.replace(/<\/table>/g, '</table></div>');
+      return {
+        __html: DOMPurify.sanitize(rawMarkup, {
+          ADD_ATTR: ['onclick', 'style'],
+        }),
+      };
+    }, [msg.content]);
 
-    {/* Text content */}
-      {(hasRenderableText || msg.isStreaming) && (
-        <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-x-hidden">
-          {hasRenderableText ? (
-            <div 
-              className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words
+    return (
+      <div className="flex flex-col space-y-1 max-w-[90%] overflow-hidden">
+        {/* Thinking indicator — show when streaming and tools are being called */}
+        {msg.isStreaming && (msg.toolCount > 0 || msg.subagentCount > 0) && (
+          <ThinkingBubble
+            toolCount={msg.toolCount}
+            subagentCount={msg.subagentCount}
+          />
+        )}
+
+        {/* Text content */}
+        {(hasRenderableText || msg.isStreaming) && (
+          <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-4 px-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)] overflow-x-hidden">
+            {hasRenderableText ? (
+              <div
+                className="prose prose-sm prose-indigo max-w-none text-slate-700 leading-relaxed break-words
                          prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5
                          [&_pre]:overflow-x-auto [&_pre]:overflow-y-auto [&_pre]:max-w-full [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:bg-slate-50 [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:text-xs [&_pre]:my-2 [&_pre]:max-h-64
                          [&_code]:break-all [&_code]:text-xs
@@ -1152,117 +1403,133 @@ const AIMessage = React.memo(({ msg, onOpenCanvas, onOpenDecision, onSubmitQuick
                          [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap
                          [&_table]:border-collapse [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-3 [&_th]:py-1.5
                          [&_td]:border [&_td]:border-slate-200 [&_td]:px-3 [&_td]:py-1.5"
-              dangerouslySetInnerHTML={htmlContent}
-              onClick={(e) => {
-                const target = e.target instanceof Element ? e.target : null;
-                if (!target) return;
-                const canvasBtn = target.closest('button[data-canvas-id]');
-                if (canvasBtn) {
-                  const raw = decodeURIComponent(
-                    String(canvasBtn.getAttribute('data-canvas-id') || '').trim(),
-                  );
-                  const id = Number(raw);
-                  const canvasType = String(canvasBtn.getAttribute('data-canvas-type') || 'article');
-                  if (Number.isFinite(id) && typeof onOpenCanvas === 'function') {
-                    onOpenCanvas(id, canvasType);
+                dangerouslySetInnerHTML={htmlContent}
+                onClick={(e) => {
+                  const target = e.target instanceof Element ? e.target : null;
+                  if (!target) return;
+                  const canvasBtn = target.closest('button[data-canvas-id]');
+                  if (canvasBtn) {
+                    const raw = decodeURIComponent(
+                      String(
+                        canvasBtn.getAttribute('data-canvas-id') || '',
+                      ).trim(),
+                    );
+                    const id = Number(raw);
+                    const canvasType = String(
+                      canvasBtn.getAttribute('data-canvas-type') || 'article',
+                    );
+                    if (
+                      Number.isFinite(id) &&
+                      typeof onOpenCanvas === 'function'
+                    ) {
+                      onOpenCanvas(id, canvasType);
+                    }
+                    return;
                   }
-                  return;
-                }
-                const decisionBtn = target.closest('button[data-decision-card-id]');
-                if (decisionBtn) {
-                  const cardId = decodeURIComponent(
-                    String(
-                      decisionBtn.getAttribute('data-decision-card-id') || '',
-                    ).trim(),
+                  const decisionBtn = target.closest(
+                    'button[data-decision-card-id]',
                   );
-                  if (cardId && typeof onOpenDecision === 'function') {
-                    onOpenDecision(cardId);
+                  if (decisionBtn) {
+                    const cardId = decodeURIComponent(
+                      String(
+                        decisionBtn.getAttribute('data-decision-card-id') || '',
+                      ).trim(),
+                    );
+                    if (cardId && typeof onOpenDecision === 'function') {
+                      onOpenDecision(cardId);
+                    }
+                    return;
                   }
-                  return;
-                }
-                const todoBtn = target.closest('button[data-todo-id]');
-                if (todoBtn) {
-                  const raw = decodeURIComponent(
-                    String(todoBtn.getAttribute('data-todo-id') || '').trim(),
-                  );
-                  const tid = Number(raw);
-                  if (Number.isFinite(tid)) {
-                    // TaskItCard 负责自行渲染 modal，此处仅阻止冒泡
+                  const todoBtn = target.closest('button[data-todo-id]');
+                  if (todoBtn) {
+                    const raw = decodeURIComponent(
+                      String(todoBtn.getAttribute('data-todo-id') || '').trim(),
+                    );
+                    const tid = Number(raw);
+                    if (Number.isFinite(tid)) {
+                      // TaskItCard 负责自行渲染 modal，此处仅阻止冒泡
+                    }
                   }
-                }
-              }}
-            />
-          ) : (
-            msg.isStreaming && (
-              <span className="animate-pulse flex items-center text-slate-400 text-sm font-medium">
-                <Sparkles size={14} className="mr-1" /> 思考中...
-              </span>
-            )
+                }}
+              />
+            ) : (
+              msg.isStreaming && (
+                <span className="animate-pulse flex items-center text-slate-400 text-sm font-medium">
+                  <Sparkles size={14} className="mr-1" /> 思考中...
+                </span>
+              )
+            )}
+          </div>
+        )}
+
+        {/* Canvas-it 内联卡片（自动加载 + 实时状态） */}
+        {canvasItBlocks.map((payload) => (
+          <CanvasItCard
+            key={payload.canvasId}
+            canvasId={payload.canvasId}
+            initialPayload={payload}
+            onOpenFull={onOpenCanvas}
+          />
+        ))}
+
+        {/* Task-it 内联卡片（自动轮询状态 + 详情 Modal） */}
+        {taskItBlocks.map((payload) => (
+          <TaskItCard
+            key={payload.todoId}
+            todoId={payload.todoId}
+            initialPayload={payload}
+          />
+        ))}
+
+        {/* Tag-select-it 内联卡片（点击展开搜索弹窗，确认后以用户消息回传） */}
+        {tagSelectBlocks.map((payload) => (
+          <TagSelectCard
+            key={payload.selectorId}
+            payload={payload}
+            onSubmit={(tags) => {
+              if (typeof onSubmitQuickMessage !== 'function') return;
+              const list = Array.isArray(tags) ? tags : [];
+              if (list.length === 0) return;
+              const text = `我选定标签：${list.map((t) => `#${t}`).join(' ')}`;
+              onSubmitQuickMessage(text);
+            }}
+          />
+        ))}
+
+        {/* Handoff-it 切换胶囊(supervisor 路由到 expert) */}
+        {handoffBlocks.map((payload, idx) => (
+          <HandoffCard
+            key={`${payload.expert}-${payload.ts ?? idx}`}
+            payload={payload}
+          />
+        ))}
+
+        {/* Show empty placeholder while loading, no content yet, no error */}
+        {!hasRenderableText &&
+          !msg.isStreaming &&
+          !msg.errorText &&
+          canvasItBlocks.length === 0 &&
+          taskItBlocks.length === 0 &&
+          tagSelectBlocks.length === 0 &&
+          handoffBlocks.length === 0 && (
+            <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
+              <span className="text-sm text-slate-400">（无内容）</span>
+            </div>
           )}
-        </div>
-      )}
 
-      {/* Canvas-it 内联卡片（自动加载 + 实时状态） */}
-      {canvasItBlocks.map(payload => (
-        <CanvasItCard
-          key={payload.canvasId}
-          canvasId={payload.canvasId}
-          initialPayload={payload}
-          onOpenFull={onOpenCanvas}
-        />
-      ))}
-
-      {/* Task-it 内联卡片（自动轮询状态 + 详情 Modal） */}
-      {taskItBlocks.map(payload => (
-        <TaskItCard
-          key={payload.todoId}
-          todoId={payload.todoId}
-          initialPayload={payload}
-        />
-      ))}
-
-      {/* Tag-select-it 内联卡片（点击展开搜索弹窗，确认后以用户消息回传） */}
-      {tagSelectBlocks.map(payload => (
-        <TagSelectCard
-          key={payload.selectorId}
-          payload={payload}
-          onSubmit={(tags) => {
-            if (typeof onSubmitQuickMessage !== 'function') return;
-            const list = Array.isArray(tags) ? tags : [];
-            if (list.length === 0) return;
-            const text = `我选定标签：${list.map((t) => `#${t}`).join(' ')}`;
-            onSubmitQuickMessage(text);
-          }}
-        />
-      ))}
-
-      {/* Handoff-it 切换胶囊(supervisor 路由到 expert) */}
-      {handoffBlocks.map((payload, idx) => (
-        <HandoffCard
-          key={`${payload.expert}-${payload.ts ?? idx}`}
-          payload={payload}
-        />
-      ))}
-
-    {/* Show empty placeholder while loading, no content yet, no error */}
-    {!hasRenderableText && !msg.isStreaming && !msg.errorText && canvasItBlocks.length === 0 && taskItBlocks.length === 0 && tagSelectBlocks.length === 0 && handoffBlocks.length === 0 && (
-      <div className="bg-white border border-slate-100 rounded-3xl rounded-tl-sm p-5 shadow-[0_2px_15px_rgba(0,0,0,0.04)]">
-        <span className="text-sm text-slate-400">（无内容）</span>
+        {/* Error message */}
+        {msg.errorText && (
+          <div className="bg-red-50 border border-red-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
+            <div className="text-xs text-red-600 font-medium flex items-center gap-1.5">
+              <AlertCircle size={14} />
+              <span>{msg.errorText}</span>
+            </div>
+          </div>
+        )}
       </div>
-    )}
-
-    {/* Error message */}
-    {msg.errorText && (
-      <div className="bg-red-50 border border-red-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
-        <div className="text-xs text-red-600 font-medium flex items-center gap-1.5">
-          <AlertCircle size={14} />
-          <span>{msg.errorText}</span>
-        </div>
-      </div>
-    )}
-  </div>
-  );
-});
+    );
+  },
+);
 
 const DecisionCardModal = ({ cardId, onClose }) => {
   const [loading, setLoading] = useState(false);
@@ -1286,7 +1553,10 @@ const DecisionCardModal = ({ cardId, onClose }) => {
         <p className="text-xs font-medium text-slate-500">{title}</p>
         <ul className="space-y-1">
           {items.map((item, idx) => (
-            <li key={`${title}-${idx}`} className="text-sm text-slate-700 flex items-start gap-2">
+            <li
+              key={`${title}-${idx}`}
+              className="text-sm text-slate-700 flex items-start gap-2"
+            >
               <span className="text-slate-400">{idx + 1}.</span>
               <span>{item}</span>
             </li>
@@ -1301,7 +1571,10 @@ const DecisionCardModal = ({ cardId, onClose }) => {
       <div className="w-full max-w-2xl bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-slate-800">决策详情</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-600"
+          >
             <X size={16} />
           </button>
         </div>
@@ -1317,12 +1590,18 @@ const DecisionCardModal = ({ cardId, onClose }) => {
                 <h4 className="text-base font-semibold text-slate-900">
                   {card.title || '决策卡'}
                 </h4>
-                <p className="text-sm text-slate-600">{card.summary || '暂无摘要'}</p>
+                <p className="text-sm text-slate-600">
+                  {card.summary || '暂无摘要'}
+                </p>
               </div>
               {card.recommendation && (
                 <div className="bg-indigo-50/60 rounded-lg p-3">
-                  <p className="text-xs font-medium text-indigo-500 mb-1">核心建议</p>
-                  <p className="text-sm text-indigo-700">{card.recommendation}</p>
+                  <p className="text-xs font-medium text-indigo-500 mb-1">
+                    核心建议
+                  </p>
+                  <p className="text-sm text-indigo-700">
+                    {card.recommendation}
+                  </p>
                 </div>
               )}
               {renderListBlock('决策依据', card.reasoning)}
@@ -1403,13 +1682,16 @@ const ChatBIView = ({
     const init = async () => {
       const loadedSessions = await chatService.getSessions({ sessionType });
       setSessions(loadedSessions);
-      
+
       const savedSessionId = localStorage.getItem(sessionStorageKey);
-      
+
       if (savedSessionId && savedSessionId.startsWith('local-')) {
         setSessionId(savedSessionId);
         $currentSessionId.set(null);
-      } else if (savedSessionId && loadedSessions.some(s => s.sessionId === savedSessionId)) {
+      } else if (
+        savedSessionId &&
+        loadedSessions.some((s) => s.sessionId === savedSessionId)
+      ) {
         handleSwitchSession({ sessionId: savedSessionId }, loadedSessions);
       } else {
         const newLocalId = 'local-' + Date.now();
@@ -1440,7 +1722,9 @@ const ChatBIView = ({
           if (Number.isFinite(id) && p?.status === 'generating') {
             map.set(id, typeof p.type === 'string' ? p.type : 'article');
           }
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
   }, []);
@@ -1462,7 +1746,9 @@ const ChatBIView = ({
           if (status && status !== 'generating') {
             map.delete(id);
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     };
     if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
@@ -1497,25 +1783,30 @@ const ChatBIView = ({
       const history = await chatService.fetchHistory(sess.sessionId, {
         sessionType,
       });
-      const msgs = Array.isArray(history) ? history : (history.messages || []);
-      setMessages(msgs.map(m => ({
-        ...m,
-        id: m.id || Date.now() + Math.random(),
-        role: m.role === 'assistant' ? 'ai' : m.role,
-        content:
-          m.role === 'assistant'
-            ? appendDecisionItIfNeeded(
-                appendCanvasItIfNeeded(
-                  typeof m.content === 'string' ? m.content : '',
+      const msgs = Array.isArray(history) ? history : history.messages || [];
+      setMessages(
+        msgs.map((m) => ({
+          ...m,
+          id: m.id || Date.now() + Math.random(),
+          role: m.role === 'assistant' ? 'ai' : m.role,
+          content:
+            m.role === 'assistant'
+              ? appendDecisionItIfNeeded(
+                  appendCanvasItIfNeeded(
+                    typeof m.content === 'string' ? m.content : '',
+                    Array.isArray(m.tool_results) ? m.tool_results : [],
+                  ),
                   Array.isArray(m.tool_results) ? m.tool_results : [],
-                ),
-                Array.isArray(m.tool_results) ? m.tool_results : [],
-              )
-            : m.content,
-        toolCount: 0,
-        subagentCount: 0,
-      })));
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }), 50);
+                )
+              : m.content,
+          toolCount: 0,
+          subagentCount: 0,
+        })),
+      );
+      setTimeout(
+        () => messagesEndRef.current?.scrollIntoView({ behavior: 'instant' }),
+        50,
+      );
     } catch (e) {
       console.error(e);
       setMessages([]);
@@ -1527,9 +1818,10 @@ const ChatBIView = ({
   /* ─── Send message with SSE streaming ─── */
   const handleSend = async (overrideText) => {
     // 支持传入文本（如来自 TagSelectCard 卡片回写），否则取输入框值
-    const raw = typeof overrideText === 'string' && overrideText.trim()
-      ? overrideText.trim()
-      : inputValue.trim();
+    const raw =
+      typeof overrideText === 'string' && overrideText.trim()
+        ? overrideText.trim()
+        : inputValue.trim();
     if (!raw || isLoading) return;
 
     const userText = raw;
@@ -1567,13 +1859,17 @@ const ChatBIView = ({
       errorText: null,
     };
 
-    setMessages(prev => [...prev, userMsg, aiMsg]);
-    setIsLoading(true);  // Blocks input field
+    setMessages((prev) => [...prev, userMsg, aiMsg]);
+    setIsLoading(true); // Blocks input field
 
     try {
-      const response = await chatService.streamChatPost(currentSessionId, userText, {
-        sessionType,
-      });
+      const response = await chatService.streamChatPost(
+        currentSessionId,
+        userText,
+        {
+          sessionType,
+        },
+      );
       if (!response.body) throw new Error('No response body');
 
       const reader = response.body.getReader();
@@ -1584,11 +1880,19 @@ const ChatBIView = ({
       let subagentCount = 0;
 
       const updateAiMsg = (overrides) => {
-        setMessages(prev => prev.map(msg =>
-          msg.id === aiMsgId
-            ? { ...msg, content: textContent, toolCount, subagentCount, ...overrides }
-            : msg
-        ));
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === aiMsgId
+              ? {
+                  ...msg,
+                  content: textContent,
+                  toolCount,
+                  subagentCount,
+                  ...overrides,
+                }
+              : msg,
+          ),
+        );
       };
 
       while (true) {
@@ -1651,18 +1955,30 @@ const ChatBIView = ({
       // Refresh session list
       const updatedSessions = await chatService.getSessions({ sessionType });
       setSessions(updatedSessions);
-
     } catch (error) {
       console.error('Chat error:', error);
-      const errName = error && typeof error === 'object' && typeof error.name === 'string' ? error.name : '';
-      const errMsg = error && typeof error === 'object' && typeof error.message === 'string' ? error.message : '未知错误';
-      const reason = errName && errName !== 'Error' ? `${errName}: ${errMsg}` : errMsg;
+      const errName =
+        error && typeof error === 'object' && typeof error.name === 'string'
+          ? error.name
+          : '';
+      const errMsg =
+        error && typeof error === 'object' && typeof error.message === 'string'
+          ? error.message
+          : '未知错误';
+      const reason =
+        errName && errName !== 'Error' ? `${errName}: ${errMsg}` : errMsg;
       // Record error in the already-created AI message (not a new one)
-      setMessages(prev => prev.map(msg =>
-        msg.id === aiMsgId
-          ? { ...msg, errorText: `抱歉，我现在无法回答。请稍后再试。(${reason})`, isStreaming: false }
-          : msg
-      ));
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === aiMsgId
+            ? {
+                ...msg,
+                errorText: `抱歉，我现在无法回答。请稍后再试。(${reason})`,
+                isStreaming: false,
+              }
+            : msg,
+        ),
+      );
     } finally {
       setIsLoading(false);
     }
@@ -1677,7 +1993,6 @@ const ChatBIView = ({
 
   return (
     <div className="flex flex-col h-full animate-fade-in relative overflow-hidden">
-
       {/* 历史会话 Drawer */}
       <div
         onTouchStart={(e) => e.stopPropagation()}
@@ -1690,7 +2005,10 @@ const ChatBIView = ({
       >
         <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <h3 className="font-bold text-slate-700 text-sm">历史会话</h3>
-          <button onClick={() => onDrawerToggle && onDrawerToggle(false)} className="text-slate-400 hover:text-slate-600">
+          <button
+            onClick={() => onDrawerToggle && onDrawerToggle(false)}
+            className="text-slate-400 hover:text-slate-600"
+          >
             <X size={18} />
           </button>
         </div>
@@ -1707,9 +2025,11 @@ const ChatBIView = ({
 
         <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
           {sessions.length === 0 ? (
-            <div className="text-center text-xs text-slate-400 py-8">暂无历史会话</div>
+            <div className="text-center text-xs text-slate-400 py-8">
+              暂无历史会话
+            </div>
           ) : (
-            sessions.map(sess => (
+            sessions.map((sess) => (
               <button
                 key={sess.sessionId}
                 onClick={() => handleSwitchSession(sess)}
@@ -1766,7 +2086,9 @@ const ChatBIView = ({
             </div>
             <div className="max-h-72 overflow-y-auto p-3 space-y-2">
               {sessions.length === 0 ? (
-                <div className="text-center text-xs text-slate-400 py-8">暂无历史会话</div>
+                <div className="text-center text-xs text-slate-400 py-8">
+                  暂无历史会话
+                </div>
               ) : (
                 sessions.map((sess) => (
                   <button
@@ -1783,7 +2105,9 @@ const ChatBIView = ({
                   >
                     <div className="font-medium truncate mb-1 flex items-center">
                       <MessageSquare size={12} className="mr-2 opacity-70" />
-                      <span className="truncate">{sess.title || '未命名会话'}</span>
+                      <span className="truncate">
+                        {sess.title || '未命名会话'}
+                      </span>
                     </div>
                     <div className="text-[10px] opacity-60">
                       {new Date(sess.timestamp).toLocaleString()}
@@ -1797,17 +2121,21 @@ const ChatBIView = ({
       )}
 
       {/* 消息列表区域 */}
-      <div 
+      <div
         className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-2 pb-4 pt-4"
         onTouchStart={(e) => {
           // 如果点击的是代码块、表格或任何可能横向滚动的容器，阻止冒泡
-          const isScrollable = e.target.closest('pre, table, .ai-table-scroll, .overflow-x-auto');
+          const isScrollable = e.target.closest(
+            'pre, table, .ai-table-scroll, .overflow-x-auto',
+          );
           if (isScrollable) {
             e.stopPropagation();
           }
         }}
         onTouchEnd={(e) => {
-          const isScrollable = e.target.closest('pre, table, .ai-table-scroll, .overflow-x-auto');
+          const isScrollable = e.target.closest(
+            'pre, table, .ai-table-scroll, .overflow-x-auto',
+          );
           if (isScrollable) {
             e.stopPropagation();
           }
@@ -1818,7 +2146,9 @@ const ChatBIView = ({
             <div className="w-20 h-20 bg-gradient-to-br from-indigo-50 to-blue-50 rounded-full flex items-center justify-center mb-6 shadow-sm border border-white ring-4 ring-indigo-50/50">
               <Sparkles size={32} className="text-indigo-600" />
             </div>
-            <h2 className="text-xl font-bold text-slate-900 mb-2">{welcomeTitle}</h2>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">
+              {welcomeTitle}
+            </h2>
             <p className="text-sm text-slate-500 max-w-xs text-center leading-relaxed">
               {welcomeDesc}
             </p>
@@ -1839,8 +2169,11 @@ const ChatBIView = ({
           </div>
         ) : (
           <>
-            {messages.map(msg => (
-              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`}>
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`}
+              >
                 {msg.role === 'user' ? (
                   <div className="bg-slate-900 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] text-sm shadow-sm font-medium leading-relaxed break-words overflow-hidden">
                     {msg.content}
@@ -1876,19 +2209,27 @@ const ChatBIView = ({
             </button>
           </div>
         )}
-        <div className={`flex items-end bg-white border shadow-lg shadow-slate-200/50 rounded-2xl p-1.5 px-4 transition-all max-w-2xl mx-auto ${
-          isLoading
-            ? 'border-indigo-200 bg-indigo-50/30'
-            : 'border-slate-200 focus-within:ring-2 focus-within:ring-indigo-500/20'
-        }`}>
+        <div
+          className={`flex items-end bg-white border shadow-lg shadow-slate-200/50 rounded-2xl p-1.5 px-4 transition-all max-w-2xl mx-auto ${
+            isLoading
+              ? 'border-indigo-200 bg-indigo-50/30'
+              : 'border-slate-200 focus-within:ring-2 focus-within:ring-indigo-500/20'
+          }`}
+        >
           <textarea
             ref={textareaRef}
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={isLoading ? 'AI 正在回复中，请稍候...' : inputPlaceholder}
+            placeholder={
+              isLoading ? 'AI 正在回复中，请稍候...' : inputPlaceholder
+            }
             rows={1}
-            style={{ height: 'auto', maxHeight: MAX_HEIGHT + 'px', overflowY: 'auto' }}
+            style={{
+              height: 'auto',
+              maxHeight: MAX_HEIGHT + 'px',
+              overflowY: 'auto',
+            }}
             className="flex-1 bg-transparent text-sm text-slate-800 outline-none placeholder-slate-400 py-2.5 font-medium disabled:cursor-not-allowed disabled:opacity-50 resize-none leading-relaxed"
             disabled={isLoading}
           />
@@ -1901,7 +2242,11 @@ const ChatBIView = ({
                 : 'bg-slate-100 text-slate-300 cursor-not-allowed scale-95'
             }`}
           >
-            {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
+            {isLoading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Zap size={16} />
+            )}
           </button>
         </div>
       </div>
@@ -1912,12 +2257,18 @@ const ChatBIView = ({
           {activeCanvasType === 'image-group' ? (
             <ImageGroupCanvasView
               canvasId={activeCanvasId}
-              onClose={() => { setActiveCanvasId(null); setActiveCanvasType(null); }}
+              onClose={() => {
+                setActiveCanvasId(null);
+                setActiveCanvasType(null);
+              }}
             />
           ) : (
             <CanvasFeedView
               canvasId={activeCanvasId}
-              onClose={() => { setActiveCanvasId(null); setActiveCanvasType(null); }}
+              onClose={() => {
+                setActiveCanvasId(null);
+                setActiveCanvasType(null);
+              }}
             />
           )}
         </div>
@@ -1978,7 +2329,6 @@ const ChatBIView = ({
           </div>
         </div>
       )}
-
     </div>
   );
 };

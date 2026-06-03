@@ -434,8 +434,8 @@ export class ChatMainService {
 
           // ─── default 模式: 意图识别 + 专家直派(不再用 LangGraph StateGraph)───
           // 两步走:
-          //   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读 JSON 化最近 10 组
-          //      对话,在提示词强约束下只输出一个路由词,代码硬解析。不是 tool 调用、不是 graph。
+          //   ① recognizeIntent —— 先走代码层承上/关键词规则,仍不确定时再用轻量 LLM
+          //      读 JSON 化 fullDialog/recentDialog,输出一个路由词。不是 tool 调用、不是 graph。
           //   ② buildExpertAgent —— 按路由词在代码层选定**单个专家** createReactAgent。
           // 选定的专家 agent 当 preBuiltAgent 交给 agent.stream 正常流式消费,原有
           // stream 处理逻辑(token 累加 / SSE / 落库)完全不变。
@@ -485,9 +485,10 @@ export class ChatMainService {
               const cleanHistory =
                 this.simplifyHistoryForRouting(loadedHistory);
 
-              // ① 意图识别 —— 读简化历史压缩出的最近 10 组 JSON,输出路由词
+              // ① 意图识别 —— 先跑承上/关键词确定性规则,仍不确定才读简化历史 JSON。
               const route = await this.supervisorGraph.recognizeIntent({
-                systemPrompt: this.getSupervisorPromptCN(
+                systemPrompt: this.getSupervisorPromptBySession(
+                  scope.sessionType,
                   sysContent,
                   currentAction,
                 ),
@@ -500,7 +501,10 @@ export class ChatMainService {
               preBuiltAgent = this.supervisorGraph.buildExpertAgent({
                 route,
                 experts,
-                chatExpertPrompt: this.getChatExpertPromptCN(sysContent),
+                chatExpertPrompt: this.getChatExpertPromptBySession(
+                  scope.sessionType,
+                  sysContent,
+                ),
                 expertLLM,
                 chatLLM: intentLLM,
                 checkpointer,
@@ -511,10 +515,16 @@ export class ChatMainService {
                 // 喂**完整历史**(业务专家要靠执行上下文/卡片接着干活)。
                 try {
                   const isContinuation = currentAction === route;
+                  const handoffMeta = this.getHandoffDisplayMeta(
+                    scope.sessionType,
+                    route,
+                  );
                   const fence = `\`\`\`handoff-it\n${JSON.stringify({
                     expert: route,
                     expertNode: `${route}_expert`,
-                    reason: `意图识别路由: ${route}`,
+                    expertLabel: handoffMeta.label,
+                    icon: handoffMeta.icon,
+                    reason: `${handoffMeta.reasonPrefix}: ${route}`,
                     isContinuation,
                     ts: Date.now(),
                   })}\n\`\`\``;
@@ -535,6 +545,15 @@ export class ChatMainService {
                   streamMessages = loadedHistory;
                 }
               } else {
+                if (currentAction) {
+                  try {
+                    await this.ctx.setActionSession(sid, null, scope);
+                  } catch (e) {
+                    this.logger.warn(
+                      `[chat.stream] action_session_clear_failed: ${String(e)}`,
+                    );
+                  }
+                }
                 // chat 专家: 喂**简化历史**,避免它看到历史里的卡片/工具调用后
                 // 跟着虚拟造一个 tool_call。
                 if (cleanHistory.length > 0) {
@@ -1101,7 +1120,14 @@ export class ChatMainService {
    * @keyword-en sanitize final output text
    */
   private sanitizeFinalText(text: string): string {
-    const s = typeof text === 'string' ? text : String(text ?? '');
+    let s = typeof text === 'string' ? text : String(text ?? '');
+    s = s.replace(/\[TOOL_CALL\][\s\S]*?(?:\[\/TOOL_CALL\]|$)/gi, '');
+    const minimaxArtifactIndex = s.search(
+      /<\|?minimax\|?>|<minimax:tool_call>|<\s*invoke\b|<parameter\b/i,
+    );
+    if (minimaxArtifactIndex >= 0) {
+      s = s.slice(0, minimaxArtifactIndex).trimEnd();
+    }
     const trimmed = s.trimStart();
     if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return s;
     let depth = 0;
@@ -1199,6 +1225,7 @@ export class ChatMainService {
     const base = [
       '你是 AI 指挥官 “小集”，目标是用最少步骤完成用户当前需求。',
       '你能完成代码生成,看版替换,页面生成,数据分析等任务,但你不是执行者,只能调用工具/子代理来完成任务。',
+      '工具必须通过系统结构化 tool call 调用；禁止把 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本展示给用户。',
       '如果是生成文章的数据收集,直接交给生文节点去做就好了,不需要你检索完了给到 subagent',
       '优先直接回答；只有当信息不足或用户明确要求时再调用工具/子代理。',
       '当工具返回了 Canvas 信息（如 canvasId），回复中输出一个 ```canvas-it``` JSON 代码块（至少包含 canvasId）。',
@@ -1219,7 +1246,7 @@ export class ChatMainService {
       '调用 todo_create/todo_update 时不要手填 userId，统一由会话上下文注入。',
       '创建发布任务时，description 必须写入当前会话上下文摘要（用户目标、对象、资源、执行要求），不要留空。',
       '生成拼图/封面属于独立图库操作；除非用户明确要求生成文章/内容，否则禁止同时触发 Canvas 创建。',
-      '[重要]需要任何数据分析,数据查询,数据获取时使用 analysis_subagent, 如果有数据来源返回也要在回答生成中说明数据来源和字段信息，确保查询结果可解释且可复用。',
+      '[重要]需要任何数据分析、数据查询、数据获取时，会由系统路由到数据分析专家。专家必须直接调用已绑定的数据工具完成查询，禁止输出 [TOOL_CALL]、XML、JSON 伪工具调用文本；如果有数据来源返回，也要在回答中说明数据来源和字段信息，确保查询结果可解释且可复用。',
       '涉及计算时必须调用 js_calc 或 js_calc_batch。',
       '若工具失败或返回空，明确告知用户并给下一步选项。',
       '所有的数据查询都要带上数据表清单（schema catalog），说明数据来源和字段信息，确保查询结果可解释且可复用。',
@@ -1346,6 +1373,7 @@ export class ChatMainService {
         )
         // minimax 私有工具调用伪文本
         .replace(/<minimax:tool_call>[\s\S]*?(?:<\/minimax:tool_call>|$)/gi, '')
+        .replace(/<\|?minimax\|?>[\s\S]*$/gi, '')
         .replace(/<\s*invoke\b[\s\S]*?(?:<\/invoke>|$)/gi, '')
         .replace(/<parameter\b[\s\S]*?(?:<\/parameter>|$)/gi, '')
         .trim();
@@ -1406,9 +1434,10 @@ export class ChatMainService {
       '你是 AI 指挥官的「意图分析层」。你的**唯一**职责: 读取一条 JSON 化上下文,判定本轮用户意图,输出一个路由词。',
       '',
       '【输入格式】你会收到一条 user 消息,内容是 JSON,包含:',
-      '- currentActionSession: 上一轮激活专家,只用于判断是否延续,不是锁定',
+      '- currentActionSession: 当前业务链路的激活专家。代码层会先处理明显承上；你只在需要 LLM 补充判断时参考它',
       '- latestUserMessage: 本轮用户最新消息,这是本轮意图判定的第一优先级',
-      '- recentDialog: 最近 10 组 user/assistant 对话,用于理解承接关系',
+      '- fullDialog: 完整清洗历史,用于承上判断和恢复较早的任务上下文',
+      '- recentDialog: 最近 10 组 user/assistant 对话,用于快速理解近端承接关系',
       '',
       '【⚠️ 输出格式 —— 极其重要,必须严格遵守】',
       '你的回复**必须且只能**是下面 7 个英文单词中的**一个**,不带任何标点、引号、解释、前后缀:',
@@ -1424,7 +1453,8 @@ export class ChatMainService {
       '',
       actionCtx,
       '',
-      '【判定规则】先归类 JSON.latestUserMessage,再结合 recentDialog 判断是否延续上一轮任务,最后输出对应路由词:',
+      '【判定规则】先归类 JSON.latestUserMessage,再结合 fullDialog/recentDialog 判断是否延续上一轮任务,最后输出对应路由词:',
+      '- 如果 currentActionSession 不为空,且 latestUserMessage 是确认/继续/补充时间范围/补充指标口径/“那就按这个来”等承接语,优先输出 currentActionSession 对应的路由词,不要因为句子短或像口语确认就输出 chat',
       '- 闲聊/无意义/情绪词("哈哈""好的""嗯""厉害""6""hi""你好") → 输出 chat',
       '- 询问指挥官自己("你是谁""你能做什么""怎么用") → 输出 chat',
       '- 与 6 个专家领域都无关的通用问题 → 输出 chat',
@@ -1436,10 +1466,10 @@ export class ChatMainService {
       '- 批量发布/内容分发/指派 robot 发布执行 → 输出 publisher',
       '- 创建/编排/查询 任务/待办/工单/排期 → 输出 task',
       '⚠️ publisher 是"把内容发出去",task 是"管理待办与编排任务",两者不同,别混。',
-      '⚠️ 即使 actionSession 已有激活专家,只要本轮是闲聊/无关内容,也必须输出 chat。',
-      '激活专家不是"锁定",每轮都要重新判定。',
+      '⚠️ 即使 actionSession 已有激活专家,只要本轮明确是闲聊/能力询问/结束当前业务,也必须输出 chat。',
+      'actionSession 是承上状态,不是让你执行任务；明确切换才回 chat。',
       '',
-      '【延续性识别】结合 recentDialog 判断,本轮是否在推进上一轮专家任务:',
+      '【延续性识别】结合 fullDialog/recentDialog 判断,本轮是否在推进上一轮专家任务:',
       '- 历史在做 image/article 并发出 tag-select 卡片,本轮"我选定标签：#X" → 延续对应专家；上一轮 article 输出 article,上一轮 image 输出 image',
       '- 历史在做 data,本轮"换成 14 天"/"再细分一下" → 输出 data',
       '- 本轮"再来一组"/"再生成一个"且历史在做图组 → 输出 image',
@@ -1461,7 +1491,8 @@ export class ChatMainService {
     return [
       envContext,
       '',
-      '你是 AI 指挥官,负责与用户做通用对话。意图分析层已判定本轮是闲聊/打招呼/询问能力/与业务无关的通用问题,转交给你直接回应。',
+      '你是 AI 指挥官的 chat 兜底入口,只负责接待、简单闲聊、能力说明和澄清问题。',
+      '你不是业务执行者。数据查询、图组生图、文章生成、可视化、发布执行、任务编排都必须由系统路由给对应专家完成。',
       '',
       '【你的能力】你统筹 6 个业务方向,可按用户需求调度:',
       '- 图组生图: 创建图组 Canvas、配图、封面、拼图',
@@ -1475,10 +1506,142 @@ export class ChatMainService {
       '- 闲聊/情绪词("哈哈""好的""厉害"): 自然地回一句,语气轻松',
       '- 问"你是谁"/"你能做什么": 简洁介绍你能统筹的 6 个方向,引导用户提出具体需求',
       '- 与业务无关的通用问题: 简短回答,或说明你更擅长上述 6 类任务',
+      '- 如果用户像是在提出业务请求但信息不足,只问一个澄清问题,不要自己查数据、生成内容、制定发布计划或创建任务',
+      '- 禁止说"我去查一下/我来生成/我确认数据/我调用工具"等执行口吻',
+      '- 禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用、canvas-it、task-it、tag-select-it、handoff-it 代码块',
       '- 用中文,1-3 句即可,不要冗长,不要解释内部路由逻辑',
     ]
       .filter((line) => typeof line === 'string')
       .join('\n');
+  }
+
+  /**
+   * @description 按会话模式选择意图识别提示词。
+   * @keyword-cn 意图识别, 小红书路由
+   * @keyword-en supervisor-prompt, xhs-routing
+   */
+  private getSupervisorPromptBySession(
+    sessionType: ConversationSessionType,
+    envContext: string,
+    currentActionSession?:
+      | 'image'
+      | 'article'
+      | 'data'
+      | 'frontend'
+      | 'publisher'
+      | 'task'
+      | null,
+  ): string {
+    if (sessionType === 'xhs-specialist') {
+      return this.getXhsSupervisorPromptCN(envContext, currentActionSession);
+    }
+    return this.getSupervisorPromptCN(envContext, currentActionSession);
+  }
+
+  /**
+   * @description 按会话模式选择 chat 专家提示词。
+   * @keyword-cn 闲聊专家, 小红书专家
+   * @keyword-en chat-expert-prompt, xhs-chat
+   */
+  private getChatExpertPromptBySession(
+    sessionType: ConversationSessionType,
+    envContext: string,
+  ): string {
+    if (sessionType === 'xhs-specialist') {
+      return this.getXhsChatExpertPromptCN(envContext);
+    }
+    return this.getChatExpertPromptCN(envContext);
+  }
+
+  /**
+   * @description 构建小红书专家意图识别提示词。
+   * @keyword-cn 小红书意图识别, 专家直派
+   * @keyword-en xhs-intent-routing, expert-dispatch
+   */
+  private getXhsSupervisorPromptCN(
+    envContext: string,
+    currentActionSession?:
+      | 'image'
+      | 'article'
+      | 'data'
+      | 'frontend'
+      | 'publisher'
+      | 'task'
+      | null,
+  ): string {
+    const actionCtx = currentActionSession
+      ? `【当前会话上下文】上一轮已激活小红书专家路由: ${currentActionSession}。用户若在确认、补充时间/账号/篇数/标签/发布范围,优先延续该路由。`
+      : '【当前会话上下文】当前无激活的小红书子领域,由你重新判定。';
+    return [
+      envContext,
+      '',
+      '你是小红书专家的「意图识别层」。你的唯一职责是读取 JSON 化上下文,把本轮用户请求分派到一个小红书专属专家。',
+      '小红书专家主入口只是简单对话/能力说明节点,不是业务执行者；凡是生图、生文、数据、发布、任务、可视化请求,都必须路由给对应专家。',
+      '输入 JSON 中 fullDialog 是完整清洗历史,recentDialog 是最近片段。遇到短句、追问、确认、补标签/账号/篇数时,必须结合 fullDialog 和 currentActionSession 承上判断。',
+      '',
+      '【输出格式】整条回复只能是下面 7 个英文路由词中的一个,不要标点、解释、JSON、代码块或工具调用:',
+      '  image    article    data    frontend    publisher    task    chat',
+      '',
+      '【绝对禁止】你只做分类,不执行任务。禁止输出 [TOOL_CALL]、<minimax>、canvas-it、task-it、tag-select-it、任何 JSON 或工具调用伪文本。',
+      '',
+      actionCtx,
+      '',
+      '【路由规则】优先判断 latestUserMessage,再结合 fullDialog/recentDialog:',
+      '- 闲聊/打招呼/问小红书专家能做什么/与小红书无关 → chat',
+      '- 生成图组、配图、生图、封面、拼图、图库搜图、图片组 Canvas → image',
+      '- 生成小红书图文、正文、笔记文案、选题、种草文章、把 Canvas 存入文章库、文章库二维码 → article',
+      '- 数据追踪、数据采集、粉丝/点赞/收藏/评论分析、爆文规律、竞品账号、发文后数据回收 → data',
+      '- 发布、发文执行、批量发布、账号池、账号轮流发布、Adspower、确认将 Canvas 发出去 → publisher',
+      '- 查看/管理/更新小红书任务、任务列表、任务进度,但不是要求立刻发布或采集 → task',
+      '- 小红书数据图表、可视化报告、dashboard、HTML 看板 → frontend',
+      '- 如果 currentActionSession 不为空,且用户是在说“好的/那就按这个/上周也看/补这个标签/有哪些tag/我想选一下/开始吧/发布吧”等承接语,优先输出 currentActionSession 对应路由词',
+      '- 如果上一轮已经进入 image 或 article,本轮只是在问 tag/标签/素材风格/可选项/选一下,继续输出上一轮 currentActionSession,不要切 chat',
+      '- 如果同一句同时包含图文/正文与配图/图组,优先 article；只有纯图片素材需求才 image',
+    ].join('\n');
+  }
+
+  /**
+   * @description 小红书专家的通用对话提示词。
+   * @keyword-cn 小红书闲聊, 能力介绍
+   * @keyword-en xhs-chat-expert, capability-intro
+   */
+  private getXhsChatExpertPromptCN(envContext: string): string {
+    return [
+      envContext,
+      '',
+      '你是小红书专家的 chat 兜底入口,只负责简单闲聊、能力说明和澄清问题。',
+      '你不是小红书业务执行者。图组生图、图文生文、数据追踪、发文执行、任务管理、可视化都必须交给对应专家完成。',
+      '你可以简洁说明自己能统筹: 图组生图、图文生文、数据追踪、发文执行、小红书任务管理、数据可视化。',
+      '如果用户像是在提出小红书业务请求但信息不足,只问一个澄清问题,不要自己生成图文、图片方案、数据结论或发布计划。',
+      '禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用、canvas-it、task-it、tag-select-it、handoff-it 代码块。',
+      '不要解释内部路由逻辑。用中文,1-3 句即可。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 生成 handoff 卡片展示元信息。
+   * @keyword-cn 路由胶囊, 小红书专家
+   * @keyword-en handoff-display, xhs-routing
+   */
+  private getHandoffDisplayMeta(
+    sessionType: ConversationSessionType,
+    route: string,
+  ): { label?: string; icon?: string; reasonPrefix: string } {
+    if (sessionType !== 'xhs-specialist') {
+      return { reasonPrefix: '意图识别路由' };
+    }
+    const labels: Record<string, { label: string; icon: string }> = {
+      image: { label: '小红书生图专家', icon: '🎨' },
+      article: { label: '小红书生文专家', icon: '✍️' },
+      data: { label: '小红书数据追踪专家', icon: '📊' },
+      frontend: { label: '小红书可视化专家', icon: '📈' },
+      publisher: { label: '小红书发文执行专家', icon: '🚀' },
+      task: { label: '小红书任务管理专家', icon: '🗂️' },
+    };
+    return {
+      ...labels[route],
+      reasonPrefix: '小红书意图识别路由',
+    };
   }
 
   /**
@@ -1496,6 +1659,12 @@ export class ChatMainService {
       ops_subagent: 'publisher',
       task_subagent: 'task',
       gallery_subagent: 'image',
+      xhs_data_tracker_subagent: 'data',
+      xhs_article_expert_subagent: 'article',
+      xhs_image_expert_subagent: 'image',
+      xhs_publish_subagent: 'publisher',
+      xhs_task_subagent: 'task',
+      xhs_visual_report_subagent: 'frontend',
     };
     const specs: ExpertSpec[] = [];
     for (const sub of subagents) {
@@ -1593,44 +1762,20 @@ export class ChatMainService {
 
   /**
    * @description 小红书专家专用提示词
-   * @keyword-en XHS specialist system prompt
+   * @keyword-cn 小红书专家, 能力介绍
+   * @keyword-en xhs-specialist, routing-entry
    */
   private getXhsSpecialistPromptCN(): string {
     return [
-      '你是"小红书内容创作专家"，专注于帮助用户生成和管理小红书内容。',
-      '你统筹两个子代理，按用户意图路由：',
-      '- gallery_subagent：图组Canvas生成、图库搜图、文章配图',
-      '- xhs_article_expert_subagent（若可用）：生文专家，负责文章/Canvas内容生成',
+      '你是"小红书专家"主入口,只负责简单对话、能力说明和承接用户意图。',
+      '你不是业务执行者: 生图、生文、数据追踪、发文执行、任务管理、可视化都由系统 supervisor 路由给对应小红书专家完成。',
+      '当用户提出任何业务诉求时,不要自己执行、不要输出伪工具调用、不要编造结果；等待系统路由到对应专家。',
+      '如果用户只是打招呼、问你能做什么、问如何使用,用 1-3 句说明可统筹: 图组生图、图文生文、数据追踪、发文执行、任务管理、数据可视化。',
       '',
-      '【Canvas 内容展示规则 - 严格遵守】',
-      '- 当用户要查看/预览某个 Canvas 的具体内容时，直接输出 canvas-it 代码块，不要通过工具获取内容后展开文字描述。',
-      '- 格式：```canvas-it',
-      '  {"canvasId":<id>,"type":"article"}',
-      '  ```',
-      '- canvas_search 工具仅用于「搜索/查找」Canvas，找到目标后输出 canvas-it 块交由前端渲染，不需要再调用 xhs_get_canvas_detail 展开内容。',
-      '',
-      '【默认意图判定 - 严格遵守】',
-      '- 用户只说"图/图组/配图/拼图/封面"等图片词，没明确"图文/正文/全套/也写文/一并出文"时：',
-      '  默认只委派 gallery_subagent 生成图组 Canvas，不要主动生成图文。',
-      '  图组返回后，主动用一句话询问用户："是否需要基于此图组继续生成对应图文？"，等待用户确认。',
-      '- 仅当用户明确表态要"图文/正文/全套/也写文"时，交给图文生成专家用 topic_orchestrate 生成图文。',
-      '  图文生成专家负责完整图文 Canvas（正文+配图链路），不要先自动创建一个独立图组 Canvas，除非用户明确要求单独生成图组。',
-      '- 用户首次需求里明确"图文带配图"/"生成图文"时：直接交给图文生成专家；只有明确说"单独图组"或"只要图组"才走图组生图专家。',
-      '- 严禁在用户没明确要图文时自动连带触发图文生成。',
-      '',
-      '【子代理路由规则】：',
-      '- 用户要"生图/配图/图组/Canvas生成" → **直接调 xhs_create_image_group_canvas**(已通过 fire-and-forget 异步生图,canvas-it 卡片由系统 earlyEmit 即时推到前端),不再委派 gallery_subagent(避免子代理 LLM 推理阻塞卡片到达)。gallery_subagent 只保留给图库搜图/详情查询等非创建场景。',
-      '- 用户要"图文/正文/写文/全套" → 委派生文专家（topic_orchestrate）',
-      '- 用户要"Canvas 存入文章库"或"获取文章库二维码" → 直接使用 article_library_list / canvas_store_to_article_library / article_library_get_push_qr；如果只给了库标题，先列候选再按标题或 id 操作。Canvas 仍在 generating 时提示完成后再入库。',
-      '',
-      '【图片组Canvas创建规则（主 agent 直接执行 xhs_create_image_group_canvas）】',
-      '   - 参数规则：groupCount 与 articles 数量保持一致；篇数按用户/LLM要求，不做 6-8 强制限制',
-      '   - **数量缺省**：用户未明确说组数/篇数时，默认只生成 1 组（articles=1、groupCount=1）；"一组/一套/一份"就是 1 组，严禁把单一主题拆成多个子场景凑多组',
-      `   - 质量目标：每篇文章配图数量应在 ${this.IMAGE_PER_ARTICLE_MIN_COUNT}-${this.IMAGE_PER_ARTICLE_MAX_COUNT} 张（当前模板默认 6 张）`,
-      '   - 严格禁止多次调用 xhs_create_image_group_canvas；用户说"N 组/N 篇"时一次性把 articles 长度=N、groupCount=N 传完，落到同一个 Canvas',
-      '   - **canvas-it 卡片已被系统 earlyEmit 即时推到前端**,你只需输出一句简短确认(如"图组 Canvas 已创建,正在后台生成"),**严禁再输出 ```canvas-it``` 代码块**',
-      '若用户要求拼图：只能用 2 张图，拼图成品固定 640x853（96dpi）。',
-      '请根据用户需求，帮助他们创建高质量的小红书内容。',
+      '【边界】',
+      '- 禁止调用或模拟任何工具。',
+      '- 禁止生成图文正文、图片方案、数据结论、发布计划等业务结果。',
+      '- 禁止输出 canvas-it/task-it/tag-select-it/handoff-it 代码块。',
     ].join('\n');
   }
 
@@ -1646,6 +1791,7 @@ export class ChatMainService {
     console.log('小红书数据追踪专家提示词被调用');
     return [
       '你是"小红书数据追踪专家"，专注于小红书账号与内容的数据分析及定期采集任务创建。',
+      '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
       '',
       '【职责范围】',
       '- 分析账号粉丝增长趋势、笔记互动数据（点赞/收藏/评论/阅读）',
@@ -1688,6 +1834,7 @@ export class ChatMainService {
   private getXhsPublisherPromptCN(): string {
     return [
       '你是"小红书发文执行专家"，专注于将内容推入发布流程。不用在意既往任务队列等',
+      '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
       '',
       '【发布前可参考】',
       '1. 若用户已明确指定 canvasId，直接使用该 ID，跳到步骤 3。',
@@ -1756,12 +1903,14 @@ export class ChatMainService {
   }
 
   /**
-   * @description 生文专家系统提示词 — 优先匹配已有图组 Canvas 合并，无则询问用户。
-   * @keyword-en xhs article expert system prompt
+   * @description 生文专家系统提示词 — 固定小红书真实分享文风，不追问多平台文风。
+   * @keyword-cn 小红书生文, 固定文风
+   * @keyword-en xhs-article-expert, writing-style
    */
   private getXhsArticleExpertPromptCN(): string {
     return [
       '你是"小红书生文专家"，专注于策划与撰写小红书图文内容。',
+      '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
       '',
       '【Canvas 内容展示规则 - 严格遵守】',
       '- 当用户要查看/预览某个 Canvas 具体内容时，直接输出 canvas-it 代码块，禁止展开文字描述内容。',
@@ -1770,8 +1919,8 @@ export class ChatMainService {
       '',
       '【生文执行规则 - 异步工作流】',
       '0. 如果用户要生成图文/配图文章但没有明确图库 tags，必须先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，再调用 topic_orchestrate，并把选定 tags 原样写入 userPrompt。',
-      '1. 调用 topic_orchestrate 前必须确认生文风格；若用户未明确平台/文风（如小红书、知乎、公众号、通用专业），先只问一句："这组图文想按哪种文风写？小红书/知乎/公众号/通用专业？"，等待用户回答，不要先调用工具。',
-      '2. 用户已明确平台或文风时，将其写入 topic_orchestrate.writingStyle；userPrompt 必须以最后一条用户生成要求为准。',
+      '1. 小红书生文专家固定垂直小红书平台，不向用户追问知乎/公众号/通用专业等文风；调用 topic_orchestrate 时必须把 writingStyle 写为"小红书真实分享文风"。',
+      '2. userPrompt 必须以最后一条用户生成要求为准；用户额外给出风格口吻时只作为小红书笔记内部语气参考，不改变平台。',
       '3. 生文必须使用 topic_orchestrate 工具发起异步工作流，不要同步展开正文。',
       '4. tool 返回后，立即把其中的 canvas-it 代码块原样输出给用户，不要追加长篇解释。',
       '   - 若 tool 明确返回缺少图库标签/配图预检未通过/未创建 Canvas 且没有 canvas-it，只告知用户需要先选择标签、补图、减少篇数或更换标签，不要编造 Canvas 卡片。',
@@ -1779,6 +1928,7 @@ export class ChatMainService {
       '   - 将指定 ID 放入 topic_orchestrate.imageGroupCanvasIds（number[]）',
       '   - count 按用户要求传入（例如 2）',
       '   - 由工作流将这些图组合并映射到新图文 Canvas。',
+      '   - 生文成功消费后，系统会自动把源图组 Canvas 标记为已使用；不要另行手写状态。',
       '6. 当用户未指定图组 Canvas 时：必须确保 userPrompt 中有用户明确给出的图库 tags（如 #月亮湾店 #生日派对）；没有 tags 就调用 tag_select_request，禁止让 LLM 自己编 tags 或自行搜索图片。',
       '7. 任何生文请求都不要退化成"仅搜索+口头计划"，必须实际调用 topic_orchestrate。',
       '【N 篇文章 = 一次调用，一个 Canvas】',
@@ -1796,6 +1946,7 @@ export class ChatMainService {
       '',
       '【工具使用】',
       '- tag_select_request：图文生成前收集图库 tags/素材方向（用户未明确 tags 时必须调用；已给 tags 时跳过）',
+      '- xhs_list_unused_image_groups：查询未被生文消费的图片组 Canvas；用户问"未使用图组/可用图组/哪些图组还没生文"时优先调用',
       '- canvas_search：搜索 Canvas（type 参数指定 image-group）',
       '- xhs_get_canvas_detail：按 ID 查看 Canvas 摘要信息',
       '- topic_orchestrate：发起异步生文并返回新 Canvas',
@@ -1813,6 +1964,7 @@ export class ChatMainService {
   private getXhsImageExpertPromptCN(): string {
     return [
       '你是"小红书生图专家"，专注于小红书图组素材的创建与管理。',
+      '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
       '',
       '【Canvas 内容展示规则 - 严格遵守】',
       '- 当用户要查看/预览某个 Canvas 具体内容时，直接输出 canvas-it 代码块，禁止展开文字描述。',
@@ -1832,6 +1984,7 @@ export class ChatMainService {
       '5. 调用后把工具结果里的 canvas-it 代码块原样返回。',
       '',
       '【图库工具】',
+      '- xhs_list_unused_image_groups：查询未被生文消费的图片组 Canvas',
       '- canvas_search：搜索已有 Canvas（type=image-group）',
       '- xhs_get_canvas_detail：查看 Canvas 详情',
       '- xhs_create_image_group_canvas：创建图组 Canvas',
@@ -1879,6 +2032,7 @@ export class ChatMainService {
         '  5. **一次调用 = 一个 Canvas**：用户说"N 组/N 篇"时，把全部 N 篇 articles 一次性传给 xhs_create_image_group_canvas（groupCount=N、articles 长度=N），落到同一个 Canvas；严禁循环调用 N 次产生 N 个 Canvas。',
         '  6. **canvas-it 已由系统提前推送给前端**，你只需输出一句简短确认（例如"图组 Canvas 已创建，正在后台生成"），**严禁再输出 ```canvas-it``` 代码块**，也不要再调用任何其他工具。',
         '【Canvas 工具】',
+        '- xhs_list_unused_image_groups：查询未被生文消费的图片组 Canvas',
         '- canvas_search：搜索 Canvas 列表',
         '- xhs_get_canvas_detail：获取 Canvas 详情（含文章和图片组）',
         '- xhs_create_image_group_canvas：创建图片组 Canvas（异步后台生成，立即返回 generating 状态）',
@@ -2176,6 +2330,165 @@ export class ChatMainService {
   }
 
   /**
+   * @description 构建小红书主专家的专属自动路由专家定义。
+   * @keyword-cn 小红书专家, 专家直派, 子领域路由
+   * @keyword-en xhs-specialist-subagents, expert-dispatch
+   */
+  private buildXhsSpecialistSubagents(
+    envStr: string,
+    allTools: StructuredTool[],
+    toolSets: {
+      analysis: StructuredTool[];
+      topicOrchestrate: StructuredTool[];
+      frontend: StructuredTool[];
+      ops: StructuredTool[];
+      task: StructuredTool[];
+      gallery: StructuredTool[];
+    },
+  ): DeepAgentSubAgent[] {
+    const byName = new Map(allTools.map((t) => [t.name, t] as const));
+    const pick = (...names: string[]): StructuredTool[] =>
+      names
+        .map((name) => byName.get(name))
+        .filter((t): t is StructuredTool => Boolean(t));
+    const pickPrefix = (...prefixes: string[]): StructuredTool[] =>
+      allTools.filter((t) => prefixes.some((p) => t.name.startsWith(p)));
+    const unique = (...groups: StructuredTool[][]): StructuredTool[] =>
+      Array.from(
+        new Map(groups.flat().map((t) => [t.name, t] as const)).values(),
+      );
+
+    const todoTools = pickPrefix('todo_');
+    const articleTools = unique(
+      todoTools,
+      toolSets.topicOrchestrate,
+      pick(
+        'canvas_search',
+        'get_canvas_detail',
+        'xhs_get_canvas_detail',
+        'xhs_list_unused_image_groups',
+        'xhs_regenerate_article_images',
+        'article_library_list',
+        'article_library_get_push_qr',
+        'canvas_store_to_article_library',
+      ),
+    );
+    const imageTools = unique(
+      toolSets.gallery,
+      pick(
+        'canvas_search',
+        'xhs_create_image_group_canvas',
+        'xhs_list_canvases',
+        'xhs_get_canvas_detail',
+        'xhs_list_unused_image_groups',
+        'xhs_regenerate_canvas_cover',
+        'gallery_search_images',
+        'gallery_random_images',
+        'gallery_list_tags',
+        'gallery_list_images',
+      ),
+    );
+    const publisherTools = unique(
+      todoTools,
+      toolSets.ops,
+      pick(
+        'robot_list',
+        'get_account_pool',
+        'canvas_search',
+        'get_canvas_detail',
+        'xhs_get_canvas_detail',
+        'xhs_batch_publish',
+        'batch_publish',
+        'canvas_execute',
+      ),
+    );
+    const taskTools = unique(
+      todoTools,
+      pick(
+        'robot_list',
+        'canvas_search',
+        'get_canvas_detail',
+        'xhs_get_canvas_detail',
+        'get_account_pool',
+      ),
+    );
+    const visualReportTools = unique(
+      toolSets.frontend,
+      toolSets.analysis,
+      pick(
+        'canvas_search',
+        'get_canvas_detail',
+        'xhs_get_canvas_detail',
+        'xhs_list_canvases',
+        'title_generate',
+      ),
+    );
+
+    return [
+      {
+        name: 'xhs_data_tracker_subagent',
+        description:
+          '【小红书数据追踪】粉丝/点赞/收藏/评论/爆文/竞品/发文后数据采集与分析 -> 委派此专家。',
+        systemPrompt: [envStr, this.getXhsTrackerPromptCN()]
+          .filter(Boolean)
+          .join('\n\n'),
+        tools: unique(toolSets.analysis, pick('canvas_search')),
+      },
+      {
+        name: 'xhs_article_expert_subagent',
+        description:
+          '【小红书生文】选题、正文、笔记、种草图文、文章库入库/二维码 -> 委派此专家。',
+        systemPrompt: [envStr, this.getXhsArticleExpertPromptCN()]
+          .filter(Boolean)
+          .join('\n\n'),
+        tools: articleTools,
+      },
+      {
+        name: 'xhs_image_expert_subagent',
+        description:
+          '【小红书生图】图组、配图、封面、图库搜图、图片组 Canvas -> 委派此专家。',
+        systemPrompt: [envStr, this.getXhsImageExpertPromptCN()]
+          .filter(Boolean)
+          .join('\n\n'),
+        tools: imageTools,
+      },
+      {
+        name: 'xhs_publish_subagent',
+        description:
+          '【小红书发文执行】账号池、批量发布、Adspower、机器人发文、发布任务 -> 委派此专家。',
+        systemPrompt: [envStr, this.getXhsPublisherPromptCN()]
+          .filter(Boolean)
+          .join('\n\n'),
+        tools: publisherTools,
+      },
+      {
+        name: 'xhs_task_subagent',
+        description:
+          '【小红书任务管理】查看、创建、更新、追踪小红书任务和执行节点 -> 委派此专家。',
+        systemPrompt: [
+          envStr,
+          '你是小红书任务管理专家。负责用 todo_* 工具查看、创建、更新、追踪小红书相关任务和执行节点；不要替代生文、生图、数据采集或发文执行专家做业务产出。',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        tools: taskTools,
+      },
+      {
+        name: 'xhs_visual_report_subagent',
+        description:
+          '【小红书可视化】小红书数据图表、HTML 看板、dashboard、可视化报告 -> 委派此专家。',
+        systemPrompt: [
+          envStr,
+          '你是小红书数据可视化专家。负责先获取小红书相关数据口径，再生成图表、HTML 看板或 dashboard；输出必须遵守前端/可视化工具的返回格式。',
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        tools: visualReportTools,
+      },
+    ];
+  }
+
+  /**
    * @description 构建默认子代理配置
    * @keyword-en build default subagents
    */
@@ -2216,6 +2529,7 @@ export class ChatMainService {
           `REQUEST_TIME_ISO:${env.now}`,
           `CLIENT_IP:${env.ip}`,
           scope?.userId ? `CURRENT_USER_ID:${scope.userId}` : '',
+          '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
           env.platformSupplement ? env.platformSupplement : '',
         ]
           .filter(Boolean)
@@ -2235,8 +2549,13 @@ export class ChatMainService {
       ]);
     }
 
+    if (mode === 'xhs-specialist') {
+      return injectMiddleware(
+        this.buildXhsSpecialistSubagents(envStr, allTools, toolSets),
+      );
+    }
+
     if (
-      mode === 'xhs-specialist' ||
       mode === 'xhs-tracker' ||
       mode === 'xhs-publisher' ||
       mode === 'xhs-article-expert' ||
@@ -2251,6 +2570,7 @@ export class ChatMainService {
       '你是一名严谨、务实的数据分析 Agent。',
       '目标：以最小推理成本与最少工具调用，在单次流程内一次性获取所需数据并返回最终答案。',
       '涉及任何加减乘除、比例、汇总、均值、环比、同比等计算时，必须调用 js_calc 或 js_calc_batch，禁止心算。',
+      '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
       '为了检索速度,你可以并发返回Tool call,我将并发执行返回结果',
       '[!重要!] 所有的数据分析,都要带上对应的数据表,也就是数据来源标识',
       '所有数据纬度都以给人理解为准,比如标识用户的就不用ID,用username等来考虑,理解为用户更方便记忆和操作。',
@@ -2339,6 +2659,7 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是专项文章生成代理。',
+          '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
           '若用户要生成图文/配图文章但未明确图库 tags，必须先调用 tag_select_request 发出 tag 选择卡片；用户回传"我选定标签：#A #B"后，把选定 tags 原样写入 topic_orchestrate.userPrompt 再生成。',
           '严禁让 LLM 自己编 tags、自己猜图库标签或自行搜索图片来配图；topic_orchestrate 的 image-group 链路只接受用户明确给出的 tags 或指定的 imageGroupCanvasIds。',
           '调用 topic_orchestrate 前必须确认生文风格；如果最后一条用户要求没有明确平台/文风（小红书/知乎/公众号/通用专业等），先只问用户一句文风选择问题并等待回答，不要调用工具。',
@@ -2375,6 +2696,7 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是前端页面生成子代理。只在用户明确要求图表/页面/可视化时工作。',
+          '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
           '除非用户明确要求 MCP 资源读取/导入，否则不要调用任何 mcp_* 工具。',
           '若必须读取 MCP 资源，先调用 mcp_list_resources 确认存在，再调用 mcp_read_resource。',
           '输出需严格遵循工具与系统提示的约束。',
@@ -2390,6 +2712,7 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是批量发布子代理，专注内容批量发布、分发与 robot 发布执行，严格遵守工具调用规则。',
+          '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -2402,6 +2725,7 @@ export class ChatMainService {
         systemPrompt: [
           envStr,
           '你是任务编排子代理，负责待办/工单的创建、更新、查询与多步骤编排。',
+          '工具必须通过系统结构化 tool call 调用；禁止输出 [TOOL_CALL]、<minimax>、XML、JSON 伪工具调用文本。',
           '用 todo_* 工具落地任务，你只编排不直接执行业务；严格遵守工具调用规则。',
         ]
           .filter(Boolean)

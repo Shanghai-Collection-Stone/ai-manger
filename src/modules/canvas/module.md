@@ -56,6 +56,8 @@ Canvas服务。
 - `updateImageGroups` — 回写图片组到 Canvas。`append=false`(默认)整组 `$set` 覆盖;`append=true` 读出现有 imageGroups + 新图组 id 接续最大 id 重编号后拼接(复用 Canvas 再生成时**追加不覆盖**,修复"再来一组"重置上一组结果的 bug)
 - `get` / `list` / `addArticles` / `updateStatus` / `updateArticle` / `updateMeta` — 常用crud
 - `list` — 支持 type / skip / tag 过滤 + skip 分页
+- `listUnusedImageGroupCanvases(input)` — 查询未被生文消费的 image-group Canvas；旧数据无 imageGroupUsage 时按 unused 处理，仅返回 completed 且含图组的 Canvas | keywords: 未使用图组, unused-image-groups
+- `markImageGroupCanvasesUsed(input)` — 生文消费指定图组后按 groupIds 累计标记 imageGroupUsage=partial/used，记录 usedByCanvasId/usedByArticleIds | keywords: 图组已使用, mark-image-group-used
 - `markArticleSent` — 标记指定文章已发送（写入 sentAt），支持自定义时间
 - **关键词**: service, image-group, async, sent-at, pagination
 
@@ -98,6 +100,7 @@ Canvas实体，含新类型定义。
 - `CanvasType` — 'article' | 'image-group'
 - `ImageGroupLayout` — 固定版式枚举（portrait-cover-5inner / collage-cover-5inner / collage-cover-5collage）
 - `CanvasImageGroup` — 单个图片组实体
+- `CanvasImageGroupUsage` — image-group Canvas 使用状态（unused/partial/used + usedGroupIds/usedAt/usedByCanvasId）
 - `CanvasGroupImage` — 图组内单张图片（含版式角色 cover/inner-1~5、主副标题 text/subtitle）
 - `CanvasImageGroupCreateInput` — 创建图片组入参
 - `CanvasArticleEntity.sentAt` — 文章成功发送时间戳（null 表示未发送）

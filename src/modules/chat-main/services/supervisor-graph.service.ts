@@ -2,8 +2,8 @@
  * @title Supervisor Intent Service
  * @description 意图识别 + 专家直派。**不再使用 LangGraph StateGraph**。
  *   两步走:
- *   ① recognizeIntent —— 一次独立的轻量 LLM 调用,读取 JSON 化的最近 10 组
- *      对话,在提示词强约束下只输出一个路由词
+ *   ① recognizeIntent —— 先走代码层 tag 承接/显式跨领域关键词切换/弱短句承上规则,仍不确定时再用轻量 LLM
+ *      读取 JSON 化的 fullDialog/recentDialog,在提示词强约束下只输出一个路由词
  *      (image/article/data/frontend/publisher/task/chat),代码 parseRouteToken
  *      硬解析,解析不到再走关键词/延续兜底。
  *   ② buildExpertAgent —— 按路由词在代码层选定单个专家,构建 createReactAgent
@@ -73,10 +73,19 @@ function inferExpertByKeyword(text: string): ExpertName | null {
     return 'image';
   if (/文章|正文|选题|文案|种草|小红书内容|写[一几]?篇/.test(s))
     return 'article';
-  if (/数据|统计|分析|趋势|业绩|订单|客流|报表|决策|方案|策略|建议/.test(s))
-    return 'data';
   if (/图表|可视化|dashboard|看板页|html页/.test(s)) return 'frontend';
-  if (/批量发布|定时发|发布任务|内容分发|批量任务/.test(s)) return 'publisher';
+  if (
+    /数据|统计|分析|趋势|业绩|营业额|营收|收入|销售额|流水|订单|客流|需求进入|工作流|粉丝|点赞|收藏|评论|互动|爆文|竞品|账号数据|数据追踪|采集|报表|决策|方案|策略|建议/.test(
+      s,
+    )
+  )
+    return 'data';
+  if (
+    /批量发布|定时发|发布任务|内容分发|批量任务|发文|发布|账号池|adspower|小红书发布/.test(
+      s,
+    )
+  )
+    return 'publisher';
   if (
     /待办|todo|工单|排期|任务编排|任务清单|任务列表|创建任务|新建任务|安排任务/i.test(
       s,
@@ -88,11 +97,66 @@ function inferExpertByKeyword(text: string): ExpertName | null {
 
 /**
  * @description 判断用户消息是否是"延续上一轮任务"的口吻(再来一组/继续等)。
- * @keyword-en detect continuation intent
+ * @keyword-cn 意图承接, 专家延续
+ * @keyword-en continuation-intent, intent-routing
  */
 function isContinuationText(text: string): boolean {
-  return /再来|再生成|再做|再一?组|又一|多来|继续|接着|那再|下一?组|换一?组|选定标签|我选|开始生成|开始吧|开始|生成吧|开干|执行|派单|正式派单|确认|可以了|没问题|就这样|按这个|照这个|走起|搞起/.test(
-    String(text ?? ''),
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  if (/^(好的?|嗯+|行|可以|可以了|没问题|确认|收到|明白|ok)$/i.test(s)) {
+    return true;
+  }
+  if (isTagWorkflowText(s)) return true;
+  return /再来|再生成|再做|再一?组|又一|多来|继续|接着|那再|那就|就按|就看|就用|也看|也要|一并|一起|都看|下一?组|换一?组|选定标签|我选|开始生成|开始吧|开始|生成吧|开干|执行|派单|正式派单|确认|就这样|就好了|按这个|按.*(?:来|算|筛|看)|照这个|走起|搞起|上周|本周|这周|上月|本月|昨天|今天|明天|时间范围|口径|条件|补上|加上/.test(
+    s,
+  );
+}
+
+/**
+ * @description 判断用户是否明确结束当前业务链路或切回普通对话。
+ * @keyword-cn 退出业务, 闲聊切换, 意图识别
+ * @keyword-en action-exit, chat-switch, intent-routing
+ */
+function isActionExitText(text: string): boolean {
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  return (
+    /^(不用了|算了|取消|结束|停止|暂停|先这样|先到这|不做了|不用看了|先不做了)$/i.test(
+      s,
+    ) ||
+    /换个话题|聊点别的|先聊|退出当前|结束当前|不用继续|不要继续|停止执行|取消任务/.test(
+      s,
+    )
+  );
+}
+
+/**
+ * @description 识别业务链路里的追问、核对、补字段、补口径等短句承接。
+ * @keyword-cn 业务追问, 专家承接, 意图识别
+ * @keyword-en business-follow-up, action-continuation, intent-routing
+ */
+function isBusinessFollowUpText(text: string): boolean {
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  return /确定|确认|核对|再查|再看|看看|看下|有没有|是否|是不是|没有提到|没提到|表中|表里|字段|备注|原因|口径|来源|明细|详情|刚才|刚刚|上面|前面|这个|那个|这些|那条|里面|还有吗|呢|吗|为什么|怎么回事|补充|换成|改成|按这个|就这个/.test(
+    s,
+  );
+}
+
+/**
+ * @description 判断当前用户输入是否应优先延续上一轮已激活专家,用于避免短确认、
+ *   时间范围补充、指标口径补充被意图 LLM 误归类为 chat。
+ * @keyword-cn 意图识别, 专家延续, 上下文路由
+ * @keyword-en action-continuation, intent-routing
+ */
+function shouldContinueCurrentAction(
+  text: string,
+  currentActionSession?: ExpertName | null,
+): currentActionSession is ExpertName {
+  return (
+    Boolean(currentActionSession) &&
+    !isActionExitText(text) &&
+    (isContinuationText(text) || isBusinessFollowUpText(text))
   );
 }
 
@@ -146,12 +210,12 @@ function truncateIntentText(text: string, maxLength = 900): string {
 }
 
 /**
- * @description 把最近消息整理成最近 10 组 user/assistant 对话,用于以单条 JSON
+ * @description 把完整消息整理成 user/assistant 对话,用于以单条 JSON
  *   user message 喂给意图识别模型。
  * @keyword-cn 意图识别, 结构化上下文
- * @keyword-en intent-context, json-history
+ * @keyword-en intent-context, full-json-history
  */
-function buildRecentDialogTurns(history: BaseMessage[]): Array<{
+function buildDialogTurns(history: BaseMessage[]): Array<{
   assistant?: string;
   user?: string;
 }> {
@@ -180,7 +244,32 @@ function buildRecentDialogTurns(history: BaseMessage[]): Array<{
     current.assistant = text;
   }
 
-  return turns.slice(-10);
+  return turns;
+}
+
+/**
+ * @description 判断是否处于小红书图组/图文的标签选择链路。
+ * @keyword-cn 标签选择, 意图承接, 小红书
+ * @keyword-en tag-workflow, intent-continuation
+ */
+function isTagWorkflowText(text: string): boolean {
+  const s = String(text ?? '').trim();
+  if (!s) return false;
+  return /我选定标签|选定标签|已选标签|标签[:：]|tag[:：]|#[^\s#]+|(?:有哪些|有什么|可用|看看|看下|列出|查看|选择|选一下|挑一下|我想选).*?(?:tag|标签)|(?:tag|标签).*?(?:有哪些|有什么|可用|看看|看下|列出|查看|选择|选一下|挑一下|我想选)/i.test(
+    s,
+  );
+}
+
+/**
+ * @description 从完整结构化对话中截取最近 10 组,作为意图识别的近端摘要。
+ * @keyword-cn 意图识别, 最近上下文
+ * @keyword-en intent-context, recent-json-history
+ */
+function buildRecentDialogTurns(history: BaseMessage[]): Array<{
+  assistant?: string;
+  user?: string;
+}> {
+  return buildDialogTurns(history).slice(-10);
 }
 
 /**
@@ -193,6 +282,7 @@ function buildIntentContextMessage(
   history: BaseMessage[],
   currentActionSession?: ExpertName | null,
 ): HumanMessage {
+  const fullDialog = buildDialogTurns(history);
   const recentDialog = buildRecentDialogTurns(history);
   const latestUserMessage = recentDialog
     .slice()
@@ -202,9 +292,10 @@ function buildIntentContextMessage(
     JSON.stringify(
       {
         instruction:
-          '请基于 currentActionSession、latestUserMessage 和 recentDialog 判断本轮用户意图。只输出 image/article/data/frontend/publisher/task/chat 之一。',
+          '请基于 currentActionSession、latestUserMessage、fullDialog 和 recentDialog 判断本轮用户意图。fullDialog 是完整清洗历史,recentDialog 只是最近片段。只输出 image/article/data/frontend/publisher/task/chat 之一。',
         currentActionSession: currentActionSession ?? null,
         latestUserMessage: latestUserMessage ?? '',
+        fullDialog,
         recentDialog,
       },
       null,
@@ -273,7 +364,7 @@ type AgentCheckpointer = Parameters<typeof createReactAgent>[0]['checkpointer'];
 export interface RecognizeIntentOptions {
   /** @description 意图识别系统提示词(强约束只输出一个路由词) */
   systemPrompt: string;
-  /** @description 清洗后的对话历史,会被压缩成最近 10 组 JSON 上下文 */
+  /** @description 清洗后的对话历史,会被整理成 fullDialog + recentDialog JSON 上下文 */
   history: BaseMessage[];
   /** @description 意图识别用的轻量 LLM(temperature=0) */
   llm: AgentLLM;
@@ -304,8 +395,8 @@ export class SupervisorGraphService {
   private readonly logger = new Logger(SupervisorGraphService.name);
 
   /**
-   * @description 第一步: 意图识别。一次独立的轻量 LLM 调用,读 JSON 化最近 10
-   *   组对话,在提示词强约束下只输出一个路由词,代码 parseRouteToken 硬解析。
+   * @description 第一步: 意图识别。先用代码层处理元问题、显式退出、tag 承接、显式跨领域关键词切换和弱短句承上。
+   *   仍不确定时再用轻量 LLM 读 JSON 化 fullDialog/recentDialog,在提示词强约束下只输出一个路由词。
    *   **不是 tool 调用,不是 graph 节点** —— 就是一次普通的 invoke。
    *   解析不到 → 关键词规则 / 延续上轮专家
    *   兜底 → 都没有则 'chat'。永远返回一个有效 RouteTarget,绝不抛错。
@@ -317,6 +408,38 @@ export class SupervisorGraphService {
     if (isCommanderMetaQuestion(userText)) {
       this.logger.log(`[intent] → chat (指挥官元问题)`);
       return 'chat';
+    }
+    if (isActionExitText(userText)) {
+      this.logger.log(`[intent] → chat (用户结束/切换当前业务链路)`);
+      return 'chat';
+    }
+
+    const isTagSelectionContinuation =
+      Boolean(currentActionSession) && isTagWorkflowText(userText);
+    if (isTagSelectionContinuation) {
+      this.logger.log(`[intent] -> ${currentActionSession} (tag continuation)`);
+      return currentActionSession!;
+    }
+    const keywordFallback = inferExpertByKeyword(userText);
+    if (keywordFallback && keywordFallback !== currentActionSession) {
+      this.logger.log(
+        `[intent] -> ${keywordFallback} (explicit keyword switch, current=${currentActionSession ?? 'none'})`,
+      );
+      return keywordFallback;
+    }
+    const shouldContinue = shouldContinueCurrentAction(
+      userText,
+      currentActionSession,
+    );
+    if (shouldContinue || isTagSelectionContinuation) {
+      this.logger.log(
+        `[intent] → ${currentActionSession} (actionSession 确定性承上)`,
+      );
+      return currentActionSession!;
+    }
+    if (keywordFallback) {
+      this.logger.log(`[intent] → ${keywordFallback} (关键词确定性路由)`);
+      return keywordFallback;
     }
 
     let respText = '';
@@ -338,17 +461,16 @@ export class SupervisorGraphService {
     );
 
     // 决策 1: 从纯文本回复硬解析路由 token(含 'chat')。
-    const isTagSelectionContinuation =
-      Boolean(currentActionSession) &&
-      /我选定标签|选定标签|已选标签|标签[:：]|tag[:：]|#[^\s#]+/i.test(
-        userText,
-      );
     const parsed = parseRouteToken(respText);
     if (parsed) {
-      const route =
-        isTagSelectionContinuation && parsed !== 'chat'
-          ? currentActionSession!
-          : parsed;
+      let route: RouteTarget = parsed;
+      if (isTagSelectionContinuation) {
+        route = currentActionSession!;
+      } else if (parsed === 'chat' && keywordFallback) {
+        route = keywordFallback;
+      } else if (parsed === 'chat' && shouldContinue) {
+        route = currentActionSession!;
+      }
       this.logger.log(`[intent] → ${route} (LLM 路由)`);
       return route;
     }
@@ -356,8 +478,8 @@ export class SupervisorGraphService {
     // 决策 2: 没解析出 token → 关键词规则 / 延续上轮专家兜底。
     let fallback = isTagSelectionContinuation
       ? currentActionSession!
-      : inferExpertByKeyword(userText);
-    if (!fallback && currentActionSession && isContinuationText(userText)) {
+      : keywordFallback;
+    if (!fallback && shouldContinue) {
       fallback = currentActionSession;
     }
     const route: RouteTarget = fallback ?? 'chat';
@@ -432,11 +554,11 @@ export class SupervisorGraphService {
 
   /**
    * @description 给定 sessionType 是否应该走意图识别 + 专家直派路径。
-   *   目前只 default 走;其他 sessionType(xhs-image-expert 等显式专家模式)
-   *   保留原 deepagents 路径不动。
+   *   default 与 xhs-specialist 走自动路由;其他显式专家 sessionType 保留原
+   *   deepagents 路径不动。
    * @keyword-en should use intent routing for session type
    */
   shouldUseSupervisor(sessionType: string): boolean {
-    return sessionType === 'default';
+    return sessionType === 'default' || sessionType === 'xhs-specialist';
   }
 }

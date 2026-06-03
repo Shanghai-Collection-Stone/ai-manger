@@ -1023,7 +1023,7 @@ export class ContextService {
    * @title 设置 actionSession Set Action Session
    * @description 持久化 default 模式下 supervisor 路由出的当前激活专家。
    *   传 null 清空(回到 supervisor 待路由状态)。该字段跨多轮对话保持,
-   *   下次进同一会话 chat.service 优先按它直接路由到 expert,跳过 supervisor LLM 决策。
+   *   下次进同一会话 chat.service 会优先用于承上短句、业务追问、标签选择等确定性路由。
    * @keyword-en set action session for default mode multi-agent routing
    */
   async setActionSession(

@@ -229,6 +229,7 @@ export class XhsToolsService {
   }): CreateAgentParams['tools'] {
     return [
       this.createListCanvasesTool(scope),
+      this.createListUnusedImageGroupsTool(scope),
       this.createGetCanvasDetailTool(scope),
       this.createImageGroupCanvasTool(scope),
       this.createTagSelectRequestTool(scope),
@@ -363,6 +364,7 @@ export class XhsToolsService {
             topic: c.topic,
             status: c.status,
             type: c.type ?? 'article',
+            imageGroupUsage: c.imageGroupUsage ?? { status: 'unused' },
             articleCount: Array.isArray(c.articles) ? c.articles.length : 0,
             imageGroupCount: Array.isArray(c.imageGroups)
               ? c.imageGroups.length
@@ -384,6 +386,90 @@ export class XhsToolsService {
   }
 
   /**
+   * @description 查询未被生文消费的图片组 Canvas 工具。
+   * @keyword-cn 未使用图组, 小红书图组
+   * @keyword-en unused-image-groups, xhs-image-groups
+   */
+  private createListUnusedImageGroupsTool(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }) {
+    return tool(
+      async (input?: {
+        limit?: number;
+        skip?: number;
+        tag?: string;
+        includeIncomplete?: boolean;
+      }) => {
+        const safeInput = input ?? {};
+        const canvases = await this.canvasService.listUnusedImageGroupCanvases({
+          userId: scope?.userId,
+          tenantId: scope?.tenantId,
+          limit: safeInput.limit,
+          skip: safeInput.skip,
+          tag: safeInput.tag,
+          includeIncomplete: safeInput.includeIncomplete,
+        });
+        return JSON.stringify({
+          canvases: canvases.map((c) => {
+            const usedGroupIds = new Set(
+              (c.imageGroupUsage?.usedGroupIds ?? [])
+                .map((groupId) => Number(groupId))
+                .filter((groupId) => Number.isFinite(groupId) && groupId > 0),
+            );
+            const imageGroups = Array.isArray(c.imageGroups)
+              ? c.imageGroups.filter(
+                  (group) => !usedGroupIds.has(Number(group?.id)),
+                )
+              : [];
+            return {
+              id: c.id,
+              topic: c.topic,
+              status: c.status,
+              type: c.type ?? 'image-group',
+              usageStatus: c.imageGroupUsage?.status ?? 'unused',
+              usedGroupIds: Array.from(usedGroupIds),
+              articleCount: Array.isArray(c.articles) ? c.articles.length : 0,
+              totalImageGroupCount: Array.isArray(c.imageGroups)
+                ? c.imageGroups.length
+                : 0,
+              unusedImageGroupCount: imageGroups.length,
+              imageGroups: imageGroups.map((g) => ({
+                id: g.id,
+                articleTitle: g.articleTitle,
+                layout: g.layout,
+                status: g.status,
+                usageStatus: 'unused',
+                imageCount: Array.isArray(g.images) ? g.images.length : 0,
+              })),
+              keywords: Array.isArray(c.keywords) ? c.keywords : [],
+              createdAt: c.createdAt,
+              updatedAt: c.updatedAt,
+            };
+          }),
+          total: canvases.length,
+          hint:
+            '这些 Canvas ID 可传给 topic_orchestrate.imageGroupCanvasIds；生文成功消费后系统会自动标记为已使用。',
+        });
+      },
+      {
+        name: 'xhs_list_unused_image_groups',
+        description:
+          '查询未使用的小红书图片组 Canvas。生图专家和生文专家在用户询问“未使用图组/可用图组/哪些图组还没生文”时调用；返回的 Canvas ID 可传给 topic_orchestrate.imageGroupCanvasIds。',
+        schema: z.object({
+          limit: z.number().optional().describe('Max results, default 50'),
+          skip: z.number().optional().describe('Pagination offset, default 0'),
+          tag: z.string().optional().describe('Filter by Canvas keyword/tag'),
+          includeIncomplete: z
+            .boolean()
+            .optional()
+            .describe('是否包含 generating/requires_human/failed，默认 false'),
+        }),
+      },
+    );
+  }
+
+  /**
    * @description 获取 Canvas 详情工具
    * @keyword-en get canvas detail tool
    */
@@ -398,11 +484,19 @@ export class XhsToolsService {
         if (!canvas) {
           return JSON.stringify({ error: 'Canvas not found', canvas_id });
         }
+        const usedGroupIds = new Set(
+          (canvas.imageGroupUsage?.usedGroupIds ?? [])
+            .map((groupId) => Number(groupId))
+            .filter((groupId) => Number.isFinite(groupId) && groupId > 0),
+        );
         return JSON.stringify({
           id: canvas.id,
           topic: canvas.topic,
           status: canvas.status,
           type: canvas.type ?? 'article',
+          imageGroupUsage: canvas.imageGroupUsage ?? {
+            status: canvas.type === 'image-group' ? 'unused' : undefined,
+          },
           articles: (canvas.articles ?? []).map((a) => ({
             id: a.id,
             title: a.title,
@@ -415,6 +509,9 @@ export class XhsToolsService {
                 id: g.id,
                 layout: g.layout,
                 status: g.status,
+                usageStatus: usedGroupIds.has(Number(g.id))
+                  ? 'used'
+                  : 'unused',
                 imageCount: Array.isArray(g.images) ? g.images.length : 0,
               }))
             : [],
