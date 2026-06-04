@@ -59,46 +59,46 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 ### CanvasFeedView.jsx
 
-图文类型 Canvas 详情视图。展示文章列表与文章详情（含图片轮播和 ImageLightbox 点击放大）；头部提供"整份存入文章库"按钮，单篇详情提供"存入文章库"按钮，弹出 LibraryPickerDialog 选择目标库或新建。文章首图封面右上角提供重生成入口，打开图库多选 + 提示词弹窗后可重新生成封面或直接设为封面。
+图文类型 Canvas 详情视图。展示文章列表与文章详情（含图片轮播和 ImageLightbox 点击放大）；头部提供"整份存入文章库"按钮，单篇详情提供"存入文章库"按钮，弹出 LibraryPickerDialog 选择目标库或新建。文章封面和详情轮播内页共用图片槽位重生成弹窗，可基于图库多选 + 提示词重新生成目标图片槽位，也可直接把已选图库图片设为当前封面/内页。
 
-- **关键词**: canvas, article, feed, image, detail, store-into-library, cover-regenerate, cover-select, image-lightbox
+- **关键词**: canvas, article, feed, image, detail, store-into-library, cover-regenerate, cover-select, article-image-regenerate, image-slot-regenerate, article-image-select, image-slot-select, image-lightbox
 - **函数**:
   - `ImageLightbox`: 图文 Canvas 图片放大预览弹窗，支持左右切换和缩略图定位
   - `openArticleImageLightbox`: 打开当前文章图片放大预览
   - `toLibraryPayload`: canvas 文章 → 文章库入库 payload
   - `handleStoreInto`: 执行入库（整份 / 单篇）
-  - `openCoverRegenerateDialog`: 打开文章封面重生成弹窗并定位到首图预览
-  - `handleRegenerateCover`: 调用文章封面重生成接口，成功后让 Canvas 进入 generating
-  - `handleSelectCover`: 直接将弹窗中第一张已选图库图片设为当前文章封面
+  - `openArticleImageRegenerateDialog`: 打开文章指定图片槽位重生成弹窗，imageIndex=0 为封面、1+ 为内页
+  - `handleRegenerateArticleImage`: 调用文章指定图片槽位重生成接口，成功响应时 Canvas 已进入 generating
+  - `handleSelectArticleImage`: 直接将弹窗中第一张已选图库图片替换到当前文章指定图片槽位
   - `handleCanvasTouchStart` / `handleCanvasTouchMove` / `handleCanvasTouchEnd`: 阻断 Canvas 详情层横向手势冒泡，避免图片滑动误触发外层切换
   - `LibraryPickerDialog`: 文章库选择器弹窗（支持即时新建）
 
 ### CoverRegenerateDialog.jsx
 
-Canvas 封面重生成弹窗。进入后拉取图库图片和图库标签，支持按 tag 筛选图片、多选参考图与多行提示词；可把多张图片 ID 合并成一次封面重生成请求，也可把第一张已选图直接设为封面。
+Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签，支持按 tag 筛选图片、最多 4 张参考图与多行本次提示词；封面与内页共用同一组件，可把多张图片 ID 合并成一次重生成请求，也可把第一张已选图直接设为目标图片槽位。
 
-- **关键词**: cover-regenerate, cover-select, selected-source-images, tag-filter, cover-only-submit
+- **关键词**: cover-regenerate, cover-select, image-slot-regenerate, selected-source-images, tag-filter, cover-only-submit
 - **函数**:
   - `readGalleryImageUrl`: 读取图库图片缩略图或原图地址
   - `normalizeGalleryImages`: 规整图库列表并过滤无效图片
   - `normalizeGalleryTags`: 规整图库标签列表，兼容字符串和带 count 的对象结构
-  - `CoverRegenerateDialog`: 封面重生成弹窗组件
+  - `CoverRegenerateDialog`: 图片槽位重生成弹窗组件，封面和内页都使用本次提示词并最多选择 4 张参考图
   - `loadImages`: 拉取可作为参考图的图库图片
   - `loadTags`: 拉取图库标签用于封面图片筛选
-  - `toggleImage`: 切换参考图选中状态
+  - `toggleImage`: 切换参考图选中状态，最多保留 4 张参考图
   - `handleDialogTouchStart` / `handleDialogTouchMove` / `handleDialogTouchEnd`: 阻断弹窗横向滑动冒泡，避免外层 Canvas 被左右滑开
-  - `handleSubmit`: 提交 `{ imageIds, prompt }`
+  - `handleSubmit`: 提交 `{ imageIds, prompt }`，其中 imageIds 最多 4 个且 prompt 为本次输入
   - `handleSelectCover`: 提交 `{ imageId, imageIds }`，将第一张已选图库图片直接设为封面
 
 ### ImageGroupCanvasView.jsx
 
-图片组类型 Canvas 详情视图。展示图片组版式与图片预览（ImageLightbox），识别全拼图版式 collage-cover-5collage；每组 role=cover 图片右上角提供重生成入口，提交后可重新生成封面或直接使用已选图库图片替换目标图组封面。
+图片组类型 Canvas 详情视图。展示图片组版式与图片预览（ImageLightbox），识别全拼图版式 collage-cover-5collage；每张 role=cover/inner-1~5 图片右上角共用同一个重生成入口，提交后可重新生成目标图片槽位或直接使用已选图库图片替换该槽位。
 
-- **关键词**: canvas, image-group, layout, lightbox, preview, cover-regenerate, cover-select
+- **关键词**: canvas, image-group, layout, lightbox, preview, cover-regenerate, cover-select, image-slot-regenerate
 - **函数**:
-  - `openGroupCoverRegenerateDialog`: 打开图片组封面重生成弹窗
-  - `handleRegenerateGroupCover`: 调用图片组封面重生成接口，成功后让 Canvas 进入 generating
-  - `handleSelectGroupCover`: 直接将弹窗中第一张已选图库图片设为当前图组封面
+  - `openGroupImageRegenerateDialog`: 打开图片组指定图片槽位重生成弹窗
+  - `handleRegenerateGroupImage`: 调用图片组指定 role 重生成接口，成功响应后使用后端返回的 generating Canvas
+  - `handleSelectGroupImage`: 直接将弹窗中第一张已选图库图片替换到当前图组指定 role 槽位
   - `handleCanvasTouchStart` / `handleCanvasTouchMove` / `handleCanvasTouchEnd`: 阻断图组详情层横向手势冒泡，避免图片滑动误触发外层切换
 
 ### ArticleLibraryView.jsx
@@ -127,14 +127,18 @@ Canvas 封面重生成弹窗。进入后拉取图库图片和图库标签，支�
 
 AI Commander 前端 API client，封装 Canvas、图库、会话等接口。
 
-- **关键词**: api-client, canvas, gallery, cover-regenerate
+- **关键词**: api-client, canvas, gallery, cover-regenerate, article-image-regenerate, image-slot-regenerate
 - **函数**:
   - `listGalleryTags`: 拉取图库标签列表，供封面重生成和标签选择弹窗筛选使用
   - `listGalleryImages`: 拉取图库图片列表，供封面重生成弹窗选择参考图
   - `regenerateCanvasArticleCover`: 调用图文 Canvas 单篇封面重生成接口
   - `selectCanvasArticleCover`: 调用图文 Canvas 单篇封面直接设图接口
+  - `regenerateCanvasArticleImage`: 调用图文 Canvas 指定文章图片下标重生成接口 | keywords: article-image-regenerate, image-slot-regenerate
+  - `selectCanvasArticleImage`: 调用图文 Canvas 指定文章图片下标直接设图接口 | keywords: article-image-select, image-slot-select
   - `regenerateCanvasImageGroupCover`: 调用图片组 Canvas 单组封面重生成接口
   - `selectCanvasImageGroupCover`: 调用图片组 Canvas 单组封面直接设图接口
+  - `regenerateCanvasImageGroupImage`: 调用图片组 Canvas 指定 role 图片槽位重生成接口 | keywords: image-slot-regenerate, image-group-image-slot
+  - `selectCanvasImageGroupImage`: 调用图片组 Canvas 指定 role 图片槽位直接设图接口 | keywords: image-slot-select, image-group-image-slot
 
 ### articleLibraryService.js
 

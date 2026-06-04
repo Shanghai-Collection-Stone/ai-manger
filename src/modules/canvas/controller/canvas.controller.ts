@@ -286,6 +286,83 @@ export class CanvasController {
   }
 
   /**
+   * @description 重新生成图文 Canvas 指定文章的任意图片槽位，imageIndex=0 为封面，1+ 为内页；立即把 Canvas 暂置为 generating。
+   * @param {string} id - Canvas ID。
+   * @param {string} articleId - 文章 ID。
+   * @param {string} imageIndex - 图片下标。
+   * @param {{ imageIds?: number[]; sourceImageIds?: number[]; prompt?: string }} body - 参考图片与提示词。
+   * @returns {Promise<Record<string, unknown>>} 进入生成中的 Canvas。
+   * @keyword-cn 图文内页重生成 图片槽位重生成
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
+   */
+  @Post(':id/articles/:articleId/images/:imageIndex/regenerate')
+  async regenerateArticleImage(
+    @Param('id') id: string,
+    @Param('articleId') articleId: string,
+    @Param('imageIndex') imageIndex: string,
+    @Body()
+    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : [];
+    const doc = await this.canvas.startArticleImageRegeneration({
+      canvasId: Number(id),
+      articleId: Number(articleId),
+      imageIndex: Number(imageIndex),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+      prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+    });
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 直接使用图库图片替换图文 Canvas 指定文章的任意图片槽位，imageIndex=0 为封面，1+ 为内页。
+   * @param {string} id - Canvas ID。
+   * @param {string} articleId - 文章 ID。
+   * @param {string} imageIndex - 图片下标。
+   * @param {{ imageId?: number; imageIds?: number[]; sourceImageIds?: number[] }} body - 选中的图库图片。
+   * @returns {Promise<Record<string, unknown>>} 更新后的 Canvas。
+   * @keyword-cn 图文内页选择 图片槽位替换
+   * @keyword-en article-image-select
+   * @keyword-en image-slot-select
+   */
+  @Post(':id/articles/:articleId/images/:imageIndex/select')
+  async selectArticleImage(
+    @Param('id') id: string,
+    @Param('articleId') articleId: string,
+    @Param('imageIndex') imageIndex: string,
+    @Body()
+    body: { imageId?: number; imageIds?: number[]; sourceImageIds?: number[] },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : body?.imageId !== undefined
+          ? [body.imageId]
+          : [];
+    const doc = await this.canvas.selectArticleImage({
+      canvasId: Number(id),
+      articleId: Number(articleId),
+      imageIndex: Number(imageIndex),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+    });
+    return { canvas: doc };
+  }
+
+  /**
    * @description 重新生成图组 Canvas 指定图组封面，只替换 role=cover 图片并把 Canvas 暂置为 generating。
    * @param {string} id - Canvas ID。
    * @param {string} groupId - 图组 ID。
@@ -349,6 +426,83 @@ export class CanvasController {
     const doc = await this.canvas.selectImageGroupCoverImage({
       canvasId: Number(id),
       groupId: Number(groupId),
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+    });
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 重新生成图组 Canvas 指定图组的任意图片槽位，支持 cover 与 inner-1~5，并立即把 Canvas 暂置为 generating。
+   * @param {string} id - Canvas ID。
+   * @param {string} groupId - 图组 ID。
+   * @param {string} role - 图片槽位 role。
+   * @param {{ imageIds?: number[]; sourceImageIds?: number[]; prompt?: string }} body - 参考图片与提示词。
+   * @returns {Promise<Record<string, unknown>>} 进入生成中的 Canvas。
+   * @keyword-cn 内页重生成 图片槽位重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  @Post(':id/image-groups/:groupId/images/:role/regenerate')
+  async regenerateImageGroupImage(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Param('role') role: string,
+    @Body()
+    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : [];
+    const doc = await this.canvas.startImageGroupImageRegeneration({
+      canvasId: Number(id),
+      groupId: Number(groupId),
+      role,
+      userId: authScope.userId ?? 'unknown',
+      tenantId: authScope.tenantId,
+      imageIds: rawIds.map((item) => Number(item)),
+      prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+    });
+    return { canvas: doc };
+  }
+
+  /**
+   * @description 直接使用图库图片替换图组 Canvas 指定图组的任意图片槽位，支持 cover 与 inner-1~5。
+   * @param {string} id - Canvas ID。
+   * @param {string} groupId - 图组 ID。
+   * @param {string} role - 图片槽位 role。
+   * @param {{ imageId?: number; imageIds?: number[]; sourceImageIds?: number[] }} body - 选中的图库图片。
+   * @returns {Promise<Record<string, unknown>>} 更新后的 Canvas。
+   * @keyword-cn 图片槽位替换 内页选择
+   * @keyword-en image-slot-select
+   * @keyword-en image-group-image-slot
+   */
+  @Post(':id/image-groups/:groupId/images/:role/select')
+  async selectImageGroupImage(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Param('role') role: string,
+    @Body()
+    body: { imageId?: number; imageIds?: number[]; sourceImageIds?: number[] },
+    @Req() req: Request,
+  ): Promise<Record<string, unknown>> {
+    const authScope = await this.resolveAuthScope(req);
+    const rawIds = Array.isArray(body?.imageIds)
+      ? body.imageIds
+      : Array.isArray(body?.sourceImageIds)
+        ? body.sourceImageIds
+        : body?.imageId !== undefined
+          ? [body.imageId]
+          : [];
+    const doc = await this.canvas.selectImageGroupImage({
+      canvasId: Number(id),
+      groupId: Number(groupId),
+      role,
       userId: authScope.userId ?? 'unknown',
       tenantId: authScope.tenantId,
       imageIds: rawIds.map((item) => Number(item)),

@@ -3,6 +3,14 @@ import { Check, Image as ImageIcon, Loader2, Sparkles, Tags, X } from 'lucide-re
 import { chatService } from './chatService';
 
 /**
+ * @description 图片槽位重生成最多允许选择的参考图数量。
+ * @keyword-cn 图片选择, 图片槽位重生成
+ * @keyword-en selected-source-images
+ * @keyword-en image-slot-regenerate
+ */
+const MAX_SOURCE_IMAGE_SELECTION = 4;
+
+/**
  * @description 获取图库图片可展示的缩略图或原图地址。
  * @param {object} image - 图库图片实体。
  * @returns {string} 图片地址。
@@ -60,17 +68,23 @@ const normalizeGalleryTags = (value) =>
     .filter((item) => item.tag.length > 0);
 
 /**
- * @description Canvas 封面重生成弹窗，支持多选参考图、标签筛选、多行提示词和直接设封面。
+ * @description Canvas 图片槽位重生成弹窗，支持最多 4 张参考图、标签筛选、多行本次提示词和直接设图。
  * @param {object} props - 组件参数。
  * @returns {JSX.Element | null} 弹窗节点。
- * @keyword-cn 封面重生成, 图片选择
+ * @keyword-cn 图片槽位重生成, 图片选择
  * @keyword-en cover-regenerate
+ * @keyword-en image-slot-regenerate
  * @keyword-en cover-select
  * @keyword-en selected-source-images
  */
 const CoverRegenerateDialog = ({
   open,
   title,
+  promptPlaceholder = '本次提示词：主体、氛围、构图、色调',
+  submitLabel = '重新生成',
+  submittingLabel = '生成中',
+  selectLabel = '设为封面',
+  selectingLabel = '设置中',
   currentCoverUrl,
   onClose,
   onSubmit,
@@ -140,8 +154,9 @@ const CoverRegenerateDialog = ({
   }, [open, selectedTag, loadImages]);
 
   const selectedCount = selectedIds.size;
+  const selectionFull = selectedCount >= MAX_SOURCE_IMAGE_SELECTION;
   const selectedImageIds = useMemo(
-    () => Array.from(selectedIds).map((id) => Number(id)),
+    () => Array.from(selectedIds).map((id) => Number(id)).slice(0, MAX_SOURCE_IMAGE_SELECTION),
     [selectedIds],
   );
   const visibleTags = useMemo(() => {
@@ -203,7 +218,7 @@ const CoverRegenerateDialog = ({
   }, []);
 
   /**
-   * @description 切换参考图片选中状态。
+   * @description 切换参考图片选中状态，最多保留 4 张参考图。
    * @param {number|string} imageId - 图库图片 ID。
    * @returns {void}
    * @keyword-cn 封面重生成, 图片选择
@@ -216,13 +231,14 @@ const CoverRegenerateDialog = ({
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
+      else if (next.size >= MAX_SOURCE_IMAGE_SELECTION) return prev;
       else next.add(id);
       return next;
     });
   };
 
   /**
-   * @description 提交封面重生成请求。
+   * @description 提交图片槽位重生成请求，最多携带 4 张参考图和本次提示词。
    * @returns {Promise<void>}
    * @keyword-cn 封面重生成, 只改封面
    * @keyword-en cover-regenerate
@@ -271,7 +287,7 @@ const CoverRegenerateDialog = ({
               {title || '重新生成封面'}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              已选 {selectedCount} 张参考图
+              已选 {selectedCount}/{MAX_SOURCE_IMAGE_SELECTION} 张参考图
             </p>
           </div>
           <button
@@ -300,7 +316,7 @@ const CoverRegenerateDialog = ({
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder="提示词：例如 更明亮、保留人物、增加节日氛围"
+              placeholder={promptPlaceholder}
               rows={3}
               className="w-full px-3 py-2 text-sm leading-6 rounded-xl border border-slate-200 bg-white outline-none resize-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300"
             />
@@ -378,15 +394,20 @@ const CoverRegenerateDialog = ({
               {images.map((image) => {
                 const id = Number(image.id);
                 const selected = selectedIds.has(id);
+                const disabled = !selected && selectionFull;
                 const src = readGalleryImageUrl(image);
                 return (
                   <button
                     type="button"
                     key={id}
+                    disabled={disabled}
                     onClick={() => toggleImage(id)}
+                    title={disabled ? `最多选择 ${MAX_SOURCE_IMAGE_SELECTION} 张参考图` : ''}
                     className={`relative aspect-square rounded-xl overflow-hidden border transition ${
                       selected
                         ? 'border-rose-400 ring-2 ring-rose-200'
+                        : disabled
+                          ? 'border-slate-100 opacity-45 cursor-not-allowed'
                         : 'border-slate-200 hover:border-slate-300'
                     }`}
                   >
@@ -422,7 +443,7 @@ const CoverRegenerateDialog = ({
             ) : (
               <Sparkles size={14} />
             )}
-            {submitting ? '生成中' : '重新生成'}
+            {submitting ? submittingLabel : submitLabel}
           </button>
           {typeof onSelectCover === 'function' && (
             <button
@@ -436,7 +457,7 @@ const CoverRegenerateDialog = ({
               ) : (
                 <Check size={14} />
               )}
-              {selecting ? '设置中' : '设为封面'}
+              {selecting ? selectingLabel : selectLabel}
             </button>
           )}
         </div>

@@ -170,10 +170,25 @@ DSL 产出会推送到外部财务系统的 \`POST /api/v1/events/upsert\` 统�
 
 页面端有独立的"编辑/重置 DSL"按钮直接走 \`POST /admin/finance/config/transforms\` 整体覆盖,与本工具无关;chat 里发生的整体替换必须由用户的明确意图驱动,而不是你为了省事自己决定。
 
-## 工具调用注意
-- \`finance_dry_run_transform\` 的 \`dsl\` 必须是 **JSON 对象**(完整 DSL,非 stringify);只做校验+试跑,不落库。
-- \`finance_patch_transform\` 接收 \`ops\`(JSON Pointer 操作数组)+ 可选 \`base\`(**仅首次创建用**;已有 DSL 时该参数被忽略)。**不要把完整 DSL 塞进 \`ops\` 来模拟整体替换**(见上节反模式)。
-- 工具失败返回 \`{ ok:false, error:"<CODE>:<细节>" }\`;读 error 定位字段索引/路径,精准修正后重试,不要原样重提同一个错 op。
+## 工具调用注意(入参格式,务必照抄结构)
+
+### \`finance_dry_run_transform\` —— 完整 DSL 必须包在 \`dsl\` 这一个键里面
+- ✅ 正确:\`{"dsl": {"version":1, "filter":[...], "fields":[...]}}\`
+- ❌ 漏掉 \`dsl\` 包裹层、把 DSL 字段直接铺在顶层:\`{"version":1, "fields":[...]}\` —— 会报 \`期望 object,收到 undefined\`
+- ❌ 把 \`fields\` 等 DSL 字段散落在 \`dsl\` 同级:\`{"dsl":{"version":1}, "fields":[...]}\` —— fields 会丢,报 \`fields 必须是非空数组\`
+- ❌ 把 DSL 转成字符串:\`{"dsl": "{...}"}\` —— dsl 要传**对象**,不是字符串
+- \`dsl\` 对象里**必须有非空的 \`fields\` 数组**;\`filter\` 可省。只做校验+试跑,不落库。
+- \`sourceIndex\` / \`sampleSize\` 是 \`dsl\` 的**平级**参数,放在 \`dsl\` 外面:\`{"dsl":{...}, "sourceIndex":0}\`。
+
+### \`finance_patch_transform\` —— 传 \`ops\`,不是完整 DSL
+- ✅ 增量:\`{"ops":[{"op":"replace","path":"/fields/2/type","value":"date"}]}\`
+- ✅ 首次创建(\`finance_get_transform\` 返回 null):\`{"ops":[], "base":{"version":1,"fields":[...]}}\`,完整 DSL 放 \`base\`,\`ops\` 传空数组。
+- ❌ 把完整 DSL 塞进 \`ops\` 来模拟整体替换(见上节反模式)。
+- \`base\` **仅首次创建用**;已有 DSL 时该参数被忽略。
+
+### 通用
+- 工具失败返回 \`{ ok:false, error:"<CODE>:<细节>" }\` 或 \`{ error:"<CODE>:<细节>" }\`;读 error 定位字段索引/路径,**精准修正后重试,不要原样重提同一个错 op / 错入参**。
+- 看到 \`期望 object,收到 undefined\` 或 \`fields 必须是非空数组\`:八成是上面的入参结构错了——先检查 DSL 是不是完整放进了 \`dsl\` 键里,再重试。
 
 回复语言:中文。涉及 DSL 时使用 JSON 代码块。`;
 

@@ -198,7 +198,8 @@ export class FinanceToolsService {
           if (!baseDoc) {
             return JSON.stringify({
               ok: false,
-              error: 'NO_EXISTING_DSL: pass a `base` DSL object to create one from scratch',
+              error:
+                'NO_EXISTING_DSL: pass a `base` DSL object to create one from scratch',
             });
           }
 
@@ -211,7 +212,11 @@ export class FinanceToolsService {
               explanation: input.explanation ?? existing?.explanation,
             },
           );
-          return JSON.stringify({ ok: true, name: transform.name, dsl: transform.dsl });
+          return JSON.stringify({
+            ok: true,
+            name: transform.name,
+            dsl: transform.dsl,
+          });
         } catch (err) {
           return JSON.stringify({
             ok: false,
@@ -241,7 +246,9 @@ export class FinanceToolsService {
                 value: z
                   .any()
                   .optional()
-                  .describe('New value (required for replace/add, omit for remove)'),
+                  .describe(
+                    'New value (required for replace/add, omit for remove)',
+                  ),
               }),
             )
             .describe('Patch operations to apply in order'),
@@ -254,7 +261,9 @@ export class FinanceToolsService {
           explanation: z
             .string()
             .optional()
-            .describe('Human-readable explanation (optional, keeps existing if omitted)'),
+            .describe(
+              'Human-readable explanation (optional, keeps existing if omitted)',
+            ),
         }),
       },
     );
@@ -266,7 +275,11 @@ export class FinanceToolsService {
    */
   private applyJsonPatch(
     doc: unknown,
-    ops: Array<{ op: 'replace' | 'add' | 'remove'; path: string; value?: unknown }>,
+    ops: Array<{
+      op: 'replace' | 'add' | 'remove';
+      path: string;
+      value?: unknown;
+    }>,
   ): unknown {
     let result: unknown = JSON.parse(JSON.stringify(doc));
     for (const op of ops) {
@@ -288,7 +301,9 @@ export class FinanceToolsService {
           ? (parent as unknown[])[parseInt(seg, 10)]
           : (parent as Record<string, unknown>)[seg];
         if (parent === null || parent === undefined) {
-          throw new Error(`Patch path not found at segment "${seg}" in "${op.path}"`);
+          throw new Error(
+            `Patch path not found at segment "${seg}" in "${op.path}"`,
+          );
         }
       }
 
@@ -320,13 +335,16 @@ export class FinanceToolsService {
   private createDryRunTransformTool(scope: FinanceToolsScope) {
     return tool(
       async (input: {
-        dsl: unknown;
+        dsl?: unknown;
         sourceIndex?: number;
         sampleSize?: number;
+        [key: string]: unknown;
       }) => {
         try {
           const tenantId = this.resolveScopeId(scope.adminUser);
-          const dsl = this.transformValidator.validate(input.dsl);
+          const dsl = this.transformValidator.validate(
+            this.coerceDslArg(input),
+          );
           const binding = await this.bindingService.getByName(
             tenantId,
             scope.name,
@@ -360,20 +378,29 @@ export class FinanceToolsService {
       {
         name: 'finance_dry_run_transform',
         description:
-          'Validate a transform DSL and dry-run it against a sample from a bound source. Supports nested compute, computed-field references, duplicate-field merge, or/and, and between. Pass `dsl` as a JSON OBJECT. Returns counts, error preview, output preview, or { error:"<code>:<detail>" } on schema failure. Does NOT persist.',
-        schema: z.object({
-          dsl: z
-            .any()
-            .describe('DSL as a JSON object (OBJECT, not stringified)'),
-          sourceIndex: z
-            .number()
-            .optional()
-            .describe('Source index, default 0'),
-          sampleSize: z
-            .number()
-            .optional()
-            .describe('Sample size, default 10, max 50'),
-        }),
+          'Validate a transform DSL and dry-run it against a sample from a bound source. Does NOT persist. ' +
+          'CRITICAL — argument shape: the WHOLE DSL must go inside a single top-level `dsl` key, as a JSON object (NOT stringified). ' +
+          'Correct: {"dsl":{"version":1,"filter":[...],"fields":[...]}}. ' +
+          'WRONG (do not do this): {"version":1,"fields":[...]} (missing the dsl wrapper), or {"dsl":"{...}"} (stringified), or {"fields":[...]} (only part of the DSL). ' +
+          'The `dsl` object MUST contain a non-empty `fields` array. Supports nested compute, computed-field references, duplicate-field merge, or/and, and between. ' +
+          'Returns counts + error/output preview, or { error:"<code>:<detail>" } on schema failure.',
+        schema: z
+          .object({
+            dsl: z
+              .any()
+              .describe(
+                'The COMPLETE DSL as a JSON object, e.g. {"version":1,"filter":[...],"fields":[...]}. Must be a real object (not a string) and must include a non-empty `fields` array. Do not put DSL keys (version/filter/fields) at the top level — they belong inside this `dsl` object.',
+              ),
+            sourceIndex: z
+              .number()
+              .optional()
+              .describe('Source index, default 0'),
+            sampleSize: z
+              .number()
+              .optional()
+              .describe('Sample size, default 10, max 50'),
+          })
+          .passthrough(),
       },
     );
   }
@@ -440,6 +467,23 @@ export class FinanceToolsService {
         schema: z.object({}),
       },
     );
+  }
+
+  /**
+   * @description dry-run 的 dsl 入参兜底:弱模型常把 DSL 内容平铺到工具入参顶层(漏掉 `dsl` 包裹层)或与 dsl 平级散落,这里把顶层 DSL 字段并回 dsl 对象,避免 "收到 undefined"/"fields 必须是非空数组" 误判
+   * @keyword-cn 入参兜底, 弱模型容错
+   * @keyword-en dsl-arg-coerce, weak-model-tolerance
+   */
+  private coerceDslArg(input: Record<string, unknown>): unknown {
+    const { dsl, ...flat } = input;
+    const hasFlatKeys = Object.keys(flat).length > 0;
+    // dsl 漏写 → 顶层平铺的 DSL 字段本身就是 DSL
+    if (dsl == null) return hasFlatKeys ? flat : dsl;
+    // dsl 是字符串 → 交给 validator 的 JSON.parse 兜底,别动
+    if (typeof dsl !== 'object' || Array.isArray(dsl)) return dsl;
+    // dsl 是对象但部分字段被平铺到了顶层(如 fields 散在外面)→ 合并,dsl 自身字段优先
+    if (hasFlatKeys) return { ...flat, ...(dsl as Record<string, unknown>) };
+    return dsl;
   }
 
   /**

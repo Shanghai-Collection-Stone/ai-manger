@@ -160,9 +160,10 @@ const ImageLightbox = ({ images, startIndex, onClose }) => {
  * @description 单个图片组卡片，展示版式、图片缩略图和角色标签；点击图片触发预览
  * @keyword-en image group card component
  */
-const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, deletingImageId, onRegenerateCover }) => {
+const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, deletingImageId, onRegenerateImage }) => {
   const images = Array.isArray(group.images) ? group.images : [];
   const isFailed = group.status === 'failed';
+  const canRegenerateImage = typeof onRegenerateImage === 'function';
 
   return (
     /* 卡片容器：选中时边框高亮 */
@@ -228,15 +229,15 @@ const GroupCard = ({ group, selected, onToggle, onImageClick, onDeleteImage, del
             {/* 拼图标记 */}
             {img.isCollage && (
               <span
-                className={`absolute top-1 ${img.role === 'cover' && typeof onRegenerateCover === 'function' ? 'right-7' : 'right-1'} w-3 h-3 rounded-full bg-indigo-500 pointer-events-none`}
+                className={`absolute top-1 ${canRegenerateImage ? 'right-7' : 'right-1'} w-3 h-3 rounded-full bg-indigo-500 pointer-events-none`}
                 title="拼图"
               />
             )}
-            {img.role === 'cover' && typeof onRegenerateCover === 'function' && (
+            {canRegenerateImage && (
               <button
                 type="button"
-                onClick={(e) => { e.stopPropagation(); onRegenerateCover(group); }}
-                title="重新生成封面"
+                onClick={(e) => { e.stopPropagation(); onRegenerateImage(group, img); }}
+                title={`重新生成${ROLE_LABEL[img.role] || '图片'}`}
                 className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-amber-500 transition"
               >
                 <Sparkles size={9} />
@@ -291,12 +292,12 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
   const [lightbox, setLightbox] = useState(null);
   /** @description 正在删除中的图片 imageId */
   const [deletingImageId, setDeletingImageId] = useState(null);
-  /** @description 封面重生成弹窗目标图组 */
-  const [coverDialogTarget, setCoverDialogTarget] = useState(null);
-  /** @description 封面重生成提交状态 */
-  const [coverRegenerating, setCoverRegenerating] = useState(false);
-  /** @description 直接设封面提交状态 */
-  const [coverSelecting, setCoverSelecting] = useState(false);
+  /** @description 图片槽位重生成弹窗目标：{ group, image } */
+  const [imageDialogTarget, setImageDialogTarget] = useState(null);
+  /** @description 图片槽位重生成提交状态 */
+  const [imageRegenerating, setImageRegenerating] = useState(false);
+  /** @description 直接替换图片槽位提交状态 */
+  const [imageSelecting, setImageSelecting] = useState(false);
   const canvasTouchStartRef = useRef(null);
 
   /* 加载 canvas 数据 */
@@ -444,69 +445,79 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
   }, []);
 
   /**
-   * @description 打开图片组封面重生成弹窗，保留目标图组上下文。
-   * @keyword-cn 封面重生成, 图片组封面
-   * @keyword-en cover-regenerate
-   * @keyword-en image-group-cover-only
+   * @description 打开图片组指定图片槽位重生成弹窗，保留目标图组与 role 上下文。
+   * @keyword-cn 内页重生成, 图片槽位重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
    */
-  const openGroupCoverRegenerateDialog = useCallback((group) => {
-    if (!group || isGenerating) return;
-    setCoverDialogTarget(group);
+  const openGroupImageRegenerateDialog = useCallback((group, image) => {
+    if (!group || !image || isGenerating) return;
+    setImageDialogTarget({ group, image });
   }, [isGenerating]);
 
   /**
-   * @description 提交图片组封面重生成请求，只让后端替换目标图组 role=cover 图片。
-   * @keyword-cn 封面重生成, 只改封面
-   * @keyword-en cover-regenerate
-   * @keyword-en image-group-cover-only
+   * @description 提交图片组指定图片槽位重生成请求，后端成功响应时 Canvas 已进入 generating。
+   * @keyword-cn 内页重生成, 图片槽位重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
    */
-  const handleRegenerateGroupCover = useCallback(async (payload) => {
-    if (!coverDialogTarget?.id) return;
-    setCoverRegenerating(true);
+  const handleRegenerateGroupImage = useCallback(async (payload) => {
+    const group = imageDialogTarget?.group;
+    const image = imageDialogTarget?.image;
+    const role = image?.role;
+    if (!group?.id || !role) return;
+    const label = ROLE_LABEL[role] || '图片';
+    setImageRegenerating(true);
     try {
-      const res = await chatService.regenerateCanvasImageGroupCover(
+      const res = await chatService.regenerateCanvasImageGroupImage(
         Number(canvasId),
-        coverDialogTarget.id,
+        group.id,
+        role,
         payload,
       );
       if (res?.canvas) {
         setCanvas(res.canvas);
-        setCoverDialogTarget(null);
-        showToast('封面已开始重新生成', 'success');
+        setImageDialogTarget(null);
+        showToast(`${label}已开始重新生成`, 'success');
       } else {
-        showToast('封面重生成启动失败', 'error');
+        showToast(`${label}重生成启动失败`, 'error');
       }
     } finally {
-      setCoverRegenerating(false);
+      setImageRegenerating(false);
     }
-  }, [canvasId, coverDialogTarget]);
+  }, [canvasId, imageDialogTarget]);
 
   /**
-   * @description 直接将弹窗中第一张已选图库图片设为当前图组封面。
-   * @keyword-cn 直接设为封面, 图片组封面
-   * @keyword-en cover-select
-   * @keyword-en image-group-cover-only
+   * @description 直接将弹窗中第一张已选图库图片替换到当前图组指定 role 图片槽位。
+   * @keyword-cn 图片槽位替换, 内页选择
+   * @keyword-en image-slot-select
+   * @keyword-en image-group-image-slot
    */
-  const handleSelectGroupCover = useCallback(async (payload) => {
-    if (!coverDialogTarget?.id) return;
-    setCoverSelecting(true);
+  const handleSelectGroupImage = useCallback(async (payload) => {
+    const group = imageDialogTarget?.group;
+    const image = imageDialogTarget?.image;
+    const role = image?.role;
+    if (!group?.id || !role) return;
+    const label = ROLE_LABEL[role] || '图片';
+    setImageSelecting(true);
     try {
-      const res = await chatService.selectCanvasImageGroupCover(
+      const res = await chatService.selectCanvasImageGroupImage(
         Number(canvasId),
-        coverDialogTarget.id,
+        group.id,
+        role,
         payload,
       );
       if (res?.canvas) {
         setCanvas(res.canvas);
-        setCoverDialogTarget(null);
-        showToast('已设为封面', 'success');
+        setImageDialogTarget(null);
+        showToast(`已设为${label}`, 'success');
       } else {
-        showToast('设置封面失败', 'error');
+        showToast(`设置${label}失败`, 'error');
       }
     } finally {
-      setCoverSelecting(false);
+      setImageSelecting(false);
     }
-  }, [canvasId, coverDialogTarget]);
+  }, [canvasId, imageDialogTarget]);
 
   /** 删除图片组中的一张图片 */
   const handleDeleteImage = useCallback(async (groupId, imageId) => {
@@ -519,6 +530,11 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
       setDeletingImageId(null);
     }
   }, [canvasId]);
+
+  const dialogTargetImage = imageDialogTarget?.image;
+  const dialogTargetRole = dialogTargetImage?.role || '';
+  const dialogTargetLabel = ROLE_LABEL[dialogTargetRole] || '图片';
+  const dialogIsCover = dialogTargetRole === 'cover';
 
   return (
     /* 主容器 */
@@ -635,7 +651,7 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
                 onImageClick={(images, idx) => setLightbox({ images, startIndex: idx })}
                 onDeleteImage={handleDeleteImage}
                 deletingImageId={deletingImageId}
-                onRegenerateCover={isGenerating ? undefined : openGroupCoverRegenerateDialog}
+                onRegenerateImage={isGenerating ? undefined : openGroupImageRegenerateDialog}
               />
             ))}
           </div>
@@ -652,18 +668,21 @@ const ImageGroupCanvasView = ({ canvasId, onClose }) => {
       )}
 
       <CoverRegenerateDialog
-        open={!!coverDialogTarget}
-        title="重新生成图组封面"
-        currentCoverUrl={
-          (coverDialogTarget?.images ?? []).find((img) => img.role === 'cover')?.url
-          || (coverDialogTarget?.images ?? []).find((img) => img.role === 'cover')?.thumbUrl
-          || ''
+        open={!!imageDialogTarget}
+        title={`重新生成图组${dialogTargetLabel}`}
+        promptPlaceholder={
+          dialogIsCover
+            ? '本次封面提示词：主体、氛围、构图、色调'
+            : '本次内页提示词：保留主体、画面调整、连续浏览氛围'
         }
-        submitting={coverRegenerating}
-        selecting={coverSelecting}
-        onClose={() => setCoverDialogTarget(null)}
-        onSubmit={handleRegenerateGroupCover}
-        onSelectCover={handleSelectGroupCover}
+        submitLabel={`重新生成${dialogTargetLabel}`}
+        selectLabel={dialogIsCover ? '设为封面' : `设为${dialogTargetLabel}`}
+        currentCoverUrl={dialogTargetImage?.url || dialogTargetImage?.thumbUrl || ''}
+        submitting={imageRegenerating}
+        selecting={imageSelecting}
+        onClose={() => setImageDialogTarget(null)}
+        onSubmit={handleRegenerateGroupImage}
+        onSelectCover={handleSelectGroupImage}
       />
     </div>
   );

@@ -53,6 +53,14 @@ const COVER_TAG_SET = new Set([
 const COLLAGE_WIDTH = 640;
 const COLLAGE_HEIGHT = 853;
 
+/**
+ * @description 封面和内页重生成最多接收的参考图数量。
+ * @keyword-cn 图片选择, 图片槽位重生成
+ * @keyword-en selected-source-images
+ * @keyword-en image-slot-regenerate
+ */
+const REGENERATE_SOURCE_IMAGE_LIMIT = 4;
+
 /** @description 模块级封面字体 base64 缓存（undefined=未加载, null=加载失败, string=缓存值） */
 let _coverFontBase64: string | null | undefined = undefined;
 /** @description 模块级封面字体已解析的绝对路径缓存 */
@@ -77,6 +85,8 @@ type ImageGroupAllocationRequest = {
   layout: ImageGroupLayout;
   slots: ImageGroupSlotRequirement[];
 };
+
+type GeneratedAssetKind = 'cover' | 'collage' | 'inner';
 
 export type ImageGroupPlannedSlot =
   | { kind: 'portrait'; role: ImageGroupImageRole; image: GalleryImageEntity }
@@ -223,7 +233,7 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 基于用户选择的一张或多张图库图片，一次性生成新的 Canvas 封面图并写入动态封面图库。
+   * @description 基于用户本次选择的最多 4 张图库图片，一次性生成新的 Canvas 封面图并写入动态封面图库。
    * @param {object} input - 封面重生成输入。
    * @returns {Promise<CanvasGroupImage>} 可直接回写到 Canvas 的封面图片。
    * @keyword-cn 封面重生成, 只改封面, 图片选择
@@ -238,7 +248,6 @@ export class CanvasImageGroupService {
     articleTags?: string[];
     prompt?: string;
     sourceImageIds: number[];
-    existingCoverText?: { title?: string; subtitle?: string };
   }): Promise<CanvasGroupImage> {
     const sourceImageIds = Array.from(
       new Set(
@@ -247,7 +256,7 @@ export class CanvasImageGroupService {
           .filter((id) => Number.isFinite(id) && id > 0)
           .map((id) => Math.floor(id)),
       ),
-    ).slice(0, 8);
+    ).slice(0, REGENERATE_SOURCE_IMAGE_LIMIT);
     if (sourceImageIds.length === 0) {
       throw new Error('COVER_SOURCE_IMAGES_REQUIRED');
     }
@@ -264,7 +273,7 @@ export class CanvasImageGroupService {
     const baseImageCandidates = sourceImages
       .map((img) => this.resolveLocalPath(img) ?? String(img.url ?? '').trim())
       .filter((path): path is string => path.length > 0)
-      .slice(0, 6);
+      .slice(0, REGENERATE_SOURCE_IMAGE_LIMIT);
     if (baseImageCandidates.length === 0) {
       throw new Error('COVER_SOURCE_IMAGES_NOT_READABLE');
     }
@@ -283,13 +292,11 @@ export class CanvasImageGroupService {
       .join('\n');
     const safeCoverText = this.sanitizeCoverText({
       title:
-        this.coercePlainText(input.existingCoverText?.title).trim() ||
         this.coercePlainText(input.articleTitle).trim() ||
         coverTheme ||
         '封面',
       subtitle:
         rawPrompt ||
-        this.coercePlainText(input.existingCoverText?.subtitle).trim() ||
         coverTheme,
     });
     const tags = (Array.isArray(input.articleTags) ? input.articleTags : [])
@@ -299,6 +306,7 @@ export class CanvasImageGroupService {
     const prompt = this.sanitizeCopyrightRiskText(
       [
         '请基于用户选择的参考图片一次性生成一张小红书图文封面。',
+        '只使用本次选择的参考图片和本次输入的提示词，不复用旧封面提示词、旧封面文案或旧版式。',
         '多张参考图需要融合为同一张封面，不要分别出图，不要生成组图。',
         '仅生成封面图：保持主体真实、画面清晰、构图适合 3:4 竖版封面。',
         '可以做轻量修图、色彩校正、局部对比、干净排版和封面化增强。',
@@ -350,6 +358,110 @@ export class CanvasImageGroupService {
       throw new Error('COVER_GENERATED_IMAGE_PERSIST_FAILED');
     }
     return this.toGroupImage(persisted, 'cover', safeCoverText);
+  }
+
+  /**
+   * @description 基于用户本次选择的最多 4 张图库图片重新生成图片组内页图，不添加封面标题并写入动态内页图库。
+   * @param {object} input - 内页重生成输入。
+   * @returns {Promise<CanvasGroupImage>} 可直接回写到 Canvas 指定内页 role 的图片。
+   * @keyword-cn 内页重生成, 图片选择
+   * @keyword-en inner-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  async regenerateInnerImage(input: {
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articleTitle?: string;
+    articleTags?: string[];
+    role: Exclude<CanvasGroupImage['role'], 'cover'>;
+    prompt?: string;
+    sourceImageIds: number[];
+  }): Promise<CanvasGroupImage> {
+    const sourceImageIds = Array.from(
+      new Set(
+        (Array.isArray(input.sourceImageIds) ? input.sourceImageIds : [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.floor(id)),
+      ),
+    ).slice(0, REGENERATE_SOURCE_IMAGE_LIMIT);
+    if (sourceImageIds.length === 0) {
+      throw new Error('INNER_SOURCE_IMAGES_REQUIRED');
+    }
+
+    const sourceImages = await this.gallery.findAccessibleImagesByIds(
+      input.userId,
+      input.tenantId,
+      sourceImageIds,
+    );
+    if (sourceImages.length === 0) {
+      throw new Error('INNER_SOURCE_IMAGES_NOT_FOUND');
+    }
+
+    const baseImageCandidates = sourceImages
+      .map((img) => this.resolveLocalPath(img) ?? String(img.url ?? '').trim())
+      .filter((path): path is string => path.length > 0)
+      .slice(0, REGENERATE_SOURCE_IMAGE_LIMIT);
+    if (baseImageCandidates.length === 0) {
+      throw new Error('INNER_SOURCE_IMAGES_NOT_READABLE');
+    }
+
+    const rawPrompt = this.coercePlainText(input.prompt).trim();
+    const tags = (Array.isArray(input.articleTags) ? input.articleTags : [])
+      .map((tag) => this.coercePlainText(tag).trim())
+      .filter((tag) => tag.length > 0)
+      .slice(0, 12);
+    const prompt = this.sanitizeCopyrightRiskText(
+      [
+        '请基于用户选择的参考图片生成一张小红书图文内页图片。',
+        '只使用本次选择的参考图片和本次输入的提示词，不复用旧内页提示词、旧内页文字或旧版式。',
+        '多张参考图需要融合为同一张内页图，不要分别出图，不要生成封面。',
+        '画面比例为 3:4 竖版，主体真实清晰，构图适合手机端连续浏览。',
+        '允许做轻量修图、调色、局部重构、背景整理和氛围增强，但不要影响 Canvas 中其他图片。',
+        '禁止添加封面主标题、副标题、营销大字、水印、平台 logo、网址、二维码或无关文字。',
+        `目标内页:${input.role}`,
+        rawPrompt ? `用户提示词:${rawPrompt}` : '',
+        input.topic ? `Canvas主题:${input.topic}` : '',
+        input.articleTitle ? `文章标题:${input.articleTitle}` : '',
+        tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
+      ]
+        .filter((part) => part.length > 0)
+        .join('\n'),
+    );
+
+    const generated = await this.agentService.sendPrompt({
+      prompt,
+      size: '640x853',
+      baseImageCandidates,
+    });
+    const generatedRecord =
+      generated && typeof generated === 'object'
+        ? (generated as Record<string, unknown>)
+        : {};
+    const imagePath = this.coercePlainText(generatedRecord.imagePath).trim();
+    if (!imagePath) {
+      throw new Error('INNER_GENERATED_IMAGE_EMPTY');
+    }
+    const providerLabel = [
+      this.coercePlainText(generatedRecord.providerCode).trim(),
+      this.coercePlainText(generatedRecord.model).trim(),
+    ]
+      .filter((part) => part.length > 0)
+      .join(':');
+    const persisted = await this.persistGeneratedAssetToGallery({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      url: imagePath,
+      generatedKind: 'inner',
+      sourceImageIds,
+      sourceImages,
+      description: `Canvas内页重生成${providerLabel ? `(${providerLabel})` : ''}`,
+    });
+    if (!persisted) {
+      throw new Error('INNER_GENERATED_IMAGE_PERSIST_FAILED');
+    }
+    return this.toGroupImage(persisted, input.role);
   }
 
   /**
@@ -2280,13 +2392,13 @@ export class CanvasImageGroupService {
 
   /**
    * @description 组装生成图片标签（保留来源语义并打上动态封面/拼图类型标签）。
-   * @param {'cover'|'collage'} generatedKind - 生成类型。
+   * @param {'cover'|'collage'|'inner'} generatedKind - 生成类型。
    * @param {GalleryImageEntity[]} [sourceImages] - 来源图片。
    * @returns {string[]} 标签列表。
    * @keyword-en build generated asset tags
    */
   private buildGeneratedAssetTags(
-    generatedKind: 'cover' | 'collage',
+    generatedKind: GeneratedAssetKind,
     sourceImages?: GalleryImageEntity[],
   ): string[] {
     const seen = new Set<string>();
@@ -2307,15 +2419,17 @@ export class CanvasImageGroupService {
 
     if (generatedKind === 'cover') {
       ['封面', 'canvas封面', '自动封面', '动态封面', '自动生成'].forEach(push);
-    } else {
+    } else if (generatedKind === 'collage') {
       ['拼图', '拼图封面', '动态拼图', '自动拼图', '自动生成'].forEach(push);
+    } else {
+      ['内页', 'canvas内页', '动态内页', '自动内页', '自动生成'].forEach(push);
     }
     return out.slice(0, 40);
   }
 
   /**
-   * @description 将画布生成出的拼图/封面文件持久化到图库，确保返回真实 imageId。
-   * @param {{ userId: string; tenantId?: string; url: string; generatedKind: 'cover'|'collage'; groupId?: string | number; sourceImageIds?: number[]; sourceImages?: GalleryImageEntity[]; description?: string }} input - 持久化入参。
+   * @description 将画布生成出的封面/拼图/内页文件持久化到图库，确保返回真实 imageId。
+   * @param {{ userId: string; tenantId?: string; url: string; generatedKind: 'cover'|'collage'|'inner'; groupId?: string | number; sourceImageIds?: number[]; sourceImages?: GalleryImageEntity[]; description?: string }} input - 持久化入参。
    * @returns {Promise<GalleryImageEntity | null>} 入库后的图库实体。
    * @keyword-en persist generated canvas asset to gallery
    */
@@ -2323,7 +2437,7 @@ export class CanvasImageGroupService {
     userId: string;
     tenantId?: string;
     url: string;
-    generatedKind: 'cover' | 'collage';
+    generatedKind: GeneratedAssetKind;
     groupId?: string | number;
     sourceImageIds?: number[];
     sourceImages?: GalleryImageEntity[];
@@ -2422,8 +2536,12 @@ export class CanvasImageGroupService {
           tags,
           description:
             input.description ??
-            (input.generatedKind === 'cover' ? '画布动态封面' : '画布动态拼图'),
-          isCollage: true,
+            (input.generatedKind === 'cover'
+              ? '画布动态封面'
+              : input.generatedKind === 'inner'
+                ? '画布动态内页'
+                : '画布动态拼图'),
+          isCollage: input.generatedKind !== 'inner',
           collageSourceImageIds: sourceIds.length > 0 ? sourceIds : undefined,
           collageMeta: {
             width,

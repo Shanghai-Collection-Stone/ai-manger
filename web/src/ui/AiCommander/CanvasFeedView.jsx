@@ -208,9 +208,9 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
   const [deletingCanvas, setDeletingCanvas] = useState(false);
   // 存入文章库弹窗状态：target=null 关闭；target='all' 整份；target={articleId} 单篇
   const [libraryPickerFor, setLibraryPickerFor] = useState(null);
-  const [coverDialogTarget, setCoverDialogTarget] = useState(null);
-  const [coverRegenerating, setCoverRegenerating] = useState(false);
-  const [coverSelecting, setCoverSelecting] = useState(false);
+  const [imageDialogTarget, setImageDialogTarget] = useState(null);
+  const [imageRegenerating, setImageRegenerating] = useState(false);
+  const [imageSelecting, setImageSelecting] = useState(false);
   const [lightbox, setLightbox] = useState(null);
   const pollingRef = useRef(null);
   const canvasTouchStartRef = useRef(null);
@@ -509,83 +509,98 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
   };
 
   /**
-   * @description 打开当前文章封面重生成弹窗，并切回首图预览。
+   * @description 打开当前文章指定图片槽位重生成弹窗，并定位到该图片预览。
    * @param {object} article - Canvas 文章。
+   * @param {number} imageIndex - 图片下标，0 为封面，1+ 为内页。
    * @returns {void}
-   * @keyword-cn 封面重生成, 只改封面
-   * @keyword-en cover-regenerate
-   * @keyword-en article-cover-only
+   * @keyword-cn 图文内页重生成, 图片槽位重生成
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
    */
-  const openCoverRegenerateDialog = (article) => {
+  const openArticleImageRegenerateDialog = (article, imageIndex = 0) => {
     if (!article) return;
+    const index = Math.max(0, Math.min(Number(imageIndex) || 0, readImages(article).length - 1));
     setSelectedId(article.id);
-    setDetailImageIndex(0);
-    setCoverDialogTarget(article);
+    setDetailImageIndex(index);
+    setImageDialogTarget({ article, imageIndex: index });
   };
 
   /**
-   * @description 提交文章封面重生成请求，仅替换 imageUrls/imageIds 的第一项。
+   * @description 提交文章指定图片槽位重生成请求，后端成功响应时 Canvas 已进入 generating。
    * @param {{ imageIds: number[]; prompt?: string }} payload - 参考图和提示词。
    * @returns {Promise<void>}
-   * @keyword-cn 封面重生成, 只改封面
-   * @keyword-en cover-regenerate
-   * @keyword-en article-cover-only
+   * @keyword-cn 图文内页重生成, 图片槽位重生成
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
    */
-  const handleRegenerateCover = async (payload) => {
-    const article = coverDialogTarget;
+  const handleRegenerateArticleImage = async (payload) => {
+    const article = imageDialogTarget?.article;
+    const imageIndex = Number(imageDialogTarget?.imageIndex ?? 0);
     if (!article) return;
-    setCoverRegenerating(true);
+    const label = imageIndex === 0 ? '封面' : `内页${imageIndex}`;
+    setImageRegenerating(true);
     try {
-      const res = await chatService.regenerateCanvasArticleCover(
+      const res = await chatService.regenerateCanvasArticleImage(
         Number(canvasId),
         article.id,
+        imageIndex,
         payload,
       );
       if (res?.canvas) {
         setCanvas(res.canvas);
         setSelectedId(article.id);
-        setDetailImageIndex(0);
-        setCoverDialogTarget(null);
-        showToast('封面已开始重新生成', 'success');
+        setDetailImageIndex(imageIndex);
+        setImageDialogTarget(null);
+        showToast(`${label}已开始重新生成`, 'success');
       } else {
-        showToast('封面重生成启动失败', 'error');
+        showToast(`${label}重生成启动失败`, 'error');
       }
     } finally {
-      setCoverRegenerating(false);
+      setImageRegenerating(false);
     }
   };
 
   /**
-   * @description 直接将弹窗中第一张已选图库图片设为当前文章封面。
+   * @description 直接将弹窗中第一张已选图库图片替换到当前文章指定图片槽位。
    * @param {{ imageId?: number; imageIds?: number[] }} payload - 选中的图库图片。
    * @returns {Promise<void>}
-   * @keyword-cn 直接设为封面, 图文Canvas
-   * @keyword-en cover-select
-   * @keyword-en article-cover-only
+   * @keyword-cn 图文内页选择, 图片槽位替换
+   * @keyword-en article-image-select
+   * @keyword-en image-slot-select
    */
-  const handleSelectCover = async (payload) => {
-    const article = coverDialogTarget;
+  const handleSelectArticleImage = async (payload) => {
+    const article = imageDialogTarget?.article;
+    const imageIndex = Number(imageDialogTarget?.imageIndex ?? 0);
     if (!article) return;
-    setCoverSelecting(true);
+    const label = imageIndex === 0 ? '封面' : `内页${imageIndex}`;
+    setImageSelecting(true);
     try {
-      const res = await chatService.selectCanvasArticleCover(
+      const res = await chatService.selectCanvasArticleImage(
         Number(canvasId),
         article.id,
+        imageIndex,
         payload,
       );
       if (res?.canvas) {
         setCanvas(res.canvas);
         setSelectedId(article.id);
-        setDetailImageIndex(0);
-        setCoverDialogTarget(null);
-        showToast('已设为封面', 'success');
+        setDetailImageIndex(imageIndex);
+        setImageDialogTarget(null);
+        showToast(`已设为${label}`, 'success');
       } else {
-        showToast('设置封面失败', 'error');
+        showToast(`设置${label}失败`, 'error');
       }
     } finally {
-      setCoverSelecting(false);
+      setImageSelecting(false);
     }
   };
+
+  const dialogArticle = imageDialogTarget?.article;
+  const dialogImageIndex = Number(imageDialogTarget?.imageIndex ?? 0);
+  const dialogImageLabel = dialogImageIndex === 0 ? '封面' : `内页${dialogImageIndex}`;
+  const dialogImages = dialogArticle ? readImages(dialogArticle) : [];
+  const dialogCurrentUrl = dialogImages[dialogImageIndex] || '';
+  const dialogIsCover = dialogImageIndex === 0;
 
   return (
     <div
@@ -732,7 +747,7 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                   {img && !isPending && !isFailed && !isGenerating && (
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); openCoverRegenerateDialog(a); }}
+                      onClick={(e) => { e.stopPropagation(); openArticleImageRegenerateDialog(a, 0); }}
                       title="重新生成封面"
                       className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/45 text-white flex items-center justify-center hover:bg-rose-500 transition"
                     >
@@ -818,11 +833,11 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                       </>
                     ) : null}
                     {/* 删除当前图片按钮 */}
-                    {activeImage && detailImageIndex === 0 && !isGenerating && (
+                    {activeImage && !isGenerating && (
                       <button
                         type="button"
-                        onClick={() => openCoverRegenerateDialog(selected)}
-                        title="重新生成封面"
+                        onClick={() => openArticleImageRegenerateDialog(selected, detailImageIndex)}
+                        title={detailImageIndex === 0 ? '重新生成封面' : `重新生成内页${detailImageIndex}`}
                         className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-rose-500 transition"
                       >
                         <Sparkles size={12} />
@@ -834,7 +849,7 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                         onClick={() => handleDeleteImage(selected, detailImageIndex)}
                         disabled={deletingImageIdx === detailImageIndex}
                         title="删除此图"
-                        className={`absolute top-2 ${detailImageIndex === 0 && !isGenerating ? 'right-11' : 'right-2'} w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-red-500 transition`}
+                        className={`absolute top-2 ${!isGenerating ? 'right-11' : 'right-2'} w-7 h-7 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-red-500 transition`}
                       >
                         {deletingImageIdx === detailImageIndex
                           ? <Loader2 size={12} className="animate-spin" />
@@ -984,14 +999,19 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
         />
       )}
       <CoverRegenerateDialog
-        open={!!coverDialogTarget}
-        title="重新生成文章封面"
-        currentCoverUrl={readImage(coverDialogTarget)}
-        submitting={coverRegenerating}
-        selecting={coverSelecting}
-        onClose={() => setCoverDialogTarget(null)}
-        onSubmit={handleRegenerateCover}
-        onSelectCover={handleSelectCover}
+        open={!!imageDialogTarget}
+        title={`重新生成文章${dialogImageLabel}`}
+        currentCoverUrl={dialogCurrentUrl}
+        promptPlaceholder={dialogIsCover
+          ? '本次封面提示词：主体、氛围、构图、色调'
+          : '本次内页提示词：保留主体、画面调整、正文配图氛围'}
+        submitLabel={`重新生成${dialogImageLabel}`}
+        selectLabel={dialogIsCover ? '设为封面' : `设为${dialogImageLabel}`}
+        submitting={imageRegenerating}
+        selecting={imageSelecting}
+        onClose={() => setImageDialogTarget(null)}
+        onSubmit={handleRegenerateArticleImage}
+        onSelectCover={handleSelectArticleImage}
       />
     </div>
   );

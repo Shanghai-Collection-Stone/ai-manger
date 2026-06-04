@@ -32,6 +32,7 @@ Finance-Agent
 - `createPatchTransformTool(scope)` — 构建基于 JSON Pointer 局部修改或首次创建 DSL 的工具(ops + 可选 base) | keywords: transform-patch-tool, dsl-patch, json-pointer
 - `applyJsonPatch(doc,ops)` — 按 RFC 6901 对文档执行 replace/add/remove 操作 | keywords: json-pointer, dsl-patch, json-patch
 - `createDryRunTransformTool(scope)` — 构建 DSL 校验与样本试运行工具 | keywords: transform-dry-run-tool, dsl-validate
+- `coerceDslArg(input)` — dry-run 入参兜底:把弱模型平铺/漏写的 DSL 字段并回 `dsl` 对象 | keywords: dsl-arg-coerce, weak-model-tolerance
 - `createListExternalStoresTool(scope)` — 构建外部门店列表工具 | keywords: external-stores-tool, lookup-source
 - `createListExternalCompaniesTool(scope)` — 构建外部公司列表工具 | keywords: external-companies-tool, lookup-source
 - `fetchSample(tenantId,source,sampleSize)` — 按源类型读取样本 | keywords: source-sample-fetch, source-dispatch
@@ -52,6 +53,7 @@ Finance-Agent
 | 工具集合          | finance-agent-tools       |
 | DSL 局部替换/创建 | dsl-patch, json-pointer   |
 | DSL 试运行        | dsl-validate              |
+| 入参兜底/弱模型容错 | dsl-arg-coerce            |
 | 源样本            | source-sample-fetch       |
 | 外部映射来源      | lookup-source             |
 | 租户作用域        | tenant-scope              |

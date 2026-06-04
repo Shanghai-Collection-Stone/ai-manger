@@ -351,6 +351,48 @@ export const chatService = {
   },
 
   /**
+   * @description 触发图文 Canvas 指定文章图片下标重生成，成功响应会让 Canvas 进入 generating。
+   * @keyword-cn 图文内页重生成 图片槽位重生成
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
+   */
+  async regenerateCanvasArticleImage(canvasId, articleId, imageIndex, payload) {
+    try {
+      const safeIndex = encodeURIComponent(String(imageIndex ?? 0));
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/articles/${articleId}/images/${safeIndex}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * @description 直接使用图库图片替换图文 Canvas 指定文章图片下标。
+   * @keyword-cn 图文内页选择 图片槽位替换
+   * @keyword-en article-image-select
+   * @keyword-en image-slot-select
+   */
+  async selectCanvasArticleImage(canvasId, articleId, imageIndex, payload) {
+    try {
+      const safeIndex = encodeURIComponent(String(imageIndex ?? 0));
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/articles/${articleId}/images/${safeIndex}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
    * @description 触发图片组 Canvas 指定图组封面重生成，仅替换 role=cover 图片。
    * @keyword-cn 封面重生成, 只改封面
    * @keyword-en cover-regenerate
@@ -379,6 +421,48 @@ export const chatService = {
   async selectCanvasImageGroupCover(canvasId, groupId, payload) {
     try {
       const res = await fetch(`${API_BASE}/canvas/${canvasId}/image-groups/${groupId}/cover/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * @description 触发图片组 Canvas 指定 role 图片槽位重生成，成功响应会让 Canvas 进入 generating。
+   * @keyword-cn 内页重生成 图片槽位重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  async regenerateCanvasImageGroupImage(canvasId, groupId, role, payload) {
+    try {
+      const safeRole = encodeURIComponent(String(role ?? ''));
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/image-groups/${groupId}/images/${safeRole}/regenerate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload ?? {}),
+      });
+      if (!res.ok) return { canvas: null };
+      return await res.json();
+    } catch {
+      return { canvas: null };
+    }
+  },
+
+  /**
+   * @description 直接使用图库图片替换图片组 Canvas 指定 role 图片槽位。
+   * @keyword-cn 图片槽位替换 内页选择
+   * @keyword-en image-slot-select
+   * @keyword-en image-group-image-slot
+   */
+  async selectCanvasImageGroupImage(canvasId, groupId, role, payload) {
+    try {
+      const safeRole = encodeURIComponent(String(role ?? ''));
+      const res = await fetch(`${API_BASE}/canvas/${canvasId}/image-groups/${groupId}/images/${safeRole}/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(payload ?? {}),

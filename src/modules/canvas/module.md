@@ -31,8 +31,12 @@ Canvas控制器。
 - `PATCH /canvas/:id/articles/:articleId` — 更新文章
 - `POST /canvas/:id/articles/:articleId/cover/regenerate` — 选择一张或多张图库图片重新生成图文 Canvas 单篇封面；仅替换首图并把 Canvas 暂置为 generating | keywords: cover-regenerate, article-cover-only
 - `POST /canvas/:id/articles/:articleId/cover/select` — 直接使用一张图库图片设为图文 Canvas 单篇封面；仅替换首图且不进入 generating | keywords: cover-select, article-cover-only
+- `POST /canvas/:id/articles/:articleId/images/:imageIndex/regenerate` — 选择一张或多张图库图片重新生成图文 Canvas 单篇文章指定图片槽位，imageIndex=0 为封面、1+ 为内页；立即把 Canvas 暂置为 generating | keywords: article-image-regenerate, image-slot-regenerate
+- `POST /canvas/:id/articles/:articleId/images/:imageIndex/select` — 直接使用一张图库图片替换图文 Canvas 单篇文章指定图片槽位，imageIndex=0 为封面、1+ 为内页；不进入 generating | keywords: article-image-select, image-slot-select
 - `POST /canvas/:id/image-groups/:groupId/cover/regenerate` — 选择一张或多张图库图片重新生成图片组 Canvas 指定图组 role=cover；仅替换封面并把 Canvas 暂置为 generating | keywords: cover-regenerate, image-group-cover-only
 - `POST /canvas/:id/image-groups/:groupId/cover/select` — 直接使用一张图库图片设为图片组 Canvas 指定图组 role=cover；不修改其他内页图 | keywords: cover-select, image-group-cover-only
+- `POST /canvas/:id/image-groups/:groupId/images/:role/regenerate` — 选择一张或多张图库图片重新生成图片组 Canvas 指定 role（cover/inner-1~5）；立即把 Canvas 暂置为 generating 且仅替换目标图片槽位 | keywords: image-slot-regenerate, image-group-image-slot
+- `POST /canvas/:id/image-groups/:groupId/images/:role/select` — 直接使用一张图库图片替换图片组 Canvas 指定 role（cover/inner-1~5）；不修改其他图片槽位 | keywords: image-slot-select, image-group-image-slot
 - `PATCH /canvas/:id/articles/:articleId/sent` — 标记文章已发送（写入 sentAt 时间戳）
 - **关键词**: canvas, articles, image-group, outline, style, content-json, image-ids, status, sent-at, mongo, controller
 
@@ -41,15 +45,30 @@ Canvas服务。
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）
 - `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)
-- `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项 | keywords: cover-regenerate, article-cover-only
-- `startImageGroupCoverRegeneration(input)` — 启动图片组 Canvas 单组封面重生成，立即置为 generating，后台仅替换目标组 role=cover 图片 | keywords: cover-regenerate, image-group-cover-only
+- `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项，参考图最多 4 张 | keywords: cover-regenerate, article-cover-only
+- `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张 | keywords: article-image-regenerate, image-slot-regenerate
+- `startImageGroupCoverRegeneration(input)` — 启动图片组 Canvas 单组封面重生成，立即置为 generating，后台仅替换目标组 role=cover 图片，参考图最多 4 张 | keywords: cover-regenerate, image-group-cover-only
+- `startImageGroupImageRegeneration(input)` — 启动图片组 Canvas 指定图片槽位重生成，立即置为 generating，后台仅替换目标组对应 role 图片，参考图最多 4 张 | keywords: image-slot-regenerate, image-group-image-slot
 - `selectArticleCoverImage(input)` — 直接用图库图片替换图文 Canvas 单篇文章首图封面，不进入生成中状态 | keywords: cover-select, article-cover-only
+- `selectArticleImage(input)` — 直接用图库图片替换图文 Canvas 单篇文章指定图片槽位，不进入生成中状态 | keywords: article-image-select, image-slot-select
 - `selectImageGroupCoverImage(input)` — 直接用图库图片替换图组 Canvas 指定图组 role=cover 图片，不修改其他内页图 | keywords: cover-select, image-group-cover-only
+- `selectImageGroupImage(input)` — 直接用图库图片替换图组 Canvas 指定 role 图片，不修改其他图片槽位 | keywords: image-slot-select, image-group-image-slot
+- `normalizeCoverSourceIds(imageIds)` — 归一化图片槽位重生成素材图片 ID，去重并限制最多 4 张 | keywords: cover-regenerate, selected-source-images
 - `loadSelectedCoverImage(input)` — 精确读取直接设封面所选的第一张当前租户可见图库图片 | keywords: cover-select, selected-cover-image
 - `resolveGalleryImageUrl(image)` — 从图库图片解析可写回 Canvas 的原图或缩略图地址 | keywords: cover-select, selected-cover-image
 - `toSelectedCoverGroupImage(image, currentCover?, articleTitle?)` — 将图库图片转换成图组 Canvas role=cover 图片结构并沿用原封面文案 | keywords: cover-select, image-group-cover-only
-- `runArticleCoverRegeneration(input)` / `runImageGroupCoverRegeneration(input)` — 后台执行封面重生成并在成功后恢复原状态，失败时标记 requires_human | keywords: cover-regenerate, cover-only
+- `toSelectedGroupImage(image, role, currentImage?, articleTitle?)` — 将图库图片转换成图组 Canvas 指定 role 图片结构，封面会沿用原文案 | keywords: image-slot-select, image-group-image-slot
+- `normalizeImageGroupImageRole(role)` — 校验图片组 role，仅允许 cover 与 inner-1~5 | keywords: image-slot-regenerate, image-group-image-slot
+- `normalizeArticleImageIndex(imageIndex)` — 校验并归一化图文文章图片下标，当前允许 0-8 | keywords: article-image-regenerate, image-slot-regenerate
+- `assertArticleImageSlotExists(article, imageIndex)` — 校验图文文章图片槽位存在，封面槽位允许从空首图开始生成 | keywords: article-image-regenerate, image-slot-regenerate
+- `toArticleInnerRole(imageIndex)` — 将图文文章图片下标映射到内页重生成 role | keywords: article-image-regenerate, inner-regenerate
+- `runArticleCoverRegeneration(input)` — 后台执行图文文章封面重生成包装逻辑，复用 imageIndex=0 的图片槽位重生成 | keywords: cover-regenerate, article-cover-only
+- `runArticleImageRegeneration(input)` — 后台执行图文文章指定图片槽位重生成，成功后恢复原状态，失败时标记 requires_human | keywords: article-image-regenerate, image-slot-regenerate
+- `runImageGroupCoverRegeneration(input)` — 后台执行图片组封面重生成包装逻辑，复用 role=cover 的图片槽位重生成 | keywords: cover-regenerate, image-group-cover-only
+- `runImageGroupImageRegeneration(input)` — 后台执行图片组指定图片槽位重生成，成功后恢复原状态，失败时标记 requires_human | keywords: image-slot-regenerate, image-group-image-slot
+- `readArticleTagsForImageGroup(canvas, group)` — 读取图组对应文章标签，供内页重生成提示词补充语义 | keywords: inner-regenerate, image-group-image-slot
 - `replaceCoverImage(images, cover)` — 替换图片组内 role=cover 图片；原组没有封面时插入到第一位 | keywords: cover-regenerate, replace-cover-image
+- `replaceGroupImageByRole(images, nextImage)` — 按 role 替换图片组中的指定图片槽位，原槽位不存在时插入合适位置 | keywords: image-slot-regenerate, replace-image-slot
 - `prepareImageGroupsForCanvas(input)` — 只准备指定 Canvas 的图片组源图分配，不生成封面/拼图文件，用于图文生成前置不足量拦截 | keywords: prepare, allocation, canvas
 - `renderPreparedImageGroupsForCanvas(input)` — 根据预分配结果渲染图片组并回写 Canvas | keywords: render, prepared, image-group
 - `runImageGroupGeneration` — 后台异步生成图片组并回写；当统一分配发现图片不足或图组失败时将 Canvas 标记为 requires_human
@@ -64,7 +83,8 @@ Canvas服务。
 ### canvas-image-group.service.ts
 图片组生成服务。
 - `generateImageGroups` — 根据文章 tag 严格匹配图库配图（**不再跨 tag 随机补图**），先在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重；图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
-- `regenerateCoverImage(input)` — 基于用户多选图库图片一次性生成新的 3:4 Canvas 封面，并以“主题 + 补充提示词”的标准结构触发生图，写入动态封面图库；仅供封面替换链路调用 | keywords: cover-regenerate, selected-source-images
+- `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库 | keywords: cover-regenerate, selected-source-images
+- `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库 | keywords: inner-regenerate, image-group-image-slot
 - `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1） | keywords: render, prepared, image-group, concurrency
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面/内页/文案/AI封面/烧字），供并发调用 | keywords: render, single-plan, image-group, cover-text
@@ -87,7 +107,7 @@ Canvas服务。
 - `pickPortrait` — 从池中选竖图（必须全局未使用；不跨组复用，不降级为横图）
 - `pickAndMakeCollage` — 仅选 2 张全局未使用横图动态合成拼图（上下拼，640x853，等比缩放不裁切；不跨组复用，不降级为竖图/任意方向）
 - `createDynamicCollageFile` — 动态合成双图拼图（使用 sharp）
-- `persistGeneratedAssetToGallery` — 将动态封面/拼图文件写入 gallery_images（返回真实 imageId，避免 id=0 虚拟图）
+- `persistGeneratedAssetToGallery` — 将动态封面/拼图/内页文件写入 gallery_images（返回真实 imageId，避免 id=0 虚拟图）
 - `resolveGeneratedUploadFileInfo` / `getImageDimensionsFromAbsPath` — 解析生成文件路径并补齐宽高元数据
 - `burnCoverText` — 使用 sharp+SVG 将主副标题烧录到封面图（无背景框，白色描边文字）
 - `loadCoverFontFaceCss` — 加载封面字体 base64 缓存（支持 public/dist/web 三条路径）

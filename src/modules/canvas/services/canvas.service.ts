@@ -23,6 +23,20 @@ import {
 import { GalleryService } from '../../gallery/services/gallery.service.js';
 import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
 
+type CanvasGroupImageRole = CanvasImageGroup['images'][number]['role'];
+type CanvasInnerImageRole = Exclude<CanvasGroupImageRole, 'cover'>;
+
+const CANVAS_GROUP_IMAGE_ROLES: CanvasGroupImageRole[] = [
+  'cover',
+  'inner-1',
+  'inner-2',
+  'inner-3',
+  'inner-4',
+  'inner-5',
+];
+
+const MAX_ARTICLE_IMAGE_INDEX = 8;
+
 @Injectable()
 export class CanvasService {
   private readonly logger = new Logger(CanvasService.name);
@@ -423,6 +437,30 @@ export class CanvasService {
     imageIds: number[];
     prompt?: string;
   }): Promise<CanvasEntity | null> {
+    return await this.startArticleImageRegeneration({
+      ...input,
+      imageIndex: 0,
+    });
+  }
+
+  /**
+   * @description 启动图文 Canvas 单篇文章指定图片槽位重生成任务，立即把 Canvas 置为 generating。
+   * @param {object} input - 图片槽位重生成输入。
+   * @returns {Promise<CanvasEntity | null>} 已进入 generating 的 Canvas。
+   * @keyword-cn 图文内页重生成, 图片槽位重生成
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
+   */
+  async startArticleImageRegeneration(input: {
+    canvasId: number;
+    articleId: number;
+    imageIndex: number;
+    userId: string;
+    tenantId?: string;
+    imageIds: number[];
+    prompt?: string;
+  }): Promise<CanvasEntity | null> {
+    const imageIndex = this.normalizeArticleImageIndex(input.imageIndex);
     const imageIds = this.normalizeCoverSourceIds(input.imageIds);
     if (imageIds.length === 0) {
       throw new BadRequestException('COVER_SOURCE_IMAGES_REQUIRED');
@@ -434,10 +472,12 @@ export class CanvasService {
       (item) => Number(item.id) === Number(input.articleId),
     );
     if (!article) throw new NotFoundException('CANVAS_ARTICLE_NOT_FOUND');
+    this.assertArticleImageSlotExists(article, imageIndex);
     const previousStatus = canvas.status;
     await this.updateStatus(input.canvasId, 'generating', input.tenantId);
-    void this.runArticleCoverRegeneration({
+    void this.runArticleImageRegeneration({
       ...input,
+      imageIndex,
       imageIds,
       previousStatus,
     });
@@ -459,6 +499,26 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
   }): Promise<CanvasEntity | null> {
+    return await this.selectArticleImage({ ...input, imageIndex: 0 });
+  }
+
+  /**
+   * @description 直接使用用户选择的图库图片替换图文 Canvas 单篇文章指定图片槽位，不进入生成中状态。
+   * @param {object} input - 直接替换文章图片槽位的输入。
+   * @returns {Promise<CanvasEntity | null>} 更新后的 Canvas。
+   * @keyword-cn 图文内页选择, 图片槽位替换
+   * @keyword-en article-image-select
+   * @keyword-en image-slot-select
+   */
+  async selectArticleImage(input: {
+    canvasId: number;
+    articleId: number;
+    imageIndex: number;
+    userId: string;
+    tenantId?: string;
+    imageIds: number[];
+  }): Promise<CanvasEntity | null> {
+    const imageIndex = this.normalizeArticleImageIndex(input.imageIndex);
     const image = await this.loadSelectedCoverImage({
       userId: input.userId,
       tenantId: input.tenantId,
@@ -471,15 +531,16 @@ export class CanvasService {
       (item) => Number(item.id) === Number(input.articleId),
     );
     if (!article) throw new NotFoundException('CANVAS_ARTICLE_NOT_FOUND');
+    this.assertArticleImageSlotExists(article, imageIndex);
 
     const nextImageUrls = Array.isArray(article.imageUrls)
       ? [...article.imageUrls]
       : [];
-    nextImageUrls[0] = this.resolveGalleryImageUrl(image);
+    nextImageUrls[imageIndex] = this.resolveGalleryImageUrl(image);
     const nextImageIds = Array.isArray(article.imageIds)
       ? [...article.imageIds]
       : [];
-    nextImageIds[0] = Number(image.id);
+    nextImageIds[imageIndex] = Number(image.id);
     return await this.updateArticleImages(
       input.canvasId,
       article.id,
@@ -506,6 +567,26 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
   }): Promise<CanvasEntity | null> {
+    return await this.selectImageGroupImage({ ...input, role: 'cover' });
+  }
+
+  /**
+   * @description 直接使用用户选择的图库图片替换图组 Canvas 指定 role 图片，不修改其他图片槽位。
+   * @param {object} input - 直接替换图组图片槽位的输入。
+   * @returns {Promise<CanvasEntity | null>} 更新后的 Canvas。
+   * @keyword-cn 图片槽位替换, 内页选择
+   * @keyword-en image-slot-select
+   * @keyword-en image-group-image-slot
+   */
+  async selectImageGroupImage(input: {
+    canvasId: number;
+    groupId: number;
+    role: string;
+    userId: string;
+    tenantId?: string;
+    imageIds: number[];
+  }): Promise<CanvasEntity | null> {
+    const role = this.normalizeImageGroupImageRole(input.role);
     const image = await this.loadSelectedCoverImage({
       userId: input.userId,
       tenantId: input.tenantId,
@@ -519,15 +600,19 @@ export class CanvasService {
       (item) => Number(item.id) === Number(input.groupId),
     );
     if (!group) throw new NotFoundException('CANVAS_IMAGE_GROUP_NOT_FOUND');
-    const currentCover = (group.images ?? []).find((img) => img.role === 'cover');
-    const nextCover = this.toSelectedCoverGroupImage(
+    const currentImage = (group.images ?? []).find((img) => img.role === role);
+    const nextImage = this.toSelectedGroupImage(
       image,
-      currentCover,
+      role,
+      currentImage,
       group.articleTitle,
     );
     const nextGroups = groups.map((item) =>
       Number(item.id) === Number(input.groupId)
-        ? { ...item, images: this.replaceCoverImage(item.images, nextCover) }
+        ? {
+            ...item,
+            images: this.replaceGroupImageByRole(item.images, nextImage),
+          }
         : item,
     );
     await this.updateImageGroups(
@@ -595,6 +680,26 @@ export class CanvasService {
     currentCover?: CanvasImageGroup['images'][number],
     articleTitle?: string,
   ): CanvasImageGroup['images'][number] {
+    return this.toSelectedGroupImage(image, 'cover', currentCover, articleTitle);
+  }
+
+  /**
+   * @description 将图库图片转换成图组 Canvas 指定 role 图片结构，封面会沿用原封面文案。
+   * @param {GalleryImageEntity} image - 图库图片。
+   * @param {CanvasGroupImageRole} role - 目标图片槽位。
+   * @param {CanvasImageGroup['images'][number] | undefined} currentImage - 原槽位图片。
+   * @param {string | undefined} articleTitle - 图组文章标题。
+   * @returns {CanvasImageGroup['images'][number]} 新槽位图片。
+   * @keyword-cn 图片槽位替换, 内页选择
+   * @keyword-en image-slot-select
+   * @keyword-en image-group-image-slot
+   */
+  private toSelectedGroupImage(
+    image: GalleryImageEntity,
+    role: CanvasGroupImageRole,
+    currentImage?: CanvasImageGroup['images'][number],
+    articleTitle?: string,
+  ): CanvasImageGroup['images'][number] {
     const width = Number(image.width);
     const height = Number(image.height);
     return {
@@ -609,10 +714,30 @@ export class CanvasService {
             ? height >= width
             : undefined,
       tags: Array.isArray(image.tags) ? [...image.tags] : [],
-      role: 'cover',
-      text: currentCover?.text || articleTitle,
-      subtitle: currentCover?.subtitle,
+      role,
+      ...(role === 'cover'
+        ? {
+            text: currentImage?.text || articleTitle,
+            subtitle: currentImage?.subtitle,
+          }
+        : {}),
     };
+  }
+
+  /**
+   * @description 校验并归一化图组图片 role，只允许 cover 与 inner-1 到 inner-5。
+   * @param {string} role - 输入 role。
+   * @returns {CanvasGroupImageRole} 合法图片槽位 role。
+   * @keyword-cn 图片槽位校验, 内页重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  private normalizeImageGroupImageRole(role: string): CanvasGroupImageRole {
+    const normalized = String(role ?? '').trim() as CanvasGroupImageRole;
+    if (!CANVAS_GROUP_IMAGE_ROLES.includes(normalized)) {
+      throw new BadRequestException('CANVAS_IMAGE_ROLE_INVALID');
+    }
+    return normalized;
   }
 
   /**
@@ -631,6 +756,30 @@ export class CanvasService {
     imageIds: number[];
     prompt?: string;
   }): Promise<CanvasEntity | null> {
+    return await this.startImageGroupImageRegeneration({
+      ...input,
+      role: 'cover',
+    });
+  }
+
+  /**
+   * @description 启动图片组 Canvas 指定图片槽位重生成任务，立即把 Canvas 置为 generating。
+   * @param {object} input - 图片槽位重生成输入。
+   * @returns {Promise<CanvasEntity | null>} 已进入 generating 的 Canvas。
+   * @keyword-cn 内页重生成, 图片槽位重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  async startImageGroupImageRegeneration(input: {
+    canvasId: number;
+    groupId: number;
+    role: string;
+    userId: string;
+    tenantId?: string;
+    imageIds: number[];
+    prompt?: string;
+  }): Promise<CanvasEntity | null> {
+    const role = this.normalizeImageGroupImageRole(input.role);
     const imageIds = this.normalizeCoverSourceIds(input.imageIds);
     if (imageIds.length === 0) {
       throw new BadRequestException('COVER_SOURCE_IMAGES_REQUIRED');
@@ -644,8 +793,9 @@ export class CanvasService {
     if (!group) throw new NotFoundException('CANVAS_IMAGE_GROUP_NOT_FOUND');
     const previousStatus = canvas.status;
     await this.updateStatus(input.canvasId, 'generating', input.tenantId);
-    void this.runImageGroupCoverRegeneration({
+    void this.runImageGroupImageRegeneration({
       ...input,
+      role,
       imageIds,
       previousStatus,
     });
@@ -668,7 +818,7 @@ export class CanvasService {
   }
 
   /**
-   * @description 归一化封面重生成素材图片 ID，去重并限制最大数量。
+   * @description 归一化图片槽位重生成素材图片 ID，去重并限制最多 4 张。
    * @param {number[]} imageIds - 输入图片 ID 列表。
    * @returns {number[]} 可用图片 ID 列表。
    * @keyword-cn 封面重生成, 图片选择
@@ -683,7 +833,61 @@ export class CanvasService {
           .filter((id) => Number.isFinite(id) && id > 0)
           .map((id) => Math.floor(id)),
       ),
-    ).slice(0, 8);
+    ).slice(0, 4);
+  }
+
+  /**
+   * @description 校验并归一化图文文章图片下标，前端最多展示 9 张图。
+   * @param {number} imageIndex - 输入图片下标。
+   * @returns {number} 合法图片下标。
+   * @keyword-cn 图文内页重生成, 图片下标
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
+   */
+  private normalizeArticleImageIndex(imageIndex: number): number {
+    const index = Number(imageIndex);
+    if (!Number.isFinite(index)) {
+      throw new BadRequestException('ARTICLE_IMAGE_INDEX_INVALID');
+    }
+    const normalized = Math.floor(index);
+    if (normalized < 0 || normalized > MAX_ARTICLE_IMAGE_INDEX) {
+      throw new BadRequestException('ARTICLE_IMAGE_INDEX_INVALID');
+    }
+    return normalized;
+  }
+
+  /**
+   * @description 校验图文文章图片槽位存在；封面槽位允许从空首图开始生成。
+   * @param {CanvasArticleEntity} article - Canvas 文章。
+   * @param {number} imageIndex - 图片下标。
+   * @returns {void}
+   * @keyword-cn 图文内页重生成, 图片槽位校验
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
+   */
+  private assertArticleImageSlotExists(
+    article: CanvasArticleEntity,
+    imageIndex: number,
+  ): void {
+    if (imageIndex === 0) return;
+    const urls = Array.isArray(article.imageUrls) ? article.imageUrls : [];
+    const url = String(urls[imageIndex] ?? '').trim();
+    if (!url) {
+      throw new NotFoundException('ARTICLE_IMAGE_SLOT_NOT_FOUND');
+    }
+  }
+
+  /**
+   * @description 将图文文章图片下标转换为内页生成 role 文案。
+   * @param {number} imageIndex - 图片下标。
+   * @returns {CanvasInnerImageRole} 内页 role。
+   * @keyword-cn 图文内页重生成, 内页角色
+   * @keyword-en article-image-regenerate
+   * @keyword-en inner-regenerate
+   */
+  private toArticleInnerRole(imageIndex: number): CanvasInnerImageRole {
+    const innerIndex = Math.max(1, Math.min(5, Math.floor(imageIndex)));
+    return `inner-${innerIndex}` as CanvasInnerImageRole;
   }
 
   /**
@@ -715,31 +919,64 @@ export class CanvasService {
     prompt?: string;
     previousStatus: CanvasStatus;
   }): Promise<void> {
+    await this.runArticleImageRegeneration({ ...input, imageIndex: 0 });
+  }
+
+  /**
+   * @description 后台执行图文 Canvas 单篇文章指定图片槽位重生成，只替换目标 imageUrls/imageIds 下标。
+   * @param {object} input - 后台任务参数。
+   * @returns {Promise<void>}
+   * @keyword-cn 图文内页重生成, 图片槽位重生成
+   * @keyword-en article-image-regenerate
+   * @keyword-en image-slot-regenerate
+   */
+  private async runArticleImageRegeneration(input: {
+    canvasId: number;
+    articleId: number;
+    imageIndex: number;
+    userId: string;
+    tenantId?: string;
+    imageIds: number[];
+    prompt?: string;
+    previousStatus: CanvasStatus;
+  }): Promise<void> {
     try {
       const canvas = await this.get(input.canvasId, input.tenantId);
       const article = (canvas?.articles ?? []).find(
         (item) => Number(item.id) === Number(input.articleId),
       );
       if (!canvas || !article) throw new Error('CANVAS_ARTICLE_NOT_FOUND');
-      const cover = await this.imageGroupService.regenerateCoverImage({
-        userId: input.userId,
-        tenantId: input.tenantId,
-        topic: canvas.topic,
-        articleTitle: article.title,
-        articleTags: Array.isArray(article.tags) ? article.tags : [],
-        prompt: input.prompt,
-        sourceImageIds: input.imageIds,
-        existingCoverText: { title: article.title },
-      });
+      this.assertArticleImageSlotExists(article, input.imageIndex);
+      const nextImage =
+        input.imageIndex === 0
+          ? await this.imageGroupService.regenerateCoverImage({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: canvas.topic,
+              articleTitle: article.title,
+              articleTags: Array.isArray(article.tags) ? article.tags : [],
+              prompt: input.prompt,
+              sourceImageIds: input.imageIds,
+            })
+          : await this.imageGroupService.regenerateInnerImage({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: canvas.topic,
+              articleTitle: article.title,
+              articleTags: Array.isArray(article.tags) ? article.tags : [],
+              role: this.toArticleInnerRole(input.imageIndex),
+              prompt: input.prompt,
+              sourceImageIds: input.imageIds,
+            });
       const nextImageUrls = Array.isArray(article.imageUrls)
         ? [...article.imageUrls]
         : [];
-      nextImageUrls[0] = cover.url;
+      nextImageUrls[input.imageIndex] = nextImage.url;
       const nextImageIds = Array.isArray(article.imageIds)
         ? [...article.imageIds]
         : [];
-      if (Number.isFinite(Number(cover.imageId))) {
-        nextImageIds[0] = Number(cover.imageId);
+      if (Number.isFinite(Number(nextImage.imageId))) {
+        nextImageIds[input.imageIndex] = Number(nextImage.imageId);
       }
       await this.updateArticleImages(
         input.canvasId,
@@ -758,7 +995,7 @@ export class CanvasService {
     } catch (err) {
       await this.updateStatus(input.canvasId, 'requires_human', input.tenantId);
       this.logger.error(
-        `[canvas-cover] article_cover_regenerate_failed canvasId=${input.canvasId} articleId=${input.articleId}`,
+        `[canvas-article-image] article_image_regenerate_failed canvasId=${input.canvasId} articleId=${input.articleId} imageIndex=${input.imageIndex}`,
         err instanceof Error ? err.stack : String(err),
       );
     }
@@ -781,6 +1018,27 @@ export class CanvasService {
     prompt?: string;
     previousStatus: CanvasStatus;
   }): Promise<void> {
+    await this.runImageGroupImageRegeneration({ ...input, role: 'cover' });
+  }
+
+  /**
+   * @description 后台执行图片组 Canvas 指定图片槽位重生成，只替换目标组对应 role 的图片。
+   * @param {object} input - 后台任务参数。
+   * @returns {Promise<void>}
+   * @keyword-cn 内页重生成, 图片槽位重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  private async runImageGroupImageRegeneration(input: {
+    canvasId: number;
+    groupId: number;
+    role: CanvasGroupImageRole;
+    userId: string;
+    tenantId?: string;
+    imageIds: number[];
+    prompt?: string;
+    previousStatus: CanvasStatus;
+  }): Promise<void> {
     try {
       const canvas = await this.get(input.canvasId, input.tenantId);
       const groups = Array.isArray(canvas?.imageGroups)
@@ -790,24 +1048,32 @@ export class CanvasService {
         (item) => Number(item.id) === Number(input.groupId),
       );
       if (!canvas || !group) throw new Error('CANVAS_IMAGE_GROUP_NOT_FOUND');
-      const currentCover = (group.images ?? []).find(
-        (img) => img.role === 'cover',
-      );
-      const cover = await this.imageGroupService.regenerateCoverImage({
-        userId: input.userId,
-        tenantId: input.tenantId,
-        topic: canvas.topic,
-        articleTitle: group.articleTitle,
-        prompt: input.prompt,
-        sourceImageIds: input.imageIds,
-        existingCoverText: {
-          title: currentCover?.text || group.articleTitle,
-          subtitle: currentCover?.subtitle,
-        },
-      });
+      const nextImage =
+        input.role === 'cover'
+          ? await this.imageGroupService.regenerateCoverImage({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: canvas.topic,
+              articleTitle: group.articleTitle,
+              prompt: input.prompt,
+              sourceImageIds: input.imageIds,
+            })
+          : await this.imageGroupService.regenerateInnerImage({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: canvas.topic,
+              articleTitle: group.articleTitle,
+              articleTags: this.readArticleTagsForImageGroup(canvas, group),
+              role: input.role as CanvasInnerImageRole,
+              prompt: input.prompt,
+              sourceImageIds: input.imageIds,
+            });
       const nextGroups = groups.map((item) =>
         Number(item.id) === Number(input.groupId)
-          ? { ...item, images: this.replaceCoverImage(item.images, cover) }
+          ? {
+              ...item,
+              images: this.replaceGroupImageByRole(item.images, nextImage),
+            }
           : item,
       );
       await this.updateImageGroups(
@@ -824,10 +1090,33 @@ export class CanvasService {
     } catch (err) {
       await this.updateStatus(input.canvasId, 'requires_human', input.tenantId);
       this.logger.error(
-        `[canvas-cover] image_group_cover_regenerate_failed canvasId=${input.canvasId} groupId=${input.groupId}`,
+        `[canvas-image-slot] image_group_image_regenerate_failed canvasId=${input.canvasId} groupId=${input.groupId} role=${input.role}`,
         err instanceof Error ? err.stack : String(err),
       );
     }
+  }
+
+  /**
+   * @description 读取图组对应文章标签，供内页重生成提示词补充语义。
+   * @param {CanvasEntity} canvas - Canvas 实体。
+   * @param {CanvasImageGroup} group - 图片组实体。
+   * @returns {string[]} 标签列表。
+   * @keyword-cn 内页重生成, 文章标签
+   * @keyword-en inner-regenerate
+   * @keyword-en image-group-image-slot
+   */
+  private readArticleTagsForImageGroup(
+    canvas: CanvasEntity,
+    group: CanvasImageGroup,
+  ): string[] {
+    const article = (canvas.articles ?? []).find(
+      (item) => Number(item.id) === Number(group.articleId),
+    );
+    if (Array.isArray(article?.tags)) return article.tags;
+    const byTitle = (canvas.articles ?? []).find(
+      (item) => String(item.title ?? '') === String(group.articleTitle ?? ''),
+    );
+    return Array.isArray(byTitle?.tags) ? byTitle.tags : [];
   }
 
   /**
@@ -843,13 +1132,35 @@ export class CanvasService {
     images: CanvasImageGroup['images'],
     cover: CanvasImageGroup['images'][number],
   ): CanvasImageGroup['images'] {
+    return this.replaceGroupImageByRole(images, cover);
+  }
+
+  /**
+   * @description 按 role 替换图片组中的指定图片槽位，若原槽位不存在则追加到封面后或列表末尾。
+   * @param {CanvasImageGroup['images']} images - 原图片列表。
+   * @param {CanvasImageGroup['images'][number]} nextImage - 新图片。
+   * @returns {CanvasImageGroup['images']} 替换后的图片列表。
+   * @keyword-cn 图片槽位替换, 内页重生成
+   * @keyword-en image-slot-regenerate
+   * @keyword-en replace-image-slot
+   */
+  private replaceGroupImageByRole(
+    images: CanvasImageGroup['images'],
+    nextImage: CanvasImageGroup['images'][number],
+  ): CanvasImageGroup['images'] {
     const list = Array.isArray(images) ? [...images] : [];
-    const coverIndex = list.findIndex((img) => img.role === 'cover');
-    if (coverIndex >= 0) {
-      list[coverIndex] = cover;
+    const roleIndex = list.findIndex((img) => img.role === nextImage.role);
+    if (roleIndex >= 0) {
+      list[roleIndex] = nextImage;
       return list;
     }
-    return [cover, ...list];
+    if (nextImage.role === 'cover') return [nextImage, ...list];
+    const coverIndex = list.findIndex((img) => img.role === 'cover');
+    if (coverIndex >= 0) {
+      list.splice(coverIndex + 1, 0, nextImage);
+      return list;
+    }
+    return [...list, nextImage];
   }
 
   /**
