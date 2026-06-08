@@ -67,6 +67,10 @@ jobs:
             echo "docker not found on runner"
             exit 1
           fi
+          if ! docker compose version >/dev/null 2>&1; then
+            echo "docker compose plugin not found on runner"
+            exit 1
+          fi
           docker info >/dev/null
 
           REF_NAME="${GITHUB_REF_NAME:-manual}"
@@ -74,6 +78,8 @@ jobs:
           SHORT_SHA="$(git rev-parse --short=12 HEAD)"
           IMAGE_REPO="ai-manger-newnew"
           IMAGE="${IMAGE_REPO}:${SAFE_REF}-${SHORT_SHA}"
+          COMPOSE_PROJECT_NAME="ai-manger-newnew"
+          COMPOSE_FILE_PATH="server/docker-compose.newnew.yml"
 
           echo "Build image: $IMAGE"
           docker build \
@@ -101,28 +107,31 @@ jobs:
             exit 1
           fi
 
-          docker volume create ai_manger_newnew_uploads >/dev/null
-          docker volume create ai_manger_newnew_uploads_thumbs >/dev/null
-          docker volume create ai_manger_newnew_uploads_zips >/dev/null
-          docker volume create ai_manger_newnew_data >/dev/null
-          docker volume create ai_manger_newnew_storage >/dev/null
+          existing_container="$(docker ps -aq -f "name=^/${CONTAINER_NAME}$" || true)"
+          if [ -n "$existing_container" ]; then
+            existing_project="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
+            if [ "$existing_project" != "$COMPOSE_PROJECT_NAME" ]; then
+              echo "Remove legacy non-compose container: $CONTAINER_NAME"
+              docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+            fi
+          fi
 
-          docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          export AI_MANGER_NEWNEW_IMAGE="$IMAGE"
+          export NEWNEW_ENV_FILE="$ENV_FILE"
+          export APP_PORT="$APP_PORT"
+          export CONTAINER_NAME="$CONTAINER_NAME"
 
-          docker run -d \
-            --name "$CONTAINER_NAME" \
-            --restart unless-stopped \
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
             --env-file "$ENV_FILE" \
-            -e NODE_ENV=production \
-            -e PORT=3011 \
-            --add-host host.docker.internal:host-gateway \
-            -p "${APP_PORT}:3011" \
-            -v ai_manger_newnew_uploads:/app/public/uploads \
-            -v ai_manger_newnew_uploads_thumbs:/app/public/uploads_thumbs \
-            -v ai_manger_newnew_uploads_zips:/app/public/uploads_zips \
-            -v ai_manger_newnew_data:/app/data \
-            -v ai_manger_newnew_storage:/app/storage \
-            "$IMAGE"
+            -f "$COMPOSE_FILE_PATH" \
+            config >/dev/null
+
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            up -d --remove-orphans
 
           healthy=0
           for _ in $(seq 1 40); do
@@ -136,7 +145,21 @@ jobs:
             sleep 2
           done
 
-          echo "=== Container logs ==="
+          echo "=== Compose status ==="
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            ps || true
+
+          echo "=== MongoDB logs ==="
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            logs --tail 80 mongodb || true
+
+          echo "=== App logs ==="
           docker logs "$CONTAINER_NAME" --tail 120 || true
 
           rm -f "$ENV_FILE"

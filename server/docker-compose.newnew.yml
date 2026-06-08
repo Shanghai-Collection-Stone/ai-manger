@@ -1,0 +1,131 @@
+name: ai-manger-newnew
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: ${MONGO_CONTAINER_NAME:-ai_manger_newnew_mongodb}
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:?set MONGODB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASS:?set MONGODB_PASS}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB:-ai_system_newnew}
+    volumes:
+      - ai_manger_newnew_mongo_data:/data/db
+      - ai_manger_newnew_mongo_config:/data/configdb
+    networks:
+      - newnew
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet -u \"$${MONGO_INITDB_ROOT_USERNAME}\" -p \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  app:
+    image: ${AI_MANGER_NEWNEW_IMAGE:?set AI_MANGER_NEWNEW_IMAGE}
+    container_name: ${CONTAINER_NAME:-ai_manger_newnew_app}
+    restart: unless-stopped
+    env_file:
+      - ${NEWNEW_ENV_FILE:-../.env.newnew}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3011
+
+      MONGODB_HOST: mongodb
+      MONGODB_PORT: 27017
+      MONGODB_USER: ${MONGODB_USER:?set MONGODB_USER}
+      MONGODB_PASS: ${MONGODB_PASS:?set MONGODB_PASS}
+      MONGODB_DB: ${MONGODB_DB:-ai_system_newnew}
+      MONGODB_AUTH_SOURCE: admin
+      MONGODB_TOPOLOGY: standalone
+      MONGODB_URI: ${MONGODB_URI:-mongodb://${MONGODB_USER}:${MONGODB_PASS}@mongodb:27017/?authSource=admin&directConnection=true}
+
+      ADMIN_BOOTSTRAP_USERNAME: ${ADMIN_BOOTSTRAP_USERNAME:-admin}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?set ADMIN_BOOTSTRAP_PASSWORD}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:?set ADMIN_JWT_SECRET}
+
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      APP_URL: ${APP_URL:-}
+      BASE_URL: ${BASE_URL:-}
+      TASK_API_BASE_URL: ${TASK_API_BASE_URL:-}
+
+      PROXY_ENABLED: ${PROXY_ENABLED:-false}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,mongodb,ai_manger_newnew_mongodb}
+
+      SUPER_PARTY_MONGODB_HOST: ${SUPER_PARTY_MONGODB_HOST:-}
+      SUPER_PARTY_MONGODB_PORT: ${SUPER_PARTY_MONGODB_PORT:-27017}
+      SUPER_PARTY_MONGODB_DB: ${SUPER_PARTY_MONGODB_DB:-}
+      SUPER_PARTY_MONGODB_USER: ${SUPER_PARTY_MONGODB_USER:-}
+      SUPER_PARTY_MONGODB_PASS: ${SUPER_PARTY_MONGODB_PASS:-}
+      SUPER_PARTY_MONGODB_AUTH_SOURCE: ${SUPER_PARTY_MONGODB_AUTH_SOURCE:-}
+
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+
+      MEITU_AK: ${MEITU_AK:-}
+      MEITU_SK: ${MEITU_SK:-}
+      OPEN_CLAW_AK: ${OPEN_CLAW_AK:-}
+      OPEN_CLAW_SK: ${OPEN_CLAW_SK:-}
+      MEITU_CLI_BIN: ${MEITU_CLI_BIN:-}
+
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      IMAGE_GROUP_RENDER_CONCURRENCY: ${IMAGE_GROUP_RENDER_CONCURRENCY:-1}
+      COVER_FONT_PATH: ${COVER_FONT_PATH:-}
+      DECISION_PROVIDER: ${DECISION_PROVIDER:-}
+      DECISION_MODEL: ${DECISION_MODEL:-}
+      TOOL_DEBUG: ${TOOL_DEBUG:-}
+
+      MCP_STORAGE_DIR: ${MCP_STORAGE_DIR:-/app/storage/mcp}
+      MCP_TOOL_TIMEOUT_MS: ${MCP_TOOL_TIMEOUT_MS:-}
+
+      FINANCE_PUSH_WEBHOOK_SECRET: ${FINANCE_PUSH_WEBHOOK_SECRET:-}
+      FINANCE_WEBHOOK_SECRET: ${FINANCE_WEBHOOK_SECRET:-}
+      SASS_SYNC_ORDER_SCHEMA_ID: ${SASS_SYNC_ORDER_SCHEMA_ID:-}
+      SASS_SYNC_USAGE_SCHEMA_ID: ${SASS_SYNC_USAGE_SCHEMA_ID:-}
+      SASS_SYNC_REFUND_SCHEMA_ID: ${SASS_SYNC_REFUND_SCHEMA_ID:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${APP_PORT:-3011}:3011"
+    volumes:
+      - ai_manger_newnew_uploads:/app/public/uploads
+      - ai_manger_newnew_uploads_thumbs:/app/public/uploads_thumbs
+      - ai_manger_newnew_uploads_zips:/app/public/uploads_zips
+      - ai_manger_newnew_data:/app/data
+      - ai_manger_newnew_storage:/app/storage
+    networks:
+      - newnew
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3011/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+networks:
+  newnew:
+    name: ai_manger_newnew_network
+
+volumes:
+  ai_manger_newnew_mongo_data:
+  ai_manger_newnew_mongo_config:
+  ai_manger_newnew_uploads:
+  ai_manger_newnew_uploads_thumbs:
+  ai_manger_newnew_uploads_zips:
+  ai_manger_newnew_data:
+  ai_manger_newnew_storage:
