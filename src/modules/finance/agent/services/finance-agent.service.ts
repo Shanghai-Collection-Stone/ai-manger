@@ -53,6 +53,8 @@ DSL 产出会推送到外部财务系统的 \`POST /api/v1/events/upsert\` 统�
 | dueAt | ✗ date YYYY-MM-DD | 到期日 | 应收/应付才有 |
 | settledAt | ✗ date YYYY-MM-DD | 实际现金流日 | stage='settled' 必填,其他可省 |
 | bankAccount | ✗ string | 银行账户名 | 银行流水类高频 |
+| balance | ✗ number | 交易后账户余额 | 银行流水类可选;源数据有余额字段时映射 |
+| isLatest | ✗ boolean | 是否最新余额流水 | 银行流水类可选;字段名必须是 camelCase \`isLatest\`,不要写成 \`is_latest\` |
 | serial_no | ✗ string | 外部交易/单据流水号(对账用) | **字段名故意 snake_case 与外部 wire 对齐,不要写成 serialNo**。常见映射:银行流水→\`from:"交易流水号"\` / \`"凭证号"\` / \`"业务流水号"\`;飞书审批→\`from:"serial_number"\` 或 meta 里的 \`__serial\`(审批读取器已自动注入)。仅用于人/系统对账可见,与 \`externalId\`(系统幂等主键)是两回事——不要二选一,值不同时两者都给 |
 | department | ✗ string | 部门 | 报销类高频 |
 | companyId | ✗ string | 归属法人公司 ID | 用 compute:lookup 从源字段(如"公司"、"账户")映射 |

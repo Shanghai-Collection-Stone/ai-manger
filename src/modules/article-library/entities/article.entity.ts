@@ -38,6 +38,8 @@ export interface ArticleEntity extends ArticleContent {
   sourceRef?: {
     canvasId?: number;
     canvasArticleId?: number;
+    featuredWorkspaceId?: number;
+    featuredPageId?: string;
   };
   createdAt: Date;
   updatedAt: Date;
@@ -56,6 +58,8 @@ export interface ArticleCreateInput extends ArticleContent {
   sourceRef?: {
     canvasId?: number;
     canvasArticleId?: number;
+    featuredWorkspaceId?: number;
+    featuredPageId?: string;
   };
 }
 

@@ -1,0 +1,73 @@
+FROM node:20-alpine AS root-deps
+
+WORKDIR /app
+
+RUN npm i -g pnpm@9
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+FROM node:20-alpine AS web-deps
+
+WORKDIR /app
+
+RUN npm i -g pnpm@9
+
+COPY web/package.json web/pnpm-lock.yaml ./web/
+RUN pnpm --dir web install --frozen-lockfile --prod=false
+
+FROM node:20-alpine AS prod-deps
+
+WORKDIR /app
+
+RUN npm i -g pnpm@9
+
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
+
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+RUN npm i -g pnpm@9
+
+COPY --from=root-deps /app/node_modules ./node_modules
+COPY --from=web-deps /app/web/node_modules ./web/node_modules
+COPY . .
+
+RUN pnpm run build
+RUN cd web && pnpm run build
+
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3011
+ENV PATH=/usr/local/bin:$PATH
+
+RUN npm i -g meitu-cli
+
+COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/config ./config
+COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
+
+RUN mkdir -p \
+  public/uploads \
+  public/uploads_thumbs \
+  public/uploads_zips \
+  data/cache \
+  storage/mcp
+
+EXPOSE 3011
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT:-3011}/" >/dev/null || exit 1
+
+CMD ["sh", "-lc", "AK=${MEITU_AK:-$OPEN_CLAW_AK}; SK=${MEITU_SK:-$OPEN_CLAW_SK}; if [ -n \"$AK\" ]; then meitu config set-ak --value \"$AK\"; fi; if [ -n \"$SK\" ]; then meitu config set-sk --value \"$SK\"; fi; if [ -z \"$MONGODB_URI\" ] && [ -n \"$MONGO_URI\" ]; then export MONGODB_URI=\"$MONGO_URI\"; fi; if [ -z \"$MONGODB_URI\" ] && [ -n \"$MONGO_URL\" ]; then export MONGODB_URI=\"$MONGO_URL\"; fi; if [ -z \"$MONGODB_URI\" ] && [ -n \"$MONGODB_URL\" ]; then export MONGODB_URI=\"$MONGODB_URL\"; fi; if [ -z \"$MONGODB_DB\" ] && [ -n \"$MONGO_DB_NAME\" ]; then export MONGODB_DB=\"$MONGO_DB_NAME\"; fi; if [ -z \"$MONGODB_DB\" ] && [ -n \"$MONGO_DB\" ]; then export MONGODB_DB=\"$MONGO_DB\"; fi; if [ -n \"$MONGODB_DOCKER_HOST\" ] && [ -n \"$MONGODB_URI\" ]; then export MONGODB_URI=\"$(printf '%s' \"$MONGODB_URI\" | sed \"s/127\\.0\\.0\\.1/$MONGODB_DOCKER_HOST/g; s/localhost/$MONGODB_DOCKER_HOST/g\")\"; fi; if [ -z \"$MONGODB_URI\" ]; then echo \"Warning: MONGODB_URI is empty (aliases: MONGO_URI/MONGO_URL/MONGODB_URL). App may fallback to localhost:27017.\"; fi; if [ -n \"$MONGODB_URI\" ] && [ -z \"$MONGODB_DOCKER_HOST\" ] && echo \"$MONGODB_URI\" | grep -E -q '://([^@/]*@)?(localhost|127\\.0\\.0\\.1)(:|/|$)'; then echo \"Warning: MONGODB_URI points to localhost/127.0.0.1 inside container. Use external host/IP, or set MONGODB_DOCKER_HOST.\"; fi; exec node dist/main.js"]

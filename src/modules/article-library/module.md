@@ -25,6 +25,7 @@
 - **类型**:
   - `ArticleContent`: 文章内容载荷（title/tags/contentJson/text/imageUrls）
   - `ArticleEntity`: 文章实体（publishStatus / lockExpireAt / lastLeaseToken 等）
+  - `ArticleEntity.sourceRef`: 来源引用，支持 canvas 来源与 featured-article 的 `featuredWorkspaceId` / `featuredPageId`
   - `ArticleCreateInput`: 入库入参
   - `ArticleUpdateInput`: 更新入参
   - `ArticleLeaseResult`: 领取返回（article + leaseToken + leaseExpireAt）

@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck, FileArchive
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck, FileArchive, FileText
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import XhsSpecialistView from './XhsSpecialistView';
@@ -8,13 +8,14 @@ import CanvasFeedView from './CanvasFeedView';
 import ImageGroupCanvasView from './ImageGroupCanvasView';
 import ChatBIView from './ChatBIView';
 import ArticleLibraryView from './ArticleLibraryView';
+import FeaturedArticleView from './FeaturedArticleView';
 import AntiDetectionView from './AntiDetectionView';
 import GalleryZipImportPanel from './GalleryZipImportPanel';
 import { showToast } from './blocks/shared';
 
 /**
  * @description Tools View for AI Commander, including AI Gallery
- * @keyword-en ToolsView
+ * @keyword-en tools-view
  */
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
@@ -2394,11 +2395,16 @@ const GalleryView = ({ onBack }) => {
 
 /**
  * @description ToolsView — 工具入口页，包含图库、思维链路、Canvas管理、小红书专家入口。
- * @keyword-en ToolsView, tools, gallery, canvas, xhs-specialist
+ * @keyword-en tools-view
+ * @keyword-en tools
+ * @keyword-en gallery
+ * @keyword-en canvas
+ * @keyword-en xhs-specialist
+ * @keyword-en featured-article
  * @param {{ onThoughtRouteChange?: Function }} props
  */
 const ToolsView = ({ onThoughtRouteChange }) => {
-  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'article-library' | 'anti-detection'
+  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'article-library' | 'featured-article' | 'anti-detection'
 
   // ── Canvas 管理状态 ──────────────────────────────────────────
   const [canvases, setCanvases] = useState([]);
@@ -2489,6 +2495,9 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   }
   if (view === 'article-library') {
     return <ArticleLibraryView onBack={() => setView('list')} />;
+  }
+  if (view === 'featured-article') {
+    return <FeaturedArticleView onBack={() => setView('list')} />;
   }
   if (view === 'anti-detection') {
     return <AntiDetectionView onBack={() => setView('list')} />;
@@ -2752,6 +2761,25 @@ const ToolsView = ({ onThoughtRouteChange }) => {
           <span className="text-xs text-slate-400 mt-1.5 z-10 whitespace-nowrap">去除 AI 生图指纹</span>
 
           <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-teal-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+
+        {/* Featured Article Card */}
+        <div
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-emerald-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => setView('featured-article')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-emerald-500 to-lime-600 flex items-center justify-center mb-4 text-white shadow-emerald-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <FileText size={30} />
+          </div>
+
+          <span className="font-bold text-slate-800 text-lg z-10">精选文章</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">选题与图文编辑</span>
+
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-emerald-500">
              <ChevronLeft size={18} className="rotate-180" />
           </div>
         </div>

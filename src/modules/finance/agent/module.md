@@ -66,4 +66,4 @@ Finance-Agent
 
 ## 模块功能描述 (Module Feature Description)
 
-控制器负责 admin 鉴权和 HTTP/SSE 输出;服务层负责把前端历史消息转换为 LangChain message 并装入系统提示词与财务工具。工具层始终基于 admin user 解析租户边界,并在 source sample/dry-run 时注入 `source_alias`,便于 DSL 行级映射 companyId、storeId 与 bankAccount。系统提示词要求 financial_event 产出 `attributedPeriod` 归属年月(`YYYY-MM`),并明确它与交易/业务发生日期 `occurredAt`、现金流日期 `settledAt` 分开维护。
+控制器负责 admin 鉴权和 HTTP/SSE 输出;服务层负责把前端历史消息转换为 LangChain message 并装入系统提示词与财务工具。工具层始终基于 admin user 解析租户边界,并在 source sample/dry-run 时注入 `source_alias`,便于 DSL 行级映射 companyId、storeId 与 bankAccount。系统提示词要求 financial_event 产出 `attributedPeriod` 归属年月(`YYYY-MM`),并明确它与交易/业务发生日期 `occurredAt`、现金流日期 `settledAt` 分开维护;银行流水可选透传 `balance` 与 `isLatest`。

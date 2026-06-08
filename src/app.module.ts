@@ -25,6 +25,7 @@ import { MongoQueryModule } from './modules/mongo-query/mongo-query.module.js';
 import { DashboardConfigModule } from './modules/dashboard-config/dashboard-config.module.js';
 import { ImageAntiDetectionModule } from './modules/image-anti-detection/image-anti-detection.module.js';
 import { ArticleLibraryModule } from './modules/article-library/article-library.module.js';
+import { FeaturedArticleModule } from './modules/featured-article/featured-article.module.js';
 import { TenantCredentialModule } from './modules/tenant-credential/tenant-credential.module.js';
 import { FinanceModule } from './modules/finance/finance.module.js';
 
@@ -57,6 +58,7 @@ import { FinanceModule } from './modules/finance/finance.module.js';
     DashboardConfigModule,
     ImageAntiDetectionModule,
     ArticleLibraryModule,
+    FeaturedArticleModule,
     TenantCredentialModule,
     FinanceModule,
   ],

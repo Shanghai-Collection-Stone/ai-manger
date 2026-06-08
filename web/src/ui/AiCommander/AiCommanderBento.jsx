@@ -32,7 +32,8 @@ import {
 
 /**
  * @description AI 指挥官 Bento 风格主界面组件
- * @keyword-en AiCommanderBento
+ * @keyword-en ai-commander-bento
+ * @keyword-en full-screen-tools
  * @returns {JSX.Element} AiCommanderBento component
  */
 const AiCommanderBento = () => {
@@ -326,7 +327,7 @@ const AiCommanderBento = () => {
       {/* 核心内容区 (可滚动) */}
       <div 
         ref={scrollRef}
-        className={`flex-1 overflow-y-auto pb-[calc(7.5rem+env(safe-area-inset-bottom))] ${(activeTab === 'tools' && isThoughtRouteActive) ? 'px-0 pt-0' : 'px-4'} custom-scrollbar ${
+        className={`flex-1 overflow-y-auto ${(activeTab === 'tools' && isThoughtRouteActive) ? 'pb-0 px-0 pt-0' : 'pb-[calc(7.5rem+env(safe-area-inset-bottom))] px-4'} custom-scrollbar ${
           slideDir === 'right' ? 'animate-slide-in-right' : 
           slideDir === 'left' ? 'animate-slide-in-left' : ''
         }`}
@@ -353,6 +354,7 @@ const AiCommanderBento = () => {
       </div>
 
       {/* 极简毛玻璃底部导航 */}
+      {!(activeTab === 'tools' && isThoughtRouteActive) && (
       <div className="fixed bottom-0 w-full h-[calc(5rem+env(safe-area-inset-bottom))] bg-white/80 backdrop-blur-xl border-t border-slate-100 flex items-center px-2 pb-[calc(1rem+env(safe-area-inset-bottom))] z-40">
         <div className="flex-1 flex justify-around">
           <NavItem icon={<LayoutDashboard size={22} />} label="看板" isActive={activeTab === 'dashboard'} onClick={() => $activeTab.set('dashboard')} />
@@ -390,6 +392,7 @@ const AiCommanderBento = () => {
           <NavItem icon={<LayoutGrid size={22} />} label="工具" isActive={activeTab === 'tools'} onClick={() => $activeTab.set('tools')} />
         </div>
       </div>
+      )}
       {canvasFocusId ? (
         <div className="fixed inset-0 z-50 bg-white flex flex-col h-[100dvh]">
           <CanvasFeedView

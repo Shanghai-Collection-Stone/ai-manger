@@ -251,6 +251,8 @@ tenant (租户/SaaS 客户)
 | `dueAt`            | `YYYY-MM-DD`                                                  | ✗    | 到期日(应收/应付才有)                                                 |
 | `settledAt`        | `YYYY-MM-DD`                                                  | ✗    | 实际现金流日(`stage='settled'` 时填)                                  |
 | `bankAccount`      | string                                                        | ✗    | 银行账户名(银行流水类高频)                                            |
+| `balance`          | decimal(string 推荐)                                          | ✗    | 交易后账户余额(银行流水类可选)                                        |
+| `isLatest`         | boolean                                                       | ✗    | 是否最新余额流水(银行流水类可选)                                      |
 | `department`       | string                                                        | ✗    | 部门(报销类高频)                                                      |
 | `companyId`        | string                                                        | ✗    | 归属法人公司 ID                                                       |
 | `storeId`          | string                                                        | ✗    | 归属门店 ID                                                           |
@@ -554,6 +556,8 @@ interface FinancialEventInput {
   dueAt?: string;
   settledAt?: string;
   bankAccount?: string;
+  balance?: string | number;
+  isLatest?: boolean;
   department?: string;
   storeId?: string;
   companyId?: string;

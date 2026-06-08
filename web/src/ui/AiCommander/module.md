@@ -4,6 +4,14 @@
 
 ## 文件清单
 
+### AiCommanderBento.jsx
+
+AI 指挥官 Bento 风格主界面组件。负责底部主导航、顶部控制台、工具内部页全屏状态和各主 Tab 的常驻渲染；当工具页进入内部视图时隐藏顶部控制台与底部导航，并取消底部安全区占位。
+
+- **关键词**: ai-commander-bento, full-screen-tools
+- **函数**:
+  - `AiCommanderBento()` — 渲染 AI 指挥官主壳并控制工具内部页全屏导航隐藏 | keywords: ai-commander-bento, full-screen-tools
+
 ### ChatBIView.jsx
 
 AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-select-it**、**handoff-it** 内联卡片（含异步轮询/详情 Modal/选标签弹窗/supervisor 路由切换胶囊）。底部输入区在 flex 流内占位，textarea 变高时消息列表自动让出高度，避免最后一段上下文被遮挡。`handleSend(overrideText?)` 接受可选参数,卡片回写时直接调用以用户消息形式发送 tags("我选定标签：#A #B")。
@@ -47,13 +55,13 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 ### ToolsView.jsx
 
-工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库入口五大模块。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。
+工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库、精选文章入口。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。
 
-- **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, article-library, zip-import, responsive, icon-collapse
+- **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, article-library, featured-article, zip-import, responsive, icon-collapse
 - **函数**:
   - `GalleryView`: 图库管理视图（含对话/图库/拼图/封面 Tab、ZIP 批量导入抽屉入口、单行响应式紧凑 Header）
   - `TagFilterDropdown`: 标签筛选下拉（窄屏 w-20 / 宽屏 w-28 自适应）
-  - `ToolsView`: 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/article-library）
+  - `ToolsView(onThoughtRouteChange?)` — 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/article-library/featured-article） | keywords: tools-view, tools, gallery, canvas, xhs-specialist, featured-article
   - `loadCanvases`: 加载 Canvas 列表，支持追加分页（append=true）、类型/标签过滤
 - **api 对象新增 ZIP 导入方法**: `uploadGalleryZip`、`listGalleryZipImports`、`cancelGalleryZipImport`、`deleteGalleryZipImport`(对接 `/gallery/zip-import/*` 后端)
 
@@ -114,6 +122,109 @@ Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签�
   - `ArticleListTab`: 文章列表 Tab（状态切换、发布状态切换、占用中标识、删除）
   - `LibraryDetailView`: 库详情页
   - `ArticleLibraryView`: 文章库主入口
+
+### FeaturedArticleView.jsx
+
+精选文章工具主视图。先展示全屏工作区选择，工作区卡片显示名称和文章数量；进入后左侧是更宽的小红书帖子式缩略页列表：封面图占满卡片、底部显示标题、右上角提供删除图标；右侧按"选题 → 图片选择 → 标题 → 正文内容 → 保存/存入文章库"纵向组织且内容区占满可用宽度。图片选择使用固定小格宫格，点击格子可放大预览，也可弹窗复用图库图片与 tag 筛选，支持多选、直接用图、本地拼图预览和 AI 提示词草稿；选题重选打开 AI 对话式弹窗，输入方向后返回候选选题；存入文章库弹窗支持选择已有库或新建库。
+
+- **关键词**: featured-article, workspace-picker, workspace-editor, article-page, image-picker-dialog, gallery-image-select, image-tag-filter, collage-preview, markdown-toolbar, ai-title-draft, ai-body-draft, ai-image-prompt, selected-image-apply, image-slot-size, image-grid-cell, image-lightbox, slide-page-list, workspace-storage, topic-selector, topic-dialog, ai-topic-options, library-picker, store-into-library
+- **函数**:
+  - `FEATURED_IMAGE_SLOT_SIZE({ width, height })` — 精选文章图片槽位固定尺寸参数 | keywords: featured-article, image-slot-size
+  - `FEATURED_IMAGE_GRID_CELL_SIZE({ width, height })` — 精选文章图片宫格单元格固定尺寸 | keywords: featured-article, image-grid-cell
+  - `buildFeaturedTopicOptions(input, workspace)` — 根据用户输入和工作区生成 AI 选题候选项 | keywords: featured-article, ai-topic-options
+  - `readFeaturedGalleryImageUrl(image)` — 读取图库图片缩略图或原图地址 | keywords: featured-article, gallery-image-select
+  - `normalizeFeaturedGalleryImages(value)` — 规整弹窗图库图片并过滤无效项 | keywords: featured-article, gallery-image-select
+  - `normalizeFeaturedGalleryTags(value)` — 规整弹窗图库标签列表 | keywords: featured-article, image-tag-filter
+  - `createFeaturedPage(index)` — 创建一个空白精选文章页面 | keywords: featured-article, article-page
+  - `createDefaultFeaturedWorkspaces()` — 返回空工作区兜底数据，避免生成默认演示工作区 | keywords: featured-article, workspace-picker
+  - `isLegacyDefaultWorkspace(workspace)` — 判断并清理旧版本内置默认工作区 | keywords: featured-article, workspace-storage
+  - `normalizeFeaturedWorkspace(workspace)` — 规整后端或本地缓存返回的精选文章工作区 | keywords: featured-article, workspace-storage
+  - `loadFeaturedWorkspaces()` — 从浏览器本地缓存读取工作区 | keywords: featured-article, workspace-storage
+  - `saveFeaturedWorkspaces(workspaces)` — 将工作区写入浏览器本地缓存 | keywords: featured-article, workspace-storage
+  - `countFeaturedWorkspaceArticles(workspace)` — 统计工作区文章数量 | keywords: featured-article, workspace-picker
+  - `buildFeaturedTitleDraft(page, workspace)` — 生成标题 AI 草稿 | keywords: featured-article, ai-title-draft
+  - `buildFeaturedBodyDraft(page, workspace)` — 生成正文 AI 草稿 | keywords: featured-article, ai-body-draft
+  - `buildFeaturedImagePrompt(page, workspace)` — 生成图片提示词 AI 草稿 | keywords: featured-article, ai-image-prompt
+  - `buildFeaturedArticleLibraryPayload(page, workspace)` — 将当前页面转换为文章库入库 payload | keywords: featured-article, store-into-library
+  - `insertTextAtCursor(input)` — 在正文光标位置插入 Markdown 或 Emoji | keywords: featured-article, markdown-toolbar
+  - `loadFeaturedImageElement(src)` — 加载可绘制到 Canvas 的图片元素 | keywords: featured-article, collage-preview
+  - `createFeaturedCollagePreview(images)` — 将多张图库图片合成本地拼图预览 | keywords: featured-article, collage-preview
+  - `FeaturedImagePickerDialog(props)` — 图片选择弹窗组件 | keywords: featured-article, image-picker-dialog
+  - `loadImages(tag)` — 拉取弹窗内可选择图库图片 | keywords: featured-article, gallery-image-select
+  - `loadTags()` — 拉取弹窗内图库标签 | keywords: featured-article, image-tag-filter
+  - `toggleImage(imageId)` — 切换弹窗图片多选状态 | keywords: featured-article, gallery-image-select
+  - `handleUseSelected()` — 将已选图片直接写入图片槽位 | keywords: featured-article, selected-image-apply
+  - `handleGeneratePrompt()` — 触发当前页面图片提示词草稿生成 | keywords: featured-article, ai-image-prompt
+  - `handleCreateCollage()` — 将已选图片生成拼图预览 | keywords: featured-article, collage-preview
+  - `FeaturedTopicDialog(props)` — AI 对话式选题重选弹窗 | keywords: featured-article, topic-dialog
+  - `handleAskAi()` — 根据输入刷新 AI 候选选题 | keywords: featured-article, ai-topic-options
+  - `handlePickTopic(topic)` — 选中 AI 返回的候选选题 | keywords: featured-article, topic-selector
+  - `FeaturedLibraryPickerDialog(props)` — 存入文章库的库选择弹窗 | keywords: featured-article, library-picker
+  - `loadLibraries()` — 加载可存入的文章库列表 | keywords: featured-article, library-picker
+  - `handleCreateLibrary()` — 新建文章库并存入当前精选文章 | keywords: featured-article, store-into-library
+  - `FeaturedArticleView(props)` — 精选文章工具主组件 | keywords: featured-article, workspace-editor
+  - `handleSelectWorkspace(workspaceId)` — 进入指定工作区并定位第一页 | keywords: featured-article, workspace-picker
+  - `handleBackToWorkspaces()` — 返回工作区选择页 | keywords: featured-article, workspace-picker
+  - `updateCurrentPage(patch)` — 更新当前精选文章页面字段 | keywords: featured-article, article-page
+  - `handleAddPage()` — 在当前工作区新增页面 | keywords: featured-article, article-page
+  - `handleSelectPage(pageId)` — 选中左侧缩略页 | keywords: featured-article, slide-page-list
+  - `handleDeletePage(pageId)` — 删除左侧缩略页并切换当前选中页 | keywords: featured-article, slide-page-list
+  - `handleSelectTopic(topic)` — 更新当前页面选题 | keywords: featured-article, topic-selector
+  - `handleOpenTopicDialog()` — 打开 AI 选题重选弹窗 | keywords: featured-article, topic-dialog
+  - `handleInsertMarkdown(value, suffix)` — 向正文编辑区插入 Markdown 或 Emoji | keywords: featured-article, markdown-toolbar
+  - `handleAiTitle()` — 写入标题 AI 草稿 | keywords: featured-article, ai-title-draft
+  - `handleAiBody()` — 写入正文 AI 草稿 | keywords: featured-article, ai-body-draft
+  - `handleAiImagePrompt()` — 写入图片提示词 AI 草稿 | keywords: featured-article, ai-image-prompt
+  - `handleApplySelectedImages(images)` — 应用弹窗直接选择的图库图片 | keywords: featured-article, selected-image-apply
+  - `handleApplyCollageImage(input)` — 应用弹窗生成的拼图预览 | keywords: featured-article, collage-preview
+  - `handleRemoveImage(imageId)` — 从当前页面图片列表移除指定图片 | keywords: featured-article, selected-image-apply
+  - `handleOpenImagePreview(image)` — 打开精选文章图片放大预览层 | keywords: featured-article, image-lightbox
+  - `handleCloseImagePreview()` — 关闭精选文章图片放大预览层 | keywords: featured-article, image-lightbox
+  - `handleSavePage()` — 保存当前精选文章草稿到后端工作区页面 | keywords: featured-article, workspace-storage
+  - `handleOpenLibraryDialog()` — 打开文章库选择弹窗准备入库 | keywords: featured-article, store-into-library
+  - `handleStoreIntoLibrary(libraryId)` — 将当前精选文章存入指定文章库 | keywords: featured-article, store-into-library
+  - `handleCreateWorkspace()` — 新建空的精选文章工作区 | keywords: featured-article, workspace-picker
+- **关键词索引**:
+  - `featured-article` / 精选文章
+  - `workspace-picker` / 工作区选择
+  - `workspace-editor` / 工作区编辑器
+  - `article-page` / 文章页面
+  - `image-picker-dialog` / 图片选择弹窗
+  - `gallery-image-select` / 图库选图
+  - `image-tag-filter` / 图片标签筛选
+  - `collage-preview` / 拼图预览
+  - `markdown-toolbar` / Markdown 工具条
+  - `ai-title-draft` / AI 标题草稿
+  - `ai-body-draft` / AI 正文草稿
+  - `ai-image-prompt` / AI 图片提示词
+  - `selected-image-apply` / 选图应用
+  - `image-slot-size` / 图片槽位尺寸
+  - `image-grid-cell` / 图片宫格单元
+  - `image-lightbox` / 图片放大预览
+  - `slide-page-list` / 缩略页列表
+  - `workspace-storage` / 工作区缓存
+  - `topic-selector` / 选题选择
+  - `topic-dialog` / 选题弹窗
+  - `ai-topic-options` / AI 选题候选
+  - `library-picker` / 文章库选择
+  - `store-into-library` / 存入文章库
+
+### featuredArticleService.js
+
+精选文章前端 API client，对接 `/api/featured-article` 工作区、页面和存入文章库接口。
+- **关键词**: featured-article, api-client, workspace-picker, workspace-editor, article-page, slide-page-list, store-into-library
+- **函数**:
+  - `getAuthHeaders()` — 构建精选文章 API 登录态请求头 | keywords: featured-article, api-client
+  - `request(path, options)` — 封装精选文章 JSON 请求和错误响应 | keywords: featured-article, api-client
+  - `listWorkspaces(params)` — 列出精选文章工作区 | keywords: featured-article, workspace-picker
+  - `createWorkspace(input)` — 新建精选文章工作区 | keywords: featured-article, workspace-picker
+  - `getWorkspace(workspaceId)` — 获取单个精选文章工作区 | keywords: featured-article, workspace-editor
+  - `updateWorkspace(workspaceId, patch)` — 更新精选文章工作区 | keywords: featured-article, workspace-editor
+  - `deleteWorkspace(workspaceId)` — 删除精选文章工作区 | keywords: featured-article, workspace-editor
+  - `createPage(workspaceId, page)` — 新建工作区页面 | keywords: featured-article, article-page
+  - `updatePage(workspaceId, pageId, patch)` — 更新工作区页面 | keywords: featured-article, article-page
+  - `deletePage(workspaceId, pageId)` — 删除工作区页面 | keywords: featured-article, slide-page-list
+  - `storePageToLibrary(workspaceId, pageId, libraryId)` — 把精选文章页面存入文章库 | keywords: featured-article, store-into-library
 
 ### qrCodeSvg.js
 
