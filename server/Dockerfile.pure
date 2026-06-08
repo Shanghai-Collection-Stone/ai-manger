@@ -52,6 +52,7 @@ RUN npm i -g meitu-cli
 
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/src/modules/data-source/sources ./dist/modules/data-source/sources
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/config ./config
 COPY --from=builder /app/migrations ./migrations
