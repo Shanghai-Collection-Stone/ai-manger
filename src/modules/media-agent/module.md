@@ -31,7 +31,8 @@
 - **函数**:
   - `getHandle` - 获取 XHS 工具列表（list、unused-image-groups、detail、create-image-group、**tag-select-request**）
   - `normalizeImageGroupArticles` - 对齐 groupCount 与 articles 数量（不强制 6-8 组）
-  - `mergeImageGroupsToArticles` - 将图组结果回写到同一 Canvas 的文章字段，并校验单篇图片 6-8 张目标
+  - `imageGroupRoleOrder(role)` - 将图组图片 role 映射为排序权重(cover=0/inner-N=N/未知=99)，回写前稳定排序防串位 | keywords: image-group-role-order, slot-alignment
+  - `mergeImageGroupsToArticles` - 将图组结果回写到同一 Canvas 的文章字段，回写前按 role(cover→inner-1..5)排序确保封面恒在 imageUrls[0]、内页不串到封面下标(任务5)，并校验单篇图片 6-8 张目标 | keywords: slot-alignment, image-group-merge
   - `precheckImageCapacity` - **不足量预检**:聚合 articles 全部 tags,调 `gallery.countAvailableByTags`,按 `MIN_SOURCE_IMAGES_PER_GROUP=6 * groupCount` 阈值判定,返回 {sufficient, available, estimatedGroups, byTag} 用于 AI 自然语言反馈
   - `createListCanvasesTool` - 列出 Canvas 列表（xhs_list_canvases）
   - `createListUnusedImageGroupsTool` - 查询未被生文消费的图片组 Canvas（xhs_list_unused_image_groups），返回 unused group 列表；生图专家/生文专家询问可用图组时优先调用 | keywords: 未使用图组, unused-image-groups

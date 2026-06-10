@@ -730,6 +730,28 @@ export class GalleryController {
   }
 
   /**
+   * @description 批量删除图片（记录+本地原图/缩略图文件）。
+   * @param {{ userId?: string; ids?: Array<number | string> }} body - 批量删除输入。
+   * @returns {Promise<{ deleted: number; failed: number; deletedIds: number[] }>} 删除统计。
+   * @throws {BadRequestException} 当缺少 userId 或 ids 时抛出。
+   * @keyword gallery, image, delete, batch
+   * @keyword-cn 图库批量删除
+   * @keyword-en gallery batch delete images
+   */
+  @Post('images/batch-delete')
+  async deleteImagesBatch(
+    @Body() body: { userId?: string; ids?: Array<number | string> },
+  ): Promise<{ deleted: number; failed: number; deletedIds: number[] }> {
+    const userId = String(body?.userId ?? '').trim();
+    if (!userId) throw new BadRequestException('userId is required');
+    const ids = (Array.isArray(body?.ids) ? body.ids : [])
+      .map((x) => Number(x))
+      .filter((x) => Number.isFinite(x));
+    if (ids.length === 0) throw new BadRequestException('ids is required');
+    return await this.gallery.deleteManyImages({ userId, ids });
+  }
+
+  /**
    * @description 批量重建图片Embedding向量，支持从 startId 起更新 limit 条。
    * @param {{ userId?: string; startId?: number | string; limit?: number | string }} body - 重建输入。
    * @returns {Promise<{ updated: number }>} 更新条数。

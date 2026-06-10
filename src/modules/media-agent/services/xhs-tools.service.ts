@@ -135,6 +135,24 @@ export class XhsToolsService {
   }
 
   /**
+   * @description 将图组图片 role 映射为排序权重(cover=0, inner-N=N, 未知=99)，用于回写文章前的稳定排序防串位。
+   * @param {unknown} role - 图组图片 role。
+   * @returns {number} 排序权重。
+   * @keyword-cn 图组下标对齐, 防串位
+   * @keyword-en image-group-role-order, slot-alignment
+   */
+  private imageGroupRoleOrder(role: unknown): number {
+    const r = String(role ?? '').trim();
+    if (r === 'cover') return 0;
+    const m = /^inner-(\d+)$/.exec(r);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n)) return n;
+    }
+    return 99;
+  }
+
+  /**
    * @description 将 imageGroups 的图片结果回写到同一 Canvas 的文章字段。
    * @param {object} input - 回写参数。
    * @returns {Promise<{ doneCount: number; missingCount: number; countMismatch: number }>} 回写统计。
@@ -162,18 +180,21 @@ export class XhsToolsService {
     await Promise.all(
       orderedArticles.map(async (article, idx) => {
         const group = input.imageGroups[idx];
-        const imageUrls = Array.isArray(group?.images)
-          ? group.images
-              .map((img) =>
-                typeof img?.url === 'string' ? img.url.trim() : '',
-              )
-              .filter((u) => u.length > 0)
+        // 防串位：严格按 role(cover→inner-1..5) 排序后再映射到 imageUrls，
+        // 保证 imageUrls[0] 恒为封面、1+ 为内页，杜绝内页落到封面下标(任务5)。
+        const orderedGroupImages = Array.isArray(group?.images)
+          ? [...group.images].sort(
+              (a, b) =>
+                this.imageGroupRoleOrder(a?.role) -
+                this.imageGroupRoleOrder(b?.role),
+            )
           : [];
-        const imageIds = Array.isArray(group?.images)
-          ? group.images
-              .map((img) => Number(img?.imageId))
-              .filter((n) => Number.isFinite(n) && n > 0)
-          : [];
+        const imageUrls = orderedGroupImages
+          .map((img) => (typeof img?.url === 'string' ? img.url.trim() : ''))
+          .filter((u) => u.length > 0);
+        const imageIds = orderedGroupImages
+          .map((img) => Number(img?.imageId))
+          .filter((n) => Number.isFinite(n) && n > 0);
         const isImageCountValid =
           imageUrls.length >= this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE &&
           imageUrls.length <= this.IMAGE_GROUP_MAX_IMAGES_PER_ARTICLE;
@@ -769,18 +790,20 @@ export class XhsToolsService {
         });
 
         const group = groups[0];
-        const imageUrls = Array.isArray(group?.images)
-          ? group.images
-              .map((img) =>
-                typeof img?.url === 'string' ? img.url.trim() : '',
-              )
-              .filter((u) => u.length > 0)
+        // 防串位：按 role(cover→inner-1..5) 排序后映射，封面恒在 imageUrls[0](任务5)
+        const orderedGroupImages = Array.isArray(group?.images)
+          ? [...group.images].sort(
+              (a, b) =>
+                this.imageGroupRoleOrder(a?.role) -
+                this.imageGroupRoleOrder(b?.role),
+            )
           : [];
-        const imageIds = Array.isArray(group?.images)
-          ? group.images
-              .map((img) => Number(img?.imageId))
-              .filter((n) => Number.isFinite(n) && n > 0)
-          : [];
+        const imageUrls = orderedGroupImages
+          .map((img) => (typeof img?.url === 'string' ? img.url.trim() : ''))
+          .filter((u) => u.length > 0);
+        const imageIds = orderedGroupImages
+          .map((img) => Number(img?.imageId))
+          .filter((n) => Number.isFinite(n) && n > 0);
         const isImageCountValid =
           imageUrls.length >= this.IMAGE_GROUP_MIN_IMAGES_PER_ARTICLE &&
           imageUrls.length <= this.IMAGE_GROUP_MAX_IMAGES_PER_ARTICLE;

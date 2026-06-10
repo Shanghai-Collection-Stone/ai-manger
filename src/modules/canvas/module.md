@@ -54,7 +54,7 @@ Canvas服务。
 - `selectImageGroupCoverImage(input)` — 直接用图库图片替换图组 Canvas 指定图组 role=cover 图片，不修改其他内页图 | keywords: cover-select, image-group-cover-only
 - `selectImageGroupImage(input)` — 直接用图库图片替换图组 Canvas 指定 role 图片，不修改其他图片槽位 | keywords: image-slot-select, image-group-image-slot
 - `normalizeCoverSourceIds(imageIds)` — 归一化图片槽位重生成素材图片 ID，去重并限制最多 4 张 | keywords: cover-regenerate, selected-source-images
-- `loadSelectedCoverImage(input)` — 精确读取直接设封面所选的第一张当前租户可见图库图片 | keywords: cover-select, selected-cover-image
+- `loadSelectedCoverImage(input)` — 读取直接设图所选图库图片：选 1 张返回该图；选 2-4 张实时合成 3:4 拼图(composeSelectedCollage)并返回拼图图片，让"直接使用"即拼即用，合成失败回退首图 | keywords: cover-select, selected-cover-image, multi-collage
 - `resolveGalleryImageUrl(image)` — 从图库图片解析可写回 Canvas 的原图或缩略图地址 | keywords: cover-select, selected-cover-image
 - `toSelectedCoverGroupImage(image, currentCover?, articleTitle?)` — 将图库图片转换成图组 Canvas role=cover 图片结构并沿用原封面文案 | keywords: cover-select, image-group-cover-only
 - `toSelectedGroupImage(image, role, currentImage?, articleTitle?)` — 将图库图片转换成图组 Canvas 指定 role 图片结构，封面会沿用原文案 | keywords: image-slot-select, image-group-image-slot
@@ -106,7 +106,10 @@ Canvas服务。
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
 - `pickPortrait` — 从池中选竖图（必须全局未使用；不跨组复用，不降级为横图）
 - `pickAndMakeCollage` — 仅选 2 张全局未使用横图动态合成拼图（上下拼，640x853，等比缩放不裁切；不跨组复用，不降级为竖图/任意方向）
-- `createDynamicCollageFile` — 动态合成双图拼图（使用 sharp）
+- `createDynamicCollageFile` — 动态合成双图拼图（使用 sharp，640x853 上下拼）
+- `resolveMultiCollageCells(count)` — 计算 2/3/4 张拼图在 640x853(3:4) 画布上的网格单元格（2=上下/3=上1下2/4=2x2） | keywords: multi-collage, collage-layout
+- `createMultiCollageFile(images)` — 将 2/3/4 张图库图合成固定 640x853(3:4) 竖版拼图(fit:cover 充满,不烧字),2 张复用 createDynamicCollageFile | keywords: multi-collage, collage-compose
+- `composeSelectedCollage({ userId, tenantId, sourceImageIds(2-4), generatedKind?, groupId? })` — 把用户多选的 2-4 张图合成 3:4 拼图并写入动态拼图图库,返回持久化图片,供"直接设图"槽位复用 | keywords: multi-collage, select-collage
 - `persistGeneratedAssetToGallery` — 将动态封面/拼图/内页文件写入 gallery_images（返回真实 imageId，避免 id=0 虚拟图）
 - `resolveGeneratedUploadFileInfo` / `getImageDimensionsFromAbsPath` — 解析生成文件路径并补齐宽高元数据
 - `burnCoverText` — 使用 sharp+SVG 将主副标题烧录到封面图（无背景框，白色描边文字）

@@ -465,14 +465,16 @@ export class ToolsService {
         );
         const latest =
           (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
-        const qrPayload = { token, articleLibraryId: lib.id };
+        const qr = await this.articleLibrary.buildPushQrContent({
+          token,
+          articleLibraryId: lib.id,
+        });
         return JSON.stringify({
           ok: true,
           library: await this.buildArticleLibrarySummary(latest),
           pushUrl: latest.pushConfig?.pushUrl ?? null,
           statusFilter: latest.pushConfig?.statusFilter ?? ['unpublished'],
-          qrPayload,
-          qrContent: JSON.stringify(qrPayload),
+          ...qr,
           hint: 'qrContent 是二维码实际编码内容；前端应使用生产级二维码库渲染它。',
         });
       },
@@ -604,13 +606,23 @@ export class ToolsService {
           (await this.articleLibrary.get(lib.id, scope?.tenantId)) ?? lib;
         let qrPayload: { token: string; articleLibraryId: number } | undefined;
         let qrContent: string | undefined;
+        let qrContentType: 'json' | 'xhs-miniapp-url' | undefined;
+        let qrSourceContent: string | undefined;
+        let xhsQrcodeUrl: string | null | undefined;
         if (returnPushQr === true) {
           const token = await this.articleLibrary.ensureQrToken(
             lib.id,
             scope?.tenantId,
           );
-          qrPayload = { token, articleLibraryId: lib.id };
-          qrContent = JSON.stringify(qrPayload);
+          const qr = await this.articleLibrary.buildPushQrContent({
+            token,
+            articleLibraryId: lib.id,
+          });
+          qrPayload = qr.qrPayload;
+          qrContent = qr.qrContent;
+          qrContentType = qr.qrContentType;
+          qrSourceContent = qr.qrSourceContent;
+          xhsQrcodeUrl = qr.xhsQrcodeUrl;
         }
         return JSON.stringify({
           ok: true,
@@ -626,6 +638,9 @@ export class ToolsService {
           articleIds: created.map((article) => article.id),
           qrPayload,
           qrContent,
+          qrContentType,
+          qrSourceContent,
+          xhsQrcodeUrl,
         });
       },
       {

@@ -288,6 +288,9 @@ const CoverRegenerateDialog = ({
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               已选 {selectedCount}/{MAX_SOURCE_IMAGE_SELECTION} 张参考图
+              {selectedCount >= 2 && (
+                <span className="text-rose-500"> · 直接使用将合成 3:4 拼图</span>
+              )}
             </p>
           </div>
           <button
@@ -457,7 +460,11 @@ const CoverRegenerateDialog = ({
               ) : (
                 <Check size={14} />
               )}
-              {selecting ? selectingLabel : selectLabel}
+              {selecting
+                ? selectingLabel
+                : selectedCount >= 2
+                  ? '合成拼图并使用'
+                  : selectLabel}
             </button>
           )}
         </div>

@@ -152,12 +152,14 @@ export class ArticleLibraryController {
     const lib = await this.library.get(id, scope.tenantId);
     if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');
     const token = await this.library.ensureQrToken(id, scope.tenantId);
-    const qrPayload = { token, articleLibraryId: id };
+    const qr = await this.library.buildPushQrContent({
+      token,
+      articleLibraryId: id,
+    });
     return {
       pushUrl: lib.pushConfig.pushUrl ?? null,
       statusFilter: lib.pushConfig.statusFilter,
-      qrPayload,
-      qrContent: JSON.stringify(qrPayload),
+      ...qr,
     };
   }
 

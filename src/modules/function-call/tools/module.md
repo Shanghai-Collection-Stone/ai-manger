@@ -15,7 +15,7 @@
 - **函数**:
   - `getHandle`: 获取工具集合/get handle
   - `getThoughtRouteTools`: 获取思维链路工具/get thought route tools
-  - `buildArticleLibraryTools`: 构建文章库工具（列库 / 获取二维码 / Canvas 入库）/build article library tools
+  - `buildArticleLibraryTools`: 构建文章库工具（列库 / 获取二维码 / Canvas 入库；二维码复用 article-library 的 XHS 短链改写逻辑）/build article library tools
   - `buildAccountPoolTool`: 构建账号池查询工具（仅 xhs）/build account pool tool, xhs only
   - `getXhsSubAgentSessionTools`: 发布/追踪子会话工具集（含账号池、canvas详情）/xhs sub-agent session tools
   - `getXhsSupervisorTools`: 小红书主专家自动路由工具池,合并小红书主入口、发布/追踪、生文、图库、XHS Canvas 与 graph workflow 工具并按名称去重 | keywords: 小红书专家, 意图路由, 工具池, xhs-supervisor-tools, intent-routing

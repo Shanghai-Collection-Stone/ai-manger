@@ -625,26 +625,43 @@ export class CanvasService {
   }
 
   /**
-   * @description 精确读取直接设封面所选的第一张可见图库图片。
-   * @param {object} input - 当前用户、租户和候选图片 ID。
-   * @returns {Promise<GalleryImageEntity>} 可用图库图片。
-   * @keyword-cn 直接设为封面 图片选择
+   * @description 读取直接设图所选图库图片：选 1 张时返回该图；选 2-4 张时实时合成 3:4 拼图并返回拼图图库图片，让"直接使用"即拼即用。
+   * @param {object} input - 当前用户、租户和候选图片 ID（可多张）。
+   * @returns {Promise<GalleryImageEntity>} 单图或合成后的拼图图库图片。
+   * @keyword-cn 直接设为封面 图片选择 多图拼图
    * @keyword-en cover-select
    * @keyword-en selected-cover-image
+   * @keyword-en multi-collage
    */
   private async loadSelectedCoverImage(input: {
     userId: string;
     tenantId?: string;
     imageIds: number[];
   }): Promise<GalleryImageEntity> {
-    const imageIds = this.normalizeCoverSourceIds(input.imageIds).slice(0, 1);
+    const imageIds = this.normalizeCoverSourceIds(input.imageIds);
     if (imageIds.length === 0) {
       throw new BadRequestException('COVER_SOURCE_IMAGES_REQUIRED');
+    }
+    // 选 2-4 张 → 合成 3:4 拼图并直接使用合成图
+    if (imageIds.length >= 2) {
+      const collage = await this.imageGroupService.composeSelectedCollage({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        sourceImageIds: imageIds,
+        generatedKind: 'collage',
+      });
+      if (collage) {
+        this.resolveGalleryImageUrl(collage);
+        return collage;
+      }
+      this.logger.warn(
+        `[canvas-select] compose collage failed, fallback to first image ids=${imageIds.join(',')}`,
+      );
     }
     const images = await this.galleryService.findAccessibleImagesByIds(
       input.userId,
       input.tenantId,
-      imageIds,
+      imageIds.slice(0, 1),
     );
     if (!images[0]) throw new NotFoundException('COVER_SOURCE_IMAGE_NOT_FOUND');
     this.resolveGalleryImageUrl(images[0]);
@@ -947,6 +964,10 @@ export class CanvasService {
       );
       if (!canvas || !article) throw new Error('CANVAS_ARTICLE_NOT_FOUND');
       this.assertArticleImageSlotExists(article, input.imageIndex);
+      // 下标→角色对齐审计：imageIndex=0 走封面提示词，1+ 走内页提示词(任务5)
+      this.logger.log(
+        `[canvas-article-image] regenerate_role_resolved canvasId=${input.canvasId} articleId=${input.articleId} imageIndex=${input.imageIndex} role=${input.imageIndex === 0 ? 'cover' : this.toArticleInnerRole(input.imageIndex)}`,
+      );
       const nextImage =
         input.imageIndex === 0
           ? await this.imageGroupService.regenerateCoverImage({

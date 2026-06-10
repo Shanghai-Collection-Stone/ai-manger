@@ -843,6 +843,40 @@ export class GalleryService {
   }
 
   /**
+   * @description 批量删除图片记录及其本地原图/缩略图文件，逐条复用单删逻辑，互不阻断。
+   * @param {{ userId: string; ids: number[] }} input - 批量删除输入（当前租户 userId + 图片自增 id 列表）。
+   * @returns {Promise<{ deleted: number; failed: number; deletedIds: number[] }>} 成功/失败统计与已删除 id。
+   * @keyword gallery, image, delete, batch
+   * @keyword-cn 图库批量删除
+   * @keyword-en gallery batch delete images
+   */
+  async deleteManyImages(input: {
+    userId: string;
+    ids: number[];
+  }): Promise<{ deleted: number; failed: number; deletedIds: number[] }> {
+    const userId = String(input?.userId ?? '').trim();
+    const ids = Array.from(
+      new Set(
+        (Array.isArray(input?.ids) ? input.ids : [])
+          .map((x) => Number(x))
+          .filter((x) => Number.isFinite(x))
+          .map((x) => Math.floor(x)),
+      ),
+    );
+    if (!userId || ids.length === 0) {
+      return { deleted: 0, failed: 0, deletedIds: [] };
+    }
+    const deletedIds: number[] = [];
+    let failed = 0;
+    for (const id of ids) {
+      const res = await this.deleteImage({ userId, id });
+      if (res.ok) deletedIds.push(id);
+      else failed++;
+    }
+    return { deleted: deletedIds.length, failed, deletedIds };
+  }
+
+  /**
    * @description 批量重建图片Embedding向量，支持从指定 startId 起更新 limit 条。
    * @param {{ userId: string; startId?: number; limit?: number }} input - 重建输入。
    * @returns {Promise<{ updated: number }>} 更新条数。

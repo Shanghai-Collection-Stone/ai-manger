@@ -1067,68 +1067,12 @@ export class AgentService {
     ) {
       // ark Seedream 5.0 lite：文生图 / 图生图 共用 /images/generations endpoint（ark 无 /images/edits）。
       // 图生图时 body 追加 image 字段（单字符串，URL 或 data:<mime>;base64,<b64>）。
-      // size 支持 2K / 4K / 比例(3:4) / 像素(1728x2304)；5.0 lite 像素下限 2560x1440，
-      // 低于此值的像素用 resolveMeituRatioBySize 换算为比例。watermark 默认关闭。
+      // Provider size is the hard aspect-ratio control. Force 3:4 here so
+      // upstream thumbnail sizes or empty input cannot fall back to square.
       const endpointBase =
         runtime.baseUrl?.trim() || 'https://ark.cn-beijing.volces.com/api/v3';
       const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
-      // Seedream 5.0 lite size 接受两种格式（互斥）：
-      //   1) 档位 '2K' | '3K'
-      //   2) 'WIDTHxHEIGHT' 像素串：总像素 ∈ [3,686,400, 10,404,496]，宽高比 ∈ [1/16, 16]
-      // 上游传入的小缩略尺寸(如 640x853)按宽高比匹配官方推荐 2K 档位像素值，
-      // 既保证落在合法区间又对齐官方推荐档（避免奇形怪状的边缘像素值）。
-      const SEED_2K_TABLE: Array<{ ratio: number; size: string }> = [
-        { ratio: 1 / 1, size: '2048x2048' },
-        { ratio: 4 / 3, size: '2304x1728' },
-        { ratio: 3 / 4, size: '1728x2304' },
-        { ratio: 16 / 9, size: '2848x1600' },
-        { ratio: 9 / 16, size: '1600x2848' },
-        { ratio: 3 / 2, size: '2496x1664' },
-        { ratio: 2 / 3, size: '1664x2496' },
-        { ratio: 21 / 9, size: '3136x1344' },
-      ];
-      const SEED_DEFAULT = '2048x2048';
-      const SEED_MIN_PIXELS = 3_686_400;
-      const SEED_MAX_PIXELS = 10_404_496;
-      const matchSeedream2KByRatio = (w: number, h: number): string => {
-        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
-          return SEED_DEFAULT;
-        }
-        const target = w / h;
-        let best = SEED_2K_TABLE[0];
-        let minDiff = Math.abs(target - best.ratio);
-        for (const entry of SEED_2K_TABLE) {
-          const diff = Math.abs(target - entry.ratio);
-          if (diff < minDiff) {
-            minDiff = diff;
-            best = entry;
-          }
-        }
-        return best.size;
-      };
-      const sizeRaw = typeof input.size === 'string' ? input.size.trim() : '';
-      const qualityTier = /^(2k|3k)$/i.exec(sizeRaw)?.[0]?.toUpperCase();
-      const pixelMatch = /^(\d{2,5})x(\d{2,5})$/i.exec(sizeRaw);
-      const normalizedSize = (() => {
-        if (qualityTier) return qualityTier;
-        if (pixelMatch) {
-          const w = Number(pixelMatch[1]);
-          const h = Number(pixelMatch[2]);
-          const total = w * h;
-          const ratio = w / h;
-          // 已是合法像素 → 透传；否则按比例匹配 2K 档推荐值
-          if (
-            total >= SEED_MIN_PIXELS &&
-            total <= SEED_MAX_PIXELS &&
-            ratio >= 1 / 16 &&
-            ratio <= 16
-          ) {
-            return `${w}x${h}`;
-          }
-          return matchSeedream2KByRatio(w, h);
-        }
-        return SEED_DEFAULT;
-      })();
+      const normalizedSize = '1728x2304';
       const body: Record<string, unknown> = {
         model: runtime.model,
         prompt,
@@ -1200,22 +1144,13 @@ export class AgentService {
       // OpenAI gpt-image-1 / gpt-image-2：
       //  - 文生图: POST /v1/images/generations
       //  - 图生图(底图编辑): POST /v1/images/edits（multipart，image=底图二进制）
-      // size 接受 1024x1024 / 1024x1536 / 1536x1024 / auto；其它尺寸按宽高比就近映射。
+      // Provider size is the hard aspect-ratio control. gpt-image-2 can use
+      // exact 3:4 pixels; gpt-image-1 uses the closest supported portrait size.
       const endpointBase =
         runtime.baseUrl?.trim() || 'https://api.openai.com/v1';
-      const sizeRaw = typeof input.size === 'string' ? input.size.trim() : '';
-      const pixelMatch = /^(\d{2,5})x(\d{2,5})$/i.exec(sizeRaw);
-      const normalizedSize = (() => {
-        if (/^auto$/i.test(sizeRaw)) return 'auto';
-        if (pixelMatch) {
-          const w = Number(pixelMatch[1]);
-          const h = Number(pixelMatch[2]);
-          if (w === h) return '1024x1024';
-          if (w > h) return '1536x1024';
-          return '1024x1536';
-        }
-        return '1024x1024';
-      })();
+      const normalizedSize = /^gpt-image-2(?:$|-)/i.test(runtime.model)
+        ? '1536x2048'
+        : '1024x1536';
 
       if (runtimeEditImage) {
         const endpoint = `${endpointBase.replace(/\/$/, '')}/images/edits`;

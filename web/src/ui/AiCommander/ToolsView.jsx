@@ -324,6 +324,34 @@ const api = {
   },
 
   /**
+   * @description 批量删除图库图片
+   * @keyword-en batchDeleteGalleryImages
+   * @keyword-cn 图库批量删除
+   * @param {{ userId: string, ids: Array<number|string> }} input
+   * @returns {Promise<{ deleted: number, failed: number, deletedIds: number[] }>}
+   */
+  async batchDeleteGalleryImages(input) {
+    try {
+      const res = await fetch(`${API_BASE}/gallery/images/batch-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(input || {}),
+      });
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) {
+        showToast(data?.message || `批量删除失败 (${res.status})`, 'error');
+        return { deleted: 0, failed: 0, deletedIds: [] };
+      }
+      return data;
+    } catch (e) {
+      showToast(`批量删除失败: ${e?.message || '网络错误'}`, 'error');
+      return { deleted: 0, failed: 0, deletedIds: [] };
+    }
+  },
+
+  /**
    * @description Rebuild embeddings for gallery images
    * @keyword-en rebuildGalleryImageEmbeddings
    * @param {Object} [input]
@@ -973,6 +1001,7 @@ const GalleryView = ({ onBack }) => {
   const [batchAddTags, setBatchAddTags] = useState([]);
   const [batchRemoveTags, setBatchRemoveTags] = useState([]);
   const [batchTagSaving, setBatchTagSaving] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
   // Refs
   const imagesReqIdRef = useRef(0);
@@ -1476,6 +1505,37 @@ const GalleryView = ({ onBack }) => {
     }
   }, [batchSelectedIds, batchAddTags, batchRemoveTags, userId, loadImages, loadTags]);
 
+  /**
+   * @description 批量删除已选图片（二次确认 → 调后端 → 刷新图库/标签）。
+   * @keyword-en batch delete selected gallery images
+   * @keyword-cn 图库批量删除
+   */
+  const onBatchDelete = useCallback(async () => {
+    if (batchSelectedIds.length === 0 || batchDeleting) return;
+    if (!window.confirm(`确认删除选中的 ${batchSelectedIds.length} 张图片？删除后不可恢复。`)) {
+      return;
+    }
+    setBatchDeleting(true);
+    try {
+      const uid = String(userId || '').trim() || 'default';
+      const res = await api.batchDeleteGalleryImages({
+        userId: uid,
+        ids: batchSelectedIds,
+      });
+      showToast(
+        `已删除 ${res.deleted ?? 0} 张图片${res.failed ? `，${res.failed} 张失败` : ''}`,
+        res.failed ? 'info' : 'success',
+      );
+      setBatchSelectedIds([]);
+      setBatchSelectAllActive(false);
+      setBatchSelectMode(false);
+      await loadImages({ append: false });
+      await loadTags();
+    } finally {
+      setBatchDeleting(false);
+    }
+  }, [batchSelectedIds, batchDeleting, userId, loadImages, loadTags]);
+
   // Preview handlers
   const openPreview = useCallback((img) => {
     setPreviewImage(img);
@@ -1957,6 +2017,14 @@ const GalleryView = ({ onBack }) => {
                 className="px-3 py-1.5 text-xs rounded-full bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
               >
                 批量改标签 ({batchSelectedIds.length})
+              </button>
+              <button
+                onClick={onBatchDelete}
+                disabled={batchSelectedIds.length === 0 || batchDeleting}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-full bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              >
+                {batchDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                批量删除 ({batchSelectedIds.length})
               </button>
               <button
                 onClick={() => { setBatchSelectMode(false); setBatchSelectedIds([]); setBatchSelectAllActive(false); }}

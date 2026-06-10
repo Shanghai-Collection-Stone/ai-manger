@@ -63,14 +63,19 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
   - `TagFilterDropdown`: 标签筛选下拉（窄屏 w-20 / 宽屏 w-28 自适应）
   - `ToolsView(onThoughtRouteChange?)` — 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/article-library/featured-article） | keywords: tools-view, tools, gallery, canvas, xhs-specialist, featured-article
   - `loadCanvases`: 加载 Canvas 列表，支持追加分页（append=true）、类型/标签过滤
+  - `onBatchDelete`: 批量删除已选图库图片(window.confirm 二次确认 → `api.batchDeleteGalleryImages` → 刷新图库/标签),与"批量改标签"同处 batch 工具条 | keywords: gallery, batch-delete
 - **api 对象新增 ZIP 导入方法**: `uploadGalleryZip`、`listGalleryZipImports`、`cancelGalleryZipImport`、`deleteGalleryZipImport`(对接 `/gallery/zip-import/*` 后端)
+- **api 对象新增批量删除方法**: `batchDeleteGalleryImages({ userId, ids })`(对接 `POST /gallery/images/batch-delete`) | keywords: gallery, batch-delete
 
 ### CanvasFeedView.jsx
 
 图文类型 Canvas 详情视图。展示文章列表与文章详情（含图片轮播和 ImageLightbox 点击放大）；头部提供"整份存入文章库"按钮，单篇详情提供"存入文章库"按钮，弹出 LibraryPickerDialog 选择目标库或新建。文章封面和详情轮播内页共用图片槽位重生成弹窗，可基于图库多选 + 提示词重新生成目标图片槽位，也可直接把已选图库图片设为当前封面/内页。
 
-- **关键词**: canvas, article, feed, image, detail, store-into-library, cover-regenerate, cover-select, article-image-regenerate, image-slot-regenerate, article-image-select, image-slot-select, image-lightbox
+- **关键词**: canvas, article, feed, image, detail, store-into-library, cover-regenerate, cover-select, article-image-regenerate, image-slot-regenerate, article-image-select, image-slot-select, image-lightbox, canvas-download, copy-text
 - **函数**:
+  - `copyText(text, label?)`: 复制文本到剪贴板(navigator.clipboard 优先,失败回退 execCommand),用于复制标题/正文 | keywords: copy-text
+  - `downloadImageUrl(url, filename)`: 下载单个图片地址(fetch→blob→a.download,失败回退直接链接) | keywords: canvas-download, download-image
+  - `downloadArticleImages(article)`: 逐张下载当前文章全部配图(封面 cover/内页 inner 顺序命名) | keywords: canvas-download, download-article-images
   - `ImageLightbox`: 图文 Canvas 图片放大预览弹窗，支持左右切换和缩略图定位
   - `openArticleImageLightbox`: 打开当前文章图片放大预览
   - `toLibraryPayload`: canvas 文章 → 文章库入库 payload
@@ -96,7 +101,7 @@ Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签�
   - `toggleImage`: 切换参考图选中状态，最多保留 4 张参考图
   - `handleDialogTouchStart` / `handleDialogTouchMove` / `handleDialogTouchEnd`: 阻断弹窗横向滑动冒泡，避免外层 Canvas 被左右滑开
   - `handleSubmit`: 提交 `{ imageIds, prompt }`，其中 imageIds 最多 4 个且 prompt 为本次输入
-  - `handleSelectCover`: 提交 `{ imageId, imageIds }`，将第一张已选图库图片直接设为封面
+  - `handleSelectCover`: 提交 `{ imageId, imageIds }`，将已选图库图片直接设为封面/内页；选 ≥2 张时按钮显示"合成拼图并使用"、由后端 `composeSelectedCollage` 合成 3:4 拼图后设入槽位 | keywords: cover-select, multi-collage
 
 ### ImageGroupCanvasView.jsx
 

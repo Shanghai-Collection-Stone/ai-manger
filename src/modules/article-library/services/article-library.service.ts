@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
 import type {
@@ -19,12 +20,16 @@ import type { ArticleEntity } from '../entities/article.entity.js';
  */
 @Injectable()
 export class ArticleLibraryService {
+  private readonly logger = new Logger(ArticleLibraryService.name);
   private readonly libraries: Collection<ArticleLibraryEntity>;
   private readonly articles: Collection<ArticleEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
   private readonly COUNTER_KEY = 'article_libraries';
 
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly config: ConfigService,
+  ) {
     this.libraries = db.collection<ArticleLibraryEntity>('article_libraries');
     this.articles = db.collection<ArticleEntity>('articles');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
@@ -149,6 +154,172 @@ export class ArticleLibraryService {
       return next.trim();
     }
     return token;
+  }
+
+  /**
+   * @description 从环境变量读取文章库小红书二维码短链模板。
+   * @returns {string | null} 短链 URL；未配置时返回 null。
+   * @keyword-en article-library-qr, env-short-link
+   */
+  private resolveConfiguredXhsQrShortLink(): string | null {
+    const keys = [
+      'ARTICLE_LIBRARY_XHS_QR_SHORT_LINK',
+      'XHS_ARTICLE_LIBRARY_QR_SHORT_LINK',
+      'XHS_MINIAPP_QR_SHORT_LINK',
+      'XHS_QR_SHORT_LINK',
+    ];
+    for (const key of keys) {
+      const value = String(this.config.get<string>(key) ?? '').trim();
+      if (value) return value;
+    }
+    return null;
+  }
+
+  /**
+   * @description 解析小红书短链 301/302 跳转，返回最终落地链接。
+   * @param {string} shortLink - xhslink.com 短链。
+   * @returns {Promise<string | null>} 跳转后的 URL；失败时返回 null。
+   * @keyword-en article-library-qr, short-link-redirect
+   */
+  async resolveXhsShortLinkRedirect(shortLink: string): Promise<string | null> {
+    const start = String(shortLink ?? '').trim();
+    if (!/^https?:\/\//i.test(start)) return null;
+    const headers = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+    };
+
+    try {
+      let current = new URL(start);
+      for (let i = 0; i < 8; i += 1) {
+        const response = await fetch(current, {
+          method: 'HEAD',
+          redirect: 'manual',
+          headers,
+          signal: AbortSignal.timeout(8000),
+        });
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          if (!location) return current.toString();
+          current = new URL(location, current);
+          continue;
+        }
+        if (response.ok) {
+          return response.url || current.toString();
+        }
+        throw new Error(`HEAD_REDIRECT_STATUS:${response.status}`);
+      }
+      return current.toString();
+    } catch (error) {
+      this.logger.warn(
+        `[article-library][qr] head_redirect_failed shortLink=${start} message=${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    try {
+      const response = await fetch(start, {
+        method: 'GET',
+        redirect: 'follow',
+        headers,
+        signal: AbortSignal.timeout(10000),
+      });
+      return response.url || start;
+    } catch (error) {
+      this.logger.warn(
+        `[article-library][qr] get_redirect_failed shortLink=${start} message=${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * @description 解析小红书 miniapp qrcode 链接，把原二维码 JSON 写入 p.path 与 p.xhsMpBizQuery。
+   * @param {string} redirectUrl - 短链跳转后的 miniapp qrcode URL。
+   * @param {string} qrContent - 原始二维码内容 JSON。
+   * @returns {string | null} 写回 p 参数后的新 URL。
+   * @keyword-en article-library-qr, p-param-rewrite
+   */
+  rewriteXhsQrcodePParam(
+    redirectUrl: string,
+    qrContent: string,
+  ): string | null {
+    const target = String(redirectUrl ?? '').trim();
+    const payload = String(qrContent ?? '').trim();
+    if (!target || !payload) return null;
+    try {
+      const url = new URL(target);
+      const p = url.searchParams.get('p');
+      if (!p) return null;
+
+      const nested = new URL(p, 'https://xhs.local');
+      const xhsQuery = `path=${payload}`;
+      const rewrittenP = `${nested.pathname}?path=${payload}&xhsMpBizQuery=${encodeURIComponent(xhsQuery)}${nested.hash}`;
+      url.searchParams.set('p', rewrittenP);
+      url.searchParams.delete('xhsMpBizQuery');
+      return url.toString();
+    } catch (error) {
+      this.logger.warn(
+        `[article-library][qr] rewrite_p_failed message=${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * @description 构建文章库二维码内容；配置短链时输出改写后的小红书 qrcode URL。
+   * @param {{ token: string; articleLibraryId: number }} input - 二维码原始 payload。
+   * @returns {Promise<{ qrPayload: { token: string; articleLibraryId: number }; qrContent: string; qrContentType: 'json' | 'xhs-miniapp-url'; qrSourceContent: string; xhsQrcodeUrl: string | null }>} 二维码内容。
+   * @keyword-en article-library-qr, qr-content-build
+   */
+  async buildPushQrContent(input: {
+    token: string;
+    articleLibraryId: number;
+  }): Promise<{
+    qrPayload: { token: string; articleLibraryId: number };
+    qrContent: string;
+    qrContentType: 'json' | 'xhs-miniapp-url';
+    qrSourceContent: string;
+    xhsQrcodeUrl: string | null;
+  }> {
+    const qrPayload = {
+      token: String(input.token ?? '').trim(),
+      articleLibraryId: Number(input.articleLibraryId),
+    };
+    const qrSourceContent = JSON.stringify(qrPayload);
+    const shortLink = this.resolveConfiguredXhsQrShortLink();
+    if (!shortLink) {
+      return {
+        qrPayload,
+        qrContent: qrSourceContent,
+        qrContentType: 'json',
+        qrSourceContent,
+        xhsQrcodeUrl: null,
+      };
+    }
+
+    const redirected = await this.resolveXhsShortLinkRedirect(shortLink);
+    const rewritten = redirected
+      ? this.rewriteXhsQrcodePParam(redirected, qrSourceContent)
+      : null;
+    if (!rewritten) {
+      this.logger.warn(
+        `[article-library][qr] xhs_qrcode_unavailable shortLink=${shortLink} redirected=${redirected ?? '<null>'}`,
+      );
+      return {
+        qrPayload,
+        qrContent: qrSourceContent,
+        qrContentType: 'json',
+        qrSourceContent,
+        xhsQrcodeUrl: null,
+      };
+    }
+    return {
+      qrPayload,
+      qrContent: rewritten,
+      qrContentType: 'xhs-miniapp-url',
+      qrSourceContent,
+      xhsQrcodeUrl: rewritten,
+    };
   }
 
   /**

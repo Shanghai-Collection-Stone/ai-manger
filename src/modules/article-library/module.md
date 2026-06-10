@@ -40,6 +40,10 @@
   - `create`: 创建库/create library
   - `get`: 获取库/get by id
   - `ensureQrToken`: 确保文章库有二维码 token/ensure qr token
+  - `resolveConfiguredXhsQrShortLink()` — 从 env 读取文章库小红书二维码短链模板 | keywords: article-library-qr, env-short-link
+  - `resolveXhsShortLinkRedirect(shortLink)` — 解析小红书短链 301/302 跳转得到最终 qrcode URL | keywords: article-library-qr, short-link-redirect
+  - `rewriteXhsQrcodePParam(redirectUrl, qrContent)` — 解析 miniapp qrcode 链接并把原二维码 JSON 写入 `p.path` 与 `p.xhsMpBizQuery` | keywords: article-library-qr, p-param-rewrite
+  - `buildPushQrContent({ token, articleLibraryId })` — 构建文章库二维码内容，配置短链时返回改写后小红书 qrcode URL | keywords: article-library-qr, qr-content-build
   - `getByQrToken`: 通过二维码 token 获取文章库/get by qr token
   - `list`: 列表库/list libraries
   - `update`: 更新库（基础信息 / 推送配置）/update library
@@ -73,7 +77,7 @@
   - `createLibrary`: 创建库 POST /api/article-library
   - `listLibraries`: 列表库 GET /api/article-library（含统计+缩略图）
   - `getLibrary`: 获取库详情 GET /api/article-library/:libraryId
-  - `getPushQr`: 获取二维码内容 GET /api/article-library/:libraryId/push-qr
+  - `getPushQr`: 获取二维码内容 GET /api/article-library/:libraryId/push-qr（配置 XHS 短链时 qrContent 为改写后的 qrcode URL）
   - `updateLibrary`: 更新库 PATCH /api/article-library/:libraryId
   - `deleteLibrary`: 删除库 DELETE /api/article-library/:libraryId
   - `createArticle`: 文章入库 POST /api/article-library/:libraryId/articles
@@ -88,7 +92,7 @@ task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由�
 - **函数**:
   - `resolveTodoForLibrary`: 校验 token + 校验库已绑定 todo/resolve todo with library binding
   - `getLibrary`: 获取库 GET /task-api/:todoId/article-library/:libraryId
-  - `getPushUrl`: 获取推送链接与二维码内容（`qrContent` 为 JSON 字符串：`{ token, articleLibraryId }`，token 为文章库 qrToken） GET .../push-url
+  - `getPushUrl`: 获取推送链接与二维码内容（默认 `qrContent` 为 JSON 字符串；配置 XHS 短链时为改写后的 qrcode URL，`p.path` 与 `p.xhsMpBizQuery` 均携带原 JSON） GET .../push-url
   - `getLibraryByToken`: token 版获取库详情 POST `/task-api/article-library/detail`
   - `leaseNext`: 队列领取 POST .../lease-next
   - `leaseNextByToken`: token 版队列领取 POST `/task-api/article-library/lease-next`，请求体可直接传二维码 JSON
@@ -109,7 +113,7 @@ task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由�
 | 2. 文章入库 | POST `/api/article-library/:libraryId/articles` | — |
 | 3. 文章状态更新 | PATCH `/api/article-library/:libraryId/articles/:articleId/status` | PATCH `/task-api/article-library/articles/:articleId/status`（扫码 token）；兼容 PATCH `/task-api/:todoId/article-library/:libraryId/articles/:articleId/status` |
 | 4. 队列顺序取出 | POST `/api/article-library/:libraryId/articles/lease-next` | POST `/task-api/:todoId/article-library/:libraryId/lease-next` |
-| 5. 推送链接 / 二维码 | GET `/api/article-library/:libraryId/push-qr` | GET `/task-api/:todoId/article-library/:libraryId/push-url`（返回 `pushUrl`、`qrPayload`、`qrContent`；二维码内容为 `{"token":"...","articleLibraryId":1}`） |
+| 5. 推送链接 / 二维码 | GET `/api/article-library/:libraryId/push-qr` | GET `/task-api/:todoId/article-library/:libraryId/push-url`（返回 `pushUrl`、`qrPayload`、`qrContent`；默认二维码内容为 `{"token":"...","articleLibraryId":1}`；配置 XHS 短链时 `qrContent` 为改写后的 qrcode URL） |
 | 6. 扫码 token 获取库/文章 | — | POST `/task-api/article-library/detail` 获取库详情；POST `/task-api/article-library/lease-next` 领取下一篇文章 |
 | 7. 扫码 token 主动释放租约 | — | POST `/task-api/article-library/articles/:articleId/release` |
 
@@ -119,4 +123,4 @@ task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由�
 - **状态语义**：`unpublished`（未发布，唯一领取池）/`published`（已发布/已发送，永不参与 `leaseNext` 领取）。`statusFilter` 仅作为历史兼容配置保留，不允许把 `published` 文章重新放回领取池。
 - **缩略图**：库实体不持有封面字段；`getThumbnailImages` 按 `createdAt` 倒序取前 N 篇文章的首图。
 - **task-api 鉴权**：带 `todoId` 的 task-api 仍照搬 `TodoTaskController.resolveTodo` 模式 —— taskToken → todo → 校验 `todo.associatedResources` 含 `{ type: 'article-library', resourceId: libraryId }`。扫码场景使用文章库 `qrToken`，请求体传入 `{ token, articleLibraryId }`，后端按文章库 ID + token 校验后获取库、领取文章或回写发布状态，不需要绑定任务。
-- **二维码内容**：管理端 `GET /api/article-library/:libraryId/push-qr` 会懒生成并持久化 `pushConfig.qrToken`，前端使用生产级二维码库把返回的 `qrContent` 渲染成二维码。
+- **二维码内容**：管理端 `GET /api/article-library/:libraryId/push-qr` 会懒生成并持久化 `pushConfig.qrToken`，前端使用生产级二维码库把返回的 `qrContent` 渲染成二维码。配置 `ARTICLE_LIBRARY_XHS_QR_SHORT_LINK`（兼容 `XHS_ARTICLE_LIBRARY_QR_SHORT_LINK` / `XHS_MINIAPP_QR_SHORT_LINK` / `XHS_QR_SHORT_LINK`）时，后端会解析短链 301/302 跳转，解析落地链接的 `p` 参数，把原 JSON 写入 `p.path`，并把 `p` 内的 `xhsMpBizQuery` 写成编码后的 `path=<原 JSON>`。

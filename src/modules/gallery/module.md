@@ -18,6 +18,8 @@
   - `createUploadThumbnails`: 批量生成缩略图
   - `extractUploadFileDimensions`: 提取上传文件尺寸
   - `getImageDimensionsFromFile`: 使用 jimp 读取图片尺寸
+  - `deleteImage`: `POST images/:id/delete` 删除单张图片
+  - `deleteImagesBatch`: `POST images/batch-delete` 批量删除图片(body `{ userId, ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
 
 ### filters/gallery-upload-exception.filter.ts
 图库上传异常过滤器（拦截 Multer 上传错误并转换为前端可读消息）。
@@ -45,6 +47,8 @@
   - `countAvailableByTags`: 统计指定 tags 当前可用图片数(已排除 isUsed),返回 total + byTag,用于生成前的不足量预估/count available images by tags
   - `listTopTagsWithCount`: 列出租户可见的热门 tag(按图片数量倒序,排除 isUsed),用于 AI 推荐 tag 选择/list top tags by count for AI recommendation
   - `markUsedBatch`: 批量标记图片为已使用 (isUsed=true,usedAt=now),生成图组/拼图完成后调用,reset=true 可反向重置/mark images as used
+  - `deleteImage`: 删除单张图片(记录+本地原图/缩略图文件)/delete one image
+  - `deleteManyImages({ userId, ids })`: 批量删除图片,逐条复用单删逻辑互不阻断,返回 {deleted, failed, deletedIds} | keywords: gallery batch delete images, 图库批量删除
 
 ### gallery-group.service.ts
 图库组服务。

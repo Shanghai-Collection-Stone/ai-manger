@@ -99,6 +99,7 @@ services:
       SASS_SYNC_ORDER_SCHEMA_ID: ${SASS_SYNC_ORDER_SCHEMA_ID:-}
       SASS_SYNC_USAGE_SCHEMA_ID: ${SASS_SYNC_USAGE_SCHEMA_ID:-}
       SASS_SYNC_REFUND_SCHEMA_ID: ${SASS_SYNC_REFUND_SCHEMA_ID:-}
+      ARTICLE_LIBRARY_XHS_QR_SHORT_LINK: ${ARTICLE_LIBRARY_XHS_QR_SHORT_LINK:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

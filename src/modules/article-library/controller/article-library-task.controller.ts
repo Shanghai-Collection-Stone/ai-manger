@@ -125,14 +125,13 @@ export class ArticleLibraryTaskController {
     const lib = await this.library.get(Number(libraryId), todo.tenantId);
     if (!lib) throw new NotFoundException('LIBRARY_NOT_FOUND');
     const token = await this.library.ensureQrToken(lib.id, todo.tenantId);
-    const qrPayload = {
+    const qr = await this.library.buildPushQrContent({
       token,
       articleLibraryId: lib.id,
-    };
+    });
     return {
       pushUrl: lib.pushConfig.pushUrl ?? null,
-      qrPayload,
-      qrContent: JSON.stringify(qrPayload),
+      ...qr,
       statusFilter: lib.pushConfig.statusFilter,
     };
   }

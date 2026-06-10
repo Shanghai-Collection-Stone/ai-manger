@@ -2672,6 +2672,159 @@ export class CanvasImageGroupService {
   }
 
   /**
+   * @description 计算 2/3/4 张拼图在固定 640×853(3:4) 画布上的网格单元格位置。
+   * @param {number} count - 图片数量（2/3/4）。
+   * @returns {Array<{ left: number; top: number; width: number; height: number }>} 单元格列表，顺序对应输入图片。
+   * @keyword-cn 拼图版式, 多图拼图
+   * @keyword-en multi-collage, collage-layout
+   */
+  private resolveMultiCollageCells(
+    count: number,
+  ): Array<{ left: number; top: number; width: number; height: number }> {
+    const W = COLLAGE_WIDTH;
+    const H = COLLAGE_HEIGHT;
+    const topH = Math.floor(H / 2);
+    const bottomH = H - topH;
+    const halfW = Math.floor(W / 2);
+    const rightW = W - halfW;
+    if (count <= 2) {
+      // 2 张：上下两等分
+      return [
+        { left: 0, top: 0, width: W, height: topH },
+        { left: 0, top: topH, width: W, height: bottomH },
+      ];
+    }
+    if (count === 3) {
+      // 3 张：上 1 通栏 + 下 2 并排
+      return [
+        { left: 0, top: 0, width: W, height: topH },
+        { left: 0, top: topH, width: halfW, height: bottomH },
+        { left: halfW, top: topH, width: rightW, height: bottomH },
+      ];
+    }
+    // 4 张：2×2 宫格
+    return [
+      { left: 0, top: 0, width: halfW, height: topH },
+      { left: halfW, top: 0, width: rightW, height: topH },
+      { left: 0, top: topH, width: halfW, height: bottomH },
+      { left: halfW, top: topH, width: rightW, height: bottomH },
+    ];
+  }
+
+  /**
+   * @description 将 2/3/4 张图库图片合成为固定 640×853(3:4) 竖版拼图，按网格充满单元格(fit:cover)，不烧录任何文字。
+   * @param {GalleryImageEntity[]} images - 2-4 张待合成图片（多余的截断到 4 张）。
+   * @returns {Promise<string | null>} 拼图静态路径(/static/uploads/canvas-collages/...)，失败返回 null。
+   * @keyword-cn 多图拼图, 拼图合成
+   * @keyword-en multi-collage, collage-compose
+   */
+  private async createMultiCollageFile(
+    images: GalleryImageEntity[],
+  ): Promise<string | null> {
+    const picked = (Array.isArray(images) ? images : []).slice(0, 4);
+    if (picked.length < 2) return null;
+    if (picked.length === 2) {
+      // 复用经过验证的双图上下拼实现
+      return this.createDynamicCollageFile(picked[0], picked[1]);
+    }
+    const paths = picked.map((img) => this.resolveLocalPath(img));
+    for (let i = 0; i < paths.length; i++) {
+      const p = paths[i];
+      if (!p || !existsSync(p)) {
+        this.logger.warn(
+          `[image-group] createMultiCollageFile skip: no readable local path img=${picked[i]?.id}`,
+        );
+        return null;
+      }
+    }
+    try {
+      const sharp = await this.loadSharp();
+      if (!sharp) return null;
+      const cells = this.resolveMultiCollageCells(picked.length);
+      const tiles = await Promise.all(
+        paths.map(async (p, idx) => {
+          const cell = cells[idx];
+          const buf = await sharp(p as string)
+            .resize({ width: cell.width, height: cell.height, fit: 'cover' })
+            .toBuffer();
+          return { input: buf, top: cell.top, left: cell.left };
+        }),
+      );
+      const outDir = join(process.cwd(), 'public', 'uploads', 'canvas-collages');
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+      const outName = `collage-${randomUUID()}.png`;
+      const outPath = join(outDir, outName);
+      await sharp({
+        create: {
+          width: COLLAGE_WIDTH,
+          height: COLLAGE_HEIGHT,
+          channels: 3,
+          background: { r: 255, g: 255, b: 255 },
+        },
+      })
+        .composite(tiles)
+        .png()
+        .toFile(outPath);
+      return `/static/uploads/canvas-collages/${outName}`;
+    } catch (err) {
+      this.logger.warn(
+        `[image-group] createMultiCollageFile error count=${picked.length}: ${this.describeUnknown(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * @description 将用户本次多选的 2-4 张图库图片合成为 3:4 拼图并写入动态拼图图库，返回持久化图片，供"直接设图"槽位复用。
+   * @param {object} input - 合成入参（当前租户 + 源图 ID + 生成类型 + 可选目标分组）。
+   * @returns {Promise<GalleryImageEntity | null>} 入库后的拼图图片实体，失败返回 null。
+   * @keyword-cn 多图拼图, 直接设图拼图
+   * @keyword-en multi-collage, select-collage
+   */
+  async composeSelectedCollage(input: {
+    userId: string;
+    tenantId?: string;
+    sourceImageIds: number[];
+    generatedKind?: 'cover' | 'collage';
+    groupId?: string | number;
+  }): Promise<GalleryImageEntity | null> {
+    const sourceImageIds = Array.from(
+      new Set(
+        (Array.isArray(input.sourceImageIds) ? input.sourceImageIds : [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.floor(id)),
+      ),
+    ).slice(0, 4);
+    if (sourceImageIds.length < 2) return null;
+
+    const sourceImages = await this.gallery.findAccessibleImagesByIds(
+      input.userId,
+      input.tenantId,
+      sourceImageIds,
+    );
+    if (sourceImages.length < 2) return null;
+
+    const collageUrl = await this.createMultiCollageFile(sourceImages);
+    if (!collageUrl) return null;
+
+    const generatedKind = input.generatedKind ?? 'collage';
+    return this.persistGeneratedAssetToGallery({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      url: collageUrl,
+      generatedKind,
+      groupId: input.groupId,
+      sourceImageIds: sourceImages.map((img) => Number(img.id)),
+      sourceImages,
+      description:
+        generatedKind === 'cover'
+          ? `画布多图拼图封面(${sourceImages.length}图)`
+          : `画布多图拼图(${sourceImages.length}图)`,
+    });
+  }
+
+  /**
    * @description 将图库图片实体转换为 CanvasGroupImage
    * @param {GalleryImageEntity} img - 图库实体
    * @param {'cover'|'inner-1'|'inner-2'|'inner-3'|'inner-4'|'inner-5'} role - 版式角色

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus, Library, Sparkles } from 'lucide-react';
+import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus, Library, Sparkles, Download, Copy, ClipboardList } from 'lucide-react';
 import { chatService } from './chatService';
 import { articleLibraryService } from './articleLibraryService';
 import { showToast } from './blocks/shared';
@@ -509,6 +509,107 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
   };
 
   /**
+   * @description 复制文本到剪贴板，navigator.clipboard 优先，失败回退 execCommand。
+   * @param {string} text - 待复制文本。
+   * @param {string} [label] - 提示用途名称。
+   * @returns {Promise<void>}
+   * @keyword-cn 复制文本, 复制标题正文
+   * @keyword-en copy-text
+   */
+  const copyText = useCallback(async (text, label = '内容') => {
+    const value = String(text ?? '');
+    if (!value.trim()) {
+      showToast(`${label}为空`, 'error');
+      return;
+    }
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      showToast(`${label}已复制`, 'success');
+    } catch {
+      showToast(`${label}复制失败`, 'error');
+    }
+  }, []);
+
+  /**
+   * @description 下载单个图片地址，优先 fetch→blob→a.download，失败回退直接链接。
+   * @param {string} url - 图片地址。
+   * @param {string} filename - 下载文件名。
+   * @returns {Promise<boolean>} 是否触发下载。
+   * @keyword-cn 图片下载, 图文Canvas下载
+   * @keyword-en canvas-download, download-image
+   */
+  const downloadImageUrl = useCallback(async (url, filename) => {
+    const src = String(url ?? '').trim();
+    if (!src) return false;
+    try {
+      const res = await fetch(src);
+      if (!res.ok) throw new Error('fetch failed');
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objUrl), 2000);
+      return true;
+    } catch {
+      const a = document.createElement('a');
+      a.href = src;
+      a.download = filename;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return true;
+    }
+  }, []);
+
+  /**
+   * @description 逐张下载当前文章的全部配图（封面+内页），文件名按 cover/inner 顺序命名。
+   * @param {object} article - Canvas 文章。
+   * @returns {Promise<void>}
+   * @keyword-cn 图文Canvas下载, 下载全部图片
+   * @keyword-en canvas-download, download-article-images
+   */
+  const downloadArticleImages = useCallback(async (article) => {
+    const images = readImages(article);
+    if (images.length === 0) {
+      showToast('当前文章暂无图片', 'error');
+      return;
+    }
+    const baseName =
+      String(article?.title || `canvas-${canvasId}-article-${article?.id ?? ''}`)
+        .replace(/[\\/:*?"<>|]+/g, '_')
+        .slice(0, 40) || 'image';
+    showToast(`开始下载 ${images.length} 张图片`, 'info');
+    for (let i = 0; i < images.length; i++) {
+      const url = images[i];
+      const rawExt = (url.split('?')[0].match(/\.(png|jpe?g|webp|gif)$/i)?.[1] || 'jpg').toLowerCase();
+      const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+      const label = i === 0 ? 'cover' : `inner${i}`;
+      // eslint-disable-next-line no-await-in-loop
+      await downloadImageUrl(url, `${baseName}-${label}.${ext}`);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    showToast('图片下载完成', 'success');
+  }, [canvasId, downloadImageUrl]);
+
+  /**
    * @description 打开当前文章指定图片槽位重生成弹窗，并定位到该图片预览。
    * @param {object} article - Canvas 文章。
    * @param {number} imageIndex - 图片下标，0 为封面，1+ 为内页。
@@ -863,6 +964,36 @@ const CanvasFeedView = ({ canvasId, onClose }) => {
                       <h4 className="text-base md:text-lg font-semibold text-slate-900 flex-1">
                         {selected.title || `文章 #${selected.id}`}
                       </h4>
+                      {/* 复制标题 */}
+                      {editingId !== selected.id && (
+                        <button
+                          onClick={() => copyText(selected.title || '', '标题')}
+                          title="复制标题"
+                          className="p-1.5 rounded-full text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition shrink-0"
+                        >
+                          <Copy size={14} />
+                        </button>
+                      )}
+                      {/* 复制正文 */}
+                      {editingId !== selected.id && (
+                        <button
+                          onClick={() => copyText(readMarkdown(selected), '正文')}
+                          title="复制正文"
+                          className="p-1.5 rounded-full text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 transition shrink-0"
+                        >
+                          <ClipboardList size={14} />
+                        </button>
+                      )}
+                      {/* 下载当前文章全部图片 */}
+                      {editingId !== selected.id && readImages(selected).length > 0 && (
+                        <button
+                          onClick={() => downloadArticleImages(selected)}
+                          title="下载当前文章全部图片"
+                          className="p-1.5 rounded-full text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 transition shrink-0"
+                        >
+                          <Download size={14} />
+                        </button>
+                      )}
                       {/* 存入文章库（单篇） */}
                       {editingId !== selected.id && (
                         <button
