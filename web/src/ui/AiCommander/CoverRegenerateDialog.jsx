@@ -100,6 +100,7 @@ const CoverRegenerateDialog = ({
   const [selectedTag, setSelectedTag] = useState('');
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [prompt, setPrompt] = useState('');
+  const [includeSystemPrompt, setIncludeSystemPrompt] = useState(true);
   const swipeStartRef = useRef(null);
 
   /**
@@ -144,6 +145,7 @@ const CoverRegenerateDialog = ({
     if (!open) return;
     setSelectedIds(new Set());
     setPrompt('');
+    setIncludeSystemPrompt(true);
     setTagQuery('');
     void loadTags();
   }, [open, loadTags]);
@@ -155,6 +157,8 @@ const CoverRegenerateDialog = ({
 
   const selectedCount = selectedIds.size;
   const selectionFull = selectedCount >= MAX_SOURCE_IMAGE_SELECTION;
+  // 未勾选系统提示词时,本次提示词为必填;为空则禁止重新生成
+  const promptMissing = !includeSystemPrompt && prompt.trim().length === 0;
   const selectedImageIds = useMemo(
     () => Array.from(selectedIds).map((id) => Number(id)).slice(0, MAX_SOURCE_IMAGE_SELECTION),
     [selectedIds],
@@ -246,9 +250,12 @@ const CoverRegenerateDialog = ({
    */
   const handleSubmit = async () => {
     if (selectedImageIds.length === 0 || submitting || selecting) return;
+    // 未勾选"系统自带提示词"时本次提示词必填,否则无任何生成方向
+    if (!includeSystemPrompt && prompt.trim().length === 0) return;
     await onSubmit?.({
       imageIds: selectedImageIds,
       prompt: prompt.trim(),
+      includeSystemPrompt,
     });
   };
 
@@ -319,10 +326,37 @@ const CoverRegenerateDialog = ({
             <textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
-              placeholder={promptPlaceholder}
+              placeholder={
+                includeSystemPrompt
+                  ? promptPlaceholder
+                  : '未使用系统自带提示词，请填写本次完整生成方向（必填）'
+              }
               rows={3}
-              className="w-full px-3 py-2 text-sm leading-6 rounded-xl border border-slate-200 bg-white outline-none resize-none focus:ring-2 focus:ring-rose-200 focus:border-rose-300"
+              className={`w-full px-3 py-2 text-sm leading-6 rounded-xl border bg-white outline-none resize-none focus:ring-2 ${
+                promptMissing
+                  ? 'border-rose-300 focus:ring-rose-200 focus:border-rose-400'
+                  : 'border-slate-200 focus:ring-rose-200 focus:border-rose-300'
+              }`}
             />
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={includeSystemPrompt}
+                onChange={(event) => setIncludeSystemPrompt(event.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-rose-500 focus:ring-rose-300"
+              />
+              <span className="text-xs text-slate-600">使用系统自带提示词</span>
+            </label>
+            <span className="text-[11px] text-slate-400">
+              {includeSystemPrompt
+                ? '系统会按目标类型补齐规格（封面重营销大字 / 内页少文字重内容）'
+                : '已关闭：仅使用本次提示词，提示词必填'}
+            </span>
+            {promptMissing && (
+              <span className="text-[11px] text-rose-500">请填写本次提示词</span>
+            )}
           </div>
           <div className="mt-3 flex items-start gap-2">
             <div className="h-9 px-2 rounded-xl bg-white border border-slate-200 text-slate-400 flex items-center gap-1.5 shrink-0">
@@ -438,7 +472,12 @@ const CoverRegenerateDialog = ({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || selecting || selectedImageIds.length === 0}
+            disabled={
+              submitting ||
+              selecting ||
+              selectedImageIds.length === 0 ||
+              promptMissing
+            }
             className="order-3 inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-xl bg-rose-500 text-white hover:bg-rose-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             {submitting ? (

@@ -436,6 +436,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
   }): Promise<CanvasEntity | null> {
     return await this.startArticleImageRegeneration({
       ...input,
@@ -459,6 +460,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
   }): Promise<CanvasEntity | null> {
     const imageIndex = this.normalizeArticleImageIndex(input.imageIndex);
     const imageIds = this.normalizeCoverSourceIds(input.imageIds);
@@ -772,6 +774,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
   }): Promise<CanvasEntity | null> {
     return await this.startImageGroupImageRegeneration({
       ...input,
@@ -795,6 +798,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
   }): Promise<CanvasEntity | null> {
     const role = this.normalizeImageGroupImageRole(input.role);
     const imageIds = this.normalizeCoverSourceIds(input.imageIds);
@@ -955,6 +959,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
     previousStatus: CanvasStatus;
   }): Promise<void> {
     try {
@@ -977,6 +982,7 @@ export class CanvasService {
               articleTitle: article.title,
               articleTags: Array.isArray(article.tags) ? article.tags : [],
               prompt: input.prompt,
+              includeSystemPrompt: input.includeSystemPrompt,
               sourceImageIds: input.imageIds,
             })
           : await this.imageGroupService.regenerateInnerImage({
@@ -987,6 +993,7 @@ export class CanvasService {
               articleTags: Array.isArray(article.tags) ? article.tags : [],
               role: this.toArticleInnerRole(input.imageIndex),
               prompt: input.prompt,
+              includeSystemPrompt: input.includeSystemPrompt,
               sourceImageIds: input.imageIds,
             });
       const nextImageUrls = Array.isArray(article.imageUrls)
@@ -1037,6 +1044,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
     previousStatus: CanvasStatus;
   }): Promise<void> {
     await this.runImageGroupImageRegeneration({ ...input, role: 'cover' });
@@ -1058,6 +1066,7 @@ export class CanvasService {
     tenantId?: string;
     imageIds: number[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
     previousStatus: CanvasStatus;
   }): Promise<void> {
     try {
@@ -1077,6 +1086,7 @@ export class CanvasService {
               topic: canvas.topic,
               articleTitle: group.articleTitle,
               prompt: input.prompt,
+              includeSystemPrompt: input.includeSystemPrompt,
               sourceImageIds: input.imageIds,
             })
           : await this.imageGroupService.regenerateInnerImage({
@@ -1087,6 +1097,7 @@ export class CanvasService {
               articleTags: this.readArticleTagsForImageGroup(canvas, group),
               role: input.role as CanvasInnerImageRole,
               prompt: input.prompt,
+              includeSystemPrompt: input.includeSystemPrompt,
               sourceImageIds: input.imageIds,
             });
       const nextGroups = groups.map((item) =>

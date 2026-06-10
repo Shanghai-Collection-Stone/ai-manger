@@ -1330,25 +1330,57 @@ export class AgentService {
   }
 
   /**
-   * @description 为 meitu image-edit 构建封面编辑提示词。上层只传入"选题/标题/副标题"
-   * 等 meta 骨架，本函数补齐所有硬性规格约束（任务/要求/文案/装饰/风格/尺寸），
-   * 并强化为明确的"硬性规格-必须严格遵守"指令，最大化底图保真度与可读性。
-   * @param {{ prompt: string; size?: string }} input - 编辑上下文。
+   * @description 为 meitu image-edit 构建编辑提示词。上层只传入"选题/标题/副标题"
+   * 等 meta 骨架，本函数按目标类型(封面/内页)补齐对应的硬性规格约束。封面强调
+   * 营销大字/装饰/点击率；内页强调"少文字、重内容"，禁止封面化包装。当
+   * includeSystemPrompt=false 时仅返回用户本次提示词，不叠加任何系统规格。
+   * @param {{ prompt: string; size?: string; kind?: 'cover' | 'inner'; includeSystemPrompt?: boolean }} input - 编辑上下文。
    * @returns {string} 增强后的编辑提示词。
-   * @keyword-en build meitu image edit prompt with hard constraints
+   * @keyword-cn 图生图提示词, 封面规格, 内页规格, 系统自带提示词
+   * @keyword-en build-meitu-edit-prompt
+   * @keyword-en inner-page-spec
+   * @keyword-en system-prompt-toggle
    */
   private buildMeituEditPrompt(input: {
     prompt: string;
     size?: string;
+    kind?: 'cover' | 'inner';
+    includeSystemPrompt?: boolean;
   }): string {
     const basePrompt = String(input.prompt ?? '')
       .replace(/\s+/g, ' ')
       .trim();
+    // 未勾选"系统自带提示词":只使用用户本次提示词,不叠加封面/内页任何系统规格
+    if (input.includeSystemPrompt === false) {
+      return basePrompt;
+    }
+    const kind = input.kind === 'inner' ? 'inner' : 'cover';
     const size = String(input.size ?? '').trim();
-    const sizeLine =
-      size && /^\d{2,5}x\d{2,5}$/i.test(size)
-        ? `尺寸规格:竖版封面 ${size}，严禁输出横版或方版`
-        : '尺寸规格:竖版封面，严禁输出横版或方版';
+    const hasSize = /^\d{2,5}x\d{2,5}$/i.test(size);
+
+    if (kind === 'inner') {
+      const sizeLine = hasSize
+        ? `尺寸规格:竖版内页 ${size}，严禁输出横版或方版`
+        : '尺寸规格:竖版内页 3:4，严禁输出横版或方版';
+      const metaBlock =
+        basePrompt.length > 0 ? `【内页元信息】\n${basePrompt}` : '';
+      const hardBlock = [
+        '【内页规格 - 必须严格遵守，违反即判为失败】',
+        '1. 任务:基于所提供底图做轻量修图/调色/局部重构/背景整理与氛围增强，保留主体身份、场景关系与核心构图的识别度；严禁脱离底图生成无关画面，严禁抹除或替换主体。',
+        '2. 内容优先:这是图文内页配图，重在真实场景、细节与氛围的呈现，画面信息要饱满、耐看、适合手机端连续浏览；以"重内容"为核心，不做封面化营销包装。',
+        '3. 文字克制:这是内页不是封面，禁止添加封面式营销大标题/副标题/促销大字；如确需文字仅允许极少量点缀性短文案，不喧宾夺主；严禁错别字、乱码、重复字、残缺字。',
+        '4. 装饰克制:仅允许少量自然氛围点缀(柔光、光斑等)，禁止堆叠贴纸、箭头、气泡、对话框、拟声词等强营销装饰，禁止遮挡主体与场景。',
+        '5. 风格:真实清晰、生活方式感、明快通透、色彩自然；杜绝灰暗脏污、低分辨率、过度滤镜与浮夸特效。',
+        `6. ${sizeLine}`,
+        '7. 输出:仅输出最终编辑后的内页图本体，严禁在画面中加入水印、平台 logo、网址、二维码、无关文字。',
+        '8. 版权合规:不得 1:1 精确复刻受版权/商标保护的角色、卡通形象、品牌 logo、知名 IP 或明星肖像；如底图含此类元素,通过风格化改造转为致敬式原创形象,在不构成侵权的前提下尽量保留可识别特征与神韵。',
+      ].join('\n');
+      return [metaBlock, hardBlock].filter((x) => x.length > 0).join('\n\n');
+    }
+
+    const sizeLine = hasSize
+      ? `尺寸规格:竖版封面 ${size}，严禁输出横版或方版`
+      : '尺寸规格:竖版封面，严禁输出横版或方版';
 
     const metaBlock =
       basePrompt.length > 0 ? `【封面元信息】\n${basePrompt}` : '';
@@ -2153,6 +2185,8 @@ export class AgentService {
     size?: string;
     baseImagePath?: string;
     baseImageCandidates?: string[];
+    kind?: 'cover' | 'inner';
+    includeSystemPrompt?: boolean;
   }): Promise<{
     providerCode: string;
     model: string;
@@ -2161,6 +2195,8 @@ export class AgentService {
     const finalPrompt = this.buildMeituEditPrompt({
       prompt: input.prompt,
       size: input.size,
+      kind: input.kind,
+      includeSystemPrompt: input.includeSystemPrompt,
     });
 
     const runtime = await this.resolveAvailableDefaultImageRuntime();
@@ -2228,16 +2264,22 @@ export class AgentService {
   }
 
   /**
-   * @description 使用 AI 封面生成工具发送提示词并返回本地图片路径。
-   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
+   * @description 使用 AI 封面生成工具发送提示词并返回本地图片路径。kind 决定下游补齐
+   * 封面规格还是内页规格(少文字重内容)；includeSystemPrompt=false 时只用用户提示词。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[]; kind?: 'cover' | 'inner'; includeSystemPrompt?: boolean }} input - 生图请求。
    * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
-   * @keyword-en send prompt for image generation
+   * @keyword-cn 发送提示词生图, 封面规格, 内页规格, 系统自带提示词
+   * @keyword-en send-prompt-for-image-generation
+   * @keyword-en inner-page-spec
+   * @keyword-en system-prompt-toggle
    */
   async sendPrompt(input: {
     prompt: string;
     size?: string;
     baseImagePath?: string;
     baseImageCandidates?: string[];
+    kind?: 'cover' | 'inner';
+    includeSystemPrompt?: boolean;
   }): Promise<{
     providerCode: string;
     model: string;
@@ -2250,6 +2292,8 @@ export class AgentService {
       size: input.size,
       baseImagePath: input.baseImagePath,
       baseImageCandidates: input.baseImageCandidates,
+      kind: input.kind,
+      includeSystemPrompt: input.includeSystemPrompt,
     });
   }
 

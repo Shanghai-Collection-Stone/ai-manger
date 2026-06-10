@@ -35,11 +35,11 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `formatFetchCause`: 递归序列化 fetch error.cause 为可读字符串，定位 DNS/TLS/socket/连接超时类失败/format fetch error cause
   - `isTransientFetchError(e, causeStr)`: 判定 fetch 抛错是否为可重试的瞬时网络错误（socket 断开/连接重置/连接超时/DNS 抖动），排除 AbortError 与 headers 超时/transient fetch error detection
   - `fetchImageWithRetry(endpoint, initFactory, label, maxRetries=2)`: 对生图 fetch 按瞬时网络错误做指数退避重试，每次重试用 initFactory 重建 RequestInit（FormData/Blob body 消费后不可复用）/retry image fetch on transient socket error
-  - `buildMeituEditPrompt`: 构建封面编辑提示词（上层传入选题/主副标题等元信息，本函数追加"硬性规格-必须严格遵守"的 8 条编号约束：任务/底图识别度/文案呈现/装饰元素/风格/尺寸/输出纯净度/版权合规。识别度规则放宽：允许风格化重绘/动画化/夸张表情；版权例外：底图为知名 IP/商标/明星肖像时转为"致敬式原创形象"——不 1:1 复刻、但在合规前提下尽量保留辨识特征与神韵，规避 OpenAI moderation_blocked 又最大化神似）/build meitu image edit prompt with hard constraints
+  - `buildMeituEditPrompt`: 构建图生图编辑提示词（按 `kind` 选规格：`cover` 追加封面 8 条硬性规格——任务/底图识别度/文案呈现/装饰元素/风格/尺寸/输出/版权，重营销大字与装饰；`inner` 改用内页 8 条规格——少文字、重内容、文字克制、装饰克制，禁止封面化营销包装；`includeSystemPrompt=false` 时只返回用户本次提示词不叠加任何系统规格。识别度规则放宽、版权例外同前）/build meitu image edit prompt with hard constraints, inner-page-spec, system-prompt-toggle
   - `resolveMeituEditableBaseImage`: 匹配可编辑底图（优先调用方传入候选）/resolve meitu editable base image
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底（stdout 非 JSON 时走 parseMeituKeyValueText 扁平 key-value 兜底；result 字段取 http(s) URL 作为最终图片地址）/generate image by meitu image-edit fallback
   - `parseMeituKeyValueText`: 解析 meitu-cli "code: 0 message: success result: https://... progress: 1" 这类扁平键值空格串（即使加 --json CLI 仍可能如此输出）/parse meitu cli flat key value text
-  - `sendPrompt`: 调用AI封面生成工具生图（入参为prompt/size/底图候选）/send prompt for image generation
+  - `sendPrompt`: 调用AI封面生成工具生图（入参 prompt/size/底图候选；`kind`=cover|inner 决定下游补封面规格还是内页"少文字重内容"规格；`includeSystemPrompt`=false 时仅用用户提示词）/send prompt for image generation, inner-page-spec, system-prompt-toggle
   - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection
   - `run`: 运行/run
   - `runWithMessages(input)`: 消息运行;默认以 nonStreaming + `nostream` tag 执行,用于 tool 内部/子代理内部 LLM 时不绑定主流 token handler | keywords: 运行, 消息, 调用, 工具内部非流, run, messages, invoke, internal-llm-nostream

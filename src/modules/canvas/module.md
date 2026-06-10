@@ -46,9 +46,9 @@ Canvas服务。
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）
 - `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)
 - `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项，参考图最多 4 张 | keywords: cover-regenerate, article-cover-only
-- `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张 | keywords: article-image-regenerate, image-slot-regenerate
+- `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张；透传 `includeSystemPrompt`(默认 true) 决定是否叠加系统自带封面/内页提示词 | keywords: article-image-regenerate, image-slot-regenerate, system-prompt-toggle
 - `startImageGroupCoverRegeneration(input)` — 启动图片组 Canvas 单组封面重生成，立即置为 generating，后台仅替换目标组 role=cover 图片，参考图最多 4 张 | keywords: cover-regenerate, image-group-cover-only
-- `startImageGroupImageRegeneration(input)` — 启动图片组 Canvas 指定图片槽位重生成，立即置为 generating，后台仅替换目标组对应 role 图片，参考图最多 4 张 | keywords: image-slot-regenerate, image-group-image-slot
+- `startImageGroupImageRegeneration(input)` — 启动图片组 Canvas 指定图片槽位重生成，立即置为 generating，后台仅替换目标组对应 role 图片，参考图最多 4 张；透传 `includeSystemPrompt`(默认 true) 决定是否叠加系统自带封面/内页提示词 | keywords: image-slot-regenerate, image-group-image-slot, system-prompt-toggle
 - `selectArticleCoverImage(input)` — 直接用图库图片替换图文 Canvas 单篇文章首图封面，不进入生成中状态 | keywords: cover-select, article-cover-only
 - `selectArticleImage(input)` — 直接用图库图片替换图文 Canvas 单篇文章指定图片槽位，不进入生成中状态 | keywords: article-image-select, image-slot-select
 - `selectImageGroupCoverImage(input)` — 直接用图库图片替换图组 Canvas 指定图组 role=cover 图片，不修改其他内页图 | keywords: cover-select, image-group-cover-only
@@ -83,8 +83,8 @@ Canvas服务。
 ### canvas-image-group.service.ts
 图片组生成服务。
 - `generateImageGroups` — 根据文章 tag 严格匹配图库配图（**不再跨 tag 随机补图**），先在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重；图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
-- `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库 | keywords: cover-regenerate, selected-source-images
-- `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库 | keywords: inner-regenerate, image-group-image-slot
+- `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库；`includeSystemPrompt=false` 时只用用户提示词(必填)并向下游传 kind=cover | keywords: cover-regenerate, selected-source-images, system-prompt-toggle
+- `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
 - `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1） | keywords: render, prepared, image-group, concurrency
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面/内页/文案/AI封面/烧字），供并发调用 | keywords: render, single-plan, image-group, cover-text

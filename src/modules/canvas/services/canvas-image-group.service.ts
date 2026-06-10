@@ -247,6 +247,7 @@ export class CanvasImageGroupService {
     articleTitle?: string;
     articleTags?: string[];
     prompt?: string;
+    includeSystemPrompt?: boolean;
     sourceImageIds: number[];
   }): Promise<CanvasGroupImage> {
     const sourceImageIds = Array.from(
@@ -279,6 +280,11 @@ export class CanvasImageGroupService {
     }
 
     const rawPrompt = this.coercePlainText(input.prompt).trim();
+    // 是否叠加系统自带封面提示词;未勾选时只用用户本次提示词,此时提示词必填
+    const includeSystemPrompt = input.includeSystemPrompt !== false;
+    if (!includeSystemPrompt && rawPrompt.length === 0) {
+      throw new Error('COVER_PROMPT_REQUIRED');
+    }
     const coverTheme =
       this.coercePlainText(input.topic).trim() ||
       this.coercePlainText(input.articleTitle).trim() ||
@@ -303,33 +309,39 @@ export class CanvasImageGroupService {
       .map((tag) => this.coercePlainText(tag).trim())
       .filter((tag) => tag.length > 0)
       .slice(0, 12);
-    const prompt = this.sanitizeCopyrightRiskText(
-      [
-        '请基于用户选择的参考图片一次性生成一张小红书图文封面。',
-        '只使用本次选择的参考图片和本次输入的提示词，不复用旧封面提示词、旧封面文案或旧版式。',
-        '多张参考图需要融合为同一张封面，不要分别出图，不要生成组图。',
-        '仅生成封面图：保持主体真实、画面清晰、构图适合 3:4 竖版封面。',
-        '可以做轻量修图、色彩校正、局部对比、干净排版和封面化增强。',
-        '不要改变原图核心主体身份，不要影响 Canvas 中除封面外的其他图片。',
-        `标准生图请求:\n${standardPrompt}`,
-        '封面必须首先服务于主题，参考图只作为人物、场景、物料与风格来源。',
-        '请围绕主题、文章标题和标签组织主体、场景和氛围，不要生成与主题无关的通用拼贴。',
-        '如果参考图与主题冲突，优先保持主题相关性。',
-        rawPrompt ? `用户提示词:${rawPrompt}` : '',
-        input.topic ? `Canvas主题:${input.topic}` : '',
-        input.articleTitle ? `文章标题:${input.articleTitle}` : '',
-        tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
-        safeCoverText.title ? `封面主标题:${safeCoverText.title}` : '',
-        safeCoverText.subtitle ? `封面副标题:${safeCoverText.subtitle}` : '',
-      ]
-        .filter((part) => part.length > 0)
-        .join('\n'),
-    );
+    const prompt = includeSystemPrompt
+      ? this.sanitizeCopyrightRiskText(
+          [
+            '请基于用户选择的参考图片一次性生成一张小红书图文封面。',
+            '只使用本次选择的参考图片和本次输入的提示词，不复用旧封面提示词、旧封面文案或旧版式。',
+            '多张参考图需要融合为同一张封面，不要分别出图，不要生成组图。',
+            '仅生成封面图：保持主体真实、画面清晰、构图适合 3:4 竖版封面。',
+            '可以做轻量修图、色彩校正、局部对比、干净排版和封面化增强。',
+            '不要改变原图核心主体身份，不要影响 Canvas 中除封面外的其他图片。',
+            `标准生图请求:\n${standardPrompt}`,
+            '封面必须首先服务于主题，参考图只作为人物、场景、物料与风格来源。',
+            '请围绕主题、文章标题和标签组织主体、场景和氛围，不要生成与主题无关的通用拼贴。',
+            '如果参考图与主题冲突，优先保持主题相关性。',
+            rawPrompt ? `用户提示词:${rawPrompt}` : '',
+            input.topic ? `Canvas主题:${input.topic}` : '',
+            input.articleTitle ? `文章标题:${input.articleTitle}` : '',
+            tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
+            safeCoverText.title ? `封面主标题:${safeCoverText.title}` : '',
+            safeCoverText.subtitle
+              ? `封面副标题:${safeCoverText.subtitle}`
+              : '',
+          ]
+            .filter((part) => part.length > 0)
+            .join('\n'),
+        )
+      : this.sanitizeCopyrightRiskText(rawPrompt);
 
     const generated = await this.agentService.sendPrompt({
       prompt,
       size: '640x853',
       baseImageCandidates,
+      kind: 'cover',
+      includeSystemPrompt,
     });
     const generatedRecord =
       generated && typeof generated === 'object'
@@ -376,6 +388,7 @@ export class CanvasImageGroupService {
     articleTags?: string[];
     role: Exclude<CanvasGroupImage['role'], 'cover'>;
     prompt?: string;
+    includeSystemPrompt?: boolean;
     sourceImageIds: number[];
   }): Promise<CanvasGroupImage> {
     const sourceImageIds = Array.from(
@@ -408,32 +421,41 @@ export class CanvasImageGroupService {
     }
 
     const rawPrompt = this.coercePlainText(input.prompt).trim();
+    // 是否叠加系统自带内页提示词;未勾选时只用用户本次提示词,此时提示词必填
+    const includeSystemPrompt = input.includeSystemPrompt !== false;
+    if (!includeSystemPrompt && rawPrompt.length === 0) {
+      throw new Error('INNER_PROMPT_REQUIRED');
+    }
     const tags = (Array.isArray(input.articleTags) ? input.articleTags : [])
       .map((tag) => this.coercePlainText(tag).trim())
       .filter((tag) => tag.length > 0)
       .slice(0, 12);
-    const prompt = this.sanitizeCopyrightRiskText(
-      [
-        '请基于用户选择的参考图片生成一张小红书图文内页图片。',
-        '只使用本次选择的参考图片和本次输入的提示词，不复用旧内页提示词、旧内页文字或旧版式。',
-        '多张参考图需要融合为同一张内页图，不要分别出图，不要生成封面。',
-        '画面比例为 3:4 竖版，主体真实清晰，构图适合手机端连续浏览。',
-        '允许做轻量修图、调色、局部重构、背景整理和氛围增强，但不要影响 Canvas 中其他图片。',
-        '禁止添加封面主标题、副标题、营销大字、水印、平台 logo、网址、二维码或无关文字。',
-        `目标内页:${input.role}`,
-        rawPrompt ? `用户提示词:${rawPrompt}` : '',
-        input.topic ? `Canvas主题:${input.topic}` : '',
-        input.articleTitle ? `文章标题:${input.articleTitle}` : '',
-        tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
-      ]
-        .filter((part) => part.length > 0)
-        .join('\n'),
-    );
+    const prompt = includeSystemPrompt
+      ? this.sanitizeCopyrightRiskText(
+          [
+            '请基于用户选择的参考图片生成一张小红书图文内页图片。',
+            '只使用本次选择的参考图片和本次输入的提示词，不复用旧内页提示词、旧内页文字或旧版式。',
+            '多张参考图需要融合为同一张内页图，不要分别出图，不要生成封面。',
+            '画面比例为 3:4 竖版，主体真实清晰，构图适合手机端连续浏览。',
+            '允许做轻量修图、调色、局部重构、背景整理和氛围增强，但不要影响 Canvas 中其他图片。',
+            '内页重内容少文字：禁止添加封面主标题、副标题、营销大字、水印、平台 logo、网址、二维码或无关文字。',
+            `目标内页:${input.role}`,
+            rawPrompt ? `用户提示词:${rawPrompt}` : '',
+            input.topic ? `Canvas主题:${input.topic}` : '',
+            input.articleTitle ? `文章标题:${input.articleTitle}` : '',
+            tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
+          ]
+            .filter((part) => part.length > 0)
+            .join('\n'),
+        )
+      : this.sanitizeCopyrightRiskText(rawPrompt);
 
     const generated = await this.agentService.sendPrompt({
       prompt,
       size: '640x853',
       baseImageCandidates,
+      kind: 'inner',
+      includeSystemPrompt,
     });
     const generatedRecord =
       generated && typeof generated === 'object'

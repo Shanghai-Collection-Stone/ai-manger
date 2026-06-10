@@ -229,7 +229,12 @@ export class CanvasController {
     @Param('id') id: string,
     @Param('articleId') articleId: string,
     @Body()
-    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    body: {
+      imageIds?: number[];
+      sourceImageIds?: number[];
+      prompt?: string;
+      includeSystemPrompt?: boolean;
+    },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
@@ -245,6 +250,7 @@ export class CanvasController {
       tenantId: authScope.tenantId,
       imageIds: rawIds.map((item) => Number(item)),
       prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+      includeSystemPrompt: body?.includeSystemPrompt !== false,
     });
     return { canvas: doc };
   }
@@ -302,7 +308,12 @@ export class CanvasController {
     @Param('articleId') articleId: string,
     @Param('imageIndex') imageIndex: string,
     @Body()
-    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    body: {
+      imageIds?: number[];
+      sourceImageIds?: number[];
+      prompt?: string;
+      includeSystemPrompt?: boolean;
+    },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
@@ -319,6 +330,7 @@ export class CanvasController {
       tenantId: authScope.tenantId,
       imageIds: rawIds.map((item) => Number(item)),
       prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+      includeSystemPrompt: body?.includeSystemPrompt !== false,
     });
     return { canvas: doc };
   }
@@ -377,7 +389,12 @@ export class CanvasController {
     @Param('id') id: string,
     @Param('groupId') groupId: string,
     @Body()
-    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    body: {
+      imageIds?: number[];
+      sourceImageIds?: number[];
+      prompt?: string;
+      includeSystemPrompt?: boolean;
+    },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
@@ -393,6 +410,7 @@ export class CanvasController {
       tenantId: authScope.tenantId,
       imageIds: rawIds.map((item) => Number(item)),
       prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+      includeSystemPrompt: body?.includeSystemPrompt !== false,
     });
     return { canvas: doc };
   }
@@ -450,7 +468,12 @@ export class CanvasController {
     @Param('groupId') groupId: string,
     @Param('role') role: string,
     @Body()
-    body: { imageIds?: number[]; sourceImageIds?: number[]; prompt?: string },
+    body: {
+      imageIds?: number[];
+      sourceImageIds?: number[];
+      prompt?: string;
+      includeSystemPrompt?: boolean;
+    },
     @Req() req: Request,
   ): Promise<Record<string, unknown>> {
     const authScope = await this.resolveAuthScope(req);
@@ -467,6 +490,7 @@ export class CanvasController {
       tenantId: authScope.tenantId,
       imageIds: rawIds.map((item) => Number(item)),
       prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+      includeSystemPrompt: body?.includeSystemPrompt !== false,
     });
     return { canvas: doc };
   }

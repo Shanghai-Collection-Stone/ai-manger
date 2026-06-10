@@ -88,14 +88,14 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 ### CoverRegenerateDialog.jsx
 
-Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签，支持按 tag 筛选图片、最多 4 张参考图与多行本次提示词；封面与内页共用同一组件，可把多张图片 ID 合并成一次重生成请求，也可把第一张已选图直接设为目标图片槽位。
+Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签，支持按 tag 筛选图片、最多 4 张参考图与多行本次提示词；封面与内页共用同一组件，可把多张图片 ID 合并成一次重生成请求，也可把第一张已选图直接设为目标图片槽位。含"使用系统自带提示词"勾选(默认勾选)：勾选时后端按目标类型补封面/内页规格；取消勾选则只用本次提示词且提示词必填，置 `includeSystemPrompt` 随 payload 提交。
 
-- **关键词**: cover-regenerate, cover-select, image-slot-regenerate, selected-source-images, tag-filter, cover-only-submit
+- **关键词**: cover-regenerate, cover-select, image-slot-regenerate, selected-source-images, tag-filter, cover-only-submit, system-prompt-toggle
 - **函数**:
   - `readGalleryImageUrl`: 读取图库图片缩略图或原图地址
   - `normalizeGalleryImages`: 规整图库列表并过滤无效图片
   - `normalizeGalleryTags`: 规整图库标签列表，兼容字符串和带 count 的对象结构
-  - `CoverRegenerateDialog`: 图片槽位重生成弹窗组件，封面和内页都使用本次提示词并最多选择 4 张参考图
+  - `CoverRegenerateDialog`: 图片槽位重生成弹窗组件，封面和内页都使用本次提示词并最多选择 4 张参考图；含"使用系统自带提示词"开关(默认开)，关闭时提示词必填并提交 includeSystemPrompt
   - `loadImages`: 拉取可作为参考图的图库图片
   - `loadTags`: 拉取图库标签用于封面图片筛选
   - `toggleImage`: 切换参考图选中状态，最多保留 4 张参考图
