@@ -124,6 +124,13 @@ export class AdminService {
       { unique: true },
     );
     await this.aiProviders.createIndex({ enabled: 1 });
+    // 旧部署可能留下同名但 partialFilterExpression 为 { isDefault: {} } 的畸形索引，
+    // 直接 createIndex 会因 IndexKeySpecsConflict(code 86) 启动崩溃；先按既有约定 drop 再重建。
+    await this.aiProviders
+      .dropIndex('modelCategory_1_isDefault_1')
+      .catch(() => undefined);
+    // 重建唯一偏索引前先兜底去重，避免历史数据存在同类多个默认项时重建触发 E11000。
+    await this.dedupeDefaultProviders();
     await this.aiProviders.createIndex(
       { modelCategory: 1, isDefault: 1 },
       {
@@ -131,6 +138,35 @@ export class AdminService {
         partialFilterExpression: { isDefault: true },
       },
     );
+  }
+
+  /**
+   * @description 重建 { modelCategory, isDefault } 唯一偏索引前的兜底去重：每个 modelCategory
+   * 仅保留最新一条 isDefault=true（按 updatedAt、_id 倒序），其余降级为 false，
+   * 防止历史脏数据导致唯一索引重建抛 E11000。
+   * @returns {Promise<void>}
+   * @keyword-cn 默认模型去重, 唯一索引兜底
+   * @keyword-en dedupe-default-providers
+   * @keyword-en unique-index-guard
+   */
+  private async dedupeDefaultProviders(): Promise<void> {
+    const categories: AdminAiProviderEntity['modelCategory'][] = [
+      'llm',
+      'em',
+      'image',
+    ];
+    for (const modelCategory of categories) {
+      const defaults = await this.aiProviders
+        .find({ modelCategory, isDefault: true })
+        .sort({ updatedAt: -1, _id: -1 })
+        .toArray();
+      if (defaults.length <= 1) continue;
+      const duplicateIds = defaults.slice(1).map((doc) => doc._id);
+      await this.aiProviders.updateMany(
+        { _id: { $in: duplicateIds } },
+        { $set: { isDefault: false, updatedAt: new Date() } },
+      );
+    }
   }
 
   /**
