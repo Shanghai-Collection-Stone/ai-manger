@@ -17,6 +17,7 @@ import { ArticleLibraryService } from '../services/article-library.service.js';
 import { ArticleService } from '../services/article.service.js';
 import type { TodoEntity } from '../../todo/entities/todo.entity.js';
 import type { ArticlePublishStatus } from '../entities/article-library.entity.js';
+import { ConfigService } from '@nestjs/config';
 
 /**
  * @description 合法发布状态集合（运行时校验）
@@ -44,6 +45,7 @@ export class ArticleLibraryTaskController {
     private readonly todo: TodoService,
     private readonly library: ArticleLibraryService,
     private readonly article: ArticleService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -222,7 +224,24 @@ export class ArticleLibraryTaskController {
       `[leaseNextByToken] libraryId=${libraryId} leased=${result ? result.article.id : 'none'}`,
     );
     if (!result) return { article: null };
+    result.article.imageUrls = result?.article?.imageUrls?.map((url) =>
+      this.toAbsoluteImageUrl(url),
+    );
     return result;
+  }
+  /**
+   * @description 将图片相对路径拼接为以 APP_URL 为前缀的完整可访问地址；已是绝对 URL 则原样返回。
+   * @keyword-en prefix image url with app base url
+   * @keyword-cn 图片地址前缀拼接
+   */
+  private toAbsoluteImageUrl(url: string): string {
+    if (/^https?:\/\//i.test(url)) return url;
+    const base = String(this.config.get<string>('APP_URL') ?? '').replace(
+      /\/+$/,
+      '',
+    );
+    if (!base) return url;
+    return `${base}/${String(url).replace(/^\/+/, '')}`;
   }
 
   /**
