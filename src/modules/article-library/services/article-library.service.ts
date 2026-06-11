@@ -115,16 +115,26 @@ export class ArticleLibraryService {
   }
 
   /**
-   * @description 按 ID 获取文章库（按 tenantId 过滤）
+   * @description 构造强制租户作用域过滤片段；空 tenantId 收口为「仅无租户(平台)库」，绝不放开到全部租户。
+   * @param {string} [tenantId] - 调用方租户；为空表示无租户调用者（平台态）。
+   * @returns {Record<string, unknown>} 可并入查询的 tenantId 过滤片段。
+   * @keyword-en tenant scope filter mandatory isolation
+   * @keyword-cn 租户作用域过滤
+   */
+  private tenantScope(tenantId?: string): Record<string, unknown> {
+    const t = tenantId?.trim();
+    return t ? { tenantId: t } : { tenantId: null };
+  }
+
+  /**
+   * @description 按 ID 获取文章库（强制租户隔离）
    * @keyword-en article library get by id
    */
   async get(
     id: number,
     tenantId?: string,
   ): Promise<ArticleLibraryEntity | null> {
-    const filter: Record<string, unknown> = { id };
-    if (tenantId) filter.tenantId = tenantId;
-    return this.libraries.findOne(filter);
+    return this.libraries.findOne({ id, ...this.tenantScope(tenantId) });
   }
 
   /**
@@ -140,7 +150,7 @@ export class ArticleLibraryService {
     }
     const token = randomUUID().replace(/-/g, '');
     const res = await this.libraries.findOneAndUpdate(
-      { id, ...(tenantId ? { tenantId } : {}) },
+      { id, ...this.tenantScope(tenantId) },
       {
         $set: {
           'pushConfig.qrToken': token,
@@ -351,8 +361,9 @@ export class ArticleLibraryService {
     limit?: number;
     offset?: number;
   }): Promise<{ items: ArticleLibraryEntity[]; total: number }> {
-    const filter: Record<string, unknown> = {};
-    if (params.tenantId) filter.tenantId = params.tenantId;
+    const filter: Record<string, unknown> = {
+      ...this.tenantScope(params.tenantId),
+    };
     if (params.userId) filter.userId = params.userId;
     if (params.type && params.type.trim().length > 0)
       filter.type = params.type.trim();
@@ -390,7 +401,7 @@ export class ArticleLibraryService {
       });
     }
     const res = await this.libraries.findOneAndUpdate(
-      { id: input.id },
+      { id: input.id, ...this.tenantScope(input.tenantId) },
       { $set: set },
       { returnDocument: 'after', includeResultMetadata: true },
     );

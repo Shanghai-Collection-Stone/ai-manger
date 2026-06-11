@@ -38,15 +38,16 @@
   - `nextId`: 自增ID/next id
   - `normalizePushConfig`: 推送配置规范化/normalize push config
   - `create`: 创建库/create library
-  - `get`: 获取库/get by id
-  - `ensureQrToken`: 确保文章库有二维码 token/ensure qr token
+  - `tenantScope(tenantId?)` — 构造强制租户作用域过滤；空 tenantId 收口为「仅无租户(平台)库」绝不放开全部租户 | keywords: tenant-scope-filter, mandatory-isolation, 租户作用域过滤
+  - `get`: 获取库（强制租户隔离，经 tenantScope）/get by id
+  - `ensureQrToken`: 确保文章库有二维码 token（写入经 tenantScope）/ensure qr token
   - `resolveConfiguredXhsQrShortLink()` — 从 env 读取文章库小红书二维码短链模板 | keywords: article-library-qr, env-short-link
   - `resolveXhsShortLinkRedirect(shortLink)` — 解析小红书短链 301/302 跳转得到最终 qrcode URL | keywords: article-library-qr, short-link-redirect
   - `rewriteXhsQrcodePParam(redirectUrl, qrContent)` — 解析 miniapp qrcode 链接并把原二维码 JSON 写入 `p.path` 与 `p.xhsMpBizQuery` | keywords: article-library-qr, p-param-rewrite
   - `buildPushQrContent({ token, articleLibraryId })` — 构建文章库二维码内容，配置短链时返回改写后小红书 qrcode URL | keywords: article-library-qr, qr-content-build
   - `getByQrToken`: 通过二维码 token 获取文章库/get by qr token
-  - `list`: 列表库/list libraries
-  - `update`: 更新库（基础信息 / 推送配置）/update library
+  - `list`: 列表库（强制租户隔离，经 tenantScope）/list libraries
+  - `update`: 更新库（基础信息 / 推送配置，写入经 tenantScope）/update library
   - `delete`: 删除库（级联删除文章）/delete cascade
   - `getStats`: 状态统计与租约占用统计/stats aggregate with occupied leases
   - `getThumbnailImages`: 取前 N 篇首图做缩略图/thumbnail sources
@@ -74,6 +75,7 @@
 - **关键词**: controller, article-library, admin, crud, auth
 - **函数**:
   - `resolveAuthScope`: 请求鉴权解析/resolve auth scope
+  - `toAbsoluteImageUrl(url)` — 用 env `APP_URL` 把图片相对路径拼成完整地址，已是绝对 URL 原样返回 | keywords: prefix-image-url, app-base-url, 图片地址前缀拼接
   - `createLibrary`: 创建库 POST /api/article-library
   - `listLibraries`: 列表库 GET /api/article-library（含统计+缩略图）
   - `getLibrary`: 获取库详情 GET /api/article-library/:libraryId
