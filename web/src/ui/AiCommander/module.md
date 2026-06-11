@@ -55,11 +55,12 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 ### ToolsView.jsx
 
-工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库、精选文章入口。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。
+工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库、精选文章入口。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。图库上拉分页使用同步请求锁与哨兵离开后再武装策略,保证一次上拉只触发一次追加请求。
 
 - **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, article-library, featured-article, zip-import, responsive, icon-collapse
 - **函数**:
-  - `GalleryView`: 图库管理视图（含对话/图库/拼图/封面 Tab、ZIP 批量导入抽屉入口、单行响应式紧凑 Header）
+  - `GalleryView(onBack)` — 图库管理视图（含对话/图库/拼图/封面 Tab、ZIP 批量导入抽屉入口、上拉分页单次触发锁） | keywords: gallery, gallery-view, infinite-scroll
+  - `loadImages({ append?, imageType? })` — 加载图库图片并用同步锁保证单次上拉只触发一次追加请求 | keywords: gallery, infinite-scroll, pagination
   - `TagFilterDropdown`: 标签筛选下拉（窄屏 w-20 / 宽屏 w-28 自适应）
   - `ToolsView(onThoughtRouteChange?)` — 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/article-library/featured-article） | keywords: tools-view, tools, gallery, canvas, xhs-specialist, featured-article
   - `loadCanvases`: 加载 Canvas 列表，支持追加分页（append=true）、类型/标签过滤

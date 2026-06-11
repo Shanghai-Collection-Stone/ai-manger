@@ -944,7 +944,7 @@ function TagFilterDropdown({ value, onChange, allTags }) {
 
 /**
  * @description Gallery view component for managing images and groups
- * @keyword-en GalleryView
+ * @keyword-en gallery, gallery-view, infinite-scroll
  * @param {Object} props
  * @param {Function} props.onBack - Callback when back button is clicked
  */
@@ -1005,6 +1005,9 @@ const GalleryView = ({ onBack }) => {
 
   // Refs
   const imagesReqIdRef = useRef(0);
+  const imagesLoadingRef = useRef(false);
+  const hasMoreImagesRef = useRef(hasMoreImages);
+  const loadMoreArmedRef = useRef(true);
   const imagesRef = useRef([]);
   const selectedGroupIdRef = useRef(selectedGroupId);
   const tabRef = useRef(tab);
@@ -1013,6 +1016,7 @@ const GalleryView = ({ onBack }) => {
 
   // Sync refs
   useEffect(() => { imagesRef.current = images; }, [images]);
+  useEffect(() => { hasMoreImagesRef.current = hasMoreImages; }, [hasMoreImages]);
   useEffect(() => { selectedGroupIdRef.current = selectedGroupId; }, [selectedGroupId]);
   useEffect(() => { tabRef.current = tab; }, [tab]);
 
@@ -1099,15 +1103,26 @@ const GalleryView = ({ onBack }) => {
     setGroups(Array.isArray(data?.groups) ? data.groups : []);
   }, [userId]);
 
-  // Load Images
+  /**
+   * @description 加载图库图片；追加分页用同步锁防止同一次上拉连续触发。
+   * @param {{ append?: boolean, imageType?: 'all'|'regular'|'collage' }} [options] - 加载选项。
+   * @returns {Promise<void>}
+   * @keyword-en gallery, infinite-scroll, pagination
+   */
   const loadImages = useCallback(async ({ append = false, imageType: explicitImageType } = {}) => {
+    if (append && (imagesLoadingRef.current || !hasMoreImagesRef.current)) return;
+    if (!append) {
+      loadMoreArmedRef.current = true;
+    }
     const reqId = (imagesReqIdRef.current += 1);
+    imagesLoadingRef.current = true;
     setImagesLoading(true);
     // 未显式指定时，依据当前 tab 自动推导: gallery/collage 只要 regular，cover 要 all
     const imageType = explicitImageType ?? (tabRef.current === 'cover' ? 'all' : 'regular');
     try {
       const curImages = imagesRef.current;
       const cursorId = append && curImages.length > 0 ? curImages[curImages.length - 1]?.id : undefined;
+      if (append && (cursorId === undefined || cursorId === null || `${cursorId}` === '')) return;
       const params = {
         userId: userId || undefined,
         groupId: selectedGroupIdRef.current ?? undefined,
@@ -1119,33 +1134,32 @@ const GalleryView = ({ onBack }) => {
       const data = await api.listGalleryImages(params);
       if (reqId !== imagesReqIdRef.current) return;
       const list = Array.isArray(data?.images) ? data.images : [];
-      setHasMoreImages(list.length >= pageSize);
+      const hasFullPage = list.length >= pageSize;
+      const prevImages = imagesRef.current;
+      const nextImages = append ? mergeUnique(prevImages, list) : mergeUnique([], list);
+      const nextHasMore = append
+        ? hasFullPage && nextImages.length > prevImages.length
+        : hasFullPage;
+      imagesRef.current = nextImages;
+      hasMoreImagesRef.current = nextHasMore;
+      setImages(() => nextImages);
+      setHasMoreImages(nextHasMore);
       if (append) {
-        setImages((prev) => mergeUnique(prev, list));
-      } else {
-        setImages(() => mergeUnique([], list));
+        loadMoreArmedRef.current = false;
       }
     } finally {
-      if (reqId === imagesReqIdRef.current) setImagesLoading(false);
+      if (reqId === imagesReqIdRef.current) {
+        imagesLoadingRef.current = false;
+        setImagesLoading(false);
+      }
     }
   }, [pageSize, userId, tagFilter]);
 
-  // Initial Load
+  // Initial metadata load
   useEffect(() => {
     loadGroups();
     loadTags();
-    loadImages();
-  }, [loadGroups, loadTags, loadImages]);
-
-  // Reload images when group changes
-  useEffect(() => {
-    loadImages({ append: false });
-  }, [selectedGroupId, loadImages]);
-
-  // Reload images when tag filter changes
-  useEffect(() => {
-    loadImages({ append: false });
-  }, [tagFilter, loadImages]);
+  }, [loadGroups, loadTags]);
 
   // Reload images when tab changes:
   // - gallery: imageType='regular' — 只显示普通图片，过滤封面和拼图
@@ -1159,7 +1173,7 @@ const GalleryView = ({ onBack }) => {
     } else if (tab === 'gallery') {
       loadImages({ append: false, imageType: 'regular' });
     }
-  }, [tab, loadImages]);
+  }, [selectedGroupId, tab, loadImages]);
 
   useEffect(() => {
     setCollageSelectedIds([]);
@@ -1199,13 +1213,24 @@ const GalleryView = ({ onBack }) => {
   useEffect(() => {
     if (!loadMoreRef.current) return;
     const obs = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && !imagesLoading && hasMoreImages) {
-        loadImages({ append: true });
+      const entry = entries[0];
+      if (!entry?.isIntersecting) {
+        loadMoreArmedRef.current = true;
+        return;
       }
+      if (
+        !loadMoreArmedRef.current ||
+        imagesLoadingRef.current ||
+        !hasMoreImagesRef.current
+      ) {
+        return;
+      }
+      loadMoreArmedRef.current = false;
+      void loadImages({ append: true });
     }, { threshold: 0.1 });
     obs.observe(loadMoreRef.current);
     return () => obs.disconnect();
-  }, [hasMoreImages, imagesLoading, loadImages]);
+  }, [loadImages, tab]);
 
   // Create Group
   const onCreateGroup = async () => {
