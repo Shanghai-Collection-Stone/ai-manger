@@ -327,7 +327,7 @@ const AiCommanderBento = () => {
       {/* 核心内容区 (可滚动) */}
       <div 
         ref={scrollRef}
-        className={`flex-1 overflow-y-auto ${(activeTab === 'tools' && isThoughtRouteActive) ? 'pb-0 px-0 pt-0' : 'pb-[calc(7.5rem+env(safe-area-inset-bottom))] px-4'} custom-scrollbar ${
+        className={`flex-1 overflow-y-auto ${(activeTab === 'tools' && isThoughtRouteActive) ? 'pb-0 px-0 pt-0' : 'pb-[calc(5rem+env(safe-area-inset-bottom))] px-4'} custom-scrollbar ${
           slideDir === 'right' ? 'animate-slide-in-right' : 
           slideDir === 'left' ? 'animate-slide-in-left' : ''
         }`}

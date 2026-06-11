@@ -121,6 +121,7 @@ export class ArticleService {
       text: typeof input.text === 'string' ? input.text : undefined,
       imageUrls: Array.isArray(input.imageUrls) ? input.imageUrls : undefined,
       imageIds: Array.isArray(input.imageIds) ? input.imageIds : undefined,
+      meta: input.meta,
       publishStatus: input.publishStatus ?? 'unpublished',
       source: input.source,
       sourceRef: input.sourceRef,
@@ -195,6 +196,7 @@ export class ArticleService {
     if (input.text !== undefined) set.text = input.text;
     if (input.imageUrls !== undefined) set.imageUrls = input.imageUrls;
     if (input.imageIds !== undefined) set.imageIds = input.imageIds;
+    if (input.meta !== undefined) set.meta = input.meta;
     if (input.publishStatus !== undefined) {
       set.publishStatus = input.publishStatus;
       if (input.publishStatus === 'published') {
@@ -218,7 +220,12 @@ export class ArticleService {
   async updatePublishStatus(
     id: number,
     status: ArticlePublishStatus,
-    opts: { tenantId?: string; libraryId?: number; leaseToken?: string } = {},
+    opts: {
+      tenantId?: string;
+      libraryId?: number;
+      leaseToken?: string;
+      meta?: Record<string, unknown>;
+    } = {},
   ): Promise<ArticleEntity | null> {
     const filter: Record<string, unknown> = { id };
     if (opts.tenantId) filter.tenantId = opts.tenantId;
@@ -232,6 +239,7 @@ export class ArticleService {
       lockExpireAt: null,
     };
     if (status === 'published') set.publishedAt = new Date();
+    if (opts.meta !== undefined) set.meta = opts.meta;
     const res = await this.articles.findOneAndUpdate(
       filter,
       { $set: set },

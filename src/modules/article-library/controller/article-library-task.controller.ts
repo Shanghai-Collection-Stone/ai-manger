@@ -89,6 +89,32 @@ export class ArticleLibraryTaskController {
   }
 
   /**
+   * @description 解析状态回写时携带的 meta JSON 字符串，空值忽略，非法或非对象 JSON 拒绝写入。
+   * @keyword-en article-status-meta, meta-json-parse
+   * @keyword-cn 文章状态元数据, JSON解析
+   */
+  private parseStatusMeta(meta: unknown): Record<string, unknown> | undefined {
+    if (meta === undefined || meta === null) return undefined;
+    if (typeof meta !== 'string') {
+      throw new BadRequestException('INVALID_META');
+    }
+    const raw = meta.trim();
+    if (!raw) return undefined;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new BadRequestException('INVALID_META');
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new BadRequestException('INVALID_META');
+    }
+    return parsed as Record<string, unknown>;
+  }
+
+  /**
    * @description 获取文章库信息（含统计）
    * @keyword-en article library task api get detail
    */
@@ -259,6 +285,7 @@ export class ArticleLibraryTaskController {
           libraryId?: number | string;
           status?: string;
           leaseToken?: string;
+          meta?: string;
         }
       | undefined,
   ) {
@@ -290,6 +317,7 @@ export class ArticleLibraryTaskController {
           body.leaseToken.trim().length > 0
             ? body.leaseToken.trim()
             : undefined,
+        meta: this.parseStatusMeta(body?.meta),
       },
     );
     if (!updated) {
@@ -349,7 +377,7 @@ export class ArticleLibraryTaskController {
     @Param('todoId') todoId: string,
     @Param('libraryId') libraryId: string,
     @Param('articleId') articleId: string,
-    @Body() body: { status?: string; leaseToken?: string },
+    @Body() body: { status?: string; leaseToken?: string; meta?: string },
     @Req() req: Request,
   ) {
     const todo = await this.resolveTodoForLibrary(
@@ -372,6 +400,7 @@ export class ArticleLibraryTaskController {
           body.leaseToken.trim().length > 0
             ? body.leaseToken.trim()
             : undefined,
+        meta: this.parseStatusMeta(body?.meta),
       },
     );
     if (!updated) {

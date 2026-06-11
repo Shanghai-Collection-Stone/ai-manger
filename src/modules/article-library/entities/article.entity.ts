@@ -12,6 +12,7 @@ export interface ArticleContent {
   text?: string;
   imageUrls?: string[];
   imageIds?: number[];
+  meta?: Record<string, unknown>;
 }
 
 /**
@@ -77,6 +78,7 @@ export interface ArticleUpdateInput {
   text?: string;
   imageUrls?: string[];
   imageIds?: number[];
+  meta?: Record<string, unknown>;
   publishStatus?: ArticlePublishStatus;
 }
 

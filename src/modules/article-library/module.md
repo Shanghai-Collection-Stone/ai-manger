@@ -20,14 +20,14 @@
   - `ArticleLibraryStats`: 库内文章数量统计（含当前租约占用数 occupiedCount）
 
 ### entities/article.entity.ts
-文章实体与输入类型，含租约字段。
-- **关键词**: article, entity, lease, publish-status
+文章实体与输入类型，含租约字段与状态回写元数据。
+- **关键词**: article, entity, lease, publish-status, meta
 - **类型**:
-  - `ArticleContent`: 文章内容载荷（title/tags/contentJson/text/imageUrls）
-  - `ArticleEntity`: 文章实体（publishStatus / lockExpireAt / lastLeaseToken 等）
+  - `ArticleContent`: 文章内容载荷（title/tags/contentJson/text/imageUrls/meta）
+  - `ArticleEntity`: 文章实体（publishStatus / lockExpireAt / lastLeaseToken / meta 等）
   - `ArticleEntity.sourceRef`: 来源引用，支持 canvas 来源与 featured-article 的 `featuredWorkspaceId` / `featuredPageId`
   - `ArticleCreateInput`: 入库入参
-  - `ArticleUpdateInput`: 更新入参
+  - `ArticleUpdateInput`: 更新入参（支持 meta）
   - `ArticleLeaseResult`: 领取返回（article + leaseToken + leaseExpireAt）
 
 ### services/article-library.service.ts
@@ -64,8 +64,8 @@
   - `bulkCreate`: 批量入库（canvas 整份搬运）/bulk create
   - `get`: 获取文章/get
   - `list`: 列表（按状态过滤，FIFO 顺序）/list by library
-  - `update`: 更新文章字段/update fields
-  - `updatePublishStatus`: 更新发布状态（释放租约）/update publish status release
+  - `update`: 更新文章字段（含 meta）/update fields with meta
+  - `updatePublishStatus`: 更新发布状态（释放租约，可写入 meta）/update publish status release with meta
   - `delete`: 删除文章/delete
   - `leaseNext`: FIFO 原子抢占领取（CAS + 15min 租约）/lease next fifo cas
   - `releaseLease`: 主动释放租约/release lease
@@ -98,9 +98,10 @@ task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由�
   - `getLibraryByToken`: token 版获取库详情 POST `/task-api/article-library/detail`
   - `leaseNext`: 队列领取 POST .../lease-next
   - `leaseNextByToken`: token 版队列领取 POST `/task-api/article-library/lease-next`，请求体可直接传二维码 JSON
-  - `updateStatusByToken`: token 版更新文章状态 PATCH `/task-api/article-library/articles/:articleId/status`
+  - `parseStatusMeta(meta)` — 解析状态回写 `meta` JSON 对象字符串，空值忽略，非法值返回 `INVALID_META` | keywords: article-status-meta, meta-json-parse, 文章状态元数据, JSON解析
+  - `updateStatusByToken`: token 版更新文章状态 PATCH `/task-api/article-library/articles/:articleId/status`，可选 `meta` JSON 对象字符串
   - `releaseLeaseByToken`: token 版主动释放租约 POST `/task-api/article-library/articles/:articleId/release`
-  - `updateStatus`: taskToken 兼容版更新文章状态 PATCH .../articles/:articleId/status
+  - `updateStatus`: taskToken 兼容版更新文章状态 PATCH .../articles/:articleId/status，可选 `meta` JSON 对象字符串
   - `releaseLease`: 释放租约 POST .../articles/:articleId/release
 
 ### article-library.module.ts
@@ -113,7 +114,7 @@ task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由�
 |---|---|---|
 | 1. 库 CRUD | POST/GET/PATCH/DELETE `/api/article-library` | — |
 | 2. 文章入库 | POST `/api/article-library/:libraryId/articles` | — |
-| 3. 文章状态更新 | PATCH `/api/article-library/:libraryId/articles/:articleId/status` | PATCH `/task-api/article-library/articles/:articleId/status`（扫码 token）；兼容 PATCH `/task-api/:todoId/article-library/:libraryId/articles/:articleId/status` |
+| 3. 文章状态更新 | PATCH `/api/article-library/:libraryId/articles/:articleId/status` | PATCH `/task-api/article-library/articles/:articleId/status`（扫码 token）；兼容 PATCH `/task-api/:todoId/article-library/:libraryId/articles/:articleId/status`；task-api 可选传 `meta` JSON 对象字符串写入文章记录 |
 | 4. 队列顺序取出 | POST `/api/article-library/:libraryId/articles/lease-next` | POST `/task-api/:todoId/article-library/:libraryId/lease-next` |
 | 5. 推送链接 / 二维码 | GET `/api/article-library/:libraryId/push-qr` | GET `/task-api/:todoId/article-library/:libraryId/push-url`（返回 `pushUrl`、`qrPayload`、`qrContent`；默认二维码内容为 `{"token":"...","articleLibraryId":1}`；配置 XHS 短链时 `qrContent` 为改写后的 qrcode URL） |
 | 6. 扫码 token 获取库/文章 | — | POST `/task-api/article-library/detail` 获取库详情；POST `/task-api/article-library/lease-next` 领取下一篇文章 |
@@ -121,7 +122,7 @@ task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由�
 
 ## 设计要点
 
-- **队列租约**：领取时 `findOneAndUpdate` 固定过滤 `publishStatus: 'unpublished'`，并以 `sort: { createdAt: 1 }` + `$or: [lockExpireAt 不存在 / null / < now]` 作为租约过滤，原子写入 `lockExpireAt = now + 15min` 与 `lastLeaseToken`。已发送文章和租约未释放文章都不会再次被领取。释放方式：15 分钟自然过期；状态回写成功时释放；主动调用 release 接口释放。状态回写可携带 `leaseToken` 做乐观锁，防止过期任务反向覆盖新租约。
+- **队列租约**：领取时 `findOneAndUpdate` 固定过滤 `publishStatus: 'unpublished'`，并以 `sort: { createdAt: 1 }` + `$or: [lockExpireAt 不存在 / null / < now]` 作为租约过滤，原子写入 `lockExpireAt = now + 15min` 与 `lastLeaseToken`。已发送文章和租约未释放文章都不会再次被领取。释放方式：15 分钟自然过期；状态回写成功时释放；主动调用 release 接口释放。状态回写可携带 `leaseToken` 做乐观锁，防止过期任务反向覆盖新租约；也可传 `meta` JSON 对象字符串，解析后写入文章记录的 `meta` 字段。
 - **状态语义**：`unpublished`（未发布，唯一领取池）/`published`（已发布/已发送，永不参与 `leaseNext` 领取）。`statusFilter` 仅作为历史兼容配置保留，不允许把 `published` 文章重新放回领取池。
 - **缩略图**：库实体不持有封面字段；`getThumbnailImages` 按 `createdAt` 倒序取前 N 篇文章的首图。
 - **task-api 鉴权**：带 `todoId` 的 task-api 仍照搬 `TodoTaskController.resolveTodo` 模式 —— taskToken → todo → 校验 `todo.associatedResources` 含 `{ type: 'article-library', resourceId: libraryId }`。扫码场景使用文章库 `qrToken`，请求体传入 `{ token, articleLibraryId }`，后端按文章库 ID + token 校验后获取库、领取文章或回写发布状态，不需要绑定任务。
