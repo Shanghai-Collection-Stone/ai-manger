@@ -12,6 +12,7 @@ import {
   Req,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { ArticleLibraryService } from '../services/article-library.service.js';
 import { ArticleService } from '../services/article.service.js';
@@ -42,7 +43,23 @@ export class ArticleLibraryController {
     private readonly library: ArticleLibraryService,
     private readonly article: ArticleService,
     private readonly adminService: AdminService,
+    private readonly config: ConfigService,
   ) {}
+
+  /**
+   * @description 将图片相对路径拼接为以 APP_URL 为前缀的完整可访问地址；已是绝对 URL 则原样返回。
+   * @keyword-en prefix image url with app base url
+   * @keyword-cn 图片地址前缀拼接
+   */
+  private toAbsoluteImageUrl(url: string): string {
+    if (/^https?:\/\//i.test(url)) return url;
+    const base = String(this.config.get<string>('APP_URL') ?? '').replace(
+      /\/+$/,
+      '',
+    );
+    if (!base) return url;
+    return `${base}/${String(url).replace(/^\/+/, '')}`;
+  }
 
   /**
    * @description 解析请求鉴权范围（Bearer token → {tenantId, userId}）
@@ -334,7 +351,11 @@ export class ArticleLibraryController {
       libraryId: Number(libraryId),
       tenantId: scope.tenantId,
     });
+
     if (!result) return { article: null };
+    result.article.imageUrls = result?.article?.imageUrls?.map((url) =>
+      this.toAbsoluteImageUrl(url),
+    );
     return result;
   }
 }
