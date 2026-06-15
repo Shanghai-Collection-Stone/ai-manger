@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { 
   LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList, Plus, LayoutGrid
@@ -30,6 +30,114 @@ import {
   clearAdminToken,
 } from '../Admin/adminApi';
 
+const COMMANDER_MAIN_TABS = ['dashboard', 'decisions', 'chat', 'tasks', 'tools'];
+const COMMANDER_MAIN_TAB_SET = new Set(COMMANDER_MAIN_TABS);
+const COMMANDER_TIME_RANGES = [
+  '今天','明天','昨天',
+  '过去7天内','未来7天内',
+  '过去30天内','未来30天内',
+  '本周','上周','上月','本月'
+];
+const COMMANDER_POPUP_ALIASES = new Map([
+  ['chat-history', 'chat-history'],
+  ['history', 'chat-history'],
+  ['session-history', 'chat-history'],
+  ['task-create', 'task-create'],
+  ['create-task', 'task-create'],
+  ['new-task', 'task-create'],
+  ['time-range', 'time-range'],
+  ['dashboard-time-range', 'time-range'],
+]);
+const COMMANDER_POPUP_TO_TAB = {
+  'chat-history': 'chat',
+  'task-create': 'tasks',
+  'time-range': 'dashboard',
+};
+
+/**
+ * @description 归一化 AI 指挥官主导航 URL 参数。
+ * @keyword-en url-route
+ * @keyword-en main-tab
+ * @param {string|null|undefined} value - URL 中的主导航值。
+ * @returns {string|null}
+ */
+const normalizeCommanderTabParam = (value) => {
+  const key = String(value || '').trim();
+  return COMMANDER_MAIN_TAB_SET.has(key) ? key : null;
+};
+
+/**
+ * @description 归一化 AI 指挥官顶部弹窗 URL 参数。
+ * @keyword-en url-route
+ * @keyword-en commander-popup
+ * @param {string|null|undefined} value - URL 中的弹窗值。
+ * @returns {string|null}
+ */
+const normalizeCommanderPopupParam = (value) => {
+  const key = String(value || '').trim();
+  return COMMANDER_POPUP_ALIASES.get(key) || null;
+};
+
+/**
+ * @description 读取 AI 指挥官页面 URL 参数并推导主导航、弹窗和焦点目标。
+ * @keyword-en url-route
+ * @keyword-en commander-state
+ * @returns {{ tab: string|null, popup: string|null, timeRange: string, canvasId: number|null, decisionCardId: string }}
+ */
+const readCommanderRouteParams = () => {
+  if (typeof window === 'undefined') {
+    return { tab: null, popup: null, timeRange: '', canvasId: null, decisionCardId: '' };
+  }
+  const params = new URLSearchParams(window.location.search || '');
+  const popup = normalizeCommanderPopupParam(
+    params.get('popup') || params.get('modal') || params.get('dialog') || params.get('open'),
+  );
+  let tab = normalizeCommanderTabParam(
+    params.get('tab') || params.get('mainTab') || params.get('activeTab'),
+  );
+  if (!tab && (params.get('tool') || params.get('toolView'))) {
+    tab = 'tools';
+  }
+  if (!tab && popup) {
+    tab = COMMANDER_POPUP_TO_TAB[popup] || null;
+  }
+
+  const canvasIdRaw = params.get('canvasId') || params.get('canvas');
+  const canvasId = Number(canvasIdRaw);
+  const decisionCardId = String(params.get('decisionCardId') || params.get('decisionCard') || '').trim();
+  return {
+    tab,
+    popup,
+    timeRange: String(params.get('timeRange') || '').trim(),
+    canvasId: Number.isFinite(canvasId) && canvasId > 0 ? canvasId : null,
+    decisionCardId,
+  };
+};
+
+/**
+ * @description 更新 AI 指挥官页面 URL 参数,用于同步底部菜单和顶部弹窗状态。
+ * @keyword-en url-route
+ * @keyword-en query-sync
+ * @param {Record<string, string|number|null|undefined>} patch - 要写入或删除的查询参数。
+ * @param {{ replace?: boolean }} [options] - 历史记录写入方式。
+ */
+const updateCommanderSearchParams = (patch, { replace = true } = {}) => {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    if (value === null || value === '') {
+      url.searchParams.delete(key);
+      return;
+    }
+    url.searchParams.set(key, String(value));
+  });
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  if (next === current) return;
+  window.history[replace ? 'replaceState' : 'pushState'](null, '', next);
+};
+
 /**
  * @description AI 指挥官 Bento 风格主界面组件
  * @keyword-en ai-commander-bento
@@ -41,6 +149,7 @@ const AiCommanderBento = () => {
   const decisionCount = useStore($decisionCount);
   const taskCount = useStore($taskCount);
   const canvasFocusId = useStore($canvasFocusId);
+  const createTaskOpen = useStore($createTaskOpen);
   const [isChatDrawerOpen, setIsChatDrawerOpen] = useState(false);
   const [timeRange, setTimeRange] = useState('本月');
   const [trOpen, setTrOpen] = useState(false);
@@ -52,14 +161,7 @@ const AiCommanderBento = () => {
   const scrollRef = useRef(null);
   const scrollPositionsRef = useRef(new Map());
   const lastTabRef = useRef(activeTab);
-  const timeRanges = [
-    '今天','明天','昨天',
-    '过去7天内','未来7天内',
-    '过去30天内','未来30天内',
-    '本周','上周','上月','本月'
-  ];
-
-  const mainTabs = ['dashboard', 'decisions', 'chat', 'tasks', 'tools'];
+  const mainTabs = COMMANDER_MAIN_TABS;
 
   /**
    * @description 解析当前前台页面标识用于登录回跳
@@ -93,11 +195,104 @@ const AiCommanderBento = () => {
     }
   };
 
+  /**
+   * @description 切换底部主 Tab 并同步到 URL 查询参数。
+   * @keyword-en url-route
+   * @keyword-en main-tab
+   * @param {string} nextTab - 下一个主导航 Tab。
+   */
+  const selectMainTab = useCallback((nextTab) => {
+    const targetTab = normalizeCommanderTabParam(nextTab);
+    if (!targetTab) return;
+    const patch = {
+      tab: targetTab,
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    };
+    if (targetTab !== 'tools') {
+      Object.assign(patch, {
+        tool: null,
+        toolView: null,
+        galleryTab: null,
+        toolTab: null,
+        libraryId: null,
+        articleLibraryId: null,
+        editLibraryId: null,
+        articleLibraryEditId: null,
+        articleLibraryTab: null,
+        libraryTab: null,
+        detailTab: null,
+        canvasId: null,
+        canvas: null,
+      });
+    }
+    if (targetTab !== 'chat') setIsChatDrawerOpen(false);
+    if (targetTab !== 'dashboard') setTrOpen(false);
+    if (targetTab !== 'tasks') $createTaskOpen.set(false);
+    $activeTab.set(targetTab);
+    updateCommanderSearchParams(patch);
+  }, []);
+
+  /**
+   * @description 打开顶部控制台弹窗并写入 URL 查询参数。
+   * @keyword-en url-route
+   * @keyword-en commander-popup
+   * @param {string} popup - 要打开的弹窗标识。
+   */
+  const openHeaderPopup = useCallback((popup) => {
+    const targetPopup = normalizeCommanderPopupParam(popup);
+    const targetTab = targetPopup ? COMMANDER_POPUP_TO_TAB[targetPopup] : null;
+    if (!targetPopup || !targetTab) return;
+    $activeTab.set(targetTab);
+    setIsChatDrawerOpen(targetPopup === 'chat-history');
+    $createTaskOpen.set(targetPopup === 'task-create');
+    setTrOpen(targetPopup === 'time-range');
+    updateCommanderSearchParams({ tab: targetTab, popup: targetPopup });
+  }, []);
+
+  /**
+   * @description 切换历史会话抽屉并同步 URL 弹窗参数。
+   * @keyword-en url-route
+   * @keyword-en commander-popup
+   * @param {boolean} open - 是否打开历史会话抽屉。
+   */
+  const handleChatDrawerToggle = useCallback((open) => {
+    const nextOpen = Boolean(open);
+    setIsChatDrawerOpen(nextOpen);
+    if (nextOpen) {
+      $activeTab.set('chat');
+      updateCommanderSearchParams({ tab: 'chat', popup: 'chat-history' });
+      return;
+    }
+    updateCommanderSearchParams({ popup: null, modal: null, dialog: null, open: null });
+  }, []);
+
+  /**
+   * @description 选择看板时间维度并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en time-range
+   * @param {string} nextRange - 时间维度文案。
+   */
+  const selectTimeRange = useCallback((nextRange) => {
+    setTimeRange(nextRange);
+    setTrOpen(false);
+    updateCommanderSearchParams({
+      tab: 'dashboard',
+      timeRange: nextRange,
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    });
+  }, []);
+
   const onSwipeLeft = () => {
     const idx = mainTabs.indexOf(activeTab);
     if (idx < mainTabs.length - 1) {
       setSlideDir('right');
-      $activeTab.set(mainTabs[idx + 1]);
+      selectMainTab(mainTabs[idx + 1]);
     }
   };
 
@@ -105,7 +300,7 @@ const AiCommanderBento = () => {
     const idx = mainTabs.indexOf(activeTab);
     if (idx > 0) {
       setSlideDir('left');
-      $activeTab.set(mainTabs[idx - 1]);
+      selectMainTab(mainTabs[idx - 1]);
     }
   };
 
@@ -142,6 +337,53 @@ const AiCommanderBento = () => {
     };
     if (trOpen) document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
+  }, [trOpen]);
+
+  /**
+   * @description 应用 URL 参数到主导航、顶部弹窗和焦点目标。
+   * @keyword-en url-route
+   * @keyword-en commander-state
+   */
+  const applyCommanderRouteParams = useCallback(() => {
+    const route = readCommanderRouteParams();
+    if (route.timeRange && COMMANDER_TIME_RANGES.includes(route.timeRange)) {
+      setTimeRange(route.timeRange);
+    }
+    if (route.canvasId) {
+      $activeTab.set('tools');
+      $canvasFocusId.set(route.canvasId);
+    } else if (route.decisionCardId) {
+      $activeTab.set('decisions');
+      $decisionFocusCardId.set(route.decisionCardId);
+    } else if (route.tab) {
+      $activeTab.set(route.tab);
+    }
+    setIsChatDrawerOpen(route.popup === 'chat-history');
+    $createTaskOpen.set(route.popup === 'task-create');
+    setTrOpen(route.popup === 'time-range');
+  }, []);
+
+  useEffect(() => {
+    applyCommanderRouteParams();
+    window.addEventListener('popstate', applyCommanderRouteParams);
+    return () => window.removeEventListener('popstate', applyCommanderRouteParams);
+  }, [applyCommanderRouteParams]);
+
+  useEffect(() => {
+    if (createTaskOpen) {
+      $activeTab.set('tasks');
+      updateCommanderSearchParams({ tab: 'tasks', popup: 'task-create' });
+      return;
+    }
+    if (readCommanderRouteParams().popup === 'task-create') {
+      updateCommanderSearchParams({ popup: null, modal: null, dialog: null, open: null });
+    }
+  }, [createTaskOpen]);
+
+  useEffect(() => {
+    if (!trOpen && readCommanderRouteParams().popup === 'time-range') {
+      updateCommanderSearchParams({ popup: null, modal: null, dialog: null, open: null });
+    }
   }, [trOpen]);
 
   /**
@@ -249,7 +491,7 @@ const AiCommanderBento = () => {
           <div className="flex items-center space-x-2">
             {activeTab === 'chat' && (
               <button
-                onClick={() => setIsChatDrawerOpen(true)}
+                onClick={() => openHeaderPopup('chat-history')}
                 className="flex items-center space-x-2 bg-indigo-50 px-3 py-1.5 rounded-full cursor-pointer hover:bg-indigo-100 transition text-indigo-600 border border-indigo-100"
                 title="历史会话"
               >
@@ -259,7 +501,7 @@ const AiCommanderBento = () => {
             )}
             {activeTab === 'tasks' && (
               <button
-                onClick={() => $createTaskOpen.set(true)}
+                onClick={() => openHeaderPopup('task-create')}
                 className="flex items-center space-x-1 bg-slate-900 text-white px-3 py-1.5 rounded-full text-xs font-medium shadow-lg shadow-slate-200 hover:bg-slate-800 transition"
               >
                 <Plus size={14} />
@@ -272,7 +514,7 @@ const AiCommanderBento = () => {
             {activeTab === 'dashboard' && (
               <div className="relative" ref={trRef}>
                 <button
-                  onClick={() => setTrOpen((v) => !v)}
+                  onClick={() => trOpen ? setTrOpen(false) : openHeaderPopup('time-range')}
                   className="inline-flex items-center px-3 py-1.5 rounded-2xl bg-slate-900 text-white text-xs font-semibold shadow-sm"
                   title="选择时间维度"
                 >
@@ -282,12 +524,11 @@ const AiCommanderBento = () => {
                 {trOpen && (
                   <div className="absolute right-0 mt-2 w-44 bg-white border border-slate-100 rounded-2xl shadow-xl p-2 animate-fade-in z-50">
                     <div className="grid grid-cols-1 gap-1">
-                      {timeRanges.map((tr) => (
+                      {COMMANDER_TIME_RANGES.map((tr) => (
                         <button
                           key={tr}
                           onClick={() => {
-                            setTimeRange(tr);
-                            setTrOpen(false);
+                            selectTimeRange(tr);
                           }}
                           className={`text-xs px-3 py-2 rounded-xl text-left transition ${
                             timeRange === tr
@@ -348,7 +589,7 @@ const AiCommanderBento = () => {
         <div style={{ display: activeTab === 'chat' ? 'block' : 'none', height: '100%' }}>
           <ChatBIView 
             isDrawerOpen={isChatDrawerOpen} 
-            onDrawerToggle={setIsChatDrawerOpen} 
+            onDrawerToggle={handleChatDrawerToggle}
           />
         </div>
       </div>
@@ -357,19 +598,19 @@ const AiCommanderBento = () => {
       {!(activeTab === 'tools' && isThoughtRouteActive) && (
       <div className="fixed bottom-0 w-full h-[calc(5rem+env(safe-area-inset-bottom))] bg-white/80 backdrop-blur-xl border-t border-slate-100 flex items-center px-2 pb-[calc(1rem+env(safe-area-inset-bottom))] z-40">
         <div className="flex-1 flex justify-around">
-          <NavItem icon={<LayoutDashboard size={22} />} label="看板" isActive={activeTab === 'dashboard'} onClick={() => $activeTab.set('dashboard')} />
+          <NavItem icon={<LayoutDashboard size={22} />} label="看板" isActive={activeTab === 'dashboard'} onClick={() => selectMainTab('dashboard')} />
           <NavItem 
             icon={<Target size={22} />} 
             label="决策流" 
             isActive={activeTab === 'decisions'} 
-            onClick={() => $activeTab.set('decisions')} 
+            onClick={() => selectMainTab('decisions')}
             badge={decisionCount > 0 ? decisionCount.toString() : null}
           />
         </div>
 
         <div className="flex flex-col items-center -mt-2">
           <button
-            onClick={() => $activeTab.set('chat')}
+            onClick={() => selectMainTab('chat')}
             className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105 ${
               activeTab === 'chat'
               ? 'bg-slate-900 text-white shadow-slate-400/50'
@@ -386,10 +627,10 @@ const AiCommanderBento = () => {
             icon={<ClipboardList size={22} />} 
             label="任务" 
             isActive={activeTab === 'tasks'} 
-            onClick={() => $activeTab.set('tasks')} 
+            onClick={() => selectMainTab('tasks')}
             badge={taskCount > 0 ? taskCount.toString() : null}
           />
-          <NavItem icon={<LayoutGrid size={22} />} label="工具" isActive={activeTab === 'tools'} onClick={() => $activeTab.set('tools')} />
+          <NavItem icon={<LayoutGrid size={22} />} label="工具" isActive={activeTab === 'tools'} onClick={() => selectMainTab('tools')} />
         </div>
       </div>
       )}

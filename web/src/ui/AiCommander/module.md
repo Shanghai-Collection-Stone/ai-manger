@@ -11,6 +11,15 @@ AI 指挥官 Bento 风格主界面组件。负责底部主导航、顶部控制�
 - **关键词**: ai-commander-bento, full-screen-tools
 - **函数**:
   - `AiCommanderBento()` — 渲染 AI 指挥官主壳并控制工具内部页全屏导航隐藏 | keywords: ai-commander-bento, full-screen-tools
+  - `normalizeCommanderTabParam(value)` — 归一化 AI 指挥官主导航 URL 参数 | keywords: url-route, main-tab
+  - `normalizeCommanderPopupParam(value)` — 归一化顶部控制台弹窗 URL 参数 | keywords: url-route, commander-popup
+  - `readCommanderRouteParams()` — 读取 URL 参数并推导主导航、弹窗、Canvas/决策焦点 | keywords: url-route, commander-state
+  - `updateCommanderSearchParams(patch, options?)` — 同步底部菜单和顶部弹窗状态到 URL 查询参数 | keywords: url-route, query-sync
+  - `selectMainTab(nextTab)` — 切换底部主 Tab 并写入 URL 参数 | keywords: url-route, main-tab
+  - `openHeaderPopup(popup)` — 打开顶部控制台弹窗并写入 URL 参数 | keywords: url-route, commander-popup
+  - `handleChatDrawerToggle(open)` — 切换历史会话抽屉并同步 URL 弹窗参数 | keywords: url-route, commander-popup
+  - `selectTimeRange(nextRange)` — 选择看板时间维度并同步 URL 参数 | keywords: url-route, time-range
+  - `applyCommanderRouteParams()` — 将 URL 参数应用到主导航、顶部弹窗和焦点目标 | keywords: url-route, commander-state
 
 ### ChatBIView.jsx
 
@@ -47,6 +56,18 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
   - `BarChartSVG`: 最近N条数据柱状对比图（纯SVG）
   - `TrendChartSVG`: 按 postHash 聚合的文章趋势折线图（纯SVG）
 
+### DouyinSpecialistView.jsx
+
+抖音专家模拟页面。仿照小红书专家工具页的右侧工作区，提供模拟聊天记录、生成视频草稿和抖音数据三个 Tab，用于演示抖音短视频运营、本地生活转化和内容表现复盘。
+
+- **关键词**: douyin-specialist, mock-chat, mock-video, douyin-data, metric-card
+- **函数**:
+  - `getMetricTone(tone)` — 读取抖音数据卡片的 Tailwind 色彩类 | keywords: douyin-specialist, metric-card
+  - `MetricCard(metric)` — 渲染抖音数据指标卡片 | keywords: douyin-specialist, metric-card
+  - `ChatBubble(message)` — 渲染抖音专家模拟聊天气泡 | keywords: douyin-specialist, mock-chat
+  - `VideoCard(video)` — 渲染抖音模拟生成视频卡片 | keywords: douyin-specialist, mock-video
+  - `DouyinSpecialistView(onBack?)` — 抖音专家页面入口，切换模拟聊天、生成视频和抖音数据 Tab | keywords: douyin-specialist, mock-chat, mock-video, douyin-data
+
 ### TaskDetailPage.jsx
 
 通用任务详情页面。
@@ -55,14 +76,25 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 ### ToolsView.jsx
 
-工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、文章库、精选文章入口。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。图库上拉分页使用同步请求锁与哨兵离开后再武装策略,保证一次上拉只触发一次追加请求。
+工具入口页。包含 AI 图库(GalleryView)、思维链路、Canvas管理、小红书专家、抖音专家、文章库、精选文章入口。Canvas管理支持类型过滤(图文/图组)、标签筛选、无限滚动分页、缩略图卡片展示，点击打开 CanvasFeedView(图文) 或 ImageGroupCanvasView(图组) 内部覆盖层。GalleryView 顶栏提供"ZIP 导入"按钮,打开 [GalleryZipImportPanel](GalleryZipImportPanel.jsx) 右侧抽屉,任务完成后自动 reload 图库 / 分组 / 标签。GalleryView Header 采用**双行布局**(让操作元素呼吸开): 第一行=返回+4 tabs+(右)上传主按钮 / batch 模式右侧显示"已选 N/M"; 第二行=标签筛选+上传标签输入(flex-1 自适应宽度)+批量选择+ZIP 导入按钮, batch 模式下整行替换为 全选/批量改标签(N)/退出。第二行 flex-wrap 容许窄屏自动换行,杜绝硬塞一行导致按钮被裁剪。图库上拉分页使用同步请求锁与哨兵离开后再武装策略,保证一次上拉只触发一次追加请求。
 
-- **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, article-library, featured-article, zip-import, responsive, icon-collapse
+- **关键词**: tools, gallery, canvas, image-group, infinite-scroll, type-filter, tag-filter, thumbnail, xhs-specialist, douyin-specialist, article-library, featured-article, zip-import, responsive, icon-collapse
 - **函数**:
   - `GalleryView(onBack)` — 图库管理视图（含对话/图库/拼图/封面 Tab、ZIP 批量导入抽屉入口、上拉分页单次触发锁） | keywords: gallery, gallery-view, infinite-scroll
+  - `normalizeToolViewParam(value)` — 归一化效能工具视图 URL 参数 | keywords: url-route, tool-view
+  - `normalizeGalleryTabParam(value)` — 归一化图库内部 Tab URL 参数 | keywords: url-route, gallery-tab
+  - `normalizeToolPopupParam(value)` — 归一化工具弹层 URL 参数 | keywords: url-route, tool-popup
+  - `readToolsRouteParams()` — 读取工具页 URL 参数并推导工具视图、内部 Tab 和弹层 | keywords: url-route, tool-state
+  - `updateToolsSearchParams(patch, options?)` — 同步工具卡片、内部 Tab 和弹层状态到 URL 查询参数 | keywords: url-route, query-sync
+  - `selectGalleryTab(nextTab)` — 切换图库内部 Tab 并同步 URL 参数 | keywords: url-route, gallery-tab
+  - `openGalleryPopup(popup)` — 打开图库工具弹层并同步 URL 参数 | keywords: url-route, tool-popup
+  - `closeGalleryPopup(popup)` — 关闭图库工具弹层并清理 URL 参数 | keywords: url-route, tool-popup
   - `loadImages({ append?, imageType? })` — 加载图库图片并用同步锁保证单次上拉只触发一次追加请求 | keywords: gallery, infinite-scroll, pagination
   - `TagFilterDropdown`: 标签筛选下拉（窄屏 w-20 / 宽屏 w-28 自适应）
-  - `ToolsView(onThoughtRouteChange?)` — 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/article-library/featured-article） | keywords: tools-view, tools, gallery, canvas, xhs-specialist, featured-article
+  - `ToolsView(onThoughtRouteChange?)` — 工具首页，子视图切换（list/gallery/thought/canvas/xhs-specialist/douyin-specialist/article-library/featured-article） | keywords: tools-view, tools, gallery, canvas, xhs-specialist, douyin-specialist, featured-article
+  - `handleToolRoutePatch(patch)` — 合并更新工具页 URL 参数并刷新本地路由快照 | keywords: url-route, query-sync
+  - `applyToolsRouteParams()` — 将 URL 参数应用到效能工具入口、内部 Tab 和弹层 | keywords: url-route, tool-state
+  - `selectToolView(nextView)` — 切换效能工具卡片并同步 URL 参数 | keywords: url-route, tool-view
   - `loadCanvases`: 加载 Canvas 列表，支持追加分页（append=true）、类型/标签过滤
   - `onBatchDelete`: 批量删除已选图库图片(window.confirm 二次确认 → `api.batchDeleteGalleryImages` → 刷新图库/标签),与"批量改标签"同处 batch 工具条 | keywords: gallery, batch-delete
 - **api 对象新增 ZIP 导入方法**: `uploadGalleryZip`、`listGalleryZipImports`、`cancelGalleryZipImport`、`deleteGalleryZipImport`(对接 `/gallery/zip-import/*` 后端)
@@ -121,13 +153,21 @@ Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签�
 
 - **关键词**: article-library, grid, thumbnail-mosaic, tabs, push-config, queue, qrcode, occupied-count, refresh
 - **函数**:
+  - `normalizeArticleLibraryTabParam(value)` — 归一化文章库详情 Tab URL 参数 | keywords: url-route, article-library-tab
   - `ThumbnailMosaic`: 2×2 缩略图网格
   - `LibraryFormDialog`: 新建/编辑库弹窗
   - `BasicInfoTab`: 基础信息 Tab（名称/类型）
   - `PushConfigTab`: 推送二维码 Tab（取文范围说明 + 数据历史 + 占用中统计 + SVG 二维码）
   - `ArticleListTab`: 文章列表 Tab（状态切换、发布状态切换、占用中标识、删除）
   - `LibraryDetailView`: 库详情页
+  - `selectDetailTab(nextTab)` — 切换文章库详情 Tab 并同步 URL 参数 | keywords: url-route, article-library-tab
   - `ArticleLibraryView`: 文章库主入口
+  - `openLibraryDetail(libraryId)` — 打开文章库详情并同步 URL 参数 | keywords: url-route, article-library-detail
+  - `backToLibraryList()` — 返回文章库列表并清理详情 URL 参数 | keywords: url-route, article-library-detail
+  - `openCreateDialog()` — 打开文章库新建弹窗并同步 URL 参数 | keywords: url-route, tool-popup
+  - `closeCreateDialog()` — 关闭文章库新建弹窗并清理 URL 弹层参数 | keywords: url-route, tool-popup
+  - `openEditDialog(library)` — 打开文章库编辑弹窗并同步 URL 参数 | keywords: url-route, tool-popup
+  - `closeEditDialog()` — 关闭文章库编辑弹窗并清理 URL 弹层参数 | keywords: url-route, tool-popup
 
 ### FeaturedArticleView.jsx
 
@@ -214,6 +254,23 @@ Canvas 图片槽位重生成弹窗。进入后拉取图库图片和图库标签�
   - `ai-topic-options` / AI 选题候选
   - `library-picker` / 文章库选择
   - `store-into-library` / 存入文章库
+  - `douyin-specialist` / 抖音专家
+  - `mock-chat` / 模拟聊天
+  - `mock-video` / 模拟视频
+  - `douyin-data` / 抖音数据
+  - `metric-card` / 指标卡片
+  - `url-route` / URL 路由
+  - `main-tab` / 主导航
+  - `commander-popup` / 顶部弹窗
+  - `commander-state` / 指挥官路由状态
+  - `query-sync` / 查询参数同步
+  - `time-range` / 时间维度
+  - `tool-view` / 工具视图
+  - `gallery-tab` / 图库标签页
+  - `tool-popup` / 工具弹层
+  - `tool-state` / 工具路由状态
+  - `article-library-tab` / 文章库标签页
+  - `article-library-detail` / 文章库详情
 
 ### featuredArticleService.js
 

@@ -1,9 +1,10 @@
 ﻿import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
-  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck, FileArchive, FileText
+  FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck, FileArchive, FileText, Video
 } from 'lucide-react';
 import ThoughtRouteView from './ThoughtRouteView';
 import XhsSpecialistView from './XhsSpecialistView';
+import DouyinSpecialistView from './DouyinSpecialistView';
 import CanvasFeedView from './CanvasFeedView';
 import ImageGroupCanvasView from './ImageGroupCanvasView';
 import ChatBIView from './ChatBIView';
@@ -36,6 +37,125 @@ function getAuthHeaders() {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
+
+const TOOL_VIEW_KEYS = new Set([
+  'list',
+  'gallery',
+  'thought',
+  'canvas',
+  'xhs-specialist',
+  'douyin-specialist',
+  'article-library',
+  'featured-article',
+  'anti-detection',
+]);
+const GALLERY_TAB_KEYS = new Set(['chat', 'gallery', 'collage', 'cover']);
+const TOOL_POPUP_ALIASES = new Map([
+  ['gallery-zip-import', 'gallery-zip-import'],
+  ['zip-import', 'gallery-zip-import'],
+  ['gallery-create-group', 'gallery-create-group'],
+  ['create-gallery-group', 'gallery-create-group'],
+  ['gallery-batch-tags', 'gallery-batch-tags'],
+  ['batch-tags', 'gallery-batch-tags'],
+  ['article-library-create', 'article-library-create'],
+  ['create-article-library', 'article-library-create'],
+  ['article-library-edit', 'article-library-edit'],
+  ['edit-article-library', 'article-library-edit'],
+]);
+
+/**
+ * @description 归一化工具入口 URL 参数。
+ * @keyword-en url-route
+ * @keyword-en tool-view
+ * @param {string|null|undefined} value - URL 中的工具视图值。
+ * @returns {string|null}
+ */
+const normalizeToolViewParam = (value) => {
+  const key = String(value || '').trim();
+  return TOOL_VIEW_KEYS.has(key) ? key : null;
+};
+
+/**
+ * @description 归一化图库内部 Tab URL 参数。
+ * @keyword-en url-route
+ * @keyword-en gallery-tab
+ * @param {string|null|undefined} value - URL 中的图库 Tab 值。
+ * @returns {string|null}
+ */
+const normalizeGalleryTabParam = (value) => {
+  const key = String(value || '').trim();
+  return GALLERY_TAB_KEYS.has(key) ? key : null;
+};
+
+/**
+ * @description 归一化工具弹层 URL 参数。
+ * @keyword-en url-route
+ * @keyword-en tool-popup
+ * @param {string|null|undefined} value - URL 中的工具弹层值。
+ * @returns {string|null}
+ */
+const normalizeToolPopupParam = (value) => {
+  const key = String(value || '').trim();
+  return TOOL_POPUP_ALIASES.get(key) || null;
+};
+
+/**
+ * @description 读取效能工具 URL 参数并推导工具视图、内部 Tab 和弹层。
+ * @keyword-en url-route
+ * @keyword-en tool-state
+ * @returns {{ view: string|null, galleryTab: string|null, popup: string|null, libraryId: number|null, editLibraryId: number|null, articleLibraryTab: string }}
+ */
+const readToolsRouteParams = () => {
+  if (typeof window === 'undefined') {
+    return { view: null, galleryTab: null, popup: null, libraryId: null, editLibraryId: null, articleLibraryTab: '' };
+  }
+  const params = new URLSearchParams(window.location.search || '');
+  const popup = normalizeToolPopupParam(
+    params.get('popup') || params.get('modal') || params.get('dialog') || params.get('open'),
+  );
+  let view = normalizeToolViewParam(params.get('tool') || params.get('toolView'));
+  const libraryId = Number(params.get('libraryId') || params.get('articleLibraryId'));
+  const editLibraryId = Number(params.get('editLibraryId') || params.get('articleLibraryEditId'));
+  if (!view && Number.isFinite(libraryId) && libraryId > 0) {
+    view = 'article-library';
+  }
+  if (!view && popup) {
+    if (popup.startsWith('gallery-')) view = 'gallery';
+    if (popup.startsWith('article-library-')) view = 'article-library';
+  }
+  return {
+    view,
+    galleryTab: normalizeGalleryTabParam(params.get('galleryTab') || params.get('toolTab')),
+    popup,
+    libraryId: Number.isFinite(libraryId) && libraryId > 0 ? libraryId : null,
+    editLibraryId: Number.isFinite(editLibraryId) && editLibraryId > 0 ? editLibraryId : null,
+    articleLibraryTab: String(params.get('articleLibraryTab') || params.get('libraryTab') || params.get('detailTab') || '').trim(),
+  };
+};
+
+/**
+ * @description 更新效能工具 URL 参数,用于同步工具卡片、内部 Tab 和弹层。
+ * @keyword-en url-route
+ * @keyword-en query-sync
+ * @param {Record<string, string|number|null|undefined>} patch - 要写入或删除的查询参数。
+ * @param {{ replace?: boolean }} [options] - 历史记录写入方式。
+ */
+const updateToolsSearchParams = (patch, { replace = true } = {}) => {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    if (value === null || value === '') {
+      url.searchParams.delete(key);
+      return;
+    }
+    url.searchParams.set(key, String(value));
+  });
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const next = `${url.pathname}${url.search}${url.hash}`;
+  if (next === current) return;
+  window.history[replace ? 'replaceState' : 'pushState'](null, '', next);
+};
 
 const api = {
   /**
@@ -948,8 +1068,8 @@ function TagFilterDropdown({ value, onChange, allTags }) {
  * @param {Object} props
  * @param {Function} props.onBack - Callback when back button is clicked
  */
-const GalleryView = ({ onBack }) => {
-  const [tab, setTab] = useState('gallery'); // 'gallery' | 'chat' | 'collage' | 'cover'
+const GalleryView = ({ onBack, routeGalleryTab, routePopup, onRoutePatch }) => {
+  const [tab, setTab] = useState(() => normalizeGalleryTabParam(routeGalleryTab) || 'gallery'); // 'gallery' | 'chat' | 'collage' | 'cover'
   const [userId, setUserId] = useState('');
   const [groups, setGroups] = useState([]);
   const [selectedGroupId, setSelectedGroupId] = useState(null);
@@ -1019,6 +1139,90 @@ const GalleryView = ({ onBack }) => {
   useEffect(() => { hasMoreImagesRef.current = hasMoreImages; }, [hasMoreImages]);
   useEffect(() => { selectedGroupIdRef.current = selectedGroupId; }, [selectedGroupId]);
   useEffect(() => { tabRef.current = tab; }, [tab]);
+
+  /**
+   * @description 切换图库内部 Tab 并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en gallery-tab
+   * @param {string} nextTab - 下一个图库 Tab。
+   */
+  const selectGalleryTab = useCallback((nextTab) => {
+    const targetTab = normalizeGalleryTabParam(nextTab);
+    if (!targetTab) return;
+    setTab(targetTab);
+    onRoutePatch?.({
+      tab: 'tools',
+      tool: 'gallery',
+      galleryTab: targetTab,
+    });
+  }, [onRoutePatch]);
+
+  /**
+   * @description 打开图库工具弹层并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en tool-popup
+   * @param {string} popup - 图库弹层标识。
+   */
+  const openGalleryPopup = useCallback((popup) => {
+    const targetPopup = normalizeToolPopupParam(popup);
+    if (!targetPopup) return;
+    if (targetPopup === 'gallery-zip-import') {
+      setZipPanelOpen(true);
+    }
+    if (targetPopup === 'gallery-create-group') {
+      setShowCreateGroup(true);
+    }
+    if (targetPopup === 'gallery-batch-tags') {
+      setShowBatchTagModal(true);
+      setBatchAddTags([]);
+      setBatchRemoveTags([]);
+    }
+    onRoutePatch?.({
+      tab: 'tools',
+      tool: 'gallery',
+      popup: targetPopup,
+      galleryTab: tabRef.current,
+    });
+  }, [onRoutePatch]);
+
+  /**
+   * @description 关闭图库工具弹层并清理 URL 弹层参数。
+   * @keyword-en url-route
+   * @keyword-en tool-popup
+   * @param {string} popup - 图库弹层标识。
+   */
+  const closeGalleryPopup = useCallback((popup) => {
+    const targetPopup = normalizeToolPopupParam(popup);
+    if (targetPopup === 'gallery-zip-import') {
+      setZipPanelOpen(false);
+    }
+    if (targetPopup === 'gallery-create-group') {
+      setShowCreateGroup(false);
+    }
+    if (targetPopup === 'gallery-batch-tags') {
+      setShowBatchTagModal(false);
+    }
+    onRoutePatch?.({
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    });
+  }, [onRoutePatch]);
+
+  useEffect(() => {
+    const targetTab = normalizeGalleryTabParam(routeGalleryTab);
+    if (targetTab && targetTab !== tabRef.current) {
+      setTab(targetTab);
+    }
+  }, [routeGalleryTab]);
+
+  useEffect(() => {
+    const popup = normalizeToolPopupParam(routePopup);
+    setZipPanelOpen(popup === 'gallery-zip-import');
+    setShowCreateGroup(popup === 'gallery-create-group');
+    setShowBatchTagModal(popup === 'gallery-batch-tags');
+  }, [routePopup]);
 
   // 拼图素材：必须是横图（isPortrait 不为 true）且非拼图戏图
   const collageSourceImages = useMemo(
@@ -1245,6 +1449,7 @@ const GalleryView = ({ onBack }) => {
     if (res?.group) {
       setGroupDraft({ name: '', description: '', tags: '' });
       setShowCreateGroup(false);
+      onRoutePatch?.({ popup: null, modal: null, dialog: null, open: null });
       await loadGroups();
       setSelectedGroupId(res.group.id);
       showToast(`图库分组 "${name}" 创建成功`, 'success');
@@ -1519,6 +1724,7 @@ const GalleryView = ({ onBack }) => {
       });
       showToast(`已更新 ${res.modified ?? 0} 张图片的标签`, 'success');
       setShowBatchTagModal(false);
+      onRoutePatch?.({ popup: null, modal: null, dialog: null, open: null });
       setBatchSelectedIds([]);
       setBatchSelectMode(false);
       setBatchAddTags([]);
@@ -1528,7 +1734,7 @@ const GalleryView = ({ onBack }) => {
     } finally {
       setBatchTagSaving(false);
     }
-  }, [batchSelectedIds, batchAddTags, batchRemoveTags, userId, loadImages, loadTags]);
+  }, [batchSelectedIds, batchAddTags, batchRemoveTags, userId, loadImages, loadTags, onRoutePatch]);
 
   /**
    * @description 批量删除已选图片（二次确认 → 调后端 → 刷新图库/标签）。
@@ -1637,25 +1843,25 @@ const GalleryView = ({ onBack }) => {
           </button>
           <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
             <button
-              onClick={() => setTab('chat')}
+              onClick={() => selectGalleryTab('chat')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               对话
             </button>
             <button
-              onClick={() => setTab('gallery')}
+              onClick={() => selectGalleryTab('gallery')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
             </button>
             <button
-              onClick={() => setTab('collage')}
+              onClick={() => selectGalleryTab('collage')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
             </button>
             <button
-              onClick={() => setTab('cover')}
+              onClick={() => selectGalleryTab('cover')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               封面
@@ -1690,25 +1896,25 @@ const GalleryView = ({ onBack }) => {
           </button>
           <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
             <button
-              onClick={() => setTab('chat')}
+              onClick={() => selectGalleryTab('chat')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               对话
             </button>
             <button
-              onClick={() => setTab('gallery')}
+              onClick={() => selectGalleryTab('gallery')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
             </button>
             <button
-              onClick={() => setTab('collage')}
+              onClick={() => selectGalleryTab('collage')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
             </button>
             <button
-              onClick={() => setTab('cover')}
+              onClick={() => selectGalleryTab('cover')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               封面
@@ -1844,25 +2050,25 @@ const GalleryView = ({ onBack }) => {
           </button>
           <div className="inline-flex rounded-full bg-slate-100 p-1 flex-shrink-0">
             <button
-              onClick={() => setTab('chat')}
+              onClick={() => selectGalleryTab('chat')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               对话
             </button>
             <button
-              onClick={() => setTab('gallery')}
+              onClick={() => selectGalleryTab('gallery')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
             </button>
             <button
-              onClick={() => setTab('collage')}
+              onClick={() => selectGalleryTab('collage')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
             </button>
             <button
-              onClick={() => setTab('cover')}
+              onClick={() => selectGalleryTab('cover')}
               className={`px-3 py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               封面
@@ -1982,25 +2188,25 @@ const GalleryView = ({ onBack }) => {
           </button>
           <div className="inline-flex rounded-full bg-slate-100 p-0.5 sm:p-1 shrink-0">
             <button
-              onClick={() => setTab('chat')}
+              onClick={() => selectGalleryTab('chat')}
               className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'chat' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               对话
             </button>
             <button
-              onClick={() => setTab('gallery')}
+              onClick={() => selectGalleryTab('gallery')}
               className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'gallery' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               图库
             </button>
             <button
-              onClick={() => setTab('collage')}
+              onClick={() => selectGalleryTab('collage')}
               className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'collage' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               拼图
             </button>
             <button
-              onClick={() => setTab('cover')}
+              onClick={() => selectGalleryTab('cover')}
               className={`px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-full whitespace-nowrap ${tab === 'cover' ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}
             >
               封面
@@ -2037,7 +2243,7 @@ const GalleryView = ({ onBack }) => {
                 {allVisibleSelected ? '取消全选' : '全选当前筛选'}
               </button>
               <button
-                onClick={() => { setShowBatchTagModal(true); setBatchAddTags([]); setBatchRemoveTags([]); }}
+                onClick={() => openGalleryPopup('gallery-batch-tags')}
                 disabled={batchSelectedIds.length === 0}
                 className="px-3 py-1.5 text-xs rounded-full bg-blue-600 text-white disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
               >
@@ -2081,7 +2287,7 @@ const GalleryView = ({ onBack }) => {
                 <span>批量选择</span>
               </button>
               <button
-                onClick={() => setZipPanelOpen(true)}
+                onClick={() => openGalleryPopup('gallery-zip-import')}
                 title="ZIP 批量导入(队列任务)"
                 className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 whitespace-nowrap"
               >
@@ -2098,7 +2304,7 @@ const GalleryView = ({ onBack }) => {
         <div className="w-64 border-r border-slate-100 bg-slate-50 flex-col hidden md:flex">
           <div className="p-3 border-b border-slate-100 flex justify-between items-center">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">图库分组</span>
-            <button onClick={() => setShowCreateGroup(true)} className="p-1 hover:bg-slate-200 rounded text-slate-500">
+            <button onClick={() => openGalleryPopup('gallery-create-group')} className="p-1 hover:bg-slate-200 rounded text-slate-500">
               <Plus size={14} />
             </button>
           </div>
@@ -2237,7 +2443,7 @@ const GalleryView = ({ onBack }) => {
             />
             <div className="flex justify-end gap-2">
               <button 
-                onClick={() => setShowCreateGroup(false)}
+                onClick={() => closeGalleryPopup('gallery-create-group')}
                 className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium"
               >
                 取消
@@ -2420,7 +2626,7 @@ const GalleryView = ({ onBack }) => {
       {/* 批量改标签 Modal */}
       {showBatchTagModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setShowBatchTagModal(false)} />
+          <div className="absolute inset-0 bg-black/60" onClick={() => closeGalleryPopup('gallery-batch-tags')} />
           <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 border border-gray-200">
             {/* Modal 标题区域 */}
             <div className="flex items-center justify-between mb-4">
@@ -2450,7 +2656,7 @@ const GalleryView = ({ onBack }) => {
             <div className="flex justify-end gap-2 mt-6">
               <button
                 type="button"
-                onClick={() => setShowBatchTagModal(false)}
+                onClick={() => closeGalleryPopup('gallery-batch-tags')}
                 disabled={batchTagSaving}
                 className="h-9 px-4 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
               >
@@ -2472,7 +2678,7 @@ const GalleryView = ({ onBack }) => {
       {/* ZIP 批量导入抽屉:零散选 zip → 后台队列异步处理 → 实时进度轮询 */}
       <GalleryZipImportPanel
         open={zipPanelOpen}
-        onClose={() => setZipPanelOpen(false)}
+        onClose={() => closeGalleryPopup('gallery-zip-import')}
         userId={userId || 'default'}
         groups={groups}
         api={api}
@@ -2487,17 +2693,19 @@ const GalleryView = ({ onBack }) => {
 };
 
 /**
- * @description ToolsView — 工具入口页，包含图库、思维链路、Canvas管理、小红书专家入口。
+ * @description ToolsView — 工具入口页，包含图库、思维链路、Canvas管理、小红书/抖音专家入口。
  * @keyword-en tools-view
  * @keyword-en tools
  * @keyword-en gallery
  * @keyword-en canvas
  * @keyword-en xhs-specialist
+ * @keyword-en douyin-specialist
  * @keyword-en featured-article
  * @param {{ onThoughtRouteChange?: Function }} props
  */
 const ToolsView = ({ onThoughtRouteChange }) => {
-  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'article-library' | 'featured-article' | 'anti-detection'
+  const [view, setView] = useState('list'); // 'list' | 'gallery' | 'thought' | 'canvas' | 'xhs-specialist' | 'douyin-specialist' | 'article-library' | 'featured-article' | 'anti-detection'
+  const [routeParams, setRouteParams] = useState(() => readToolsRouteParams());
 
   // ── Canvas 管理状态 ──────────────────────────────────────────
   const [canvases, setCanvases] = useState([]);
@@ -2510,6 +2718,71 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   const canvasReqIdRef = useRef(0);
   const canvasListRef = useRef([]);
   const canvasLoadMoreRef = useRef(null);
+
+  /**
+   * @description 合并更新工具页 URL 参数并刷新本地路由快照。
+   * @keyword-en url-route
+   * @keyword-en query-sync
+   * @param {Record<string, string|number|null|undefined>} patch - 工具页查询参数补丁。
+   */
+  const handleToolRoutePatch = useCallback((patch) => {
+    updateToolsSearchParams(patch);
+    setRouteParams(readToolsRouteParams());
+  }, []);
+
+  /**
+   * @description 应用 URL 参数到效能工具入口、内部 Tab 和弹层。
+   * @keyword-en url-route
+   * @keyword-en tool-state
+   */
+  const applyToolsRouteParams = useCallback(() => {
+    const nextRoute = readToolsRouteParams();
+    setRouteParams(nextRoute);
+    setView(nextRoute.view || 'list');
+  }, []);
+
+  /**
+   * @description 切换效能工具卡片并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en tool-view
+   * @param {string} nextView - 下一个工具视图。
+   */
+  const selectToolView = useCallback((nextView) => {
+    const targetView = normalizeToolViewParam(nextView) || 'list';
+    setView(targetView);
+    const patch = {
+      tab: 'tools',
+      tool: targetView === 'list' ? null : targetView,
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    };
+    if (targetView !== 'gallery') {
+      Object.assign(patch, {
+        galleryTab: null,
+        toolTab: null,
+      });
+    }
+    if (targetView !== 'article-library') {
+      Object.assign(patch, {
+        libraryId: null,
+        articleLibraryId: null,
+        editLibraryId: null,
+        articleLibraryEditId: null,
+        articleLibraryTab: null,
+        libraryTab: null,
+        detailTab: null,
+      });
+    }
+    handleToolRoutePatch(patch);
+  }, [handleToolRoutePatch]);
+
+  useEffect(() => {
+    applyToolsRouteParams();
+    window.addEventListener('popstate', applyToolsRouteParams);
+    return () => window.removeEventListener('popstate', applyToolsRouteParams);
+  }, [applyToolsRouteParams]);
 
   /**
    * @description 加载 Canvas 列表，支持分页追加和首屏重置。
@@ -2578,22 +2851,41 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   }, [canvasHasMore, canvasLoading, loadCanvases, view]);
 
   if (view === 'gallery') {
-    return <GalleryView onBack={() => setView('list')} />;
+    return (
+      <GalleryView
+        onBack={() => selectToolView('list')}
+        routeGalleryTab={routeParams.galleryTab}
+        routePopup={routeParams.popup}
+        onRoutePatch={handleToolRoutePatch}
+      />
+    );
   }
   if (view === 'thought') {
-    return <ThoughtRouteView onBack={() => setView('list')} />;
+    return <ThoughtRouteView onBack={() => selectToolView('list')} />;
   }
   if (view === 'xhs-specialist') {
-    return <XhsSpecialistView onBack={() => setView('list')} />;
+    return <XhsSpecialistView onBack={() => selectToolView('list')} />;
+  }
+  if (view === 'douyin-specialist') {
+    return <DouyinSpecialistView onBack={() => selectToolView('list')} />;
   }
   if (view === 'article-library') {
-    return <ArticleLibraryView onBack={() => setView('list')} />;
+    return (
+      <ArticleLibraryView
+        onBack={() => selectToolView('list')}
+        routeLibraryId={routeParams.libraryId}
+        routeEditLibraryId={routeParams.editLibraryId}
+        routeDetailTab={routeParams.articleLibraryTab}
+        routePopup={routeParams.popup}
+        onRoutePatch={handleToolRoutePatch}
+      />
+    );
   }
   if (view === 'featured-article') {
-    return <FeaturedArticleView onBack={() => setView('list')} />;
+    return <FeaturedArticleView onBack={() => selectToolView('list')} />;
   }
   if (view === 'anti-detection') {
-    return <AntiDetectionView onBack={() => setView('list')} />;
+    return <AntiDetectionView onBack={() => selectToolView('list')} />;
   }
   if (view === 'canvas') {
     // ── 打开某个 Canvas 的内部覆盖层 ──
@@ -2620,7 +2912,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
         <div className="flex flex-wrap items-center gap-2 p-3 md:p-4 border-b border-slate-100 bg-white/90">
           {/* 返回按钮 back button */}
           <button
-            onClick={() => setView('list')}
+            onClick={() => selectToolView('list')}
             className="p-2 hover:bg-slate-100 rounded-full transition text-slate-500 hover:text-slate-800 shrink-0"
           >
             <ChevronLeft size={22} />
@@ -2749,7 +3041,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <div 
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-blue-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('gallery')}
+          onClick={() => selectToolView('gallery')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
@@ -2767,7 +3059,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
         
         <div 
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-indigo-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('thought')}
+          onClick={() => selectToolView('thought')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
@@ -2785,7 +3077,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
 
         <div 
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-emerald-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('canvas')}
+          onClick={() => selectToolView('canvas')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
           
@@ -2804,7 +3096,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
         {/* XHS Specialist Card */}
         <div
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-rose-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('xhs-specialist')}
+          onClick={() => selectToolView('xhs-specialist')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-rose-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
@@ -2820,10 +3112,29 @@ const ToolsView = ({ onThoughtRouteChange }) => {
           </div>
         </div>
 
+        {/* Douyin Specialist Card */}
+        <div
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-cyan-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => selectToolView('douyin-specialist')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-cyan-50/50 to-rose-50/40 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-slate-900 via-cyan-700 to-rose-500 flex items-center justify-center mb-4 text-white shadow-cyan-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <Video size={30} />
+          </div>
+
+          <span className="font-bold text-slate-800 text-lg z-10">抖音专家</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">短视频与本地生活</span>
+
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-cyan-500">
+             <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+
         {/* Article Library Card */}
         <div
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-amber-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('article-library')}
+          onClick={() => selectToolView('article-library')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-amber-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
@@ -2842,7 +3153,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
         {/* Anti-Detection Card */}
         <div
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-teal-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('anti-detection')}
+          onClick={() => selectToolView('anti-detection')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 
@@ -2861,7 +3172,7 @@ const ToolsView = ({ onThoughtRouteChange }) => {
         {/* Featured Article Card */}
         <div
           className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-emerald-100 transition-all duration-300 aspect-square relative overflow-hidden"
-          onClick={() => setView('featured-article')}
+          onClick={() => selectToolView('featured-article')}
         >
           <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
 

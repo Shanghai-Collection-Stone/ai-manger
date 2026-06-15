@@ -6,6 +6,20 @@ import { articleLibraryService } from './articleLibraryService';
 import { createQrCodeSvg } from './qrCodeSvg';
 import { showToast } from './blocks/shared';
 
+const ARTICLE_LIBRARY_TAB_KEYS = new Set(['articles', 'basic', 'push']);
+
+/**
+ * @description 归一化文章库详情 Tab URL 参数。
+ * @keyword-en url-route
+ * @keyword-en article-library-tab
+ * @param {string|null|undefined} value - URL 中的文章库详情 Tab 值。
+ * @returns {string|null}
+ */
+const normalizeArticleLibraryTabParam = (value) => {
+  const key = String(value || '').trim();
+  return ARTICLE_LIBRARY_TAB_KEYS.has(key) ? key : null;
+};
+
 /**
  * @description 2×2 缩略图网格（库封面）
  * @keyword-en library thumbnail mosaic grid
@@ -444,10 +458,10 @@ const ArticleListTab = ({ library, onChanged }) => {
  * @description 库详情页（文章列表 / 基础信息 / 推送二维码 三个 Tab）
  * @keyword-en library detail view with tabs
  */
-const LibraryDetailView = ({ libraryId, onBack }) => {
+const LibraryDetailView = ({ libraryId, routeDetailTab, onBack, onRoutePatch }) => {
   const [library, setLibrary] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState('articles');
+  const [tab, setTab] = useState(() => normalizeArticleLibraryTabParam(routeDetailTab) || 'articles');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -460,6 +474,33 @@ const LibraryDetailView = ({ libraryId, onBack }) => {
   }, [libraryId]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const nextTab = normalizeArticleLibraryTabParam(routeDetailTab);
+    if (nextTab) setTab(nextTab);
+  }, [routeDetailTab]);
+
+  /**
+   * @description 切换文章库详情 Tab 并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en article-library-tab
+   * @param {string} nextTab - 下一个文章库详情 Tab。
+   */
+  const selectDetailTab = useCallback((nextTab) => {
+    const targetTab = normalizeArticleLibraryTabParam(nextTab);
+    if (!targetTab) return;
+    setTab(targetTab);
+    onRoutePatch?.({
+      tab: 'tools',
+      tool: 'article-library',
+      libraryId,
+      articleLibraryTab: targetTab,
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    });
+  }, [libraryId, onRoutePatch]);
 
   if (loading && !library) {
     return (
@@ -508,7 +549,7 @@ const LibraryDetailView = ({ libraryId, onBack }) => {
           ].map((t) => (
             <button
               key={t.key}
-              onClick={() => setTab(t.key)}
+              onClick={() => selectDetailTab(t.key)}
               className={`px-3 py-1 rounded-full transition ${
                 tab === t.key ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'
               }`}
@@ -542,11 +583,18 @@ const LibraryDetailView = ({ libraryId, onBack }) => {
  * @description 文章库入口视图：库列表网格 + 新建 + 跳详情
  * @keyword-en article library tool main view
  */
-const ArticleLibraryView = ({ onBack }) => {
+const ArticleLibraryView = ({
+  onBack,
+  routeLibraryId,
+  routeEditLibraryId,
+  routeDetailTab,
+  routePopup,
+  onRoutePatch,
+}) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
-  const [detailId, setDetailId] = useState(null);
+  const [detailId, setDetailId] = useState(routeLibraryId ?? null);
   const [showCreate, setShowCreate] = useState(false);
   const [showEditFor, setShowEditFor] = useState(null);
 
@@ -563,6 +611,129 @@ const ArticleLibraryView = ({ onBack }) => {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    setDetailId(routeLibraryId ?? null);
+  }, [routeLibraryId]);
+
+  useEffect(() => {
+    setShowCreate(routePopup === 'article-library-create');
+  }, [routePopup]);
+
+  useEffect(() => {
+    if (routePopup !== 'article-library-edit') {
+      setShowEditFor(null);
+      return;
+    }
+    const targetId = Number(routeEditLibraryId);
+    if (!Number.isFinite(targetId) || targetId <= 0) return;
+    const target = items.find((item) => Number(item?.id) === targetId);
+    if (target) setShowEditFor(target);
+  }, [items, routeEditLibraryId, routePopup]);
+
+  /**
+   * @description 打开文章库详情并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en article-library-detail
+   * @param {number|string} libraryId - 文章库 ID。
+   */
+  const openLibraryDetail = useCallback((libraryId) => {
+    const targetId = Number(libraryId);
+    if (!Number.isFinite(targetId) || targetId <= 0) return;
+    setDetailId(targetId);
+    onRoutePatch?.({
+      tab: 'tools',
+      tool: 'article-library',
+      libraryId: targetId,
+      articleLibraryTab: 'articles',
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    });
+  }, [onRoutePatch]);
+
+  /**
+   * @description 返回文章库列表并清理详情 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en article-library-detail
+   */
+  const backToLibraryList = useCallback(() => {
+    setDetailId(null);
+    onRoutePatch?.({
+      libraryId: null,
+      articleLibraryId: null,
+      articleLibraryTab: null,
+      libraryTab: null,
+      detailTab: null,
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+    });
+    load();
+  }, [load, onRoutePatch]);
+
+  /**
+   * @description 打开文章库新建弹窗并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en tool-popup
+   */
+  const openCreateDialog = useCallback(() => {
+    setShowCreate(true);
+    onRoutePatch?.({
+      tab: 'tools',
+      tool: 'article-library',
+      popup: 'article-library-create',
+      editLibraryId: null,
+      articleLibraryEditId: null,
+    });
+  }, [onRoutePatch]);
+
+  /**
+   * @description 关闭文章库新建弹窗并清理 URL 弹层参数。
+   * @keyword-en url-route
+   * @keyword-en tool-popup
+   */
+  const closeCreateDialog = useCallback(() => {
+    setShowCreate(false);
+    onRoutePatch?.({ popup: null, modal: null, dialog: null, open: null });
+  }, [onRoutePatch]);
+
+  /**
+   * @description 打开文章库编辑弹窗并同步 URL 参数。
+   * @keyword-en url-route
+   * @keyword-en tool-popup
+   * @param {Object} library - 要编辑的文章库。
+   */
+  const openEditDialog = useCallback((library) => {
+    if (!library?.id) return;
+    setShowEditFor(library);
+    onRoutePatch?.({
+      tab: 'tools',
+      tool: 'article-library',
+      popup: 'article-library-edit',
+      editLibraryId: library.id,
+      articleLibraryEditId: null,
+    });
+  }, [onRoutePatch]);
+
+  /**
+   * @description 关闭文章库编辑弹窗并清理 URL 弹层参数。
+   * @keyword-en url-route
+   * @keyword-en tool-popup
+   */
+  const closeEditDialog = useCallback(() => {
+    setShowEditFor(null);
+    onRoutePatch?.({
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+      editLibraryId: null,
+      articleLibraryEditId: null,
+    });
+  }, [onRoutePatch]);
+
   const handleCreate = async ({ name, type }) => {
     const res = await articleLibraryService.createLibrary({ name, type });
     if (!res?.library) {
@@ -571,6 +742,7 @@ const ArticleLibraryView = ({ onBack }) => {
     }
     showToast('已创建', 'success');
     setShowCreate(false);
+    onRoutePatch?.({ popup: null, modal: null, dialog: null, open: null });
     load();
   };
 
@@ -583,6 +755,14 @@ const ArticleLibraryView = ({ onBack }) => {
     }
     showToast('已保存', 'success');
     setShowEditFor(null);
+    onRoutePatch?.({
+      popup: null,
+      modal: null,
+      dialog: null,
+      open: null,
+      editLibraryId: null,
+      articleLibraryEditId: null,
+    });
     load();
   };
 
@@ -596,7 +776,12 @@ const ArticleLibraryView = ({ onBack }) => {
 
   if (detailId != null) {
     return (
-      <LibraryDetailView libraryId={detailId} onBack={() => { setDetailId(null); load(); }} />
+      <LibraryDetailView
+        libraryId={detailId}
+        routeDetailTab={routeDetailTab}
+        onBack={backToLibraryList}
+        onRoutePatch={onRoutePatch}
+      />
     );
   }
 
@@ -619,7 +804,7 @@ const ArticleLibraryView = ({ onBack }) => {
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
         </button>
         <button
-          onClick={() => setShowCreate(true)}
+          onClick={openCreateDialog}
           className="text-xs px-3 py-1 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition inline-flex items-center gap-1"
         >
           <Plus size={12} /> 新建
@@ -636,7 +821,7 @@ const ArticleLibraryView = ({ onBack }) => {
             <Folder size={28} />
             <div className="text-xs">还没有文章库</div>
             <button
-              onClick={() => setShowCreate(true)}
+              onClick={openCreateDialog}
               className="text-xs text-blue-500 hover:underline"
             >
               新建一个
@@ -648,7 +833,7 @@ const ArticleLibraryView = ({ onBack }) => {
               <div
                 key={lib.id}
                 className="group bg-white rounded-3xl border border-slate-100 overflow-hidden hover:shadow-lg hover:border-blue-100 transition-all cursor-pointer"
-                onClick={() => setDetailId(lib.id)}
+                onClick={() => openLibraryDetail(lib.id)}
               >
                 {/* 缩略图区 */}
                 <div className="relative w-full aspect-square bg-slate-50">
@@ -676,7 +861,7 @@ const ArticleLibraryView = ({ onBack }) => {
                     </div>
                     <div className="opacity-0 group-hover:opacity-100 transition flex items-center gap-1">
                       <button
-                        onClick={(e) => { e.stopPropagation(); setShowEditFor(lib); }}
+                        onClick={(e) => { e.stopPropagation(); openEditDialog(lib); }}
                         className="p-1 text-slate-400 hover:text-slate-700 transition"
                         title="编辑"
                       >
@@ -699,10 +884,10 @@ const ArticleLibraryView = ({ onBack }) => {
       </div>
 
       {showCreate && (
-        <LibraryFormDialog onClose={() => setShowCreate(false)} onSubmit={handleCreate} />
+        <LibraryFormDialog onClose={closeCreateDialog} onSubmit={handleCreate} />
       )}
       {showEditFor && (
-        <LibraryFormDialog initial={showEditFor} onClose={() => setShowEditFor(null)} onSubmit={handleEdit} />
+        <LibraryFormDialog initial={showEditFor} onClose={closeEditDialog} onSubmit={handleEdit} />
       )}
     </div>
   );
