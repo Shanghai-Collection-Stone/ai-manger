@@ -45,12 +45,33 @@ export class ArticleLibraryService {
     await this.libraries.createIndex({ id: 1 }, { unique: true });
     await this.libraries.createIndex({ scope: 1, tenantId: 1, userId: 1 });
     await this.libraries.createIndex({ scope: 1, tenantId: 1, type: 1 });
-    await this.libraries.createIndex(
-      { 'pushConfig.qrToken': 1 },
-      { unique: true, sparse: true },
-    );
+    await this.ensureQrTokenIndex();
     await this.libraries.createIndex({ createdAt: -1 });
     await this.ensureCounterAtLeast(await this.getMaxArticleLibraryId());
+  }
+
+  /**
+   * @description 重建二维码 token 唯一索引，仅约束真实字符串 token，忽略空值与历史 null。
+   * @keyword-cn 二维码索引
+   * @keyword-en article-library-qr-index
+   */
+  private async ensureQrTokenIndex(): Promise<void> {
+    await this.libraries
+      .dropIndex('pushConfig.qrToken_1')
+      .catch(() => undefined);
+    await this.libraries.updateMany(
+      { 'pushConfig.qrToken': null },
+      { $unset: { 'pushConfig.qrToken': '' } },
+    );
+    await this.libraries.createIndex(
+      { 'pushConfig.qrToken': 1 },
+      {
+        unique: true,
+        partialFilterExpression: {
+          'pushConfig.qrToken': { $type: 'string' },
+        },
+      },
+    );
   }
 
   /**
@@ -113,12 +134,14 @@ export class ArticleLibraryService {
 
   /**
    * @description 规范化 pushConfig（statusFilter 为历史兼容字段，固定仅未发布）
-   * @keyword-en article library normalize push config
+   * @keyword-en article-library, push-config
    */
   private normalizePushConfig(
     input?: Partial<ArticleLibraryPushConfig>,
   ): ArticleLibraryPushConfig {
-    const statusFilter: ArticlePublishStatus[] = ['unpublished'];
+    const config: ArticleLibraryPushConfig = {
+      statusFilter: ['unpublished'],
+    };
     const pushUrl =
       typeof input?.pushUrl === 'string'
         ? input.pushUrl.trim() || undefined
@@ -127,7 +150,9 @@ export class ArticleLibraryService {
       typeof input?.qrToken === 'string'
         ? input.qrToken.trim() || undefined
         : undefined;
-    return { statusFilter, pushUrl, qrToken };
+    if (pushUrl) config.pushUrl = pushUrl;
+    if (qrToken) config.qrToken = qrToken;
+    return config;
   }
 
   /**

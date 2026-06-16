@@ -4,7 +4,7 @@
 Article-Library
 
 ## 概述 (Overview)
-文章库模块提供“库容器 + 文章”的两层结构，支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。库和文章都使用 MongoDB 业务自增 ID，并在分配 ID 前校准 counter，避免计数器落后于既有数据后触发 duplicate key。
+文章库模块提供“库容器 + 文章”的两层结构，支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。库和文章都使用 MongoDB 业务自增 ID，并在分配 ID 前校准 counter，避免计数器落后于既有数据后触发 duplicate key；二维码 token 唯一索引只约束真实字符串 token，空值不参与唯一性判断。
 
 ## 文件清单 (File List)
 - `article-library.module.ts` — Nest 模块声明，导入 DataSource、Admin、Todo 模块并导出文章库服务。
@@ -19,6 +19,7 @@ Article-Library
 - `ArticleLibraryModule()` — 注册文章库模块依赖、控制器和服务 | keywords: article-library, module
 - `ArticleLibraryService()` — 文章库容器服务 | keywords: article-library, service
 - `ensureIndexes()` — 建立文章库索引并校准 article_libraries counter | keywords: article-library-counter, 文章库计数器校准
+- `ensureQrTokenIndex()` — 重建二维码 token partial unique 索引并清理历史 null token | keywords: article-library-qr-index, 二维码索引
 - `getMaxArticleLibraryId()` — 读取当前最大文章库业务 ID | keywords: article-library-counter, 文章库计数器校准
 - `ensureCounterAtLeast(seq)` — 将 article_libraries counter 至少推进到指定下限 | keywords: article-library-counter, 文章库计数器校准
 - `nextId()` — 分配新文章库业务 ID 前先校准 counter | keywords: article-library-counter, 文章库计数器校准
@@ -89,6 +90,7 @@ Article-Library
 | 文章入库计数器 | article-id-counter |
 | 推送配置 | push-config |
 | 二维码 | article-library-qr |
+| 二维码索引 | article-library-qr-index |
 | 小红书短链 | short-link-redirect |
 | 租户隔离 | tenant-scope-filter |
 | 强制隔离 | mandatory-isolation |
@@ -117,7 +119,7 @@ Article-Library
 ## 模块功能描述 (Module Feature Description)
 管理端接口挂载在 `/api/article-library` 下，提供文章库创建、列表、详情、更新、删除、二维码内容获取、文章入库、文章列表、发布状态更新、文章删除和队列领取测试。task 专项接口挂载在 `/task-api` 下，支持 todo 绑定资源鉴权与扫码 token 鉴权两种方式。
 
-文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；文章使用 `articles` 集合并对 `id` 建唯一索引。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
+文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；`pushConfig.qrToken` 使用 partial unique 索引，只索引字符串 token，历史 null token 会在索引初始化时清理。文章使用 `articles` 集合并对 `id` 建唯一索引。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
 
 队列领取只面向 `unpublished` 文章，按 `createdAt` FIFO 排序，并通过 `findOneAndUpdate` 原子写入 `lockExpireAt` 和 `lastLeaseToken`。发布状态回写成功或主动 release 会释放租约；自然过期后文章可再次领取。`published` 文章不再参与领取池。
 
