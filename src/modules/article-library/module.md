@@ -1,129 +1,124 @@
 # Article-Library Module
 
-## 模块描述
-文章库：容器（库）+ 文章的两层结构。支持库 CRUD、文章入库（可从 canvas 搬运）、发布状态更新，以及按 FIFO 顺序的队列领取（15 分钟租约、过期自动回池）。
-同时提供 task-token 专项接口，供推送机器人 / 自动任务按 todo 关联资源方式调用。
-文件路径: `src/modules/article-library`
+## 模块名称 (Module Name)
+Article-Library
 
-## 功能描述及关键词
+## 概述 (Overview)
+文章库模块提供“库容器 + 文章”的两层结构，支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。库和文章都使用 MongoDB 业务自增 ID，并在分配 ID 前校准 counter，避免计数器落后于既有数据后触发 duplicate key。
 
-### entities/article-library.entity.ts
-文章库容器实体与输入类型定义（含 push 配置、自由字符串 type）。
-- **关键词**: article-library, entity, push-config, scope, tenant
-- **类型**:
-  - `ArticleLibraryScope`: 作用域枚举/platform tenant scope
-  - `ArticlePublishStatus`: 发布状态枚举 unpublished/published
-  - `ArticleLibraryPushConfig`: 推送配置（statusFilter / pushUrl / qrToken）
-  - `ArticleLibraryEntity`: 库容器实体
-  - `ArticleLibraryCreateInput`: 创建入参
-  - `ArticleLibraryUpdateInput`: 更新入参
-  - `ArticleLibraryStats`: 库内文章数量统计（含当前租约占用数 occupiedCount）
+## 文件清单 (File List)
+- `article-library.module.ts` — Nest 模块声明，导入 DataSource、Admin、Todo 模块并导出文章库服务。
+- `entities/article-library.entity.ts` — 文章库容器、推送配置、发布状态、统计结果和输入类型定义。
+- `entities/article.entity.ts` — 文章实体、内容载荷、入库输入、更新输入和租约领取结果定义。
+- `services/article-library.service.ts` — 文章库容器 CRUD、二维码内容、统计、缩略图和库 ID counter 校准服务。
+- `services/article.service.ts` — 文章入库、列表、更新、发布状态、FIFO 租约领取和文章 ID counter 校准服务。
+- `controller/article-library.controller.ts` — 管理端文章库与文章 REST 接口。
+- `controller/article-library-task.controller.ts` — task-token 与扫码 token 专项文章库接口。
 
-### entities/article.entity.ts
-文章实体与输入类型，含租约字段与状态回写元数据。
-- **关键词**: article, entity, lease, publish-status, meta
-- **类型**:
-  - `ArticleContent`: 文章内容载荷（title/tags/contentJson/text/imageUrls/meta）
-  - `ArticleEntity`: 文章实体（publishStatus / lockExpireAt / lastLeaseToken / meta 等）
-  - `ArticleEntity.sourceRef`: 来源引用，支持 canvas 来源与 featured-article 的 `featuredWorkspaceId` / `featuredPageId`
-  - `ArticleCreateInput`: 入库入参
-  - `ArticleUpdateInput`: 更新入参（支持 meta）
-  - `ArticleLeaseResult`: 领取返回（article + leaseToken + leaseExpireAt）
+## 函数清单 (Function List)
+- `ArticleLibraryModule()` — 注册文章库模块依赖、控制器和服务 | keywords: article-library, module
+- `ArticleLibraryService()` — 文章库容器服务 | keywords: article-library, service
+- `ensureIndexes()` — 建立文章库索引并校准 article_libraries counter | keywords: article-library-counter, 文章库计数器校准
+- `getMaxArticleLibraryId()` — 读取当前最大文章库业务 ID | keywords: article-library-counter, 文章库计数器校准
+- `ensureCounterAtLeast(seq)` — 将 article_libraries counter 至少推进到指定下限 | keywords: article-library-counter, 文章库计数器校准
+- `nextId()` — 分配新文章库业务 ID 前先校准 counter | keywords: article-library-counter, 文章库计数器校准
+- `normalizePushConfig(input)` — 规范化文章库推送配置 | keywords: article-library, push-config
+- `create(input)` — 创建文章库容器 | keywords: article-library, create-library
+- `tenantScope(tenantId?)` — 构造强制租户作用域过滤，空 tenantId 收口到平台库 | keywords: tenant-scope-filter, mandatory-isolation, 租户作用域过滤
+- `get(id,tenantId?)` — 按业务 ID 获取当前租户可见文章库 | keywords: article-library, get-library
+- `ensureQrToken(id,tenantId?)` — 确保文章库存在并持久化二维码 token | keywords: article-library-qr, qr-token
+- `resolveConfiguredXhsQrShortLink()` — 从环境变量读取小红书二维码短链模板 | keywords: article-library-qr, env-short-link
+- `resolveXhsShortLinkRedirect(shortLink)` — 解析小红书短链跳转后的最终 qrcode URL | keywords: article-library-qr, short-link-redirect
+- `rewriteXhsQrcodePParam(redirectUrl,qrContent)` — 将原二维码 JSON 写入小红书 miniapp qrcode 的 p 参数 | keywords: article-library-qr, p-param-rewrite
+- `buildPushQrContent(input)` — 构建文章库二维码 payload 与可渲染内容 | keywords: article-library-qr, qr-content-build
+- `getByQrToken(id,token)` — 通过文章库 ID 与二维码 token 获取文章库 | keywords: article-library-qr, get-by-token
+- `list(params)` — 列出当前租户可见文章库 | keywords: article-library, list-libraries
+- `update(input)` — 更新文章库基础信息和推送配置 | keywords: article-library, update-library
+- `delete(id,tenantId?)` — 删除文章库并级联删除所属文章 | keywords: article-library, delete-library
+- `getStats(libraryId)` — 聚合文章库内发布状态和租约占用统计 | keywords: article-library, stats
+- `getThumbnailImages(libraryId,limit?)` — 读取文章库缩略图所需的最近文章首图 | keywords: article-library, thumbnail
+- `ArticleService()` — 文章服务 | keywords: article, service
+- `ensureIndexes()` — 建立文章索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
+- `getMaxArticleId()` — 读取当前最大文章业务 ID | keywords: article-id-counter, 文章入库, 计数器校准
+- `ensureCounterAtLeast(seq)` — 将 articles counter 至少推进到指定下限 | keywords: article-id-counter, 文章入库, 计数器校准
+- `nextId()` — 分配新文章业务 ID 前先校准 counter | keywords: article-id-counter, 文章入库, 计数器校准
+- `create(input)` — 单篇文章入库 | keywords: article, create
+- `bulkCreate(inputs)` — 批量文章入库 | keywords: article, bulk-create
+- `get(id,tenantId?)` — 获取当前租户可见文章 | keywords: article, get
+- `list(params)` — 按文章库、状态和 FIFO 顺序列出文章 | keywords: article, list
+- `update(input)` — 更新文章字段和 meta | keywords: article, update
+- `updatePublishStatus(id,status,tenantId?,leaseToken?,meta?)` — 更新发布状态并释放租约 | keywords: article, publish-status
+- `delete(id,tenantId?)` — 删除单篇文章 | keywords: article, delete
+- `leaseNext(params)` — 以 CAS 方式领取下一篇未发布文章并写入租约 | keywords: article, lease-next
+- `releaseLease(id,tenantId?,leaseToken?)` — 主动释放文章租约 | keywords: article, release-lease
+- `ArticleLibraryController()` — 管理端文章库控制器 | keywords: article-library, admin-controller
+- `toAbsoluteImageUrl(url)` — 将相对图片路径拼接为完整地址 | keywords: prefix-image-url, app-base-url, 图片地址前缀拼接
+- `resolveAuthScope(req)` — 解析管理端请求鉴权作用域 | keywords: article-library, auth-scope
+- `createLibrary(body,req)` — 管理端创建文章库 | keywords: article-library, create-endpoint
+- `listLibraries(type,limit,offset,req)` — 管理端列出文章库并返回统计和缩略图 | keywords: article-library, list-endpoint
+- `getLibrary(libraryId,req)` — 管理端获取文章库详情 | keywords: article-library, get-endpoint
+- `getPushQr(libraryId,req)` — 管理端获取文章库二维码内容 | keywords: article-library-qr, push-qr-endpoint
+- `updateLibrary(libraryId,body,req)` — 管理端更新文章库 | keywords: article-library, update-endpoint
+- `deleteLibrary(libraryId,req)` — 管理端删除文章库 | keywords: article-library, delete-endpoint
+- `createArticle(libraryId,body,req)` — 管理端向文章库写入文章 | keywords: article, create-endpoint
+- `listArticles(libraryId,status,limit,offset,req)` — 管理端列出文章库内文章 | keywords: article, list-endpoint
+- `updateArticleStatus(libraryId,articleId,body,req)` — 管理端更新文章发布状态 | keywords: article, status-endpoint
+- `deleteArticle(libraryId,articleId,req)` — 管理端删除文章 | keywords: article, delete-endpoint
+- `leaseNext(libraryId,req)` — 管理端测试领取下一篇文章 | keywords: article, lease-endpoint
+- `ArticleLibraryTaskController()` — task-token 与扫码 token 控制器 | keywords: article-library, task-controller
+- `resolveTodoForLibrary(todoId,taskToken,libraryId)` — 校验 task token 并确认 todo 绑定目标文章库 | keywords: task-api, todo-binding
+- `resolveLibraryByQrToken(token,libraryId)` — 校验扫码 token 并获取文章库 | keywords: article-library-qr, token-auth
+- `parseStatusMeta(meta)` — 解析状态回写 meta JSON 字符串 | keywords: article-status-meta, meta-json-parse, 文章状态元数据, JSON解析
+- `getLibrary(todoId,libraryId,taskToken)` — task-api 获取文章库详情 | keywords: task-api, get-library
+- `getPushUrl(todoId,libraryId,taskToken)` — task-api 获取推送链接与二维码内容 | keywords: task-api, push-url
+- `getLibraryByToken(body)` — 扫码 token 获取文章库详情 | keywords: article-library-qr, detail-by-token
+- `leaseNext(todoId,libraryId,taskToken)` — task-api 领取下一篇文章 | keywords: task-api, lease-next
+- `leaseNextByToken(body)` — 扫码 token 领取下一篇文章 | keywords: article-library-qr, lease-by-token
+- `toAbsoluteImageUrl(url)` — task-api 响应中拼接图片完整地址 | keywords: prefix-image-url, app-base-url, 图片地址前缀拼接
+- `updateStatusByToken(articleId,body)` — 扫码 token 更新文章发布状态 | keywords: article-library-qr, status-by-token
+- `releaseLeaseByToken(articleId,body)` — 扫码 token 主动释放租约 | keywords: article-library-qr, release-by-token
+- `updateStatus(todoId,libraryId,articleId,taskToken,body)` — taskToken 兼容路由更新文章发布状态 | keywords: task-api, update-status
+- `releaseLease(todoId,libraryId,articleId,taskToken,body)` — taskToken 兼容路由释放文章租约 | keywords: task-api, release-lease
 
-### services/article-library.service.ts
-文章库容器服务：CRUD、统计与缩略图取图。
-- **关键词**: article-library, service, crud, stats, thumbnail, counter
-- **函数**:
-  - `ensureIndexes`: 建索引/ensure indexes
-  - `nextId`: 自增ID/next id
-  - `normalizePushConfig`: 推送配置规范化/normalize push config
-  - `create`: 创建库/create library
-  - `tenantScope(tenantId?)` — 构造强制租户作用域过滤；空 tenantId 收口为「仅无租户(平台)库」绝不放开全部租户 | keywords: tenant-scope-filter, mandatory-isolation, 租户作用域过滤
-  - `get`: 获取库（强制租户隔离，经 tenantScope）/get by id
-  - `ensureQrToken`: 确保文章库有二维码 token（写入经 tenantScope）/ensure qr token
-  - `resolveConfiguredXhsQrShortLink()` — 从 env 读取文章库小红书二维码短链模板 | keywords: article-library-qr, env-short-link
-  - `resolveXhsShortLinkRedirect(shortLink)` — 解析小红书短链 301/302 跳转得到最终 qrcode URL | keywords: article-library-qr, short-link-redirect
-  - `rewriteXhsQrcodePParam(redirectUrl, qrContent)` — 解析 miniapp qrcode 链接并把原二维码 JSON 写入 `p.path` 与 `p.xhsMpBizQuery` | keywords: article-library-qr, p-param-rewrite
-  - `buildPushQrContent({ token, articleLibraryId })` — 构建文章库二维码内容，配置短链时返回改写后小红书 qrcode URL | keywords: article-library-qr, qr-content-build
-  - `getByQrToken`: 通过二维码 token 获取文章库/get by qr token
-  - `list`: 列表库（强制租户隔离，经 tenantScope）/list libraries
-  - `update`: 更新库（基础信息 / 推送配置，写入经 tenantScope）/update library
-  - `delete`: 删除库（级联删除文章）/delete cascade
-  - `getStats`: 状态统计与租约占用统计/stats aggregate with occupied leases
-  - `getThumbnailImages`: 取前 N 篇首图做缩略图/thumbnail sources
+## 关键词索引 (Keyword Index)
+| 中文 | English |
+|---|---|
+| 文章库 | article-library |
+| 文章 | article |
+| 计数器校准 | article-library-counter |
+| 文章入库计数器 | article-id-counter |
+| 推送配置 | push-config |
+| 二维码 | article-library-qr |
+| 小红书短链 | short-link-redirect |
+| 租户隔离 | tenant-scope-filter |
+| 强制隔离 | mandatory-isolation |
+| 管理端接口 | admin-controller |
+| 专项任务接口 | task-api |
+| 扫码鉴权 | token-auth |
+| 状态元数据 | article-status-meta |
+| 队列领取 | lease-next |
+| 主动释放租约 | release-lease |
+| 缩略图 | thumbnail |
 
-### services/article.service.ts
-文章服务：入库 / 列表 / 更新 / 状态切换 / FIFO 租约领取。
-- **关键词**: article, service, crud, lease, fifo, cas, 15-min
-- **函数**:
-  - `ensureIndexes`: 建索引（含租约扫描索引）并把 articles counter 校准到当前最大文章 ID/ensure indexes lease counter calibration
-  - `getMaxArticleId`: 读取 articles 集合当前最大业务 ID，用于修复 counter 落后导致的 duplicate key/article max id counter calibration
-  - `ensureCounterAtLeast`: 将 articles counter 至少推进到指定下限，避免单篇入库撞上既有 id/article counter floor
-  - `nextId`: 自增ID；分配前先校准 counter 到已有最大文章 ID/next id with counter calibration
-  - `create`: 文章入库（单篇）/create put into library
-  - `bulkCreate`: 批量入库（canvas 整份搬运）/bulk create
-  - `get`: 获取文章/get
-  - `list`: 列表（按状态过滤，FIFO 顺序）/list by library
-  - `update`: 更新文章字段（含 meta）/update fields with meta
-  - `updatePublishStatus`: 更新发布状态（释放租约，可写入 meta）/update publish status release with meta
-  - `delete`: 删除文章/delete
-  - `leaseNext`: FIFO 原子抢占领取（CAS + 15min 租约）/lease next fifo cas
-  - `releaseLease`: 主动释放租约/release lease
+## 类型导出 (Type Exports)
+- `ArticleLibraryScope` — 文章库作用域枚举 | keywords: article-library, scope
+- `ArticlePublishStatus` — 文章发布状态枚举 | keywords: article, publish-status
+- `ArticleLibraryPushConfig` — 文章库推送配置 | keywords: article-library, push-config
+- `ArticleLibraryEntity` — 文章库容器实体 | keywords: article-library, entity
+- `ArticleLibraryCreateInput` — 创建文章库输入 | keywords: article-library, create-input
+- `ArticleLibraryUpdateInput` — 更新文章库输入 | keywords: article-library, update-input
+- `ArticleLibraryStats` — 文章库统计结果 | keywords: article-library, stats
+- `ArticleContent` — 文章内容载荷 | keywords: article, content
+- `ArticleEntity` — 文章实体 | keywords: article, entity
+- `ArticleCreateInput` — 文章入库输入 | keywords: article, create-input
+- `ArticleUpdateInput` — 文章更新输入 | keywords: article, update-input
+- `ArticleLeaseResult` — 文章领取返回结果 | keywords: article, lease-result
 
-### controller/article-library.controller.ts
-管理端控制器（Bearer token 鉴权，对齐 gallery.controller.resolveAuthScope）。
-- **关键词**: controller, article-library, admin, crud, auth
-- **函数**:
-  - `resolveAuthScope`: 请求鉴权解析/resolve auth scope
-  - `toAbsoluteImageUrl(url)` — 用 env `APP_URL` 把图片相对路径拼成完整地址，已是绝对 URL 原样返回 | keywords: prefix-image-url, app-base-url, 图片地址前缀拼接
-  - `createLibrary`: 创建库 POST /api/article-library
-  - `listLibraries`: 列表库 GET /api/article-library（含统计+缩略图）
-  - `getLibrary`: 获取库详情 GET /api/article-library/:libraryId
-  - `getPushQr`: 获取二维码内容 GET /api/article-library/:libraryId/push-qr（配置 XHS 短链时 qrContent 为改写后的 qrcode URL）
-  - `updateLibrary`: 更新库 PATCH /api/article-library/:libraryId
-  - `deleteLibrary`: 删除库 DELETE /api/article-library/:libraryId
-  - `createArticle`: 文章入库 POST /api/article-library/:libraryId/articles
-  - `listArticles`: 文章列表 GET /api/article-library/:libraryId/articles
-  - `updateArticleStatus`: 更新文章状态 PATCH /api/article-library/:libraryId/articles/:articleId/status
-  - `deleteArticle`: 删除文章 DELETE /api/article-library/:libraryId/articles/:articleId
-  - `leaseNext`: 管理端队列领取测试 POST /api/article-library/:libraryId/articles/lease-next
+## 模块功能描述 (Module Feature Description)
+管理端接口挂载在 `/api/article-library` 下，提供文章库创建、列表、详情、更新、删除、二维码内容获取、文章入库、文章列表、发布状态更新、文章删除和队列领取测试。task 专项接口挂载在 `/task-api` 下，支持 todo 绑定资源鉴权与扫码 token 鉴权两种方式。
 
-### controller/article-library-task.controller.ts
-task-token 专项控制器（对齐 TodoTaskController）；原 task-api 路由校验 todo.associatedResources 含目标库。扫码 token 路由校验文章库自身 qrToken。
-- **关键词**: controller, task-api, task-token, article-library, lease
-- **函数**:
-  - `resolveTodoForLibrary`: 校验 token + 校验库已绑定 todo/resolve todo with library binding
-  - `getLibrary`: 获取库 GET /task-api/:todoId/article-library/:libraryId
-  - `getPushUrl`: 获取推送链接与二维码内容（默认 `qrContent` 为 JSON 字符串；配置 XHS 短链时为改写后的 qrcode URL，`p.path` 与 `p.xhsMpBizQuery` 均携带原 JSON） GET .../push-url
-  - `getLibraryByToken`: token 版获取库详情 POST `/task-api/article-library/detail`
-  - `leaseNext`: 队列领取 POST .../lease-next
-  - `leaseNextByToken`: token 版队列领取 POST `/task-api/article-library/lease-next`，请求体可直接传二维码 JSON
-  - `parseStatusMeta(meta)` — 解析状态回写 `meta` JSON 对象字符串，空值忽略，非法值返回 `INVALID_META` | keywords: article-status-meta, meta-json-parse, 文章状态元数据, JSON解析
-  - `updateStatusByToken`: token 版更新文章状态 PATCH `/task-api/article-library/articles/:articleId/status`，可选 `meta` JSON 对象字符串
-  - `releaseLeaseByToken`: token 版主动释放租约 POST `/task-api/article-library/articles/:articleId/release`
-  - `updateStatus`: taskToken 兼容版更新文章状态 PATCH .../articles/:articleId/status，可选 `meta` JSON 对象字符串
-  - `releaseLease`: 释放租约 POST .../articles/:articleId/release
+文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；文章使用 `articles` 集合并对 `id` 建唯一索引。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
 
-### article-library.module.ts
-模块声明（导入 DataSource/Admin/Todo，导出 2 个 Service）。
-- **关键词**: module, article-library
+队列领取只面向 `unpublished` 文章，按 `createdAt` FIFO 排序，并通过 `findOneAndUpdate` 原子写入 `lockExpireAt` 和 `lastLeaseToken`。发布状态回写成功或主动 release 会释放租约；自然过期后文章可再次领取。`published` 文章不再参与领取池。
 
-## 接口对应关系
-
-| 需求接口 | 管理端 | task-api |
-|---|---|---|
-| 1. 库 CRUD | POST/GET/PATCH/DELETE `/api/article-library` | — |
-| 2. 文章入库 | POST `/api/article-library/:libraryId/articles` | — |
-| 3. 文章状态更新 | PATCH `/api/article-library/:libraryId/articles/:articleId/status` | PATCH `/task-api/article-library/articles/:articleId/status`（扫码 token）；兼容 PATCH `/task-api/:todoId/article-library/:libraryId/articles/:articleId/status`；task-api 可选传 `meta` JSON 对象字符串写入文章记录 |
-| 4. 队列顺序取出 | POST `/api/article-library/:libraryId/articles/lease-next` | POST `/task-api/:todoId/article-library/:libraryId/lease-next` |
-| 5. 推送链接 / 二维码 | GET `/api/article-library/:libraryId/push-qr` | GET `/task-api/:todoId/article-library/:libraryId/push-url`（返回 `pushUrl`、`qrPayload`、`qrContent`；默认二维码内容为 `{"token":"...","articleLibraryId":1}`；配置 XHS 短链时 `qrContent` 为改写后的 qrcode URL） |
-| 6. 扫码 token 获取库/文章 | — | POST `/task-api/article-library/detail` 获取库详情；POST `/task-api/article-library/lease-next` 领取下一篇文章 |
-| 7. 扫码 token 主动释放租约 | — | POST `/task-api/article-library/articles/:articleId/release` |
-
-## 设计要点
-
-- **队列租约**：领取时 `findOneAndUpdate` 固定过滤 `publishStatus: 'unpublished'`，并以 `sort: { createdAt: 1 }` + `$or: [lockExpireAt 不存在 / null / < now]` 作为租约过滤，原子写入 `lockExpireAt = now + 15min` 与 `lastLeaseToken`。已发送文章和租约未释放文章都不会再次被领取。释放方式：15 分钟自然过期；状态回写成功时释放；主动调用 release 接口释放。状态回写可携带 `leaseToken` 做乐观锁，防止过期任务反向覆盖新租约；也可传 `meta` JSON 对象字符串，解析后写入文章记录的 `meta` 字段。
-- **状态语义**：`unpublished`（未发布，唯一领取池）/`published`（已发布/已发送，永不参与 `leaseNext` 领取）。`statusFilter` 仅作为历史兼容配置保留，不允许把 `published` 文章重新放回领取池。
-- **缩略图**：库实体不持有封面字段；`getThumbnailImages` 按 `createdAt` 倒序取前 N 篇文章的首图。
-- **task-api 鉴权**：带 `todoId` 的 task-api 仍照搬 `TodoTaskController.resolveTodo` 模式 —— taskToken → todo → 校验 `todo.associatedResources` 含 `{ type: 'article-library', resourceId: libraryId }`。扫码场景使用文章库 `qrToken`，请求体传入 `{ token, articleLibraryId }`，后端按文章库 ID + token 校验后获取库、领取文章或回写发布状态，不需要绑定任务。
-- **二维码内容**：管理端 `GET /api/article-library/:libraryId/push-qr` 会懒生成并持久化 `pushConfig.qrToken`，前端使用生产级二维码库把返回的 `qrContent` 渲染成二维码。配置 `ARTICLE_LIBRARY_XHS_QR_SHORT_LINK`（兼容 `XHS_ARTICLE_LIBRARY_QR_SHORT_LINK` / `XHS_MINIAPP_QR_SHORT_LINK` / `XHS_QR_SHORT_LINK`）时，后端会解析短链 301/302 跳转，解析落地链接的 `p` 参数，把原 JSON 写入 `p.path`，并把 `p` 内的 `xhsMpBizQuery` 写成编码后的 `path=<原 JSON>`。
+二维码内容由文章库 `pushConfig.qrToken` 驱动，管理端可懒生成 token。默认二维码内容是包含 `token` 与 `articleLibraryId` 的 JSON 字符串；配置 `ARTICLE_LIBRARY_XHS_QR_SHORT_LINK` 或兼容环境变量时，会解析小红书短链落地 URL 并改写 miniapp qrcode 的 `p` 参数。

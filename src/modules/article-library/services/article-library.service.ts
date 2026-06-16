@@ -37,8 +37,9 @@ export class ArticleLibraryService {
   }
 
   /**
-   * @description 创建集合索引与计数器
-   * @keyword-en article library ensure indexes
+   * @description 创建集合索引，并把文章库 counter 校准到当前最大业务 ID。
+   * @keyword-cn 文章库计数器校准
+   * @keyword-en article-library-counter
    */
   async ensureIndexes(): Promise<void> {
     await this.libraries.createIndex({ id: 1 }, { unique: true });
@@ -49,17 +50,58 @@ export class ArticleLibraryService {
       { unique: true, sparse: true },
     );
     await this.libraries.createIndex({ createdAt: -1 });
-    const exists = await this.counters.findOne({ _id: this.COUNTER_KEY });
-    if (!exists)
-      await this.counters.insertOne({ _id: this.COUNTER_KEY, seq: 0 });
+    await this.ensureCounterAtLeast(await this.getMaxArticleLibraryId());
   }
 
   /**
-   * @description 生成下一个文章库自增 ID
-   * @returns {Promise<number>} 下一个可用 ID
-   * @keyword-en article library next id
+   * @description 读取 article_libraries 集合当前最大业务 ID，用于修复 counter 落后导致的 duplicate key。
+   * @keyword-cn 文章库计数器校准
+   * @keyword-en article-library-counter
+   */
+  private async getMaxArticleLibraryId(): Promise<number> {
+    const latest = await this.libraries
+      .find({}, { projection: { id: 1 } })
+      .sort({ id: -1 })
+      .limit(1)
+      .next();
+    const id = Number(latest?.id);
+    return Number.isFinite(id) && id > 0 ? Math.floor(id) : 0;
+  }
+
+  /**
+   * @description 将 article_libraries counter 至少推进到指定下限，避免新建库撞上既有 ID。
+   * @keyword-cn 文章库计数器校准
+   * @keyword-en article-library-counter
+   */
+  private async ensureCounterAtLeast(seq: number): Promise<void> {
+    const nextSeq = Math.max(0, Math.floor(Number(seq) || 0));
+    await this.counters.updateOne(
+      { _id: this.COUNTER_KEY },
+      [
+        {
+          $set: {
+            seq: {
+              $cond: [
+                { $gte: [{ $ifNull: ['$seq', 0] }, nextSeq] },
+                '$seq',
+                nextSeq,
+              ],
+            },
+          },
+        },
+      ],
+      { upsert: true },
+    );
+  }
+
+  /**
+   * @description 分配新的文章库业务 ID，分配前先把 counter 推进到已有最大文章库 ID。
+   * @returns {Promise<number>} 下一个可用 ID。
+   * @keyword-cn 文章库计数器校准
+   * @keyword-en article-library-counter
    */
   private async nextId(): Promise<number> {
+    await this.ensureCounterAtLeast(await this.getMaxArticleLibraryId());
     const res = await this.counters.findOneAndUpdate(
       { _id: this.COUNTER_KEY },
       { $inc: { seq: 1 } },
