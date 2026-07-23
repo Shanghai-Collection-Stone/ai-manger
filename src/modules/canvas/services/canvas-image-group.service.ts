@@ -623,7 +623,8 @@ export class CanvasImageGroupService {
       for (const id of usedIds) usedSourceIds.add(id);
     }
 
-    if (usedSourceIds.size > 0) {
+    // 不去重(dedup===false)时不写 isUsed，源图保留可无限复用；仅去重模式消耗源图
+    if (input.dedup !== false && usedSourceIds.size > 0) {
       try {
         await this.gallery.markUsedBatch({ ids: Array.from(usedSourceIds) });
         this.logger.debug(
@@ -1765,7 +1766,7 @@ export class CanvasImageGroupService {
    * @keyword-en fetch image pool by tags
    */
   private async fetchImagePool(
-    input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>,
+    input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId' | 'dedup'>,
     tags: string[],
     wantCountOrType: number | 'regular' | 'collage',
     imageType?: 'regular' | 'collage',
@@ -1788,6 +1789,8 @@ export class CanvasImageGroupService {
         tags,
         limit: wantCount,
         imageType: imgType,
+        // 不去重(dedup===false)时包含已用图，命中池后再由 shuffleArray 随机取图
+        includeUsed: input.dedup === false,
       });
     }
 

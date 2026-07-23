@@ -33,7 +33,7 @@
   - `buildTopicOrchestrateDedupKey`: 选题编排去重键（含 userPrompt/dataSummary/writingStyle）
   - `normalizePlatformType`: 归一化平台标签（小红书别名→xhs，软纠正）/normalize platform type alias
   - `resolveTopicWritingStyle`: 从显式 writingStyle 或兼容的 style 对象中解析生文风格/resolve topic writing style
-  - `getHandle`: 获取图工作流工具；topic_orchestrate 返回简短状态 + canvas-it,不再返回完整 canvas/articles/items JSON；缺少显式图库 tags 或配图预检不足时不创建 Canvas 且不输出 canvas-it；传 imageGroupCanvasIds 时复用未使用图组，成功配图后自动标记来源图组已使用/get graph workflow tools
+  - `getHandle`: 获取图工作流工具；topic_orchestrate 返回简短状态 + canvas-it,不再返回完整 canvas/articles/items JSON；缺少显式图库 tags 或配图预检不足时不创建 Canvas 且不输出 canvas-it；传 imageGroupCanvasIds 时复用未使用图组，成功配图后自动标记来源图组已使用；**新增 `dedup` 参数(默认去重;用户消息含"不去重/允许重复"传 false→取图不排除 isUsed),并计入 orchestrate 去重缓存 key**/get graph workflow tools | keywords: dedup
 
 ### tools.module.ts
 

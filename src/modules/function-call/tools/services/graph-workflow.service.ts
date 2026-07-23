@@ -109,6 +109,7 @@ export class GraphWorkflowFunctionCallService {
     galleryGroupId?: number;
     imageGroupCanvasIds?: number[];
     minImageScore?: number;
+    dedup?: boolean;
   }): string {
     return [
       this.normalizeKeyString(input.userId),
@@ -135,6 +136,7 @@ export class GraphWorkflowFunctionCallService {
       Number.isFinite(Number(input.minImageScore))
         ? String(Number(input.minImageScore))
         : '',
+      input.dedup === false ? 'nodedup' : 'dedup',
     ].join('|');
   }
 
@@ -335,6 +337,7 @@ export class GraphWorkflowFunctionCallService {
         galleryGroupId,
         imageGroupCanvasIds,
         minImageScore,
+        dedup,
       }) => {
         const outline = coerceRecord(outlineRaw);
         const style = coerceRecord(styleRaw);
@@ -402,6 +405,7 @@ export class GraphWorkflowFunctionCallService {
           galleryGroupId,
           imageGroupCanvasIds: normalizedImageGroupCanvasIds,
           minImageScore,
+          dedup,
         });
         const now = Date.now();
         this.clearExpiredOrchestrateCache(now);
@@ -435,6 +439,7 @@ export class GraphWorkflowFunctionCallService {
             galleryGroupId,
             imageGroupCanvasIds: normalizedImageGroupCanvasIds,
             minImageScore,
+            dedup: dedup === false ? false : undefined,
             langchainContext: {
               source: 'tool.topic_orchestrate',
               userId: finalUserId,
@@ -610,6 +615,12 @@ export class GraphWorkflowFunctionCallService {
             .optional()
             .describe(
               'Optional image-group canvas IDs. When provided, reuse currently unused canvas image groups as article image sources by order; after successful article image assignment, consumed source groups are automatically marked used.',
+            ),
+          dedup: z
+            .boolean()
+            .optional()
+            .describe(
+              '是否图片去重，默认 true(去重: 排除已用图、每张源图只用一次)。当用户消息包含"不去重"/"允许重复"/"可重复取图"等意图时传 false(不去重: 按标签取图不排除已用图，图片可复用)。用户未提及则不传。',
             ),
         }),
       },

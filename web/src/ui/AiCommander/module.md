@@ -23,12 +23,12 @@ AI 指挥官 Bento 风格主界面组件。负责底部主导航、顶部控制�
 
 ### ChatBIView.jsx
 
-AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-select-it**、**handoff-it** 内联卡片（含异步轮询/详情 Modal/选标签弹窗/supervisor 路由切换胶囊）。底部输入区在 flex 流内占位，textarea 变高时消息列表自动让出高度，避免最后一段上下文被遮挡。`handleSend(overrideText?)` 接受可选参数,卡片回写时直接调用以用户消息形式发送 tags("我选定标签：#A #B")。
+AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-select-it**、**handoff-it** 内联卡片（含异步轮询/详情 Modal/选标签弹窗/supervisor 路由切换胶囊）。底部输入区在 flex 流内占位，textarea 变高时消息列表自动让出高度，避免最后一段上下文被遮挡。`handleSend(overrideText?)` 接受可选参数,卡片回写时直接调用以用户消息形式发送 tags("我选定标签：#A #B（去重/不去重…）",附带去重偏好供 AI 解析)。
 
 - **关键词**: chat, ai, bi, commander, stream, canvas-it, task-it, tag-select-it, handoff-it, supervisor, quick-message
 - **函数**:
   - `extractAllCanvasItBlocks` / `extractAllTaskItBlocks` / `extractAllTagSelectBlocks` / `extractAllHandoffBlocks`: 从消息文本提取对应 fence JSON 块
-  - `TagSelectCard`: tag 选择卡片(琥珀色徽章),展示标题/提示/推荐 chips 预览,点击触发 `TagSelectModal` 弹窗;确认后显示已选 chips 状态
+  - `TagSelectCard`: tag 选择卡片(琥珀色徽章),展示标题/提示/推荐 chips 预览,内置**去重开关**(默认去重=每张图只用一次;关=不去重允许重复取图),点击触发 `TagSelectModal` 弹窗;确认后显示已选 chips + 去重模式状态,回写消息附带"（去重/不去重…）"供 AI 解析为 dedup 参数 | keywords: dedup, tag-select
   - `TagSelectModal`: 顶部搜索框 + 已选 chips + 内容区(无输入显示推荐计数 chips,有输入显示联想下拉),底部确认按钮校验 minTags/maxTags;`chatService.listGalleryTags` 拉全量 tags 用于联想
   - `HandoffCard`: 🆕 意图识别 → expert 路由胶囊。展示`→ 已切换至 {专家名} + reason 副标题`,6 个专家映射颜色(image/violet, article/sky, data/emerald, frontend/indigo, publisher/amber, task/rose)+ 图标；若后端 handoff-it 传入 `expertLabel/icon`,优先使用自定义展示名与图标（用于小红书专属专家）。后端意图识别路由到业务专家时通过 earlyEmit 推送 `\`\`\`handoff-it\`\`\`` fence 到主 SSE,前端即时渲染让用户感知到路由切换
   - `AIMessage`: 多卡片渲染,strip 四种 fence 后走 markdown;新增 `onSubmitQuickMessage(text)` prop 用于卡片向 AI 回写用户消息

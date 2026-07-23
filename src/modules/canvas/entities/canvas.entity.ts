@@ -114,6 +114,11 @@ export interface CanvasImageGroupCreateInput {
     /** @description 指定版式，不传则系统交替分配 */
     layout?: ImageGroupLayout;
   }>;
+  /**
+   * @description 是否去重(每张源图跨生成只用一次)。默认 true=去重(排除 isUsed + 生成后 markUsed);
+   *  false=不去重(命中已用图、按标签随机取图、生成后不写 isUsed，图片可无限复用)。
+   */
+  dedup?: boolean;
 }
 
 /** @description 更新 imageGroups 的内部入参 */

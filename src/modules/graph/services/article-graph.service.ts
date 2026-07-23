@@ -1912,6 +1912,8 @@ export class ArticleGraphService {
     galleryGroupId?: number;
     imageGroupCanvasIds?: number[];
     minImageScore?: number;
+    /** 是否图片去重(默认 true)。false=不去重: 命中已用图、按标签取图不排除 isUsed */
+    dedup?: boolean;
     langchainContext?: Record<string, unknown>;
   }): Promise<Record<string, unknown>> {
     const count =
@@ -2198,6 +2200,7 @@ export class ArticleGraphService {
       platformAiPrompt: envCtx.platformAiPrompt,
       currentDatetime: envCtx.datetime,
       minImageScore,
+      dedup: input.dedup,
       langchainContext,
     });
 
@@ -2261,6 +2264,8 @@ export class ArticleGraphService {
       /** 当前时间字符串 */
       currentDatetime?: string;
       minImageScore: number;
+      /** 是否图片去重(默认 true)。false=不去重: 取图不排除 isUsed */
+      dedup?: boolean;
       langchainContext: Record<string, unknown>;
     },
   ): Promise<void> {
@@ -2782,6 +2787,8 @@ export class ArticleGraphService {
     /** 当前时间字符串 */
     currentDatetime?: string;
     minImageScore: number;
+    /** 是否图片去重(默认 true)。false=不去重: 取图不排除 isUsed */
+    dedup?: boolean;
     langchainContext: Record<string, unknown>;
   }): Promise<void> {
     const total = input.blueprints.length;
@@ -2930,6 +2937,7 @@ export class ArticleGraphService {
         tenantId: input.tenantId,
         tags: allTags,
         excludedGroupIds: excludedGeneratedGroupIds,
+        dedup: input.dedup,
       });
       // 批次级别贪心预分配图片 slice，全局 usedIds 去重，各篇文章用独立来源
       imageSlices = this.preAssignImageSlices(
@@ -3513,6 +3521,8 @@ export class ArticleGraphService {
     tenantId?: string;
     tags: string[];
     excludedGroupIds?: number[];
+    /** 是否图片去重(默认 true)。false=不去重: searchByTags 不排除 isUsed */
+    dedup?: boolean;
   }): Promise<GalleryImageEntity[]> {
     const wantCount = 60;
     const seen = new Set<string | number>();
@@ -3539,6 +3549,8 @@ export class ArticleGraphService {
         tags: input.tags,
         limit: wantCount,
         imageType: 'regular',
+        // 不去重(dedup===false)时包含已用图
+        includeUsed: input.dedup === false,
       });
       dedup(byTags);
     }

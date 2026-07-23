@@ -906,6 +906,9 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
   const [open, setOpen] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submittedTags, setSubmittedTags] = useState([]);
+  // 图片去重开关：默认 true=去重(每张源图只用一次)；false=不去重(允许重复取图)
+  const [dedup, setDedup] = useState(payload?.dedup !== false);
+  const [submittedDedup, setSubmittedDedup] = useState(true);
   const recommendTags = useMemo(
     () => (Array.isArray(payload?.recommendTags) ? payload.recommendTags : []),
     [payload],
@@ -922,10 +925,11 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
       const list = Array.isArray(tags) ? tags : [];
       setSubmitted(true);
       setSubmittedTags(list);
+      setSubmittedDedup(dedup);
       setOpen(false);
-      if (typeof onSubmit === 'function') onSubmit(list);
+      if (typeof onSubmit === 'function') onSubmit(list, dedup);
     },
-    [onSubmit],
+    [onSubmit, dedup],
   );
 
   return (
@@ -958,7 +962,9 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
         )}
         {submitted ? (
           <div className="mt-3">
-            <p className="text-[11px] text-emerald-600">已选定标签：</p>
+            <p className="text-[11px] text-emerald-600">
+              已选定标签（{submittedDedup ? '去重' : '不去重'}）：
+            </p>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {submittedTags.map((t) => (
                 <span
@@ -971,13 +977,36 @@ const TagSelectCard = React.memo(({ payload, onSubmit }) => {
             </div>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="mt-3 inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-600 text-white hover:bg-amber-700"
-          >
-            {multi ? '点击选择标签' : '点击选择一个标签'}
-          </button>
+          <div className="mt-3 flex flex-col gap-2">
+            {/* 去重开关：去重=每张源图只用一次；不去重=允许重复取图（按标签随机） */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={dedup}
+                onClick={() => setDedup((v) => !v)}
+                className={`relative inline-flex h-4 w-7 items-center rounded-full transition ${
+                  dedup ? 'bg-amber-500' : 'bg-slate-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-3 w-3 transform rounded-full bg-white transition ${
+                    dedup ? 'translate-x-3.5' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+              <span className="text-[11px] text-slate-600">
+                {dedup ? '去重（每张图只用一次）' : '不去重（允许重复取图）'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="self-start inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-600 text-white hover:bg-amber-700"
+            >
+              {multi ? '点击选择标签' : '点击选择一个标签'}
+            </button>
+          </div>
         )}
       </section>
 
@@ -1486,11 +1515,18 @@ const AIMessage = React.memo(
           <TagSelectCard
             key={payload.selectorId}
             payload={payload}
-            onSubmit={(tags) => {
+            onSubmit={(tags, dedup) => {
               if (typeof onSubmitQuickMessage !== 'function') return;
               const list = Array.isArray(tags) ? tags : [];
               if (list.length === 0) return;
-              const text = `我选定标签：${list.map((t) => `#${t}`).join(' ')}`;
+              // 附带去重偏好，供 AI 解析后给生成工具传 dedup 参数
+              const dedupNote =
+                dedup === false
+                  ? '（不去重，允许重复取图）'
+                  : '（去重，每张图只用一次）';
+              const text = `我选定标签：${list
+                .map((t) => `#${t}`)
+                .join(' ')}${dedupNote}`;
               onSubmitQuickMessage(text);
             }}
           />

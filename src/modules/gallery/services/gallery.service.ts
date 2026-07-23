@@ -631,15 +631,18 @@ export class GalleryService {
   }
 
   /**
-   * @description 统计指定 tags 当前可用图片数(已排除 isUsed)。用于生成前的不足量预估。
+   * @description 统计指定 tags 当前可用图片数(默认已排除 isUsed)。用于生成前的不足量预估。
    *  返回 byTag 字典(每个 tag 单独 count) + total(去重后总数,$or 匹配任一 tag)。
-   * @keyword-en count available images by tags excluding used
+   *  传 includeUsed=true 关闭 isUsed 过滤(不去重生成时统计全量)。
+   * @keyword-en count available images by tags excluding used by default
    */
   async countAvailableByTags(input: {
     userId?: string;
     tenantId?: string;
     tags: string[];
     imageType?: 'all' | 'regular' | 'collage';
+    /** 是否包含已使用 (isUsed=true) 图片, 默认 false(去重统计) */
+    includeUsed?: boolean;
   }): Promise<{ total: number; byTag: Record<string, number> }> {
     const tags = Array.isArray(input?.tags)
       ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
@@ -647,8 +650,10 @@ export class GalleryService {
     if (tags.length === 0) return { total: 0, byTag: {} };
     const baseClauses: Record<string, unknown>[] = [
       this.buildTenantFilter(input.userId, input.tenantId),
-      { isUsed: { $ne: true } },
     ];
+    if (input.includeUsed !== true) {
+      baseClauses.push({ isUsed: { $ne: true } });
+    }
     if (input.imageType && input.imageType !== 'all') {
       baseClauses.push(this.buildImageTypeFilter(input.imageType));
     }

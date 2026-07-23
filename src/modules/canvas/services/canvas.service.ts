@@ -1252,12 +1252,15 @@ export class CanvasService {
     articles: CanvasImageGroupCreateInput['articles'];
     /** true=追加到现有图组(复用 Canvas 再生成);false/缺省=覆盖(新建 Canvas 首次生成) */
     append?: boolean;
+    /** 是否去重(默认 true)。false=不去重: 命中已用图、随机取图、生成后不写 isUsed */
+    dedup?: boolean;
   }): Promise<CanvasImageGroup[]> {
     const groups = await this.imageGroupService.generateImageGroups({
       userId: input.userId,
       tenantId: input.tenantId,
       topic: input.topic,
       articles: input.articles,
+      dedup: input.dedup,
     });
     await this.updateImageGroups(
       input.canvasId,
@@ -1280,6 +1283,8 @@ export class CanvasService {
     tenantId?: string;
     topic?: string;
     articles: CanvasImageGroupCreateInput['articles'];
+    /** 是否去重(默认 true)。false=不去重: 命中已用图、随机取图 */
+    dedup?: boolean;
   }): Promise<ImageGroupSourcePreparation> {
     void input.canvasId;
     return await this.imageGroupService.prepareImageGroupSources({
@@ -1287,6 +1292,7 @@ export class CanvasService {
       tenantId: input.tenantId,
       topic: input.topic,
       articles: input.articles,
+      dedup: input.dedup,
     });
   }
 
@@ -1304,6 +1310,8 @@ export class CanvasService {
     articles: CanvasImageGroupCreateInput['articles'];
     preparation: Extract<ImageGroupSourcePreparation, { ok: true }>;
     append?: boolean;
+    /** 是否去重(默认 true)。false=不去重: 生成后不写 isUsed，源图可复用 */
+    dedup?: boolean;
   }): Promise<CanvasImageGroup[]> {
     const groups = await this.imageGroupService.renderPreparedImageGroups(
       {
@@ -1311,6 +1319,7 @@ export class CanvasService {
         tenantId: input.tenantId,
         topic: input.topic,
         articles: input.articles,
+        dedup: input.dedup,
       },
       input.preparation,
     );
@@ -1344,6 +1353,7 @@ export class CanvasService {
         tenantId: input.tenantId,
         topic: input.topic,
         articles: input.articles,
+        dedup: input.dedup,
       });
       const doneCount = groups.filter((g) => g.status === 'done').length;
       const failedCount = groups.filter((g) => g.status === 'failed').length;

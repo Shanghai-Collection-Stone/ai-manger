@@ -39,6 +39,8 @@ export class XhsToolsService {
     userId: string;
     tenantId?: string;
     articles: Array<{ title: string; tags: string[] }>;
+    /** 是否去重(默认 true)。false=不去重预检: 统计含已用图 */
+    dedup?: boolean;
   }): Promise<{
     sufficient: boolean;
     available: number;
@@ -75,6 +77,7 @@ export class XhsToolsService {
       tenantId: input.tenantId,
       tags,
       imageType: 'regular',
+      includeUsed: input.dedup === false,
     });
     const estimatedGroups = Math.floor(
       total / this.MIN_SOURCE_IMAGES_PER_GROUP,
@@ -320,7 +323,7 @@ export class XhsToolsService {
           // 推送失败不影响主流程
         }
         // 仅返回简短文字给 LLM,fence 已通过 earlyEmit 直接推到前端,无需 LLM 二次输出
-        return '已向用户发出 tag 选择卡片(已直接推送给前端,无需在回复中重复 fence)。请用一句简短中文告诉用户卡片已弹出,等待用户在卡片内多选 tags 并以"我选定标签：#A #B"形式回传后,再按场景调用对应生成工具继续生成: 图文用 topic_orchestrate, 图组用 xhs_create_image_group_canvas。';
+        return '已向用户发出 tag 选择卡片(已直接推送给前端,无需在回复中重复 fence)。请用一句简短中文告诉用户卡片已弹出,等待用户在卡片内多选 tags 并以"我选定标签：#A #B"形式回传后,再按场景调用对应生成工具继续生成: 图文用 topic_orchestrate, 图组用 xhs_create_image_group_canvas。**注意:用户回传消息可能附带去重偏好(如"（不去重，允许重复取图）"或"（去重）");若含"不去重"/"允许重复"则给生成工具传 dedup=false,否则默认去重(不传 dedup)。**';
       },
       {
         name: 'tag_select_request',
@@ -874,6 +877,7 @@ export class XhsToolsService {
         topic?: string;
         groupCount?: number;
         articles?: Array<{ title: string; tags?: string[] }>;
+        dedup?: boolean;
       }) => {
         if (!scope?.userId) {
           return JSON.stringify({
@@ -929,6 +933,7 @@ export class XhsToolsService {
               userId: scope.userId,
               tenantId: scope.tenantId,
               articles: sourceArticles,
+              dedup: input.dedup,
             });
           } catch (e) {
             this.logger.warn(
@@ -963,6 +968,7 @@ export class XhsToolsService {
             })),
             // 复用已有 Canvas 再生成 → 追加图组,不覆盖上一组生成结果
             append: true,
+            dedup: input.dedup,
           });
           const mergeSummary = await this.mergeImageGroupsToArticles({
             canvasId: requestedCanvasId,
@@ -990,6 +996,7 @@ export class XhsToolsService {
             userId: scope.userId,
             tenantId: scope.tenantId,
             articles,
+            dedup: input.dedup,
           });
         } catch (e) {
           this.logger.warn(
@@ -1020,6 +1027,7 @@ export class XhsToolsService {
             title: a.title,
             tags: a.tags ?? [],
           })),
+          dedup: input.dedup,
         });
         const canvasBlock = `\`\`\`canvas-it\n${JSON.stringify({ canvasId: canvas.id, status: 'generating', type: 'image-group', topic: canvas.topic ?? '', articleCount: Array.isArray(canvas.articles) ? canvas.articles.length : 0 })}\n\`\`\``;
         try {
@@ -1064,6 +1072,12 @@ export class XhsToolsService {
             .optional()
             .describe(
               '文章列表，每篇对应一个 imageGroup。传入 canvasId 且未传 articles 时，会使用该 Canvas 现有文章作为图组输入。',
+            ),
+          dedup: z
+            .boolean()
+            .optional()
+            .describe(
+              '是否图片去重，默认 true(去重)。去重: 排除已用过的图、每张源图只用一次、生成后标记已用。当用户消息包含"不去重"/"允许重复"/"可重复取图"等意图时传 false(不去重: 命中已用图、按标签随机取图、图片可无限复用)。用户未提及则不传(默认去重)。',
             ),
         }),
       },
