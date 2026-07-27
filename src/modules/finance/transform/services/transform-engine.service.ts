@@ -440,7 +440,8 @@ export class TransformEngineService {
           break;
         }
         const key = this.toComparable(src[rule.from]);
-        const keyStr = key == null ? '' : String(key);
+        // trim 掉键的前后空白(含全角空格 U+3000);飞书 cell 常带尾空格,如 "6月 " 否则精确匹配不上 map 键
+        const keyStr = key == null ? '' : String(key).trim();
         if (
           keyStr !== '' &&
           Object.prototype.hasOwnProperty.call(rule.map, keyStr)
@@ -461,14 +462,17 @@ export class TransformEngineService {
           result = null;
           break;
         }
-        let re: RegExp;
-        try {
-          re = new RegExp(rule.pattern, rule.flags);
-        } catch {
-          result = null;
-          break;
+        const text = String(raw as string | number | boolean);
+        // 先按原样匹配;不中且 pattern 含双反斜杠时,兜底去掉一层多余转义再试一次
+        // (存储/表单层常把 \d 双转义成 \\d,正则退化为"匹配字面反斜杠+d",永远不中)
+        let m = this.execRegex(text, rule.pattern, rule.flags);
+        if (!m && rule.pattern.includes('\\\\')) {
+          m = this.execRegex(
+            text,
+            rule.pattern.replace(/\\\\/g, '\\'),
+            rule.flags,
+          );
         }
-        const m = String(raw).match(re);
         if (!m) {
           result = null;
           break;
@@ -496,6 +500,24 @@ export class TransformEngineService {
       return cast;
     }
     return result;
+  }
+
+  /**
+   * @description 编译并执行正则;pattern 非法或不中返回 null(不抛),供 regex compute 原样/去转义两趟复用
+   * @keyword-en regex-exec, regex-compile
+   */
+  private execRegex(
+    text: string,
+    pattern: string,
+    flags?: string,
+  ): RegExpMatchArray | null {
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, flags);
+    } catch {
+      return null;
+    }
+    return text.match(re);
   }
 
   /**

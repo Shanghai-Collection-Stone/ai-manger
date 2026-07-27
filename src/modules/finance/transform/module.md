@@ -34,6 +34,7 @@ Finance-Transform
 - `runMap(src,rule)` — 执行直接字段映射 | keywords: map-rule-run, default-fallback
 - `readFieldValue(src,field,fallback?,type?,format?)` — 从源字段或 computed 上下文读取字段 | keywords: context-field-read, computed-field
 - `runCompute(src,rule)` — 执行 concat/sum/if/coalesce/const/lookup/regex | keywords: compute-rule-run, nested-compute, regex-extract
+- `execRegex(text,pattern,flags?)` — 编译并执行正则,非法/不中返回 null | keywords: regex-exec, regex-compile
 - `resolveExpressionValue(src,value,allowBareFieldRef?)` — 求值 then/else 中的字段引用或嵌套 compute | keywords: expression-resolve, nested-compute
 - `resolveMappedValue(src,value)` — 求值 lookup map 命中后的显式表达式 | keywords: lookup-value-resolve, nested-compute
 - `isComputeExpression(value)` — 判断嵌套 compute 表达式 | keywords: nested-compute-detect, expression-detect
