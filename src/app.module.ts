@@ -28,6 +28,10 @@ import { ArticleLibraryModule } from './modules/article-library/article-library.
 import { FeaturedArticleModule } from './modules/featured-article/featured-article.module.js';
 import { TenantCredentialModule } from './modules/tenant-credential/tenant-credential.module.js';
 import { FinanceModule } from './modules/finance/finance.module.js';
+import { AuditLogModule } from './modules/audit-log/audit-log.module.js';
+import { WorkspaceModule } from './modules/workspace/workspace.module.js';
+import { NetdiskModule } from './modules/netdisk/netdisk.module.js';
+import { NoticeModule } from './modules/notice/notice.module.js';
 
 @Module({
   imports: [
@@ -61,6 +65,10 @@ import { FinanceModule } from './modules/finance/finance.module.js';
     FeaturedArticleModule,
     TenantCredentialModule,
     FinanceModule,
+    AuditLogModule,
+    WorkspaceModule,
+    NetdiskModule,
+    NoticeModule,
   ],
   controllers: [AppController],
   providers: [AppService],

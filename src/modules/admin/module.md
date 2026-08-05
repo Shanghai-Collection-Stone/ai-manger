@@ -1,8 +1,9 @@
 # Admin Module
 
 ## 模块描述
- 后台管理模块，负责租户化登录、JWT鉴权、用户管理、平台级AI提供商管理与密钥管理、Claw 接入配置管理、Agent 配置管理。
+ 后台管理模块，负责租户化登录、JWT鉴权、基于 CASL 的角色能力鉴权(RBAC 静态角色目录)、用户管理、角色管理(只读)、平台级AI提供商管理与密钥管理、Claw 接入配置管理、Agent 配置管理。
 文件路径: `src/modules/admin`
+鉴权分层: `AdminAuthGuard`(校验 JWT/注入用户) → `AdminPoliciesGuard`(校验 `@RequirePermission` 声明的 CASL 能力)。角色权限矩阵唯一定义源为 `casl/admin-ability.factory.ts` 的 `ROLE_CATALOG`。
 
 ## 功能描述及关键词
 
@@ -18,6 +19,7 @@
   - `createUser`: 创建用户/create user
   - `updateUser`: 更新用户/update user
   - `deleteUser`: 删除用户/delete user
+  - `listRoles`: 角色管理列表(静态RBAC角色目录)/admin roles list | keywords: admin-roles-list-endpoint
   - `listAiProviders`: 提供商列表/list providers
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
@@ -44,6 +46,7 @@
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重，每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login`: 登录签发JWT/login issue jwt
   - `getUserByToken`: token解析用户/get user by token
+  - `listRoles`: 角色列表(静态RBAC角色目录及权限矩阵，只读)/list admin roles | keywords: list-admin-roles
   - `logout`: 注销会话/logout
   - `listLoginTenants`: 登录租户列表/list login tenants
   - `getDefaultAiProvider`: 读取默认提供商（llm/em 未设 default 时 fallback 任一 enabled 记录）/get default provider
@@ -78,6 +81,29 @@
 - **关键词**: guard, auth, bearer, jwt
 - **函数**:
   - `canActivate`: 鉴权校验/can activate
+
+### guards/policies.guard.ts
+后台 CASL 策略守卫，读取 `@RequirePermission` 声明与登录用户角色能力，能力不足抛 403。需在 `AdminAuthGuard` 之后生效(依赖已注入的 `req.adminUser`)。
+- **关键词**: guard, casl, policy, ability, rbac, forbidden
+- **函数**:
+  - `canActivate`: 策略校验(校验入口声明的动作+主体能力)/can activate policy check | keywords: can-activate-policy-check
+
+### casl/admin-ability.factory.ts
+后台 CASL 能力工厂，按用户角色静态构建 ability(RBAC)；导出 `ROLE_CATALOG` 静态角色目录(权限矩阵唯一定义源)与 `AdminAbility` 类型。
+- **关键词**: casl, ability, factory, rbac, role-catalog, mongo-ability
+- **函数**:
+  - `createForUser`: 依据登录用户角色构建 CASL ability/create ability for admin user | keywords: create-ability-for-admin-user
+
+### casl/admin-permission.constants.ts
+后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`。
+- **关键词**: permission, subject, action, registry, root-key, casl
+- **类型导出**: `AdminAction`, `AdminSubject`; 常量 `ADMIN_ACTIONS`, `ADMIN_SUBJECTS`
+
+### decorators/require-permission.decorator.ts
+入口鉴权声明装饰器 `@RequirePermission(action, subject)`，与路由装饰器同址标注入口所需能力，供 `AdminPoliciesGuard` 消费。
+- **关键词**: decorator, metadata, require-permission, casl, policy
+- **函数**:
+  - `RequirePermission`: 入口鉴权声明(设置权限元数据)/require permission decorator | keywords: require-permission-decorator
 
 ### entities/admin.entity.ts
 后台实体定义。

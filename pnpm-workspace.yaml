@@ -1,0 +1,5 @@
+allowBuilds:
+  '@nestjs/core': true
+  protobufjs: true
+  sharp: true
+  unrs-resolver: true

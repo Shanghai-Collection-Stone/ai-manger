@@ -16,6 +16,8 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminAuthGuard } from '../guards/admin-auth.guard.js';
+import { AdminPoliciesGuard } from '../guards/policies.guard.js';
+import { RequirePermission } from '../decorators/require-permission.decorator.js';
 import { AdminService } from '../services/admin.service.js';
 import type { AdminRequest } from '../types/admin-request.types.js';
 import {
@@ -105,7 +107,8 @@ export class AdminController {
    * @description 用户管理列表
    * @keyword-en admin users list endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
   @Get('users')
   async listUsers(@Req() req: Request) {
     const users = await this.adminService.listUsers(this.requireUser(req));
@@ -116,7 +119,8 @@ export class AdminController {
    * @description 用户管理新增
    * @keyword-en admin users create endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('create', 'User')
   @Post('users')
   async createUser(@Req() req: Request, @Body() body: CreateAdminUserDto) {
     const user = await this.adminService.createUser(
@@ -130,7 +134,8 @@ export class AdminController {
    * @description 用户管理更新
    * @keyword-en admin users update endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'User')
   @Patch('users/:id')
   async updateUser(
     @Req() req: Request,
@@ -149,11 +154,24 @@ export class AdminController {
    * @description 用户管理删除
    * @keyword-en admin users delete endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('delete', 'User')
   @Delete('users/:id')
   async deleteUser(@Req() req: Request, @Param('id') id: string) {
     const ok = await this.adminService.deleteUser(this.requireUser(req), id);
     return { ok };
+  }
+
+  /**
+   * @description 角色管理列表（静态 RBAC 角色目录及权限矩阵，只读）
+   * @keyword-en admin roles list endpoint
+   * @keyword-cn 角色管理列表
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'Role')
+  @Get('roles')
+  listRoles() {
+    return { roles: this.adminService.listRoles() };
   }
 
   /**

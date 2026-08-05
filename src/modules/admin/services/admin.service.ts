@@ -23,6 +23,10 @@ import type {
 import type { SassApiKeyEntity } from '../../sass/entities/sass-api-key.entity.js';
 import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
 import { SassService } from '../../sass/services/sass.service.js';
+import {
+  ROLE_CATALOG,
+  type RoleCatalogEntry,
+} from '../casl/admin-ability.factory.js';
 import type {
   AdminAiProviderEntity,
   AdminAgentConfigEntity,
@@ -300,6 +304,18 @@ export class AdminService {
       .sort({ updatedAt: -1 })
       .toArray();
     return rows.map((row) => this.toPublicUser(row));
+  }
+
+  /**
+   * @description 角色列表，返回静态 RBAC 角色目录及各角色权限矩阵（只读，角色由代码定义）
+   * @keyword-en list admin roles
+   * @keyword-cn 角色列表
+   */
+  listRoles(): RoleCatalogEntry[] {
+    return ROLE_CATALOG.map((entry) => ({
+      ...entry,
+      permissions: entry.permissions.map((rule) => ({ ...rule })),
+    }));
   }
 
   /**
