@@ -1,3 +1,6 @@
+packages:
+  - web
+
 allowBuilds:
   '@nestjs/core': true
   protobufjs: true
