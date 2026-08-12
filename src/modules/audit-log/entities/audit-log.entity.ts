@@ -8,6 +8,9 @@ import { ObjectId } from 'mongodb';
 export type AuditTargetType =
   | 'workspace'
   | 'workspace_member'
+  | 'workspace_agent'
+  | 'workspace_conversation'
+  | 'workspace_task'
   | 'disk_node'
   | 'disk_root'
   | 'notice';
