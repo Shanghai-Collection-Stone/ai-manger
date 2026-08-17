@@ -6,6 +6,7 @@ import {
 import { $createTaskOpen, $taskCount, $tasksRefreshKey } from './store';
 import { getAdminToken } from '../Admin/adminApi';
 import TaskDetailPage from './TaskDetailPage';
+import { SkeletonList } from './blocks/shared.jsx';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
 
@@ -15,7 +16,7 @@ const API_BASE = typeof window !== 'undefined' ? window.location.origin : '';
  * @description 任务看板组件，横向泳道展示各状态任务
  * @keyword-en KanbanBoard kanban columns by task status
  */
-const KanbanBoard = ({ tasks, onTaskClick }) => {
+const KanbanBoard = ({ tasks, onTaskClick, loading = false }) => {
   const typeLabelMap = {
     auto_execute: '自动执行',
     offline_execute: '线下执行',
@@ -55,8 +56,10 @@ const KanbanBoard = ({ tasks, onTaskClick }) => {
             style={{ touchAction: 'pan-y', scrollbarWidth: 'none', msOverflowStyle: 'none' }}
             onTouchMove={(e) => e.stopPropagation()}
           >
-            {col.tasks.length === 0 ? (
-              <div className="text-center text-xs text-slate-300 py-8">暂无任务</div>
+            {loading && tasks.length === 0 ? (
+              <SkeletonList rows={3} rowClassName="h-20" />
+            ) : col.tasks.length === 0 ? (
+              <div className="text-center text-xs text-slate-300 py-8 animate-fade-in">暂无任务</div>
             ) : (
               col.tasks.map((task) => (
                 /* 看板任务卡片 */
@@ -410,8 +413,11 @@ const TaskCenterView = ({ currentUser }) => {
 
           {/* 任务列表 区域 */}
           <div className="space-y-2 min-h-[200px]">
-            {filteredTasks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+            {isFetching && tasks.length === 0 ? (
+              /* 首次拉取时用骨架屏占位，避免误显示「暂无任务」 */
+              <SkeletonList rows={4} rowClassName="h-[86px]" />
+            ) : filteredTasks.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-slate-400 animate-fade-in">
                 <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-3">
                   <ClipboardList size={24} className="text-slate-300" />
                 </div>
@@ -502,7 +508,7 @@ const TaskCenterView = ({ currentUser }) => {
               <div className="text-2xl font-black text-slate-900">{totalCount}</div>
             </div>
           </div>
-          <KanbanBoard tasks={tasks} onTaskClick={openTaskDetail} />
+          <KanbanBoard tasks={tasks} onTaskClick={openTaskDetail} loading={isFetching} />
         </>
       )}
 
