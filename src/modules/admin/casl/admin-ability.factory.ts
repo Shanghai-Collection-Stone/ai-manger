@@ -63,6 +63,9 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'XhsTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'manage', subject: 'Workspace' },
+      { action: 'manage', subject: 'WorkspaceAgent' },
+      { action: 'manage', subject: 'WorkspaceConversation' },
+      { action: 'manage', subject: 'WorkspaceTask' },
       { action: 'manage', subject: 'Netdisk' },
       { action: 'manage', subject: 'Notice' },
       { action: 'read', subject: 'AuditLog' },
@@ -72,12 +75,16 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
   {
     role: 'operator',
     displayName: '操作员',
-    description: '只读用户/角色/工作区，可操作网盘文件，不可增改删用户',
+    description:
+      '只读用户/角色/工作区，可在工作区内协作(会话/任务)与操作网盘文件，不可增改删用户',
     permissions: [
       { action: 'read', subject: 'User' },
       { action: 'manage', subject: 'XhsTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'read', subject: 'Workspace' },
+      { action: 'read', subject: 'WorkspaceAgent' },
+      { action: 'manage', subject: 'WorkspaceConversation' },
+      { action: 'manage', subject: 'WorkspaceTask' },
       { action: 'manage', subject: 'Netdisk' },
       { action: 'read', subject: 'Notice' },
       { action: 'manage', subject: 'NoticeRead' },

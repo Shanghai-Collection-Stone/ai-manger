@@ -28,6 +28,7 @@ import { NetdiskService } from '../services/netdisk.service.js';
 import { createNetdiskDiskStorage } from '../services/netdisk-storage.service.js';
 import {
   CreateFolderDto,
+  DiskRootQueryDto,
   ListNodesQueryDto,
   RenameNodeDto,
   UpdateDiskRootDto,
@@ -59,9 +60,13 @@ export class NetdiskController {
    * @keyword-cn 获取网盘根端点
    */
   @RequirePermission('read', 'Netdisk')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
   @Get('root')
-  async getRoot(@Req() req: AdminRequest) {
-    const root = await this.netdiskService.getRoot(this.requireUser(req));
+  async getRoot(@Req() req: AdminRequest, @Query() query: DiskRootQueryDto) {
+    const root = await this.netdiskService.getRoot(
+      this.requireUser(req),
+      query.tenantId,
+    );
     return { root };
   }
 
@@ -77,6 +82,7 @@ export class NetdiskController {
     const root = await this.netdiskService.updateRootCapacity(
       this.requireUser(req),
       body.capacityBytes,
+      body.tenantId,
     );
     return { root };
   }
@@ -93,6 +99,7 @@ export class NetdiskController {
     const nodes = await this.netdiskService.listNodes(this.requireUser(req), {
       workspaceId: query.workspaceId,
       parentId: query.parentId,
+      tenantId: query.tenantId,
     });
     return { nodes };
   }
@@ -135,7 +142,11 @@ export class NetdiskController {
     const node = await this.netdiskService.finalizeUpload(
       this.requireUser(req),
       file,
-      { workspaceId: body.workspaceId, parentId: body.parentId },
+      {
+        workspaceId: body.workspaceId,
+        parentId: body.parentId,
+        tenantId: body.tenantId,
+      },
     );
     return { node };
   }

@@ -1,4 +1,4 @@
-# 后台管理 API · v2(工作区 / 网盘 / 审计日志)
+# 后台管理 API · v2(工作区 / 工作区协作 / 网盘 / 审计日志)
 
 > **目标读者**:后台控制台前端 / 运营管理端
 > **接口前缀**:`/api/v2`
@@ -8,6 +8,7 @@
 本组接口面向**后台控制台**,管理多租户 SaaS 的:
 
 - **工作区**(团队/项目空间,含名称、描述、容量设定、成员管理)
+- **工作区协作**(工作区内页的 Agent 通讯录、会话与消息、任务与跟进记录)
 - **网盘**(租户级与工作区级文件/文件夹,真实文件上传下载、容量配额)
 - **审计日志**(后台变更事件追踪,工作区/网盘操作自动埋点)
 - **通知**(后台发起的站内通知,增删改查 + 发布/撤销)
@@ -62,6 +63,9 @@ Authorization: Bearer <token>
 | User 用户管理        | manage      | manage       | read     |
 | Role 角色查看        | read        | read         | read     |
 | Workspace 工作区     | manage      | manage       | read     |
+| WorkspaceAgent Agent 通讯录 | manage | manage      | read     |
+| WorkspaceConversation 工作区会话 | manage | manage  | manage   |
+| WorkspaceTask 工作区任务 | manage  | manage       | manage   |
 | Netdisk 网盘         | manage      | manage       | manage   |
 | AuditLog 审计日志    | read        | read         | —        |
 | Notice 通知管理      | manage      | manage       | read     |
@@ -125,6 +129,16 @@ Authorization: Bearer <token>
 | `USER_NOT_FOUND`                           | 404  | 成员用户不存在                              |
 | `MEMBER_ALREADY_EXISTS`                    | 400  | 成员已在该工作区                            |
 | `MEMBER_NOT_FOUND`                         | 404  | 成员不存在                                  |
+| `AGENT_NOT_FOUND`                          | 404  | Agent 不存在(通讯录/任务承接方)             |
+| `AGENT_DISABLED`                           | 400  | Agent 已停用,不可新建会话                  |
+| `AGENT_KEY_ALREADY_EXISTS`                 | 400  | 同租户内 Agent 键重复                       |
+| `CONVERSATION_NOT_FOUND`                   | 404  | 会话不存在或不属于该工作区                  |
+| `MESSAGE_EMPTY`                            | 400  | 消息正文与附件同时为空                      |
+| `TASK_NOT_FOUND`                           | 404  | 任务不存在或不属于该工作区                  |
+| `FOLLOWUP_EMPTY`                           | 400  | 跟进正文与附件同时为空                      |
+| `ASSIGNEE_NOT_MEMBER`                      | 400  | 承接人不是该工作区成员                      |
+| `ATTACHMENT_NOT_FOUND`                     | 400  | 附件节点不存在/非文件/不属于该工作区        |
+| `INVALID_DUE_AT`                           | 400  | 非法的截止时间                              |
 | `FILE_REQUIRED`                            | 400  | 上传请求缺少 `file` 字段                    |
 | `FILE_NOT_FOUND`                           | 404  | 文件节点不存在或非文件                      |
 | `NODE_NOT_FOUND`                           | 404  | 节点不存在                                  |
@@ -303,7 +317,7 @@ curl https://your-server/api/v2/netdisk/files/<id>/download \
 | `actorUserId`  | string   | 操作者后台用户 ID                                           |
 | `actorUsername`| string   | 操作者用户名                                                |
 | `action`       | string   | 事件动作(`<module>.<verb>`)                                 |
-| `targetType`   | `workspace` / `workspace_member` / `disk_node` / `disk_root` / `notice` | 目标类型 |
+| `targetType`   | `workspace` / `workspace_member` / `workspace_agent` / `workspace_conversation` / `workspace_task` / `disk_node` / `disk_root` / `notice` | 目标类型 |
 | `targetId`     | string   | 目标资源 ID(可选)                                          |
 | `detail`       | object   | 事件明细(变更摘要,不含敏感原文)                             |
 | `createdAt`    | datetime | 事件时间                                                    |
@@ -338,6 +352,12 @@ curl https://your-server/api/v2/netdisk/files/<id>/download \
 | 工作区   | `workspace.memberAdd`         | 添加成员                         |
 | 工作区   | `workspace.memberUpdate`      | 修改成员角色                     |
 | 工作区   | `workspace.memberRemove`      | 移除成员                         |
+| 工作区协作 | `workspaceAgent.create/update/delete` | Agent 通讯录增删改     |
+| 工作区协作 | `workspaceConversation.create`      | 新建会话                 |
+| 工作区协作 | `workspaceConversation.messageSend` | 发送会话消息             |
+| 工作区协作 | `workspaceConversation.delete`      | 删除会话                 |
+| 工作区协作 | `workspaceTask.create/update/delete`| 任务增删改               |
+| 工作区协作 | `workspaceTask.followupAdd`         | 追加任务跟进             |
 | 网盘     | `netdisk.folderCreate`        | 创建文件夹                       |
 | 网盘     | `netdisk.fileUpload`          | 上传文件                         |
 | 网盘     | `netdisk.nodeRename`          | 重命名节点                       |
@@ -459,7 +479,97 @@ curl -X POST https://your-server/api/v2/notices/<id>/revoke \
 
 ---
 
-## 8. 角色 / 权限目录
+## 8. 工作区协作 `/api/v2/workspaces/:workspaceId`
+
+工作区内页(独立工作区窗口)使用的三组接口:Agent 通讯录、会话与消息、任务与跟进。全部按 `workspaceId` 归属校验,跨租户/跨工作区一律拒绝。**附件不单独上传**:先用 `POST /api/v2/netdisk/files`(带 `workspaceId`)把文件真实传入该工作区网盘,再把返回的节点 ID 放进 `attachmentIds`。
+
+### 8.1 Agent 通讯录
+
+Agent 是**租户级**目录(工作区之间共享),租户首次读取时自动写入默认 6 个 Agent。
+
+| 字段          | 类型    | 说明                                              |
+| ------------- | ------- | ------------------------------------------------- |
+| `id`          | string  | ObjectId                                          |
+| `key`         | string  | 租户内唯一键(`^[a-z0-9-]{2,32}$`)                 |
+| `name`        | string  | 展示名                                            |
+| `description` | string  | 简介                                              |
+| `icon`/`accent` | string | 前端图标类名                                     |
+| `enabled`     | boolean | 是否在通讯录可用                                  |
+| `aiEnabled`   | boolean | 是否接入 AI 运行时自动回复(默认仅 `general` 为真) |
+| `aiProvider`/`aiModel` | string | 透传给 chat-main 的运行时参数            |
+
+| 方法   | 路径                                        | 必需能力                | 返回        |
+| ------ | ------------------------------------------- | ----------------------- | ----------- |
+| GET    | `/api/v2/workspaces/:id/agents`             | read WorkspaceAgent     | `{ agents }`|
+| POST   | `/api/v2/workspaces/:id/agents`             | create WorkspaceAgent   | `{ agent }` |
+| PATCH  | `/api/v2/workspaces/:id/agents/:agentId`    | update WorkspaceAgent   | `{ agent }` |
+| DELETE | `/api/v2/workspaces/:id/agents/:agentId`    | delete WorkspaceAgent   | `{ ok }`    |
+
+```bash
+# 给 AI 表格开启 AI 自动回复
+curl -X PATCH https://your-server/api/v2/workspaces/66a…/agents/66c… \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{ "aiEnabled": true }'
+```
+
+### 8.2 会话与消息
+
+会话字段:`id` / `workspaceId` / `agentKey` / `agentName` / `title` / `summary` / `sessionId` / `createdBy` / `createdByName` / `messageCount` / `lastMessageAt` / `createdAt`。
+消息字段:`id` / `conversationId` / `role`(`user` | `agent`) / `authorUserId` / `authorName` / `text` / `attachments[{ nodeId, name, sizeBytes }]` / `createdAt`。
+
+| 方法   | 路径                                                        | 必需能力                       | 返回                |
+| ------ | ----------------------------------------------------------- | ------------------------------ | ------------------- |
+| GET    | `/api/v2/workspaces/:id/conversations`                      | read WorkspaceConversation     | `{ conversations }` |
+| POST   | `/api/v2/workspaces/:id/conversations`                      | create WorkspaceConversation   | `{ conversation }`  |
+| DELETE | `/api/v2/workspaces/:id/conversations/:cid`                 | delete WorkspaceConversation   | `{ ok }`            |
+| GET    | `/api/v2/workspaces/:id/conversations/:cid/messages`        | read WorkspaceConversation     | `{ messages }`      |
+| POST   | `/api/v2/workspaces/:id/conversations/:cid/messages`        | create WorkspaceConversation   | 见下                |
+
+发送消息返回 `{ message, reply, replyError, conversation }`:
+
+- `message`:刚落库的成员消息;
+- `reply`:Agent 回复消息,**仅当该 Agent `aiEnabled=true` 且 chat-main 运行时返回内容时才有值**,否则为 `null`;
+- `replyError`:回复失败原因(如模型服务未配置),此时成员消息仍已保存,服务端不会写入任何占位回复。
+
+```bash
+curl -X POST https://your-server/api/v2/workspaces/66a…/conversations/66d…/messages \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{ "text": "帮我梳理下这周的投放结论", "attachmentIds": ["66e…"] }'
+```
+
+### 8.3 任务与跟进
+
+任务字段:`id` / `workspaceId` / `title` / `description` / `status`(`in_progress` | `completed` | `failed`) / `createdBy` / `createdByName` / `assigneeType`(`user` | `agent`) / `assigneeId` / `assigneeName` / `dueAt` / `attachments` / `followupCount` / `createdAt` / `updatedAt`。
+跟进字段:`id` / `taskId` / `authorUserId` / `authorName` / `text` / `attachments` / `createdAt`。
+
+| 方法   | 路径                                                  | 必需能力              | 返回                  |
+| ------ | ----------------------------------------------------- | --------------------- | --------------------- |
+| GET    | `/api/v2/workspaces/:id/tasks?status=`                | read WorkspaceTask    | `{ tasks, counts }`   |
+| POST   | `/api/v2/workspaces/:id/tasks`                        | create WorkspaceTask  | `{ task }`            |
+| PATCH  | `/api/v2/workspaces/:id/tasks/:taskId`                | update WorkspaceTask  | `{ task }`            |
+| DELETE | `/api/v2/workspaces/:id/tasks/:taskId`                | delete WorkspaceTask  | `{ ok }`              |
+| GET    | `/api/v2/workspaces/:id/tasks/:taskId/followups`      | read WorkspaceTask    | `{ followups }`       |
+| POST   | `/api/v2/workspaces/:id/tasks/:taskId/followups`      | update WorkspaceTask  | `{ followup }`        |
+
+`counts` 为全量状态计数(`{ all, in_progress, completed, failed }`),不受 `status` 筛选影响,供侧栏任务中心直接使用。
+
+```bash
+# 指派给 Agent
+curl -X POST https://your-server/api/v2/workspaces/66a…/tasks \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{ "title": "渠道投放 ROI 复盘", "assigneeType": "agent", "assigneeId": "analysis", "dueAt": "2026-08-20T10:00:00.000Z" }'
+
+# 追加跟进并同时结单
+curl -X POST https://your-server/api/v2/workspaces/66a…/tasks/66f…/followups \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{ "text": "复盘结论已同步周会", "attachmentIds": ["66e…"], "status": "completed" }'
+```
+
+> 承接方为成员时,`assigneeId` 必须是该工作区成员(否则 `400 ASSIGNEE_NOT_MEMBER`);为 Agent 时,`assigneeId` 传 Agent 的 `key`。
+
+---
+
+## 9. 角色 / 权限目录
 
 | 方法 | 路径           | 必需能力   | 返回     |
 | ---- | -------------- | ---------- | -------- |
@@ -469,7 +579,7 @@ curl -X POST https://your-server/api/v2/notices/<id>/revoke \
 
 ---
 
-## 9. 变更与联系
+## 10. 变更与联系
 
 - 接口变更通过本文档同步更新,前缀 `/api/v2` 保证向后兼容。
 - 重大不兼容变更启用 `/api/v3`,旧版保留。

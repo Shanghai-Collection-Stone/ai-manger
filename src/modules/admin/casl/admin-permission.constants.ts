@@ -32,6 +32,12 @@ export const ADMIN_SUBJECTS = {
   Role: 'Role',
   /** 工作区(含成员管理) */
   Workspace: 'Workspace',
+  /** 工作区 Agent 通讯录 */
+  WorkspaceAgent: 'WorkspaceAgent',
+  /** 工作区会话与消息 */
+  WorkspaceConversation: 'WorkspaceConversation',
+  /** 工作区任务与跟进记录 */
+  WorkspaceTask: 'WorkspaceTask',
   /** 租户网盘(文件/文件夹节点与容量) */
   Netdisk: 'Netdisk',
   /** 审计日志 */

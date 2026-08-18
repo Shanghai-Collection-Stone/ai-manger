@@ -15,6 +15,29 @@ export const LoadingBox = ({ height = 120 }) => (
 );
 
 /**
+ * @description 骨架屏色块，带微光扫过动画，用于内容加载中的占位
+ * @keyword-en skeleton shimmer placeholder
+ * @param {string} [className] - 额外的尺寸/圆角类名
+ */
+export const Skeleton = ({ className = 'h-4 w-full' }) => (
+  <div className={`skeleton-shimmer animate-shimmer rounded-md ${className}`} />
+);
+
+/**
+ * @description 列表骨架屏，按行渲染若干占位条
+ * @keyword-en skeleton list rows placeholder
+ * @param {number} [rows] - 占位行数
+ * @param {string} [rowClassName] - 单行的尺寸类名
+ */
+export const SkeletonList = ({ rows = 4, rowClassName = 'h-14' }) => (
+  <div className="flex flex-col gap-2.5 animate-fade-in">
+    {Array.from({ length: rows }).map((_, i) => (
+      <Skeleton key={i} className={`${rowClassName} w-full rounded-2xl`} />
+    ))}
+  </div>
+);
+
+/**
  * @description 错误提示框
  * @keyword-en error message box
  */
