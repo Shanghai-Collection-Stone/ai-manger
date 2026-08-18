@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { GalleryService } from '../services/gallery.service.js';
 import { GalleryGroupService } from '../services/gallery-group.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryUploadExceptionFilter } from '../filters/gallery-upload-exception.filter.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
@@ -34,6 +35,13 @@ type JimpImageLike = {
 };
 
 let jimpModulePromise: Promise<unknown> | null = null;
+
+/**
+ * @description AI 生成素材的固定标签，素材面板按此 tag 筛出「AI 生成」页签的内容。
+ * @keyword-cn AI素材标签
+ * @keyword-en ai material tag
+ */
+export const AI_MATERIAL_TAG = 'ai素材';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === 'object';
@@ -321,6 +329,7 @@ export class GalleryController {
     private readonly gallery: GalleryService,
     private readonly groups: GalleryGroupService,
     private readonly adminService: AdminService,
+    private readonly agent: AgentService,
   ) {}
 
   /**
@@ -588,6 +597,154 @@ export class GalleryController {
 
     const docs = await this.gallery.createMany(inputs);
     return { images: docs.map((d) => ({ ...d, _id: undefined })) };
+  }
+
+  /**
+   * @description 把生图返回的本地路径解析成 public/uploads 下的文件信息，拒绝外链和穿越路径。
+   * @param {string} url - 生图返回的 imagePath。
+   * @returns {{ fileName: string; absPath: string; url: string } | null} 文件信息，非法时返回 null。
+   * @keyword-cn 素材落盘
+   * @keyword-en resolve generated material file
+   */
+  private resolveGeneratedMaterialFile(
+    url: string,
+  ): { fileName: string; absPath: string; url: string } | null {
+    const raw = String(url ?? '')
+      .trim()
+      .replace(/\\/g, '/');
+    if (!raw || /^https?:\/\//i.test(raw)) return null;
+    let rel = raw.replace(/^\/+/, '');
+    if (rel.startsWith('static/uploads/'))
+      rel = rel.slice('static/uploads/'.length);
+    if (rel.startsWith('uploads/')) rel = rel.slice('uploads/'.length);
+    const safeRel = rel
+      .split('/')
+      .map((seg) => seg.trim())
+      .filter((seg) => seg.length > 0 && seg !== '.' && seg !== '..')
+      .join('/');
+    if (!safeRel) return null;
+    return {
+      fileName: safeRel,
+      absPath: join(process.cwd(), 'public', 'uploads', safeRel),
+      url: `/static/uploads/${safeRel}`,
+    };
+  }
+
+  /**
+   * @description AI 生成贴纸素材并入图库。提示词强制单主体 + 纯色背景 + 无文字，
+   * 便于前端 GPU 去底后直接当贴纸用；可选参考图只约束配色、字体气质与构成语言，
+   * 不作为最终素材内容。生成结果打 `ai素材` 标签供素材面板筛选。
+   * @param {{ prompt?: string; size?: string; tags?: string; userId?: string; referenceImageUrl?: string }} body - 生成参数。
+   * @param {Request} [req] - Express 请求对象，用于解析租户范围。
+   * @returns {Promise<{ image: Omit<GalleryImageEntity, '_id'> }>} 入库后的素材记录。
+   * @throws {BadRequestException} 提示词为空或生图结果落盘失败时抛出。
+   * @keyword-cn AI素材生成
+   * @keyword-en ai-material-generate
+   */
+  @Post('ai-material')
+  async generateAiMaterial(
+    @Body()
+    body: {
+      prompt?: string;
+      size?: string;
+      tags?: string;
+      userId?: string;
+      referenceImageUrl?: string;
+    },
+    @Req() req?: Request,
+  ): Promise<{ image: Omit<GalleryImageEntity, '_id'> }> {
+    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const userId =
+      String(body?.userId ?? '').trim() || authScope.userId || undefined;
+    if (!userId) throw new BadRequestException('userId is required');
+    const tenantId = authScope.tenantId || undefined;
+
+    const rawPrompt = String(body?.prompt ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!rawPrompt) throw new BadRequestException('prompt is required');
+
+    const size = /^\d{2,5}x\d{2,5}$/i.test(String(body?.size ?? '').trim())
+      ? String(body.size).trim()
+      : '1024x1024';
+    const referenceImageUrl = String(body?.referenceImageUrl ?? '')
+      .trim()
+      .slice(0, 2000);
+    const prompt = [
+      `贴纸素材主体:${rawPrompt}`,
+      referenceImageUrl
+        ? '【风格参考】已附参考图，只学习其色彩组合、粗细对比、字体气质、描边方式和装饰构成；严禁复制参考图中的具体文字、人物、品牌或版面内容。'
+        : '',
+      '【素材规格 - 必须严格遵守】',
+      '1. 画面只有一个主体，居中、完整、不裁切，主体边缘清晰锐利、轮廓闭合。',
+      '2. 背景必须是单一纯色平铺(推荐纯白 #FFFFFF 或纯品绿 #00FF00)，无渐变、无阴影、无投影、无地面、无纹理、无场景元素。',
+      '3. 严禁画面内出现任何文字、字母、数字、水印、logo、二维码、边框、马赛克棋盘格。',
+      '4. 风格干净、色彩明快、主体与背景色差大，便于后续抠图去底。',
+      '5. 只输出主体本身，不要拼图、不要多格、不要展示图排版。',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const generated = await this.agent.sendPrompt({
+      prompt,
+      size,
+      includeSystemPrompt: false,
+      ...(referenceImageUrl
+        ? { baseImageCandidates: [referenceImageUrl] }
+        : {}),
+    });
+    const file = this.resolveGeneratedMaterialFile(
+      String(generated?.imagePath ?? ''),
+    );
+    if (!file) throw new BadRequestException('AI_MATERIAL_IMAGE_EMPTY');
+
+    let byteSize: number | undefined;
+    try {
+      const st = await fs.stat(file.absPath);
+      byteSize = Number.isFinite(st.size) && st.size > 0 ? st.size : undefined;
+    } catch {
+      throw new BadRequestException('AI_MATERIAL_IMAGE_MISSING');
+    }
+
+    const dim = await getImageDimensionsFromFile(file.absPath);
+    const thumb = await this.gallery.generateThumbnail(
+      file.absPath,
+      file.fileName,
+    );
+    const tags = Array.from(
+      new Set(
+        [
+          AI_MATERIAL_TAG,
+          ...String(body?.tags ?? '')
+            .split(/[,\t\n\r\s]+/g)
+            .map((t) => t.trim()),
+        ].filter((t) => t.length > 0),
+      ),
+    );
+
+    const [doc] = await this.gallery.createMany([
+      {
+        userId,
+        tenantId,
+        originalName: rawPrompt.slice(0, 60),
+        fileName: file.fileName,
+        absPath: file.absPath,
+        url: file.url,
+        ...(thumb ?? {}),
+        mimeType:
+          extname(file.fileName).toLowerCase() === '.png'
+            ? 'image/png'
+            : 'image/jpeg',
+        size: byteSize,
+        width: dim?.width,
+        height: dim?.height,
+        tags,
+        description: `AI素材:${rawPrompt.slice(0, 120)}`,
+      },
+    ]);
+    return {
+      image: { ...doc, _id: undefined } as Omit<GalleryImageEntity, '_id'>,
+    };
   }
 
   /**

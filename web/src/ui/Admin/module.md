@@ -11,6 +11,10 @@
 
 ### AdminApp.jsx
 后台管理主应用,包含多 Tab 管理界面与数据加载逻辑,刷新后保留上次点击 Tab。
+**代码分割**: `@uiw/react-md-editor`(含 CodeMirror,约 1.6 MB)改为 `React.lazy` 按需加载 — 模块内自建 `MDEditor` 与 `MDEditor.Markdown` 两个 Suspense 包装组件,三处调用点写法不变;编辑器样式表仍静态引入避免 FOUC。后台首屏包由 1.77 MB 降到 88 KB。
+- **函数**(代码分割相关):
+  - `MDEditor(props)` — 按需加载的 Markdown 编辑器包装 | keywords: lazy-import, markdown-editor
+  - `MDEditor.Markdown(props)` — 按需加载的 Markdown 只读渲染包装 | keywords: lazy-import, markdown-preview
 Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户级用户可见(super_admin 隐藏)。
 **飞书凭证 / 财务**对所有用户开放:tenant_admin 看到自己租户的;super_admin 看到平台自身的(service 内部统一用 `__platform__` 作为作用域占位符)。
 **飞书凭证 Tab 改为单条本作用域表单(无表格、无租户列)**;

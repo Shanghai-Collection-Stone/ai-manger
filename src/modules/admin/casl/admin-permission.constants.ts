@@ -26,6 +26,8 @@ export type AdminAction = (typeof ADMIN_ACTIONS)[number];
 export const ADMIN_SUBJECTS = {
   /** 后台用户 */
   User: 'User',
+  /** 小红书 AI 选题生成 */
+  XhsTopic: 'XhsTopic',
   /** 角色 */
   Role: 'Role',
   /** 工作区(含成员管理) */

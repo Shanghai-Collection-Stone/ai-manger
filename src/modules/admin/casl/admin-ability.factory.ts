@@ -8,7 +8,10 @@ import type {
   AdminUserEntity,
   AdminUserRole,
 } from '../entities/admin.entity.js';
-import type { AdminAction, AdminSubject } from './admin-permission.constants.js';
+import type {
+  AdminAction,
+  AdminSubject,
+} from './admin-permission.constants.js';
 
 /**
  * @description 后台 CASL 能力类型，(动作, 主体) 二元组
@@ -57,6 +60,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
     description: '本租户内管理用户、工作区与网盘，可查看角色与审计日志',
     permissions: [
       { action: 'manage', subject: 'User' },
+      { action: 'manage', subject: 'XhsTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'manage', subject: 'Workspace' },
       { action: 'manage', subject: 'Netdisk' },
@@ -71,6 +75,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
     description: '只读用户/角色/工作区，可操作网盘文件，不可增改删用户',
     permissions: [
       { action: 'read', subject: 'User' },
+      { action: 'manage', subject: 'XhsTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'read', subject: 'Workspace' },
       { action: 'manage', subject: 'Netdisk' },
@@ -93,9 +98,7 @@ export class AdminAbilityFactory {
    * @keyword-cn 构建用户能力
    */
   createForUser(user: AdminUserEntity): AdminAbility {
-    const { can, build } = new AbilityBuilder<AdminAbility>(
-      createMongoAbility,
-    );
+    const { can, build } = new AbilityBuilder<AdminAbility>(createMongoAbility);
     const entry = ROLE_CATALOG.find((item) => item.role === user.role);
     for (const rule of entry?.permissions ?? []) {
       can(rule.action, rule.subject);

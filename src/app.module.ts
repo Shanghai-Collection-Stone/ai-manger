@@ -32,6 +32,7 @@ import { AuditLogModule } from './modules/audit-log/audit-log.module.js';
 import { WorkspaceModule } from './modules/workspace/workspace.module.js';
 import { NetdiskModule } from './modules/netdisk/netdisk.module.js';
 import { NoticeModule } from './modules/notice/notice.module.js';
+import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { NoticeModule } from './modules/notice/notice.module.js';
     WorkspaceModule,
     NetdiskModule,
     NoticeModule,
+    XhsTopicModule,
   ],
   controllers: [AppController],
   providers: [AppService],

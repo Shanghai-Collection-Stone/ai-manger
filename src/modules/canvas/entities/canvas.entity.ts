@@ -21,6 +21,66 @@ export type ImageGroupLayout =
   | 'collage-cover-5inner'
   | 'collage-cover-5collage';
 
+/**
+ * @description 拼图内单张源图在拼图画布上的格子位置，坐标以拼图画布像素为单位。
+ * @keyword-cn 拼图画布格式, 拼图格子
+ * @keyword-en collage-canvas-format, collage-cell
+ */
+export interface CanvasCollageCell {
+  imageId: number;
+  url: string;
+  thumbUrl?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** @description 源图填充方式，与 sharp 合成时保持一致（fit:cover） */
+  objectFit: 'cover' | 'contain';
+}
+
+/**
+ * @description 拼图的画布格式描述：画布尺寸 + 各源图格子，供设计编辑器还原成可逐张替换的图层。
+ * @keyword-cn 拼图画布格式, 可换图拼图
+ * @keyword-en collage-canvas-format, swappable-collage
+ */
+export interface CanvasCollageLayout {
+  width: number;
+  height: number;
+  cells: CanvasCollageCell[];
+}
+
+/**
+ * @description 封面进入设计编辑器时使用的原始照片底图，和装饰素材层分开保存。
+ * @keyword-cn 可编辑封面底图, 图层分离
+ * @keyword-en editable-cover-base, separated-layers
+ */
+export interface CanvasEditableCoverBase {
+  imageId: number;
+  url: string;
+  thumbUrl?: string;
+}
+
+/**
+ * @description 可在设计编辑器中独立移动、缩放、隐藏并重新调整去底特效的图片素材层。
+ * @keyword-cn 可编辑装饰素材, 图层分离
+ * @keyword-en editable-decoration-material, separated-layers
+ */
+export interface CanvasEditableMaterialLayer {
+  id: string;
+  name: string;
+  src: string;
+  materialSrc: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  /** @description 素材图像本身是否已经包含封面文字，用于避免编辑器重复创建文字图层。 */
+  includesText?: boolean;
+  effect?: Record<string, unknown>;
+}
+
 /** @description 图片组内单张图片信息（含版式角色） */
 export interface CanvasGroupImage {
   imageId: number;
@@ -35,6 +95,12 @@ export interface CanvasGroupImage {
   text?: string;
   /** @description 封面副标题文案（仅 role=cover 时有值） */
   subtitle?: string;
+  /** @description 拼图画布格式（仅拼图有值），保留源图格子供后续逐张换图 */
+  collage?: CanvasCollageLayout;
+  /** @description 合成预览图对应的原始照片底图，进入设计编辑器时优先使用 */
+  editableBase?: CanvasEditableCoverBase;
+  /** @description 与底图分离的可编辑装饰素材层 */
+  materials?: CanvasEditableMaterialLayer[];
 }
 
 /** @description canvas 图片组实体（一组对应一篇文章） */
@@ -119,7 +185,21 @@ export interface CanvasImageGroupCreateInput {
    *  false=不去重(命中已用图、按标签随机取图、生成后不写 isUsed，图片可无限复用)。
    */
   dedup?: boolean;
+  /**
+   * @description 封面生成策略。
+   *  `ai-direct`(默认)=AI 基于源图二次编辑，产出物直接作为封面成品;
+   *  `ai-overlay`=AI 只文生图产出文字与装饰融合的绿幕海报素材层，
+   *   再用 sharp 去底并叠加到真实照片上，照片主体不被重绘。小红书专家走此模式。
+   */
+  coverStrategy?: CanvasCoverStrategy;
 }
+
+/**
+ * @description 封面生成策略：AI 产出物是成品封面，还是叠加用的文字海报素材层。
+ * @keyword-cn 封面策略, 装饰素材叠加
+ * @keyword-en cover-strategy, decoration-overlay
+ */
+export type CanvasCoverStrategy = 'ai-direct' | 'ai-overlay';
 
 /** @description 更新 imageGroups 的内部入参 */
 export interface CanvasUpdateImageGroupsInput {

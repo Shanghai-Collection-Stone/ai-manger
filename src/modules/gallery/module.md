@@ -20,6 +20,14 @@
   - `getImageDimensionsFromFile`: 使用 jimp 读取图片尺寸
   - `deleteImage`: `POST images/:id/delete` 删除单张图片
   - `deleteImagesBatch`: `POST images/batch-delete` 批量删除图片(body `{ userId, ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
+  - `generateAiMaterial`: `POST ai-material` AI 生成贴纸素材并入图库；支持可选 `referenceImageUrl`，参考图只约束配色、字体气质、描边与构成语言，不复制具体内容；输出仍强制单主体 + 纯色背景 + 无文字，供前端 GPU 去底 | keywords: AI素材生成, ai-material-generate
+  - `resolveGeneratedMaterialFile`: 把生图返回的本地路径解析成 `public/uploads` 下的文件信息,拒绝外链与 `..` 穿越 | keywords: resolve generated material file, 素材落盘
+
+### 常量
+- `AI_MATERIAL_TAG` = `ai素材`：AI 生成素材的固定标签,与前端 `web/src/ui/AiCommander/design-editor/material-lab/MaterialPanel.jsx` 的同名常量必须逐字一致 | keywords: ai material tag, AI素材标签
+
+### 鉴权说明
+`gallery` 控制器全部入口走模块自有的 `resolveAuthScope(req)`(Bearer token → `AdminService.getUserByToken` → tenantId/userId,失败抛 `UnauthorizedException`),不使用 admin 的 CASL `RequirePermission` 装饰器——后者绑定 `AdminAuthGuard` 且 subject 注册中心里没有 Gallery 主体,挂上会把租户侧调用方全部挡死。新增入口一律沿用 `resolveAuthScope`,与同模块既有 20+ 入口保持一致。
 
 ### filters/gallery-upload-exception.filter.ts
 图库上传异常过滤器（拦截 Multer 上传错误并转换为前端可读消息）。
@@ -71,5 +79,5 @@
 - **关键词**: entity
 
 ### gallery.module.ts
-图库模块定义。
-- **关键词**: module
+图库模块定义。导入 `AiAgentModule` 以复用 `AgentService` 的生图运行时(ai-agent 不反向依赖 gallery,无循环)。
+- **关键词**: module, ai-agent, image-generate

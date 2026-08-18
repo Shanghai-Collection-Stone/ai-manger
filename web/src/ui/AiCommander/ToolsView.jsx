@@ -2,17 +2,42 @@
 import {
   FolderPlus, Image as ImageIcon, Search, Plus, Trash2, X, Upload, MoreHorizontal, Check, RefreshCw, ChevronLeft, Edit2, BrainCircuit, MessageSquare, BookOpen, Type, Loader2, Library, ShieldCheck, FileArchive, FileText, Video
 } from 'lucide-react';
-import ThoughtRouteView from './ThoughtRouteView';
-import XhsSpecialistView from './XhsSpecialistView';
-import DouyinSpecialistView from './DouyinSpecialistView';
-import CanvasFeedView from './CanvasFeedView';
-import ImageGroupCanvasView from './ImageGroupCanvasView';
-import ChatBIView from './ChatBIView';
-import ArticleLibraryView from './ArticleLibraryView';
-import FeaturedArticleView from './FeaturedArticleView';
-import AntiDetectionView from './AntiDetectionView';
-import GalleryZipImportPanel from './GalleryZipImportPanel';
 import { showToast } from './blocks/shared';
+
+/**
+ * @description 视图级懒加载包装器：子视图拆成独立 chunk，切到该视图时才下载，调用处写法保持不变
+ * @keyword-cn 按需加载, 代码分割
+ * @keyword-en lazy-import, code-splitting
+ * @param {Function} loader - 返回 import() Promise 的加载函数
+ * @returns {React.ComponentType} 自带 Suspense 的组件
+ */
+const lazyView = (loader) => {
+  const Loaded = React.lazy(loader);
+  const Wrapped = (props) => (
+    <React.Suspense
+      fallback={
+        <div className="w-full h-full min-h-[240px] flex items-center justify-center text-slate-400">
+          <Loader2 size={20} className="animate-spin" />
+        </div>
+      }
+    >
+      <Loaded {...props} />
+    </React.Suspense>
+  );
+  return Wrapped;
+};
+
+const ThoughtRouteView = lazyView(() => import('./ThoughtRouteView'));
+const XhsSpecialistView = lazyView(() => import('./XhsSpecialistView'));
+const DouyinSpecialistView = lazyView(() => import('./DouyinSpecialistView'));
+const CanvasFeedView = lazyView(() => import('./CanvasFeedView'));
+const ImageGroupCanvasView = lazyView(() => import('./ImageGroupCanvasView'));
+const ChatBIView = lazyView(() => import('./ChatBIView'));
+const ArticleLibraryView = lazyView(() => import('./ArticleLibraryView'));
+const FeaturedArticleView = lazyView(() => import('./FeaturedArticleView'));
+const AntiDetectionView = lazyView(() => import('./AntiDetectionView'));
+const DesignEditorView = lazyView(() => import('./design-editor/DesignEditorView'));
+const GalleryZipImportPanel = lazyView(() => import('./GalleryZipImportPanel'));
 
 /**
  * @description Tools View for AI Commander, including AI Gallery
@@ -48,6 +73,7 @@ const TOOL_VIEW_KEYS = new Set([
   'article-library',
   'featured-article',
   'anti-detection',
+  'design-editor',
 ]);
 const GALLERY_TAB_KEYS = new Set(['chat', 'gallery', 'collage', 'cover']);
 const TOOL_POPUP_ALIASES = new Map([
@@ -2887,6 +2913,9 @@ const ToolsView = ({ onThoughtRouteChange }) => {
   if (view === 'anti-detection') {
     return <AntiDetectionView onBack={() => selectToolView('list')} />;
   }
+  if (view === 'design-editor') {
+    return <DesignEditorView onBack={() => selectToolView('list')} />;
+  }
   if (view === 'canvas') {
     // ── 打开某个 Canvas 的内部覆盖层 ──
     if (canvasOpenItem) {
@@ -3090,6 +3119,21 @@ const ToolsView = ({ onThoughtRouteChange }) => {
           
           <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-emerald-500">
              <ChevronLeft size={18} className="rotate-180" />
+          </div>
+        </div>
+
+        <div
+          className="group bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex flex-col items-center justify-center cursor-pointer hover:shadow-lg hover:border-violet-100 transition-all duration-300 aspect-square relative overflow-hidden"
+          onClick={() => selectToolView('design-editor')}
+        >
+          <div className="absolute inset-0 bg-gradient-to-br from-violet-50/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+          <div className="w-16 h-16 shrink-0 rounded-2xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center mb-4 text-white shadow-violet-200 shadow-xl group-hover:scale-110 transition-transform duration-300 z-10">
+            <Edit2 size={30} />
+          </div>
+          <span className="font-bold text-slate-800 text-lg z-10">灵感画布</span>
+          <span className="text-xs text-slate-400 mt-1.5 z-10">模板、图层与图片编辑</span>
+          <div className="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0 text-violet-500">
+            <ChevronLeft size={18} className="rotate-180" />
           </div>
         </div>
 

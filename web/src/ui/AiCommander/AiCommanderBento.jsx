@@ -1,15 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from '@nanostores/react';
 import { 
-  LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList, Plus, LayoutGrid
+  LayoutDashboard, Sparkles, MessageSquare, Target, Search, ChevronRight, MapPin, History, ClipboardList, Plus, LayoutGrid, Loader2
 } from 'lucide-react';
 
 import DashboardView from './DashboardView';
-import DecisionFeedView from './DecisionFeedView';
-import ChatBIView from './ChatBIView';
-import TaskCenterView from './TaskCenterView';
-import ToolsView from './ToolsView';
-import CanvasFeedView from './CanvasFeedView';
 import NavItem from './NavItem';
 import { ToastContainer } from './blocks/shared';
 import {
@@ -29,6 +24,35 @@ import {
   resolveLoginPageHref,
   clearAdminToken,
 } from '../Admin/adminApi';
+
+/**
+ * @description 主 Tab 视图懒加载包装器：除首屏仪表盘外的视图各自成 chunk，切到该 Tab 才下载
+ * @keyword-cn 按需加载, 代码分割
+ * @keyword-en lazy-import, code-splitting
+ * @param {Function} loader - 返回 import() Promise 的加载函数
+ * @returns {React.ComponentType} 自带 Suspense 的组件
+ */
+const lazyTabView = (loader) => {
+  const Loaded = React.lazy(loader);
+  const Wrapped = (props) => (
+    <React.Suspense
+      fallback={
+        <div className="w-full h-full min-h-[320px] flex items-center justify-center text-slate-400">
+          <Loader2 size={22} className="animate-spin" />
+        </div>
+      }
+    >
+      <Loaded {...props} />
+    </React.Suspense>
+  );
+  return Wrapped;
+};
+
+const DecisionFeedView = lazyTabView(() => import('./DecisionFeedView'));
+const ChatBIView = lazyTabView(() => import('./ChatBIView'));
+const TaskCenterView = lazyTabView(() => import('./TaskCenterView'));
+const ToolsView = lazyTabView(() => import('./ToolsView'));
+const CanvasFeedView = lazyTabView(() => import('./CanvasFeedView'));
 
 const COMMANDER_MAIN_TABS = ['dashboard', 'decisions', 'chat', 'tasks', 'tools'];
 const COMMANDER_MAIN_TAB_SET = new Set(COMMANDER_MAIN_TABS);

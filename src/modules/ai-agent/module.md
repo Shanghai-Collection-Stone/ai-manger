@@ -35,7 +35,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `formatFetchCause`: 递归序列化 fetch error.cause 为可读字符串，定位 DNS/TLS/socket/连接超时类失败/format fetch error cause
   - `isTransientFetchError(e, causeStr)`: 判定 fetch 抛错是否为可重试的瞬时网络错误（socket 断开/连接重置/连接超时/DNS 抖动），排除 AbortError 与 headers 超时/transient fetch error detection
   - `fetchImageWithRetry(endpoint, initFactory, label, maxRetries=2)`: 对生图 fetch 按瞬时网络错误做指数退避重试，每次重试用 initFactory 重建 RequestInit（FormData/Blob body 消费后不可复用）/retry image fetch on transient socket error
-  - `buildMeituEditPrompt`: 构建图生图编辑提示词（按 `kind` 选规格：`cover` 追加封面 8 条硬性规格——任务/底图识别度/文案呈现/装饰元素/风格/尺寸/输出/版权，重营销大字与装饰；`inner` 改用内页 8 条规格——少文字、重内容、文字克制、装饰克制，禁止封面化营销包装；`includeSystemPrompt=false` 时只返回用户本次提示词不叠加任何系统规格。识别度规则放宽、版权例外同前）/build meitu image edit prompt with hard constraints, inner-page-spec, system-prompt-toggle
+  - `buildMeituEditPrompt`: 构建图生图编辑提示词（按 `kind` 选规格：`cover` 追加无字封面底图硬约束，主副标题只用于主题理解和构图留白，禁止把任何文字烧进图片；`inner` 改用内页 8 条规格——少文字、重内容、文字克制、装饰克制，禁止封面化营销包装；`includeSystemPrompt=false` 时只返回用户本次提示词不叠加任何系统规格。识别度规则放宽、版权例外同前）/build meitu image edit prompt with hard constraints, inner-page-spec, system-prompt-toggle
   - `resolveMeituEditableBaseImage`: 匹配可编辑底图（优先调用方传入候选）/resolve meitu editable base image
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底（stdout 非 JSON 时走 parseMeituKeyValueText 扁平 key-value 兜底；result 字段取 http(s) URL 作为最终图片地址）/generate image by meitu image-edit fallback
   - `parseMeituKeyValueText`: 解析 meitu-cli "code: 0 message: success result: https://... progress: 1" 这类扁平键值空格串（即使加 --json CLI 仍可能如此输出）/parse meitu cli flat key value text

@@ -26,7 +26,7 @@ type ServerConfig = Record<string, StdioServer | HttpServer>;
 export class McpAdaptersService implements OnModuleInit {
   private readonly logger = new Logger(McpAdaptersService.name);
   private client: {
-    getTools: () => Promise<CreateAgentParams['tools']>;
+    getTools: (...serverNames: string[]) => Promise<CreateAgentParams['tools']>;
     getResources?: (
       serverName?: string,
       opts?: { uris?: string | string[] },
@@ -63,7 +63,9 @@ export class McpAdaptersService implements OnModuleInit {
     try {
       const pkg = (await import('@langchain/mcp-adapters')) as {
         MultiServerMCPClient: new (cfg: Record<string, unknown>) => {
-          getTools: () => Promise<CreateAgentParams['tools']>;
+          getTools: (
+            ...serverNames: string[]
+          ) => Promise<CreateAgentParams['tools']>;
           getResources?: (
             serverName?: string,
             opts?: { uris?: string | string[] },
@@ -111,6 +113,34 @@ export class McpAdaptersService implements OnModuleInit {
    */
   getTools(): CreateAgentParams['tools'] {
     return this.toolsCache ?? [];
+  }
+
+  /**
+   * @description 按配置中的 MCP 服务名读取该服务工具，避免业务 Agent 混入其他服务的同名工具。
+   * @returns {Promise<CreateAgentParams['tools']>}
+   * @keyword-cn MCP服务工具, 服务隔离
+   * @keyword-en mcp-server-tools, server-isolation
+   */
+  async getToolsForServer(
+    serverName: string,
+  ): Promise<CreateAgentParams['tools']> {
+    const normalizedName = String(serverName ?? '').trim();
+    if (
+      !normalizedName ||
+      !this.client ||
+      !this.serverConfig?.[normalizedName]
+    ) {
+      return [];
+    }
+    try {
+      return (await this.client.getTools(normalizedName)) ?? [];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `[MCP] Failed to load tools for server ${normalizedName}: ${message}`,
+      );
+      return [];
+    }
   }
 
   /**

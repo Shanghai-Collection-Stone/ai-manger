@@ -95,7 +95,7 @@
   - `createForUser`: 依据登录用户角色构建 CASL ability/create ability for admin user | keywords: create-ability-for-admin-user
 
 ### casl/admin-permission.constants.ts
-后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`。
+后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`。
 - **关键词**: permission, subject, action, registry, root-key, casl
 - **类型导出**: `AdminAction`, `AdminSubject`; 常量 `ADMIN_ACTIONS`, `ADMIN_SUBJECTS`
 

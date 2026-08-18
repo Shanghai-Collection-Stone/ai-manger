@@ -10,6 +10,7 @@ import { Collection, Db, ObjectId } from 'mongodb';
 import type {
   CanvasAddArticlesInput,
   CanvasArticleEntity,
+  CanvasCollageLayout,
   CanvasCreateInput,
   CanvasEntity,
   CanvasImageGroup,
@@ -521,7 +522,7 @@ export class CanvasService {
     imageIds: number[];
   }): Promise<CanvasEntity | null> {
     const imageIndex = this.normalizeArticleImageIndex(input.imageIndex);
-    const image = await this.loadSelectedCoverImage({
+    const { image } = await this.loadSelectedCoverImage({
       userId: input.userId,
       tenantId: input.tenantId,
       imageIds: input.imageIds,
@@ -589,7 +590,7 @@ export class CanvasService {
     imageIds: number[];
   }): Promise<CanvasEntity | null> {
     const role = this.normalizeImageGroupImageRole(input.role);
-    const image = await this.loadSelectedCoverImage({
+    const { image, collage } = await this.loadSelectedCoverImage({
       userId: input.userId,
       tenantId: input.tenantId,
       imageIds: input.imageIds,
@@ -608,6 +609,7 @@ export class CanvasService {
       role,
       currentImage,
       group.articleTitle,
+      collage,
     );
     const nextGroups = groups.map((item) =>
       Number(item.id) === Number(input.groupId)
@@ -629,7 +631,7 @@ export class CanvasService {
   /**
    * @description 读取直接设图所选图库图片：选 1 张时返回该图；选 2-4 张时实时合成 3:4 拼图并返回拼图图库图片，让"直接使用"即拼即用。
    * @param {object} input - 当前用户、租户和候选图片 ID（可多张）。
-   * @returns {Promise<GalleryImageEntity>} 单图或合成后的拼图图库图片。
+   * @returns {Promise<{ image: GalleryImageEntity; collage?: CanvasCollageLayout }>} 单图或合成后的拼图图库图片，拼图另带画布格式。
    * @keyword-cn 直接设为封面 图片选择 多图拼图
    * @keyword-en cover-select
    * @keyword-en selected-cover-image
@@ -639,7 +641,7 @@ export class CanvasService {
     userId: string;
     tenantId?: string;
     imageIds: number[];
-  }): Promise<GalleryImageEntity> {
+  }): Promise<{ image: GalleryImageEntity; collage?: CanvasCollageLayout }> {
     const imageIds = this.normalizeCoverSourceIds(input.imageIds);
     if (imageIds.length === 0) {
       throw new BadRequestException('COVER_SOURCE_IMAGES_REQUIRED');
@@ -653,7 +655,7 @@ export class CanvasService {
         generatedKind: 'collage',
       });
       if (collage) {
-        this.resolveGalleryImageUrl(collage);
+        this.resolveGalleryImageUrl(collage.image);
         return collage;
       }
       this.logger.warn(
@@ -667,7 +669,7 @@ export class CanvasService {
     );
     if (!images[0]) throw new NotFoundException('COVER_SOURCE_IMAGE_NOT_FOUND');
     this.resolveGalleryImageUrl(images[0]);
-    return images[0];
+    return { image: images[0] };
   }
 
   /**
@@ -699,7 +701,12 @@ export class CanvasService {
     currentCover?: CanvasImageGroup['images'][number],
     articleTitle?: string,
   ): CanvasImageGroup['images'][number] {
-    return this.toSelectedGroupImage(image, 'cover', currentCover, articleTitle);
+    return this.toSelectedGroupImage(
+      image,
+      'cover',
+      currentCover,
+      articleTitle,
+    );
   }
 
   /**
@@ -708,6 +715,7 @@ export class CanvasService {
    * @param {CanvasGroupImageRole} role - 目标图片槽位。
    * @param {CanvasImageGroup['images'][number] | undefined} currentImage - 原槽位图片。
    * @param {string | undefined} articleTitle - 图组文章标题。
+   * @param {CanvasCollageLayout} [collage] - 拼图画布格式（多选实时合成拼图时传入）。
    * @returns {CanvasImageGroup['images'][number]} 新槽位图片。
    * @keyword-cn 图片槽位替换, 内页选择
    * @keyword-en image-slot-select
@@ -718,6 +726,7 @@ export class CanvasService {
     role: CanvasGroupImageRole,
     currentImage?: CanvasImageGroup['images'][number],
     articleTitle?: string,
+    collage?: CanvasCollageLayout,
   ): CanvasImageGroup['images'][number] {
     const width = Number(image.width);
     const height = Number(image.height);
@@ -740,6 +749,7 @@ export class CanvasService {
             subtitle: currentImage?.subtitle,
           }
         : {}),
+      ...(collage ? { collage } : {}),
     };
   }
 
@@ -1236,6 +1246,19 @@ export class CanvasService {
     void this.runImageGroupGeneration(id, input);
 
     return { ...doc, _id: doc._id };
+  }
+
+  /**
+   * @description 复用生文图片阶段，按文章相关标签生成带封面、内页、拼图及可选 AI 生图的完整图组，不创建独立 Canvas。
+   * @param {CanvasImageGroupCreateInput} input - 文章标题、相关图库标签与作用域。
+   * @returns {Promise<CanvasImageGroup[]>} 生文工作流渲染完成的文章图组。
+   * @keyword-cn 生文配图工作流, 文章图组
+   * @keyword-en article-image-workflow, generated-image-group
+   */
+  async generateArticleImageGroups(
+    input: CanvasImageGroupCreateInput,
+  ): Promise<CanvasImageGroup[]> {
+    return await this.imageGroupService.generateImageGroups(input);
   }
 
   /**

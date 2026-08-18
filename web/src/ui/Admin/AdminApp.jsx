@@ -1,12 +1,51 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import '@uiw/react-md-editor/markdown-editor.css';
-import MDEditor from '@uiw/react-md-editor';
 import {
   adminApi,
   clearAdminToken,
   resolveFrontendPageHref,
   resolveLoginPageHref,
 } from './adminApi';
+
+const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
+const LazyMDMarkdown = React.lazy(() =>
+  import('@uiw/react-md-editor').then((mod) => ({ default: mod.default.Markdown })),
+);
+
+/**
+ * @description Markdown 编辑器，@uiw/react-md-editor(含 CodeMirror) 在首次渲染时才按需加载，不进后台首屏包
+ * @keyword-cn 按需加载, Markdown编辑器
+ * @keyword-en lazy-import, markdown-editor
+ * @param {object} props - 透传给 @uiw/react-md-editor 的属性
+ * @returns {JSX.Element} 编辑器节点
+ */
+const MDEditor = (props) => (
+  <React.Suspense
+    fallback={
+      <div
+        className="w-full rounded border border-slate-200 bg-slate-50 text-xs text-slate-400 flex items-center justify-center"
+        style={{ height: props.height || 200 }}
+      >
+        编辑器加载中…
+      </div>
+    }
+  >
+    <LazyMDEditor {...props} />
+  </React.Suspense>
+);
+
+/**
+ * @description Markdown 只读渲染，与编辑器共用同一个按需加载的 chunk
+ * @keyword-cn 按需加载, Markdown渲染
+ * @keyword-en lazy-import, markdown-preview
+ * @param {object} props - 透传给 MDEditor.Markdown 的属性
+ * @returns {JSX.Element} 渲染节点
+ */
+MDEditor.Markdown = (props) => (
+  <React.Suspense fallback={<div className="text-xs text-slate-400">渲染中…</div>}>
+    <LazyMDMarkdown {...props} />
+  </React.Suspense>
+);
 
 const PAGE_SIZE = 6;
 const ADMIN_ACTIVE_TAB_KEY = 'admin_active_tab';

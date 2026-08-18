@@ -18,6 +18,8 @@ import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.en
 import type {
   CanvasImageGroup,
   CanvasGroupImage,
+  CanvasCollageLayout,
+  CanvasEditableMaterialLayer,
   ImageGroupLayout,
   CanvasImageGroupCreateInput,
 } from '../entities/canvas.entity.js';
@@ -41,7 +43,7 @@ const LAYOUT_SPECS: Record<
   },
 };
 
-/** @description 内页不允许使用的封面标签集合（系统写入的精确封面标记） */
+/** @description 历史封面标签集合，仅供兼容旧封面素材识别方法。 */
 const COVER_TAG_SET = new Set([
   '\u5c01\u9762',
   '\u62fc\u56fe\u5c01\u9762',
@@ -61,9 +63,9 @@ const COLLAGE_HEIGHT = 853;
  */
 const REGENERATE_SOURCE_IMAGE_LIMIT = 4;
 
-/** @description 模块级封面字体 base64 缓存（undefined=未加载, null=加载失败, string=缓存值） */
+/** @description 历史烧字方法使用的封面字体缓存；新封面生成流程不再调用。 */
 let _coverFontBase64: string | null | undefined = undefined;
-/** @description 模块级封面字体已解析的绝对路径缓存 */
+/** @description 历史烧字方法使用的字体路径缓存；新封面生成流程不再调用。 */
 let _coverFontPath: string | null | undefined = undefined;
 
 /** @description 交替版式列表 */
@@ -168,7 +170,7 @@ async function runConcurrent<T>(
 @Injectable()
 export class CanvasImageGroupService {
   private readonly logger = new Logger(CanvasImageGroupService.name);
-  /** @description 进程级 fontconfig 是否已写入（Linux/Alpine 兼容） */
+  /** @description 历史烧字兼容方法的 fontconfig 初始化状态；新封面流程不再使用。 */
   private fontconfigSetupDone = false;
   constructor(
     private readonly gallery: GalleryService,
@@ -298,12 +300,8 @@ export class CanvasImageGroupService {
       .join('\n');
     const safeCoverText = this.sanitizeCoverText({
       title:
-        this.coercePlainText(input.articleTitle).trim() ||
-        coverTheme ||
-        '封面',
-      subtitle:
-        rawPrompt ||
-        coverTheme,
+        this.coercePlainText(input.articleTitle).trim() || coverTheme || '封面',
+      subtitle: rawPrompt || coverTheme,
     });
     const tags = (Array.isArray(input.articleTags) ? input.articleTags : [])
       .map((tag) => this.coercePlainText(tag).trim())
@@ -316,7 +314,8 @@ export class CanvasImageGroupService {
             '只使用本次选择的参考图片和本次输入的提示词，不复用旧封面提示词、旧封面文案或旧版式。',
             '多张参考图需要融合为同一张封面，不要分别出图，不要生成组图。',
             '仅生成封面图：保持主体真实、画面清晰、构图适合 3:4 竖版封面。',
-            '可以做轻量修图、色彩校正、局部对比、干净排版和封面化增强。',
+            '可以做轻量修图、色彩校正、局部对比和无字封面化增强。',
+            '输出必须是纯净无字底图：不得生成标题、副标题、标签文字、字母、数字、水印、平台 logo、网址或二维码；标题会在灵感画布中以可编辑文字图层添加。',
             '不要改变原图核心主体身份，不要影响 Canvas 中除封面外的其他图片。',
             `标准生图请求:\n${standardPrompt}`,
             '封面必须首先服务于主题，参考图只作为人物、场景、物料与风格来源。',
@@ -326,9 +325,11 @@ export class CanvasImageGroupService {
             input.topic ? `Canvas主题:${input.topic}` : '',
             input.articleTitle ? `文章标题:${input.articleTitle}` : '',
             tags.length > 0 ? `文章标签:${tags.join(', ')}` : '',
-            safeCoverText.title ? `封面主标题:${safeCoverText.title}` : '',
+            safeCoverText.title
+              ? `后续画布主标题参考:${safeCoverText.title}`
+              : '',
             safeCoverText.subtitle
-              ? `封面副标题:${safeCoverText.subtitle}`
+              ? `后续画布副标题参考:${safeCoverText.subtitle}`
               : '',
           ]
             .filter((part) => part.length > 0)
@@ -593,7 +594,7 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 根据已完成的源图分配渲染图组：生成拼图、封面文案、AI 封面或烧字封面，并写入图库。
+   * @description 根据已完成的源图分配渲染图组：生成拼图、无字封面底图与可编辑封面文案元数据，并写入图库。
    * 并发数由 IMAGE_GROUP_RENDER_CONCURRENCY 环境变量控制，默认 1（串行）。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
    * @param {Extract<ImageGroupSourcePreparation, {ok: true}>} preparation - 已完成的源图分配结果。
@@ -639,7 +640,7 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 渲染单个图组计划（封面、内页、封面文案、AI 封面或烧字）。供 renderPreparedImageGroups 并发调用。
+   * @description 渲染单个图组计划（无字封面底图、内页和可编辑封面文案元数据）。供 renderPreparedImageGroups 并发调用。
    * @keyword-en render, single-plan, image-group, cover-text
    */
   private async renderOnePlan(
@@ -682,11 +683,11 @@ export class CanvasImageGroupService {
           imgA: GalleryImageEntity;
           imgB: GalleryImageEntity;
           collageUrl: string;
+          collage?: CanvasCollageLayout;
         }
       | {
           kind: 'portrait';
           image: GalleryImageEntity;
-          alreadyDesigned: boolean;
         }
       | null = null;
     if (!coverSlot) {
@@ -707,6 +708,7 @@ export class CanvasImageGroupService {
           imgA: collageResult.imgA,
           imgB: collageResult.imgB,
           collageUrl: collageResult.collageUrl,
+          collage: collageResult.collage,
         };
         collectContextImage(collageResult.imgA);
         collectContextImage(collageResult.imgB);
@@ -716,11 +718,9 @@ export class CanvasImageGroupService {
       }
     } else {
       const coverImg = coverSlot.image;
-      const alreadyDesigned = this.hasCoverTag(coverImg);
       coverPlan = {
         kind: 'portrait',
         image: coverImg,
-        alreadyDesigned,
       };
       collectContextImage(coverImg);
       addUsedIds([coverImg.id]);
@@ -739,7 +739,14 @@ export class CanvasImageGroupService {
           generatedKind: 'collage',
         });
         if (collageResult) {
-          groupImages.push(this.toGroupImage(collageResult.image, slot.role));
+          groupImages.push(
+            this.toGroupImage(
+              collageResult.image,
+              slot.role,
+              undefined,
+              collageResult.collage,
+            ),
+          );
           collectContextImage(collageResult.imgA);
           collectContextImage(collageResult.imgB);
           addUsedIds(collageResult.sourceIds);
@@ -770,28 +777,54 @@ export class CanvasImageGroupService {
         )[0] ?? this.buildCoverText(art.title, i);
       const coverText = this.sanitizeCoverText(rawCoverText);
 
-      const aiCover = preparation.aiCoverEnabled
-        ? await this.tryGenerateAiCoverToGallery({
-            userId: input.userId,
-            tenantId: input.tenantId,
-            topic: input.topic,
-            articleTitle: art.title,
-            articleTags: art.tags,
-            imageContext,
-            coverText,
-            coverType: coverPlan.kind,
-            sourceImages:
-              coverPlan.kind === 'collage'
-                ? [coverPlan.imgA, coverPlan.imgB]
-                : [coverPlan.image],
-            dynamicCoverGroupId: preparation.dynamicCoverGroupId,
-          })
-        : null;
+      // ai-overlay: AI 生成文字与装饰融合的海报素材层，真实照片主体保持不动。
+      // 列表/发布保留合成预览，同时把原照片和含字素材分别写入画板元数据供后续加特效。
+      // ai-direct(默认): AI 基于源图二次编辑，产出物直接当封面成品。
+      const useOverlayStrategy = input.coverStrategy === 'ai-overlay';
+      const coverSourceImages =
+        coverPlan.kind === 'collage'
+          ? [coverPlan.imgA, coverPlan.imgB]
+          : [coverPlan.image];
+      const aiCover = !preparation.aiCoverEnabled
+        ? null
+        : useOverlayStrategy
+          ? await this.tryComposeAiOverlayCoverToGallery({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: input.topic,
+              articleTitle: art.title,
+              coverText,
+              baseImage: coverPlan.image,
+              sourceImages: coverSourceImages,
+              dynamicCoverGroupId: preparation.dynamicCoverGroupId,
+            })
+          : await this.tryGenerateAiCoverToGallery({
+              userId: input.userId,
+              tenantId: input.tenantId,
+              topic: input.topic,
+              articleTitle: art.title,
+              articleTags: art.tags,
+              imageContext,
+              coverText,
+              coverType: coverPlan.kind,
+              sourceImages: coverSourceImages,
+              dynamicCoverGroupId: preparation.dynamicCoverGroupId,
+            });
 
       if (aiCover) {
-        groupImages.unshift(this.toGroupImage(aiCover, 'cover', coverText));
+        const isOverlayCover = 'preview' in aiCover;
+        const coverImage = this.toGroupImage(
+          isOverlayCover ? aiCover.preview : aiCover,
+          'cover',
+          coverText,
+        );
+        if (isOverlayCover) {
+          coverImage.editableBase = aiCover.editableBase;
+          coverImage.materials = aiCover.materials;
+        }
+        groupImages.unshift(coverImage);
         this.logger.debug(
-          `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'} cover=ai`,
+          `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'} cover=${useOverlayStrategy ? 'ai-overlay' : 'ai'}`,
         );
         return {
           group: {
@@ -806,50 +839,14 @@ export class CanvasImageGroupService {
         };
       }
 
-      if (coverPlan.kind === 'collage') {
-        const burnedUrl = await this.burnCollageCoverText(
-          { imgA: coverPlan.imgA, imgB: coverPlan.imgB },
+      groupImages.unshift(
+        this.toGroupImage(
+          coverPlan.image,
+          'cover',
           coverText,
-        );
-        const finalUrl = burnedUrl ?? coverPlan.collageUrl;
-        const persistedCover =
-          finalUrl === coverPlan.image.url
-            ? coverPlan.image
-            : await this.persistGeneratedAssetToGallery({
-                userId: input.userId,
-                tenantId: input.tenantId,
-                url: finalUrl,
-                generatedKind: 'cover',
-                groupId: preparation.dynamicCoverGroupId,
-                sourceImageIds: [coverPlan.imgA.id, coverPlan.imgB.id],
-                sourceImages: [coverPlan.imgA, coverPlan.imgB],
-                description: burnedUrl
-                  ? '画布拼图封面（已烧录文案）'
-                  : '画布拼图封面',
-              });
-        const finalCover = persistedCover ?? coverPlan.image;
-        groupImages.unshift(this.toGroupImage(finalCover, 'cover', coverText));
-      } else {
-        const burnedUrl = coverPlan.alreadyDesigned
-          ? null
-          : await this.burnCoverText(coverPlan.image, coverText);
-        const persistedCover = burnedUrl
-          ? await this.persistGeneratedAssetToGallery({
-              userId: input.userId,
-              tenantId: input.tenantId,
-              url: burnedUrl,
-              generatedKind: 'cover',
-              groupId: preparation.dynamicCoverGroupId,
-              sourceImageIds: [coverPlan.image.id],
-              sourceImages: [coverPlan.image],
-              description: '画布单图封面（已烧录文案）',
-            })
-          : null;
-        const finalCover = persistedCover ?? coverPlan.image;
-        const coverCopy =
-          coverPlan.alreadyDesigned || !persistedCover ? undefined : coverText;
-        groupImages.unshift(this.toGroupImage(finalCover, 'cover', coverCopy));
-      }
+          coverPlan.kind === 'collage' ? coverPlan.collage : undefined,
+        ),
+      );
     }
 
     this.logger.debug(
@@ -1115,7 +1112,7 @@ export class CanvasImageGroupService {
   /**
    * @description 将已经统一分配好的两张横图合成为拼图并入库。
    * @param {object} input - 拼图生成与入库参数。
-   * @returns {Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string } | null>} 入库后的拼图信息。
+   * @returns {Promise<{ image: GalleryImageEntity; sourceIds: number[]; imgA: GalleryImageEntity; imgB: GalleryImageEntity; collageUrl: string; collage?: CanvasCollageLayout } | null>} 入库后的拼图信息与拼图画布格式。
    * @keyword-en collage, allocation, gallery
    */
   private async persistPlannedCollage(input: {
@@ -1131,6 +1128,7 @@ export class CanvasImageGroupService {
     imgA: GalleryImageEntity;
     imgB: GalleryImageEntity;
     collageUrl: string;
+    collage?: CanvasCollageLayout;
   } | null> {
     const collageUrl = await this.createDynamicCollageFile(
       input.imgA,
@@ -1163,6 +1161,7 @@ export class CanvasImageGroupService {
       imgA: input.imgA,
       imgB: input.imgB,
       collageUrl: persisted.url,
+      collage: this.buildCollageLayout([input.imgA, input.imgB]),
     };
   }
 
@@ -1433,18 +1432,18 @@ export class CanvasImageGroupService {
     const safeTopic = this.sanitizeCopyrightRiskText(input.topic);
     const safeArticleTitle = this.sanitizeCopyrightRiskText(input.articleTitle);
     const safeCoverText = this.sanitizeCoverText(input.coverText);
-    // 封面视觉调性：实景优先，轻设计增强。
+    // 封面底图只生成视觉内容；主副标题由灵感画布作为独立文字图层承载。
     const themeAnchor = safeTopic || safeArticleTitle || '所给主题';
     const styleDirectives = [
       '【封面视觉要求 - 实景照片优先，轻量封面设计】',
       '- 第一优先级:保持真实摄影/现场实拍质感，保留原图人物、空间、活动氛围和真实光影，不改成插画、卡通、3D Q版、漫画、像素、赛博或二次元风格。',
       '- 画面增强:只做轻量修图与封面化处理，包括适度提亮、清晰度增强、自然色彩校正、轻微景深、局部对比和干净排版。',
       '- 主体表达:主体保持真实比例和真实动作，允许轻微优化表情与姿态，但不要夸张变形、不要新增夸张肢体动作。',
-      '- 装饰控制:最多 1-2 个轻量标签、箭头或简洁色块作为辅助，禁止大量贴纸、emoji、手绘涂鸦、漫画气泡和密集几何拼贴。',
+      '- 装饰控制:最多 1-2 个轻量箭头或简洁无字色块作为辅助，禁止大量贴纸、emoji、手绘涂鸦、漫画气泡和密集几何拼贴。',
       '- 特效控制:不要流动光带、爆裂粒子、速度线、漫画冲击线、拟声词图形、故障艺术、霓虹大片光效；如需氛围，只允许自然光晕或柔和高光。',
       '- 色彩:真实、明亮、干净，适合小红书生活方式封面；避免过饱和撞色、糖果色堆叠和强烈渐变。',
-      '- 文案表现:封面主标题清晰可读，使用干净粗体或描边字体；副标题用小字辅助；文字不要遮挡人物脸部、产品或关键场景。',
-      '- 构图:以真实场景中的人物/空间/活动为核心，三分法或居中构图，留出文字区域，画面自然有呼吸感。',
+      '- 文字限制:输出必须是纯净无字底图，不得绘制主标题、副标题、标签文字、数字、字母、水印、平台 logo、网址或二维码；文案将在灵感画布里作为独立可编辑文字图层叠加。',
+      '- 构图:以真实场景中的人物/空间/活动为核心，三分法或居中构图，为后续画布文字图层留出干净区域，画面自然有呼吸感。',
       `- 情绪锚定:贴合"${themeAnchor}"的核心情绪，表达真实、轻松、沉浸、有现场感的体验。`,
       '- 严禁:动画化、漫画化、游戏化、夸张特效、虚构角色、过度滤镜、过度磨皮、低清晰度、脏污背景、复杂装饰堆砌。',
     ].join('\n');
@@ -1453,8 +1452,11 @@ export class CanvasImageGroupService {
       input.coverType === 'collage' ? '封面版式:拼图封面' : '封面版式:单图封面',
       safeTopic ? `选题:${safeTopic}` : '',
       safeArticleTitle ? `文章标题:${safeArticleTitle}` : '',
-      safeCoverText.title ? `封面主标题:${safeCoverText.title}` : '',
-      safeCoverText.subtitle ? `封面副标题:${safeCoverText.subtitle}` : '',
+      safeCoverText.title ? `后续画布主标题参考:${safeCoverText.title}` : '',
+      safeCoverText.subtitle
+        ? `后续画布副标题参考:${safeCoverText.subtitle}`
+        : '',
+      '文字处理:这些参考文案只用于预留构图空间，禁止画入底图；服务端会把它们作为灵感画布独立文字图层保存。',
       '版权安全:不得出现或模仿任何具体 IP、商标、影视动漫游戏角色、官方徽章、制服、学院组织名、经典道具或官方视觉符号；只保留通用氛围。',
     ]
       .filter((x) => x.length > 0)
@@ -1466,7 +1468,47 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 调用生图模型生成封面并落图库。
+   * @description 构建"文字海报素材层"文生图提示词。产物不是封面成品，而是一张用于叠加的
+   *   艺术字与装饰融合素材：模型按指定主副标题生成波普艺术字，并结合心形、星芒、派对帽、
+   *   彩带、贴纸框等图形元素；不含人物与场景。由 tryComposeAiOverlayCoverToGallery 叠到真实照片上。
+   *   固定要求纯绿色实底，由拼合侧做绿幕色键，不依赖任何生图型号的透明通道能力。
+   * @param {{ topic?: string; articleTitle?: string; coverText: { title: string; subtitle: string } }} input - 主题上下文与必须画入素材的封面文案。
+   * @returns {string} 文字海报素材层提示词。
+   * @keyword-cn 文字海报素材, 绿色素材层
+   * @keyword-en typography-poster-material, green-screen-material
+   */
+  private buildAiCoverOverlayPrompt(input: {
+    topic?: string;
+    articleTitle?: string;
+    coverText: { title: string; subtitle: string };
+  }): string {
+    const safeTopic = this.sanitizeCopyrightRiskText(input.topic);
+    const safeArticleTitle = this.sanitizeCopyrightRiskText(input.articleTitle);
+    const safeCoverText = this.sanitizeCoverText(input.coverText);
+    const themeAnchor = safeTopic || safeArticleTitle || '所给主题';
+    return [
+      '【任务】生成一张用于叠加到真实照片上的中文文字海报素材层。文字与装饰必须融合成一张完整素材，这不是照片或场景。',
+      '【背景】背景必须是纯绿色 #00FF00 实底（标准绿幕色），整片均匀一致；绝对不能透明，不能有渐变、纹理、阴影、暗角或环境场景。',
+      `【必须文字】主标题必须逐字准确写成“${safeCoverText.title}”，不得增字、漏字、改字或使用拼音；主标题是画面最大视觉主体。`,
+      ...(safeCoverText.subtitle
+        ? [
+            `【必须文字】副标题必须逐字准确写成“${safeCoverText.subtitle}”，作为较小的贴纸标签或横幅文字。`,
+          ]
+        : []),
+      '【文字风格】中文艺术字采用夸张粗体、大小错落、轻微倾斜、粗黑描边与贴纸外轮廓；亮粉、明黄、奶白可以分行或分词交替，允许天蓝小色块。文字必须清晰可读、完整位于画布内。',
+      '【装饰风格】把心形、星星、星芒、派对帽、彩带、纸屑、手绘曲线、贴纸边框自然穿插在文字周围，形成高对比波普生日海报视觉；装饰服务于文字排版，不要把文字和装饰拆成互不相关的区域。',
+      '【严禁】装饰元素使用绿色、黄绿色或青绿色，避免与绿幕背景混淆；禁止大面积暗色实体和写实质感。',
+      '【严禁】人物、人脸、动物、建筑、家具、食物、任何真实场景；允许主题相关的简化图标，但必须是扁平贴纸图形。',
+      '【严禁】除指定主标题和副标题外，不得出现其他文字、字母、数字、水印、logo、网址、二维码、对话框、拟声词或 emoji。',
+      '【构图】文字海报主体置于画面中上部至中下部，四周保留连续纯绿色间隙，避免任何文字或装饰被裁切。',
+      '【密度】文字与装饰合计覆盖率控制在 35%-65%，其余部分保持纯绿色 #00FF00，保证后续能干净抠除背景并透出真实照片。',
+      `【情绪】视觉语言贴合“${themeAnchor}”的氛围，适合小红书生活方式封面：醒目、快乐、年轻、有传播力。`,
+      '【尺寸】竖版 3:4。',
+    ].join('\n');
+  }
+
+  /**
+   * @description 调用生图模型生成不含文字的封面底图并落图库。
    * @param {object} input - 生图输入。
    * @returns {Promise<GalleryImageEntity | null>} 生成并入库后的封面图。
    * @keyword-en generate ai cover and persist to gallery
@@ -1503,6 +1545,7 @@ export class CanvasImageGroupService {
         prompt,
         size: '640x853',
         baseImageCandidates,
+        kind: 'cover',
       });
       const generatedRecord =
         generated && typeof generated === 'object'
@@ -1535,11 +1578,253 @@ export class CanvasImageGroupService {
         groupId: input.dynamicCoverGroupId,
         sourceImageIds,
         sourceImages: input.sourceImages,
-        description: `AI生成封面（${providerLabel || 'unknown'}）`,
+        description: `AI生成无字封面底图（${providerLabel || 'unknown'}）`,
       });
     } catch (err) {
       this.logger.warn(
         `[image-group] ai_cover_generate_failed: ${this.describeUnknown(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * @description `ai-overlay` 封面策略:AI 文生图产出文字与装饰融合的海报素材层，再用 sharp 生成
+   *   合成预览图和透明 PNG 素材。原照片、绿幕原素材、透明素材与可回改特效参数分别保存，
+   *   进入设计编辑器后是独立图层；照片本身不传给模型也不被重绘。
+   * @param {object} input - 叠加输入(底图、主副标题、主题上下文与落库作用域)。
+   * @returns {Promise<object | null>} 合成预览图、原照片底图和可编辑素材层。
+   * @keyword-cn 装饰素材叠加, 图层分离, 可编辑装饰素材
+   * @keyword-en decoration-overlay-cover, separated-layers, editable-decoration-material
+   */
+  private async tryComposeAiOverlayCoverToGallery(input: {
+    userId: string;
+    tenantId?: string;
+    topic?: string;
+    articleTitle?: string;
+    coverText: { title: string; subtitle: string };
+    baseImage: GalleryImageEntity;
+    sourceImages: GalleryImageEntity[];
+    dynamicCoverGroupId: string | number;
+  }): Promise<{
+    preview: GalleryImageEntity;
+    editableBase: { imageId: number; url: string; thumbUrl?: string };
+    materials: CanvasEditableMaterialLayer[];
+  } | null> {
+    try {
+      const basePath = this.resolveLocalPath(input.baseImage);
+      if (!basePath || !existsSync(basePath)) {
+        this.logger.warn(
+          `[image-group] ai_overlay_cover_skip: base unreadable id=${input.baseImage.id}`,
+        );
+        return null;
+      }
+
+      const prompt = this.sanitizeCopyrightRiskText(
+        this.buildAiCoverOverlayPrompt({
+          topic: input.topic,
+          articleTitle: input.articleTitle,
+          coverText: input.coverText,
+        }),
+      );
+
+      const generated = await this.agentService.sendPrompt({
+        prompt,
+        size: `${COLLAGE_WIDTH}x${COLLAGE_HEIGHT}`,
+        kind: 'cover',
+        includeSystemPrompt: false,
+      });
+      const generatedRecord =
+        generated && typeof generated === 'object'
+          ? (generated as Record<string, unknown>)
+          : {};
+      const overlayUrl = this.coercePlainText(generatedRecord.imagePath).trim();
+      if (!overlayUrl) {
+        this.logger.warn(
+          '[image-group] ai_overlay_cover_failed: empty overlay imagePath',
+        );
+        return null;
+      }
+      const overlayFile = this.resolveGeneratedUploadFileInfo(overlayUrl);
+      if (!overlayFile || !existsSync(overlayFile.absPath)) {
+        this.logger.warn(
+          `[image-group] ai_overlay_cover_failed: overlay file missing url=${overlayUrl}`,
+        );
+        return null;
+      }
+
+      const composed = await this.composeCoverWithOverlay(
+        basePath,
+        overlayFile.absPath,
+      );
+      if (!composed) return null;
+
+      const providerLabel = [
+        this.coercePlainText(generatedRecord.providerCode).trim(),
+        this.coercePlainText(generatedRecord.model).trim(),
+      ]
+        .filter((part) => part.length > 0)
+        .join(':');
+
+      const sourceImageIds = input.sourceImages
+        .map((img) => Number(img?.id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .slice(0, 2);
+
+      const preview = await this.persistGeneratedAssetToGallery({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        url: composed.previewUrl,
+        generatedKind: 'cover',
+        groupId: input.dynamicCoverGroupId,
+        sourceImageIds,
+        sourceImages: input.sourceImages,
+        description: `真实照片+AI文字海报素材叠加封面（${providerLabel || 'unknown'}）`,
+      });
+      if (!preview) return null;
+      return {
+        preview,
+        editableBase: {
+          imageId: Number(input.baseImage.id),
+          url: String(input.baseImage.url ?? '').trim(),
+          ...(input.baseImage.thumbUrl
+            ? { thumbUrl: input.baseImage.thumbUrl }
+            : {}),
+        },
+        materials: [
+          {
+            id: 'ai-decoration-1',
+            name: 'AI 文字海报素材',
+            src: composed.materialUrl,
+            materialSrc: overlayUrl,
+            x: 0,
+            y: 0,
+            width: COLLAGE_WIDTH,
+            height: COLLAGE_HEIGHT,
+            canvasWidth: COLLAGE_WIDTH,
+            canvasHeight: COLLAGE_HEIGHT,
+            includesText: true,
+            effect: {
+              cutout: {
+                enabled: true,
+                strength: 0.5,
+                holeFill: true,
+                backgroundColors: [[0, 1, 0]],
+              },
+            },
+          },
+        ],
+      };
+    } catch (err) {
+      this.logger.warn(
+        `[image-group] ai_overlay_cover_failed: ${this.describeUnknown(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * @description 用 sharp 对纯绿装饰层生成带软边的透明 PNG，并额外叠到真实照片上输出
+   *   640x853 合成预览图。两份输出并存：预览图供列表和发布，透明 PNG 供设计编辑器独立编辑。
+   * @param {string} basePath - 真实照片绝对路径。
+   * @param {string} overlayPath - AI 装饰素材层绝对路径。
+   * @returns {Promise<{ previewUrl: string; materialUrl: string } | null>} 合成预览与透明素材 URL。
+   * @keyword-cn 装饰素材叠加, 绿幕色键, 可编辑装饰素材
+   * @keyword-en composite-overlay-on-photo, green-screen-keying, editable-decoration-material
+   */
+  private async composeCoverWithOverlay(
+    basePath: string,
+    overlayPath: string,
+  ): Promise<{ previewUrl: string; materialUrl: string } | null> {
+    try {
+      const sharp = await this.loadSharp();
+      if (!sharp) return null;
+
+      const keyed = await sharp(overlayPath)
+        .resize({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT, fit: 'fill' })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const pixelCount = keyed.info.width * keyed.info.height;
+      let greenPixels = 0;
+      let foregroundPixels = 0;
+      for (let p = 0; p < pixelCount; p++) {
+        const o = p * keyed.info.channels;
+        const red = keyed.data[o];
+        const green = keyed.data[o + 1];
+        const blue = keyed.data[o + 2];
+        const sourceAlpha = keyed.data[o + 3];
+        const greenDominance = green - Math.max(red, blue);
+        const greenLevel = Math.max(0, Math.min(1, (green - 64) / 96));
+        const dominanceLevel = Math.max(
+          0,
+          Math.min(1, (greenDominance - 20) / 60),
+        );
+        const keyStrength = Math.min(greenLevel, dominanceLevel);
+        if (keyStrength >= 0.6) greenPixels++;
+        const outputAlpha = Math.round(sourceAlpha * (1 - keyStrength));
+        keyed.data[o + 1] = Math.round(
+          green - Math.max(0, greenDominance) * keyStrength,
+        );
+        keyed.data[o + 3] = outputAlpha;
+        if (outputAlpha > 64) foregroundPixels++;
+      }
+      const greenRatio = pixelCount > 0 ? greenPixels / pixelCount : 0;
+      if (greenRatio < 0.3) {
+        this.logger.warn(
+          `[image-group] ai_overlay_cover_skip: insufficient green background greenRatio=${greenRatio.toFixed(2)}`,
+        );
+        return null;
+      }
+      const foregroundRatio =
+        pixelCount > 0 ? foregroundPixels / pixelCount : 1;
+      if (foregroundRatio > 0.68) {
+        this.logger.warn(
+          `[image-group] ai_overlay_cover_skip: keyed overlay too dense foregroundRatio=${foregroundRatio.toFixed(2)}`,
+        );
+        return null;
+      }
+      const overlayBuf = await sharp(keyed.data, {
+        raw: {
+          width: keyed.info.width,
+          height: keyed.info.height,
+          channels: 4,
+        },
+      })
+        .png()
+        .toBuffer();
+
+      const materialDir = join(
+        process.cwd(),
+        'public',
+        'uploads',
+        'canvas-materials',
+      );
+      if (!existsSync(materialDir)) mkdirSync(materialDir, { recursive: true });
+      const materialName = `overlay-material-${randomUUID()}.png`;
+      await writeFile(join(materialDir, materialName), overlayBuf);
+
+      const outDir = join(process.cwd(), 'public', 'uploads', 'canvas-covers');
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+      const outName = `overlay-cover-${randomUUID()}.jpg`;
+      const outPath = join(outDir, outName);
+
+      await sharp(basePath)
+        .resize({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT })
+        .composite([{ input: overlayBuf, blend: 'over' }])
+        .jpeg({ quality: 92 })
+        .toFile(outPath);
+
+      this.logger.debug(
+        `[image-group] overlay_composed key=green-screen greenRatio=${greenRatio.toFixed(2)} foregroundRatio=${foregroundRatio.toFixed(2)} out=${outName}`,
+      );
+      return {
+        previewUrl: `/static/uploads/canvas-covers/${outName}`,
+        materialUrl: `/static/uploads/canvas-materials/${materialName}`,
+      };
+    } catch (err) {
+      this.logger.warn(
+        `[image-group] composeCoverWithOverlay error: ${this.describeUnknown(err)}`,
       );
       return null;
     }
@@ -1794,12 +2079,14 @@ export class CanvasImageGroupService {
       });
     }
 
-    // 去重；不足时不再补随机/跨 tag，保留原样供上游做不足量决策
-    return this.dedup(this.filterOutExcludedGroups(images, excludedGroupIds));
+    // 去重并排除可能已带烧字设计的历史封面素材；不足时不再补随机/跨 tag。
+    return this.dedup(
+      this.filterOutExcludedGroups(images, excludedGroupIds),
+    ).filter((image) => !this.hasCoverTag(image));
   }
 
   /**
-   * @description 判断图片是否带有封面标签（已预设计封面，自带文字设计，无需再合成文字）
+   * @description 判断图片是否带有历史封面标签，避免将可能已含文字的成品图重新用作无字底图。
    * @param {GalleryImageEntity} img - 图库实体
    * @returns {boolean}
    * @keyword-en check if image has cover tag
@@ -2737,6 +3024,35 @@ export class CanvasImageGroupService {
   }
 
   /**
+   * @description 按合成时的网格把 2-4 张源图描述成拼图画布格式，供设计编辑器把拼图还原成可逐张替换的图层。
+   * @param {GalleryImageEntity[]} images - 参与合成的源图（顺序与合成顺序一致）。
+   * @returns {CanvasCollageLayout | undefined} 拼图画布格式；不足 2 张时返回 undefined。
+   * @keyword-cn 拼图画布格式, 可换图拼图
+   * @keyword-en collage-canvas-format, swappable-collage
+   */
+  private buildCollageLayout(
+    images: GalleryImageEntity[],
+  ): CanvasCollageLayout | undefined {
+    const picked = (Array.isArray(images) ? images : []).slice(0, 4);
+    if (picked.length < 2) return undefined;
+    const cells = this.resolveMultiCollageCells(picked.length);
+    return {
+      width: COLLAGE_WIDTH,
+      height: COLLAGE_HEIGHT,
+      cells: picked.map((img, index) => ({
+        imageId: Number(img.id),
+        url: String(img.url ?? img.thumbUrl ?? ''),
+        ...(img.thumbUrl ? { thumbUrl: img.thumbUrl } : {}),
+        x: cells[index].left,
+        y: cells[index].top,
+        width: cells[index].width,
+        height: cells[index].height,
+        objectFit: 'cover' as const,
+      })),
+    };
+  }
+
+  /**
    * @description 将 2/3/4 张图库图片合成为固定 640×853(3:4) 竖版拼图，按网格充满单元格(fit:cover)，不烧录任何文字。
    * @param {GalleryImageEntity[]} images - 2-4 张待合成图片（多余的截断到 4 张）。
    * @returns {Promise<string | null>} 拼图静态路径(/static/uploads/canvas-collages/...)，失败返回 null。
@@ -2775,7 +3091,12 @@ export class CanvasImageGroupService {
           return { input: buf, top: cell.top, left: cell.left };
         }),
       );
-      const outDir = join(process.cwd(), 'public', 'uploads', 'canvas-collages');
+      const outDir = join(
+        process.cwd(),
+        'public',
+        'uploads',
+        'canvas-collages',
+      );
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
       const outName = `collage-${randomUUID()}.png`;
       const outPath = join(outDir, outName);
@@ -2802,9 +3123,9 @@ export class CanvasImageGroupService {
   /**
    * @description 将用户本次多选的 2-4 张图库图片合成为 3:4 拼图并写入动态拼图图库，返回持久化图片，供"直接设图"槽位复用。
    * @param {object} input - 合成入参（当前租户 + 源图 ID + 生成类型 + 可选目标分组）。
-   * @returns {Promise<GalleryImageEntity | null>} 入库后的拼图图片实体，失败返回 null。
-   * @keyword-cn 多图拼图, 直接设图拼图
-   * @keyword-en multi-collage, select-collage
+   * @returns {Promise<{ image: GalleryImageEntity; collage?: CanvasCollageLayout } | null>} 入库后的拼图图片实体与拼图画布格式，失败返回 null。
+   * @keyword-cn 多图拼图, 直接设图拼图, 拼图画布格式
+   * @keyword-en multi-collage, select-collage, collage-canvas-format
    */
   async composeSelectedCollage(input: {
     userId: string;
@@ -2812,7 +3133,10 @@ export class CanvasImageGroupService {
     sourceImageIds: number[];
     generatedKind?: 'cover' | 'collage';
     groupId?: string | number;
-  }): Promise<GalleryImageEntity | null> {
+  }): Promise<{
+    image: GalleryImageEntity;
+    collage?: CanvasCollageLayout;
+  } | null> {
     const sourceImageIds = Array.from(
       new Set(
         (Array.isArray(input.sourceImageIds) ? input.sourceImageIds : [])
@@ -2834,7 +3158,7 @@ export class CanvasImageGroupService {
     if (!collageUrl) return null;
 
     const generatedKind = input.generatedKind ?? 'collage';
-    return this.persistGeneratedAssetToGallery({
+    const persisted = await this.persistGeneratedAssetToGallery({
       userId: input.userId,
       tenantId: input.tenantId,
       url: collageUrl,
@@ -2847,6 +3171,8 @@ export class CanvasImageGroupService {
           ? `画布多图拼图封面(${sourceImages.length}图)`
           : `画布多图拼图(${sourceImages.length}图)`,
     });
+    if (!persisted) return null;
+    return { image: persisted, collage: this.buildCollageLayout(sourceImages) };
   }
 
   /**
@@ -2854,6 +3180,7 @@ export class CanvasImageGroupService {
    * @param {GalleryImageEntity} img - 图库实体
    * @param {'cover'|'inner-1'|'inner-2'|'inner-3'|'inner-4'|'inner-5'} role - 版式角色
    * @param {{ title: string; subtitle: string }} [coverCopy] - 封面主副标题（仅封面图传入）
+   * @param {CanvasCollageLayout} [collage] - 拼图画布格式（仅拼图传入）
    * @returns {CanvasGroupImage} 图片组图片
    * @keyword-en map gallery image to canvas group image
    */
@@ -2861,6 +3188,7 @@ export class CanvasImageGroupService {
     img: GalleryImageEntity,
     role: CanvasGroupImage['role'],
     coverCopy?: { title: string; subtitle: string },
+    collage?: CanvasCollageLayout,
   ): CanvasGroupImage {
     return {
       imageId: img.id,
@@ -2873,6 +3201,7 @@ export class CanvasImageGroupService {
       ...(coverCopy?.title
         ? { text: coverCopy.title, subtitle: coverCopy.subtitle }
         : {}),
+      ...(collage ? { collage } : {}),
     };
   }
 }

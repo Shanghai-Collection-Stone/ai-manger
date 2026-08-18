@@ -1,7 +1,6 @@
 import React from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import html2canvas from 'html2canvas';
 import { $currentSessionId } from './AiCommander/store';
 import { ToastContainer } from './AiCommander/blocks/shared';
 
@@ -3630,6 +3629,7 @@ export default function AiChatApp() {
   const handleScreenshot = async () => {
     try {
       const element = document.body;
+      const { default: html2canvas } = await import('html2canvas');
       const canvas = await html2canvas(element, {
         useCORS: true,
         logging: false,
