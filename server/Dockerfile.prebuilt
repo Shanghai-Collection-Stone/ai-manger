@@ -1,21 +1,6 @@
-FROM node:20-alpine AS root-deps
-
-WORKDIR /app
-
-RUN npm i -g pnpm@9
-
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
-
-FROM node:20-alpine AS web-deps
-
-WORKDIR /app
-
-RUN npm i -g pnpm@9
-
-COPY web/package.json web/pnpm-lock.yaml ./web/
-RUN pnpm --dir web install --frozen-lockfile --prod=false
-
+# 只消费 CI 产物的运行时镜像: dist / public/pages 由 GitHub 托管 runner 编译好后下载而来.
+# 服务器上不再跑 tsc 与 astro (tsc 峰值堆约 900MB, 小内存机器必然 OOM), 只装 prod 依赖并起容器.
+# 编译型构建仍保留在 Dockerfile.pure, 供大内存机器一把梭使用.
 FROM node:20-alpine AS prod-deps
 
 WORKDIR /app
@@ -24,23 +9,6 @@ RUN npm i -g pnpm@9
 
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --prod --frozen-lockfile
-
-FROM node:20-alpine AS builder
-
-WORKDIR /app
-
-ENV NODE_ENV=production
-# tsc 峰值堆约 900MB, 小内存机器上 node 默认堆上限(约 870MB) 会 OOM, 这里显式抬高
-ENV NODE_OPTIONS=--max-old-space-size=4096
-
-RUN npm i -g pnpm@9
-
-COPY --from=root-deps /app/node_modules ./node_modules
-COPY --from=web-deps /app/web/node_modules ./web/node_modules
-COPY . .
-
-RUN pnpm run build
-RUN cd web && pnpm run build
 
 FROM node:20-alpine AS runtime
 
@@ -53,13 +21,17 @@ ENV PATH=/usr/local/bin:$PATH
 RUN npm i -g meitu-cli
 
 COPY --from=prod-deps /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/src/modules/data-source/sources ./dist/modules/data-source/sources
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/config ./config
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY dist ./dist
+COPY src/modules/data-source/sources ./dist/modules/data-source/sources
+COPY public ./public
+COPY config ./config
+COPY migrations ./migrations
+COPY package.json ./package.json
+COPY pnpm-lock.yaml ./pnpm-lock.yaml
+
+# 产物缺失时立刻失败, 避免起一个空壳容器
+RUN test -f dist/main.js || (echo "dist/main.js missing: CI artifact not downloaded" && exit 1)
+RUN test -d public/pages || (echo "public/pages missing: web build artifact not downloaded" && exit 1)
 
 RUN mkdir -p \
   public/uploads \

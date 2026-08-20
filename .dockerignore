@@ -8,7 +8,7 @@
 node_modules
 web/node_modules
 web/pnpm-workspace.yaml
-dist
+# dist 与 public/pages 不能排除: Dockerfile.prebuilt 直接消费 CI 下载下来的产物
 build
 coverage
 web/dist
@@ -19,7 +19,6 @@ web/.astro
 *.log
 logs
 
-public/pages
 public/uploads
 public/uploads_thumbs
 public/uploads_zips

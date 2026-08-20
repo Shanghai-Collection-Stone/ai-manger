@@ -36,7 +36,70 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 编译放在 GitHub 托管 runner（16GB）上：tsc 峰值堆约 900MB，
+  # 上海那台小内存机器的 node 默认堆上限（约 870MB）扛不住，必然 OOM。
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Install pnpm globally
+        run: |
+          npm i -g pnpm@9
+          pnpm -v
+
+      - name: Compute pnpm store path
+        run: echo "PNPM_STORE_PATH=$(pnpm store path)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir web install --frozen-lockfile --prod=false
+
+      - name: Build NestJS
+        run: pnpm run build
+        env:
+          NODE_ENV: production
+
+      - name: Build frontend pages
+        run: pnpm --dir web run build
+        env:
+          NODE_ENV: production
+
+      - name: Verify build output
+        run: |
+          test -f dist/main.js || (echo "dist/main.js missing after build" && exit 1)
+          test -d public/pages || (echo "public/pages missing after web build" && exit 1)
+          du -sh dist public/pages
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-manger-shanghai-dist
+          path: |
+            dist
+            public/pages
+          if-no-files-found: error
+          retention-days: 1
+
   deploy:
+    needs: build
     runs-on:
       - self-hosted
       - shanghai
@@ -45,6 +108,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-manger-shanghai-dist
+          path: .
+
+      - name: Verify downloaded artifact
+        run: |
+          set -euo pipefail
+          test -f dist/main.js || (echo "dist/main.js missing: artifact download failed" && exit 1)
+          test -d public/pages || (echo "public/pages missing: artifact download failed" && exit 1)
+          du -sh dist public/pages
 
       - name: Build image and restart container
         env:
@@ -81,10 +157,11 @@ jobs:
           COMPOSE_PROJECT_NAME="ai-manger-shanghai"
           COMPOSE_FILE_PATH="server/docker-compose.shanghai.yml"
 
+          # 只装 prod 依赖 + 打包 CI 产物，服务器上不跑 tsc / astro
           echo "Build image: $IMAGE"
           docker build \
             --pull \
-            -f server/Dockerfile.pure \
+            -f server/Dockerfile.prebuilt \
             --label app=ai-manger-shanghai \
             --label deploy-ref="$REF_NAME" \
             --label git-sha="$(git rev-parse HEAD)" \
