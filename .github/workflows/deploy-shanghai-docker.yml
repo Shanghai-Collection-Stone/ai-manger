@@ -1,0 +1,184 @@
+name: deploy-shanghai-docker
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags:
+      - "shanghai-*"
+      - "shanghai/**"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要部署的分支、commit 或 tag（留空使用当前选择的 ref）
+        type: string
+        required: false
+        default: ""
+      app_port:
+        description: 宿主机端口，映射到容器 3011
+        type: string
+        required: false
+        default: "3011"
+      container_name:
+        description: Docker 容器名
+        type: string
+        required: false
+        default: "ai_manger_shanghai_app"
+      image_keep:
+        description: 保留最近几个 shanghai 镜像
+        type: string
+        required: false
+        default: "3"
+
+concurrency:
+  group: deploy-shanghai-docker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on:
+      - self-hosted
+      - shanghai
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Build image and restart container
+        env:
+          APP_PORT_INPUT: ${{ github.event.inputs.app_port || '3011' }}
+          CONTAINER_NAME_INPUT: ${{ github.event.inputs.container_name || 'ai_manger_shanghai_app' }}
+          IMAGE_KEEP_INPUT: ${{ github.event.inputs.image_keep || '3' }}
+          SHANGHAI_ENV: ${{ secrets.SHANGHAI_ENV }}
+          SHANGHAI_ENV_B64: ${{ secrets.SHANGHAI_ENV_B64 }}
+        run: |
+          set -euo pipefail
+
+          APP_PORT="${APP_PORT_INPUT:-3011}"
+          CONTAINER_NAME="${CONTAINER_NAME_INPUT:-ai_manger_shanghai_app}"
+          IMAGE_KEEP="${IMAGE_KEEP_INPUT:-3}"
+          if ! printf '%s' "$IMAGE_KEEP" | grep -Eq '^[0-9]+$'; then
+            IMAGE_KEEP=3
+          fi
+
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "docker not found on runner"
+            exit 1
+          fi
+          if ! docker compose version >/dev/null 2>&1; then
+            echo "docker compose plugin not found on runner"
+            exit 1
+          fi
+          docker info >/dev/null
+
+          REF_NAME="${GITHUB_REF_NAME:-manual}"
+          SAFE_REF="$(printf '%s' "$REF_NAME" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9_.-')"
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
+          IMAGE_REPO="ai-manger-shanghai"
+          IMAGE="${IMAGE_REPO}:${SAFE_REF}-${SHORT_SHA}"
+          COMPOSE_PROJECT_NAME="ai-manger-shanghai"
+          COMPOSE_FILE_PATH="server/docker-compose.shanghai.yml"
+
+          echo "Build image: $IMAGE"
+          docker build \
+            --pull \
+            -f server/Dockerfile.pure \
+            --label app=ai-manger-shanghai \
+            --label deploy-ref="$REF_NAME" \
+            --label git-sha="$(git rev-parse HEAD)" \
+            -t "$IMAGE" \
+            .
+
+          ENV_FILE="${RUNNER_TEMP:-/tmp}/ai-manger-shanghai.env"
+          rm -f "$ENV_FILE"
+          if [ -n "${SHANGHAI_ENV_B64:-}" ]; then
+            printf '%s' "$SHANGHAI_ENV_B64" | base64 -d > "$ENV_FILE"
+          elif [ -n "${SHANGHAI_ENV:-}" ]; then
+            printf '%s\n' "$SHANGHAI_ENV" > "$ENV_FILE"
+          else
+            echo "Missing GitHub secret SHANGHAI_ENV or SHANGHAI_ENV_B64"
+            exit 1
+          fi
+          chmod 600 "$ENV_FILE"
+          if [ ! -s "$ENV_FILE" ]; then
+            echo "Generated env file is empty"
+            exit 1
+          fi
+
+          existing_container="$(docker ps -aq -f "name=^/${CONTAINER_NAME}$" || true)"
+          if [ -n "$existing_container" ]; then
+            existing_project="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
+            if [ "$existing_project" != "$COMPOSE_PROJECT_NAME" ]; then
+              echo "Remove legacy non-compose container: $CONTAINER_NAME"
+              docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+            fi
+          fi
+
+          export AI_MANGER_SHANGHAI_IMAGE="$IMAGE"
+          export SHANGHAI_ENV_FILE="$ENV_FILE"
+          export APP_PORT="$APP_PORT"
+          export CONTAINER_NAME="$CONTAINER_NAME"
+
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            config >/dev/null
+
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            up -d --remove-orphans
+
+          healthy=0
+          for _ in $(seq 1 40); do
+            if docker exec "$CONTAINER_NAME" wget -qO- http://127.0.0.1:3011/ >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)" != "true" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          echo "=== Compose status ==="
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            ps || true
+
+          echo "=== MongoDB logs ==="
+          docker compose \
+            --project-name "$COMPOSE_PROJECT_NAME" \
+            --env-file "$ENV_FILE" \
+            -f "$COMPOSE_FILE_PATH" \
+            logs --tail 80 mongodb || true
+
+          echo "=== App logs ==="
+          docker logs "$CONTAINER_NAME" --tail 120 || true
+
+          rm -f "$ENV_FILE"
+
+          if [ "$healthy" != "1" ]; then
+            echo "Container did not become healthy"
+            exit 1
+          fi
+
+          echo "Cleanup old shanghai images, keeping latest $IMAGE_KEEP"
+          docker image ls "$IMAGE_REPO" --filter "label=app=ai-manger-shanghai" --format '{{.Repository}}:{{.Tag}}' \
+            | awk -v keep="$IMAGE_KEEP" 'NR > keep { print }' \
+            | while IFS= read -r old_image; do
+                if [ -n "$old_image" ] && [ "$old_image" != "$IMAGE" ]; then
+                  docker rmi "$old_image" || true
+                fi
+              done
+
+          docker image prune -f --filter "label=app=ai-manger-shanghai" || true
+          docker builder prune -f --filter "until=168h" || true
+
+          echo "Deployed $IMAGE as $CONTAINER_NAME on port $APP_PORT"
