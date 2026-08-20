@@ -67,10 +67,14 @@ jobs:
           restore-keys: |
             pnpm-store-${{ runner.os }}-
 
+      # 根 pnpm-workspace.yaml 声明了 web，但根 lockfile 只有 "." 一个 importer，
+      # web 用的是自己的 web/pnpm-lock.yaml。所以两边都按单项目装（等价于 Dockerfile
+      # 各 stage 只 COPY package.json + lock 的做法），否则 workspace 模式下
+      # --frozen-lockfile 会报 ERR_PNPM_OUTDATED_LOCKFILE。
       - name: Install dependencies
         run: |
-          pnpm install --frozen-lockfile
-          pnpm --dir web install --frozen-lockfile --prod=false
+          pnpm install --frozen-lockfile --ignore-workspace
+          pnpm --dir web install --frozen-lockfile --prod=false --ignore-workspace
 
       - name: Build NestJS
         run: pnpm run build
