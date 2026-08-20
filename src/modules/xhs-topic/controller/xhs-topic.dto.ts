@@ -161,6 +161,16 @@ export class GenerateXhsArticleDto {
   @Type(() => Boolean)
   @IsBoolean()
   useSearch?: boolean;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  dedup?: boolean;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  regenerateImages?: boolean;
 }
 
 /**

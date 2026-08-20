@@ -12,7 +12,7 @@
 - `controller/xhs-topic.controller.ts` — 小红书选题生成 HTTP 接口与权限声明。
 - `controller/xhs-topic.dto.ts` — 生成层级、提示词、母选题、数量与检索开关校验。
 - `entities/xhs-topic.entity.ts` — 选题候选、数据库实体、母子列表、生成输入、Todo 结果与接口响应类型。
-- `services/xhs-topic-repository.service.ts` — MongoDB 索引、真实母子选题列表、批量入库和级联删除。
+- `services/xhs-topic-repository.service.ts` — MongoDB 索引、真实母子选题列表（已存入文章库的子题不再返回）、批量入库和级联删除。
 - `services/xhs-article-generation.service.ts` — 文章 Todo、Agent 内存文章工具、真实图库标签选择、Duck 搜索、生文图组工作流与文章落库。
 - `services/xhs-topic.service.ts` — Todo 生命周期、数量解析、Agent 工具写入、Duck 搜索筛选与结果持久化。
 
@@ -24,7 +24,7 @@
 - `CreateXhsTopicsDto({ kind, parentId?, sourceTodoId?, candidates })` — 校验批量保存母题或子题请求 | keywords: 批量保存选题, 数据库存储, create-topics-dto, database-storage
 - `DeleteXhsTopicsDto({ ids })` — 校验批量和级联删除请求 | keywords: 批量删除选题, 级联删除, delete-topics-dto, cascade-delete
 - `UpdateXhsTopicDto({ title?, topicType?, status? })` — 校验真实选题内容或状态更新 | keywords: 更新真实选题, 选题状态, update-persisted-topic, topic-status
-- `GenerateXhsArticleDto({ prompt?, useSearch? })` — 校验真实文章生成请求 | keywords: 文章生成参数, 文章提示词, article-generation-dto, article-prompt
+- `GenerateXhsArticleDto({ prompt?, useSearch?, dedup?, regenerateImages? })` — 校验真实文章生成请求、配图去重及重新配图规则 | keywords: 文章生成参数, 文章提示词, article-generation-dto, article-prompt
 - `XhsArticleCanvasCollageCellDto({ src, imageId?, x, y, width, height, objectFit? })` — 校验拼图画布格式里的单个源图格子 | keywords: 拼图画布格式, 拼图格子, collage-canvas-format, collage-cell
 - `XhsArticleCanvasCollageDto({ width, height, cells })` — 校验拼图画布格式的画布尺寸与 2-4 个源图格子 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsArticleCanvasMaterialDto({ id, name, src, materialSrc, x, y, width, height, canvasWidth, canvasHeight, includesText?, effect? })` — 校验与照片分离、可回改特效并可标记已融合文字的海报素材层 | keywords: 可编辑装饰素材, 图层分离, editable-decoration-material, separated-layers
@@ -41,8 +41,9 @@
 - `XhsTopicService.runAgent(system, tools, remainingCount)` — 执行 Agent 并忽略其最终文本 | keywords: 执行选题Agent, 忽略最终文本, run-topic-agent, ignore-final-text
 - `XhsTopicRepositoryService({ db })` — 管理租户用户隔离的 MongoDB 选题集合 | keywords: 选题数据库服务, 租户隔离, topic-repository, tenant-isolation
 - `XhsTopicRepositoryService.ensureIndexes()` — 创建业务 ID、作用域及父子关系索引 | keywords: 选题索引, 父子关系, topic-indexes, parent-child-relation
-- `XhsTopicRepositoryService.listWorkspace(scope)` — 聚合当前用户的真实母题与子题列表 | keywords: 读取选题工作台, 母子聚合, list-topic-workspace, parent-child-aggregation
-- `XhsTopicRepositoryService.createMany(input, scope)` — 批量保存候选并校验父题归属 | keywords: 批量创建选题, 父题校验, create-topics, parent-validation
+- `XhsTopicRepositoryService.listStoredArticleTopicIds(scope, topicIds)` — 在给定子选题里挑出已存入文章库的那些 ID，按选题 ID 反查而不按 userId 关联 | keywords: 已入库子选题, 文章库来源, stored-topic-ids, article-library-source
+- `XhsTopicRepositoryService.listWorkspace(scope)` — 聚合当前用户的真实母题与尚未存入文章库的子题列表 | keywords: 读取选题工作台, 母子聚合, list-topic-workspace, parent-child-aggregation
+- `XhsTopicRepositoryService.createMany(input, scope)` — 批量保存候选并校验父题归属，同名去重只比对仍留在工作台的选题 | keywords: 批量创建选题, 父题校验, 已入库子选题, create-topics, parent-validation, stored-topic-ids
 - `XhsTopicRepositoryService.getOwnedTopic(id, scope)` — 按作用域读取文章生成所需真实选题 | keywords: 读取真实选题, 文章生成上下文, get-owned-topic, article-generation-context
 - `XhsTopicRepositoryService.saveGeneratedArticle(id, article, scope)` — 将完整内存文章写入子选题 | keywords: 保存生成文章, 文章落库, save-generated-article, persist-article
 - `XhsTopicRepositoryService.updateArticle(id, input, scope)` — 更新已生成文章内容、真实配图与结构化画板元数据 | keywords: 更新真实文章, 文章配图, update-persisted-article, article-images
@@ -57,19 +58,22 @@
 - `XhsArticleGenerationService({ agentService, mcpAdapters, todoService, repository, galleryService, canvasService })` — 编排工具写入内存、真实图库标签选择与生文图组工作流 | keywords: 文章生成服务, 内存文章, article-generation-service, in-memory-article
 - `XHS_ARTICLE_ERROR_MESSAGES` — 文章生成失败码与前端可读中文原因的对照表 | keywords: 文章生成错误码, 失败原因文案, article-error-code, failure-reason-text
 - `XHS_ARTICLE_TODO_RESOURCE_TYPE` — 生成 Todo 绑定子选题时使用的资源类型 | keywords: 生成任务关联资源, 子选题归位, generation-todo-resource, topic-binding
+- `XHS_ARTICLE_RUNTIME_MISS_LIMIT` — 定义持久化运行态缺失真实执行实例时的连续确认次数 | keywords: 异步存活确认, 连续查询, async-liveness-confirmation, consecutive-polls
 - `describeXhsArticleError(code, detail?)` — 把失败码翻译成可直接展示的中文原因，未知码回退为原始码 | keywords: 失败原因文案, 错误码翻译, failure-reason-text, error-code-translate
 - `XhsArticleGenerationError(code, detail?)` — 携带失败码与明细的文章生成错误，供接口层原样抛给前端 | keywords: 文章生成错误, 失败码, article-generation-error, failure-code
-- `XhsArticleGenerationService.start(topicId, input, scope)` — 创建运行中的 Todo 后立即返回，并在后台并发执行不同子选题 | keywords: 异步生成文章, 后台任务, 并发生成, start-article-generation, background-task, concurrent-generation
-- `XhsArticleGenerationService.runGeneration(params)` — 后台执行文章全流程并把成功或失败结果回写 Todo | keywords: 后台生成文章, 待办回写, run-article-generation, todo-writeback
-- `XhsArticleGenerationService.listGenerations(scope)` — 按子选题汇总最近一次生成状态与失败原因 | keywords: 文章生成状态, 逐条进度, 状态轮询, article-generation-state, per-topic-progress, poll-generation-state
+- `XhsArticleGenerationService.start(topicId, input, scope)` — 创建运行中的 Todo 后立即返回，并把缺省不去重的配图规则传入后台任务 | keywords: 异步生成文章, 后台任务, 并发生成, start-article-generation, background-task, concurrent-generation
+- `XhsArticleGenerationService.runGeneration(params)` — 后台执行文章全流程，按请求保留或重新生成配图，并把结果回写 Todo | keywords: 后台生成文章, 待办回写, run-article-generation, todo-writeback
+- `XhsArticleGenerationService.listGenerations(scope)` — 汇总最近生成状态，并通过持久化 Todo 与当前进程执行集合双重确认，连续两次缺失后收敛陈旧运行态 | keywords: 文章生成状态, 逐条进度, 异步存活确认, article-generation-state, per-topic-progress, async-liveness-confirmation
+- `XhsArticleGenerationService.isRuntimeGenerationActive(scope,topicId)` — 确认子选题是否仍由当前服务进程实际执行 | keywords: 运行实例确认, 异步存活确认, runtime-instance-check, async-liveness-confirmation
+- `XhsArticleGenerationService.buildRuntimeConfirmationKey(scope,topicId)` — 构造租户用户及子选题隔离的连续存活确认键 | keywords: 存活确认键, 租户隔离, liveness-confirmation-key, tenant-isolation
 - `XhsArticleGenerationService.readTodoTopicId(todo)` — 从 Todo 关联资源读取对应子选题 ID | keywords: 生成任务关联资源, 子选题归位, generation-todo-resource, topic-binding
 - `XhsArticleGenerationService.readTodoErrorCode(todo)` — 从 Todo 结果解析文章生成失败码 | keywords: 失败码, 待办结果解析, failure-code, task-result-parse
 - `XhsArticleGenerationService.createCurrentArticleReadTool(article, state)` — 创建强制读取当前标题、正文、标签、配图与发布形式的 Agent 工具 | keywords: 读取当前文章, 文章改写上下文, read-current-article, article-rewrite-context
 - `XhsArticleGenerationService.createArticleMemoryTool(draft, availableImageTags)` — 创建标题、正文、文章标签和真实图库标签的内存调整工具 | keywords: 文章调整工具, 内存写入, article-memory-tool, memory-write
-- `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章合规、搜索和工具交付提示词 | keywords: 构造文章提示词, 工具交付约束, build-article-prompt, tool-delivery-contract
+- `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章合规、搜索、重新匹配图库和工具交付提示词 | keywords: 构造文章提示词, 工具交付约束, build-article-prompt, tool-delivery-contract
 - `XhsArticleGenerationService.runAgent(system, tools, draft)` — 执行文章 Agent 并忽略最终文本 | keywords: 执行文章Agent, 忽略最终文本, run-article-agent, ignore-final-text
 - `XhsArticleGenerationService.isArticleComplete(draft, requireImageTags)` — 校验标题、正文、文章标签，并仅在首次配图时要求图库标签 | keywords: 校验文章完整性, 内存文章, validate-article-completeness, in-memory-article
-- `XhsArticleGenerationService.generateArticleImagesByWorkflow(input, scope)` — 生成图片组并把合成封面拆成原照片与已融合文字的独立海报素材画板元数据 | keywords: 生文配图工作流, 可编辑封面, article-image-workflow, editable-cover
+- `XhsArticleGenerationService.generateArticleImagesByWorkflow(input, scope)` — 按请求的去重规则生成图片组，并把合成封面拆成原照片与已融合文字的独立海报素材画板元数据 | keywords: 生文配图工作流, 可编辑封面, article-image-workflow, editable-cover
 - `XhsArticleGenerationService.toCanvasBoardCollage(collage?)` — 把图组拼图的画布格式转成文章画板元数据，源图格子随文章持久化 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsArticleGenerationService.buildResult(topicId, article, searchEnabled, searchAvailable)` — 构造可写入 Todo 的文章结果 | keywords: 构造文章结果, 日期序列化, build-article-result, serialize-dates
 - `XhsTopicController({ xhsTopicService, articleGenerationService, repository })` — 暴露带后台鉴权的选题、真实文章生成与持久化接口 | keywords: 小红书选题接口, 待办返回, xhs-topic-controller, todo-response
@@ -100,6 +104,9 @@
 | 待办结果         | todo-result                       | taskResult 持久化与接口响应                                                          |
 | 选题数据库服务   | topic-repository                  | `xhs_topics` 集合读写与租户用户隔离                                                  |
 | 母子聚合         | parent-child-aggregation          | 真实母题与子题工作台列表                                                             |
+| 已入库子选题     | stored-topic-ids                  | 已存入文章库的来源子选题，工作台列表与同名去重都会跳过                               |
+| userId 口径差异  | user-id-mismatch                  | `xhs_topics.userId` 存后台用户 ObjectId，`articles.userId` 存用户名，两表不可用 userId 关联 |
+| 文章库来源       | article-library-source            | articles 集合里 `source=xhs-topic` + `meta.xhsTopicId` 的入库记录                     |
 | 批量入库         | bulk-persistence                  | 保存用户确认的候选                                                                   |
 | 级联删除         | cascade-delete                    | 删除母题时同步删除所属子题                                                           |
 | 内存文章         | in-memory-article                 | Agent 通过工具设置标题、正文并逐个追加标签                                           |
@@ -118,6 +125,7 @@
 | 文章生成错误码   | article-error-code                | 失败码与中文原因对照表，接口层据此下发用户可读提示                                   |
 | 失败原因文案     | failure-reason-text               | `describeXhsArticleError` 翻译出的中文失败原因                                        |
 | 文章生成错误     | article-generation-error          | `XhsArticleGenerationError` 携带失败码与明细，配图不足时附带本次图库标签             |
+| 异步存活确认     | async-liveness-confirmation        | 查询时同时核对 Todo 状态与当前进程执行集合，连续两次缺失后判定服务中断               |
 
 ## 类型导出 (Type Exports)
 
@@ -136,7 +144,7 @@
 - `XhsTopicGenerateInput` — 服务层标准生成输入。
 - `XhsArticleUpdateInput` — 已生成文章编辑输入。
 - `XhsArticleMemoryDraft` — Agent 工具在单次运行中调整的文章内存，含文章标签与真实图库配图标签。
-- `XhsArticleGenerateInput` — 真实文章生成输入。
+- `XhsArticleGenerateInput` — 真实文章生成输入，包含配图去重规则和可选的整组配图重新生成开关。
 - `XhsArticleGenerationResult` — 写入 Todo `taskResult` 的文章生成结果。
 - `XhsArticleGenerationState` — 单个子选题最近一次文章生成任务的运行、完成或失败状态。
 - `XhsTopicGenerationResult` — 写入 Todo `taskResult` 的结果结构。
@@ -148,6 +156,6 @@
 
 `POST /api/xhs-topic/prompt/recommend` 根据当前母题调用 AI 返回一条可编辑的子选题生成提示词，失败时使用包含数量、差异化角度、内容价值和标题风格的稳定模板回退。入口与选题生成一样声明 `create XhsTopic` 权限。
 
-`POST /api/xhs-topic/:id/article/generate` 同时承担首次生成与已有文章改写。接口创建 `in_progress` Todo 后立即返回，Agent、配图和落库流程在后台继续执行；不同子选题互不阻塞并可同时生成，同一子选题在当前运行实例内拒绝重复启动。服务预载已保存文章，并强制 Agent 首先调用 `xhs_article_read_current` 读取标题、正文、标签、配图和发布形式，再根据用户提示词做局部修改或完全重写；所有变更仍必须经 `xhs_article_update_memory` 写入。改写默认保留现有图片和画板数据，因此不再依赖图库标签；首次生成或没有现有图组时才要求选择真实图库标签并调用 Canvas 生文图片阶段生成一张封面和五张内页。租户开启 AI 封面时走 `ai-overlay`：模型生成纯绿实底、指定主副标题与波普装饰融合的文字海报素材，真实照片不传给模型；sharp 输出合成预览和透明 PNG 素材，`canvasBoards` 另外保存 `baseSrc` 原照片以及带 `includesText` 标记的 `materials` 素材原图/去底图/特效参数。文章预览与发布继续使用合成封面，进入灵感画布后则还原成照片和含字图片素材两个独立图层；素材可移动、缩放、隐藏或重开图片特效。完整文章落库后状态才变为 `generated`。后台失败会把失败码写进 Todo `taskResult.error`，把中文原因写进 `taskResult.errorMessage` 与 `abnormalReason`。前端通过 `GET /api/xhs-topic/article/generations` 轮询每个子选题最近一次任务，只在对应选题下展示进度或错误，并在任务完成后刷新文章。配图阶段的 `XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT` 会附带本次使用的图库标签，便于用户判断该补哪些标签的图。
+`POST /api/xhs-topic/:id/article/generate` 同时承担首次生成与已有文章改写。接口创建 `in_progress` Todo 后立即返回，Agent、配图和落库流程在后台继续执行；不同子选题互不阻塞并可同时生成，同一子选题在当前运行实例内拒绝重复启动。服务预载已保存文章，并强制 Agent 首先调用 `xhs_article_read_current` 读取标题、正文、标签、配图和发布形式，再根据用户提示词做局部修改或完全重写；所有变更仍必须经 `xhs_article_update_memory` 写入。改写默认保留现有图片和画板数据，因此不再依赖图库标签；首次生成或没有现有图组时才要求选择真实图库标签并调用 Canvas 生文图片阶段生成一张封面和五张内页。租户开启 AI 封面时走 `ai-overlay`：模型生成纯绿实底、指定主副标题与波普装饰融合的文字海报素材，真实照片不传给模型；sharp 输出合成预览和透明 PNG 素材，`canvasBoards` 另外保存 `baseSrc` 原照片以及带 `includesText` 标记的 `materials` 素材原图/去底图/特效参数。文章预览与发布继续使用合成封面，进入灵感画布后则还原成照片和含字图片素材两个独立图层；素材可移动、缩放、隐藏或重开图片特效。完整文章落库后状态才变为 `generated`。后台失败会把失败码写进 Todo `taskResult.error`，把中文原因写进 `taskResult.errorMessage` 与 `abnormalReason`。前端通过 `GET /api/xhs-topic/article/generations` 轮询每个子选题最近一次任务；查询同时读取 Todo 持久化状态并核对当前进程 `runningTopics`，若数据库仍显示运行但进程内任务已不存在，第一次仅记录疑似中断，连续第二次确认仍缺失后才将 Todo 改为 `failed`，错误码为 `XHS_ARTICLE_GENERATION_INTERRUPTED`。正常运行任务每次都能通过运行实例确认，不会被误清理；服务重启遗留的陈旧状态也不会永久显示“生成中”。配图阶段的 `XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT` 会附带本次使用的图库标签，便于用户判断该补哪些标签的图。
 
-`GET /api/xhs-topic` 从 `xhs_topics` 返回当前租户用户的母子选题工作台，无租户账号同时兼容历史缺失字段与 MongoDB 序列化的 `null`；`POST /api/xhs-topic` 将用户确认的候选批量入库并返回最新工作台；`PATCH /api/xhs-topic/:id` 更新标题、类型或状态；`DELETE /api/xhs-topic` 删除当前用户指定选题，母题命中时级联删除所有子题。入口分别声明 `read/create/update/delete XhsTopic` 权限。
+`GET /api/xhs-topic` 从 `xhs_topics` 返回当前租户用户的母子选题工作台，并通过 `articles.source=xhs-topic` 与 `meta.xhsTopicId` 过滤已经存入选题文章库的子题；历史已入库文章同样生效，库内文章删除后对应子题会重新出现。无租户账号同时兼容历史缺失字段与 MongoDB 序列化的 `null`；`POST /api/xhs-topic` 将用户确认的候选批量入库并返回最新工作台；`PATCH /api/xhs-topic/:id` 更新标题、类型或状态；`DELETE /api/xhs-topic` 删除当前用户指定选题，母题命中时级联删除所有子题。入口分别声明 `read/create/update/delete XhsTopic` 权限。

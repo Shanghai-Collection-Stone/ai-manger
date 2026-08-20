@@ -39,7 +39,7 @@ Article-Library
 - `getStats(libraryId)` — 聚合文章库内发布状态和租约占用统计 | keywords: article-library, stats
 - `getThumbnailImages(libraryId,limit?)` — 读取文章库缩略图所需的最近文章首图 | keywords: article-library, thumbnail
 - `ArticleService()` — 文章服务 | keywords: article, service
-- `ensureIndexes()` — 建立文章索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
+- `ensureIndexes()` — 建立文章及来源选题查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
 - `getMaxArticleId()` — 读取当前最大文章业务 ID | keywords: article-id-counter, 文章入库, 计数器校准
 - `ensureCounterAtLeast(seq)` — 将 articles counter 至少推进到指定下限 | keywords: article-id-counter, 文章入库, 计数器校准
 - `nextId()` — 分配新文章业务 ID 前先校准 counter | keywords: article-id-counter, 文章入库, 计数器校准
@@ -49,6 +49,7 @@ Article-Library
 - `list(params)` — 按文章库、状态和 FIFO 顺序列出文章 | keywords: article, list
 - `update(input)` — 更新文章字段和 meta | keywords: article, update
 - `updatePublishStatus(id,status,tenantId?,leaseToken?,meta?)` — 更新发布状态并释放租约 | keywords: article, publish-status
+- `moveToLibrary({id,fromLibraryId,toLibraryId,tenantId?})` — 把文章移动到同租户下的另一个文章库，租约未过期的在途文章拒绝移动 | keywords: 移动文章, 跨库转移, move-article-to-library, cross-library-transfer
 - `delete(id,tenantId?)` — 删除单篇文章 | keywords: article, delete
 - `leaseNext(params)` — 以 CAS 方式领取下一篇未发布文章并写入租约 | keywords: article, lease-next
 - `releaseLease(id,tenantId?,leaseToken?)` — 主动释放文章租约 | keywords: article, release-lease
@@ -64,6 +65,7 @@ Article-Library
 - `createArticle(libraryId,body,req)` — 管理端向文章库写入文章 | keywords: article, create-endpoint
 - `listArticles(libraryId,status,limit,offset,req)` — 管理端列出文章库内文章 | keywords: article, list-endpoint
 - `updateArticleStatus(libraryId,articleId,body,req)` — 管理端更新文章发布状态 | keywords: article, status-endpoint
+- `moveArticleToLibrary(libraryId,articleId,body,req)` — 管理端把文章移动到当前用户的另一个文章库 | keywords: 移动文章, 跨库转移, move-article-to-library, cross-library-transfer
 - `deleteArticle(libraryId,articleId,req)` — 管理端删除文章 | keywords: article, delete-endpoint
 - `leaseNext(libraryId,req)` — 管理端测试领取下一篇文章 | keywords: article, lease-endpoint
 - `ArticleLibraryTaskController()` — task-token 与扫码 token 控制器 | keywords: article-library, task-controller
@@ -99,6 +101,8 @@ Article-Library
 | 扫码鉴权 | token-auth |
 | 状态元数据 | article-status-meta |
 | 队列领取 | lease-next |
+| 移动文章 | move-article-to-library |
+| 跨库转移 | cross-library-transfer |
 | 主动释放租约 | release-lease |
 | 缩略图 | thumbnail |
 
@@ -117,9 +121,9 @@ Article-Library
 - `ArticleLeaseResult` — 文章领取返回结果 | keywords: article, lease-result
 
 ## 模块功能描述 (Module Feature Description)
-管理端接口挂载在 `/api/article-library` 下，提供文章库创建、列表、详情、更新、删除、二维码内容获取、文章入库、文章列表、发布状态更新、文章删除和队列领取测试。task 专项接口挂载在 `/task-api` 下，支持 todo 绑定资源鉴权与扫码 token 鉴权两种方式。
+管理端接口挂载在 `/api/article-library` 下，提供文章库创建、列表、详情、更新、删除、二维码内容获取、文章入库、文章列表、发布状态更新、文章跨库移动、文章删除和队列领取测试。跨库移动走 `PATCH /:libraryId/articles/:articleId/library`，校验来源库、目标库与文章都属于当前租户用户，源库与目标库相同返回 400，文章仍持有未过期租约返回 409。task 专项接口挂载在 `/task-api` 下，支持 todo 绑定资源鉴权与扫码 token 鉴权两种方式。
 
-文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；`pushConfig.qrToken` 使用 partial unique 索引，只索引字符串 token，历史 null token 会在索引初始化时清理。文章使用 `articles` 集合并对 `id` 建唯一索引。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
+文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；`pushConfig.qrToken` 使用 partial unique 索引，只索引字符串 token，历史 null token 会在索引初始化时清理。文章使用 `articles` 集合并对 `id` 建唯一索引，同时按租户、用户、来源与 `meta.xhsTopicId` 建组合索引，供选题工作台识别已经入库的来源子选题。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
 
 队列领取只面向 `unpublished` 文章，按 `createdAt` FIFO 排序，并通过 `findOneAndUpdate` 原子写入 `lockExpireAt` 和 `lastLeaseToken`。发布状态回写成功或主动 release 会释放租约；自然过期后文章可再次领取。`published` 文章不再参与领取池。
 

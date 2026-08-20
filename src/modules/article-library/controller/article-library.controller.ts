@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -320,6 +321,52 @@ export class ArticleLibraryController {
     );
     if (!updated) throw new NotFoundException('ARTICLE_NOT_FOUND');
     return { article: updated };
+  }
+
+  /**
+   * @description 把文章移动到当前用户的另一个文章库（发文台拖拽换库）
+   * @keyword-cn 移动文章, 跨库转移
+   * @keyword-en move-article-to-library, cross-library-transfer
+   */
+  @Patch(':libraryId/articles/:articleId/library')
+  async moveArticleToLibrary(
+    @Param('libraryId') libraryId: string,
+    @Param('articleId') articleId: string,
+    @Body() body: { targetLibraryId?: number | string },
+    @Req() req: Request,
+  ) {
+    const scope = await this.resolveAuthScope(req);
+    if (!scope.userId) throw new UnauthorizedException('USER_REQUIRED');
+    const sourceLibraryId = Number(libraryId);
+    const targetLibraryId = Number(body?.targetLibraryId);
+    const id = Number(articleId);
+    if (!Number.isFinite(id) || id <= 0) {
+      throw new BadRequestException('ARTICLE_ID_REQUIRED');
+    }
+    if (!Number.isFinite(targetLibraryId) || targetLibraryId <= 0) {
+      throw new BadRequestException('TARGET_LIBRARY_REQUIRED');
+    }
+    if (targetLibraryId === sourceLibraryId) {
+      throw new BadRequestException('TARGET_LIBRARY_SAME_AS_SOURCE');
+    }
+    const [sourceLibrary, targetLibrary] = await Promise.all([
+      this.library.get(sourceLibraryId, scope.tenantId),
+      this.library.get(targetLibraryId, scope.tenantId),
+    ]);
+    if (!sourceLibrary) throw new NotFoundException('LIBRARY_NOT_FOUND');
+    if (!targetLibrary) throw new NotFoundException('TARGET_LIBRARY_NOT_FOUND');
+    const article = await this.article.get(id, scope.tenantId);
+    if (!article || article.libraryId !== sourceLibraryId) {
+      throw new NotFoundException('ARTICLE_NOT_FOUND');
+    }
+    const moved = await this.article.moveToLibrary({
+      id,
+      fromLibraryId: sourceLibraryId,
+      toLibraryId: targetLibraryId,
+      tenantId: scope.tenantId,
+    });
+    if (!moved) throw new ConflictException('ARTICLE_LEASED');
+    return { article: moved };
   }
 
   /**

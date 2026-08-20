@@ -218,6 +218,8 @@ export interface XhsArticleMemoryDraft {
 export interface XhsArticleGenerateInput {
   prompt?: string;
   useSearch?: boolean;
+  dedup?: boolean;
+  regenerateImages?: boolean;
 }
 
 /**

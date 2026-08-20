@@ -30,12 +30,19 @@ export class ArticleService {
   }
 
   /**
-   * @description 索引：FIFO 领取、状态过滤、租约扫描
-   * @keyword-en article ensure indexes fifo lease
+   * @description 建立 FIFO 领取、状态过滤、租约扫描及来源选题查询索引。
+   * @keyword-cn 文章入库, 计数器校准
+   * @keyword-en article-id-counter
    */
   async ensureIndexes(): Promise<void> {
     await this.articles.createIndex({ id: 1 }, { unique: true });
     await this.articles.createIndex({ libraryId: 1, createdAt: 1 });
+    await this.articles.createIndex({
+      tenantId: 1,
+      userId: 1,
+      source: 1,
+      'meta.xhsTopicId': 1,
+    });
     await this.articles.createIndex({
       libraryId: 1,
       publishStatus: 1,
@@ -243,6 +250,35 @@ export class ArticleService {
     const res = await this.articles.findOneAndUpdate(
       filter,
       { $set: set },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
+  }
+
+  /**
+   * @description 把文章移动到同租户下的另一个文章库；租约未过期的在途文章拒绝移动。
+   * @keyword-cn 移动文章, 跨库转移
+   * @keyword-en move-article-to-library, cross-library-transfer
+   */
+  async moveToLibrary(params: {
+    id: number;
+    fromLibraryId: number;
+    toLibraryId: number;
+    tenantId?: string;
+  }): Promise<ArticleEntity | null> {
+    const filter: Record<string, unknown> = {
+      id: params.id,
+      libraryId: params.fromLibraryId,
+      $or: [
+        { lockExpireAt: { $exists: false } },
+        { lockExpireAt: null },
+        { lockExpireAt: { $lte: new Date() } },
+      ],
+    };
+    if (params.tenantId) filter.tenantId = params.tenantId;
+    const res = await this.articles.findOneAndUpdate(
+      filter,
+      { $set: { libraryId: params.toLibraryId, updatedAt: new Date() } },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;

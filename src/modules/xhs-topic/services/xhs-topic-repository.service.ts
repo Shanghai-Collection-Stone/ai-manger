@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { Collection, Db, Filter } from 'mongodb';
+import type { Collection, Db, Document, Filter } from 'mongodb';
 import { ObjectId } from 'mongodb';
 import type {
   XhsArticleCanvasCollage,
@@ -20,10 +20,12 @@ import type {
 @Injectable()
 export class XhsTopicRepositoryService {
   private readonly topics: Collection<XhsTopicEntity>;
+  private readonly articles: Collection<Document>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
 
   constructor(@Inject('DS_MONGO_DB') db: Db) {
     this.topics = db.collection<XhsTopicEntity>('xhs_topics');
+    this.articles = db.collection('articles');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     void this.ensureIndexes();
   }
@@ -50,7 +52,40 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 按当前租户和用户读取母题及其真实子题列表。
+   * @description 在给定子选题里挑出已经存入文章库的那些 ID。
+   * 只按选题 ID 反查入库记录：选题集合的 userId 存后台用户 ObjectId，文章集合的 userId 存用户名，
+   * 两个口径不一致，用 userId 关联会永远查不到，所以隔离交给传入的选题 ID 与租户条件。
+   * @keyword-cn 已入库子选题, 文章库来源
+   * @keyword-en stored-topic-ids, article-library-source
+   * @param scope 当前租户与用户作用域。
+   * @param topicIds 待判定的子选题业务 ID 列表。
+   */
+  private async listStoredArticleTopicIds(
+    scope: { tenantId?: string; userId: string },
+    topicIds: number[],
+  ): Promise<Set<number>> {
+    const candidateIds = topicIds.filter(
+      (topicId) => Number.isInteger(topicId) && topicId > 0,
+    );
+    if (!candidateIds.length) return new Set();
+    const tenantId = String(scope.tenantId ?? '').trim();
+    const filter: Filter<Document> = {
+      source: 'xhs-topic',
+      'meta.xhsTopicId': { $in: candidateIds },
+    };
+    if (tenantId) filter.tenantId = tenantId;
+    const storedArticles = await this.articles
+      .find(filter, { projection: { 'meta.xhsTopicId': 1 } })
+      .toArray();
+    return new Set(
+      storedArticles
+        .map((article) => Number(article.meta?.xhsTopicId))
+        .filter((topicId) => Number.isInteger(topicId) && topicId > 0),
+    );
+  }
+
+  /**
+   * @description 按当前租户和用户读取母题及其未存入文章库的真实子题列表。
    * @keyword-cn 读取选题工作台, 母子聚合
    * @keyword-en list-topic-workspace, parent-child-aggregation
    */
@@ -62,9 +97,16 @@ export class XhsTopicRepositoryService {
       .find(this.buildScopeFilter(scope))
       .sort({ createdAt: 1, id: 1 })
       .toArray();
+    const storedTopicIds = await this.listStoredArticleTopicIds(
+      scope,
+      entities
+        .filter((entity) => entity.kind === 'child')
+        .map((entity) => Number(entity.id)),
+    );
     const childrenByParent = new Map<number, XhsChildTopicView[]>();
     for (const entity of entities) {
       if (entity.kind !== 'child' || !entity.parentId) continue;
+      if (storedTopicIds.has(entity.id)) continue;
       const children = childrenByParent.get(entity.parentId) ?? [];
       children.push(this.toChildView(entity));
       childrenByParent.set(entity.parentId, children);
@@ -128,9 +170,17 @@ export class XhsTopicRepositoryService {
     if (input.kind === 'child') duplicateFilter.parentId = input.parentId;
     const existing = await this.topics
       .find(duplicateFilter)
-      .project<{ title: string }>({ title: 1 })
+      .project<{ id: number; title: string }>({ id: 1, title: 1 })
       .toArray();
-    const existingTitles = new Set(existing.map((entity) => entity.title));
+    const storedTopicIds = await this.listStoredArticleTopicIds(
+      scope,
+      existing.map((entity) => Number(entity.id)),
+    );
+    const existingTitles = new Set(
+      existing
+        .filter((entity) => !storedTopicIds.has(Number(entity.id)))
+        .map((entity) => entity.title),
+    );
     const freshCandidates = candidates.filter(
       (candidate) => !existingTitles.has(candidate.title),
     );
