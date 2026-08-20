@@ -226,6 +226,28 @@
   @apply w-3/4 h-8 bg-gray-700 rounded-lg animate-pulse;
 }
 
+/* 亮色骨架屏底纹：配合 animate-shimmer 使用，微光从左扫到右 */
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgb(241 245 249) 25%,
+    rgb(226 232 240) 37%,
+    rgb(241 245 249) 63%
+  );
+  background-size: 200% 100%;
+}
+
+/* 尊重系统的「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer,
+  .animate-fade-in,
+  .animate-fade-in-up,
+  .animate-slide-in-left,
+  .animate-slide-in-right {
+    animation: none !important;
+  }
+}
+
 /* Ranking List */
 .ranking-list {
   @apply flex flex-col gap-2;

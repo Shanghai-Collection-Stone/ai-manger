@@ -30,6 +30,7 @@ import { TenantCredentialModule } from './modules/tenant-credential/tenant-crede
 import { FinanceModule } from './modules/finance/finance.module.js';
 import { AuditLogModule } from './modules/audit-log/audit-log.module.js';
 import { WorkspaceModule } from './modules/workspace/workspace.module.js';
+import { WorkspaceCollabModule } from './modules/workspace-collab/workspace-collab.module.js';
 import { NetdiskModule } from './modules/netdisk/netdisk.module.js';
 import { NoticeModule } from './modules/notice/notice.module.js';
 import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
@@ -68,6 +69,7 @@ import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
     FinanceModule,
     AuditLogModule,
     WorkspaceModule,
+    WorkspaceCollabModule,
     NetdiskModule,
     NoticeModule,
     XhsTopicModule,

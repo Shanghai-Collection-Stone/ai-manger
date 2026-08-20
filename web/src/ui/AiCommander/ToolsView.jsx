@@ -505,7 +505,7 @@ const api = {
    */
   async rebuildGalleryImageEmbeddings(input) {
     try {
-      const res = await fetch(`${API_BASE}/gallery/embeddings/rebuild`, {
+      const res = await fetch(`${API_BASE}/gallery/images/embedding/rebuild`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(input || {}),

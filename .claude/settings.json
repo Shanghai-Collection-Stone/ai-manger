@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "PowerShell($r = Test-NetConnection -ComputerName 127.0.0.1 -Port 27018 -InformationLevel Quiet -WarningAction SilentlyContinue; Write-Output \"mongo 27018 reachable: $r\"; $r2 = Test-NetConnection -ComputerName 127.0.0.1 -Port 3011 -InformationLevel Quiet -WarningAction SilentlyContinue; Write-Output \"api 3011 reachable: $r2\")",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\(p.scripts,null,1\\)\\)\")",
+      "Bash(python -)",
+      "Bash(npx eslint *)",
+      "Bash(echo \"lint exit: $?\")",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger diff --stat -- src/modules/admin src/modules/audit-log src/app.module.ts)",
+      "Bash(npx tsc *)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger status --short)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc status --short)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc diff -- src/renderer/workspace/vue-boot.js src/renderer/workspace/index.html)",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3011 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $procIds = $c.OwningProcess | Select-Object -Unique; foreach \\($procId in $procIds\\) { $p = Get-Process -Id $procId -ErrorAction SilentlyContinue; if \\($p\\) { Write-Output \"stopping $\\($p.ProcessName\\) \\($procId\\)\"; Stop-Process -Id $procId -Force } } } else { Write-Output \"no listener on 3011\" }; Start-Sleep -Seconds 1; if \\(Get-NetTCPConnection -LocalPort 3011 -State Listen -ErrorAction SilentlyContinue\\) { Write-Output \"still listening\" } else { Write-Output \"port 3011 released\" })",
+      "Bash(timeout 90 ./node_modules/.bin/electron \"C:/Users/年年/AppData/Local/Temp/claude/d--aizhihuiguan-ai-manger/e71ae1cc-608e-4220-8ab2-6cd5ebef036f/scratchpad/fixture-check.js\")",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 3011 -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $ids = $c.OwningProcess | Select-Object -Unique; foreach \\($i in $ids\\) { Stop-Process -Id $i -Force -ErrorAction SilentlyContinue } ; Write-Output \"backend stopped\" } else { Write-Output \"no backend running\" }; Get-Process electron -ErrorAction SilentlyContinue | Stop-Process -Force; Write-Output \"electron cleaned\"; git -C d:\\\\aizhihuiguan\\\\ai-manger-pc status --short)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger log --oneline -8)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc log --oneline -8)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger diff --stat)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc diff --stat)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger diff -- api-v2.md src/app.module.ts src/modules/admin src/modules/audit-log docker-compose.yml)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc diff -- src/renderer/workspace/module.md src/renderer/workspace/components/module.md src/renderer/workspace/stores/module.md src/renderer/workspace/api/module.md src/renderer/scripts/module.md src/renderer/styles/module.md src/renderer/workspace/composables/module.md)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc diff -- main.js src/renderer/index.html src/renderer/scripts/article-data.js src/renderer/workspace/api/error-codes.js src/renderer/workspace/api/index.js src/renderer/workspace/api/workspaces.js src/renderer/workspace/stores/rbac.js src/renderer/workspace/composables/useAdmin.js 2>$null)",
+      "PowerShell(git -C d:\\\\aizhihuiguan-ai-manger-pc diff 2>$null)",
+      "PowerShell(git -C d:\\\\aizhihuiguan\\\\ai-manger-pc diff -- src/renderer/workspace/components/workspace-admin.js src/renderer/workspace/components/netdisk-admin.js src/renderer/workspace/components/settings-admin.js src/renderer/workspace/components/audit-admin.js src/renderer/workspace/components/rbac-pages.js src/renderer/workspace/components/dashboard-home.js src/renderer/workspace/stores/audit.js src/renderer/workspace/vue-boot.js)",
+      "PowerShell($f = @\\('src\\\\renderer\\\\scripts\\\\glass-select.js','src\\\\renderer\\\\styles\\\\glass-select.css','src\\\\renderer\\\\workspace\\\\api\\\\workspace-collab.js','src\\\\renderer\\\\workspace\\\\components\\\\glass-select.js','src\\\\renderer\\\\workspace\\\\components\\\\workspace-room.js','src\\\\renderer\\\\workspace\\\\stores\\\\workspace-room.js'\\); foreach\\($i in $f\\){ $p = Join-Path 'd:\\\\aizhihuiguan\\\\ai-manger-pc' $i; $n = \\(Get-Content $p | Measure-Object -Line\\).Lines; \"$i : $n 行\" })"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\年年\\AppData\\Local\\Temp"
+    ]
+  }
+}

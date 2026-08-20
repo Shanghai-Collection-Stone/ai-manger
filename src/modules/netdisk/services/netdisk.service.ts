@@ -26,6 +26,8 @@ import { NetdiskStorageService } from './netdisk-storage.service.js';
 export interface NodeScope {
   workspaceId?: string;
   parentId?: string;
+  /** 目标租户；租户用户忽略此值(锁死自身)，平台超管必须显式指定 */
+  tenantId?: string;
 }
 
 /**
@@ -91,8 +93,11 @@ export class NetdiskService {
    * @keyword-en get tenant disk root
    * @keyword-cn 获取网盘根
    */
-  async getRoot(currentUser: AdminUserEntity): Promise<DiskRootEntity> {
-    return this.ensureRoot(this.requireTenant(currentUser));
+  async getRoot(
+    currentUser: AdminUserEntity,
+    tenantId?: string,
+  ): Promise<DiskRootEntity> {
+    return this.ensureRoot(this.resolveTenant(currentUser, tenantId));
   }
 
   /**
@@ -103,8 +108,9 @@ export class NetdiskService {
   async updateRootCapacity(
     currentUser: AdminUserEntity,
     capacityBytes: number,
+    targetTenantId?: string,
   ): Promise<DiskRootEntity> {
-    const tenantId = this.requireTenant(currentUser);
+    const tenantId = this.resolveTenant(currentUser, targetTenantId);
     const root = await this.ensureRoot(tenantId);
     const capacity = this.normalizeCapacity(capacityBytes);
     if (capacity !== 0 && capacity < root.usedBytes) {
@@ -130,7 +136,7 @@ export class NetdiskService {
     currentUser: AdminUserEntity,
     scope: NodeScope,
   ): Promise<DiskNodeEntity[]> {
-    const tenantId = this.requireTenant(currentUser);
+    const tenantId = this.resolveTenant(currentUser, scope.tenantId);
     return this.nodes
       .find({
         tenantId,
@@ -151,7 +157,7 @@ export class NetdiskService {
     currentUser: AdminUserEntity,
     input: { name: string } & NodeScope,
   ): Promise<DiskNodeEntity> {
-    const tenantId = this.requireTenant(currentUser);
+    const tenantId = this.resolveTenant(currentUser, input.tenantId);
     await this.assertScope(tenantId, input);
     const now = new Date();
     const doc: DiskNodeEntity = {
@@ -187,7 +193,7 @@ export class NetdiskService {
     const size = file.size;
     let tenantId: string;
     try {
-      tenantId = this.requireTenant(currentUser);
+      tenantId = this.resolveTenant(currentUser, scope.tenantId);
       await this.assertScope(tenantId, scope);
       await this.assertCapacity(tenantId, scope.workspaceId, size);
     } catch (error) {
@@ -229,11 +235,11 @@ export class NetdiskService {
     currentUser: AdminUserEntity,
     id: string,
   ): Promise<{ node: DiskNodeEntity; absPath: string }> {
-    const tenantId = this.requireTenant(currentUser);
-    const node = await this.nodes.findOne({ _id: this.toId(id), tenantId });
+    const node = await this.nodes.findOne({ _id: this.toId(id) });
     if (!node || node.type !== 'file' || !node.storageKey) {
       throw new NotFoundException('FILE_NOT_FOUND');
     }
+    this.assertTenant(currentUser, node.tenantId);
     return { node, absPath: this.storage.absPathOf(node.storageKey) };
   }
 
@@ -247,9 +253,11 @@ export class NetdiskService {
     id: string,
     name: string,
   ): Promise<DiskNodeEntity> {
-    const tenantId = this.requireTenant(currentUser);
+    const existing = await this.nodes.findOne({ _id: this.toId(id) });
+    if (!existing) throw new NotFoundException('NODE_NOT_FOUND');
+    this.assertTenant(currentUser, existing.tenantId);
     const res = await this.nodes.findOneAndUpdate(
-      { _id: this.toId(id), tenantId },
+      { _id: existing._id },
       { $set: { name: name.trim(), updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
@@ -266,9 +274,10 @@ export class NetdiskService {
    * @keyword-cn 删除节点
    */
   async deleteNode(currentUser: AdminUserEntity, id: string): Promise<boolean> {
-    const tenantId = this.requireTenant(currentUser);
-    const node = await this.nodes.findOne({ _id: this.toId(id), tenantId });
+    const node = await this.nodes.findOne({ _id: this.toId(id) });
     if (!node) return false;
+    this.assertTenant(currentUser, node.tenantId);
+    const tenantId = node.tenantId;
     if (node.type === 'folder') {
       const childCount = await this.nodes.countDocuments({ parentId: id });
       if (childCount > 0) throw new BadRequestException('FOLDER_NOT_EMPTY');
@@ -378,15 +387,39 @@ export class NetdiskService {
   }
 
   /**
-   * @description 要求当前用户具备租户上下文(网盘为租户级资源)
-   * @keyword-en require tenant context
-   * @keyword-cn 要求租户上下文
+   * @description 解析本次操作的目标租户：租户用户锁死自身(传入不一致直接拒绝)；
+   *   平台超管(无租户上下文)须显式指定 tenantId，用于跨租户分配与管理网盘
+   * @keyword-en resolve netdisk tenant
+   * @keyword-cn 解析网盘租户
    */
-  private requireTenant(currentUser: AdminUserEntity): string {
-    if (!currentUser.tenantId) {
-      throw new ForbiddenException('TENANT_CONTEXT_REQUIRED');
+  private resolveTenant(
+    currentUser: AdminUserEntity,
+    tenantId?: string,
+  ): string {
+    const own = currentUser.tenantId;
+    const requested = tenantId?.trim();
+    if (own) {
+      if (requested && requested !== own) {
+        throw new ForbiddenException('CROSS_TENANT_FORBIDDEN');
+      }
+      return own;
     }
-    return currentUser.tenantId;
+    if (!requested) throw new BadRequestException('TENANT_ID_REQUIRED');
+    return requested;
+  }
+
+  /**
+   * @description 校验当前用户对既有节点所属租户的访问边界(超管放行，租户用户仅限自身)
+   * @keyword-en assert netdisk tenant boundary
+   * @keyword-cn 校验网盘租户边界
+   */
+  private assertTenant(
+    currentUser: AdminUserEntity,
+    targetTenantId: string,
+  ): void {
+    if (currentUser.tenantId && currentUser.tenantId !== targetTenantId) {
+      throw new ForbiddenException('CROSS_TENANT_FORBIDDEN');
+    }
   }
 
   /**

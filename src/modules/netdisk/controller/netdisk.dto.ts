@@ -22,6 +22,23 @@ export class ListNodesQueryDto {
   @IsOptional()
   @IsMongoId()
   parentId?: string;
+
+  /** 目标租户；仅平台超管需要显式指定，租户用户传入会被拒绝 */
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
+}
+
+/**
+ * @description 读取网盘根 query 参数
+ * @keyword-en disk root query dto
+ * @keyword-cn 网盘根查询体
+ */
+export class DiskRootQueryDto {
+  /** 目标租户；仅平台超管需要显式指定 */
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
 }
 
 /**
@@ -42,6 +59,11 @@ export class CreateFolderDto {
   @IsOptional()
   @IsMongoId()
   parentId?: string;
+
+  /** 目标租户；仅平台超管需要显式指定 */
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
 }
 
 /**
@@ -57,6 +79,11 @@ export class UploadFileDto {
   @IsOptional()
   @IsMongoId()
   parentId?: string;
+
+  /** 目标租户；仅平台超管需要显式指定 */
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
 }
 
 /**
@@ -81,4 +108,9 @@ export class UpdateDiskRootDto {
   @IsInt()
   @Min(0)
   capacityBytes!: number;
+
+  /** 目标租户；平台超管为租户分配容量时必填 */
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
 }

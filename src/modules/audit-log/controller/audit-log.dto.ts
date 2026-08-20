@@ -13,7 +13,16 @@ export class AuditLogQueryDto {
   action?: string;
 
   @IsOptional()
-  @IsIn(['workspace', 'workspace_member', 'disk_node', 'disk_root', 'notice'])
+  @IsIn([
+    'workspace',
+    'workspace_member',
+    'workspace_agent',
+    'workspace_conversation',
+    'workspace_task',
+    'disk_node',
+    'disk_root',
+    'notice',
+  ])
   targetType?: string;
 
   @IsOptional()

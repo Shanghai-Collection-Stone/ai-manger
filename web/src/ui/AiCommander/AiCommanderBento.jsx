@@ -228,6 +228,13 @@ const AiCommanderBento = () => {
   const selectMainTab = useCallback((nextTab) => {
     const targetTab = normalizeCommanderTabParam(nextTab);
     if (!targetTab) return;
+    // 底部导航点击时也按 Tab 顺序给出方向，和左右滑动保持一致的横向过渡
+    const prevTab = $activeTab.get();
+    if (prevTab !== targetTab) {
+      const from = COMMANDER_MAIN_TABS.indexOf(prevTab);
+      const to = COMMANDER_MAIN_TABS.indexOf(targetTab);
+      if (from >= 0 && to >= 0) setSlideDir(to > from ? 'right' : 'left');
+    }
     const patch = {
       tab: targetTab,
       popup: null,
@@ -353,6 +360,13 @@ const AiCommanderBento = () => {
     }
     lastTabRef.current = activeTab;
   }, [activeTab]);
+
+  // 过渡播放完把方向复位，否则连续朝同一方向切换时类名不变、动画不会重新触发
+  useEffect(() => {
+    if (slideDir === 'none') return undefined;
+    const timer = setTimeout(() => setSlideDir('none'), 280);
+    return () => clearTimeout(timer);
+  }, [slideDir, activeTab]);
 
   useEffect(() => {
     const onClick = (e) => {

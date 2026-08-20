@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, Copy, Check, X } from 'lucide-react';
+import { SkeletonList } from './blocks/shared.jsx';
 
 /**
  * @description 看板配置管理界面（管理端）
@@ -252,7 +253,7 @@ const DashboardConfigManager = () => {
 
       {/* 加载中 */}
       {loading ? (
-        <div className="text-center py-8 text-slate-500">加载中...</div>
+        <SkeletonList rows={4} rowClassName="h-16" />
       ) : mappings.length === 0 ? (
         <div className="text-center py-8 text-slate-500">
           暂无配置映射。点击"新建配置映射"开始添加。

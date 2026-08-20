@@ -1989,14 +1989,38 @@ const AdminApp = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500">
-        加载中...
+      <div className="min-h-screen bg-slate-50 animate-fade-in">
+        {/* 顶栏骨架，和加载完成后的布局对齐，避免内容出现时跳动 */}
+        <div className="bg-white border-b border-slate-200">
+          <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+            <div className="skeleton-shimmer animate-shimmer h-5 w-32 rounded-md" />
+            <div className="skeleton-shimmer animate-shimmer h-8 w-24 rounded-lg" />
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          <div className="flex gap-2 mb-6 flex-wrap">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="skeleton-shimmer animate-shimmer h-9 w-24 rounded-lg"
+              />
+            ))}
+          </div>
+          <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col gap-3">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div
+                key={i}
+                className="skeleton-shimmer animate-shimmer h-11 w-full rounded-lg"
+              />
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 animate-fade-in">
       <div className="bg-white border-b border-slate-200 sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="text-sm text-slate-700">

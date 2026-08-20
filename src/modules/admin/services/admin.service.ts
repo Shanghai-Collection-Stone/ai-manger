@@ -370,6 +370,13 @@ export class AdminService {
   ): Promise<AdminUserPublic | null> {
     this.assertCanManageUser(currentUser);
     const targetId = this.toObjectId(id, 'INVALID_USER_ID');
+    // 停用自己会让当前会话立刻失效且无法再登录(getUserByToken/login 都拦禁用账号)，需要改库才能恢复
+    if (
+      input.enabled === false &&
+      String(currentUser._id) === String(targetId)
+    ) {
+      throw new BadRequestException('SELF_DISABLE_FORBIDDEN');
+    }
     const target = await this.users.findOne({ _id: targetId });
     if (!target) return null;
     if (currentUser.tenantId && target.tenantId !== currentUser.tenantId) {

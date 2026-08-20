@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, Plus, RefreshCw, Trash2, Edit2, Search } from 'lucide-react';
 import ChatBIView from './ChatBIView';
+import { SkeletonList } from './blocks/shared.jsx';
 
 const API_BASE = typeof window !== 'undefined' && window.location.port === '4322'
   ? 'http://localhost:3011'
@@ -242,7 +243,9 @@ const ThoughtRouteView = ({ onBack }) => {
                 <div className="px-3 py-8 text-center text-slate-400 text-sm">暂无思维链数据</div>
               )}
               {loading && (
-                <div className="px-3 py-8 text-center text-slate-400 text-sm">加载中...</div>
+                <div className="px-3 py-4">
+                  <SkeletonList rows={4} rowClassName="h-16" />
+                </div>
               )}
             </div>
             <div className="hidden md:block overflow-x-auto">
@@ -290,13 +293,16 @@ const ThoughtRouteView = ({ onBack }) => {
                       </td>
                     </tr>
                   )}
-                  {loading && (
-                    <tr>
-                      <td className="px-3 py-8 text-center text-slate-400" colSpan={4}>
-                        加载中...
-                      </td>
-                    </tr>
-                  )}
+                  {loading &&
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <tr key={`sk-${i}`}>
+                        {Array.from({ length: 4 }).map((__, c) => (
+                          <td key={c} className="px-3 py-3">
+                            <div className="skeleton-shimmer animate-shimmer h-4 w-full rounded-md" />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
