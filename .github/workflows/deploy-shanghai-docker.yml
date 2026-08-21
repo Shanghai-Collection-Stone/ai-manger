@@ -131,8 +131,11 @@ jobs:
           APP_PORT_INPUT: ${{ github.event.inputs.app_port || '3011' }}
           CONTAINER_NAME_INPUT: ${{ github.event.inputs.container_name || 'ai_manger_shanghai_app' }}
           IMAGE_KEEP_INPUT: ${{ github.event.inputs.image_keep || '3' }}
+          # 没有单独的 SHANGHAI_ENV 时直接复用 newnew 的那份，不再新建 secret
           SHANGHAI_ENV: ${{ secrets.SHANGHAI_ENV }}
           SHANGHAI_ENV_B64: ${{ secrets.SHANGHAI_ENV_B64 }}
+          NEWNEW_ENV: ${{ secrets.NEWNEW_ENV }}
+          NEWNEW_ENV_B64: ${{ secrets.NEWNEW_ENV_B64 }}
         run: |
           set -euo pipefail
 
@@ -174,12 +177,21 @@ jobs:
 
           ENV_FILE="${RUNNER_TEMP:-/tmp}/ai-manger-shanghai.env"
           rm -f "$ENV_FILE"
+          # 优先用 shanghai 专属 secret，没有就回落到 newnew 那份
           if [ -n "${SHANGHAI_ENV_B64:-}" ]; then
+            echo "Env source: SHANGHAI_ENV_B64"
             printf '%s' "$SHANGHAI_ENV_B64" | base64 -d > "$ENV_FILE"
           elif [ -n "${SHANGHAI_ENV:-}" ]; then
+            echo "Env source: SHANGHAI_ENV"
             printf '%s\n' "$SHANGHAI_ENV" > "$ENV_FILE"
+          elif [ -n "${NEWNEW_ENV_B64:-}" ]; then
+            echo "Env source: NEWNEW_ENV_B64 (fallback)"
+            printf '%s' "$NEWNEW_ENV_B64" | base64 -d > "$ENV_FILE"
+          elif [ -n "${NEWNEW_ENV:-}" ]; then
+            echo "Env source: NEWNEW_ENV (fallback)"
+            printf '%s\n' "$NEWNEW_ENV" > "$ENV_FILE"
           else
-            echo "Missing GitHub secret SHANGHAI_ENV or SHANGHAI_ENV_B64"
+            echo "Missing GitHub secret: need SHANGHAI_ENV(_B64) or NEWNEW_ENV(_B64)"
             exit 1
           fi
           chmod 600 "$ENV_FILE"
