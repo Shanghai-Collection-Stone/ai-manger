@@ -42,7 +42,7 @@
 后台管理服务。
 - **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot
 - **函数**:
-  - `ensureIndexes`: 索引初始化（含畸形旧 partial 索引先 drop 再建，重建唯一偏索引前调用 dedupeDefaultProviders 兜底去重）/ensure indexes
+  - `ensureIndexes()` — 后台索引初始化，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重，每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login`: 登录签发JWT/login issue jwt
   - `getUserByToken`: token解析用户/get user by token

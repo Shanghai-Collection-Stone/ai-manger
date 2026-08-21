@@ -100,8 +100,12 @@ export class AdminService {
   }
 
   /**
-   * @description 确保索引
-   * @keyword-en ensure admin indexes
+   * @description 确保后台管理索引，并将旧的会话过期时间普通索引迁移为 TTL 索引。
+   * @returns {Promise<void>}
+   * @keyword-cn 后台索引初始化
+   * @keyword-cn 会话过期索引迁移
+   * @keyword-en admin-index-initialization
+   * @keyword-en session-ttl-index-migration
    */
   async ensureIndexes(): Promise<void> {
     await this.users.dropIndex('username_1').catch(() => undefined);
@@ -114,6 +118,13 @@ export class AdminService {
     await this.sessions.createIndex({ sessionId: 1 }, { unique: true });
     await this.sessions.createIndex({ userId: 1 });
     await this.sessions.createIndex({ tenantId: 1 });
+    const sessionIndexes = await this.sessions.indexes();
+    for (const index of sessionIndexes) {
+      if (index.name === 'expiresAt_1' && index.expireAfterSeconds !== 0) {
+        await this.sessions.dropIndex('expiresAt_1');
+        break;
+      }
+    }
     await this.sessions.createIndex(
       { expiresAt: 1 },
       { expireAfterSeconds: 0 },
