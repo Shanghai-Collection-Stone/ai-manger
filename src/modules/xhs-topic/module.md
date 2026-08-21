@@ -28,7 +28,9 @@
 - `XhsArticleCanvasCollageCellDto({ src, imageId?, x, y, width, height, objectFit? })` — 校验拼图画布格式里的单个源图格子 | keywords: 拼图画布格式, 拼图格子, collage-canvas-format, collage-cell
 - `XhsArticleCanvasCollageDto({ width, height, cells })` — 校验拼图画布格式的画布尺寸与 2-4 个源图格子 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsArticleCanvasMaterialDto({ id, name, src, materialSrc, x, y, width, height, canvasWidth, canvasHeight, includesText?, effect? })` — 校验与照片分离、可回改特效并可标记已融合文字的海报素材层 | keywords: 可编辑装饰素材, 图层分离, editable-decoration-material, separated-layers
-- `XhsArticleCanvasBoardDto({ imageIndex, kind, title?, subtitle?, baseSrc?, materials?, collage? })` — 校验独立底图、素材、文字与拼图画板元数据 | keywords: 文章画板, 可编辑封面, 图层分离, article-canvas-board, editable-cover, separated-layers
+- `XhsArticleCanvasEditorSizeDto({ width, height })` — 校验用户保存的灵感画布尺寸 | keywords: 画板编辑状态, 画板尺寸, canvas-editor-state, canvas-size
+- `XhsArticleCanvasEditorStateDto({ version, template, size, layers })` — 校验灵感画布保存的模板、尺寸与有序图层结构 | keywords: 画板编辑状态, 图层结构, canvas-editor-state, layer-structure
+- `XhsArticleCanvasBoardDto({ imageIndex, kind, title?, subtitle?, baseSrc?, materials?, collage?, editorState? })` — 校验生成态画板元数据或用户保存的完整编辑状态 | keywords: 文章画板, 画板编辑状态, 图层结构, article-canvas-board, canvas-editor-state, layer-structure
 - `UpdateXhsArticleDto({ title?, body?, tags?, images?, canvasBoards?, contentType? })` — 校验真实文章、配图与结构化画板编辑请求 | keywords: 编辑文章参数, 真实配图, update-article-dto, persisted-images
 - `XHS_TOPIC_COMPLIANCE_PROMPT()` — 定义候选生成的法律、平台、真实性与高风险内容边界 | keywords: 合规提示词, 选题安全, compliance-prompt, topic-safety
 - `resolveRequestedTopicCount(prompt, explicitCount, kind)` — 优先使用显式数量，否则从提示词解析并限制候选数 | keywords: 解析选题数量, 提示词数量, resolve-topic-count, prompt-quantity
@@ -120,6 +122,8 @@
 | 可编辑装饰素材   | editable-decoration-material      | 合成预览保留用于发布，画板另外保存原照片、透明素材、绿幕原图与特效参数               |
 | 图层分离         | separated-layers                  | 照片与文字海报素材进入灵感画布后是独立对象，文字属于素材像素而非原生文字层           |
 | 文章画板         | article-canvas-board              | 图片下标、封面/内页类型与可编辑文案的持久化结构                                      |
+| 画板编辑状态     | canvas-editor-state               | 用户保存的模板、尺寸和完整有序图层，重新进入灵感画布时直接恢复                        |
+| 图层结构         | layer-structure                   | 编辑态画板中按顺序保存的图片、文字和形状图层                                          |
 | 拼图画布格式     | collage-canvas-format             | 拼图画布尺寸与源图格子，进入灵感画布后拆成独立图层                                   |
 | 可换图拼图       | swappable-collage                 | 拼图里的每张源图都能在画布上单独替换                                                 |
 | 文章生成错误码   | article-error-code                | 失败码与中文原因对照表，接口层据此下发用户可读提示                                   |
@@ -136,7 +140,9 @@
 - `XhsArticleCanvasCollageCell` — 拼图内单张源图的格子（地址、图库 ID、坐标尺寸与填充方式）。
 - `XhsArticleCanvasCollage` — 拼图画布格式：画布尺寸与 2-4 个源图格子。
 - `XhsArticleCanvasMaterial` — 封面独立图片素材层，保留原素材、去底结果、坐标尺寸、特效参数与文字融合标记。
-- `XhsArticleCanvasBoard` — 文章画板初始化元数据；支持独立底图、含字图片素材、旧版原生文字与拼图格子。
+- `XhsArticleCanvasEditorSize` — 用户保存的灵感画布宽高。
+- `XhsArticleCanvasEditorState` — 灵感画布保存的模板、尺寸与完整有序图层。
+- `XhsArticleCanvasBoard` — 文章画板元数据；兼容生成态封面/内页和用户保存的完整编辑状态。
 - `XhsTopicArticle` — 子选题持久化的真实文章、标签、图片与内容形式。
 - `XhsTopicCreateInput` — 用户确认候选的批量入库输入。
 - `XhsChildTopicView` — 子题接口列表结构。
@@ -159,3 +165,5 @@
 `POST /api/xhs-topic/:id/article/generate` 同时承担首次生成与已有文章改写。接口创建 `in_progress` Todo 后立即返回，Agent、配图和落库流程在后台继续执行；不同子选题互不阻塞并可同时生成，同一子选题在当前运行实例内拒绝重复启动。服务预载已保存文章，并强制 Agent 首先调用 `xhs_article_read_current` 读取标题、正文、标签、配图和发布形式，再根据用户提示词做局部修改或完全重写；所有变更仍必须经 `xhs_article_update_memory` 写入。改写默认保留现有图片和画板数据，因此不再依赖图库标签；首次生成或没有现有图组时才要求选择真实图库标签并调用 Canvas 生文图片阶段生成一张封面和五张内页。租户开启 AI 封面时走 `ai-overlay`：模型生成纯绿实底、指定主副标题与波普装饰融合的文字海报素材，真实照片不传给模型；sharp 输出合成预览和透明 PNG 素材，`canvasBoards` 另外保存 `baseSrc` 原照片以及带 `includesText` 标记的 `materials` 素材原图/去底图/特效参数。文章预览与发布继续使用合成封面，进入灵感画布后则还原成照片和含字图片素材两个独立图层；素材可移动、缩放、隐藏或重开图片特效。完整文章落库后状态才变为 `generated`。后台失败会把失败码写进 Todo `taskResult.error`，把中文原因写进 `taskResult.errorMessage` 与 `abnormalReason`。前端通过 `GET /api/xhs-topic/article/generations` 轮询每个子选题最近一次任务；查询同时读取 Todo 持久化状态并核对当前进程 `runningTopics`，若数据库仍显示运行但进程内任务已不存在，第一次仅记录疑似中断，连续第二次确认仍缺失后才将 Todo 改为 `failed`，错误码为 `XHS_ARTICLE_GENERATION_INTERRUPTED`。正常运行任务每次都能通过运行实例确认，不会被误清理；服务重启遗留的陈旧状态也不会永久显示“生成中”。配图阶段的 `XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT` 会附带本次使用的图库标签，便于用户判断该补哪些标签的图。
 
 `GET /api/xhs-topic` 从 `xhs_topics` 返回当前租户用户的母子选题工作台，并通过 `articles.source=xhs-topic` 与 `meta.xhsTopicId` 过滤已经存入选题文章库的子题；历史已入库文章同样生效，库内文章删除后对应子题会重新出现。无租户账号同时兼容历史缺失字段与 MongoDB 序列化的 `null`；`POST /api/xhs-topic` 将用户确认的候选批量入库并返回最新工作台；`PATCH /api/xhs-topic/:id` 更新标题、类型或状态；`DELETE /api/xhs-topic` 删除当前用户指定选题，母题命中时级联删除所有子题。入口分别声明 `read/create/update/delete XhsTopic` 权限。
+
+`PATCH /api/xhs-topic/:id/article` 同时接受生成阶段的 `cover/inner` 画板和灵感画布保存的 `edited` 画板。编辑态使用版本化 `editorState` 保存模板、120~1600 像素画板尺寸及最多 200 个有序图层，重新进入灵感画布时可恢复上次编辑结果；原有封面素材、拼图与文章图片结构继续兼容。

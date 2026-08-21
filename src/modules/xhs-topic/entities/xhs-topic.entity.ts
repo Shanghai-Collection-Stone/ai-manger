@@ -72,18 +72,41 @@ export interface XhsArticleCanvasMaterial {
 }
 
 /**
- * @description 文章图片进入灵感画布时使用的结构化画板元数据，支持封面底图、含字海报素材、旧版文字与拼图格子分别保存。
- * @keyword-cn 文章画板, 可编辑封面, 图层分离
- * @keyword-en article-canvas-board, editable-cover, separated-layers
+ * @description 灵感画布保存的画板尺寸，恢复编辑时按该尺寸重建坐标系。
+ * @keyword-cn 画板编辑状态, 画板尺寸
+ * @keyword-en canvas-editor-state, canvas-size
+ */
+export interface XhsArticleCanvasEditorSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * @description 用户保存的灵感画布完整编辑状态，包含模板、尺寸和有序图层数据。
+ * @keyword-cn 画板编辑状态, 图层结构
+ * @keyword-en canvas-editor-state, layer-structure
+ */
+export interface XhsArticleCanvasEditorState {
+  version: 1;
+  template: Record<string, unknown>;
+  size: XhsArticleCanvasEditorSize;
+  layers: Record<string, unknown>[];
+}
+
+/**
+ * @description 文章图片进入灵感画布时使用的结构化画板元数据，兼容生成态封面/内页及用户保存的完整编辑状态。
+ * @keyword-cn 文章画板, 画板编辑状态, 图层结构
+ * @keyword-en article-canvas-board, canvas-editor-state, layer-structure
  */
 export interface XhsArticleCanvasBoard {
   imageIndex: number;
-  kind: 'cover' | 'inner';
+  kind: 'cover' | 'inner' | 'edited';
   title?: string;
   subtitle?: string;
   baseSrc?: string;
   materials?: XhsArticleCanvasMaterial[];
   collage?: XhsArticleCanvasCollage;
+  editorState?: XhsArticleCanvasEditorState;
 }
 
 /**

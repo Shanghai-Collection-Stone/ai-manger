@@ -13,7 +13,7 @@ WORKDIR /app
 
 RUN npm i -g pnpm@10.34.5
 
-COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
+COPY web/package.json web/pnpm-lock.yaml ./web/
 RUN pnpm --dir web install --frozen-lockfile --prod=false
 
 FROM node:20-alpine AS prod-deps

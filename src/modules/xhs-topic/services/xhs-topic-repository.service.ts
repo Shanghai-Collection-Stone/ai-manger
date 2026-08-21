@@ -279,7 +279,12 @@ export class XhsTopicRepositoryService {
     if (Array.isArray(input.canvasBoards)) {
       article.canvasBoards = input.canvasBoards.slice(0, 20).map((board) => ({
         imageIndex: Math.max(0, Math.min(19, Math.floor(board.imageIndex))),
-        kind: board.kind === 'cover' ? 'cover' : 'inner',
+        kind:
+          board.kind === 'cover'
+            ? 'cover'
+            : board.kind === 'edited'
+              ? 'edited'
+              : 'inner',
         ...(board.title
           ? { title: String(board.title).trim().slice(0, 100) }
           : {}),
@@ -312,6 +317,21 @@ export class XhsTopicRepositoryService {
             }
           : {}),
         ...this.normalizeCanvasCollage(board.collage),
+        ...(board.kind === 'edited' && board.editorState
+          ? {
+              editorState: {
+                version: 1 as const,
+                template: { ...board.editorState.template },
+                size: {
+                  width: Number(board.editorState.size.width),
+                  height: Number(board.editorState.size.height),
+                },
+                layers: board.editorState.layers
+                  .slice(0, 200)
+                  .map((layer) => ({ ...layer })),
+              },
+            }
+          : {}),
       }));
     }
     if (input.contentType) article.contentType = input.contentType;

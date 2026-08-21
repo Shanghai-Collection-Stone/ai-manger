@@ -4,6 +4,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
+  IsDefined,
   IsIn,
   IsInt,
   IsNumber,
@@ -13,12 +14,15 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import type {
   XhsArticleCanvasBoard,
   XhsArticleCanvasCollage,
   XhsArticleCanvasCollageCell,
+  XhsArticleCanvasEditorSize,
+  XhsArticleCanvasEditorState,
   XhsArticleCanvasMaterial,
   XhsTopicKind,
 } from '../entities/xhs-topic.entity.js';
@@ -183,9 +187,7 @@ export class GenerateXhsArticleDto {
  * @keyword-cn 拼图画布格式, 拼图格子
  * @keyword-en collage-canvas-format, collage-cell
  */
-export class XhsArticleCanvasCollageCellDto
-  implements XhsArticleCanvasCollageCell
-{
+export class XhsArticleCanvasCollageCellDto implements XhsArticleCanvasCollageCell {
   @IsString()
   @MaxLength(2000)
   src!: string;
@@ -306,9 +308,52 @@ export class XhsArticleCanvasMaterialDto implements XhsArticleCanvasMaterial {
 }
 
 /**
- * @description 校验文章图片对应的灵感画布初始化元数据，包括独立底图、含字素材层、旧版文字和拼图。
- * @keyword-cn 文章画板, 可编辑封面, 图层分离
- * @keyword-en article-canvas-board, editable-cover, separated-layers
+ * @description 校验用户保存的灵感画布尺寸，范围与前端自定义画板一致。
+ * @keyword-cn 画板编辑状态, 画板尺寸
+ * @keyword-en canvas-editor-state, canvas-size
+ */
+export class XhsArticleCanvasEditorSizeDto implements XhsArticleCanvasEditorSize {
+  @Type(() => Number)
+  @IsNumber()
+  @Min(120)
+  @Max(1600)
+  width!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(120)
+  @Max(1600)
+  height!: number;
+}
+
+/**
+ * @description 校验灵感画布保存的模板、尺寸与有序图层结构。
+ * @keyword-cn 画板编辑状态, 图层结构
+ * @keyword-en canvas-editor-state, layer-structure
+ */
+export class XhsArticleCanvasEditorStateDto implements XhsArticleCanvasEditorState {
+  @Type(() => Number)
+  @IsIn([1])
+  version!: 1;
+
+  @IsObject()
+  template!: Record<string, unknown>;
+
+  @ValidateNested()
+  @Type(() => XhsArticleCanvasEditorSizeDto)
+  size!: XhsArticleCanvasEditorSizeDto;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @IsObject({ each: true })
+  layers!: Record<string, unknown>[];
+}
+
+/**
+ * @description 校验文章图片对应的生成态画板元数据或用户保存的完整编辑状态。
+ * @keyword-cn 文章画板, 画板编辑状态, 图层结构
+ * @keyword-en article-canvas-board, canvas-editor-state, layer-structure
  */
 export class XhsArticleCanvasBoardDto implements XhsArticleCanvasBoard {
   @Type(() => Number)
@@ -317,8 +362,8 @@ export class XhsArticleCanvasBoardDto implements XhsArticleCanvasBoard {
   @Max(19)
   imageIndex!: number;
 
-  @IsIn(['cover', 'inner'])
-  kind!: 'cover' | 'inner';
+  @IsIn(['cover', 'inner', 'edited'])
+  kind!: 'cover' | 'inner' | 'edited';
 
   @IsOptional()
   @IsString()
@@ -346,6 +391,15 @@ export class XhsArticleCanvasBoardDto implements XhsArticleCanvasBoard {
   @ValidateNested()
   @Type(() => XhsArticleCanvasCollageDto)
   collage?: XhsArticleCanvasCollageDto;
+
+  @ValidateIf(
+    (board: XhsArticleCanvasBoardDto) =>
+      board.kind === 'edited' || board.editorState !== undefined,
+  )
+  @IsDefined()
+  @ValidateNested()
+  @Type(() => XhsArticleCanvasEditorStateDto)
+  editorState?: XhsArticleCanvasEditorStateDto;
 }
 
 /**
