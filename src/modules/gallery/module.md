@@ -6,6 +6,7 @@
 
 ## 子模块
 - `zip-import/` — ZIP 批量导入子模块，详见 `zip-import/module.md`。复用 `GalleryService.createMany` 入库，支持队列化、进度轮询、取消。
+- `material-styles/` — AI 素材风格库子模块，详见 `material-styles/module.md`。给 `ai-material` 提供可选/随机的风格预设，只约束配色、笔触、描边与装饰语言；参考图打进桌面端安装包，服务端只存描述词。
 
 ## 功能描述及关键词
 
@@ -20,7 +21,8 @@
   - `getImageDimensionsFromFile`: 使用 jimp 读取图片尺寸
   - `deleteImage`: `POST images/:id/delete` 删除单张图片
   - `deleteImagesBatch`: `POST images/batch-delete` 批量删除图片(body `{ userId, ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
-  - `generateAiMaterial`: `POST ai-material` AI 生成贴纸素材并入图库；支持可选 `referenceImageUrl`，参考图只约束配色、字体气质、描边与构成语言，不复制具体内容；输出仍强制单主体 + 纯色背景 + 无文字，供前端 GPU 去底 | keywords: AI素材生成, ai-material-generate
+  - `listMaterialStyles`: `GET material-styles` 列出 AI 素材可选的风格预设与分组，只下发 id/展示名/分组/气质概括，提示词留服务端，缩略图由安装包按同名 id 自带 | keywords: 素材风格列表, list-material-styles
+  - `generateAiMaterial`: `POST ai-material` AI 生成贴纸素材并入图库；支持可选 `referenceImageUrl`，参考图只约束配色、字体气质、描边与构成语言，不复制具体内容；支持可选 `stylePreset`（预设 id 或 `random`）从内置风格库套一种视觉处理方式，解决同一句描述反复生成气质雷同；输出仍强制单主体 + 纯色背景 + 无文字，供前端 GPU 去底 | keywords: AI素材生成, ai-material-generate, material-style-preset
   - `resolveGeneratedMaterialFile`: 把生图返回的本地路径解析成 `public/uploads` 下的文件信息,拒绝外链与 `..` 穿越 | keywords: resolve generated material file, 素材落盘
 
 ### 常量

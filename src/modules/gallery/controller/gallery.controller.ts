@@ -23,6 +23,9 @@ import { GalleryGroupService } from '../services/gallery-group.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryUploadExceptionFilter } from '../filters/gallery-upload-exception.filter.js';
+import { MaterialStyleService } from '../material-styles/services/material-style.service.js';
+import type { MaterialStyleOption } from '../material-styles/services/material-style.service.js';
+import type { MaterialStyleGroupId } from '../material-styles/material-style.presets.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
 import type { Request } from 'express';
@@ -330,6 +333,7 @@ export class GalleryController {
     private readonly groups: GalleryGroupService,
     private readonly adminService: AdminService,
     private readonly agent: AgentService,
+    private readonly materialStyles: MaterialStyleService,
   ) {}
 
   /**
@@ -631,10 +635,30 @@ export class GalleryController {
   }
 
   /**
+   * @description 列出 AI 素材可选的风格预设与分组，供素材面板渲染风格选择区。
+   * 只下发 id / 展示名 / 分组 / 气质概括，`descriptor` 提示词留在服务端；
+   * 缩略图不走接口，由前端按同名 `id` 取随包图片。
+   * @param {Request} [req] - Express 请求对象，用于校验调用方身份。
+   * @returns {Promise<{ groups: Array<{ id: MaterialStyleGroupId; label: string }>; styles: MaterialStyleOption[] }>} 风格分组与列表。
+   * @keyword-cn 素材风格列表, 风格预设
+   * @keyword-en list-material-styles, material-style-preset
+   */
+  @Get('material-styles')
+  async listMaterialStyles(@Req() req?: Request): Promise<{
+    groups: Array<{ id: MaterialStyleGroupId; label: string }>;
+    styles: MaterialStyleOption[];
+  }> {
+    if (req) await this.resolveAuthScope(req);
+    return this.materialStyles.listStyles();
+  }
+
+  /**
    * @description AI 生成贴纸素材并入图库。提示词强制单主体 + 纯色背景 + 无文字，
    * 便于前端 GPU 去底后直接当贴纸用；可选参考图只约束配色、字体气质与构成语言，
-   * 不作为最终素材内容。生成结果打 `ai素材` 标签供素材面板筛选。
-   * @param {{ prompt?: string; size?: string; tags?: string; userId?: string; referenceImageUrl?: string }} body - 生成参数。
+   * 不作为最终素材内容。可选 `stylePreset` 从内置风格库取一条视觉处理方式（传
+   * `random` 则每次随机换一条），解决同一句描述反复生成时气质雷同的问题。
+   * 生成结果打 `ai素材` 标签供素材面板筛选。
+   * @param {{ prompt?: string; size?: string; tags?: string; userId?: string; referenceImageUrl?: string; stylePreset?: string }} body - 生成参数。
    * @param {Request} [req] - Express 请求对象，用于解析租户范围。
    * @returns {Promise<{ image: Omit<GalleryImageEntity, '_id'> }>} 入库后的素材记录。
    * @throws {BadRequestException} 提示词为空或生图结果落盘失败时抛出。
@@ -650,6 +674,7 @@ export class GalleryController {
       tags?: string;
       userId?: string;
       referenceImageUrl?: string;
+      stylePreset?: string;
     },
     @Req() req?: Request,
   ): Promise<{ image: Omit<GalleryImageEntity, '_id'> }> {
@@ -670,8 +695,12 @@ export class GalleryController {
     const referenceImageUrl = String(body?.referenceImageUrl ?? '')
       .trim()
       .slice(0, 2000);
+    const stylePreset = this.materialStyles.resolveStyle(body?.stylePreset);
     const prompt = [
       `贴纸素材主体:${rawPrompt}`,
+      // 风格段落放在主体之后、规格之前：它必须能盖住模型的默认审美，
+      // 又不能盖过下面「无文字 / 纯色背景」这几条硬规格。
+      this.materialStyles.buildStylePrompt(stylePreset),
       referenceImageUrl
         ? '【风格参考】已附参考图，只学习其色彩组合、粗细对比、字体气质、描边方式和装饰构成；严禁复制参考图中的具体文字、人物、品牌或版面内容。'
         : '',

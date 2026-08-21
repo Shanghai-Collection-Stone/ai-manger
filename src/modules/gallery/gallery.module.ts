@@ -5,11 +5,12 @@ import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { GalleryController } from './controller/gallery.controller.js';
 import { GalleryService } from './services/gallery.service.js';
 import { GalleryGroupService } from './services/gallery-group.service.js';
+import { MaterialStyleService } from './material-styles/services/material-style.service.js';
 
 @Module({
   imports: [DataSourceModule, AdminModule, AiAgentModule],
   controllers: [GalleryController],
-  providers: [GalleryService, GalleryGroupService],
-  exports: [GalleryService, GalleryGroupService],
+  providers: [GalleryService, GalleryGroupService, MaterialStyleService],
+  exports: [GalleryService, GalleryGroupService, MaterialStyleService],
 })
 export class GalleryModule {}

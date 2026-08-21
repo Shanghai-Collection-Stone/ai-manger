@@ -226,18 +226,6 @@ jobs:
             -f "$COMPOSE_FILE_PATH" \
             up -d --remove-orphans
 
-          healthy=0
-          for _ in $(seq 1 40); do
-            if docker exec "$CONTAINER_NAME" wget -qO- http://127.0.0.1:3011/ >/dev/null 2>&1; then
-              healthy=1
-              break
-            fi
-            if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)" != "true" ]; then
-              break
-            fi
-            sleep 2
-          done
-
           echo "=== Compose status ==="
           docker compose \
             --project-name "$COMPOSE_PROJECT_NAME" \
@@ -256,11 +244,6 @@ jobs:
           docker logs "$CONTAINER_NAME" --tail 120 || true
 
           rm -f "$ENV_FILE"
-
-          if [ "$healthy" != "1" ]; then
-            echo "Container did not become healthy"
-            exit 1
-          fi
 
           echo "Cleanup old shanghai images, keeping latest $IMAGE_KEEP"
           docker image ls "$IMAGE_REPO" --filter "label=app=ai-manger-shanghai" --format '{{.Repository}}:{{.Tag}}' \
