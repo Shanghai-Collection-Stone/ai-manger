@@ -4,7 +4,7 @@
 
 ## 概述 (Overview)
 
-提供母选题与子选题候选生成、真实选题列表、文章生成、批量入库和级联删除接口。候选与文章生成都先创建 Todo；选题 Agent 只通过工具逐项写入候选，文章 Agent 只通过工具分别设置标题、正文、文章标签并从真实图库标签中选择相关配图标签，模型最终文本均不参与结果解析。文章内存完整校验后，复用既有生文图片阶段按相关标签生成无字封面底图、五张内页、动态拼图与可选 AI 封面底图，并把封面文案保存为灵感画布可编辑图层元数据，最终将文章与完整图组一并写入对应子选题的 `article` 字段。Agent 可按需使用已配置的 DuckDuckGo MCP 搜索工具，默认提示词强制执行法律、平台与高风险内容合规边界。
+提供母选题与子选题候选生成、真实选题列表、文章生成、批量入库和级联删除接口。候选与文章生成都先创建 Todo；选题 Agent 只通过工具逐项写入候选，文章 Agent 只通过工具分别设置标题、正文、文章标签并从真实图库标签中选择相关配图标签，模型最终文本均不参与结果解析。文章内存完整校验后，复用既有生文图片阶段按相关标签生成无字封面底图、五张内页、动态拼图与可选 AI 封面底图；小红书专家的 `ai-overlay` 封面可通过 `coverStyle` 选择素材风格预设或传 `random` 随机，并把生成出的透明文字海报层以 `ai素材` 标签同步入图库，同时把封面文案保存为灵感画布可编辑图层元数据，最终将文章与完整图组一并写入对应子选题的 `article` 字段。Agent 可按需使用已配置的 DuckDuckGo MCP 搜索工具，默认提示词强制执行法律、平台与高风险内容合规边界。
 
 ## 文件清单 (File List)
 
@@ -24,7 +24,7 @@
 - `CreateXhsTopicsDto({ kind, parentId?, sourceTodoId?, candidates })` — 校验批量保存母题或子题请求 | keywords: 批量保存选题, 数据库存储, create-topics-dto, database-storage
 - `DeleteXhsTopicsDto({ ids })` — 校验批量和级联删除请求 | keywords: 批量删除选题, 级联删除, delete-topics-dto, cascade-delete
 - `UpdateXhsTopicDto({ title?, topicType?, status? })` — 校验真实选题内容或状态更新 | keywords: 更新真实选题, 选题状态, update-persisted-topic, topic-status
-- `GenerateXhsArticleDto({ prompt?, useSearch?, dedup?, regenerateImages? })` — 校验真实文章生成请求、配图去重及重新配图规则 | keywords: 文章生成参数, 文章提示词, article-generation-dto, article-prompt
+- `GenerateXhsArticleDto({ prompt?, useSearch?, dedup?, coverStyle?, regenerateImages? })` — 校验真实文章生成请求、配图去重、封面风格预设及重新配图规则 | keywords: 文章生成参数, 文章提示词, article-generation-dto, article-prompt
 - `XhsArticleCanvasCollageCellDto({ src, imageId?, x, y, width, height, objectFit? })` — 校验拼图画布格式里的单个源图格子 | keywords: 拼图画布格式, 拼图格子, collage-canvas-format, collage-cell
 - `XhsArticleCanvasCollageDto({ width, height, cells })` — 校验拼图画布格式的画布尺寸与 2-4 个源图格子 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsArticleCanvasMaterialDto({ id, name, src, materialSrc, x, y, width, height, canvasWidth, canvasHeight, includesText?, effect? })` — 校验与照片分离、可回改特效并可标记已融合文字的海报素材层 | keywords: 可编辑装饰素材, 图层分离, editable-decoration-material, separated-layers
@@ -73,7 +73,7 @@
 - `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章合规、搜索、重新匹配图库和工具交付提示词 | keywords: 构造文章提示词, 工具交付约束, build-article-prompt, tool-delivery-contract
 - `XhsArticleGenerationService.runAgent(system, tools, draft)` — 执行文章 Agent 并忽略最终文本 | keywords: 执行文章Agent, 忽略最终文本, run-article-agent, ignore-final-text
 - `XhsArticleGenerationService.isArticleComplete(draft, requireImageTags)` — 校验标题、正文、文章标签，并仅在首次配图时要求图库标签 | keywords: 校验文章完整性, 内存文章, validate-article-completeness, in-memory-article
-- `XhsArticleGenerationService.generateArticleImagesByWorkflow(input, scope)` — 按请求的去重规则生成图片组，并把合成封面拆成原照片与已融合文字的独立海报素材画板元数据 | keywords: 生文配图工作流, 可编辑封面, article-image-workflow, editable-cover
+- `XhsArticleGenerationService.generateArticleImagesByWorkflow(input, scope)` — 按去重与封面风格规则生成图片组，并把合成封面拆成原照片与已融合文字的独立海报素材画板元数据 | keywords: 生文配图工作流, 可编辑封面, article-image-workflow, editable-cover
 - `XhsArticleGenerationService.toCanvasBoardCollage(collage?)` — 把图组拼图的画布格式转成文章画板元数据，源图格子随文章持久化 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsArticleGenerationService.buildResult(topicId, article, searchEnabled, searchAvailable)` — 构造可写入 Todo 的文章结果 | keywords: 构造文章结果, 日期序列化, build-article-result, serialize-dates
 - `XhsTopicController({ xhsTopicService, articleGenerationService, repository })` — 暴露带后台鉴权的选题、真实文章生成与持久化接口 | keywords: 小红书选题接口, 待办返回, xhs-topic-controller, todo-response
@@ -144,7 +144,7 @@
 - `XhsTopicGenerateInput` — 服务层标准生成输入。
 - `XhsArticleUpdateInput` — 已生成文章编辑输入。
 - `XhsArticleMemoryDraft` — Agent 工具在单次运行中调整的文章内存，含文章标签与真实图库配图标签。
-- `XhsArticleGenerateInput` — 真实文章生成输入，包含配图去重规则和可选的整组配图重新生成开关。
+- `XhsArticleGenerateInput` — 真实文章生成输入，包含配图去重、素材风格库封面预设和可选的整组配图重新生成开关。
 - `XhsArticleGenerationResult` — 写入 Todo `taskResult` 的文章生成结果。
 - `XhsArticleGenerationState` — 单个子选题最近一次文章生成任务的运行、完成或失败状态。
 - `XhsTopicGenerationResult` — 写入 Todo `taskResult` 的结果结构。

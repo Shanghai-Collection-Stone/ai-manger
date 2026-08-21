@@ -14,6 +14,7 @@ import { GalleryService } from '../../gallery/services/gallery.service.js';
 import { GalleryGroupService } from '../../gallery/services/gallery-group.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { SassService } from '../../sass/services/sass.service.js';
+import { MaterialStyleService } from '../../gallery/material-styles/services/material-style.service.js';
 import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
 import type {
   CanvasImageGroup,
@@ -88,7 +89,17 @@ type ImageGroupAllocationRequest = {
   slots: ImageGroupSlotRequirement[];
 };
 
-type GeneratedAssetKind = 'cover' | 'collage' | 'inner';
+type GeneratedAssetKind = 'cover' | 'collage' | 'inner' | 'material';
+
+/**
+ * @description AI 生成素材的固定标签，与 `gallery.controller.ts` 的 `AI_MATERIAL_TAG`
+ * 和前端 `material-lab/MaterialPanel.jsx` 的同名常量必须逐字一致。
+ * 这里重新声明而不是 import：`gallery.controller` 会带进 AgentService 等一整条依赖，
+ * 而 ai-agent 与 canvas 之间已经是 forwardRef 循环，再多一条会在模块加载期出问题。
+ * @keyword-cn AI素材标签
+ * @keyword-en ai-material-tag
+ */
+const AI_MATERIAL_TAG = 'ai素材';
 
 export type ImageGroupPlannedSlot =
   | { kind: 'portrait'; role: ImageGroupImageRole; image: GalleryImageEntity }
@@ -177,6 +188,7 @@ export class CanvasImageGroupService {
     private readonly galleryGroups: GalleryGroupService,
     private readonly agentService: AgentService,
     private readonly sassService: SassService,
+    private readonly materialStyles: MaterialStyleService,
   ) {}
 
   private coercePlainText(value: unknown): string {
@@ -794,6 +806,7 @@ export class CanvasImageGroupService {
               topic: input.topic,
               articleTitle: art.title,
               coverText,
+              coverStyle: input.coverStyle,
               baseImage: coverPlan.image,
               sourceImages: coverSourceImages,
               dynamicCoverGroupId: preparation.dynamicCoverGroupId,
@@ -1472,7 +1485,7 @@ export class CanvasImageGroupService {
    *   艺术字与装饰融合素材：模型按指定主副标题生成波普艺术字，并结合心形、星芒、派对帽、
    *   彩带、贴纸框等图形元素；不含人物与场景。由 tryComposeAiOverlayCoverToGallery 叠到真实照片上。
    *   固定要求纯绿色实底，由拼合侧做绿幕色键，不依赖任何生图型号的透明通道能力。
-   * @param {{ topic?: string; articleTitle?: string; coverText: { title: string; subtitle: string } }} input - 主题上下文与必须画入素材的封面文案。
+   * @param {{ topic?: string; articleTitle?: string; coverText: { title: string; subtitle: string }; coverStyle?: string }} input - 主题上下文、必须画入素材的封面文案与可选风格预设。
    * @returns {string} 文字海报素材层提示词。
    * @keyword-cn 文字海报素材, 绿色素材层
    * @keyword-en typography-poster-material, green-screen-material
@@ -1481,7 +1494,12 @@ export class CanvasImageGroupService {
     topic?: string;
     articleTitle?: string;
     coverText: { title: string; subtitle: string };
+    coverStyle?: string;
   }): string {
+    // 风格预设与素材工坊共用同一套注册表：那 14 条描述的正是配色、笔触、描边和
+    // 装饰语言，恰好覆盖下面【文字风格】【装饰风格】两行的职责。没选或选不中时
+    // 回落到原来写死的「亮粉/明黄/奶白 波普生日海报」，保持旧行为不变。
+    const style = this.materialStyles.resolveStyle(input.coverStyle);
     const safeTopic = this.sanitizeCopyrightRiskText(input.topic);
     const safeArticleTitle = this.sanitizeCopyrightRiskText(input.articleTitle);
     const safeCoverText = this.sanitizeCoverText(input.coverText);
@@ -1495,8 +1513,12 @@ export class CanvasImageGroupService {
             `【必须文字】副标题必须逐字准确写成“${safeCoverText.subtitle}”，作为较小的贴纸标签或横幅文字。`,
           ]
         : []),
-      '【文字风格】中文艺术字采用夸张粗体、大小错落、轻微倾斜、粗黑描边与贴纸外轮廓；亮粉、明黄、奶白可以分行或分词交替，允许天蓝小色块。文字必须清晰可读、完整位于画布内。',
-      '【装饰风格】把心形、星星、星芒、派对帽、彩带、纸屑、手绘曲线、贴纸边框自然穿插在文字周围，形成高对比波普生日海报视觉；装饰服务于文字排版，不要把文字和装饰拆成互不相关的区域。',
+      style
+        ? `【风格预设 - ${style.label}】${style.descriptor}`
+        : '【文字风格】中文艺术字采用夸张粗体、大小错落、轻微倾斜、粗黑描边与贴纸外轮廓；亮粉、明黄、奶白可以分行或分词交替，允许天蓝小色块。文字必须清晰可读、完整位于画布内。',
+      style
+        ? '【风格约束】风格预设只决定配色、笔触质感、描边方式和装饰元素语言；文字内容仍以上面【必须文字】为准，装饰服务于文字排版，不要把文字和装饰拆成互不相关的区域。预设里若提到深色或纯黑底色，一律忽略——本图背景必须是纯绿色 #00FF00。'
+        : '【装饰风格】把心形、星星、星芒、派对帽、彩带、纸屑、手绘曲线、贴纸边框自然穿插在文字周围，形成高对比波普生日海报视觉；装饰服务于文字排版，不要把文字和装饰拆成互不相关的区域。',
       '【严禁】装饰元素使用绿色、黄绿色或青绿色，避免与绿幕背景混淆；禁止大面积暗色实体和写实质感。',
       '【严禁】人物、人脸、动物、建筑、家具、食物、任何真实场景；允许主题相关的简化图标，但必须是扁平贴纸图形。',
       '【严禁】除指定主标题和副标题外，不得出现其他文字、字母、数字、水印、logo、网址、二维码、对话框、拟声词或 emoji。',
@@ -1603,6 +1625,7 @@ export class CanvasImageGroupService {
     topic?: string;
     articleTitle?: string;
     coverText: { title: string; subtitle: string };
+    coverStyle?: string;
     baseImage: GalleryImageEntity;
     sourceImages: GalleryImageEntity[];
     dynamicCoverGroupId: string | number;
@@ -1625,6 +1648,7 @@ export class CanvasImageGroupService {
           topic: input.topic,
           articleTitle: input.articleTitle,
           coverText: input.coverText,
+          coverStyle: input.coverStyle,
         }),
       );
 
@@ -1682,6 +1706,25 @@ export class CanvasImageGroupService {
         description: `真实照片+AI文字海报素材叠加封面（${providerLabel || 'unknown'}）`,
       });
       if (!preview) return null;
+
+      // 去底后的文字海报本来只作为画板图层引用，不入库就等于用完即弃。
+      // 打上 ai素材 标签存进图库后，它会出现在素材工坊「AI 生成」页签里，
+      // 可以直接拖到别的画布上复用。存失败不影响封面本身，只记一条日志。
+      await this.persistGeneratedAssetToGallery({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        url: composed.materialUrl,
+        generatedKind: 'material',
+        description: `文章封面文字海报素材（${providerLabel || 'unknown'}）`,
+      }).catch((error) => {
+        this.logger.warn(
+          `[image-group] ai_overlay_material_persist_failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return null;
+      });
+
       return {
         preview,
         editableBase: {
@@ -2704,10 +2747,11 @@ export class CanvasImageGroupService {
 
   /**
    * @description 组装生成图片标签（保留来源语义并打上动态封面/拼图类型标签）。
-   * @param {'cover'|'collage'|'inner'} generatedKind - 生成类型。
+   * @param {'cover'|'collage'|'inner'|'material'} generatedKind - 生成类型。
    * @param {GalleryImageEntity[]} [sourceImages] - 来源图片。
    * @returns {string[]} 标签列表。
-   * @keyword-en build generated asset tags
+   * @keyword-cn AI素材标签, 生成素材标签
+   * @keyword-en ai-material-tag, generated-asset-tags
    */
   private buildGeneratedAssetTags(
     generatedKind: GeneratedAssetKind,
@@ -2722,6 +2766,13 @@ export class CanvasImageGroupService {
       seen.add(t);
       out.push(t);
     };
+
+    if (generatedKind === 'material') {
+      // 只打素材标签，不继承源照片的 tag：素材是纯装饰层，
+      // 带上「人像」「门店」这类照片标签会污染按 tag 取图的生文工作流
+      [AI_MATERIAL_TAG, '封面素材', '自动生成'].forEach(push);
+      return out;
+    }
 
     for (const img of Array.isArray(sourceImages) ? sourceImages : []) {
       for (const t of Array.isArray(img.tags) ? img.tags : []) {
@@ -2741,9 +2792,10 @@ export class CanvasImageGroupService {
 
   /**
    * @description 将画布生成出的封面/拼图/内页文件持久化到图库，确保返回真实 imageId。
-   * @param {{ userId: string; tenantId?: string; url: string; generatedKind: 'cover'|'collage'|'inner'; groupId?: string | number; sourceImageIds?: number[]; sourceImages?: GalleryImageEntity[]; description?: string }} input - 持久化入参。
+   * @param {{ userId: string; tenantId?: string; url: string; generatedKind: 'cover'|'collage'|'inner'|'material'; groupId?: string | number; sourceImageIds?: number[]; sourceImages?: GalleryImageEntity[]; description?: string }} input - 持久化入参；素材只打 `ai素材` 标签，不进入动态封面分组。
    * @returns {Promise<GalleryImageEntity | null>} 入库后的图库实体。
-   * @keyword-en persist generated canvas asset to gallery
+   * @keyword-cn 生成素材入库, AI素材同步
+   * @keyword-en persist-generated-asset, sync-ai-material
    */
   private async persistGeneratedAssetToGallery(input: {
     userId: string;
@@ -2774,7 +2826,9 @@ export class CanvasImageGroupService {
     let finalGroupId = isValidGroupId(input.groupId)
       ? input.groupId
       : undefined;
-    if (finalGroupId === undefined) {
+    // 素材不进「动态封面/动态拼图」分组：它按 ai素材 标签在素材面板里露出，
+    // 塞进封面分组只会让分组视图里混进一堆透明装饰层
+    if (finalGroupId === undefined && input.generatedKind !== 'material') {
       if (input.generatedKind === 'cover') {
         const coverGroup =
           await this.galleryGroups.findOrCreateDynamicCoverGroup(
@@ -2852,7 +2906,11 @@ export class CanvasImageGroupService {
               ? '画布动态封面'
               : input.generatedKind === 'inner'
                 ? '画布动态内页'
-                : '画布动态拼图'),
+                : input.generatedKind === 'material'
+                  ? 'AI 文字海报素材'
+                  : '画布动态拼图'),
+          // 素材也标 isCollage：它是生成物不是用户照片，
+          // `regular` 过滤会把它排掉，从而不污染画布左侧的选图面板
           isCollage: input.generatedKind !== 'inner',
           collageSourceImageIds: sourceIds.length > 0 ? sourceIds : undefined,
           collageMeta: {

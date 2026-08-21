@@ -1,7 +1,7 @@
 # Gallery-Zip-Import Module
 
 ## 模块描述
-图库 ZIP 批量导入模块:接收单个 zip 包 → 写入 `gallery_zip_imports` 集合(pending 任务) → 立即返回 jobId → 进程内串行后台流水线(打开 zip → 流式逐张解压到 `public/uploads/` → 保质量压缩(同批量上传口径) → 调 `GalleryService.createMany` 分批入库 + 生成缩略图 + 写 embedding)→ 全程更新 `status / stage / progress`,前端 2s 轮询展示。
+图库 ZIP 批量导入模块:接收单个 zip 包 → 写入 `gallery_zip_imports` 集合(pending 任务) → 立即返回 jobId → 进程内串行后台流水线(打开 zip → 读取可选客户端预处理清单 → 流式逐张解压到 `public/uploads/` → 旧 ZIP 或处理失败图片走服务端保质量压缩 → 调 `GalleryService.createMany` 分批入库 + 生成缩略图 + 写 embedding)→ 全程更新 `status / stage / progress`,前端 2s 轮询展示。
 
 特点:
 - **单进程串行**:同时只跑一个 zip,避免大包互相挤垮内存
@@ -11,6 +11,7 @@
 - **可指定库 + 全局 tag**:`groupId` 落到每张图的 `groupId` 字段,`tags` 落到 `tags` 字段
 - **挂载点**:`/gallery/zip-import/*`,复用 `AdminAuthGuard`(Bearer token + tenant scope)
 - **zip 上限**:1GB,zip 临时文件存 `public/uploads_zips/`,处理完(成功/失败/取消)自动 unlink
+- **客户端预处理兼容**:识别根目录 `_gallery_manifest.json`;清单有效的图片复用前端宽高并跳过服务端重复压缩/尺寸读取，无清单或单图处理失败时自动回退原流水线
 
 文件路径: `src/modules/gallery/zip-import`
 
@@ -38,13 +39,14 @@
   - `cancel`: 写 `cancelRequested=true`,pending 态直接置 cancelled /cancel job
   - `remove`: 删除一条任务记录(仅限完成/失败/取消态)/delete job record
   - `processJob`: 进程内串行入口(等待当前任务结束后才跑下一个)/sequential processing entry
-  - `runJob`: 主流水线 — 打开 zip → 枚举图片 entry → 逐张解压 → 保质量压缩(`GalleryService.compressImageInPlace`,与普通批量上传同口径 1600x1600/q75) → 生成缩略图/读尺寸 → 累积到 batch → 每 20 张 flush 到 `GalleryService.createMany` /run zip import pipeline
+  - `runJob`: 主流水线 — 打开 zip → 读取客户端清单 → 枚举图片 entry → 逐张解压 → 按清单跳过或回退服务端压缩/读尺寸 → 生成缩略图 → 每 20 张 flush 到 `GalleryService.createMany` /run zip import pipeline
   - `shouldCancel`: 实时从 db 取 `cancelRequested` 标志 /check cancel flag
   - `finalizeFailed` / `finalizeCancelled`: 写终态 + 清理 zip 临时文件 /finalize failed or cancelled
   - `isImageEntry`: 按扩展名筛选 zip 内的图片条目(忽略 `__MACOSX/` 和 `._` 元数据)/filter image entry
   - `extractEntry`: 单个 entry 流式解压到目标路径 /stream extract single entry
   - `closeZip` / `safeUnlink` / `statSize`: 资源/IO 工具 /resource and io helpers
   - `readImageDimensions`: jimp 读尺寸 /read image dimensions via jimp
+  - `readClientPreprocessManifest(zip)` — 校验前端尺寸清单并索引可跳过重复处理的图片 | keywords: 客户端预处理清单, 跳过重复压缩, client-preprocess-manifest, skip-duplicate-compression
   - `mimeTypeFromExt`: 扩展名 → mime /mime from ext
   - `loadStreamZip`: 懒加载 `node-stream-zip` 构造函数 /lazy load streamzip ctor
 

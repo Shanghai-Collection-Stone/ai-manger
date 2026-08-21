@@ -210,6 +210,7 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
   - `selectToolView(nextView)` — 切换效能工具卡片并同步 URL 参数 | keywords: url-route, tool-view
   - `loadCanvases`: 加载 Canvas 列表，支持追加分页（append=true）、类型/标签过滤
   - `onBatchDelete`: 批量删除已选图库图片(window.confirm 二次确认 → `api.batchDeleteGalleryImages` → 刷新图库/标签),与"批量改标签"同处 batch 工具条 | keywords: gallery, batch-delete
+  - `api.uploadGalleryZip(file, body, onProgress?)` — 使用 XHR 上传 ZIP 并按真实字节进度回调，服务端接收后进入后台队列 | keywords: ZIP上传, 上传速度, zip-upload, upload-speed
 - **api 对象新增 ZIP 导入方法**: `uploadGalleryZip`、`listGalleryZipImports`、`cancelGalleryZipImport`、`deleteGalleryZipImport`(对接 `/gallery/zip-import/*` 后端)
 - **api 对象新增批量删除方法**: `batchDeleteGalleryImages({ userId, ids })`(对接 `POST /gallery/images/batch-delete`) | keywords: gallery, batch-delete
 
@@ -450,14 +451,31 @@ AI Commander 前端 API client，封装 Canvas、图库、会话以及小红书�
 
 ### GalleryZipImportPanel.jsx
 
-图库 ZIP 批量导入右侧抽屉面板。包含上传表单(选 zip + 分组下拉 + 标签输入)和任务历史列表(2s 轮询拉 `/gallery/zip-import/list`,展示 status / stage / progress / 错误明细;可取消运行中、删除完成态)。完成态触发 `onCompleted` 通知外部刷新图库与分组。
+图库 ZIP 批量导入右侧抽屉面板。选择不超过 300MB 的 ZIP 后，先调用独立 Worker 解包、逐张压缩并生成尺寸清单，再上传优化后的 ZIP；展示本地处理进度、压缩前后体积、真实字节上传进度与平滑实时速度。任务历史轮询采用请求完成后递归调度，上一轮成功返回并处理数据后才等待 2s 拉取 `/gallery/zip-import/list`，不会产生重叠请求；展示 status / stage / progress / 错误明细，可取消运行中、删除完成态。完成态触发 `onCompleted` 通知外部刷新图库与分组。
 
-- **关键词**: gallery-zip-import, drawer, multipart upload, polling, progress-bar, cancel, status-badge
+- **关键词**: gallery-zip-import, local-zip-optimization, worker-image-compression, image-dimension-manifest, upload-speed, sequential-polling
 - **函数**:
-  - `GalleryZipImportPanel`: 主组件,props: `{ open, onClose, userId, groups, api, onCompleted }` /panel main entry
+  - `preprocessGalleryZip(file, onProgress, onWorker)` — 在 Worker 中优化图片并返回带尺寸清单的新 ZIP | keywords: ZIP本地优化, Worker图片压缩, local-zip-optimization, worker-image-compression
+  - `GalleryZipImportPanel({ open, onClose, userId, groups, api, onCompleted })` — ZIP 本地优化、上传与串行轮询主组件 | keywords: 图库ZIP导入, ZIP本地优化, 串行轮询, gallery-zip-import, local-zip-optimization, sequential-polling
+  - `refresh()` — 复用正在执行的列表请求，并在成功返回任务数据后更新界面 | keywords: 串行轮询刷新, 导入任务数据, sequential-poll-refresh, import-job-data
+  - `poll()` — 上一轮刷新成功完成后再调度下一次请求 | keywords: 串行任务轮询, 请求完成后调度, sequential-job-polling, post-response-scheduling
+  - `handleUploadProgress({ loaded, total })` — 根据连续字节采样计算平滑上传速度并更新进度 | keywords: 上传速度计算, 上传进度显示, upload-speed-calculation, upload-progress-display
   - `JobCard`: 单条任务卡片(状态徽章 + 进度条 + 错误折叠)/job card with progress
   - `StatusBadge`: 状态徽章(进行中蓝 / 成功绿 / 失败红 / 取消灰)/status badge
   - `formatBytes` / `formatTime`: 显示格式化 helpers
+
+### galleryZipPreprocess.worker.js
+
+浏览器 ZIP 图片预处理 Worker。使用 `fflate` 仅解出图片 entry，JPEG/WebP/PNG 通过 `OffscreenCanvas` 最大边缩到 1600、质量 0.75，只有体积至少缩小 5% 才替换；GIF/BMP 保持原字节。重新打包时写入 `_gallery_manifest.json`，供服务端复用可信宽高并跳过重复压缩。
+
+- **关键词**: client-zip-preprocess, client-image-compression, image-dimension-manifest, preserve-animation
+- **函数**:
+  - `extensionOf(name)` — 提取 ZIP 图片 entry 的小写扩展名 | keywords: 图片扩展名, ZIP条目, image-extension, zip-entry
+  - `mimeTypeOf(extension)` — 把图片扩展名映射为浏览器编码 MIME | keywords: 图片媒体类型, 浏览器编码, image-mime, browser-encode
+  - `encodeOptimizedImage(bitmap, mimeType)` — 使用 OffscreenCanvas 等比缩放并编码图片 | keywords: 客户端图片压缩, 等比缩放, client-image-compression, proportional-resize
+  - `preprocessImage(entryName, bytes)` — 优化单图并保留 GIF/BMP 原始内容 | keywords: 单图预处理, 保留动图, single-image-preprocess, preserve-animation
+  - `preprocessZip(file)` — 解包、逐图处理、写尺寸清单并重新打包 | keywords: ZIP客户端预处理, 图片尺寸清单, client-zip-preprocess, image-dimension-manifest
+  - `handleMessage(event)` — 处理 Worker 请求并转移新 ZIP ArrayBuffer | keywords: Worker消息处理, ZIP结果传输, worker-message-handler, zip-result-transfer
 
 ### AntiDetectionView.jsx
 

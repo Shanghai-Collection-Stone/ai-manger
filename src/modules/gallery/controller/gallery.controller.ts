@@ -128,9 +128,82 @@ async function mapLimit<T, R>(
   return results;
 }
 
+/**
+ * @description 读取并校验前端写入的图片预处理声明。与 ZIP 导入的
+ * `readClientPreprocessManifest` 同一口径：只有 `processed=true` 且尺寸合法的条目才可信，
+ * 命中后服务端同时跳过压缩和尺寸读取。
+ *
+ * 按**下标**对齐而不是按文件名：同一批里完全可能有同名文件（不同目录拖进来的
+ * `IMG_0001.jpg`），按名字匹配会把尺寸安到错误的那张上。下标之外再比对一次
+ * `originalname` 作为护栏，对不上就当没声明、退回服务端压缩。
+ * @param {string} raw - 表单里的 clientPreprocess JSON。
+ * @param {Express.Multer.File[]} files - multer 解析出的文件，顺序与前端一致。
+ * @returns {Map<string, { width: number; height: number }>} 按 multer filename 索引的可信尺寸。
+ * @keyword-cn 客户端预处理清单, 跳过重复压缩
+ * @keyword-en client-preprocess-manifest, skip-duplicate-compression
+ */
+function readUploadPreprocessManifest(
+  raw: string,
+  files: Express.Multer.File[],
+): Map<string, { width: number; height: number }> {
+  const out = new Map<string, { width: number; height: number }>();
+  const text = String(raw ?? '').trim();
+  if (!text || text.length > 5 * 1024 * 1024) return out;
+  try {
+    const parsed = JSON.parse(text) as {
+      version?: unknown;
+      processor?: unknown;
+      images?: unknown;
+    };
+    if (
+      parsed?.version !== 1 ||
+      parsed?.processor !== 'ai-manger-web' ||
+      !Array.isArray(parsed.images)
+    ) {
+      return out;
+    }
+    for (const item of parsed.images) {
+      if (!item || typeof item !== 'object') continue;
+      const candidate = item as Record<string, unknown>;
+      const index = Number(candidate.index);
+      const width = Number(candidate.width);
+      const height = Number(candidate.height);
+      if (
+        candidate.processed !== true ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= files.length ||
+        !Number.isInteger(width) ||
+        !Number.isInteger(height) ||
+        width <= 0 ||
+        height <= 0 ||
+        width > 100_000 ||
+        height > 100_000
+      ) {
+        continue;
+      }
+      const file = files[index];
+      const key = String(file?.filename || '');
+      if (!key) continue;
+      // 护栏：下标对上了但文件名对不上，说明顺序和前端假设不一致，宁可不信
+      if (String(candidate.fileName || '') !== String(file?.originalname || '')) {
+        continue;
+      }
+      out.set(key, { width, height });
+    }
+  } catch (error) {
+    console.warn(
+      '[gallery.upload] ignored invalid clientPreprocess manifest:',
+      errorMessage(error),
+    );
+  }
+  return out;
+}
+
 async function compressUploadFiles(
   gallery: GalleryService,
   files: Express.Multer.File[],
+  skip: Set<string>,
 ): Promise<void> {
   const list = Array.isArray(files) ? files : [];
   if (list.length === 0) return;
@@ -139,6 +212,8 @@ async function compressUploadFiles(
   await mapLimit(list, concurrency, async (f) => {
     const p = f.path;
     if (!p) return;
+    // 前端已按同一口径（1600×1600 / q75）压过，再压一次纯属白烧 CPU
+    if (skip.has(String(f.filename || ''))) return;
     // 复用 GalleryService.compressImageInPlace,与 ZIP 批量导入共用同一压缩口径
     const r = await gallery.compressImageInPlace({
       filePath: p,
@@ -201,6 +276,7 @@ async function getImageDimensionsFromFile(
  */
 async function extractUploadFileDimensions(
   files: Express.Multer.File[],
+  clientDims: Map<string, { width: number; height: number }>,
 ): Promise<
   Map<string, { width: number; height: number; isPortrait: boolean }>
 > {
@@ -216,6 +292,12 @@ async function extractUploadFileDimensions(
     const key = String(f.filename || '');
     const p = String(f.path || '');
     if (!key || !p) return;
+    // 前端量过的尺寸已经是「按 EXIF 旋转后」的真实展示尺寸，直接采信，省一次 jimp 解码
+    const known = clientDims.get(key);
+    if (known) {
+      out.set(key, { ...known, isPortrait: known.height > known.width });
+      return;
+    }
     const dims = await getImageDimensionsFromFile(p);
     if (dims) {
       out.set(key, dims);
@@ -468,6 +550,7 @@ export class GalleryController {
       collageWidth?: string;
       collageHeight?: string;
       collageDpi?: string;
+      clientPreprocess?: string;
     },
     @Req() req?: Request,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
@@ -541,9 +624,13 @@ export class GalleryController {
       dynamicCollageGroupId = defaults.collageGroup.id;
     }
 
-    await compressUploadFiles(this.gallery, files);
+    const clientDims = readUploadPreprocessManifest(
+      String(body?.clientPreprocess ?? ''),
+      files,
+    );
+    await compressUploadFiles(this.gallery, files, new Set(clientDims.keys()));
     // 提取图片尺寸（压缩后），保证宽高元数据与落盘文件一致
-    const dims = await extractUploadFileDimensions(files);
+    const dims = await extractUploadFileDimensions(files, clientDims);
     const thumbs = await createUploadThumbnails(files);
 
     const inputs = files.map((f, idx) => {

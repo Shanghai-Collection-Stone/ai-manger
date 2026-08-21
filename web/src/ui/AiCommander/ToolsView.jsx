@@ -525,13 +525,15 @@ const api = {
   },
 
   /**
-   * @description 上传 zip 包到图库,入后台队列;返回 jobId
-   * @keyword-en uploadGalleryZip, multipart, queue
+   * @description 通过 XMLHttpRequest 上传 ZIP 包并报告真实字节进度，服务端接收后进入后台队列。
+   * @keyword-cn ZIP上传, 上传速度
+   * @keyword-en zip-upload, upload-speed
    * @param {File} file - zip 文件
    * @param {Object} body - { groupId, tags }
+   * @param {(progress: { loaded: number, total: number }) => void} [onProgress] - 上传字节进度回调
    * @returns {Promise<Object>}
    */
-  async uploadGalleryZip(file, body) {
+  async uploadGalleryZip(file, body, onProgress) {
     try {
       if (!file) {
         showToast('请先选择 ZIP 文件', 'error');
@@ -543,20 +545,40 @@ const api = {
         if (v === undefined || v === null || v === '') return;
         fd.append(k, String(v));
       });
-      const res = await fetch(`${API_BASE}/gallery/zip-import/upload`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: fd,
+      return await new Promise((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${API_BASE}/gallery/zip-import/upload`);
+        Object.entries(getAuthHeaders()).forEach(([name, value]) => {
+          xhr.setRequestHeader(name, value);
+        });
+        xhr.upload.onprogress = (event) => {
+          if (typeof onProgress !== 'function') return;
+          onProgress({
+            loaded: Number(event.loaded) || 0,
+            total: event.lengthComputable ? Number(event.total) || 0 : Number(file.size) || 0,
+          });
+        };
+        xhr.onload = () => {
+          let data = {};
+          try { data = JSON.parse(xhr.responseText || '{}'); } catch {}
+          if (xhr.status < 200 || xhr.status >= 300) {
+            showToast(data?.message || `ZIP 上传失败 (${xhr.status})`, 'error');
+            resolve({ job: null });
+            return;
+          }
+          showToast('ZIP 已上传,正在后台解压', 'success');
+          resolve(data);
+        };
+        xhr.onerror = () => {
+          showToast('ZIP 上传失败: 网络错误', 'error');
+          resolve({ job: null });
+        };
+        xhr.onabort = () => {
+          showToast('ZIP 上传已取消', 'error');
+          resolve({ job: null });
+        };
+        xhr.send(fd);
       });
-      const raw = await res.text();
-      let data = {};
-      try { data = JSON.parse(raw); } catch {}
-      if (!res.ok) {
-        showToast(data?.message || `ZIP 上传失败 (${res.status})`, 'error');
-        return { job: null };
-      }
-      showToast('ZIP 已上传,正在后台解压', 'success');
-      return data;
     } catch (e) {
       showToast(`ZIP 上传失败: ${e?.message || '网络错误'}`, 'error');
       return { job: null };

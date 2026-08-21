@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import * as express from 'express';
 import { join } from 'path';
@@ -52,7 +53,7 @@ async function runMigrations() {
 }
 
 /**
- * @description Bootstrap the Nest app, static pages, redirects, CORS, and raw-body capture for webhooks.
+ * @description Bootstrap the Nest app, 50 MB JSON/form parsing, static pages, redirects, CORS, and raw-body capture for webhooks.
  * @keyword-en app-bootstrap, raw-body-webhooks
  * @keyword-cn 应用启动, webhook原始请求体
  */
@@ -62,7 +63,11 @@ async function bootstrap() {
   // Run migrations before starting the app
   await runMigrations();
 
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
+  app.useBodyParser('json', { limit: '50mb' });
+  app.useBodyParser('urlencoded', { limit: '50mb', extended: true });
   app.enableCors();
 
   const publicPages = join(process.cwd(), 'public', 'pages');

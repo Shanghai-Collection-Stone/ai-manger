@@ -219,6 +219,8 @@ export interface XhsArticleGenerateInput {
   prompt?: string;
   useSearch?: boolean;
   dedup?: boolean;
+  /** 素材风格库预设 id；`random` 表示由服务端为本次封面随机选择。 */
+  coverStyle?: string;
   regenerateImages?: boolean;
 }
 

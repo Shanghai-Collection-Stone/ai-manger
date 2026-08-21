@@ -192,6 +192,16 @@ export interface CanvasImageGroupCreateInput {
    *   再用 sharp 去底并叠加到真实照片上，照片主体不被重绘。小红书专家走此模式。
    */
   coverStrategy?: CanvasCoverStrategy;
+
+  /**
+   * @description 封面文字海报的视觉风格预设 id，取值来自素材风格库
+   * （`gallery/material-styles`），传 `random` 则每次随机换一条。
+   * 只在 `coverStrategy: 'ai-overlay'` 下生效；缺省或选不中时回落到内置的
+   * 「亮粉/明黄/奶白 波普生日海报」写死风格，行为与加这个字段之前一致。
+   * @keyword-cn 封面风格预设
+   * @keyword-en cover-style-preset
+   */
+  coverStyle?: string;
 }
 
 /**

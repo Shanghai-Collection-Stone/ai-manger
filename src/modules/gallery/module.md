@@ -14,7 +14,7 @@
 图库控制器。
 - **关键词**: gallery, image, group, groups, upload, pagination, cursor, embedding, vector-search, similarity, groupId, atlas, cosine, mongo, controller
 - **函数**:
-  - `upload`: 上传图片文件并写入图库记录（含压缩、缩略图生成、尺寸提取、cover/collage 自动识别）
+  - `upload`: 上传图片文件并写入图库记录（含压缩、缩略图生成、尺寸提取、cover/collage 自动识别）。表单可带 `clientPreprocess` 声明前端已按同口径（1600×1600 / q75）压过，命中后**同时跳过压缩和尺寸读取**；与 ZIP 导入的 `_gallery_manifest.json` 同一套校验，但按**下标**对齐并额外比对 `originalname`——同批可能有同名文件，按名字匹配会把尺寸安到错误的那张上 | keywords: 客户端预处理清单, 跳过重复压缩, client-preprocess-manifest, skip-duplicate-compression
   - `listGroups`: 自动确保并置顶默认分组“动态封面/动态拼图”
   - `createUploadThumbnails`: 批量生成缩略图
   - `extractUploadFileDimensions`: 提取上传文件尺寸
@@ -23,6 +23,7 @@
   - `deleteImagesBatch`: `POST images/batch-delete` 批量删除图片(body `{ userId, ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
   - `listMaterialStyles`: `GET material-styles` 列出 AI 素材可选的风格预设与分组，只下发 id/展示名/分组/气质概括，提示词留服务端，缩略图由安装包按同名 id 自带 | keywords: 素材风格列表, list-material-styles
   - `generateAiMaterial`: `POST ai-material` AI 生成贴纸素材并入图库；支持可选 `referenceImageUrl`，参考图只约束配色、字体气质、描边与构成语言，不复制具体内容；支持可选 `stylePreset`（预设 id 或 `random`）从内置风格库套一种视觉处理方式，解决同一句描述反复生成气质雷同；输出仍强制单主体 + 纯色背景 + 无文字，供前端 GPU 去底 | keywords: AI素材生成, ai-material-generate, material-style-preset
+  - `readUploadPreprocessManifest`: 读取并校验普通上传的 `clientPreprocess` 声明,返回按 multer filename 索引的可信尺寸 | keywords: 客户端预处理清单, client-preprocess-manifest
   - `resolveGeneratedMaterialFile`: 把生图返回的本地路径解析成 `public/uploads` 下的文件信息,拒绝外链与 `..` 穿越 | keywords: resolve generated material file, 素材落盘
 
 ### 常量

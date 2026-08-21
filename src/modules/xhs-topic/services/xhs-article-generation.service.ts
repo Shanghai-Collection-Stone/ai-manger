@@ -146,6 +146,7 @@ export class XhsArticleGenerationService {
         : '写成适合小红书发布的真实、有信息量、有情绪共鸣的图文文章。');
     const useSearch = input.useSearch !== false;
     const dedup = input.dedup === true;
+    const coverStyle = String(input.coverStyle ?? '').trim();
     const regenerateImages = input.regenerateImages === true;
     const todo = await this.todoService.create({
       tenantId: scope.tenantId,
@@ -184,6 +185,7 @@ export class XhsArticleGenerationService {
       userPrompt,
       useSearch,
       dedup,
+      coverStyle,
       regenerateImages,
       scope,
     }).finally(() => this.runningTopics.delete(runningKey));
@@ -206,6 +208,7 @@ export class XhsArticleGenerationService {
     userPrompt: string;
     useSearch: boolean;
     dedup: boolean;
+    coverStyle: string;
     regenerateImages: boolean;
     scope: { tenantId?: string; userId: string };
   }): Promise<void> {
@@ -218,6 +221,7 @@ export class XhsArticleGenerationService {
       userPrompt,
       useSearch,
       dedup,
+      coverStyle,
       regenerateImages,
       scope,
     } = params;
@@ -305,6 +309,7 @@ export class XhsArticleGenerationService {
               topicType: topic.topicType,
               draft,
               dedup,
+              coverStyle,
             },
             scope,
           )
@@ -738,6 +743,7 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
       topicType: string;
       draft: XhsArticleMemoryDraft;
       dedup: boolean;
+      coverStyle?: string;
     },
     scope: { tenantId?: string; userId: string },
   ): Promise<{ images: string[]; canvasBoards: XhsArticleCanvasBoard[] }> {
@@ -754,6 +760,8 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
       dedup: input.dedup,
       // 小红书封面走"AI 出装饰素材 + 真实照片拼合"，模型不重绘人物，保住实拍质感
       coverStrategy: 'ai-overlay',
+      // 封面文字海报的视觉风格，来自素材风格库；空串表示不指定，回落到内置写死风格
+      ...(input.coverStyle ? { coverStyle: input.coverStyle } : {}),
     });
     const group = imageGroups[0];
     if (!group || group.status !== 'done') {

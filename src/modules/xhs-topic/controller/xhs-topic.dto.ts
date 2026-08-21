@@ -168,6 +168,11 @@ export class GenerateXhsArticleDto {
   dedup?: boolean;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  coverStyle?: string;
+
+  @IsOptional()
   @Type(() => Boolean)
   @IsBoolean()
   regenerateImages?: boolean;

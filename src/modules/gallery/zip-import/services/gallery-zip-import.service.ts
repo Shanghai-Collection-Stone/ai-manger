@@ -23,6 +23,7 @@ interface StreamZipInstance {
   on(event: 'ready' | 'error', cb: (err?: unknown) => void): void;
   entries(): Record<string, StreamZipEntry>;
   entry(name: string): StreamZipEntry | undefined;
+  entryDataSync(entry: string): Buffer;
   extract(entry: string, outPath: string, cb: (err: unknown) => void): void;
   close(cb?: (err?: unknown) => void): void;
 }
@@ -30,6 +31,12 @@ interface StreamZipEntry {
   name: string;
   isDirectory?: boolean;
   size?: number;
+}
+
+interface ClientPreprocessManifestEntry {
+  entryName: string;
+  width: number;
+  height: number;
 }
 
 const IMAGE_EXT_SET = new Set([
@@ -42,6 +49,8 @@ const IMAGE_EXT_SET = new Set([
 ]);
 
 const MAX_IMPORT_PER_BATCH = 20;
+const CLIENT_PREPROCESS_MANIFEST = '_gallery_manifest.json';
+const MAX_CLIENT_MANIFEST_BYTES = 5 * 1024 * 1024;
 
 /**
  * @description 图库 ZIP 批量导入服务:接收 zip → 入队列 → 进程内串行解压 → 走 GalleryService 入库
@@ -266,6 +275,7 @@ export class GalleryZipImportService {
       await this.safeUnlink(zipPath);
       return;
     }
+    const clientManifest = this.readClientPreprocessManifest(zip);
 
     await this.jobs.updateOne(
       { id },
@@ -346,26 +356,30 @@ export class GalleryZipImportService {
           const absPath = join(dir, fileName);
           await this.extractEntry(zip, entryName, absPath);
 
-          // 保质量压缩(就地替换),与普通批量上传同口径:1600x1600 / quality 75。
-          // 必须在生成缩略图、读取尺寸、统计大小之前,保证元数据与落盘文件一致。
-          const compressed = await this.gallery
-            .compressImageInPlace({
-              filePath: absPath,
-              maxWidth: 1600,
-              maxHeight: 1600,
-              quality: 75,
-            })
-            .catch(() => null);
-          if (compressed?.reason && compressed.reason !== 'not-smaller') {
-            console.error(
-              `[gallery-zip-compress-skip] ${entryName} :: ${compressed.reason}`,
-            );
+          const clientImage = clientManifest.get(entryName);
+          if (!clientImage) {
+            // 兼容旧 ZIP 或客户端处理失败的 entry，继续走服务端压缩和尺寸读取。
+            const compressed = await this.gallery
+              .compressImageInPlace({
+                filePath: absPath,
+                maxWidth: 1600,
+                maxHeight: 1600,
+                quality: 75,
+              })
+              .catch(() => null);
+            if (compressed?.reason && compressed.reason !== 'not-smaller') {
+              console.error(
+                `[gallery-zip-compress-skip] ${entryName} :: ${compressed.reason}`,
+              );
+            }
           }
 
           const thumb = await this.gallery
             .generateThumbnail(absPath, entryName)
             .catch(() => null);
-          const dims = await this.readImageDimensions(absPath);
+          const dims = clientImage
+            ? { width: clientImage.width, height: clientImage.height }
+            : await this.readImageDimensions(absPath);
 
           const input: GalleryImageCreateInput = {
             userId: job.userId,
@@ -601,6 +615,63 @@ export class GalleryZipImportService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * @description 读取并校验前端写入的图片预处理清单；只有 processed=true 且尺寸合法的 entry 才可跳过服务端压缩和尺寸读取。
+   * @param {StreamZipInstance} zip 已打开的 ZIP 实例。
+   * @returns {Map<string, ClientPreprocessManifestEntry>} 按 ZIP entryName 索引的可信客户端预处理结果。
+   * @keyword-cn 客户端预处理清单, 跳过重复压缩
+   * @keyword-en client-preprocess-manifest, skip-duplicate-compression
+   */
+  private readClientPreprocessManifest(
+    zip: StreamZipInstance,
+  ): Map<string, ClientPreprocessManifestEntry> {
+    const output = new Map<string, ClientPreprocessManifestEntry>();
+    try {
+      const entry = zip.entry(CLIENT_PREPROCESS_MANIFEST);
+      const size = Math.max(0, Number(entry?.size) || 0);
+      if (!entry || size <= 0 || size > MAX_CLIENT_MANIFEST_BYTES) return output;
+      const raw = zip.entryDataSync(CLIENT_PREPROCESS_MANIFEST).toString('utf8');
+      const parsed = JSON.parse(raw) as {
+        version?: unknown;
+        processor?: unknown;
+        images?: unknown;
+      };
+      if (
+        parsed?.version !== 1 ||
+        parsed?.processor !== 'ai-manger-web' ||
+        !Array.isArray(parsed.images)
+      ) {
+        return output;
+      }
+      for (const item of parsed.images) {
+        if (!item || typeof item !== 'object') continue;
+        const candidate = item as Record<string, unknown>;
+        const entryName = String(candidate.entryName || '');
+        const width = Number(candidate.width);
+        const height = Number(candidate.height);
+        if (
+          candidate.processed !== true ||
+          !entryName ||
+          !Number.isInteger(width) ||
+          !Number.isInteger(height) ||
+          width <= 0 ||
+          height <= 0 ||
+          width > 100_000 ||
+          height > 100_000
+        ) {
+          continue;
+        }
+        output.set(entryName, { entryName, width, height });
+      }
+    } catch (error) {
+      console.warn(
+        '[GalleryZipImportService.readClientPreprocessManifest] ignored invalid manifest:',
+        errorMessage(error),
+      );
+    }
+    return output;
   }
 
   /**

@@ -58,7 +58,7 @@ Canvas控制器。
 Canvas服务。
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）。透传 `dedup` 到后台 runImageGroupGeneration
-- `generateArticleImageGroups(input)` — 不创建独立 Canvas，直接复用生文图片阶段按相关 tag 生成封面、五张内页、动态拼图与可选 AI 封面;封面走 `input.coverStrategy`(小红书专家传 `ai-overlay`) | keywords: 生文配图工作流, 文章图组, 封面策略, article-image-workflow, generated-image-group, cover-strategy
+- `generateArticleImageGroups(input)` — 不创建独立 Canvas，直接复用生文图片阶段按相关 tag 生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机 | keywords: 生文配图工作流, 文章图组, 封面策略, article-image-workflow, generated-image-group, cover-strategy
 - `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)。**`dedup` 参数**: 缺省/true=去重(排除 isUsed+生成后 markUsed);false=不去重(命中已用图、随机取图、不写 isUsed) | keywords: dedup, includeUsed
 - `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项，参考图最多 4 张 | keywords: cover-regenerate, article-cover-only
 - `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张；透传 `includeSystemPrompt`(默认 true) 决定是否叠加系统自带封面/内页提示词 | keywords: article-image-regenerate, image-slot-regenerate, system-prompt-toggle
@@ -102,7 +102,7 @@ Canvas服务。
 - `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
 - `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用 | keywords: render, prepared, image-group, concurrency, dedup
-- `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
+- `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
 - `planImageGroupAllocation(pool, articles)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；自动版式可在竖图不足时切到全拼图版式 | keywords: plan, allocation, no-reuse
 - `buildImageGroupAllocationRequests(articles, options?)` — 根据文章列表生成图组版式槽位需求，支持自动版式覆盖 | keywords: plan, allocation, layout
 - `summarizeImageGroupAllocationStats(requestedGroups, availablePortrait, availableLandscape)` — 统计分配所需竖图/横图数量与素材缺口 | keywords: stats, allocation, shortage
@@ -117,8 +117,9 @@ Canvas服务。
 - `sanitizeCoverText(coverText)` — 清洗封面主副标题，避免可见文案携带 IP/商标专名 | keywords: sanitize, cover-copy, copyright-safe
 - `buildAiCoverPrompt` — 构建封面元信息骨架与实景照片优先的无字底图视觉指令，文案仅用于理解主题和预留构图空间，明确禁止生成任何文字；通用图生图硬约束由 AgentService.buildMeituEditPrompt 在下游补齐
 - `tryGenerateAiCoverToGallery` — `ai-direct` 策略:调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit）
-- `buildAiCoverOverlayPrompt({ topic?, articleTitle?, coverText })` — 构建纯绿实底的波普文字海报素材提示词，要求指定主副标题与心形、星芒、派对帽、彩带等装饰融合生成 | keywords: 文字海报素材, 绿色素材层, typography-poster-material, green-screen-material
-- `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材并同时返回合成预览、原照片底图和可回改的独立素材层 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
+- `buildAiCoverOverlayPrompt({ topic?, articleTitle?, coverText, coverStyle? })` — 按素材风格预设或旧版默认视觉构建纯绿实底文字海报素材提示词 | keywords: 文字海报素材, 绿色素材层, typography-poster-material, green-screen-material
+- `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
+- `buildGeneratedAssetTags(generatedKind, sourceImages?)` — 为封面、拼图、内页或 AI 文字海报素材生成隔离的图库标签 | keywords: AI素材标签, 生成素材标签, ai-material-tag, generated-asset-tags
 - `composeCoverWithOverlay(basePath, overlayPath)` — sharp 对纯绿素材做软边色键，同时输出透明 PNG 素材与 640x853 合成预览 | keywords: 装饰素材叠加, 绿幕色键, 可编辑装饰素材, composite-overlay-on-photo, green-screen-keying, editable-decoration-material
 - `fetchImagePool` — tag匹配取图（过滤默认动态封面/动态拼图分组）。**已移除"不足时补随机/相近标签"逻辑**,只严格按 tags 取池,不足由上游工具预检+用户决策。`dedup===false` 时传 `includeUsed=true` 命中已用图(取池后由 shuffleArray 随机取图) | keywords: dedup, includeUsed
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
@@ -129,7 +130,7 @@ Canvas服务。
 - `buildCollageLayout(images)` — 按合成网格把 2-4 张源图描述成拼图画布格式(画布尺寸 + 各源图格子)，供编辑器还原成可逐张替换的图层 | keywords: collage-canvas-format, swappable-collage
 - `createMultiCollageFile(images)` — 将 2/3/4 张图库图合成固定 640x853(3:4) 竖版拼图(fit:cover 充满,不烧字),2 张复用 createDynamicCollageFile | keywords: multi-collage, collage-compose
 - `composeSelectedCollage({ userId, tenantId, sourceImageIds(2-4), generatedKind?, groupId? })` — 把用户多选的 2-4 张图合成 3:4 拼图并写入动态拼图图库,返回 `{ image, collage }`(持久化图片 + 拼图画布格式),供"直接设图"槽位复用 | keywords: multi-collage, select-collage, collage-canvas-format
-- `persistGeneratedAssetToGallery` — 将动态封面/拼图/内页文件写入 gallery_images（返回真实 imageId，避免 id=0 虚拟图）
+- `persistGeneratedAssetToGallery(input)` — 将动态封面、拼图、内页或 AI 文字海报素材写入 gallery_images，素材不混入动态封面分组 | keywords: 生成素材入库, AI素材同步, persist-generated-asset, sync-ai-material
 - `resolveGeneratedUploadFileInfo` / `getImageDimensionsFromAbsPath` — 解析生成文件路径并补齐宽高元数据
 - `burnCoverText` / `burnCollageCoverText` — 仅保留给历史兼容的 sharp+SVG 烧字实现；当前封面生成链路不再调用
 - `loadCoverFontFaceCss` — 历史烧字兼容方法使用的封面字体 base64 缓存；当前封面链路不加载
