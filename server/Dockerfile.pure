@@ -2,27 +2,27 @@ FROM node:20-alpine AS root-deps
 
 WORKDIR /app
 
-RUN npm i -g pnpm@9
+RUN npm i -g pnpm@10.34.5
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM node:20-alpine AS web-deps
 
 WORKDIR /app
 
-RUN npm i -g pnpm@9
+RUN npm i -g pnpm@10.34.5
 
-COPY web/package.json web/pnpm-lock.yaml ./web/
+COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./web/
 RUN pnpm --dir web install --frozen-lockfile --prod=false
 
 FROM node:20-alpine AS prod-deps
 
 WORKDIR /app
 
-RUN npm i -g pnpm@9
+RUN npm i -g pnpm@10.34.5
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --prod --frozen-lockfile
 
 FROM node:20-alpine AS builder
@@ -33,7 +33,7 @@ ENV NODE_ENV=production
 # tsc 峰值堆约 900MB, 小内存机器上 node 默认堆上限(约 870MB) 会 OOM, 这里显式抬高
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-RUN npm i -g pnpm@9
+RUN npm i -g pnpm@10.34.5
 
 COPY --from=root-deps /app/node_modules ./node_modules
 COPY --from=web-deps /app/web/node_modules ./web/node_modules

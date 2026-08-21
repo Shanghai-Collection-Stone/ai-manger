@@ -3,7 +3,7 @@ FROM node:20-alpine
 WORKDIR /app
 
 # 安装 pnpm 和 meitu-cli
-RUN npm i -g pnpm meitu-cli
+RUN npm i -g pnpm@10.34.5 meitu-cli
 
 # 设置环境变量
 ENV NODE_ENV=production
