@@ -200,6 +200,18 @@ jobs:
             exit 1
           fi
 
+          echo "=== Proxy keys in deployment env (values masked) ==="
+          for proxy_key in \
+            PROXY_ENABLED HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY \
+            DEV_PROXY_ENABLED DEV_HTTPS_PROXY DEV_HTTP_PROXY DEV_ALL_PROXY \
+            https_proxy http_proxy all_proxy no_proxy; do
+            if grep -Eq "^${proxy_key}=.+" "$ENV_FILE"; then
+              echo "${proxy_key}=<set>"
+            else
+              echo "${proxy_key}=<unset>"
+            fi
+          done
+
           existing_container="$(docker ps -aq -f "name=^/${CONTAINER_NAME}$" || true)"
           if [ -n "$existing_container" ]; then
             existing_project="$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$CONTAINER_NAME" 2>/dev/null || true)"
@@ -213,6 +225,11 @@ jobs:
           export SHANGHAI_ENV_FILE="$ENV_FILE"
           export APP_PORT="$APP_PORT"
           export CONTAINER_NAME="$CONTAINER_NAME"
+
+          # Compose 的 shell 环境优先级高于 --env-file，避免 runner 自身代理覆盖部署 Secret。
+          unset PROXY_ENABLED HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY
+          unset DEV_PROXY_ENABLED DEV_HTTPS_PROXY DEV_HTTP_PROXY DEV_ALL_PROXY
+          unset https_proxy http_proxy all_proxy no_proxy
 
           docker compose \
             --project-name "$COMPOSE_PROJECT_NAME" \
@@ -242,6 +259,29 @@ jobs:
 
           echo "=== App logs ==="
           docker logs "$CONTAINER_NAME" --tail 120 || true
+
+          echo "=== Effective proxy settings in app container ==="
+          docker exec "$CONTAINER_NAME" node -e '
+            const keys = ["PROXY_ENABLED", "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy"];
+            for (const key of keys) {
+              const value = String(process.env[key] ?? "").trim();
+              if (!value) {
+                console.log(`${key}=<unset>`);
+              } else if (key === "PROXY_ENABLED") {
+                console.log(`${key}=${value === "true" ? "true" : value === "false" ? "false" : "<invalid>"}`);
+              } else if (key.toLowerCase() === "no_proxy") {
+                console.log(`${key}=<set, ${value.split(",").filter(Boolean).length} entries>`);
+              } else {
+                try {
+                  const url = new URL(value);
+                  const endpoint = `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ""}`;
+                  console.log(`${key}=<set, ${endpoint}, auth=${url.username || url.password ? "yes" : "no"}>`);
+                } catch {
+                  console.log(`${key}=<set, invalid URL>`);
+                }
+              }
+            }
+          ' || true
 
           rm -f "$ENV_FILE"
 

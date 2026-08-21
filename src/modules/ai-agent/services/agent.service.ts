@@ -120,7 +120,7 @@ export class AgentService {
     const proxyUri = resolveProxyUriFromEnv();
     this.logger.log(
       proxyUri
-        ? `[image-dispatcher] proxy enabled via ${proxyUri} (.env 统一代理配置)`
+        ? '[image-dispatcher] proxy enabled (.env 统一代理配置，地址已隐藏)'
         : '[image-dispatcher] direct connection (代理未启用)。若 OpenAI 生图报 ECONNREFUSED,请检查 .env 的 DEV_PROXY_ENABLED / DEV_HTTPS_PROXY 配置',
     );
   }
