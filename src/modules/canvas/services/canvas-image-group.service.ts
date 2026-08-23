@@ -56,6 +56,13 @@ const COVER_TAG_SET = new Set([
 const COLLAGE_WIDTH = 640;
 const COLLAGE_HEIGHT = 853;
 
+/** @description AI 文字海报素材默认占画布的 70%，并在封面中水平、垂直居中。 */
+const AI_OVERLAY_SCALE = 0.7;
+const AI_OVERLAY_WIDTH = Math.round(COLLAGE_WIDTH * AI_OVERLAY_SCALE);
+const AI_OVERLAY_HEIGHT = Math.round(COLLAGE_HEIGHT * AI_OVERLAY_SCALE);
+const AI_OVERLAY_X = Math.round((COLLAGE_WIDTH - AI_OVERLAY_WIDTH) / 2);
+const AI_OVERLAY_Y = Math.round((COLLAGE_HEIGHT - AI_OVERLAY_HEIGHT) / 2);
+
 /**
  * @description 封面和内页重生成最多接收的参考图数量。
  * @keyword-cn 图片选择, 图片槽位重生成
@@ -1611,7 +1618,7 @@ export class CanvasImageGroupService {
   /**
    * @description `ai-overlay` 封面策略:AI 文生图产出文字与装饰融合的海报素材层，再用 sharp 生成
    *   合成预览图和透明 PNG 素材。原照片、绿幕原素材、透明素材与可回改特效参数分别保存，
-   *   进入设计编辑器后是独立图层；照片本身不传给模型也不被重绘。
+   *   进入设计编辑器后是默认占画布 70% 且居中的独立图层；照片本身不传给模型也不被重绘。
    * @param {object} input - 叠加输入(底图、主副标题、主题上下文与落库作用域)。
    * @returns {Promise<object | null>} 合成预览图、原照片底图和可编辑素材层。
    * @keyword-cn 装饰素材叠加, 图层分离, 可编辑装饰素材
@@ -1738,10 +1745,10 @@ export class CanvasImageGroupService {
             name: 'AI 文字海报素材',
             src: composed.materialUrl,
             materialSrc: overlayUrl,
-            x: 0,
-            y: 0,
-            width: COLLAGE_WIDTH,
-            height: COLLAGE_HEIGHT,
+            x: AI_OVERLAY_X,
+            y: AI_OVERLAY_Y,
+            width: AI_OVERLAY_WIDTH,
+            height: AI_OVERLAY_HEIGHT,
             canvasWidth: COLLAGE_WIDTH,
             canvasHeight: COLLAGE_HEIGHT,
             includesText: true,
@@ -1766,7 +1773,8 @@ export class CanvasImageGroupService {
 
   /**
    * @description 用 sharp 对纯绿装饰层生成带软边的透明 PNG，并额外叠到真实照片上输出
-   *   640x853 合成预览图。两份输出并存：预览图供列表和发布，透明 PNG 供设计编辑器独立编辑。
+   *   640x853 合成预览图。透明素材按画布 70% 缩放并居中，两份输出并存：预览图供列表和发布，
+   *   透明 PNG 供设计编辑器独立编辑。
    * @param {string} basePath - 真实照片绝对路径。
    * @param {string} overlayPath - AI 装饰素材层绝对路径。
    * @returns {Promise<{ previewUrl: string; materialUrl: string } | null>} 合成预览与透明素材 URL。
@@ -1834,6 +1842,14 @@ export class CanvasImageGroupService {
       })
         .png()
         .toBuffer();
+      const materialBuf = await sharp(overlayBuf)
+        .resize({
+          width: AI_OVERLAY_WIDTH,
+          height: AI_OVERLAY_HEIGHT,
+          fit: 'fill',
+        })
+        .png()
+        .toBuffer();
 
       const materialDir = join(
         process.cwd(),
@@ -1843,7 +1859,7 @@ export class CanvasImageGroupService {
       );
       if (!existsSync(materialDir)) mkdirSync(materialDir, { recursive: true });
       const materialName = `overlay-material-${randomUUID()}.png`;
-      await writeFile(join(materialDir, materialName), overlayBuf);
+      await writeFile(join(materialDir, materialName), materialBuf);
 
       const outDir = join(process.cwd(), 'public', 'uploads', 'canvas-covers');
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
@@ -1852,7 +1868,14 @@ export class CanvasImageGroupService {
 
       await sharp(basePath)
         .resize({ width: COLLAGE_WIDTH, height: COLLAGE_HEIGHT })
-        .composite([{ input: overlayBuf, blend: 'over' }])
+        .composite([
+          {
+            input: materialBuf,
+            blend: 'over',
+            left: AI_OVERLAY_X,
+            top: AI_OVERLAY_Y,
+          },
+        ])
         .jpeg({ quality: 92 })
         .toFile(outPath);
 

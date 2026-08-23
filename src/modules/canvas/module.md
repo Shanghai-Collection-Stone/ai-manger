@@ -20,7 +20,7 @@
 
 ## AI 封面策略（coverStrategy）
 - **ai-direct**（默认，canvas 发文链路）：把封面源图当底图丢给生图模型做二次编辑，模型产出物**直接作为封面成品**。走 `/images/edits`，`buildAiCoverPrompt` 的视觉指令 + `AgentService.buildMeituEditPrompt` 的封面硬性规格叠加下发。
-- **ai-overlay**（小红书专家链路）：AI 产出**文字与装饰融合的海报素材层**，指定主副标题直接成为素材像素的一部分，真实照片主体不经过模型重绘。默认视觉语言采用亮粉/明黄/天蓝/奶白、粗黑描边的高对比波普贴纸风；服务端同时保存合成预览图、原照片底图、绿幕原素材和去底 PNG，进入灵感画布后还原成“照片 + 可加特效的文字海报素材”两个独立图层，不再重复创建原生文字层。
+- **ai-overlay**（小红书专家链路）：AI 产出**文字与装饰融合的海报素材层**，指定主副标题直接成为素材像素的一部分，真实照片主体不经过模型重绘。默认视觉语言采用亮粉/明黄/天蓝/奶白、粗黑描边的高对比波普贴纸风；服务端同时保存合成预览图、原照片底图、绿幕原素材和去底 PNG，进入灵感画布后还原成“照片 + 可加特效的文字海报素材”两个独立图层。素材默认按画布宽高的 70% 居中摆放，不再铺满画布，也不重复创建原生文字层。
 - 装饰层固定生成**纯绿色 `#00FF00` 实底**，不请求、不依赖任何模型的透明通道；前景装饰禁止使用绿色系，避免与绿幕混淆。
 - 合成前由 sharp 按绿色通道优势度生成软边 alpha 色键，再统一以 `over` 模式叠到真实照片上。
 - 文字海报素材可用性两道闸，任一不过就回退到未叠加的真实照片封面：① 绿幕像素占比 `<0.30`；② 色键后的前景占比 `>0.68`。
@@ -118,9 +118,9 @@ Canvas服务。
 - `buildAiCoverPrompt` — 构建封面元信息骨架与实景照片优先的无字底图视觉指令，文案仅用于理解主题和预留构图空间，明确禁止生成任何文字；通用图生图硬约束由 AgentService.buildMeituEditPrompt 在下游补齐
 - `tryGenerateAiCoverToGallery` — `ai-direct` 策略:调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit）
 - `buildAiCoverOverlayPrompt({ topic?, articleTitle?, coverText, coverStyle? })` — 按素材风格预设或旧版默认视觉构建纯绿实底文字海报素材提示词 | keywords: 文字海报素材, 绿色素材层, typography-poster-material, green-screen-material
-- `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
+- `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和默认占画布 70% 的居中可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
 - `buildGeneratedAssetTags(generatedKind, sourceImages?)` — 为封面、拼图、内页或 AI 文字海报素材生成隔离的图库标签 | keywords: AI素材标签, 生成素材标签, ai-material-tag, generated-asset-tags
-- `composeCoverWithOverlay(basePath, overlayPath)` — sharp 对纯绿素材做软边色键，同时输出透明 PNG 素材与 640x853 合成预览 | keywords: 装饰素材叠加, 绿幕色键, 可编辑装饰素材, composite-overlay-on-photo, green-screen-keying, editable-decoration-material
+- `composeCoverWithOverlay(basePath, overlayPath)` — sharp 对纯绿素材做软边色键，将透明 PNG 缩至画布 70% 并居中叠加，同时输出素材与 640x853 合成预览 | keywords: 装饰素材叠加, 绿幕色键, 可编辑装饰素材, composite-overlay-on-photo, green-screen-keying, editable-decoration-material
 - `fetchImagePool` — tag匹配取图（过滤默认动态封面/动态拼图分组）。**已移除"不足时补随机/相近标签"逻辑**,只严格按 tags 取池,不足由上游工具预检+用户决策。`dedup===false` 时传 `includeUsed=true` 命中已用图(取池后由 shuffleArray 随机取图) | keywords: dedup, includeUsed
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
 - `pickPortrait` — 从池中选竖图（必须全局未使用；不跨组复用，不降级为横图）
