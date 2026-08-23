@@ -25,7 +25,10 @@ import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryUploadExceptionFilter } from '../filters/gallery-upload-exception.filter.js';
 import { MaterialStyleService } from '../material-styles/services/material-style.service.js';
 import type { MaterialStyleOption } from '../material-styles/services/material-style.service.js';
-import type { MaterialStyleGroupId } from '../material-styles/material-style.presets.js';
+import type {
+  MaterialStyleGroupId,
+  MaterialStylePreset,
+} from '../material-styles/material-style.presets.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
 import type { Request } from 'express';
@@ -186,7 +189,9 @@ function readUploadPreprocessManifest(
       const key = String(file?.filename || '');
       if (!key) continue;
       // 护栏：下标对上了但文件名对不上，说明顺序和前端假设不一致，宁可不信
-      if (String(candidate.fileName || '') !== String(file?.originalname || '')) {
+      if (
+        String(candidate.fileName || '') !== String(file?.originalname || '')
+      ) {
         continue;
       }
       out.set(key, { width, height });
@@ -722,6 +727,80 @@ export class GalleryController {
   }
 
   /**
+   * @description 判断用户的素材描述里是否明确要求画面出现文字。默认走无字贴纸分支，只有
+   * 命中正向词、且没被否定词否掉时才放开文字。加这一步是因为硬规格里的「严禁文字」写在
+   * 提示词最后又标了「必须严格遵守」，会把「生成以上文字标题图片」这类描述整条抹掉，
+   * 主体被清空后只剩风格预设有实体信息，模型就只能照风格画出一个空壳。
+   * @param {string} prompt - 用户原始描述（已压缩空白）。
+   * @returns {boolean} true 表示本次需要把文字画进素材。
+   * @keyword-cn 文字意图识别, 素材文字需求
+   * @keyword-en material-text-intent, detect-text-intent
+   */
+  private detectMaterialTextIntent(prompt: string): boolean {
+    const text = String(prompt ?? '').trim();
+    if (!text) return false;
+    // 否定必须先判：「无文字贴纸」「不要文字」这类描述本身就含「文字」，
+    // 只跑正向词会把明确不要字的需求误判成要字。
+    const negative =
+      /(?:不要|不能|不应|不含|不带|不出现|不生成|不添加|不需要|没有|无|禁止|去掉|去除|避免)[\s，,、]*(?:(?:画面|图片|图像)(?:中|内)?[\s，,、]*)?(?:(?:出现|生成|添加|加入|包含|带有|使用)[\s，,、]*)?(?:任何)?[\s，,、]*(?:文字|文案|标题|大字|字母|字)|(?:no|without|remove|avoid|exclude)\s+(?:any\s+)?(?:text|title|lettering|typography|words?|slogan|headline|caption)|(?:do\s+not|don't)\s+(?:show|include|add|generate|use)\s+(?:any\s+)?(?:text|title|lettering|typography|words?|slogan|headline|caption)/i;
+    if (negative.test(text)) return false;
+    const positive =
+      /(?:文字|文案|标题|副标题|大字|艺术字|字体|字样|标语|口号|书法|手写字|写着|写上|写出|带字|加字|text|title|lettering|typography|word\s*art|slogan|headline|caption)/i;
+    return positive.test(text);
+  }
+
+  /**
+   * @description 拼装 AI 素材生成的完整提示词。用户描述固定排在最前并显式声明为最高
+   * 优先级，风格段落与默认素材规格只补足描述未说明的部分。描述里没有文字需求时默认
+   * 生成单主体 + 纯色背景 + 无文字贴纸；命中文字需求时改为「逐字写出指定文案，其他
+   * 文字照禁」，同时保留便于去底的构图建议，但这些默认项都不能覆盖用户的明确要求。
+   * @param {{ rawPrompt: string; stylePreset: MaterialStylePreset | null; referenceImageUrl: string; wantsText: boolean }} input - 拼装上下文。
+   * @returns {string} 生图提示词。
+   * @keyword-cn 素材提示词, 描述优先
+   * @keyword-en build-ai-material-prompt, prompt-first
+   */
+  private buildAiMaterialPrompt(input: {
+    rawPrompt: string;
+    stylePreset: MaterialStylePreset | null;
+    referenceImageUrl: string;
+    wantsText: boolean;
+  }): string {
+    const { rawPrompt, stylePreset, referenceImageUrl, wantsText } = input;
+    return [
+      '【最高优先级：用户原始描述】下面这句描述决定本次要生成的主体、文字、构图与表现；后面的风格预设和默认素材规格只补足描述未说明的部分，任何冲突都以这句描述为准。',
+      `用户原始描述：${rawPrompt}`,
+      wantsText
+        ? [
+            '【文字要求】本次描述明确要求画面内出现文字，文字本身就是主体：',
+            '- 描述里点名要呈现的文案必须逐字准确写出，不得增字、漏字、改字、调换顺序或用拼音、英文代替。',
+            '- 文案按中文艺术字排版，可分行、可大小错落、可倾斜；全部文字完整位于画面内，不裁切、不出血、清晰可读。',
+            '- 除描述指定的文案外，不得出现任何其他文字、字母、数字、水印、logo、网址或二维码。',
+          ].join('\n')
+        : '',
+      // 风格段落放在主体之后、默认规格之前：它负责视觉处理，不能盖过用户描述；
+      // 默认规格只补足描述没有明确说明的部分。
+      this.materialStyles.buildStylePrompt(stylePreset, {
+        allowText: wantsText,
+      }),
+      referenceImageUrl
+        ? '【风格参考】已附参考图，只学习其色彩组合、粗细对比、字体气质、描边方式和装饰构成；严禁复制参考图中的具体文字、人物、品牌或版面内容。'
+        : '',
+      '【默认素材规格】仅在用户原始描述没有另行说明时采用：',
+      wantsText
+        ? '1. 画面只有一组主体（文案与紧贴它的装饰算同一组），居中、完整、不裁切，边缘清晰锐利、轮廓闭合。'
+        : '1. 画面只有一个主体，居中、完整、不裁切，主体边缘清晰锐利、轮廓闭合。',
+      '2. 背景必须是单一纯色平铺(推荐纯白 #FFFFFF 或纯品绿 #00FF00)，无渐变、无阴影、无投影、无地面、无纹理、无场景元素。',
+      wantsText
+        ? '3. 除描述指定的文案外，严禁出现其他文字、字母、数字、水印、logo、二维码、边框、马赛克棋盘格。'
+        : '3. 严禁画面内出现任何文字、字母、数字、水印、logo、二维码、边框、马赛克棋盘格。',
+      '4. 风格干净、色彩明快、主体与背景色差大，便于后续抠图去底。',
+      '5. 只输出主体本身，不要拼图、不要多格、不要展示图排版。',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  /**
    * @description 列出 AI 素材可选的风格预设与分组，供素材面板渲染风格选择区。
    * 只下发 id / 展示名 / 分组 / 气质概括，`descriptor` 提示词留在服务端；
    * 缩略图不走接口，由前端按同名 `id` 取随包图片。
@@ -740,17 +819,17 @@ export class GalleryController {
   }
 
   /**
-   * @description AI 生成贴纸素材并入图库。提示词强制单主体 + 纯色背景 + 无文字，
-   * 便于前端 GPU 去底后直接当贴纸用；可选参考图只约束配色、字体气质与构成语言，
-   * 不作为最终素材内容。可选 `stylePreset` 从内置风格库取一条视觉处理方式（传
-   * `random` 则每次随机换一条），解决同一句描述反复生成时气质雷同的问题。
+   * @description AI 生成素材并入图库。用户输入提示词具有最高内容优先级：明确要求文字时
+   * 必须逐字生成指定文案；没有文字需求时默认生成单主体 + 纯色背景 + 无文字贴纸，便于
+   * 前端 GPU 去底。可选参考图与 `stylePreset` 只约束配色、字体气质与构成语言，不改变
+   * 用户描述的主体；`random` 风格会在每次生成时随机选择一条视觉处理方式。
    * 生成结果打 `ai素材` 标签供素材面板筛选。
    * @param {{ prompt?: string; size?: string; tags?: string; userId?: string; referenceImageUrl?: string; stylePreset?: string }} body - 生成参数。
    * @param {Request} [req] - Express 请求对象，用于解析租户范围。
    * @returns {Promise<{ image: Omit<GalleryImageEntity, '_id'> }>} 入库后的素材记录。
    * @throws {BadRequestException} 提示词为空或生图结果落盘失败时抛出。
-   * @keyword-cn AI素材生成
-   * @keyword-en ai-material-generate
+   * @keyword-cn AI素材生成, 描述优先
+   * @keyword-en ai-material-generate, prompt-first
    */
   @Post('ai-material')
   async generateAiMaterial(
@@ -783,23 +862,13 @@ export class GalleryController {
       .trim()
       .slice(0, 2000);
     const stylePreset = this.materialStyles.resolveStyle(body?.stylePreset);
-    const prompt = [
-      `贴纸素材主体:${rawPrompt}`,
-      // 风格段落放在主体之后、规格之前：它必须能盖住模型的默认审美，
-      // 又不能盖过下面「无文字 / 纯色背景」这几条硬规格。
-      this.materialStyles.buildStylePrompt(stylePreset),
-      referenceImageUrl
-        ? '【风格参考】已附参考图，只学习其色彩组合、粗细对比、字体气质、描边方式和装饰构成；严禁复制参考图中的具体文字、人物、品牌或版面内容。'
-        : '',
-      '【素材规格 - 必须严格遵守】',
-      '1. 画面只有一个主体，居中、完整、不裁切，主体边缘清晰锐利、轮廓闭合。',
-      '2. 背景必须是单一纯色平铺(推荐纯白 #FFFFFF 或纯品绿 #00FF00)，无渐变、无阴影、无投影、无地面、无纹理、无场景元素。',
-      '3. 严禁画面内出现任何文字、字母、数字、水印、logo、二维码、边框、马赛克棋盘格。',
-      '4. 风格干净、色彩明快、主体与背景色差大，便于后续抠图去底。',
-      '5. 只输出主体本身，不要拼图、不要多格、不要展示图排版。',
-    ]
-      .filter(Boolean)
-      .join('\n');
+    const wantsText = this.detectMaterialTextIntent(rawPrompt);
+    const prompt = this.buildAiMaterialPrompt({
+      rawPrompt,
+      stylePreset,
+      referenceImageUrl,
+      wantsText,
+    });
 
     const generated = await this.agent.sendPrompt({
       prompt,

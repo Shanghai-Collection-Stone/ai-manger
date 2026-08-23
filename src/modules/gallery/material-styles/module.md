@@ -3,7 +3,7 @@
 ## 模块描述
 AI 素材风格库子模块：给 `POST /gallery/ai-material` 提供一组可选的「视觉处理方式」预设，解决同一句描述反复生成时素材气质雷同的问题。
 
-预设本身是一张静态注册表（`material-style.presets.ts`），每条只描述 **配色 / 笔触质感 / 描边方式 / 装饰元素语言**，刻意不描述版面结构、不含任何文字内容——`ai-material` 的产物是单主体、纯色背景、无文字的贴纸，排版由前端画布的文字图层和宫格模板负责。
+预设本身是一张静态注册表（`material-style.presets.ts`），每条只描述 **配色 / 笔触质感 / 描边方式 / 装饰元素语言**，刻意不描述版面结构、不含任何文字内容。`ai-material` 以用户原始描述为最高优先级：明确要求文字时允许文字成为素材主体，未要求文字时默认输出单主体、纯色背景、无文字贴纸；风格预设在两种分支中都不得改变主体或改写指定文案。
 
 调用方在 `stylePreset` 里传预设 `id`，或传保留值 `random` 让服务端每次现挑一条；传空或未知 id 时返回 `null`，走老的「纯描述词生成」分支，行为与加这个字段之前完全一致。
 
@@ -35,7 +35,7 @@ AI 素材风格库子模块：给 `POST /gallery/ai-material` 提供一组可选
 - **函数**:
   - `listStyles()` — 列出全部风格预设与分组，供素材面板渲染风格选择区 | keywords: list-material-styles, material-style-group
   - `resolveStyle(id?)` — 按 id 解析预设，`random` 随机挑一条，空/未知 id 返回 null 表示不套风格 | keywords: resolve-material-style, random-style
-  - `buildStylePrompt(preset)` — 把预设拼成提示词里的独立风格段落，并再声明一次「只借视觉处理、不要文字」 | keywords: build-style-prompt, style-paragraph
+  - `buildStylePrompt(preset, options?)` — 把预设拼成独立风格段落；默认禁止文字，`allowText` 分支允许指定文案但禁止风格增删或改写文字 | keywords: 风格提示词, 风格段落, 允许文字, build-style-prompt, style-paragraph, allow-text
 
 ## 关键词索引
 
@@ -51,6 +51,7 @@ AI 素材风格库子模块：给 `POST /gallery/ai-material` 提供一组可选
 | 随机风格 | random-style |
 | 风格提示词 | build-style-prompt |
 | 风格段落 | style-paragraph |
+| 允许文字 | allow-text |
 | 风格预设结构 | material-style-shape |
 
 ## 鉴权说明

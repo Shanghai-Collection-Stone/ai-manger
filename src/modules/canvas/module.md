@@ -110,7 +110,7 @@ Canvas服务。
 - `buildInsufficientImageGroups(articles)` — 构造图片不足时的 failed 空图组，供文章/Canvas 进入 requires_human 补图流程 | keywords: insufficient, requires-human, image-group
 - `collectPlanSourceImages(plan)` — 收集图组分配计划中的全部源图，用于文章正文和封面文案共享图片语义 | keywords: collect, allocation, image-context
 - `persistPlannedCollage(input)` — 将统一分配好的两张横图合成为动态拼图并入库，同时返回拼图画布格式 | keywords: collage, allocation, gallery, collage-canvas-format
-- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流 | keywords: 封面文案, 工具内部非流, cover-text, internal-llm-nostream
+- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流；内容优先级为「文章标题 > 配图语义」，主标题只能提炼文章标题，配图标签/描述降级为方向参考（标签上限 8 条）且冲突时丢弃 | keywords: 封面文案, 工具内部非流, 标题优先, cover-text, internal-llm-nostream, title-first
 - `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
 - `sanitizeCopyrightRiskText(raw)` — 将封面文案/生图提示中的高风险 IP、商标和角色专名替换为版权安全泛化表达 | keywords: sanitize, copyright-safe, image-prompt
 - `sanitizeCopyrightRiskList(items?)` — 清洗列表型封面上下文，去重后返回版权安全表达 | keywords: sanitize, copyright-safe, list

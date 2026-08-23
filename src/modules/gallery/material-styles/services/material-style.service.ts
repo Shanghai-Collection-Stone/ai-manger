@@ -72,19 +72,27 @@ export class MaterialStyleService {
   }
 
   /**
-   * @description 把风格预设拼成生图提示词里的独立段落。刻意再声明一次「只借视觉处理、
-   * 不要文字」——预设描述里出现「手写笔刷」「大字块」这类词会诱导模型直接画字，
-   * 而 `ai-material` 的产物必须是可去底的无字贴纸。
+   * @description 把风格预设拼成生图提示词里的独立段落，并声明「风格只借视觉处理」。
+   * 默认还会再封一次「不要文字」——预设描述里出现「手写笔刷」「大字块」这类词会诱导
+   * 模型直接画字，而默认的 `ai-material` 产物必须是可去底的无字贴纸。
+   * 调用方判定用户明确要文字时传 `allowText: true`：此时文字本身就是主体，这层封禁必须
+   * 让位给描述，否则风格段落会把用户点名要写的字重新抹掉，只剩一个空的风格外壳。
    * @param {MaterialStylePreset | null} preset - 已解析的风格预设。
+   * @param {{ allowText?: boolean }} [options] - `allowText` 为 true 时不再禁止画文字，改为禁止风格改写文案。
    * @returns {string} 提示词段落，未选风格时为空串。
-   * @keyword-cn 风格提示词, 风格段落
-   * @keyword-en build-style-prompt, style-paragraph
+   * @keyword-cn 风格提示词, 风格段落, 允许文字
+   * @keyword-en build-style-prompt, style-paragraph, allow-text
    */
-  buildStylePrompt(preset: MaterialStylePreset | null): string {
+  buildStylePrompt(
+    preset: MaterialStylePreset | null,
+    options?: { allowText?: boolean },
+  ): string {
     if (!preset) return '';
     return [
       `【风格预设 - ${preset.label}】${preset.descriptor}`,
-      '风格预设只决定配色、笔触质感、描边方式和装饰元素语言；它不改变主体是什么，也不允许因此画出任何文字、字母或数字。',
+      options?.allowText
+        ? '风格预设只决定配色、笔触质感、描边方式和装饰元素语言；它不改变主体是什么，也不得增删、改写或替换描述里点名要写出的文案。'
+        : '风格预设只决定配色、笔触质感、描边方式和装饰元素语言；它不改变主体是什么，也不允许因此画出任何文字、字母或数字。',
     ].join('\n');
   }
 }

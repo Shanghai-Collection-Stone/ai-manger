@@ -969,12 +969,10 @@ export class CanvasImageGroupService {
       const spec = LAYOUT_SPECS[layout];
       const slots: ImageGroupSlotRequirement[] = [
         { kind: spec.cover, role: 'cover' },
-        ...spec.inner.map(
-          (kind, idx): ImageGroupSlotRequirement => ({
-            kind,
-            role: innerRoles[idx] ?? 'inner-5',
-          }),
-        ),
+        ...spec.inner.map((kind, idx): ImageGroupSlotRequirement => ({
+          kind,
+          role: innerRoles[idx] ?? 'inner-5',
+        })),
       ];
       return {
         articleIndex,
@@ -2168,13 +2166,16 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 批量生成封面文案（主标题+副标题）：优先 LLM 生成，失败则退回标题截短
+   * @description 批量生成封面文案（主标题+副标题）：优先 LLM 生成，失败则退回标题截短。
+   * 内容优先级刻意写死为「文章标题 > 配图语义」：主标题只能是文章标题的提炼版，配图标签与
+   * 配图描述降级为方向参考，只影响用词、场景细节和情绪，冲突时一律丢弃。早期版本反过来
+   * （标签优先），结果是标签里的高频词直接改写了主标题在讲什么，封面和正文对不上。
    * @param {string | undefined} topic - 主题
    * @param {Array<{ title: string; tags: string[] }>} articles - 文章列表
-   * @param {Array<{ tags: string[]; descriptions: string[] }>} [imageContexts] - 每篇文章对应的配图语义上下文
+   * @param {Array<{ tags: string[]; descriptions: string[] }>} [imageContexts] - 每篇文章对应的配图语义上下文（方向参考，非选题来源）
    * @returns {Promise<Array<{title: string; subtitle: string}>>} 每篇文章对应的封面主副标题
-   * @keyword-cn 封面文案, 工具内部非流
-   * @keyword-en cover-text, internal-llm-nostream
+   * @keyword-cn 封面文案, 工具内部非流, 标题优先
+   * @keyword-en cover-text, internal-llm-nostream, title-first
    */
   private async generateCoverTexts(
     topic: string | undefined,
@@ -2197,7 +2198,7 @@ export class CanvasImageGroupService {
           const ctx = imageContexts?.[i];
           const ctxTags = this.sanitizeCopyrightRiskList(
             Array.isArray(ctx?.tags) ? ctx.tags : [],
-          ).slice(0, 24);
+          ).slice(0, 8);
           const ctxDescs = this.sanitizeCopyrightRiskList(
             Array.isArray(ctx?.descriptions) ? ctx.descriptions : [],
           ).slice(0, 6);
@@ -2206,9 +2207,11 @@ export class CanvasImageGroupService {
             articleTags.length > 0
               ? `   文章标签：${articleTags.join('、')}`
               : '',
-            ctxTags.length > 0 ? `   配图标签汇总：${ctxTags.join('、')}` : '',
+            ctxTags.length > 0
+              ? `   配图标签（仅方向参考）：${ctxTags.join('、')}`
+              : '',
             ctxDescs.length > 0
-              ? `   配图描述汇总：${ctxDescs.join('；')}`
+              ? `   配图描述（仅方向参考）：${ctxDescs.join('；')}`
               : '',
           ].filter((x) => x.length > 0);
           return parts.join('\n');
@@ -2218,10 +2221,11 @@ export class CanvasImageGroupService {
       const prompt = [
         '你是一名小红书封面文案专家。根据以下文章与配图语义信息，为每篇文章生成封面主标题和副标题。',
         '要求：',
-        '- 主标题：6-16 个汉字，简洁有力、吸引点击',
-        '- 副标题：10-24 个汉字，补充描述或引发兴趣',
-        '- 文案必须与配图标签和配图描述强相关，不得脱离配图语义凭空发挥',
-        '- 若文章标题与配图语义冲突，优先以配图语义为准，并尽量兼顾文章主题',
+        '- 主标题：以「文章标题」为唯一内容来源，只做提炼、缩短、重排或语气增强，不得引入文章标题里没有的主题、场景、人物或卖点；6-16 个汉字，简洁有力、吸引点击',
+        '- 副标题：10-24 个汉字，补充描述或引发兴趣，可从配图标签与配图描述取材',
+        '- 配图标签与配图描述仅用于副标题取材和用词风格参考；它们不是选题来源，禁止让标签里的词决定主标题在讲什么',
+        '- 主题、文章标签、配图标签和配图描述都不得成为主标题的新内容来源；主标题所指的事必须与文章标题完全一致',
+        '- 若文章标题与配图语义冲突，一律以文章标题为准；此时直接放弃使用冲突的配图语义，不要折中，也不要把配图里的主体写进主标题',
         '- 每条唯一不重复，不加引号、序号或多余标点，特别是禁止使用破折号（——或--）和省略号（…或...）',
         '',
         topicCtx,
