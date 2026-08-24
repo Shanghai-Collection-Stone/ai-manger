@@ -1,6 +1,7 @@
 # Sass Module
 
 ## 模块描述
+
 该模块提供SaaS数据源接入能力，包含Schema定义管理、租户与API Key管理、基于API Key租户识别的数据隔离CRUD接口，并提供非租户对接payload到SaaS payload的同步入库接口。
 文件路径: `src/modules/sass`
 标识策略: 统一使用 MongoDB `_id`（ObjectId 字符串），不再维护自增数字 id。
@@ -8,7 +9,9 @@
 ## 功能描述及关键词
 
 ### sass.controller.ts
+
 Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统一接入DTO校验。
+
 - **关键词**: sass, schema, tenant, api-key, crud, controller, class-validator, dto
 - **函数**:
   - `createSchema`: 创建schema/create schema
@@ -32,7 +35,9 @@ Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统�
   - `deleteOneData`: 删除单条/delete one data
 
 ### sass-sync.controller.ts
+
 Sass对接同步控制器，提供订单、订单使用、订单退单的兼容接收接口并转换为SaaS入库格式，订单接口支持手机号AES解密（特供固定密钥配置），并复用租户鉴权上下文入库。
+
 - **关键词**: sync, order, usage, refund, payload transform, phone decrypt, aes, fixed key, request-id, tenant context, controller
 - **函数**:
   - `syncOrders`: 同步订单/sync orders
@@ -52,7 +57,9 @@ Sass对接同步控制器，提供订单、订单使用、订单退单的兼容�
   - `decryptPhone`: 解密手机号/decrypt phone
 
 ### sass.service.ts
+
 Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持批量插入、去重、过滤DSL与数据日志，并统一ObjectId校验与历史索引清理。
+
 - **关键词**: service, mongo, schema, tenant, api-key, data isolation, dedupe, batch insert, log, objectid, index migration
 - **函数**:
   - `ensureIndexes`: 初始化索引/ensure indexes
@@ -89,37 +96,53 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `upsertPlatformInfo`: 更新租户平台AI配置（含enableAiCover）/upsert platform info
 
 ### sass-tenant-auth.middleware.ts
+
 Sass租户鉴权中间件，在sass schema、data与sync路由生效，支持通过 `X-Request-ID` 或传统API Key头解析密钥。
+
 - **关键词**: middleware, api-key, request-id, tenant-id, header, auth
 - **函数**:
   - `use`: 校验API Key并注入tenantId/verify api key and inject tenant id
 
 ### sass.module.ts
+
 Sass模块定义。
+
 - **关键词**: module, nest, middleware
 
 ### sass.dto.ts
+
 Sass请求体DTO与校验约束定义，包含租户CRUD与外部同步payload结构。
+
 - **关键词**: dto, class-validator, validation, sync payload
 - **函数**:
   - `validate`: DTO约束校验入口/validate dto fields
 
 ### sass-schema.entity.ts
+
 Schema实体定义。
+
 - **关键词**: entity, schema
 
 ### sass-tenant.entity.ts
-租户实体定义。
-- **关键词**: entity, tenant
+
+租户实体定义；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，容量由实际工作区数量汇总。
+
+- **关键词**: entity, tenant, tenant-node-assignment, workspace-count
 
 ### sass-api-key.entity.ts
+
 API Key实体定义。
+
 - **关键词**: entity, api-key
 
 ### platform-info.entity.ts
+
 平台AI配置实体定义。
+
 - **关键词**: entity, platform-info, ai-prompt-supplement, enable-ai-cover
 
 ### sass-database-log.entity.ts
+
 数据操作日志实体定义。
+
 - **关键词**: entity, data-log, operation

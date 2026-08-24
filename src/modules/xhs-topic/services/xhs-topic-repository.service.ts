@@ -8,6 +8,7 @@ import type {
   XhsTopicArticle,
   XhsTopicCreateInput,
   XhsTopicEntity,
+  XhsTopicCrawlStatus,
   XhsTopicUpdateInput,
   XhsTopicWorkspaceGroup,
 } from '../entities/xhs-topic.entity.js';
@@ -40,6 +41,7 @@ export class XhsTopicRepositoryService {
     await this.topics.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     await this.topics.createIndex({ tenantId: 1, userId: 1, parentId: 1 });
     await this.topics.createIndex({ tenantId: 1, userId: 1, kind: 1 });
+    await this.topics.createIndex({ kind: 1, 'crawl.status': 1 });
     const latest = await this.topics
       .find({}, { projection: { id: 1 } })
       .sort({ id: -1 })
@@ -85,24 +87,33 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 按当前租户和用户读取母题及其未存入文章库的真实子题列表。
-   * @keyword-cn 读取选题工作台, 母子聚合
-   * @keyword-en list-topic-workspace, parent-child-aggregation
+   * @description 按当前租户和用户读取母题及其真实子题列表。选题页传默认值剔除已存入文章库的子题；
+   *   数据看板传 `includeStoredArticles` 保留它们——已发文的子选题恰恰是最需要看抓取数据的那批。
+   * @keyword-cn 读取选题工作台, 母子聚合, 保留已入库子题
+   * @keyword-en list-topic-workspace, parent-child-aggregation, include-stored-topics
+   * @param scope 当前租户与用户作用域。
+   * @param options 是否保留已存入文章库的子选题。
+   * @returns {Promise<XhsTopicWorkspaceGroup[]>} 母题及其子题聚合列表。
    */
-  async listWorkspace(scope: {
-    tenantId?: string;
-    userId: string;
-  }): Promise<XhsTopicWorkspaceGroup[]> {
+  async listWorkspace(
+    scope: {
+      tenantId?: string;
+      userId: string;
+    },
+    options: { includeStoredArticles?: boolean } = {},
+  ): Promise<XhsTopicWorkspaceGroup[]> {
     const entities = await this.topics
       .find(this.buildScopeFilter(scope))
       .sort({ createdAt: 1, id: 1 })
       .toArray();
-    const storedTopicIds = await this.listStoredArticleTopicIds(
-      scope,
-      entities
-        .filter((entity) => entity.kind === 'child')
-        .map((entity) => Number(entity.id)),
-    );
+    const storedTopicIds = options.includeStoredArticles
+      ? new Set<number>()
+      : await this.listStoredArticleTopicIds(
+          scope,
+          entities
+            .filter((entity) => entity.kind === 'child')
+            .map((entity) => Number(entity.id)),
+        );
     const childrenByParent = new Map<number, XhsChildTopicView[]>();
     for (const entity of entities) {
       if (entity.kind !== 'child' || !entity.parentId) continue;
@@ -520,6 +531,91 @@ export class XhsTopicRepositoryService {
   }
 
   /**
+   * @description 切换子选题的数据抓取开关，恢复抓取时清空取消时间。
+   * @keyword-cn 切换抓取状态, 取消恢复抓取
+   * @keyword-en toggle-crawl-status, cancel-resume-crawl
+   * @param id 子选题业务 ID。
+   * @param status 目标抓取状态。
+   * @param scope 当前租户与用户作用域。
+   * @returns {Promise<XhsTopicEntity | null>} 更新后的子选题，越权或不存在时为 null。
+   */
+  async setCrawlStatus(
+    id: number,
+    status: XhsTopicCrawlStatus,
+    scope: { tenantId?: string; userId: string },
+  ): Promise<XhsTopicEntity | null> {
+    const now = new Date();
+    const update: Document =
+      status === 'cancelled'
+        ? {
+            $set: {
+              'crawl.status': status,
+              'crawl.cancelledAt': now,
+              updatedAt: now,
+            },
+          }
+        : {
+            $set: { 'crawl.status': status, updatedAt: now },
+            $unset: { 'crawl.cancelledAt': '' },
+          };
+    const res = await this.topics.findOneAndUpdate(
+      { ...this.buildScopeFilter(scope), id, kind: 'child' },
+      update,
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return res.value ?? null;
+  }
+
+  /**
+   * @description 记录一次调度已为子选题创建抓取任务，供频率节流判断。
+   * @keyword-cn 记录调度时间, 抓取频率节流
+   * @keyword-en mark-crawl-scheduled, schedule-throttle
+   * @param id 子选题业务 ID。
+   * @param at 本次调度时间。
+   * @returns {Promise<void>}
+   */
+  async markCrawlScheduled(id: number, at: Date): Promise<void> {
+    await this.topics.updateOne(
+      { id },
+      { $set: { 'crawl.lastScheduledAt': at, updatedAt: at } },
+    );
+  }
+
+  /**
+   * @description 记录一次抓取成功回写数据的时间，作为总览「最后抓取时间」的来源。
+   * @keyword-cn 记录抓取时间, 最后抓取
+   * @keyword-en mark-crawled, last-crawled-at
+   * @param id 子选题业务 ID。
+   * @param at 数据回写时间。
+   * @returns {Promise<void>}
+   */
+  async markCrawled(id: number, at: Date): Promise<void> {
+    await this.topics.updateOne(
+      { id },
+      { $set: { 'crawl.lastCrawledAt': at, updatedAt: at } },
+    );
+  }
+
+  /**
+   * @description 跨租户列出所有处于抓取中的子选题，仅供后台定时调度使用，不对外暴露。
+   * @keyword-cn 待调度子选题, 全局抓取列表
+   * @keyword-en schedulable-topics, global-crawling-list
+   * @returns {Promise<XhsTopicEntity[]>} 抓取状态为 crawling（含未写过该字段）的子选题。
+   */
+  async listCrawlingChildTopics(): Promise<XhsTopicEntity[]> {
+    return await this.topics
+      .find({
+        kind: 'child',
+        $or: [
+          { 'crawl.status': 'crawling' },
+          { 'crawl.status': { $exists: false } },
+          { crawl: { $exists: false } },
+        ],
+      })
+      .toArray();
+  }
+
+  /**
    * @description 将子选题数据库实体转换为前端列表结构。
    * @keyword-cn 子选题转换, 接口视图
    * @keyword-en child-topic-view, api-view
@@ -538,6 +634,8 @@ export class XhsTopicRepositoryService {
             updatedAt: entity.article.updatedAt.toISOString(),
           }
         : undefined,
+      crawlStatus: entity.crawl?.status ?? 'crawling',
+      lastCrawledAt: entity.crawl?.lastCrawledAt?.toISOString(),
       sourceTodoId: entity.sourceTodoId,
       createdAt: entity.createdAt.toISOString(),
       updatedAt: entity.updatedAt.toISOString(),

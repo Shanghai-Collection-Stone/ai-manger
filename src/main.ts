@@ -7,6 +7,8 @@ import { enableProxyFromEnv } from './shared/network/proxy';
 import { ConfigService } from '@nestjs/config';
 import { existsSync } from 'fs';
 import { resolveMongoUri } from './shared/mongo/resolve-mongo-uri';
+import { MicroserviceOptions } from '@nestjs/microservices';
+import { createSuperClawGrpcOptions } from './modules/super-claw/super-claw-grpc.options.js';
 
 /**
  * @description Run pending Mongo migrations before the Nest app starts.
@@ -66,6 +68,11 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
+  if (process.env.SUPER_CLAW_GRPC_ENABLED?.trim().toLowerCase() !== 'false') {
+    app.connectMicroservice<MicroserviceOptions>(createSuperClawGrpcOptions(), {
+      inheritAppConfig: true,
+    });
+  }
   app.useBodyParser('json', { limit: '50mb' });
   app.useBodyParser('urlencoded', { limit: '50mb', extended: true });
   app.enableCors();
@@ -110,6 +117,7 @@ async function bootstrap() {
   });
 
   app.use('/static', express.static(join(process.cwd(), 'public')));
+  await app.startAllMicroservices();
   await app.listen(process.env.PORT ?? 3011);
   console.log(`Application is running on: ${await app.getUrl()}`);
 }

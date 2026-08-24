@@ -8,14 +8,16 @@ import { ObjectId } from 'mongodb';
 export type WorkspaceMemberRole = 'owner' | 'editor' | 'viewer';
 
 /**
- * @description 工作区实体，隶属租户，含容量设定与已用容量(由网盘维护)
- * @keyword-en workspace entity
- * @keyword-cn 工作区实体
+ * @description 工作区实体，隶属租户并作为 SuperClaw 子资源，含独立网盘容量
+ * @keyword-en workspace-entity, super-claw-child
+ * @keyword-cn 工作区实体, 节点子资源
  */
 export interface WorkspaceEntity {
   _id: ObjectId;
   /** 归属租户 */
   tenantId: string;
+  /** 承载该工作区的平台 SuperClaw 节点 ID */
+  superClawId: string;
   /** 工作区名称(租户内唯一) */
   name: string;
   /** 工作区描述 */

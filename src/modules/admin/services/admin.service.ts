@@ -927,8 +927,9 @@ export class AdminService {
   }
 
   /**
-   * @description 删除租户
-   * @keyword-en delete tenant
+   * @description 删除没有用户且未分配 SuperClaw 的租户
+   * @keyword-cn 删除租户, 分配保护
+   * @keyword-en delete-tenant, allocation-protection
    */
   async deleteTenant(
     currentUser: AdminUserEntity,
@@ -939,6 +940,10 @@ export class AdminService {
     const hasUser = await this.users.findOne({ tenantId: String(tenantId) });
     if (hasUser) {
       throw new BadRequestException('TENANT_HAS_USERS');
+    }
+    const tenant = await this.sassTenants.findOne({ _id: tenantId });
+    if (tenant?.superClawId) {
+      throw new BadRequestException('TENANT_HAS_SUPER_CLAW_ALLOCATION');
     }
     const res = await this.sassTenants.deleteOne({ _id: tenantId });
     return res.deletedCount === 1;

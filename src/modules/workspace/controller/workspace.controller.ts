@@ -33,7 +33,11 @@ import {
 @Controller('api/v2/workspaces')
 @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
 @UsePipes(
-  new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }),
+  new ValidationPipe({
+    transform: true,
+    whitelist: true,
+    forbidNonWhitelisted: true,
+  }),
 )
 export class WorkspaceController {
   constructor(private readonly workspaceService: WorkspaceService) {}
@@ -73,7 +77,10 @@ export class WorkspaceController {
   @RequirePermission('read', 'Workspace')
   @Get(':id')
   async get(@Req() req: AdminRequest, @Param('id') id: string) {
-    const workspace = await this.workspaceService.get(this.requireUser(req), id);
+    const workspace = await this.workspaceService.get(
+      this.requireUser(req),
+      id,
+    );
     return { workspace };
   }
 

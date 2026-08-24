@@ -49,6 +49,7 @@
   - `listRoles`: 角色列表(静态RBAC角色目录及权限矩阵，只读)/list admin roles | keywords: list-admin-roles
   - `logout`: 注销会话/logout
   - `listLoginTenants`: 登录租户列表/list login tenants
+  - `deleteTenant(currentUser, id)`: 删除没有用户且未分配 SuperClaw 的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
   - `getDefaultAiProvider`: 读取默认提供商（llm/em 未设 default 时 fallback 任一 enabled 记录）/get default provider
   - `getDefaultAiProviderRuntime`: 读取默认提供商运行配置/get default provider runtime
   - `getDefaultEmbeddingRuntime`: 读取默认向量配置/get default embedding runtime
@@ -95,7 +96,7 @@
   - `createForUser`: 依据登录用户角色构建 CASL ability/create ability for admin user | keywords: create-ability-for-admin-user
 
 ### casl/admin-permission.constants.ts
-后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`。
+后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic` 与平台节点主体 `SuperClaw`。
 - **关键词**: permission, subject, action, registry, root-key, casl
 - **类型导出**: `AdminAction`, `AdminSubject`; 常量 `ADMIN_ACTIONS`, `ADMIN_SUBJECTS`
 

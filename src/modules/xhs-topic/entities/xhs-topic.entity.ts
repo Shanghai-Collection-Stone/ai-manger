@@ -127,6 +127,28 @@ export interface XhsTopicArticle {
 }
 
 /**
+ * @description 子选题的数据抓取开关状态。`crawling` 由定时调度持续建任务，`cancelled` 跳过调度但保留历史数据。
+ * @keyword-cn 抓取状态, 取消抓取
+ * @keyword-en crawl-status, cancel-crawl
+ */
+export type XhsTopicCrawlStatus = 'crawling' | 'cancelled';
+
+/**
+ * @description 子选题上持久化的抓取开关与最近一次调度结果，未写过该字段的历史子选题按 `crawling` 处理。
+ * @keyword-cn 选题抓取状态, 最后抓取时间
+ * @keyword-en topic-crawl-state, last-crawled-at
+ */
+export interface XhsTopicCrawlState {
+  status: XhsTopicCrawlStatus;
+  /** 最近一次成功回写数据的时间 */
+  lastCrawledAt?: Date;
+  /** 最近一次调度创建抓取任务的时间，用于按频率节流 */
+  lastScheduledAt?: Date;
+  /** 取消抓取的时间，恢复后清空 */
+  cancelledAt?: Date;
+}
+
+/**
  * @description MongoDB 中持久化的母选题或子选题实体。
  * @keyword-cn 选题实体, 数据库存储
  * @keyword-en topic-entity, database-storage
@@ -142,6 +164,8 @@ export interface XhsTopicEntity {
   topicType: string;
   status: XhsTopicStatus;
   article?: XhsTopicArticle;
+  /** 子选题专用的数据抓取开关状态，母选题不写该字段 */
+  crawl?: XhsTopicCrawlState;
   sourceTodoId?: number;
   createdAt: Date;
   updatedAt: Date;
@@ -174,6 +198,10 @@ export interface XhsChildTopicView {
     createdAt: string;
     updatedAt: string;
   };
+  /** 数据抓取开关状态，历史数据缺省视为 crawling */
+  crawlStatus: XhsTopicCrawlStatus;
+  /** 最近一次成功抓取时间，ISO 字符串 */
+  lastCrawledAt?: string;
   sourceTodoId?: number;
   createdAt: string;
   updatedAt: string;

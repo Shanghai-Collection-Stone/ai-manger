@@ -570,6 +570,8 @@ export class TodoFunctionCallService {
       '         "likeCount": 1200,',
       '         "commentCount": 80,',
       '         "collectCount": 450,',
+      '         "viewCount": 32000,',
+      '         "shareCount": 60,',
       '         "tag": "分类标签（可选）",',
       '         "dataAt": "2026-04-13T00:00:00.000Z",',
       '         "topComments": [',
@@ -586,6 +588,7 @@ export class TodoFunctionCallService {
       '     "status": "done"',
       '   }',
       '3. taskToken 从任务详情中获取（首次执行先调用 GET /task-api/{todoId} 读取）。',
+      '4. viewCount(曝光/浏览量) 与 shareCount(分享量) 能取到就一并回写；取不到时整个字段省略，不要填 0 冒充真实值。',
     ].join('\n');
     return [aiPlan, instructions].filter(Boolean).join('\n\n');
   }

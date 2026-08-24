@@ -8,6 +8,8 @@ export interface SassTenantEntity {
   _id: ObjectId;
   name: string;
   description?: string;
+  /** 平台为租户分配的 SuperClaw 节点 ID */
+  superClawId?: string;
   createdAt: Date;
   updatedAt: Date;
 }

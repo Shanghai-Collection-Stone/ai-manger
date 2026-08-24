@@ -46,6 +46,8 @@ export const ADMIN_SUBJECTS = {
   Notice: 'Notice',
   /** 通知已读状态(接收人视角：我的通知/标记已读/未读数) */
   NoticeRead: 'NoticeRead',
+  /** 平台专属 SuperClaw 节点、Token 与租户容量分配 */
+  SuperClaw: 'SuperClaw',
   /** 通配全部主体 */
   All: 'all',
 } as const;

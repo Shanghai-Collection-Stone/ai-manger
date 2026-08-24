@@ -33,6 +33,8 @@ export class XhsPostStatService {
     await this.stats.createIndex({ postHash: 1 });
     await this.stats.createIndex({ todoId: 1, postHash: 1 });
     await this.stats.createIndex({ dataAt: -1 });
+    await this.stats.createIndex({ topicId: 1, dataAt: -1 });
+    await this.stats.createIndex({ crawlRunId: 1 });
     const exists = await this.counters.findOne({ _id: 'xhs_post_stats' });
     if (!exists)
       await this.counters.insertOne({ _id: 'xhs_post_stats', seq: 0 });
@@ -83,6 +85,13 @@ export class XhsPostStatService {
       likeCount: input.likeCount ?? 0,
       commentCount: input.commentCount ?? 0,
       collectCount: input.collectCount ?? 0,
+      viewCount:
+        typeof input.viewCount === 'number' ? input.viewCount : undefined,
+      shareCount:
+        typeof input.shareCount === 'number' ? input.shareCount : undefined,
+      topicId: typeof input.topicId === 'number' ? input.topicId : undefined,
+      crawlRunId:
+        typeof input.crawlRunId === 'number' ? input.crawlRunId : undefined,
       topComments: input.topComments ?? [],
       dataAt: input.dataAt ?? now,
       createdAt: now,
@@ -191,5 +200,88 @@ export class XhsPostStatService {
         { projection: { _id: 0 } },
       )) ?? null
     );
+  }
+
+  /**
+   * @description 把一个抓取 Todo 下**尚未归属任何运行**的帖子数据，一次性划给指定的抓取运行与子选题。
+   *   长时采集任务会在同一个 todoId 下多次回写，用「有没有 crawlRunId」而不是「有没有 topicId」来判定，
+   *   才能把后一批数据划给新的运行，而不是被前一批的归属结果挡住。
+   * @keyword-cn 回填抓取运行, 归属子选题, 分批划归
+   * @keyword-en assign-crawl-run, backfill-topic-id, batch-attribution
+   * @param {number} todoId - 抓取 Todo ID。
+   * @param {number} topicId - 归属子选题 ID。
+   * @param {number} crawlRunId - 抓取运行记录 ID。
+   * @returns {Promise<number>} 本次划归的数据条数。
+   */
+  async assignCrawlRun(
+    todoId: number,
+    topicId: number,
+    crawlRunId: number,
+  ): Promise<number> {
+    const res = await this.stats.updateMany(
+      { todoId, crawlRunId: { $exists: false } },
+      { $set: { topicId, crawlRunId, updatedAt: new Date() } },
+    );
+    return res.modifiedCount;
+  }
+
+  /**
+   * @description 按子选题分页读取抓取明细，按采集时间倒序。
+   * @keyword-cn 选题抓取明细, 分页查询
+   * @keyword-en topic-stat-details, paged-query
+   */
+  async listByTopicPaged(
+    topicId: number,
+    page: number,
+    pageSize: number,
+  ): Promise<{ items: XhsPostStatEntity[]; total: number }> {
+    const filter = { topicId };
+    const total = await this.stats.countDocuments(filter);
+    const items = await this.stats
+      .find(filter, { projection: { _id: 0 } })
+      .sort({ dataAt: -1, id: -1 })
+      .skip(Math.max(0, (page - 1) * pageSize))
+      .limit(pageSize)
+      .toArray();
+    return { items, total };
+  }
+
+  /**
+   * @description 读取某个子选题的全部抓取明细，供总览聚合与舆论分析使用。
+   * @keyword-cn 选题全部数据, 聚合数据源
+   * @keyword-en topic-all-stats, aggregation-source
+   */
+  async listByTopic(topicId: number): Promise<XhsPostStatEntity[]> {
+    return this.stats
+      .find({ topicId }, { projection: { _id: 0 } })
+      .sort({ dataAt: 1 })
+      .toArray();
+  }
+
+  /**
+   * @description 删除某个子选题指定自然日（本地时区区间）内的全部抓取数据。
+   * @keyword-cn 按天删除数据, 清理抓取记录
+   * @keyword-en delete-stats-by-day, purge-crawl-records
+   */
+  async deleteByTopicDay(
+    topicId: number,
+    dayStart: Date,
+    dayEnd: Date,
+  ): Promise<number> {
+    const res = await this.stats.deleteMany({
+      topicId,
+      dataAt: { $gte: dayStart, $lt: dayEnd },
+    });
+    return res.deletedCount;
+  }
+
+  /**
+   * @description 删除某个子选题的全部抓取数据，供取消抓取时清空使用。
+   * @keyword-cn 清空选题数据, 删除全部记录
+   * @keyword-en purge-topic-stats, delete-all-records
+   */
+  async deleteByTopic(topicId: number): Promise<number> {
+    const res = await this.stats.deleteMany({ topicId });
+    return res.deletedCount;
   }
 }

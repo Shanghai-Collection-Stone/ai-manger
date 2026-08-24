@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package superclaw.v1;
+
+// SuperClaw 节点控制面接入服务。
+// 规范性字段语义、鉴权和兼容性规则见 grpc-protocol.md。
+service SuperClawGateway {
+  // 注册或刷新当前运行实例，并开始心跳生命周期。
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // 续期节点在线状态并上报节点侧容量观测值。
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message RegisterRequest {
+  // 当前运行实例标识，去除首尾空白后必须非空。
+  string instance_id = 1;
+
+  // 节点对外地址，仅用于登记和诊断；V1 平台不会主动拨号。
+  string endpoint = 2;
+
+  // 节点程序版本，建议使用 SemVer 或不可变构建版本。
+  string version = 3;
+}
+
+message RegisterResponse {
+  // 平台节点 ID，仅用于关联和诊断，不能替代 Token 鉴权。
+  string super_claw_id = 1;
+
+  // RPC 返回 OK 时恒为 true。
+  bool registered = 2;
+
+  // 平台配置的工作区槽位总数。
+  int32 capacity = 3;
+
+  // 平台按工作区绑定关系计算的已占用槽位数。
+  int32 allocated_capacity = 4;
+
+  // 服务端建议心跳间隔，单位为秒。
+  int32 heartbeat_interval_seconds = 5;
+
+  // 服务端 UTC 时间，RFC 3339/ISO 8601 格式。
+  string server_time = 6;
+}
+
+message HeartbeatRequest {
+  // 当前运行实例标识；空字符串表示不更新已登记值。
+  string instance_id = 1;
+
+  // 节点观测到的已使用工作区槽位数，不是平台限额权威值。
+  int32 used_capacity = 2;
+}
+
+message HeartbeatResponse {
+  // RPC 返回 OK 时恒为 true。
+  bool accepted = 1;
+
+  // 平台配置的工作区槽位总数。
+  int32 capacity = 2;
+
+  // 平台按工作区绑定关系计算的已占用槽位数。
+  int32 allocated_capacity = 3;
+
+  // 服务端 UTC 时间，RFC 3339/ISO 8601 格式。
+  string server_time = 4;
+}

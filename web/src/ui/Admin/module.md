@@ -1,6 +1,7 @@
 # Admin UI Module
 
 ## 模块描述
+
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
 支持 AI 提供商按模型类型管理(llm/em/image),并支持平台 AI 配置中的"是否开启 AI 封面"开关。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
@@ -10,15 +11,17 @@
 ## 功能描述及关键词
 
 ### AdminApp.jsx
-后台管理主应用,包含多 Tab 管理界面与数据加载逻辑,刷新后保留上次点击 Tab。
+
+后台管理主应用,包含多 Tab 管理界面与数据加载逻辑,刷新后保留上次点击 Tab。平台 SuperClaw Tab 支持节点 CRUD、一次性 Token 展示/轮换、连接状态和工作区槽位查看；租户管理表单选择 SuperClaw 后，该租户全部工作区归属并计入所选节点。
 **代码分割**: `@uiw/react-md-editor`(含 CodeMirror,约 1.6 MB)改为 `React.lazy` 按需加载 — 模块内自建 `MDEditor` 与 `MDEditor.Markdown` 两个 Suspense 包装组件,三处调用点写法不变;编辑器样式表仍静态引入避免 FOUC。后台首屏包由 1.77 MB 降到 88 KB。
+
 - **函数**(代码分割相关):
   - `MDEditor(props)` — 按需加载的 Markdown 编辑器包装 | keywords: lazy-import, markdown-editor
   - `MDEditor.Markdown(props)` — 按需加载的 Markdown 只读渲染包装 | keywords: lazy-import, markdown-preview
-Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户级用户可见(super_admin 隐藏)。
-**飞书凭证 / 财务**对所有用户开放:tenant_admin 看到自己租户的;super_admin 看到平台自身的(service 内部统一用 `__platform__` 作为作用域占位符)。
-**飞书凭证 Tab 改为单条本作用域表单(无表格、无租户列)**;
-**财务 Tab(简化版,对齐 api.md `financial_event` 统一模型)**:
+    Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户级用户可见(super_admin 隐藏)。
+    **飞书凭证 / 财务**对所有用户开放:tenant_admin 看到自己租户的;super_admin 看到平台自身的(service 内部统一用 `__platform__` 作为作用域占位符)。
+    **飞书凭证 Tab 改为单条本作用域表单(无表格、无租户列)**;
+    **财务 Tab(简化版,对齐 api.md `financial_event` 统一模型)**:
 - 顶部:推送配置卡片(默认折叠,显示 baseUrl + 外部租户 ID 摘要 + 连通性 badge;展开后才有 baseUrl/apiKey/外部租户 ID 输入与"测试连通性")
 - 推送结果反馈(全宽,**SSE 流式**:推送中实时显示蓝色进度条+最后一条 log,执行日志区随后端 onLog 逐条追加;结束后切到成功/失败摘要 + 完整错误信息 + 对方原始响应 body + 该批前 3 条 payload + 完整执行日志;失败时提供"复制详情"和"发给 Agent"两个按钮一键把 markdown 化的完整失败详情送给 LLM 排错)
 - 子 Tab(流水表 / 审批表 / 应付表 / 应收表,FINANCE_KINDS 预设 — name/flow/partyType 自动注入,用户不感知)
@@ -33,6 +36,7 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 - **关键词**: admin ui, tabs, crud, localStorage, dashboard config mapping, tenant isolation, ai provider, glm, z.ai, kimi, moonshot, image category, ai cover toggle, ai provider test connection button, feishu credential single tenant, finance preset kinds (FINANCE_KINDS), expense payable sub tabs, hidden name flow partyType auto inject, collapsible push config, auto-loaded stores companies, collapsed dsl advanced
 
 #### finance 相关常量与函数
+
 - `FINANCE_KINDS`: 子 Tab 预设(支出/应付,内含 id=name + flowDefault + partyTypeDefault + hint)/finance kinds preset
 - `formatFinanceToolValue`: 格式化 Agent 工具参数/结果用于聊天气泡展示/format finance agent tool value | keywords: finance-agent-tool-value, tool-display
 - `mergeFinanceToolEvent`: 合并 Agent tool_start/tool_chunk/tool_end 到单条 assistant 消息/merge finance agent tool event | keywords: finance-agent-tool-event, tool-stream
@@ -55,13 +59,23 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
 - `onSendPushFailureToAgent`: 把失败详情塞进当前 binding 的 Agent 输入框 /send push failure to agent composer
 
 #### 通用函数
+
 - `toText` / `toLower` / `readAdminActiveTab` / `writeAdminActiveTab` / `toDateInput` / `getRoleLabel` / `hasAdminFullAccess` / `isSuperAdmin` / `ALL_TABS` / `buildPagedRows` / `renderPager` / `loadData` / `updateForm` / `updateFilter` / `gotoPage`
 - `reloadDashboardConfigs` / `onSubmitDashboardConfig` / `onDeleteDashboardConfig` / `onSubmitPlatformInfo`
 - `onSubmitFeishuCredential` / `onDeleteFeishuCredential`
 - `onTestProvider(id)`: AI 提供商测试连接按钮 handler(列表里每行的「测试连接」按钮触发,成功时绿色 notice 显示状态+延迟+模型数+前 3 个模型名,失败时红色 error 显示状态+endpoint+原始错误 message,disable 阻止重复点击)/test ai provider handler
+- `reloadSuperClaws()` — 刷新平台节点与容量 | keywords: 刷新节点, 容量状态, reload-super-claws, capacity-status
+- `onSubmitSuperClaw()` — 创建或更新 SuperClaw | keywords: 提交节点, 总容量, submit-super-claw, total-capacity
+- `onDeleteSuperClaw(id)` — 删除空闲 SuperClaw | keywords: 删除节点, 占用保护, delete-super-claw, allocation-guard
+- `onRotateSuperClawToken(id)` — 轮换并展示一次性 Token | keywords: 轮换密钥, 一次性令牌, rotate-super-claw-token, one-time-token
+- `onCopySuperClawToken()` — 复制一次性 Token | keywords: 复制密钥, 一次性展示, copy-super-claw-token, one-time-display
+- `onSubmitTenant()` — 保存租户并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
+- `onDeleteTenant(id)` — 删除未分配节点的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
 
 ### AdminLoginApp.jsx
+
 后台登录页:选择租户并登录,写入 token 并跳转。
+
 - **关键词**: admin login, tenant select, token
 - **函数**:
   - `hasAdminFullAccess`: 权限判断 /check full access
@@ -69,7 +83,9 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
   - `resolvePostLoginTarget`: 登录后跳转 /resolve post login target
 
 ### adminApi.js
+
 后台 API 封装:管理端接口请求、token 存取、页面跳转地址解析。注意:`request()` 内部已拼接 `/admin` 前缀,调用方路径不得重复。
+
 - **关键词**: api, bearer token, request, redirect, social-accounts, finance named bindings, global push config, external stores companies
 - **函数**:
   - `getAdminToken` / `setAdminToken` / `clearAdminToken`: token 存取
@@ -87,3 +103,9 @@ Tab 按角色过滤:`platformOnly` 仅 super_admin 可见;`tenantOnly` 仅租户
   - `adminApi.chatFinanceAgent`: 财务 Agent 同步聊天(传 `{ name, messages }`)
   - `adminApi.chatFinanceAgentStream(payload, callbacks)`: 财务 Agent SSE 流式聊天封装(fetch + ReadableStream + TextDecoder,逐帧分发 token/tool/end/error)/finance agent chat stream | keywords: finance-agent-chat-stream, sse-chat
   - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活, 15s 超时, 不消耗配额)/test ai provider
+  - `adminApi.listSuperClaws()` — 平台 SuperClaw 节点列表 | keywords: 节点列表, 平台管理, super-claw-list, platform-management
+  - `adminApi.createSuperClaw(payload)` — 创建节点并接收一次性 Token | keywords: 创建节点, 一次性令牌, super-claw-create, one-time-token
+  - `adminApi.updateSuperClaw(id, payload)` — 更新节点与容量 | keywords: 更新节点, 容量上限, super-claw-update, capacity-limit
+  - `adminApi.deleteSuperClaw(id)` — 删除空闲节点 | keywords: 删除节点, 占用保护, super-claw-delete, allocation-guard
+  - `adminApi.rotateSuperClawToken(id)` — 轮换节点密钥 | keywords: 轮换令牌, 密钥管理, super-claw-token-rotate, secret-management
+  - `adminApi.assignTenantSuperClaw(tenantId, payload)` — 设置租户节点并迁移工作区 | keywords: 租户节点归属, 工作区迁移, tenant-node-assignment, workspace-migration

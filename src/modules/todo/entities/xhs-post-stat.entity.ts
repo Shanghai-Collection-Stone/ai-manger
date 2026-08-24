@@ -39,6 +39,14 @@ export interface XhsPostStatEntity {
   commentCount: number;
   /** 收藏量 */
   collectCount: number;
+  /** 曝光/浏览量，采集端未提供时为 undefined，前端据此显示「待采集」 */
+  viewCount?: number;
+  /** 分享量，采集端未提供时为 undefined，前端据此显示「待采集」 */
+  shareCount?: number;
+  /** 归属子选题 ID，由抓取任务绑定关系回填，历史数据可能缺失 */
+  topicId?: number;
+  /** 归属的抓取运行记录 ID。同一个 Todo 多次回写会分到不同的运行，趋势与环比按它分批 */
+  crawlRunId?: number;
   /** 前 5 条热门评论快照 */
   topComments: XhsTopComment[];
   /** 数据采集时间 */
@@ -62,6 +70,10 @@ export interface XhsPostStatCreateInput {
   likeCount?: number;
   commentCount?: number;
   collectCount?: number;
+  viewCount?: number;
+  shareCount?: number;
+  topicId?: number;
+  crawlRunId?: number;
   topComments?: XhsTopComment[];
   dataAt?: Date;
 }
@@ -80,6 +92,10 @@ export interface XhsPostStatUpdateInput {
   likeCount?: number;
   commentCount?: number;
   collectCount?: number;
+  viewCount?: number;
+  shareCount?: number;
+  topicId?: number;
+  crawlRunId?: number;
   topComments?: XhsTopComment[];
   dataAt?: Date;
 }

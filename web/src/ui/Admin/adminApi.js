@@ -195,6 +195,79 @@ export const adminApi = {
       method: 'DELETE',
     });
   },
+
+  // ─── SuperClaw 平台节点 ─────────────────────────────────────────────────────
+
+  /**
+   * @description 获取平台 SuperClaw 节点列表
+   * @keyword-cn 节点列表, 平台管理
+   * @keyword-en super-claw-list, platform-management
+   */
+  async listSuperClaws() {
+    return request('/super-claws');
+  },
+
+  /**
+   * @description 创建 SuperClaw 并接收一次性明文 Token
+   * @keyword-cn 创建节点, 一次性令牌
+   * @keyword-en super-claw-create, one-time-token
+   */
+  async createSuperClaw(payload) {
+    return request('/super-claws', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 更新 SuperClaw 基础信息与容量
+   * @keyword-cn 更新节点, 容量上限
+   * @keyword-en super-claw-update, capacity-limit
+   */
+  async updateSuperClaw(id, payload) {
+    return request(`/super-claws/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除没有租户占用的 SuperClaw
+   * @keyword-cn 删除节点, 占用保护
+   * @keyword-en super-claw-delete, allocation-guard
+   */
+  async deleteSuperClaw(id) {
+    return request(`/super-claws/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * @description 轮换 SuperClaw 连接 Token
+   * @keyword-cn 轮换令牌, 密钥管理
+   * @keyword-en super-claw-token-rotate, secret-management
+   */
+  async rotateSuperClawToken(id) {
+    return request(`/super-claws/${encodeURIComponent(id)}/token/rotate`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * @description 设置租户 SuperClaw 归属并迁移其工作区
+   * @keyword-cn 租户节点归属, 工作区迁移
+   * @keyword-en tenant-node-assignment, workspace-migration
+   */
+  async assignTenantSuperClaw(tenantId, payload) {
+    return request(
+      `/super-claws/tenant-allocations/${encodeURIComponent(tenantId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      },
+    );
+  },
+
   async listKeys(tenantId = '') {
     const query = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : '';
     return request(`/keys${query}`);
@@ -605,7 +678,10 @@ export const adminApi = {
       }
       if (event === 'log' && typeof callbacks.onLog === 'function') {
         callbacks.onLog(payload);
-      } else if (event === 'result' && typeof callbacks.onResult === 'function') {
+      } else if (
+        event === 'result' &&
+        typeof callbacks.onResult === 'function'
+      ) {
         callbacks.onResult(payload);
       } else if (event === 'error' && typeof callbacks.onError === 'function') {
         callbacks.onError(payload);

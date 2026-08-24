@@ -14,6 +14,7 @@ import type {
   WorkspaceMemberRole,
 } from '../entities/workspace.entity.js';
 import { WORKSPACE_AUDIT_ACTIONS } from '../constants/workspace-audit.constants.js';
+import { SuperClawService } from '../../super-claw/services/super-claw.service.js';
 
 /**
  * @description 创建工作区入参
@@ -39,7 +40,7 @@ export interface UpdateWorkspaceInput {
 }
 
 /**
- * @description 工作区服务，负责工作区 CRUD、成员管理、容量记账入口，并对变更自动埋点审计
+ * @description 工作区服务，负责 SuperClaw 子工作区 CRUD、成员管理、网盘容量记账与审计
  * @keyword-en workspace service
  * @keyword-cn 工作区服务
  */
@@ -52,6 +53,7 @@ export class WorkspaceService {
   constructor(
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly auditLogService: AuditLogService,
+    private readonly superClawService: SuperClawService,
   ) {
     this.workspaces = db.collection<WorkspaceEntity>('workspaces');
     this.members = db.collection<WorkspaceMemberEntity>('workspace_members');
@@ -70,6 +72,7 @@ export class WorkspaceService {
       { unique: true },
     );
     await this.workspaces.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.workspaces.createIndex({ superClawId: 1 });
     await this.members.createIndex(
       { workspaceId: 1, userId: 1 },
       { unique: true },
@@ -104,9 +107,9 @@ export class WorkspaceService {
   }
 
   /**
-   * @description 创建工作区
-   * @keyword-en create workspace
-   * @keyword-cn 创建工作区
+   * @description 在租户所属 SuperClaw 下创建工作区并占用一个节点槽位
+   * @keyword-en create-workspace, reserve-super-claw-slot
+   * @keyword-cn 创建工作区, 占用节点槽位
    */
   async create(
     currentUser: AdminUserEntity,
@@ -114,10 +117,13 @@ export class WorkspaceService {
   ): Promise<WorkspaceEntity> {
     const tenantId = this.resolveTenant(currentUser, input.tenantId);
     const capacityBytes = this.normalizeCapacity(input.capacityBytes);
+    const superClawId =
+      await this.superClawService.reserveWorkspaceForTenant(tenantId);
     const now = new Date();
     const doc: WorkspaceEntity = {
       _id: new ObjectId(),
       tenantId,
+      superClawId,
       name: input.name.trim(),
       description: input.description?.trim(),
       capacityBytes,
@@ -129,12 +135,19 @@ export class WorkspaceService {
     try {
       await this.workspaces.insertOne(doc);
     } catch {
+      await this.superClawService.releaseWorkspace(superClawId);
       throw new BadRequestException('WORKSPACE_NAME_ALREADY_EXISTS');
     }
-    await this.audit(currentUser, WORKSPACE_AUDIT_ACTIONS.create, 'workspace', String(doc._id), {
-      name: doc.name,
-      capacityBytes: doc.capacityBytes,
-    });
+    await this.audit(
+      currentUser,
+      WORKSPACE_AUDIT_ACTIONS.create,
+      'workspace',
+      String(doc._id),
+      {
+        name: doc.name,
+        capacityBytes: doc.capacityBytes,
+      },
+    );
     return doc;
   }
 
@@ -166,14 +179,20 @@ export class WorkspaceService {
       { $set: updates },
       { returnDocument: 'after' },
     );
-    await this.audit(currentUser, WORKSPACE_AUDIT_ACTIONS.update, 'workspace', id, updates);
+    await this.audit(
+      currentUser,
+      WORKSPACE_AUDIT_ACTIONS.update,
+      'workspace',
+      id,
+      updates,
+    );
     return res ?? ws;
   }
 
   /**
-   * @description 删除工作区及其成员(网盘残留内容清理由后续迭代处理，见 module.md)
-   * @keyword-en delete workspace
-   * @keyword-cn 删除工作区
+   * @description 删除工作区及成员，并释放所属 SuperClaw 的一个工作区槽位
+   * @keyword-en delete-workspace, release-super-claw-slot
+   * @keyword-cn 删除工作区, 释放节点槽位
    */
   async remove(currentUser: AdminUserEntity, id: string): Promise<boolean> {
     const ws = await this.get(currentUser, id);
@@ -182,9 +201,18 @@ export class WorkspaceService {
     }
     await this.members.deleteMany({ workspaceId: id });
     const res = await this.workspaces.deleteOne({ _id: ws._id });
-    await this.audit(currentUser, WORKSPACE_AUDIT_ACTIONS.delete, 'workspace', id, {
-      name: ws.name,
-    });
+    if (res.deletedCount === 1) {
+      await this.superClawService.releaseWorkspace(ws.superClawId);
+    }
+    await this.audit(
+      currentUser,
+      WORKSPACE_AUDIT_ACTIONS.delete,
+      'workspace',
+      id,
+      {
+        name: ws.name,
+      },
+    );
     return res.deletedCount === 1;
   }
 
@@ -198,10 +226,7 @@ export class WorkspaceService {
     workspaceId: string,
   ): Promise<WorkspaceMemberEntity[]> {
     await this.get(currentUser, workspaceId);
-    return this.members
-      .find({ workspaceId })
-      .sort({ createdAt: 1 })
-      .toArray();
+    return this.members.find({ workspaceId }).sort({ createdAt: 1 }).toArray();
   }
 
   /**
@@ -239,11 +264,17 @@ export class WorkspaceService {
     } catch {
       throw new BadRequestException('MEMBER_ALREADY_EXISTS');
     }
-    await this.audit(currentUser, WORKSPACE_AUDIT_ACTIONS.memberAdd, 'workspace_member', String(doc._id), {
-      workspaceId,
-      userId: input.userId,
-      role: input.role,
-    });
+    await this.audit(
+      currentUser,
+      WORKSPACE_AUDIT_ACTIONS.memberAdd,
+      'workspace_member',
+      String(doc._id),
+      {
+        workspaceId,
+        userId: input.userId,
+        role: input.role,
+      },
+    );
     return doc;
   }
 
@@ -265,11 +296,17 @@ export class WorkspaceService {
       { returnDocument: 'after' },
     );
     if (!res) throw new NotFoundException('MEMBER_NOT_FOUND');
-    await this.audit(currentUser, WORKSPACE_AUDIT_ACTIONS.memberUpdate, 'workspace_member', String(res._id), {
-      workspaceId,
-      userId,
-      role,
-    });
+    await this.audit(
+      currentUser,
+      WORKSPACE_AUDIT_ACTIONS.memberUpdate,
+      'workspace_member',
+      String(res._id),
+      {
+        workspaceId,
+        userId,
+        role,
+      },
+    );
     return res;
   }
 
@@ -286,10 +323,16 @@ export class WorkspaceService {
     await this.get(currentUser, workspaceId);
     const res = await this.members.findOneAndDelete({ workspaceId, userId });
     if (!res) return false;
-    await this.audit(currentUser, WORKSPACE_AUDIT_ACTIONS.memberRemove, 'workspace_member', String(res._id), {
-      workspaceId,
-      userId,
-    });
+    await this.audit(
+      currentUser,
+      WORKSPACE_AUDIT_ACTIONS.memberRemove,
+      'workspace_member',
+      String(res._id),
+      {
+        workspaceId,
+        userId,
+      },
+    );
     return true;
   }
 

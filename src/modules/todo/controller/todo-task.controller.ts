@@ -471,9 +471,8 @@ export class TodoTaskController {
     }
 
     // 通过 ModuleRef 获取 CanvasService（懒加载避免循环依赖）
-    const { CanvasService } = await import(
-      '../../canvas/services/canvas.service.js'
-    );
+    const { CanvasService } =
+      await import('../../canvas/services/canvas.service.js');
     const canvasService = this.moduleRef.get(CanvasService, { strict: false });
     if (!canvasService) {
       throw new Error('CANVAS_SERVICE_UNAVAILABLE');
@@ -528,9 +527,8 @@ export class TodoTaskController {
     if (!canvasId) {
       return { ok: false, message: 'CANVAS_ID_NOT_FOUND_IN_TASK' };
     }
-    const { CanvasService } = await import(
-      '../../canvas/services/canvas.service.js'
-    );
+    const { CanvasService } =
+      await import('../../canvas/services/canvas.service.js');
     const canvasService = this.moduleRef.get(CanvasService, { strict: false });
     if (!canvasService) {
       throw new Error('CANVAS_SERVICE_UNAVAILABLE');
@@ -609,6 +607,7 @@ export class TodoTaskController {
     const stat = await this.xhsPostStat.create({ ...body, todoId: todo.id });
     const { _id, ...rest } = stat as typeof stat & { _id?: unknown };
     void _id;
+    await this.recordXhsCrawlRun(todo.id);
     this.logger.log(
       `[createXhsStat] statId=${String(rest.id)} todoId=${todoId}`,
     );
@@ -656,10 +655,34 @@ export class TodoTaskController {
     }
 
     const result = await this.xhsPostStat.bulkUpsert(todo.id, items);
+    await this.recordXhsCrawlRun(todo.id);
     this.logger.log(
       `[bulkUpsertXhsStats] todoId=${todoId} upserted=${result.upserted}`,
     );
     return { ok: true, ...result };
+  }
+
+  /**
+   * @description 数据回写后在数据看板落一条抓取运行记录。走 ModuleRef 是因为 TodoModule 不能反过来
+   *   依赖 XhsTopicDataModule（后者已经依赖 TodoModule），而看板模块可能没装载，所以拿不到就静默跳过——
+   *   回写本身是采集任务的主流程，绝不能被看板记账拖垮。
+   * @keyword-cn 记录抓取运行, 回写后记账
+   * @keyword-en record-crawl-run, post-write-bookkeeping
+   * @param {number} todoId - 回写数据的抓取 Todo ID。
+   * @returns {Promise<void>}
+   */
+  private async recordXhsCrawlRun(todoId: number): Promise<void> {
+    try {
+      const crawlService = this.moduleRef.get<{
+        recordCrawlRun: (todoId: number) => Promise<number | undefined>;
+      }>('XhsTopicCrawlService', { strict: false });
+      if (!crawlService) return;
+      await crawlService.recordCrawlRun(todoId);
+    } catch (error) {
+      this.logger.warn(
+        `[recordXhsCrawlRun] todoId=${todoId} 记录抓取运行失败：${String(error)}`,
+      );
+    }
   }
 
   /**

@@ -34,6 +34,8 @@ import { WorkspaceCollabModule } from './modules/workspace-collab/workspace-coll
 import { NetdiskModule } from './modules/netdisk/netdisk.module.js';
 import { NoticeModule } from './modules/notice/notice.module.js';
 import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
+import { XhsTopicDataModule } from './modules/xhs-topic-data/xhs-topic-data.module.js';
+import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
 
 @Module({
   imports: [
@@ -73,6 +75,8 @@ import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
     NetdiskModule,
     NoticeModule,
     XhsTopicModule,
+    XhsTopicDataModule,
+    SuperClawModule,
   ],
   controllers: [AppController],
   providers: [AppService],

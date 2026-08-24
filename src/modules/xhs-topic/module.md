@@ -49,6 +49,10 @@
 - `XhsTopicRepositoryService.getOwnedTopic(id, scope)` — 按作用域读取文章生成所需真实选题 | keywords: 读取真实选题, 文章生成上下文, get-owned-topic, article-generation-context
 - `XhsTopicRepositoryService.saveGeneratedArticle(id, article, scope)` — 将完整内存文章写入子选题 | keywords: 保存生成文章, 文章落库, save-generated-article, persist-article
 - `XhsTopicRepositoryService.updateArticle(id, input, scope)` — 更新已生成文章内容、真实配图与结构化画板元数据 | keywords: 更新真实文章, 文章配图, update-persisted-article, article-images
+- `XhsTopicRepositoryService.setCrawlStatus(id, status, scope)` — 切换子选题数据抓取开关，恢复时清空取消时间 | keywords: 切换抓取状态, 取消恢复抓取, toggle-crawl-status, cancel-resume-crawl
+- `XhsTopicRepositoryService.markCrawlScheduled(id, at)` — 记录一次调度已建抓取任务，供频率节流 | keywords: 记录调度时间, 抓取频率节流, mark-crawl-scheduled, schedule-throttle
+- `XhsTopicRepositoryService.markCrawled(id, at)` — 记录一次抓取成功回写数据的时间 | keywords: 记录抓取时间, 最后抓取, mark-crawled, last-crawled-at
+- `XhsTopicRepositoryService.listCrawlingChildTopics()` — 跨租户列出抓取中的子选题，仅供后台调度使用 | keywords: 待调度子选题, 全局抓取列表, schedulable-topics, global-crawling-list
 - `XhsTopicRepositoryService.normalizeCanvasCollage(collage?)` — 归一化画板里的拼图画布格式，过滤空地址与非法尺寸格子，不足两格视为普通单图 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsTopicRepositoryService.deleteMany(ids, scope)` — 删除选题并级联子题 | keywords: 删除选题, 级联子题, delete-topics, cascade-children
 - `XhsTopicRepositoryService.update(id, input, scope)` — 更新标题、类型或发布状态 | keywords: 更新选题, 发布状态, update-topic, publish-status
@@ -137,6 +141,8 @@
 - `XhsTopicCandidate` — 包含 `title` 与 `topicType` 的候选。
 - `XhsTopicEntity` — MongoDB 中持久化的母题或子题。
 - `XhsTopicStatus` — 真实选题的业务状态。
+- `XhsTopicCrawlStatus` — 子选题数据抓取开关：`crawling` 或 `cancelled`。
+- `XhsTopicCrawlState` — 子选题上的抓取开关子文档（状态、最后抓取时间、最后调度时间、取消时间）。
 - `XhsArticleCanvasCollageCell` — 拼图内单张源图的格子（地址、图库 ID、坐标尺寸与填充方式）。
 - `XhsArticleCanvasCollage` — 拼图画布格式：画布尺寸与 2-4 个源图格子。
 - `XhsArticleCanvasMaterial` — 封面独立图片素材层，保留原素材、去底结果、坐标尺寸、特效参数与文字融合标记。
@@ -145,7 +151,7 @@
 - `XhsArticleCanvasBoard` — 文章画板元数据；兼容生成态封面/内页和用户保存的完整编辑状态。
 - `XhsTopicArticle` — 子选题持久化的真实文章、标签、图片与内容形式。
 - `XhsTopicCreateInput` — 用户确认候选的批量入库输入。
-- `XhsChildTopicView` — 子题接口列表结构。
+- `XhsChildTopicView` — 子题接口列表结构，含 `crawlStatus` 与 `lastCrawledAt`（历史数据缺省视为 `crawling`）。
 - `XhsTopicWorkspaceGroup` — 母题及其子题的聚合结构。
 - `XhsTopicGenerateInput` — 服务层标准生成输入。
 - `XhsArticleUpdateInput` — 已生成文章编辑输入。
@@ -157,6 +163,8 @@
 - `XhsTopicGenerateResponse` — 服务内部携带 Todo 与生成结果的响应，控制器仅输出 Todo。
 
 ## 模块功能描述 (Module Feature Description)
+
+子选题上的 `crawl` 子文档只在本模块存取（开关状态、最后抓取时间、最后调度时间），真正按频率建抓取任务、聚合看板指标和做舆论分析都在 [xhs-topic-data 模块](../xhs-topic-data/module.md)。放在这里是因为「这个子选题还抓不抓」属于选题自身的属性，跟着选题一起删；抓取任务和抓取数据则是另一份生命周期，单独成表。
 
 `POST /api/xhs-topic/generate` 以 `create XhsTopic` 权限接收选题层级、提示词、可选母选题、可选数量和搜索开关。服务从显式参数或提示词解析目标数量，创建运行 Todo 后将内存追加工具与 DuckDuckGo 检索工具交给 Agent。每条候选都必须通过 `xhs_topic_add_candidate` 写入，包含题目和题目类型；最终回答被忽略。服务最多补跑一次缺失候选，数量准确时将最终内存集合序列化到 Todo `taskResult`，更新状态为 `done` 并只返回 Todo；仍不足或运行异常时将已有候选与错误写入 `failed` Todo 并同样返回。
 

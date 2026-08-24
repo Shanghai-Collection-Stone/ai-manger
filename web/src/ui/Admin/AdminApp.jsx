@@ -9,7 +9,9 @@ import {
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
 const LazyMDMarkdown = React.lazy(() =>
-  import('@uiw/react-md-editor').then((mod) => ({ default: mod.default.Markdown })),
+  import('@uiw/react-md-editor').then((mod) => ({
+    default: mod.default.Markdown,
+  })),
 );
 
 /**
@@ -42,7 +44,9 @@ const MDEditor = (props) => (
  * @returns {JSX.Element} 渲染节点
  */
 MDEditor.Markdown = (props) => (
-  <React.Suspense fallback={<div className="text-xs text-slate-400">渲染中…</div>}>
+  <React.Suspense
+    fallback={<div className="text-xs text-slate-400">渲染中…</div>}
+  >
     <LazyMDMarkdown {...props} />
   </React.Suspense>
 );
@@ -83,7 +87,8 @@ const formatFinanceToolValue = (value) => {
  * @returns {Array<Record<string, unknown>>}
  */
 const mergeFinanceToolEvent = (tools = [], patch = {}) => {
-  const key = toText(patch.id) || `${toText(patch.name) || 'tool'}:${patch.index ?? 0}`;
+  const key =
+    toText(patch.id) || `${toText(patch.name) || 'tool'}:${patch.index ?? 0}`;
   const next = Array.isArray(tools) ? [...tools] : [];
   const idx = next.findIndex((item) => {
     const itemKey =
@@ -276,6 +281,7 @@ const ALL_TABS = [
   { id: 'keys', label: 'key管理' },
   { id: 'sources', label: '数据源管理' },
   { id: 'claw_configs', label: 'Claw管理', platformOnly: true },
+  { id: 'super_claws', label: 'SuperClaw管理', platformOnly: true },
   { id: 'agent_configs', label: 'Agent管理', platformOnly: true },
   { id: 'social_accounts', label: '自媒体账号管理' },
   { id: 'dashboard_configs', label: '看板配置' },
@@ -314,6 +320,8 @@ const AdminApp = () => {
   const [dashboardConfigs, setDashboardConfigs] = useState([]);
   const [platformInfo, setPlatformInfo] = useState(null);
   const [clawConfigs, setClawConfigs] = useState([]);
+  const [superClaws, setSuperClaws] = useState([]);
+  const [superClawSecret, setSuperClawSecret] = useState('');
   const [agentConfigs, setAgentConfigs] = useState([]);
   const [xhsAccounts, setXhsAccounts] = useState([]);
   const [feishuCredentials, setFeishuCredentials] = useState([]);
@@ -363,6 +371,7 @@ const AdminApp = () => {
   const [editingSourceCode, setEditingSourceCode] = useState('');
   const [editingDashboardConfigId, setEditingDashboardConfigId] = useState('');
   const [editingClawConfigId, setEditingClawConfigId] = useState('');
+  const [editingSuperClawId, setEditingSuperClawId] = useState('');
   const [pingLoadingId, setPingLoadingId] = useState('');
   const [editingAgentConfigId, setEditingAgentConfigId] = useState('');
   const [editingXhsAccountId, setEditingXhsAccountId] = useState('');
@@ -390,6 +399,7 @@ const AdminApp = () => {
     sources: { keyword: '', status: '' },
     dashboardConfigs: { keyword: '', tenantId: '' },
     clawConfigs: { keyword: '' },
+    superClaws: { keyword: '' },
     agentConfigs: { keyword: '' },
     xhsAccounts: { keyword: '' },
   });
@@ -401,6 +411,7 @@ const AdminApp = () => {
     sources: 1,
     dashboardConfigs: 1,
     clawConfigs: 1,
+    superClaws: 1,
     agentConfigs: 1,
     xhsAccounts: 1,
   });
@@ -426,6 +437,7 @@ const AdminApp = () => {
     tenant: {
       name: '',
       description: '',
+      superClawId: '',
     },
     key: {
       tenantId: '',
@@ -456,6 +468,11 @@ const AdminApp = () => {
       description: '',
       token: '',
       serviceUrl: '',
+    },
+    superClaw: {
+      name: '',
+      description: '',
+      capacity: 1,
     },
     agentConfig: {
       name: '',
@@ -527,11 +544,13 @@ const AdminApp = () => {
       // 加载 Claw 和 Agent 配置（仅超级管理员）
       if (isSA) {
         try {
-          const [cc, ac] = await Promise.all([
+          const [cc, sc, ac] = await Promise.all([
             adminApi.listClawConfigs(),
+            adminApi.listSuperClaws(),
             adminApi.listAgentConfigs(),
           ]);
           setClawConfigs(cc.clawConfigs || []);
+          setSuperClaws(sc.superClaws || []);
           setAgentConfigs(ac.agentConfigs || []);
         } catch {
           // 忽略加载失败
@@ -682,7 +701,10 @@ const AdminApp = () => {
           };
         }
       }
-      window.localStorage.setItem('finance_chat_history', JSON.stringify(persisted));
+      window.localStorage.setItem(
+        'finance_chat_history',
+        JSON.stringify(persisted),
+      );
     } catch {
       // ignore quota errors
     }
@@ -737,7 +759,8 @@ const AdminApp = () => {
    */
   const onSubmitDashboardConfig = async () => {
     const payload = {
-      dashboardCode: toText(forms.dashboardConfig.dashboardCode).trim() || undefined,
+      dashboardCode:
+        toText(forms.dashboardConfig.dashboardCode).trim() || undefined,
       tenantId: toText(forms.dashboardConfig.tenantId).trim() || undefined,
       filePath: toText(forms.dashboardConfig.filePath).trim(),
       enabled: Boolean(forms.dashboardConfig.enabled),
@@ -745,7 +768,9 @@ const AdminApp = () => {
     const res = await adminApi.upsertDashboardConfigMapping(payload);
     setEditingDashboardConfigId(toText(res?.row?._id));
     await reloadDashboardConfigs();
-    setNotice(editingDashboardConfigId ? '看板配置映射已更新' : '看板配置映射已创建');
+    setNotice(
+      editingDashboardConfigId ? '看板配置映射已更新' : '看板配置映射已创建',
+    );
   };
 
   /**
@@ -992,7 +1017,10 @@ const AdminApp = () => {
     setForms((prev) => {
       const next = [...prev.financeBinding.sources];
       next[idx] = { ...next[idx], [key]: value };
-      return { ...prev, financeBinding: { ...prev.financeBinding, sources: next } };
+      return {
+        ...prev,
+        financeBinding: { ...prev.financeBinding, sources: next },
+      };
     });
   };
 
@@ -1015,7 +1043,8 @@ const AdminApp = () => {
    * @keyword-en submit finance binding with preset name and defaults
    */
   const onSubmitFinanceBinding = async () => {
-    const kind = FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
+    const kind =
+      FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
     const form = forms.financeBinding;
     const sources = (form.sources || []).map((s) => {
       const base = { alias: toText(s.alias).trim() || undefined };
@@ -1103,10 +1132,17 @@ const AdminApp = () => {
    */
   const onSendFinanceChat = async (name) => {
     if (!name) return;
-    const current = financeChat[name] || { messages: [], input: '', loading: false };
+    const current = financeChat[name] || {
+      messages: [],
+      input: '',
+      loading: false,
+    };
     const text = toText(current.input).trim();
     if (!text) return;
-    const displayHistory = [...current.messages, { role: 'user', content: text }];
+    const displayHistory = [
+      ...current.messages,
+      { role: 'user', content: text },
+    ];
     const requestHistory = sanitizeFinanceAgentMessages(displayHistory);
     const assistantIndex = displayHistory.length;
     const initialAssistant = {
@@ -1150,7 +1186,10 @@ const AdminApp = () => {
         { name, messages: requestHistory },
         {
           onStart: () => {
-            patchAssistant((m) => ({ ...m, status: 'Agent 已连接,等待模型输出...' }));
+            patchAssistant((m) => ({
+              ...m,
+              status: 'Agent 已连接,等待模型输出...',
+            }));
           },
           onToken: (payload) => {
             const chunk = toText(payload?.text);
@@ -1240,7 +1279,10 @@ const AdminApp = () => {
         [name]: {
           messages: [
             ...displayHistory,
-            { role: 'assistant', content: `❌ 调用失败:${err.message || String(err)}` },
+            {
+              role: 'assistant',
+              content: `❌ 调用失败:${err.message || String(err)}`,
+            },
           ],
           input: '',
           loading: false,
@@ -1254,7 +1296,8 @@ const AdminApp = () => {
    * @keyword-en submit finance transform with preset name
    */
   const onSubmitFinanceTransform = async () => {
-    const kind = FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
+    const kind =
+      FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
     const form = forms.financeBinding;
     let dsl;
     try {
@@ -1268,7 +1311,10 @@ const AdminApp = () => {
       explanation: toText(form.explanation).trim() || undefined,
     };
     const res = await adminApi.upsertFinanceTransform(payload);
-    setFinanceTransforms((prev) => ({ ...prev, [res.transform.name]: res.transform }));
+    setFinanceTransforms((prev) => ({
+      ...prev,
+      [res.transform.name]: res.transform,
+    }));
     setNotice(`${kind.label} Transform 已保存`);
   };
 
@@ -1330,7 +1376,8 @@ const AdminApp = () => {
     if (!name) return;
     const sd = toText(financePushDateWindow.startDate).trim();
     const ed = toText(financePushDateWindow.endDate).trim();
-    const winLabel = sd || ed ? `时间窗 [${sd || '不限'} → ${ed || '不限'}]` : '全量';
+    const winLabel =
+      sd || ed ? `时间窗 [${sd || '不限'} → ${ed || '不限'}]` : '全量';
     if (
       !window.confirm(
         `确认立即推送 binding「${name}」到外部财务系统?\n${winLabel}\n整批拒收语义:任意一行不合规整批被拒。`,
@@ -1362,7 +1409,8 @@ const AdminApp = () => {
                 kind: 'run',
                 ...result,
                 logs:
-                  Array.isArray(result.logs) && result.logs.length >= prevLogs.length
+                  Array.isArray(result.logs) &&
+                  result.logs.length >= prevLogs.length
                     ? result.logs
                     : prevLogs,
                 streaming: false,
@@ -1411,11 +1459,15 @@ const AdminApp = () => {
     lines.push('');
     lines.push(`- binding: **${feedback.name}**`);
     if (feedback.startDate || feedback.endDate) {
-      lines.push(`- 时间窗: [${feedback.startDate || '不限'} → ${feedback.endDate || '不限'}]`);
+      lines.push(
+        `- 时间窗: [${feedback.startDate || '不限'} → ${feedback.endDate || '不限'}]`,
+      );
     }
     lines.push(
       `- 源拉取 ${feedback.totalRows};transform 输出 ${feedback.transformedRows};filter ${feedback.filteredRows};transform 错 ${feedback.transformErrors}` +
-        (feedback.dateFilteredRows > 0 ? `;时间窗滤掉 ${feedback.dateFilteredRows}` : ''),
+        (feedback.dateFilteredRows > 0
+          ? `;时间窗滤掉 ${feedback.dateFilteredRows}`
+          : ''),
     );
     if (feedback.error) {
       lines.push('');
@@ -1450,7 +1502,9 @@ const AdminApp = () => {
     }
     if (Array.isArray(fb.payloadAll) && fb.payloadAll.length > 0) {
       lines.push('');
-      lines.push(`## 推送过去的 payload(共 ${fb.payloadAll.length} 条,以下前 3 条)`);
+      lines.push(
+        `## 推送过去的 payload(共 ${fb.payloadAll.length} 条,以下前 3 条)`,
+      );
       lines.push('```json');
       lines.push(JSON.stringify(fb.payloadAll.slice(0, 3), null, 2));
       lines.push('```');
@@ -1511,7 +1565,9 @@ const AdminApp = () => {
     if (editingClawConfigId) {
       const res = await adminApi.updateClawConfig(editingClawConfigId, payload);
       setClawConfigs((prev) =>
-        prev.map((item) => (item._id === editingClawConfigId ? res.clawConfig : item)),
+        prev.map((item) =>
+          item._id === editingClawConfigId ? res.clawConfig : item,
+        ),
       );
       setNotice('Claw配置已更新');
     } else {
@@ -1548,17 +1604,113 @@ const AdminApp = () => {
       setClawConfigs((prev) =>
         prev.map((item) =>
           item._id === id
-            ? { ...item, connectStatus: res.status, connectCheckedAt: new Date().toISOString() }
+            ? {
+                ...item,
+                connectStatus: res.status,
+                connectCheckedAt: new Date().toISOString(),
+              }
             : item,
         ),
       );
-      const label = res.status === 'full' ? '完全通畅' : res.status === 'api_only' ? '接口通畅, skill未接' : '连接失败';
+      const label =
+        res.status === 'full'
+          ? '完全通畅'
+          : res.status === 'api_only'
+            ? '接口通畅, skill未接'
+            : '连接失败';
       setNotice(`连通测试完成：${label}`);
     } catch (err) {
       setError(err.message);
     } finally {
       setPingLoadingId('');
     }
+  };
+
+  /**
+   * @description 刷新平台 SuperClaw 节点和容量状态
+   * @keyword-cn 刷新节点, 容量状态
+   * @keyword-en reload-super-claws, capacity-status
+   * @returns {Promise<void>}
+   */
+  const reloadSuperClaws = async () => {
+    const res = await adminApi.listSuperClaws();
+    setSuperClaws(res.superClaws || []);
+  };
+
+  /**
+   * @description 创建或更新 SuperClaw 节点
+   * @keyword-cn 提交节点, 总容量
+   * @keyword-en submit-super-claw, total-capacity
+   * @returns {Promise<void>}
+   */
+  const onSubmitSuperClaw = async () => {
+    const capacity = Number(forms.superClaw.capacity);
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      throw new Error('总容量必须是大于 0 的整数');
+    }
+    const payload = {
+      name: toText(forms.superClaw.name).trim(),
+      description: toText(forms.superClaw.description).trim() || undefined,
+      capacity,
+    };
+    if (editingSuperClawId) {
+      const res = await adminApi.updateSuperClaw(editingSuperClawId, payload);
+      setSuperClaws((prev) =>
+        prev.map((item) =>
+          item._id === editingSuperClawId ? res.superClaw : item,
+        ),
+      );
+      setNotice('SuperClaw 已更新');
+      return;
+    }
+    const res = await adminApi.createSuperClaw(payload);
+    setSuperClaws((prev) => [res.superClaw, ...prev]);
+    setEditingSuperClawId(toText(res.superClaw?._id));
+    setSuperClawSecret(toText(res.token));
+    setNotice('SuperClaw 已创建，请立即保存一次性 Token');
+  };
+
+  /**
+   * @description 删除没有租户分配的 SuperClaw
+   * @keyword-cn 删除节点, 占用保护
+   * @keyword-en delete-super-claw, allocation-guard
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onDeleteSuperClaw = async (id) => {
+    await adminApi.deleteSuperClaw(id);
+    setSuperClaws((prev) => prev.filter((item) => item._id !== id));
+    if (editingSuperClawId === id) setEditingSuperClawId('');
+    setNotice('SuperClaw 已删除');
+  };
+
+  /**
+   * @description 轮换 SuperClaw Token 并展示一次性新密钥
+   * @keyword-cn 轮换密钥, 一次性令牌
+   * @keyword-en rotate-super-claw-token, one-time-token
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const onRotateSuperClawToken = async (id) => {
+    if (!window.confirm('轮换后旧 Token 会立即失效，确认继续？')) return;
+    const res = await adminApi.rotateSuperClawToken(id);
+    setSuperClaws((prev) =>
+      prev.map((item) => (item._id === id ? res.superClaw : item)),
+    );
+    setSuperClawSecret(toText(res.token));
+    setNotice('Token 已轮换，请立即保存新 Token');
+  };
+
+  /**
+   * @description 复制当前一次性 SuperClaw Token
+   * @keyword-cn 复制密钥, 一次性展示
+   * @keyword-en copy-super-claw-token, one-time-display
+   * @returns {Promise<void>}
+   */
+  const onCopySuperClawToken = async () => {
+    if (!superClawSecret) return;
+    await navigator.clipboard.writeText(superClawSecret);
+    setNotice('SuperClaw Token 已复制');
   };
 
   /**
@@ -1576,9 +1728,14 @@ const AdminApp = () => {
       enabled: Boolean(forms.agentConfig.enabled),
     };
     if (editingAgentConfigId) {
-      const res = await adminApi.updateAgentConfig(editingAgentConfigId, payload);
+      const res = await adminApi.updateAgentConfig(
+        editingAgentConfigId,
+        payload,
+      );
       setAgentConfigs((prev) =>
-        prev.map((item) => (item._id === editingAgentConfigId ? res.agentConfig : item)),
+        prev.map((item) =>
+          item._id === editingAgentConfigId ? res.agentConfig : item,
+        ),
       );
       setNotice('Agent配置已更新');
     } else {
@@ -1619,7 +1776,9 @@ const AdminApp = () => {
     if (editingXhsAccountId) {
       const res = await adminApi.updateXhsAccount(editingXhsAccountId, payload);
       setXhsAccounts((prev) =>
-        prev.map((item) => (toText(item._id) === editingXhsAccountId ? res.account : item)),
+        prev.map((item) =>
+          toText(item._id) === editingXhsAccountId ? res.account : item,
+        ),
       );
       setNotice('小红书账号已更新');
     } else {
@@ -1656,12 +1815,21 @@ const AdminApp = () => {
       setXhsAccounts((prev) =>
         prev.map((item) =>
           toText(item._id) === id
-            ? { ...item, loginStatus: res.loginStatus, lastLoginAt: new Date().toISOString() }
+            ? {
+                ...item,
+                loginStatus: res.loginStatus,
+                lastLoginAt: new Date().toISOString(),
+              }
             : item,
         ),
       );
-      const statusLabel = { online: '在线', offline: '离线', error: '异常', unknown: '未知' }[res.loginStatus] ?? res.loginStatus;
-      setNotice(`登录测试完成：${statusLabel}${res.message ? `（${res.message}）` : ''}`);
+      const statusLabel =
+        { online: '在线', offline: '离线', error: '异常', unknown: '未知' }[
+          res.loginStatus
+        ] ?? res.loginStatus;
+      setNotice(
+        `登录测试完成：${statusLabel}${res.message ? `（${res.message}）` : ''}`,
+      );
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1731,7 +1899,9 @@ const AdminApp = () => {
     if (editingProviderId) {
       const res = await adminApi.updateProvider(editingProviderId, payload);
       setProviders((prev) =>
-        prev.map((item) => (item._id === editingProviderId ? res.provider : item)),
+        prev.map((item) =>
+          item._id === editingProviderId ? res.provider : item,
+        ),
       );
       setEditingProviderId('');
       setNotice('AI提供商已更新');
@@ -1781,25 +1951,61 @@ const AdminApp = () => {
     }
   };
 
+  /**
+   * @description 创建或更新租户，并把该租户工作区归属到所选 SuperClaw
+   * @keyword-cn 提交租户, 工作区归属
+   * @keyword-en submit-tenant, workspace-node-assignment
+   * @returns {Promise<void>}
+   */
   const onSubmitTenant = async () => {
     const payload = {
       name: forms.tenant.name.trim(),
       description: forms.tenant.description.trim() || undefined,
     };
+    const superClawId = toText(forms.tenant.superClawId).trim();
     if (editingTenantId) {
+      await adminApi.assignTenantSuperClaw(editingTenantId, {
+        superClawId: superClawId || null,
+      });
       const res = await adminApi.updateTenant(editingTenantId, payload);
       setTenants((prev) =>
         prev.map((item) => (item._id === editingTenantId ? res.tenant : item)),
       );
       setEditingTenantId('');
+      await reloadSuperClaws();
       setNotice('租户已更新');
       return;
     }
     const res = await adminApi.createTenant(payload);
-    setTenants((prev) => [res.tenant, ...prev]);
+    let tenant = res.tenant;
+    setTenants((prev) => [tenant, ...prev]);
+    if (superClawId) {
+      try {
+        tenant = (
+          await adminApi.assignTenantSuperClaw(res.tenant._id, {
+            superClawId,
+          })
+        ).tenant;
+        setTenants((prev) =>
+          prev.map((item) => (item._id === tenant._id ? tenant : item)),
+        );
+      } catch (err) {
+        throw new Error(
+          `租户已创建，但 SuperClaw 分配失败：${err.message || String(err)}`,
+        );
+      }
+    }
+    await reloadSuperClaws();
     setNotice('租户已创建');
   };
 
+  /**
+   * @description 删除未分配 SuperClaw 的租户
+   * @keyword-cn 删除租户, 分配保护
+   * @keyword-en delete-tenant, allocation-protection
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
   const onDeleteTenant = async (id) => {
     await adminApi.deleteTenant(id);
     setTenants((prev) => prev.filter((item) => item._id !== id));
@@ -1861,7 +2067,9 @@ const AdminApp = () => {
         status: payload.status,
       });
       setSources((prev) =>
-        prev.map((item) => (item.code === editingSourceCode ? res.source : item)),
+        prev.map((item) =>
+          item.code === editingSourceCode ? res.source : item,
+        ),
       );
       setEditingSourceCode('');
       setNotice('数据源已更新');
@@ -1876,7 +2084,9 @@ const AdminApp = () => {
     const res = await adminApi.updateDataSource(code, {
       status: status === 'active' ? 'inactive' : 'active',
     });
-    setSources((prev) => prev.map((item) => (item.code === code ? res.source : item)));
+    setSources((prev) =>
+      prev.map((item) => (item.code === code ? res.source : item)),
+    );
     setNotice('数据源状态已更新');
   };
 
@@ -1893,7 +2103,8 @@ const AdminApp = () => {
       toLower(item.username).includes(keyword) ||
       toLower(item.displayName).includes(keyword);
     const hitTenant =
-      !filters.users.tenantId || toText(item.tenantId) === filters.users.tenantId;
+      !filters.users.tenantId ||
+      toText(item.tenantId) === filters.users.tenantId;
     return hitKeyword && hitTenant;
   });
   const filteredProviders = providers.filter((item) => {
@@ -1918,7 +2129,8 @@ const AdminApp = () => {
       !keyword ||
       toLower(item.name).includes(keyword) ||
       toLower(item.tokenPreview).includes(keyword);
-    const hitTenant = !filters.keys.tenantId || item.tenantId === filters.keys.tenantId;
+    const hitTenant =
+      !filters.keys.tenantId || item.tenantId === filters.keys.tenantId;
     return hitKeyword && hitTenant;
   });
   const filteredSources = sources.filter((item) => {
@@ -1928,7 +2140,8 @@ const AdminApp = () => {
       toLower(item.code).includes(keyword) ||
       toLower(item.name).includes(keyword) ||
       toLower(item.moduleRef).includes(keyword);
-    const hitStatus = !filters.sources.status || item.status === filters.sources.status;
+    const hitStatus =
+      !filters.sources.status || item.status === filters.sources.status;
     return hitKeyword && hitStatus;
   });
 
@@ -1952,6 +2165,16 @@ const AdminApp = () => {
       toLower(item.name).includes(keyword) ||
       toLower(item.description ?? '').includes(keyword) ||
       toLower(item.serviceUrl).includes(keyword)
+    );
+  });
+
+  const filteredSuperClaws = superClaws.filter((item) => {
+    const keyword = toLower(filters.superClaws.keyword.trim());
+    if (!keyword) return true;
+    return (
+      toLower(item.name).includes(keyword) ||
+      toLower(item.description ?? '').includes(keyword) ||
+      toLower(item.instanceId ?? '').includes(keyword)
     );
   });
 
@@ -1983,9 +2206,19 @@ const AdminApp = () => {
     filteredDashboardConfigs,
     pages.dashboardConfigs,
   );
-  const pagedClawConfigs = buildPagedRows(filteredClawConfigs, pages.clawConfigs);
-  const pagedAgentConfigs = buildPagedRows(filteredAgentConfigs, pages.agentConfigs);
-  const pagedXhsAccounts = buildPagedRows(filteredXhsAccounts, pages.xhsAccounts);
+  const pagedClawConfigs = buildPagedRows(
+    filteredClawConfigs,
+    pages.clawConfigs,
+  );
+  const pagedSuperClaws = buildPagedRows(filteredSuperClaws, pages.superClaws);
+  const pagedAgentConfigs = buildPagedRows(
+    filteredAgentConfigs,
+    pages.agentConfigs,
+  );
+  const pagedXhsAccounts = buildPagedRows(
+    filteredXhsAccounts,
+    pages.xhsAccounts,
+  );
 
   if (loading) {
     return (
@@ -2069,17 +2302,48 @@ const AdminApp = () => {
               <h2 className="font-semibold text-slate-900">
                 {editingUserId ? '编辑用户' : '新增用户'}
               </h2>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入用户账号（3-60字符）" value={forms.user.username} disabled={Boolean(editingUserId)} onChange={(e) => updateForm('user', 'username', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入用户显示名称" value={forms.user.displayName} onChange={(e) => updateForm('user', 'displayName', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder={editingUserId ? '不修改密码可留空' : '请输入登录密码（至少6位）'} type="password" value={forms.user.password} onChange={(e) => updateForm('user', 'password', e.target.value)} />
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.user.role} onChange={(e) => updateForm('user', 'role', e.target.value)}>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入用户账号（3-60字符）"
+                value={forms.user.username}
+                disabled={Boolean(editingUserId)}
+                onChange={(e) => updateForm('user', 'username', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入用户显示名称"
+                value={forms.user.displayName}
+                onChange={(e) =>
+                  updateForm('user', 'displayName', e.target.value)
+                }
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder={
+                  editingUserId
+                    ? '不修改密码可留空'
+                    : '请输入登录密码（至少6位）'
+                }
+                type="password"
+                value={forms.user.password}
+                onChange={(e) => updateForm('user', 'password', e.target.value)}
+              />
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.user.role}
+                onChange={(e) => updateForm('user', 'role', e.target.value)}
+              >
                 {ROLE_OPTIONS.map((roleItem) => (
                   <option key={roleItem.value} value={roleItem.value}>
                     {roleItem.label}
                   </option>
                 ))}
               </select>
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.user.tenantId} onChange={(e) => updateForm('user', 'tenantId', e.target.value)}>
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.user.tenantId}
+                onChange={(e) => updateForm('user', 'tenantId', e.target.value)}
+              >
                 <option value="">不绑定租户（平台级）</option>
                 {tenants.map((tenant) => (
                   <option key={tenant._id} value={tenant._id}>
@@ -2087,16 +2351,30 @@ const AdminApp = () => {
                   </option>
                 ))}
               </select>
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.user.enabled ? '1' : '0'} onChange={(e) => updateForm('user', 'enabled', e.target.value === '1')}>
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.user.enabled ? '1' : '0'}
+                onChange={(e) =>
+                  updateForm('user', 'enabled', e.target.value === '1')
+                }
+              >
                 <option value="1">启用</option>
                 <option value="0">禁用</option>
               </select>
               <div className="flex gap-2">
-                <button onClick={() => onSubmitUser().catch((err) => setError(err.message))} className="px-3 py-2 bg-slate-900 text-white text-sm rounded">
+                <button
+                  onClick={() =>
+                    onSubmitUser().catch((err) => setError(err.message))
+                  }
+                  className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
+                >
                   {editingUserId ? '保存用户' : '创建用户'}
                 </button>
                 {editingUserId ? (
-                  <button onClick={() => setEditingUserId('')} className="px-3 py-2 bg-white border text-sm rounded">
+                  <button
+                    onClick={() => setEditingUserId('')}
+                    className="px-3 py-2 bg-white border text-sm rounded"
+                  >
                     取消编辑
                   </button>
                 ) : null}
@@ -2105,8 +2383,21 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <h2 className="font-semibold text-slate-900 mb-2">用户列表</h2>
               <div className="grid grid-cols-2 gap-2 mb-3">
-                <input className="border rounded px-3 py-2 text-sm" placeholder="按账号或名称搜索" value={filters.users.keyword} onChange={(e) => updateFilter('users', 'keyword', e.target.value)} />
-                <select className="border rounded px-3 py-2 text-sm" value={filters.users.tenantId} onChange={(e) => updateFilter('users', 'tenantId', e.target.value)}>
+                <input
+                  className="border rounded px-3 py-2 text-sm"
+                  placeholder="按账号或名称搜索"
+                  value={filters.users.keyword}
+                  onChange={(e) =>
+                    updateFilter('users', 'keyword', e.target.value)
+                  }
+                />
+                <select
+                  className="border rounded px-3 py-2 text-sm"
+                  value={filters.users.tenantId}
+                  onChange={(e) =>
+                    updateFilter('users', 'tenantId', e.target.value)
+                  }
+                >
                   <option value="">全部租户</option>
                   {tenants.map((tenant) => (
                     <option key={tenant._id} value={tenant._id}>
@@ -2117,32 +2408,49 @@ const AdminApp = () => {
               </div>
               <div className="space-y-2 text-sm">
                 {pagedUsers.rows.map((item) => (
-                  <div key={item.id} className="border rounded-lg p-3 flex justify-between">
+                  <div
+                    key={item.id}
+                    className="border rounded-lg p-3 flex justify-between"
+                  >
                     <div>
                       <div className="font-medium">{item.displayName}</div>
                       <div className="text-slate-500">{item.username}</div>
-                      <div className="text-xs text-slate-500">{getRoleLabel(item.role)}</div>
-                      <div className="text-xs text-slate-500">{item.tenantId || '平台级(空租户)'}</div>
+                      <div className="text-xs text-slate-500">
+                        {getRoleLabel(item.role)}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {item.tenantId || '平台级(空租户)'}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <button onClick={() => {
-                        setEditingUserId(item.id);
-                        setForms((prev) => ({
-                          ...prev,
-                          user: {
-                            ...prev.user,
-                            username: item.username || '',
-                            displayName: item.displayName || '',
-                            password: '',
-                            role: item.role || 'operator',
-                            tenantId: item.tenantId || '',
-                            enabled: Boolean(item.enabled),
-                          },
-                        }));
-                      }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
+                      <button
+                        onClick={() => {
+                          setEditingUserId(item.id);
+                          setForms((prev) => ({
+                            ...prev,
+                            user: {
+                              ...prev.user,
+                              username: item.username || '',
+                              displayName: item.displayName || '',
+                              password: '',
+                              role: item.role || 'operator',
+                              tenantId: item.tenantId || '',
+                              enabled: Boolean(item.enabled),
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
                         编辑
                       </button>
-                      <button onClick={() => onDeleteUser(item.id).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600">
+                      <button
+                        onClick={() =>
+                          onDeleteUser(item.id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
+                      >
                         删除
                       </button>
                     </div>
@@ -2161,36 +2469,104 @@ const AdminApp = () => {
         {activeTab === 'providers' ? (
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <h2 className="font-semibold text-slate-900">{editingProviderId ? '编辑AI提供商' : '新增AI提供商'}</h2>
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.providerCode} onChange={(e) => updateForm('provider', 'providerCode', e.target.value)}>
+              <h2 className="font-semibold text-slate-900">
+                {editingProviderId ? '编辑AI提供商' : '新增AI提供商'}
+              </h2>
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.provider.providerCode}
+                onChange={(e) =>
+                  updateForm('provider', 'providerCode', e.target.value)
+                }
+              >
                 <option value="">请选择提供商编码</option>
                 {PROVIDER_CODE_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
                 ))}
               </select>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入提供商名称" value={forms.provider.name} onChange={(e) => updateForm('provider', 'name', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入服务地址（可选）" value={forms.provider.baseUrl} onChange={(e) => updateForm('provider', 'baseUrl', e.target.value)} />
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.modelCategory} onChange={(e) => updateForm('provider', 'modelCategory', e.target.value)}>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入提供商名称"
+                value={forms.provider.name}
+                onChange={(e) => updateForm('provider', 'name', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入服务地址（可选）"
+                value={forms.provider.baseUrl}
+                onChange={(e) =>
+                  updateForm('provider', 'baseUrl', e.target.value)
+                }
+              />
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.provider.modelCategory}
+                onChange={(e) =>
+                  updateForm('provider', 'modelCategory', e.target.value)
+                }
+              >
                 <option value="llm">类别: 非EM模型（LLM/关键词/任务）</option>
                 <option value="em">类别: EM模型（向量计算）</option>
                 <option value="image">类别: 生图模型（Image）</option>
               </select>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder={forms.provider.modelCategory === 'em' ? '请输入EM模型（向量模型）' : forms.provider.modelCategory === 'image' ? '请输入生图模型（Image模型）' : '请输入非EM模型（LLM模型）'} value={forms.provider.model} onChange={(e) => updateForm('provider', 'model', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入API Key（可修改）" value={forms.provider.apiKey} onChange={(e) => updateForm('provider', 'apiKey', e.target.value)} />
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.enabled ? '1' : '0'} onChange={(e) => updateForm('provider', 'enabled', e.target.value === '1')}>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder={
+                  forms.provider.modelCategory === 'em'
+                    ? '请输入EM模型（向量模型）'
+                    : forms.provider.modelCategory === 'image'
+                      ? '请输入生图模型（Image模型）'
+                      : '请输入非EM模型（LLM模型）'
+                }
+                value={forms.provider.model}
+                onChange={(e) =>
+                  updateForm('provider', 'model', e.target.value)
+                }
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入API Key（可修改）"
+                value={forms.provider.apiKey}
+                onChange={(e) =>
+                  updateForm('provider', 'apiKey', e.target.value)
+                }
+              />
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.provider.enabled ? '1' : '0'}
+                onChange={(e) =>
+                  updateForm('provider', 'enabled', e.target.value === '1')
+                }
+              >
                 <option value="1">启用</option>
                 <option value="0">禁用</option>
               </select>
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.provider.isDefault ? '1' : '0'} onChange={(e) => updateForm('provider', 'isDefault', e.target.value === '1')}>
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.provider.isDefault ? '1' : '0'}
+                onChange={(e) =>
+                  updateForm('provider', 'isDefault', e.target.value === '1')
+                }
+              >
                 <option value="0">非默认（当前类别）</option>
                 <option value="1">设为默认（当前类别）</option>
               </select>
               <div className="flex gap-2">
-                <button onClick={() => onSubmitProvider().catch((err) => setError(err.message))} className="px-3 py-2 bg-slate-900 text-white text-sm rounded">
+                <button
+                  onClick={() =>
+                    onSubmitProvider().catch((err) => setError(err.message))
+                  }
+                  className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
+                >
                   {editingProviderId ? '保存提供商' : '创建提供商'}
                 </button>
                 {editingProviderId ? (
-                  <button onClick={() => setEditingProviderId('')} className="px-3 py-2 bg-white border text-sm rounded">
+                  <button
+                    onClick={() => setEditingProviderId('')}
+                    className="px-3 py-2 bg-white border text-sm rounded"
+                  >
                     取消编辑
                   </button>
                 ) : null}
@@ -2199,46 +2575,85 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <h2 className="font-semibold text-slate-900 mb-2">提供商列表</h2>
               <div className="grid grid-cols-1 gap-2 mb-3">
-                <input className="border rounded px-3 py-2 text-sm" placeholder="按编码或名称搜索" value={filters.providers.keyword} onChange={(e) => updateFilter('providers', 'keyword', e.target.value)} />
+                <input
+                  className="border rounded px-3 py-2 text-sm"
+                  placeholder="按编码或名称搜索"
+                  value={filters.providers.keyword}
+                  onChange={(e) =>
+                    updateFilter('providers', 'keyword', e.target.value)
+                  }
+                />
               </div>
               <div className="space-y-2 text-sm">
                 {pagedProviders.rows.map((item) => (
-                  <div key={item._id} className="border rounded-lg p-3 flex justify-between">
+                  <div
+                    key={item._id}
+                    className="border rounded-lg p-3 flex justify-between"
+                  >
                     <div>
                       <div className="font-medium">{item.name}</div>
                       <div className="text-slate-500">{item.providerCode}</div>
-                      <div className="text-xs text-slate-500">类别：{item.modelCategory === 'em' ? 'EM模型' : item.modelCategory === 'image' ? '生图模型' : '非EM模型'}</div>
-                      <div className="text-xs text-slate-500">模型：{item.model || '-'}</div>
-                      <div className="text-xs text-slate-500">{item.isDefault ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : '非EM'}默认` : '候选提供商'}</div>
+                      <div className="text-xs text-slate-500">
+                        类别：
+                        {item.modelCategory === 'em'
+                          ? 'EM模型'
+                          : item.modelCategory === 'image'
+                            ? '生图模型'
+                            : '非EM模型'}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        模型：{item.model || '-'}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {item.isDefault
+                          ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : '非EM'}默认`
+                          : '候选提供商'}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <button onClick={() => {
-                        setEditingProviderId(item._id);
-                        setForms((prev) => ({
-                          ...prev,
-                          provider: {
-                            ...prev.provider,
-                            providerCode: item.providerCode || '',
-                            name: item.name || '',
-                            baseUrl: item.baseUrl || '',
-                            modelCategory: item.modelCategory || 'llm',
-                            model: item.model || '',
-                            apiKey: item.apiKey || '',
-                            enabled: Boolean(item.enabled),
-                            isDefault: Boolean(item.isDefault),
-                          },
-                        }));
-                      }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
+                      <button
+                        onClick={() => {
+                          setEditingProviderId(item._id);
+                          setForms((prev) => ({
+                            ...prev,
+                            provider: {
+                              ...prev.provider,
+                              providerCode: item.providerCode || '',
+                              name: item.name || '',
+                              baseUrl: item.baseUrl || '',
+                              modelCategory: item.modelCategory || 'llm',
+                              model: item.model || '',
+                              apiKey: item.apiKey || '',
+                              enabled: Boolean(item.enabled),
+                              isDefault: Boolean(item.isDefault),
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
                         编辑
                       </button>
                       <button
-                        onClick={() => onTestProvider(item._id).catch((err) => setError(err.message))}
+                        onClick={() =>
+                          onTestProvider(item._id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
                         disabled={testingProviderId === item._id}
                         className="text-xs px-2 py-1 h-fit rounded border border-emerald-300 text-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        {testingProviderId === item._id ? '测试中…' : '测试连接'}
+                        {testingProviderId === item._id
+                          ? '测试中…'
+                          : '测试连接'}
                       </button>
-                      <button onClick={() => onDeleteProvider(item._id).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600">
+                      <button
+                        onClick={() =>
+                          onDeleteProvider(item._id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
+                      >
                         删除
                       </button>
                     </div>
@@ -2257,15 +2672,65 @@ const AdminApp = () => {
         {activeTab === 'tenants' ? (
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <h2 className="font-semibold text-slate-900">{editingTenantId ? '编辑租户' : '新增租户'}</h2>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入租户名称" value={forms.tenant.name} onChange={(e) => updateForm('tenant', 'name', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入租户描述（可选）" value={forms.tenant.description} onChange={(e) => updateForm('tenant', 'description', e.target.value)} />
+              <h2 className="font-semibold text-slate-900">
+                {editingTenantId ? '编辑租户' : '新增租户'}
+              </h2>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入租户名称"
+                value={forms.tenant.name}
+                onChange={(e) => updateForm('tenant', 'name', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入租户描述（可选）"
+                value={forms.tenant.description}
+                onChange={(e) =>
+                  updateForm('tenant', 'description', e.target.value)
+                }
+              />
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.tenant.superClawId}
+                onChange={(e) =>
+                  updateForm('tenant', 'superClawId', e.target.value)
+                }
+              >
+                <option value="">不分配 SuperClaw</option>
+                {superClaws.map((item) => (
+                  <option key={item._id} value={item._id}>
+                    {item.name}（剩余工作区槽位 {item.remainingCapacity}/
+                    {item.capacity}）
+                  </option>
+                ))}
+              </select>
+              <div className="text-xs text-slate-500">
+                SuperClaw 容量按工作区槽位计数；每个工作区占用 1 个槽位。
+              </div>
               <div className="flex gap-2">
-                <button onClick={() => onSubmitTenant().catch((err) => setError(err.message))} className="px-3 py-2 bg-slate-900 text-white text-sm rounded">
+                <button
+                  onClick={() =>
+                    onSubmitTenant().catch((err) => setError(err.message))
+                  }
+                  className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
+                >
                   {editingTenantId ? '保存租户' : '创建租户'}
                 </button>
                 {editingTenantId ? (
-                  <button onClick={() => setEditingTenantId('')} className="px-3 py-2 bg-white border text-sm rounded">
+                  <button
+                    onClick={() => {
+                      setEditingTenantId('');
+                      setForms((prev) => ({
+                        ...prev,
+                        tenant: {
+                          name: '',
+                          description: '',
+                          superClawId: '',
+                        },
+                      }));
+                    }}
+                    className="px-3 py-2 bg-white border text-sm rounded"
+                  >
                     取消编辑
                   </button>
                 ) : null}
@@ -2273,29 +2738,56 @@ const AdminApp = () => {
             </div>
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <h2 className="font-semibold text-slate-900 mb-2">租户列表</h2>
-              <input className="w-full border rounded px-3 py-2 text-sm mb-3" placeholder="按租户名称搜索" value={filters.tenants.keyword} onChange={(e) => updateFilter('tenants', 'keyword', e.target.value)} />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm mb-3"
+                placeholder="按租户名称搜索"
+                value={filters.tenants.keyword}
+                onChange={(e) =>
+                  updateFilter('tenants', 'keyword', e.target.value)
+                }
+              />
               <div className="space-y-2 text-sm">
                 {pagedTenants.rows.map((item) => (
-                  <div key={item._id} className="border rounded-lg p-3 flex justify-between">
+                  <div
+                    key={item._id}
+                    className="border rounded-lg p-3 flex justify-between"
+                  >
                     <div>
                       <div className="font-medium">{item.name}</div>
                       <div className="text-xs text-slate-500">{item._id}</div>
+                      <div className="text-xs text-slate-500">
+                        SuperClaw：
+                        {superClaws.find(
+                          (node) => node._id === item.superClawId,
+                        )?.name || '未分配'}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <button onClick={() => {
-                        setEditingTenantId(item._id);
-                        setForms((prev) => ({
-                          ...prev,
-                          tenant: {
-                            ...prev.tenant,
-                            name: item.name || '',
-                            description: item.description || '',
-                          },
-                        }));
-                      }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
+                      <button
+                        onClick={() => {
+                          setEditingTenantId(item._id);
+                          setForms((prev) => ({
+                            ...prev,
+                            tenant: {
+                              ...prev.tenant,
+                              name: item.name || '',
+                              description: item.description || '',
+                              superClawId: item.superClawId || '',
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
                         编辑
                       </button>
-                      <button onClick={() => onDeleteTenant(item._id).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600">
+                      <button
+                        onClick={() =>
+                          onDeleteTenant(item._id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
+                      >
                         删除
                       </button>
                     </div>
@@ -2314,10 +2806,18 @@ const AdminApp = () => {
         {activeTab === 'keys' ? (
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <h2 className="font-semibold text-slate-900">{editingKeyId ? '编辑Key' : '创建Key'}</h2>
+              <h2 className="font-semibold text-slate-900">
+                {editingKeyId ? '编辑Key' : '创建Key'}
+              </h2>
               {!editingKeyId ? (
                 <>
-                  <select className="w-full border rounded px-3 py-2 text-sm" value={forms.key.tenantId} onChange={(e) => updateForm('key', 'tenantId', e.target.value)}>
+                  <select
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    value={forms.key.tenantId}
+                    onChange={(e) =>
+                      updateForm('key', 'tenantId', e.target.value)
+                    }
+                  >
                     <option value="">请选择租户</option>
                     {tenants.map((tenant) => (
                       <option key={tenant._id} value={tenant._id}>
@@ -2325,22 +2825,61 @@ const AdminApp = () => {
                       </option>
                     ))}
                   </select>
-                  <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入Key名称" value={forms.key.name} onChange={(e) => updateForm('key', 'name', e.target.value)} />
-                  <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入有效天数（如365）" value={forms.key.expireDays} onChange={(e) => updateForm('key', 'expireDays', e.target.value)} />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入Key名称"
+                    value={forms.key.name}
+                    onChange={(e) => updateForm('key', 'name', e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入有效天数（如365）"
+                    value={forms.key.expireDays}
+                    onChange={(e) =>
+                      updateForm('key', 'expireDays', e.target.value)
+                    }
+                  />
                 </>
               ) : (
                 <>
-                  <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入Key名称" value={forms.key.name} onChange={(e) => updateForm('key', 'name', e.target.value)} />
-                  <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入过期时间（ISO格式，可空）" value={forms.key.expiresAt} onChange={(e) => updateForm('key', 'expiresAt', e.target.value)} />
-                  <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入撤销时间（ISO格式，可空）" value={forms.key.revokedAt} onChange={(e) => updateForm('key', 'revokedAt', e.target.value)} />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入Key名称"
+                    value={forms.key.name}
+                    onChange={(e) => updateForm('key', 'name', e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入过期时间（ISO格式，可空）"
+                    value={forms.key.expiresAt}
+                    onChange={(e) =>
+                      updateForm('key', 'expiresAt', e.target.value)
+                    }
+                  />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入撤销时间（ISO格式，可空）"
+                    value={forms.key.revokedAt}
+                    onChange={(e) =>
+                      updateForm('key', 'revokedAt', e.target.value)
+                    }
+                  />
                 </>
               )}
               <div className="flex gap-2">
-                <button onClick={() => onSubmitKey().catch((err) => setError(err.message))} className="px-3 py-2 bg-slate-900 text-white text-sm rounded">
+                <button
+                  onClick={() =>
+                    onSubmitKey().catch((err) => setError(err.message))
+                  }
+                  className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
+                >
                   {editingKeyId ? '保存Key' : '创建Key'}
                 </button>
                 {editingKeyId ? (
-                  <button onClick={() => setEditingKeyId('')} className="px-3 py-2 bg-white border text-sm rounded">
+                  <button
+                    onClick={() => setEditingKeyId('')}
+                    className="px-3 py-2 bg-white border text-sm rounded"
+                  >
                     取消编辑
                   </button>
                 ) : null}
@@ -2349,8 +2888,21 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <h2 className="font-semibold text-slate-900 mb-2">Key列表</h2>
               <div className="grid grid-cols-2 gap-2 mb-3">
-                <input className="border rounded px-3 py-2 text-sm" placeholder="按名称或预览值搜索" value={filters.keys.keyword} onChange={(e) => updateFilter('keys', 'keyword', e.target.value)} />
-                <select className="border rounded px-3 py-2 text-sm" value={filters.keys.tenantId} onChange={(e) => updateFilter('keys', 'tenantId', e.target.value)}>
+                <input
+                  className="border rounded px-3 py-2 text-sm"
+                  placeholder="按名称或预览值搜索"
+                  value={filters.keys.keyword}
+                  onChange={(e) =>
+                    updateFilter('keys', 'keyword', e.target.value)
+                  }
+                />
+                <select
+                  className="border rounded px-3 py-2 text-sm"
+                  value={filters.keys.tenantId}
+                  onChange={(e) =>
+                    updateFilter('keys', 'tenantId', e.target.value)
+                  }
+                >
                   <option value="">全部租户</option>
                   {tenants.map((tenant) => (
                     <option key={tenant._id} value={tenant._id}>
@@ -2361,31 +2913,55 @@ const AdminApp = () => {
               </div>
               <div className="space-y-2 text-sm">
                 {pagedKeys.rows.map((item) => (
-                  <div key={item._id} className="border rounded-lg p-3 flex justify-between">
+                  <div
+                    key={item._id}
+                    className="border rounded-lg p-3 flex justify-between"
+                  >
                     <div>
                       <div className="font-medium">{item.name}</div>
-                      <div className="text-xs text-slate-500">{item.tokenPreview}</div>
-                      <div className="text-xs text-slate-500">{item.tenantId}</div>
+                      <div className="text-xs text-slate-500">
+                        {item.tokenPreview}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {item.tenantId}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <button onClick={() => {
-                        setEditingKeyId(item._id);
-                        setForms((prev) => ({
-                          ...prev,
-                          key: {
-                            ...prev.key,
-                            name: item.name || '',
-                            expiresAt: toDateInput(item.expiresAt),
-                            revokedAt: toDateInput(item.revokedAt),
-                          },
-                        }));
-                      }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
+                      <button
+                        onClick={() => {
+                          setEditingKeyId(item._id);
+                          setForms((prev) => ({
+                            ...prev,
+                            key: {
+                              ...prev.key,
+                              name: item.name || '',
+                              expiresAt: toDateInput(item.expiresAt),
+                              revokedAt: toDateInput(item.revokedAt),
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
                         编辑
                       </button>
-                      <button onClick={() => onRevokeKey(item._id).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-amber-300 text-amber-700">
+                      <button
+                        onClick={() =>
+                          onRevokeKey(item._id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-amber-300 text-amber-700"
+                      >
                         撤销
                       </button>
-                      <button onClick={() => onDeleteKey(item._id).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600">
+                      <button
+                        onClick={() =>
+                          onDeleteKey(item._id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
+                      >
                         删除
                       </button>
                     </div>
@@ -2404,21 +2980,60 @@ const AdminApp = () => {
         {activeTab === 'sources' ? (
           <div className="grid lg:grid-cols-2 gap-4 pb-8">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <h2 className="font-semibold text-slate-900">{editingSourceCode ? '编辑数据源' : '新增数据源'}</h2>
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入数据源编码（唯一）" value={forms.source.code} disabled={Boolean(editingSourceCode)} onChange={(e) => updateForm('source', 'code', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入数据源名称" value={forms.source.name} onChange={(e) => updateForm('source', 'name', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入数据源描述" value={forms.source.description} onChange={(e) => updateForm('source', 'description', e.target.value)} />
-              <input className="w-full border rounded px-3 py-2 text-sm" placeholder="请输入模块引用路径（如sources/mongo）" value={forms.source.moduleRef} onChange={(e) => updateForm('source', 'moduleRef', e.target.value)} />
-              <select className="w-full border rounded px-3 py-2 text-sm" value={forms.source.status} onChange={(e) => updateForm('source', 'status', e.target.value)}>
+              <h2 className="font-semibold text-slate-900">
+                {editingSourceCode ? '编辑数据源' : '新增数据源'}
+              </h2>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入数据源编码（唯一）"
+                value={forms.source.code}
+                disabled={Boolean(editingSourceCode)}
+                onChange={(e) => updateForm('source', 'code', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入数据源名称"
+                value={forms.source.name}
+                onChange={(e) => updateForm('source', 'name', e.target.value)}
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入数据源描述"
+                value={forms.source.description}
+                onChange={(e) =>
+                  updateForm('source', 'description', e.target.value)
+                }
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="请输入模块引用路径（如sources/mongo）"
+                value={forms.source.moduleRef}
+                onChange={(e) =>
+                  updateForm('source', 'moduleRef', e.target.value)
+                }
+              />
+              <select
+                className="w-full border rounded px-3 py-2 text-sm"
+                value={forms.source.status}
+                onChange={(e) => updateForm('source', 'status', e.target.value)}
+              >
                 <option value="active">active</option>
                 <option value="inactive">inactive</option>
               </select>
               <div className="flex gap-2">
-                <button onClick={() => onSubmitSource().catch((err) => setError(err.message))} className="px-3 py-2 bg-slate-900 text-white text-sm rounded">
+                <button
+                  onClick={() =>
+                    onSubmitSource().catch((err) => setError(err.message))
+                  }
+                  className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
+                >
                   {editingSourceCode ? '保存数据源' : '创建数据源'}
                 </button>
                 {editingSourceCode ? (
-                  <button onClick={() => setEditingSourceCode('')} className="px-3 py-2 bg-white border text-sm rounded">
+                  <button
+                    onClick={() => setEditingSourceCode('')}
+                    className="px-3 py-2 bg-white border text-sm rounded"
+                  >
                     取消编辑
                   </button>
                 ) : null}
@@ -2427,8 +3042,21 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4">
               <h2 className="font-semibold text-slate-900 mb-2">数据源列表</h2>
               <div className="grid grid-cols-2 gap-2 mb-3">
-                <input className="border rounded px-3 py-2 text-sm" placeholder="按编码、名称或路径搜索" value={filters.sources.keyword} onChange={(e) => updateFilter('sources', 'keyword', e.target.value)} />
-                <select className="border rounded px-3 py-2 text-sm" value={filters.sources.status} onChange={(e) => updateFilter('sources', 'status', e.target.value)}>
+                <input
+                  className="border rounded px-3 py-2 text-sm"
+                  placeholder="按编码、名称或路径搜索"
+                  value={filters.sources.keyword}
+                  onChange={(e) =>
+                    updateFilter('sources', 'keyword', e.target.value)
+                  }
+                />
+                <select
+                  className="border rounded px-3 py-2 text-sm"
+                  value={filters.sources.status}
+                  onChange={(e) =>
+                    updateFilter('sources', 'status', e.target.value)
+                  }
+                >
                   <option value="">全部状态</option>
                   <option value="active">active</option>
                   <option value="inactive">inactive</option>
@@ -2436,33 +3064,55 @@ const AdminApp = () => {
               </div>
               <div className="space-y-2 text-sm">
                 {pagedSources.rows.map((item) => (
-                  <div key={item.code} className="border rounded-lg p-3 flex justify-between">
+                  <div
+                    key={item.code}
+                    className="border rounded-lg p-3 flex justify-between"
+                  >
                     <div>
                       <div className="font-medium">{item.name}</div>
                       <div className="text-xs text-slate-500">{item.code}</div>
-                      <div className="text-xs text-slate-500">{item.moduleRef}</div>
+                      <div className="text-xs text-slate-500">
+                        {item.moduleRef}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
-                      <button onClick={() => {
-                        setEditingSourceCode(item.code);
-                        setForms((prev) => ({
-                          ...prev,
-                          source: {
-                            ...prev.source,
-                            code: item.code || '',
-                            name: item.name || '',
-                            description: item.description || '',
-                            moduleRef: item.moduleRef || '',
-                            status: item.status || 'active',
-                          },
-                        }));
-                      }} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
+                      <button
+                        onClick={() => {
+                          setEditingSourceCode(item.code);
+                          setForms((prev) => ({
+                            ...prev,
+                            source: {
+                              ...prev.source,
+                              code: item.code || '',
+                              name: item.name || '',
+                              description: item.description || '',
+                              moduleRef: item.moduleRef || '',
+                              status: item.status || 'active',
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
                         编辑
                       </button>
-                      <button onClick={() => onToggleSourceStatus(item.code, item.status).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700">
+                      <button
+                        onClick={() =>
+                          onToggleSourceStatus(item.code, item.status).catch(
+                            (err) => setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-slate-300 text-slate-700"
+                      >
                         切换状态
                       </button>
-                      <button onClick={() => onDeleteSource(item.code).catch((err) => setError(err.message))} className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600">
+                      <button
+                        onClick={() =>
+                          onDeleteSource(item.code).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
+                      >
                         删除
                       </button>
                     </div>
@@ -2490,26 +3140,34 @@ const AdminApp = () => {
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="名称（必填）"
                 value={forms.clawConfig.name}
-                onChange={(e) => updateForm('clawConfig', 'name', e.target.value)}
+                onChange={(e) =>
+                  updateForm('clawConfig', 'name', e.target.value)
+                }
               />
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="描述（选填）"
                 value={forms.clawConfig.description}
-                onChange={(e) => updateForm('clawConfig', 'description', e.target.value)}
+                onChange={(e) =>
+                  updateForm('clawConfig', 'description', e.target.value)
+                }
               />
               <input
                 className="w-full border rounded px-3 py-2 text-sm font-mono"
                 placeholder="Service URL（如 http://127.0.0.1:18789）"
                 value={forms.clawConfig.serviceUrl}
-                onChange={(e) => updateForm('clawConfig', 'serviceUrl', e.target.value)}
+                onChange={(e) =>
+                  updateForm('clawConfig', 'serviceUrl', e.target.value)
+                }
               />
               <input
                 className="w-full border rounded px-3 py-2 text-sm font-mono"
                 placeholder="Token（Bearer 令牌，必填）"
                 type="password"
                 value={forms.clawConfig.token}
-                onChange={(e) => updateForm('clawConfig', 'token', e.target.value)}
+                onChange={(e) =>
+                  updateForm('clawConfig', 'token', e.target.value)
+                }
               />
               <div className="flex gap-2">
                 <button
@@ -2526,7 +3184,12 @@ const AdminApp = () => {
                       setEditingClawConfigId('');
                       setForms((prev) => ({
                         ...prev,
-                        clawConfig: { name: '', description: '', token: '', serviceUrl: '' },
+                        clawConfig: {
+                          name: '',
+                          description: '',
+                          token: '',
+                          serviceUrl: '',
+                        },
                       }));
                     }}
                     className="px-3 py-2 text-sm border rounded"
@@ -2540,19 +3203,25 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold text-slate-900">Claw 配置列表</h2>
-                <span className="text-xs text-slate-400">{filteredClawConfigs.length} 条</span>
+                <span className="text-xs text-slate-400">
+                  {filteredClawConfigs.length} 条
+                </span>
               </div>
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="搜索..."
                 value={filters.clawConfigs.keyword}
-                onChange={(e) => updateFilter('clawConfigs', 'keyword', e.target.value)}
+                onChange={(e) =>
+                  updateFilter('clawConfigs', 'keyword', e.target.value)
+                }
               />
               {pagedClawConfigs.rows.map((item) => (
                 <div
                   key={item._id}
                   className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
-                    editingClawConfigId === item._id ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                    editingClawConfigId === item._id
+                      ? 'border-slate-900 bg-slate-50'
+                      : 'border-slate-200'
                   }`}
                   onClick={() => {
                     setEditingClawConfigId(toText(item._id));
@@ -2569,20 +3238,27 @@ const AdminApp = () => {
                 >
                   <div className="font-medium text-slate-900">{item.name}</div>
                   {item.description ? (
-                    <div className="text-slate-500 text-xs">{item.description}</div>
+                    <div className="text-slate-500 text-xs">
+                      {item.description}
+                    </div>
                   ) : null}
-                  <div className="text-slate-400 text-xs font-mono truncate">{item.serviceUrl}</div>
+                  <div className="text-slate-400 text-xs font-mono truncate">
+                    {item.serviceUrl}
+                  </div>
                   {/* 连通状态 | @keyword-en connect status badge */}
                   {item.connectStatus ? (
-                    <div className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${
-                      item.connectStatus === 'full'
-                        ? 'text-emerald-600 border-emerald-200 bg-emerald-50'
-                        : item.connectStatus === 'api_only'
-                        ? 'text-amber-600 border-amber-200 bg-amber-50'
-                        : 'text-rose-500 border-rose-200 bg-rose-50'
-                    }`}>
+                    <div
+                      className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${
+                        item.connectStatus === 'full'
+                          ? 'text-emerald-600 border-emerald-200 bg-emerald-50'
+                          : item.connectStatus === 'api_only'
+                            ? 'text-amber-600 border-amber-200 bg-amber-50'
+                            : 'text-rose-500 border-rose-200 bg-rose-50'
+                      }`}
+                    >
                       {item.connectStatus === 'full' && '完全通畅'}
-                      {item.connectStatus === 'api_only' && '接口通畅, skill未接'}
+                      {item.connectStatus === 'api_only' &&
+                        '接口通畅, skill未接'}
                       {item.connectStatus === 'error' && '连接失败'}
                     </div>
                   ) : null}
@@ -2591,18 +3267,24 @@ const AdminApp = () => {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onPingClawConfig(toText(item._id)).catch((err) => setError(err.message));
+                        onPingClawConfig(toText(item._id)).catch((err) =>
+                          setError(err.message),
+                        );
                       }}
                       disabled={pingLoadingId === toText(item._id)}
                       className="text-xs text-blue-600 px-2 py-1 border border-blue-200 rounded disabled:opacity-50"
                     >
-                      {pingLoadingId === toText(item._id) ? '测试中...' : '测试连接'}
+                      {pingLoadingId === toText(item._id)
+                        ? '测试中...'
+                        : '测试连接'}
                     </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!window.confirm('确认删除该 Claw 配置？')) return;
-                        onDeleteClawConfig(toText(item._id)).catch((err) => setError(err.message));
+                        onDeleteClawConfig(toText(item._id)).catch((err) =>
+                          setError(err.message),
+                        );
                       }}
                       className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
                     >
@@ -2620,6 +3302,214 @@ const AdminApp = () => {
           </div>
         ) : null}
 
+        {/* SuperClaw 平台节点管理 | @keyword-en super-claw platform node management */}
+        {activeTab === 'super_claws' ? (
+          <div className="grid lg:grid-cols-2 gap-4 pb-8">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+              <h2 className="font-semibold text-slate-900">
+                {editingSuperClawId ? '编辑 SuperClaw' : '新增 SuperClaw'}
+              </h2>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="节点名称"
+                value={forms.superClaw.name}
+                onChange={(e) =>
+                  updateForm('superClaw', 'name', e.target.value)
+                }
+              />
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="节点描述（可选）"
+                value={forms.superClaw.description}
+                onChange={(e) =>
+                  updateForm('superClaw', 'description', e.target.value)
+                }
+              />
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">
+                  可承载工作区总数
+                </label>
+                <input
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={forms.superClaw.capacity}
+                  onChange={(e) =>
+                    updateForm('superClaw', 'capacity', e.target.value)
+                  }
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() =>
+                    onSubmitSuperClaw().catch((err) => setError(err.message))
+                  }
+                  className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                >
+                  {editingSuperClawId ? '保存节点' : '创建并生成 Token'}
+                </button>
+                {editingSuperClawId ? (
+                  <button
+                    onClick={() => {
+                      setEditingSuperClawId('');
+                      setSuperClawSecret('');
+                      setForms((prev) => ({
+                        ...prev,
+                        superClaw: { name: '', description: '', capacity: 1 },
+                      }));
+                    }}
+                    className="px-3 py-2 text-sm border rounded"
+                  >
+                    新建
+                  </button>
+                ) : null}
+              </div>
+
+              {superClawSecret ? (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+                  <div className="text-sm font-medium text-amber-800">
+                    Token 仅显示这一次，请立即保存
+                  </div>
+                  <div className="font-mono text-xs break-all text-slate-700">
+                    {superClawSecret}
+                  </div>
+                  <button
+                    onClick={() =>
+                      onCopySuperClawToken().catch((err) =>
+                        setError(err.message),
+                      )
+                    }
+                    className="px-2 py-1 text-xs rounded border border-amber-400 text-amber-800"
+                  >
+                    复制 Token
+                  </button>
+                </div>
+              ) : null}
+
+              <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600 space-y-1">
+                <div>gRPC 服务：superclaw.v1.SuperClawGateway</div>
+                <div>方法：Register / Heartbeat</div>
+                <div>metadata：authorization: Bearer &lt;token&gt;</div>
+                <div>默认监听：0.0.0.0:50051</div>
+              </div>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-slate-900">SuperClaw 节点</h2>
+                <span className="text-xs text-slate-400">
+                  {filteredSuperClaws.length} 个
+                </span>
+              </div>
+              <input
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="按名称、描述或实例 ID 搜索"
+                value={filters.superClaws.keyword}
+                onChange={(e) =>
+                  updateFilter('superClaws', 'keyword', e.target.value)
+                }
+              />
+              <div className="space-y-2">
+                {pagedSuperClaws.rows.map((item) => (
+                  <div
+                    key={item._id}
+                    className={`border rounded-lg p-3 text-sm space-y-2 ${
+                      editingSuperClawId === item._id
+                        ? 'border-slate-900 bg-slate-50'
+                        : 'border-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-medium text-slate-900">
+                          {item.name}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {item.description || item.instanceId || '尚未注册'}
+                        </div>
+                      </div>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full ${
+                          item.status === 'online'
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : item.status === 'offline'
+                              ? 'bg-rose-100 text-rose-700'
+                              : 'bg-amber-100 text-amber-700'
+                        }`}
+                      >
+                        {item.status === 'online'
+                          ? '在线'
+                          : item.status === 'offline'
+                            ? '离线'
+                            : '待注册'}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      工作区槽位 {item.allocatedCapacity}/{item.capacity} · 剩余{' '}
+                      {item.remainingCapacity}
+                    </div>
+                    <div className="text-xs text-slate-400 font-mono">
+                      Token：{item.tokenPrefix}…
+                    </div>
+                    {item.lastHeartbeatAt ? (
+                      <div className="text-xs text-slate-400">
+                        最后心跳：
+                        {new Date(item.lastHeartbeatAt).toLocaleString()}
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => {
+                          setEditingSuperClawId(toText(item._id));
+                          setSuperClawSecret('');
+                          setForms((prev) => ({
+                            ...prev,
+                            superClaw: {
+                              name: item.name || '',
+                              description: item.description || '',
+                              capacity: item.capacity || 1,
+                            },
+                          }));
+                        }}
+                        className="text-xs px-2 py-1 rounded border border-slate-300"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        onClick={() =>
+                          onRotateSuperClawToken(toText(item._id)).catch(
+                            (err) => setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 rounded border border-amber-300 text-amber-700"
+                      >
+                        轮换 Token
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!window.confirm('确认删除该 SuperClaw？')) return;
+                          onDeleteSuperClaw(toText(item._id)).catch((err) =>
+                            setError(err.message),
+                          );
+                        }}
+                        className="text-xs px-2 py-1 rounded border border-rose-300 text-rose-600"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {renderPager(
+                pagedSuperClaws,
+                () => gotoPage('superClaws', pages.superClaws - 1),
+                () => gotoPage('superClaws', pages.superClaws + 1),
+              )}
+            </div>
+          </div>
+        ) : null}
+
         {/* Agent管理 | @keyword-en agent config management */}
         {activeTab === 'agent_configs' ? (
           <div className="grid lg:grid-cols-2 gap-4 pb-8">
@@ -2632,17 +3522,25 @@ const AdminApp = () => {
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="Agent 名称（必填）"
                 value={forms.agentConfig.name}
-                onChange={(e) => updateForm('agentConfig', 'name', e.target.value)}
+                onChange={(e) =>
+                  updateForm('agentConfig', 'name', e.target.value)
+                }
               />
               {/* Agent 所属模块选择 | @keyword-en agent module select */}
               <div>
-                <label className="block text-xs text-slate-500 mb-1">所属模块（来自 auto-task-robot）</label>
+                <label className="block text-xs text-slate-500 mb-1">
+                  所属模块（来自 auto-task-robot）
+                </label>
                 <select
                   className="w-full border rounded px-3 py-2 text-sm"
                   value={forms.agentConfig.module}
-                  onChange={(e) => updateForm('agentConfig', 'module', e.target.value)}
+                  onChange={(e) =>
+                    updateForm('agentConfig', 'module', e.target.value)
+                  }
                 >
-                  <option value="xhs_publisher">小红书发布机（xhs_publisher）</option>
+                  <option value="xhs_publisher">
+                    小红书发布机（xhs_publisher）
+                  </option>
                   <option value="claw">OpenClaw 智能体（claw）</option>
                 </select>
               </div>
@@ -2650,11 +3548,19 @@ const AdminApp = () => {
               {forms.agentConfig.module === 'claw' ? (
                 <>
                   <div>
-                    <label className="block text-xs text-slate-500 mb-1">选择 Claw 配置</label>
+                    <label className="block text-xs text-slate-500 mb-1">
+                      选择 Claw 配置
+                    </label>
                     <select
                       className="w-full border rounded px-3 py-2 text-sm"
                       value={forms.agentConfig.clawConfigId}
-                      onChange={(e) => updateForm('agentConfig', 'clawConfigId', e.target.value)}
+                      onChange={(e) =>
+                        updateForm(
+                          'agentConfig',
+                          'clawConfigId',
+                          e.target.value,
+                        )
+                      }
                     >
                       <option value="">-- 请选择 --</option>
                       {clawConfigs.map((cc) => (
@@ -2668,7 +3574,9 @@ const AdminApp = () => {
                     className="w-full border rounded px-3 py-2 text-sm"
                     placeholder="Claw Agent ID（默认 main）"
                     value={forms.agentConfig.clawAgentId}
-                    onChange={(e) => updateForm('agentConfig', 'clawAgentId', e.target.value)}
+                    onChange={(e) =>
+                      updateForm('agentConfig', 'clawAgentId', e.target.value)
+                    }
                   />
                 </>
               ) : null}
@@ -2677,20 +3585,28 @@ const AdminApp = () => {
                 <input
                   type="checkbox"
                   checked={Boolean(forms.agentConfig.enabled)}
-                  onChange={(e) => updateForm('agentConfig', 'enabled', e.target.checked)}
+                  onChange={(e) =>
+                    updateForm('agentConfig', 'enabled', e.target.checked)
+                  }
                 />
                 启用
               </label>
               {/* Agent 提示词编辑区域（Markdown）| @keyword-en agent prompt markdown editor */}
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Agent 提示词（Markdown）</label>
+                <label className="block text-xs text-slate-500 mb-1">
+                  Agent 提示词（Markdown）
+                </label>
                 <div className="w-full" data-color-mode="light">
                   <MDEditor
                     height={300}
                     value={forms.agentConfig.prompt}
-                    onChange={(val) => updateForm('agentConfig', 'prompt', val || '')}
+                    onChange={(val) =>
+                      updateForm('agentConfig', 'prompt', val || '')
+                    }
                     preview="edit"
-                    textareaProps={{ placeholder: '在这里输入 Agent 的系统提示词...' }}
+                    textareaProps={{
+                      placeholder: '在这里输入 Agent 的系统提示词...',
+                    }}
                   />
                 </div>
               </div>
@@ -2730,19 +3646,25 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold text-slate-900">Agent 配置列表</h2>
-                <span className="text-xs text-slate-400">{filteredAgentConfigs.length} 条</span>
+                <span className="text-xs text-slate-400">
+                  {filteredAgentConfigs.length} 条
+                </span>
               </div>
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="搜索..."
                 value={filters.agentConfigs.keyword}
-                onChange={(e) => updateFilter('agentConfigs', 'keyword', e.target.value)}
+                onChange={(e) =>
+                  updateFilter('agentConfigs', 'keyword', e.target.value)
+                }
               />
               {pagedAgentConfigs.rows.map((item) => (
                 <div
                   key={item._id}
                   className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
-                    editingAgentConfigId === item._id ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
+                    editingAgentConfigId === item._id
+                      ? 'border-slate-900 bg-slate-50'
+                      : 'border-slate-200'
                   }`}
                   onClick={() => {
                     setEditingAgentConfigId(toText(item._id));
@@ -2760,8 +3682,12 @@ const AdminApp = () => {
                   }}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-slate-900">{item.name}</span>
-                    <span className={`text-xs px-1.5 py-0.5 rounded border ${item.enabled ? 'text-emerald-600 border-emerald-200 bg-emerald-50' : 'text-slate-400 border-slate-200 bg-slate-50'}`}>
+                    <span className="font-medium text-slate-900">
+                      {item.name}
+                    </span>
+                    <span
+                      className={`text-xs px-1.5 py-0.5 rounded border ${item.enabled ? 'text-emerald-600 border-emerald-200 bg-emerald-50' : 'text-slate-400 border-slate-200 bg-slate-50'}`}
+                    >
                       {item.enabled ? '启用' : '停用'}
                     </span>
                   </div>
@@ -2769,18 +3695,24 @@ const AdminApp = () => {
                     模块：{item.module}
                     {item.clawConfigId ? (
                       <span className="ml-2">
-                        · Claw：{clawConfigs.find((c) => c._id === item.clawConfigId)?.name || item.clawConfigId}
+                        · Claw：
+                        {clawConfigs.find((c) => c._id === item.clawConfigId)
+                          ?.name || item.clawConfigId}
                       </span>
                     ) : null}
                   </div>
                   {item.prompt ? (
-                    <div className="text-slate-500 text-xs line-clamp-2">{item.prompt.slice(0, 100)}</div>
+                    <div className="text-slate-500 text-xs line-clamp-2">
+                      {item.prompt.slice(0, 100)}
+                    </div>
                   ) : null}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       if (!window.confirm('确认删除该 Agent 配置？')) return;
-                      onDeleteAgentConfig(toText(item._id)).catch((err) => setError(err.message));
+                      onDeleteAgentConfig(toText(item._id)).catch((err) =>
+                        setError(err.message),
+                      );
                     }}
                     className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
                   >
@@ -2817,173 +3749,232 @@ const AdminApp = () => {
               ))}
             </div>
             {socialAccountSubTab === 'xhs' ? (
-          <div className="grid lg:grid-cols-2 gap-4">
-            {/* 小红书账号表单区域 | @keyword-en xhs account form area */}
-            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <h2 className="font-semibold text-slate-900">
-                {editingXhsAccountId ? '编辑小红书账号' : '新增小红书账号'}
-              </h2>
-              {/* 账号名称输入 | @keyword-en username input */}
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="账号名称（必填，如小红书昵称）"
-                value={forms.xhsAccount.username}
-                onChange={(e) => updateForm('xhsAccount', 'username', e.target.value)}
-              />
-              {/* AdsPower 环境 ID | @keyword-en adspowerid input */}
-              <input
-                className="w-full border rounded px-3 py-2 text-sm font-mono"
-                placeholder="AdsPower 环境 ID（选填）"
-                value={forms.xhsAccount.adspowerId}
-                onChange={(e) => updateForm('xhsAccount', 'adspowerId', e.target.value)}
-              />
-              {/* Claw 配置选择 | @keyword-en claw config selector */}
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">关联 Claw 配置（选填）</label>
-                <select
-                  className="w-full border rounded px-3 py-2 text-sm"
-                  value={forms.xhsAccount.clawConfigId}
-                  onChange={(e) => updateForm('xhsAccount', 'clawConfigId', e.target.value)}
-                >
-                  <option value="">-- 不关联 --</option>
-                  {clawConfigs.map((cc) => (
-                    <option key={toText(cc._id)} value={toText(cc._id)}>
-                      {cc.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {/* Claw Agent ID | @keyword-en claw agent id input */}
-              <input
-                className="w-full border rounded px-3 py-2 text-sm font-mono"
-                placeholder="Claw Agent ID（选填，如 main）"
-                value={forms.xhsAccount.clawAgentId}
-                onChange={(e) => updateForm('xhsAccount', 'clawAgentId', e.target.value)}
-              />
-              {/* 备注 | @keyword-en notes textarea */}
-              <textarea
-                className="w-full border rounded px-3 py-2 text-sm resize-none"
-                rows={2}
-                placeholder="备注（选填）"
-                value={forms.xhsAccount.notes}
-                onChange={(e) => updateForm('xhsAccount', 'notes', e.target.value)}
-              />
-              {/* 操作按钮区域 | @keyword-en form action buttons */}
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onSubmitXhsAccount().catch((err) => setError(err.message))}
-                  className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
-                >
-                  {editingXhsAccountId ? '更新' : '创建'}
-                </button>
-                {editingXhsAccountId ? (
-                  <button
-                    onClick={() => {
-                      setEditingXhsAccountId('');
-                      setForms((prev) => ({
-                        ...prev,
-                        xhsAccount: { username: '', adspowerId: '', clawConfigId: '', clawAgentId: '', notes: '' },
-                      }));
-                    }}
-                    className="px-3 py-2 text-sm border rounded"
-                  >
-                    取消编辑
-                  </button>
-                ) : null}
-              </div>
-            </div>
-
-            {/* 小红书账号列表区域 | @keyword-en xhs account list area */}
-            <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <h2 className="font-semibold text-slate-900">账号列表</h2>
-                <span className="text-xs text-slate-400">{filteredXhsAccounts.length} 条</span>
-              </div>
-              {/* 账号搜索框 | @keyword-en xhs account search input */}
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="搜索账号..."
-                value={filters.xhsAccounts.keyword}
-                onChange={(e) => updateFilter('xhsAccounts', 'keyword', e.target.value)}
-              />
-              {pagedXhsAccounts.rows.map((item) => {
-                const statusStyle = {
-                  online: 'text-emerald-600 border-emerald-200 bg-emerald-50',
-                  offline: 'text-slate-500 border-slate-200 bg-slate-50',
-                  error: 'text-rose-500 border-rose-200 bg-rose-50',
-                  unknown: 'text-slate-400 border-slate-200 bg-slate-50',
-                }[item.loginStatus ?? 'unknown'] ?? 'text-slate-400 border-slate-200 bg-slate-50';
-                const statusText = { online: '在线', offline: '离线', error: '异常', unknown: '未知' }[item.loginStatus ?? 'unknown'] ?? '未知';
-                const linkedClaw = clawConfigs.find((cc) => toText(cc._id) === toText(item.clawConfigId));
-                return (
-                  /* 单个账号卡片 | @keyword-en xhs account card */
-                  <div
-                    key={toText(item._id)}
-                    className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
-                      editingXhsAccountId === toText(item._id) ? 'border-slate-900 bg-slate-50' : 'border-slate-200'
-                    }`}
-                    onClick={() => {
-                      setEditingXhsAccountId(toText(item._id));
-                      setForms((prev) => ({
-                        ...prev,
-                        xhsAccount: {
-                          username: item.username || '',
-                          adspowerId: item.adspowerId || '',
-                          clawConfigId: toText(item.clawConfigId) || '',
-                          clawAgentId: item.clawAgentId || '',
-                          notes: item.notes || '',
-                        },
-                      }));
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      {/* 账号名 | @keyword-en account username */}
-                      <span className="font-medium text-slate-900 truncate">{item.username}</span>
-                      {/* 登录状态徽章 | @keyword-en login status badge */}
-                      <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${statusStyle}`}>{statusText}</span>
-                    </div>
-                    {item.adspowerId ? (
-                      <div className="text-xs text-slate-400 font-mono">AdsPower: {item.adspowerId}</div>
-                    ) : null}
-                    {linkedClaw ? (
-                      <div className="text-xs text-slate-500">Claw: {linkedClaw.name}{item.clawAgentId ? ` / ${item.clawAgentId}` : ''}</div>
-                    ) : null}
-                    {item.notes ? (
-                      <div className="text-xs text-slate-400 truncate">{item.notes}</div>
-                    ) : null}
-                    {/* 账号操作按钮 | @keyword-en account action buttons */}
-                    <div className="flex gap-2 pt-1">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTestLoginXhsAccount(toText(item._id)).catch((err) => setError(err.message));
-                        }}
-                        disabled={testLoginLoadingId === toText(item._id)}
-                        className="text-xs text-blue-600 px-2 py-1 border border-blue-200 rounded disabled:opacity-50"
-                      >
-                        {testLoginLoadingId === toText(item._id) ? '测试中...' : '测试登录'}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!window.confirm('确认删除该小红书账号？')) return;
-                          onDeleteXhsAccount(toText(item._id)).catch((err) => setError(err.message));
-                        }}
-                        className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
-                      >
-                        删除
-                      </button>
-                    </div>
+              <div className="grid lg:grid-cols-2 gap-4">
+                {/* 小红书账号表单区域 | @keyword-en xhs account form area */}
+                <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                  <h2 className="font-semibold text-slate-900">
+                    {editingXhsAccountId ? '编辑小红书账号' : '新增小红书账号'}
+                  </h2>
+                  {/* 账号名称输入 | @keyword-en username input */}
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="账号名称（必填，如小红书昵称）"
+                    value={forms.xhsAccount.username}
+                    onChange={(e) =>
+                      updateForm('xhsAccount', 'username', e.target.value)
+                    }
+                  />
+                  {/* AdsPower 环境 ID | @keyword-en adspowerid input */}
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm font-mono"
+                    placeholder="AdsPower 环境 ID（选填）"
+                    value={forms.xhsAccount.adspowerId}
+                    onChange={(e) =>
+                      updateForm('xhsAccount', 'adspowerId', e.target.value)
+                    }
+                  />
+                  {/* Claw 配置选择 | @keyword-en claw config selector */}
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">
+                      关联 Claw 配置（选填）
+                    </label>
+                    <select
+                      className="w-full border rounded px-3 py-2 text-sm"
+                      value={forms.xhsAccount.clawConfigId}
+                      onChange={(e) =>
+                        updateForm('xhsAccount', 'clawConfigId', e.target.value)
+                      }
+                    >
+                      <option value="">-- 不关联 --</option>
+                      {clawConfigs.map((cc) => (
+                        <option key={toText(cc._id)} value={toText(cc._id)}>
+                          {cc.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                );
-              })}
-              {renderPager(
-                pagedXhsAccounts,
-                () => gotoPage('xhsAccounts', pages.xhsAccounts - 1),
-                () => gotoPage('xhsAccounts', pages.xhsAccounts + 1),
-              )}
-            </div>
-          </div>
+                  {/* Claw Agent ID | @keyword-en claw agent id input */}
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm font-mono"
+                    placeholder="Claw Agent ID（选填，如 main）"
+                    value={forms.xhsAccount.clawAgentId}
+                    onChange={(e) =>
+                      updateForm('xhsAccount', 'clawAgentId', e.target.value)
+                    }
+                  />
+                  {/* 备注 | @keyword-en notes textarea */}
+                  <textarea
+                    className="w-full border rounded px-3 py-2 text-sm resize-none"
+                    rows={2}
+                    placeholder="备注（选填）"
+                    value={forms.xhsAccount.notes}
+                    onChange={(e) =>
+                      updateForm('xhsAccount', 'notes', e.target.value)
+                    }
+                  />
+                  {/* 操作按钮区域 | @keyword-en form action buttons */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() =>
+                        onSubmitXhsAccount().catch((err) =>
+                          setError(err.message),
+                        )
+                      }
+                      className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                    >
+                      {editingXhsAccountId ? '更新' : '创建'}
+                    </button>
+                    {editingXhsAccountId ? (
+                      <button
+                        onClick={() => {
+                          setEditingXhsAccountId('');
+                          setForms((prev) => ({
+                            ...prev,
+                            xhsAccount: {
+                              username: '',
+                              adspowerId: '',
+                              clawConfigId: '',
+                              clawAgentId: '',
+                              notes: '',
+                            },
+                          }));
+                        }}
+                        className="px-3 py-2 text-sm border rounded"
+                      >
+                        取消编辑
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* 小红书账号列表区域 | @keyword-en xhs account list area */}
+                <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-semibold text-slate-900">账号列表</h2>
+                    <span className="text-xs text-slate-400">
+                      {filteredXhsAccounts.length} 条
+                    </span>
+                  </div>
+                  {/* 账号搜索框 | @keyword-en xhs account search input */}
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="搜索账号..."
+                    value={filters.xhsAccounts.keyword}
+                    onChange={(e) =>
+                      updateFilter('xhsAccounts', 'keyword', e.target.value)
+                    }
+                  />
+                  {pagedXhsAccounts.rows.map((item) => {
+                    const statusStyle =
+                      {
+                        online:
+                          'text-emerald-600 border-emerald-200 bg-emerald-50',
+                        offline: 'text-slate-500 border-slate-200 bg-slate-50',
+                        error: 'text-rose-500 border-rose-200 bg-rose-50',
+                        unknown: 'text-slate-400 border-slate-200 bg-slate-50',
+                      }[item.loginStatus ?? 'unknown'] ??
+                      'text-slate-400 border-slate-200 bg-slate-50';
+                    const statusText =
+                      {
+                        online: '在线',
+                        offline: '离线',
+                        error: '异常',
+                        unknown: '未知',
+                      }[item.loginStatus ?? 'unknown'] ?? '未知';
+                    const linkedClaw = clawConfigs.find(
+                      (cc) => toText(cc._id) === toText(item.clawConfigId),
+                    );
+                    return (
+                      /* 单个账号卡片 | @keyword-en xhs account card */
+                      <div
+                        key={toText(item._id)}
+                        className={`p-3 border rounded-lg text-sm space-y-1 cursor-pointer ${
+                          editingXhsAccountId === toText(item._id)
+                            ? 'border-slate-900 bg-slate-50'
+                            : 'border-slate-200'
+                        }`}
+                        onClick={() => {
+                          setEditingXhsAccountId(toText(item._id));
+                          setForms((prev) => ({
+                            ...prev,
+                            xhsAccount: {
+                              username: item.username || '',
+                              adspowerId: item.adspowerId || '',
+                              clawConfigId: toText(item.clawConfigId) || '',
+                              clawAgentId: item.clawAgentId || '',
+                              notes: item.notes || '',
+                            },
+                          }));
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          {/* 账号名 | @keyword-en account username */}
+                          <span className="font-medium text-slate-900 truncate">
+                            {item.username}
+                          </span>
+                          {/* 登录状态徽章 | @keyword-en login status badge */}
+                          <span
+                            className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${statusStyle}`}
+                          >
+                            {statusText}
+                          </span>
+                        </div>
+                        {item.adspowerId ? (
+                          <div className="text-xs text-slate-400 font-mono">
+                            AdsPower: {item.adspowerId}
+                          </div>
+                        ) : null}
+                        {linkedClaw ? (
+                          <div className="text-xs text-slate-500">
+                            Claw: {linkedClaw.name}
+                            {item.clawAgentId ? ` / ${item.clawAgentId}` : ''}
+                          </div>
+                        ) : null}
+                        {item.notes ? (
+                          <div className="text-xs text-slate-400 truncate">
+                            {item.notes}
+                          </div>
+                        ) : null}
+                        {/* 账号操作按钮 | @keyword-en account action buttons */}
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onTestLoginXhsAccount(toText(item._id)).catch(
+                                (err) => setError(err.message),
+                              );
+                            }}
+                            disabled={testLoginLoadingId === toText(item._id)}
+                            className="text-xs text-blue-600 px-2 py-1 border border-blue-200 rounded disabled:opacity-50"
+                          >
+                            {testLoginLoadingId === toText(item._id)
+                              ? '测试中...'
+                              : '测试登录'}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!window.confirm('确认删除该小红书账号？'))
+                                return;
+                              onDeleteXhsAccount(toText(item._id)).catch(
+                                (err) => setError(err.message),
+                              );
+                            }}
+                            className="text-xs text-rose-500 px-2 py-1 border border-rose-200 rounded"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {renderPager(
+                    pagedXhsAccounts,
+                    () => gotoPage('xhsAccounts', pages.xhsAccounts - 1),
+                    () => gotoPage('xhsAccounts', pages.xhsAccounts + 1),
+                  )}
+                </div>
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -2993,20 +3984,26 @@ const AdminApp = () => {
             {/* 看板配置映射编辑区域 | @keyword-en dashboard config mapping editor */}
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
               <h2 className="font-semibold text-slate-900">
-                {editingDashboardConfigId ? '编辑看板配置映射' : '新增看板配置映射'}
+                {editingDashboardConfigId
+                  ? '编辑看板配置映射'
+                  : '新增看板配置映射'}
               </h2>
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="dashboardCode（默认 ai-commander）"
                 value={forms.dashboardConfig.dashboardCode}
-                onChange={(e) => updateForm('dashboardConfig', 'dashboardCode', e.target.value)}
+                onChange={(e) =>
+                  updateForm('dashboardConfig', 'dashboardCode', e.target.value)
+                }
               />
               {/* 租户管理员锁定 tenantId，平台管理员可选 */}
               {isSuperAdmin(me?.role) ? (
                 <select
                   className="w-full border rounded px-3 py-2 text-sm"
                   value={forms.dashboardConfig.tenantId}
-                  onChange={(e) => updateForm('dashboardConfig', 'tenantId', e.target.value)}
+                  onChange={(e) =>
+                    updateForm('dashboardConfig', 'tenantId', e.target.value)
+                  }
                 >
                   <option value="">母平台（空租户）</option>
                   {tenants.map((tenant) => (
@@ -3017,26 +4014,37 @@ const AdminApp = () => {
                 </select>
               ) : (
                 <div className="w-full border rounded px-3 py-2 text-sm text-slate-500 bg-slate-50">
-                  租户：{tenants.find((t) => t._id === me?.tenantId)?.name || me?.tenantId || '当前租户'}
+                  租户：
+                  {tenants.find((t) => t._id === me?.tenantId)?.name ||
+                    me?.tenantId ||
+                    '当前租户'}
                 </div>
               )}
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="配置文件路径（相对项目根，如 config/dashboards/xxx.json）"
                 value={forms.dashboardConfig.filePath}
-                onChange={(e) => updateForm('dashboardConfig', 'filePath', e.target.value)}
+                onChange={(e) =>
+                  updateForm('dashboardConfig', 'filePath', e.target.value)
+                }
               />
               <label className="flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   checked={Boolean(forms.dashboardConfig.enabled)}
-                  onChange={(e) => updateForm('dashboardConfig', 'enabled', e.target.checked)}
+                  onChange={(e) =>
+                    updateForm('dashboardConfig', 'enabled', e.target.checked)
+                  }
                 />
                 启用
               </label>
               <div className="flex gap-2">
                 <button
-                  onClick={() => onSubmitDashboardConfig().catch((err) => setError(err.message))}
+                  onClick={() =>
+                    onSubmitDashboardConfig().catch((err) =>
+                      setError(err.message),
+                    )
+                  }
                   className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
                 >
                   {editingDashboardConfigId ? '保存映射' : '创建映射'}
@@ -3062,7 +4070,8 @@ const AdminApp = () => {
                 ) : null}
               </div>
               <div className="text-xs text-slate-500">
-                配置文件仅允许在 <span className="font-mono">config/dashboards/</span> 目录下。
+                配置文件仅允许在{' '}
+                <span className="font-mono">config/dashboards/</span> 目录下。
               </div>
             </div>
 
@@ -3074,12 +4083,16 @@ const AdminApp = () => {
                   className="border rounded px-3 py-2 text-sm"
                   placeholder="按 dashboardCode 或 filePath 搜索"
                   value={filters.dashboardConfigs.keyword}
-                  onChange={(e) => updateFilter('dashboardConfigs', 'keyword', e.target.value)}
+                  onChange={(e) =>
+                    updateFilter('dashboardConfigs', 'keyword', e.target.value)
+                  }
                 />
                 <select
                   className="border rounded px-3 py-2 text-sm"
                   value={filters.dashboardConfigs.tenantId}
-                  onChange={(e) => updateFilter('dashboardConfigs', 'tenantId', e.target.value)}
+                  onChange={(e) =>
+                    updateFilter('dashboardConfigs', 'tenantId', e.target.value)
+                  }
                 >
                   <option value="">全部租户</option>
                   <option value="__platform__">母平台（空租户）</option>
@@ -3092,7 +4105,10 @@ const AdminApp = () => {
               </div>
               <div className="space-y-2 text-sm">
                 {pagedDashboardConfigs.rows.map((item) => (
-                  <div key={item._id} className="border rounded-lg p-3 flex justify-between">
+                  <div
+                    key={item._id}
+                    className="border rounded-lg p-3 flex justify-between"
+                  >
                     <div>
                       <div className="font-medium">
                         {item.dashboardCode || 'ai-commander'}
@@ -3100,7 +4116,9 @@ const AdminApp = () => {
                       <div className="text-xs text-slate-500">
                         {item.tenantId ? item.tenantId : '母平台(空租户)'}
                       </div>
-                      <div className="text-xs text-slate-500">{item.filePath}</div>
+                      <div className="text-xs text-slate-500">
+                        {item.filePath}
+                      </div>
                       <div className="text-xs text-slate-500">
                         {item.enabled ? 'enabled' : 'disabled'}
                       </div>
@@ -3112,7 +4130,8 @@ const AdminApp = () => {
                           setForms((prev) => ({
                             ...prev,
                             dashboardConfig: {
-                              dashboardCode: item.dashboardCode || 'ai-commander',
+                              dashboardCode:
+                                item.dashboardCode || 'ai-commander',
                               tenantId: item.tenantId || '',
                               filePath: item.filePath || '',
                               enabled: Boolean(item.enabled),
@@ -3124,7 +4143,11 @@ const AdminApp = () => {
                         编辑
                       </button>
                       <button
-                        onClick={() => onDeleteDashboardConfig(item._id).catch((err) => setError(err.message))}
+                        onClick={() =>
+                          onDeleteDashboardConfig(item._id).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
                         className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
                       >
                         删除
@@ -3132,9 +4155,9 @@ const AdminApp = () => {
                       {/* 重置 AI 修改按钮：清除 customConfig 回退到文件配置 | @keyword-en reset ai custom config */}
                       <button
                         onClick={() =>
-                          onResetDashboardCustomConfig(item.dashboardCode).catch((err) =>
-                            setError(err.message),
-                          )
+                          onResetDashboardCustomConfig(
+                            item.dashboardCode,
+                          ).catch((err) => setError(err.message))
                         }
                         className="text-xs px-2 py-1 h-fit rounded border border-amber-300 text-amber-700"
                         title="清除 AI 修改的自定义配置，回退到文件配置"
@@ -3155,862 +4178,1088 @@ const AdminApp = () => {
         ) : null}
 
         {/* 飞书凭证（仅本租户） | @keyword-en feishu credentials current tenant only */}
-        {activeTab === 'feishu_credentials' ? (
-          (() => {
-            const ownCredential = feishuCredentials[0] || null;
-            return (
-              <div className="grid lg:grid-cols-1 gap-4 pb-8">
-                <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-                  {/* 头部说明 + 保存 | @keyword-en feishu credential header */}
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h2 className="font-semibold text-slate-900">飞书 appId / appSecret</h2>
-                      <p className="text-xs text-slate-500 mt-1">
-                        本租户专属凭证，财务多维表 / 审批读取共用；同一租户只保留一份，重新提交即覆盖。
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      {ownCredential ? (
+        {activeTab === 'feishu_credentials'
+          ? (() => {
+              const ownCredential = feishuCredentials[0] || null;
+              return (
+                <div className="grid lg:grid-cols-1 gap-4 pb-8">
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                    {/* 头部说明 + 保存 | @keyword-en feishu credential header */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h2 className="font-semibold text-slate-900">
+                          飞书 appId / appSecret
+                        </h2>
+                        <p className="text-xs text-slate-500 mt-1">
+                          本租户专属凭证，财务多维表 /
+                          审批读取共用；同一租户只保留一份，重新提交即覆盖。
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        {ownCredential ? (
+                          <button
+                            onClick={() =>
+                              onDeleteFeishuCredential(ownCredential._id).catch(
+                                (err) => setError(err.message),
+                              )
+                            }
+                            className="px-3 py-2 border border-red-300 text-red-600 text-sm rounded"
+                          >
+                            删除凭证
+                          </button>
+                        ) : null}
                         <button
                           onClick={() =>
-                            onDeleteFeishuCredential(ownCredential._id).catch((err) =>
+                            onSubmitFeishuCredential().catch((err) =>
                               setError(err.message),
                             )
                           }
-                          className="px-3 py-2 border border-red-300 text-red-600 text-sm rounded"
+                          className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
                         >
-                          删除凭证
+                          保存凭证
                         </button>
-                      ) : null}
-                      <button
-                        onClick={() =>
-                          onSubmitFeishuCredential().catch((err) => setError(err.message))
-                        }
-                        className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
-                      >
-                        保存凭证
-                      </button>
+                      </div>
+                    </div>
+                    {/* 表单区域 | @keyword-en feishu credential form area */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="text-xs text-slate-600 space-y-1">
+                        <div>appId</div>
+                        <input
+                          className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          value={forms.feishuCredential.appId}
+                          onChange={(e) =>
+                            updateForm(
+                              'feishuCredential',
+                              'appId',
+                              e.target.value,
+                            )
+                          }
+                          placeholder="cli_xxxxxx"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-600 space-y-1">
+                        <div>appSecret</div>
+                        <input
+                          className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          value={forms.feishuCredential.appSecret}
+                          onChange={(e) =>
+                            updateForm(
+                              'feishuCredential',
+                              'appSecret',
+                              e.target.value,
+                            )
+                          }
+                          placeholder="xxxxxxxxxxxx"
+                          type="password"
+                        />
+                      </label>
+                      <label className="text-xs text-slate-600 space-y-1 md:col-span-2">
+                        <div>备注</div>
+                        <input
+                          className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          value={forms.feishuCredential.remark}
+                          onChange={(e) =>
+                            updateForm(
+                              'feishuCredential',
+                              'remark',
+                              e.target.value,
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
+                    {/* 状态信息 | @keyword-en feishu credential status info */}
+                    <div className="text-xs text-slate-400">
+                      {ownCredential
+                        ? `上次更新：${new Date(ownCredential.updatedAt).toLocaleString()}`
+                        : '当前租户尚未配置凭证，填写后点击保存。'}
                     </div>
                   </div>
-                  {/* 表单区域 | @keyword-en feishu credential form area */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <label className="text-xs text-slate-600 space-y-1">
-                      <div>appId</div>
-                      <input
-                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
-                        value={forms.feishuCredential.appId}
-                        onChange={(e) => updateForm('feishuCredential', 'appId', e.target.value)}
-                        placeholder="cli_xxxxxx"
-                      />
-                    </label>
-                    <label className="text-xs text-slate-600 space-y-1">
-                      <div>appSecret</div>
-                      <input
-                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
-                        value={forms.feishuCredential.appSecret}
-                        onChange={(e) => updateForm('feishuCredential', 'appSecret', e.target.value)}
-                        placeholder="xxxxxxxxxxxx"
-                        type="password"
-                      />
-                    </label>
-                    <label className="text-xs text-slate-600 space-y-1 md:col-span-2">
-                      <div>备注</div>
-                      <input
-                        className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
-                        value={forms.feishuCredential.remark}
-                        onChange={(e) => updateForm('feishuCredential', 'remark', e.target.value)}
-                      />
-                    </label>
-                  </div>
-                  {/* 状态信息 | @keyword-en feishu credential status info */}
-                  <div className="text-xs text-slate-400">
-                    {ownCredential
-                      ? `上次更新：${new Date(ownCredential.updatedAt).toLocaleString()}`
-                      : '当前租户尚未配置凭证，填写后点击保存。'}
-                  </div>
                 </div>
-              </div>
-            );
-          })()
-        ) : null}
+              );
+            })()
+          : null}
 
         {/* 财务（内含 支出 / 应付 / 推送配置 三个子 Tab） | @keyword-en finance tab with category and push sub tabs */}
         {/* 财务 Tab(回归"支出/应付"子 Tab,name 由 FINANCE_KINDS 自动注入,用户不感知) | @keyword-en finance tab simplified preset kinds */}
-        {activeTab === 'finance' ? (
-          (() => {
-            const currentKind =
-              FINANCE_KINDS.find((k) => k.id === financeSubTab) || FINANCE_KINDS[0];
-            const bindingForm = forms.financeBinding;
-            const pushForm = forms.financePush;
-            const currentBinding = financeBindings.find(
-              (b) => b.name === currentKind.id,
-            );
-            const currentTransform = financeTransforms[currentKind.id];
-            const chatState = financeChat[currentKind.id] || {
-              messages: [],
-              input: '',
-              loading: false,
-            };
-            const pushConfig = financePushConfig;
-            const canTest =
-              !!toText(pushForm.baseUrl).trim() && !!toText(pushForm.apiKey).trim();
-            const isRunning = financePushPending.run === currentKind.id;
-            const canRun =
-              !!pushConfig &&
-              (bindingForm.sources?.length || 0) > 0 &&
-              !!currentTransform?.dsl;
-            const testStatusBadge =
-              financePushFeedback && financePushFeedback.kind === 'test'
-                ? {
-                    status: financePushFeedback.status,
-                    message: financePushFeedback.message,
-                    code: financePushFeedback.code,
-                    httpStatus: financePushFeedback.httpStatus,
-                  }
-                : pushConfig?.lastTestStatus
+        {activeTab === 'finance'
+          ? (() => {
+              const currentKind =
+                FINANCE_KINDS.find((k) => k.id === financeSubTab) ||
+                FINANCE_KINDS[0];
+              const bindingForm = forms.financeBinding;
+              const pushForm = forms.financePush;
+              const currentBinding = financeBindings.find(
+                (b) => b.name === currentKind.id,
+              );
+              const currentTransform = financeTransforms[currentKind.id];
+              const chatState = financeChat[currentKind.id] || {
+                messages: [],
+                input: '',
+                loading: false,
+              };
+              const pushConfig = financePushConfig;
+              const canTest =
+                !!toText(pushForm.baseUrl).trim() &&
+                !!toText(pushForm.apiKey).trim();
+              const isRunning = financePushPending.run === currentKind.id;
+              const canRun =
+                !!pushConfig &&
+                (bindingForm.sources?.length || 0) > 0 &&
+                !!currentTransform?.dsl;
+              const testStatusBadge =
+                financePushFeedback && financePushFeedback.kind === 'test'
                   ? {
-                      status: pushConfig.lastTestStatus,
-                      message: pushConfig.lastTestMessage,
-                      at: pushConfig.lastTestedAt,
+                      status: financePushFeedback.status,
+                      message: financePushFeedback.message,
+                      code: financePushFeedback.code,
+                      httpStatus: financePushFeedback.httpStatus,
                     }
-                  : null;
-            return (
-              <>
-              <div className="space-y-4 pb-8">
-                {/* 顶部:推送配置卡片(默认折叠,显示状态摘要) | @keyword-en collapsible push config */}
-                <div className="bg-white border border-slate-200 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => setFinancePushCollapsed((v) => !v)}
-                    className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left"
-                  >
-                    <div className="min-w-0 flex items-center gap-3 flex-wrap">
-                      <span className="text-sm font-semibold text-slate-900">
-                        推送配置
-                      </span>
-                      {pushConfig ? (
-                        <span className="text-xs text-slate-500 truncate font-mono">
-                          {pushConfig.baseUrl}
-                          {pushConfig.externalTenantId
-                            ? ` · ${pushConfig.externalTenantId}`
-                            : ''}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-amber-600">未配置</span>
-                      )}
-                      {testStatusBadge ? (
-                        <span
-                          className={
-                            'text-xs px-2 py-0.5 rounded ' +
-                            (PUSH_STATUS_COLOR[testStatusBadge.status] || PUSH_STATUS_COLOR.unknown)
-                          }
-                        >
-                          {PUSH_STATUS_LABEL[testStatusBadge.status] || testStatusBadge.status}
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className="text-xs text-slate-400">
-                      {financePushCollapsed ? '展开 ▾' : '收起 ▴'}
-                    </span>
-                  </button>
-                  {!financePushCollapsed ? (
-                    <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
-                      <p className="text-xs text-slate-500">
-                        外部财务系统的 API 前缀(含 <code>/api/v1</code>) + API Key。外部租户 ID 用于 webhook tenantId 映射。统一推到 <code className="text-slate-700">/events/upsert</code>,探活打 <code className="text-slate-700">/me</code>。
-                      </p>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <label className="text-xs text-slate-600 space-y-1">
-                          <div>baseUrl</div>
-                          <input
-                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
-                            placeholder="http(s)://your-server.example.com/api/v1"
-                            value={pushForm.baseUrl}
-                            onChange={(e) => updateForm('financePush', 'baseUrl', e.target.value)}
-                          />
-                        </label>
-                        <label className="text-xs text-slate-600 space-y-1">
-                          <div>apiKey</div>
-                          <input
-                            type="password"
-                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
-                            placeholder="fa_xxxxxxxxxxxx.yyyyyyyy"
-                            value={pushForm.apiKey}
-                            onChange={(e) => updateForm('financePush', 'apiKey', e.target.value)}
-                          />
-                        </label>
-                        <label className="text-xs text-slate-600 space-y-1">
-                          <div>外部租户ID</div>
-                          <input
-                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
-                            placeholder="t_demo"
-                            value={pushForm.externalTenantId}
-                            onChange={(e) =>
-                              updateForm('financePush', 'externalTenantId', e.target.value)
-                            }
-                          />
-                        </label>
-                      </div>
-                      <div className="flex gap-2 flex-wrap">
-                        <button
-                          onClick={() =>
-                            onSubmitFinancePushConfig().catch((err) => setError(err.message))
-                          }
-                          disabled={financePushPending.save}
-                          className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded disabled:bg-slate-300"
-                        >
-                          {financePushPending.save ? '保存中…' : '保存配置'}
-                        </button>
-                        <button
-                          onClick={() => onTestFinancePush()}
-                          disabled={!canTest || financePushPending.test || !pushConfig}
-                          title={!pushConfig ? '请先保存配置后再测试' : ''}
-                          className="px-3 py-1.5 border border-slate-300 text-slate-700 text-xs rounded disabled:bg-slate-100 disabled:text-slate-400"
-                        >
-                          {financePushPending.test ? '测试中…' : '测试连通性'}
-                        </button>
-                      </div>
-                      {testStatusBadge?.message ? (
-                        <div className="text-xs text-slate-500 truncate">
-                          {testStatusBadge.message}
-                          {testStatusBadge.at ? (
-                            <span className="ml-2 text-slate-400">
-                              {new Date(testStatusBadge.at).toLocaleString()}
+                  : pushConfig?.lastTestStatus
+                    ? {
+                        status: pushConfig.lastTestStatus,
+                        message: pushConfig.lastTestMessage,
+                        at: pushConfig.lastTestedAt,
+                      }
+                    : null;
+              return (
+                <>
+                  <div className="space-y-4 pb-8">
+                    {/* 顶部:推送配置卡片(默认折叠,显示状态摘要) | @keyword-en collapsible push config */}
+                    <div className="bg-white border border-slate-200 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setFinancePushCollapsed((v) => !v)}
+                        className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left"
+                      >
+                        <div className="min-w-0 flex items-center gap-3 flex-wrap">
+                          <span className="text-sm font-semibold text-slate-900">
+                            推送配置
+                          </span>
+                          {pushConfig ? (
+                            <span className="text-xs text-slate-500 truncate font-mono">
+                              {pushConfig.baseUrl}
+                              {pushConfig.externalTenantId
+                                ? ` · ${pushConfig.externalTenantId}`
+                                : ''}
                             </span>
+                          ) : (
+                            <span className="text-xs text-amber-600">
+                              未配置
+                            </span>
+                          )}
+                          {testStatusBadge ? (
+                            <span
+                              className={
+                                'text-xs px-2 py-0.5 rounded ' +
+                                (PUSH_STATUS_COLOR[testStatusBadge.status] ||
+                                  PUSH_STATUS_COLOR.unknown)
+                              }
+                            >
+                              {PUSH_STATUS_LABEL[testStatusBadge.status] ||
+                                testStatusBadge.status}
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="text-xs text-slate-400">
+                          {financePushCollapsed ? '展开 ▾' : '收起 ▴'}
+                        </span>
+                      </button>
+                      {!financePushCollapsed ? (
+                        <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
+                          <p className="text-xs text-slate-500">
+                            外部财务系统的 API 前缀(含 <code>/api/v1</code>) +
+                            API Key。外部租户 ID 用于 webhook tenantId
+                            映射。统一推到{' '}
+                            <code className="text-slate-700">
+                              /events/upsert
+                            </code>
+                            ,探活打 <code className="text-slate-700">/me</code>
+                            。
+                          </p>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <label className="text-xs text-slate-600 space-y-1">
+                              <div>baseUrl</div>
+                              <input
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                                placeholder="http(s)://your-server.example.com/api/v1"
+                                value={pushForm.baseUrl}
+                                onChange={(e) =>
+                                  updateForm(
+                                    'financePush',
+                                    'baseUrl',
+                                    e.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                            <label className="text-xs text-slate-600 space-y-1">
+                              <div>apiKey</div>
+                              <input
+                                type="password"
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                                placeholder="fa_xxxxxxxxxxxx.yyyyyyyy"
+                                value={pushForm.apiKey}
+                                onChange={(e) =>
+                                  updateForm(
+                                    'financePush',
+                                    'apiKey',
+                                    e.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                            <label className="text-xs text-slate-600 space-y-1">
+                              <div>外部租户ID</div>
+                              <input
+                                className="w-full border border-slate-300 rounded px-2 py-1 text-sm font-mono"
+                                placeholder="t_demo"
+                                value={pushForm.externalTenantId}
+                                onChange={(e) =>
+                                  updateForm(
+                                    'financePush',
+                                    'externalTenantId',
+                                    e.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                          </div>
+                          <div className="flex gap-2 flex-wrap">
+                            <button
+                              onClick={() =>
+                                onSubmitFinancePushConfig().catch((err) =>
+                                  setError(err.message),
+                                )
+                              }
+                              disabled={financePushPending.save}
+                              className="px-3 py-1.5 bg-slate-900 text-white text-xs rounded disabled:bg-slate-300"
+                            >
+                              {financePushPending.save ? '保存中…' : '保存配置'}
+                            </button>
+                            <button
+                              onClick={() => onTestFinancePush()}
+                              disabled={
+                                !canTest ||
+                                financePushPending.test ||
+                                !pushConfig
+                              }
+                              title={!pushConfig ? '请先保存配置后再测试' : ''}
+                              className="px-3 py-1.5 border border-slate-300 text-slate-700 text-xs rounded disabled:bg-slate-100 disabled:text-slate-400"
+                            >
+                              {financePushPending.test
+                                ? '测试中…'
+                                : '测试连通性'}
+                            </button>
+                          </div>
+                          {testStatusBadge?.message ? (
+                            <div className="text-xs text-slate-500 truncate">
+                              {testStatusBadge.message}
+                              {testStatusBadge.at ? (
+                                <span className="ml-2 text-slate-400">
+                                  {new Date(
+                                    testStatusBadge.at,
+                                  ).toLocaleString()}
+                                </span>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
                       ) : null}
                     </div>
-                  ) : null}
-                </div>
 
-                {/* 推送结果反馈 + 执行日志(全宽) | @keyword-en push run feedback with logs */}
-                {financePushFeedback && financePushFeedback.kind === 'run' ? (
-                  <div className="space-y-2">
-                  {financePushFeedback.streaming ? (
-                    <div className="text-xs bg-sky-50 border border-sky-200 text-sky-700 rounded p-2 flex items-center gap-2">
-                      <span className="inline-block w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
-                      推送中… binding「{financePushFeedback.name}」
-                      {Array.isArray(financePushFeedback.logs) && financePushFeedback.logs.length > 0
-                        ? ` · ${financePushFeedback.logs[financePushFeedback.logs.length - 1].msg}`
-                        : ''}
-                    </div>
-                  ) : financePushFeedback.error ? (
-                    <div className="text-xs bg-red-50 border border-red-200 text-red-700 rounded p-2">
-                      ❌ 推送失败:{financePushFeedback.error}
-                    </div>
-                  ) : financePushFeedback.failedBatch ? (
-                    <div className="text-xs bg-red-50 border border-red-200 rounded p-2 space-y-2">
-                      <div className="flex flex-wrap gap-2 items-start justify-between">
-                        <div className="font-semibold text-red-700">
-                          ❌ binding「{financePushFeedback.name}」批次 #{financePushFeedback.failedBatch.index + 1} 整批拒收
-                          · HTTP {financePushFeedback.failedBatch.httpStatus}
-                          {financePushFeedback.failedBatch.code ? ` · ${financePushFeedback.failedBatch.code}` : ''}
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          <button
-                            onClick={() =>
-                              onCopyPushFailure(financePushFeedback).catch((err) =>
-                                setError(err.message),
-                              )
-                            }
-                            className="px-2 py-0.5 border border-slate-300 text-slate-700 text-xs rounded bg-white hover:bg-slate-50"
-                            title="复制完整失败详情(HTTP / 错误信息 / 推送 payload / 对方原始响应)到剪贴板"
-                          >
-                            复制详情
-                          </button>
-                          <button
-                            onClick={() =>
-                              onSendPushFailureToAgent(currentKind.id, financePushFeedback)
-                            }
-                            className="px-2 py-0.5 bg-slate-900 text-white text-xs rounded"
-                            title="把失败详情塞进右侧 Agent 输入框,让 Agent 修 DSL"
-                          >
-                            发给 Agent
-                          </button>
-                        </div>
-                      </div>
-                      <div className="text-slate-600">
-                        成功 {financePushFeedback.successCount} / 共 {financePushFeedback.transformedRows} 条;
-                        源拉取 {financePushFeedback.totalRows}(filter {financePushFeedback.filteredRows},transform 错 {financePushFeedback.transformErrors}
-                        {financePushFeedback.dateFilteredRows > 0
-                          ? `,时间窗滤掉 ${financePushFeedback.dateFilteredRows}`
-                          : ''})
-                      </div>
-                      <details open>
-                        <summary className="cursor-pointer text-slate-700 font-semibold">
-                          错误信息(完整){financePushFeedback.failedBatch.contentType ? ` · ${financePushFeedback.failedBatch.contentType}` : ''}
-                        </summary>
-                        <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono text-red-700 whitespace-pre-wrap break-all">
-                          {financePushFeedback.failedBatch.message || '(无 message 字段)'}
-                        </pre>
-                      </details>
-                      {financePushFeedback.failedBatch.rawResponseBody !== undefined &&
-                      financePushFeedback.failedBatch.rawResponseBody !== null ? (
-                        <details>
-                          <summary className="cursor-pointer text-slate-500">
-                            对方原始响应 body(完整)
-                          </summary>
-                          <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono whitespace-pre-wrap break-all">
-                            {typeof financePushFeedback.failedBatch.rawResponseBody === 'string'
-                              ? financePushFeedback.failedBatch.rawResponseBody
-                              : JSON.stringify(financePushFeedback.failedBatch.rawResponseBody, null, 2)}
-                          </pre>
-                        </details>
-                      ) : null}
-                      {Array.isArray(financePushFeedback.failedBatch.payloadAll) &&
-                      financePushFeedback.failedBatch.payloadAll.length > 0 ? (
-                        <details>
-                          <summary className="cursor-pointer text-slate-500">
-                            该批推送 payload(共 {financePushFeedback.failedBatch.payloadAll.length} 条;展示首 3 条)
-                          </summary>
-                          <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono">
-                            {JSON.stringify(
-                              financePushFeedback.failedBatch.payloadAll.slice(0, 3),
-                              null,
-                              2,
-                            )}
-                          </pre>
-                        </details>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 rounded p-2">
-                      ✅ 全部成功 · {financePushFeedback.successCount} 条 / {financePushFeedback.batches} 批
-                      (源拉取 {financePushFeedback.totalRows},filter {financePushFeedback.filteredRows},transform 错 {financePushFeedback.transformErrors}
-                      {financePushFeedback.dateFilteredRows > 0
-                        ? `,时间窗滤掉 ${financePushFeedback.dateFilteredRows}`
-                        : ''})
-                    </div>
-                  )}
-                  {/* 执行日志(后端累积的关键步骤) | @keyword-en push run logs */}
-                  {Array.isArray(financePushFeedback.logs) && financePushFeedback.logs.length > 0 ? (
-                    <details className="text-xs bg-slate-50 border border-slate-200 rounded" open>
-                      <summary className="cursor-pointer px-3 py-1.5 select-none text-slate-700">
-                        执行日志 · {financePushFeedback.logs.length} 条
-                      </summary>
-                      <div className="px-3 py-2 max-h-64 overflow-y-auto space-y-0.5 font-mono">
-                        {financePushFeedback.logs.map((entry, i) => (
-                          <div
-                            key={i}
-                            className={
-                              entry.level === 'error'
-                                ? 'text-red-600'
-                                : entry.level === 'warn'
-                                  ? 'text-amber-600'
-                                  : 'text-slate-600'
-                            }
-                          >
-                            <span className="text-slate-400">
-                              {new Date(entry.at).toLocaleTimeString()}
-                            </span>{' '}
-                            <span className="text-slate-400">[{entry.level}]</span>{' '}
-                            {entry.msg}
+                    {/* 推送结果反馈 + 执行日志(全宽) | @keyword-en push run feedback with logs */}
+                    {financePushFeedback &&
+                    financePushFeedback.kind === 'run' ? (
+                      <div className="space-y-2">
+                        {financePushFeedback.streaming ? (
+                          <div className="text-xs bg-sky-50 border border-sky-200 text-sky-700 rounded p-2 flex items-center gap-2">
+                            <span className="inline-block w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+                            推送中… binding「{financePushFeedback.name}」
+                            {Array.isArray(financePushFeedback.logs) &&
+                            financePushFeedback.logs.length > 0
+                              ? ` · ${financePushFeedback.logs[financePushFeedback.logs.length - 1].msg}`
+                              : ''}
                           </div>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  </div>
-                ) : null}
-
-                {/* 子 Tab(支出 / 应付) | @keyword-en finance sub tab bar */}
-                <div className="flex gap-2 border-b border-slate-200 pb-2">
-                  {FINANCE_KINDS.map((k) => (
-                    <button
-                      key={k.id}
-                      onClick={() => setFinanceSubTab(k.id)}
-                      className={
-                        'px-4 py-1.5 text-sm rounded ' +
-                        (financeSubTab === k.id
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
-                      }
-                    >
-                      {k.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* 主体:左 binding 编辑 | 右 Agent | @keyword-en finance editor and agent */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  <div className="lg:col-span-2 space-y-4">
-                    {/* 源绑定 + 备注 + 保存/推送 | @keyword-en source binding card */}
-                    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <h2 className="font-semibold text-slate-900">{currentKind.label}</h2>
-                          <p className="text-xs text-slate-500 mt-1">
-                            {currentKind.hint}。可同时绑定多个多维表 / 审批,自动归类为 {currentKind.flowDefault === 'out' ? '支出' : '收入'}。
-                          </p>
-                        </div>
-                        <div className="flex gap-2 flex-wrap shrink-0">
-                          <button
-                            onClick={onAddBitableSource}
-                            className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs rounded whitespace-nowrap"
-                          >
-                            + 多维表
-                          </button>
-                          <button
-                            onClick={onAddApprovalSource}
-                            className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs rounded whitespace-nowrap"
-                          >
-                            + 审批
-                          </button>
-                          <button
-                            onClick={() =>
-                              onSubmitFinanceBinding().catch((err) => setError(err.message))
-                            }
-                            className="px-4 py-1.5 bg-slate-900 text-white text-xs rounded whitespace-nowrap"
-                          >
-                            保存
-                          </button>
-                          <button
-                            onClick={() => onRunFinancePush(currentKind.id)}
-                            disabled={!canRun || isRunning}
-                            title={
-                              !pushConfig
-                                ? '先保存推送配置(顶部)'
-                                : (bindingForm.sources?.length || 0) === 0
-                                  ? '请先绑定数据源'
-                                  : !currentTransform?.dsl
-                                    ? '请先让 Agent 生成 / 手填 Transform DSL'
-                                    : ''
-                            }
-                            className="px-4 py-1.5 bg-emerald-600 text-white text-xs rounded whitespace-nowrap disabled:bg-slate-300"
-                          >
-                            {isRunning ? '推送中…' : '立即推送'}
-                          </button>
-                        </div>
-                      </div>
-                      {/* 推送时间窗(按 occurredAt 过滤;空=全量) | @keyword-en push date window inputs */}
-                      <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
-                        <span className="text-slate-500">推送时间窗(按 occurredAt 过滤,留空=全量):</span>
-                        <label className="space-y-0.5">
-                          <div className="text-slate-400">起</div>
-                          <input
-                            type="date"
-                            className="border border-slate-300 rounded px-2 py-1 text-xs"
-                            value={financePushDateWindow.startDate}
-                            onChange={(e) =>
-                              setFinancePushDateWindow((p) => ({
-                                ...p,
-                                startDate: e.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                        <label className="space-y-0.5">
-                          <div className="text-slate-400">止</div>
-                          <input
-                            type="date"
-                            className="border border-slate-300 rounded px-2 py-1 text-xs"
-                            value={financePushDateWindow.endDate}
-                            onChange={(e) =>
-                              setFinancePushDateWindow((p) => ({
-                                ...p,
-                                endDate: e.target.value,
-                              }))
-                            }
-                          />
-                        </label>
-                        {financePushDateWindow.startDate || financePushDateWindow.endDate ? (
-                          <button
-                            onClick={() =>
-                              setFinancePushDateWindow({ startDate: '', endDate: '' })
-                            }
-                            className="text-slate-500 underline"
-                          >
-                            清空
-                          </button>
-                        ) : null}
-                      </div>
-
-                      {bindingForm.sources.length === 0 ? (
-                        <div className="text-center text-slate-400 text-sm py-4 border border-dashed border-slate-200 rounded">
-                          未绑定任何源,请用上方"+ 多维表"或"+ 审批"添加
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {bindingForm.sources.map((s, idx) => (
-                            <div key={idx} className="border border-slate-200 rounded p-2 space-y-2">
-                              <div className="flex items-start gap-2">
-                                <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 mt-1">
-                                  {s.type === 'bitable' ? '多维表' : '审批'}
-                                </span>
-                                <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2">
-                                  {s.type === 'bitable' ? (
-                                    <>
-                                      <input
-                                        className="border border-slate-300 rounded px-2 py-1 text-xs"
-                                        placeholder="appToken"
-                                        value={s.appToken || ''}
-                                        onChange={(e) =>
-                                          onUpdateSourceField(idx, 'appToken', e.target.value)
-                                        }
-                                      />
-                                      <input
-                                        className="border border-slate-300 rounded px-2 py-1 text-xs"
-                                        placeholder="tableId"
-                                        value={s.tableId || ''}
-                                        onChange={(e) =>
-                                          onUpdateSourceField(idx, 'tableId', e.target.value)
-                                        }
-                                      />
-                                    </>
-                                  ) : (
-                                    <input
-                                      className="md:col-span-2 border border-slate-300 rounded px-2 py-1 text-xs"
-                                      placeholder="approvalCode"
-                                      value={s.approvalCode || ''}
-                                      onChange={(e) =>
-                                        onUpdateSourceField(idx, 'approvalCode', e.target.value)
-                                      }
-                                    />
-                                  )}
-                                  <input
-                                    className="border border-slate-300 rounded px-2 py-1 text-xs"
-                                    placeholder="别名(可选)"
-                                    value={s.alias || ''}
-                                    onChange={(e) =>
-                                      onUpdateSourceField(idx, 'alias', e.target.value)
-                                    }
-                                  />
-                                </div>
+                        ) : financePushFeedback.error ? (
+                          <div className="text-xs bg-red-50 border border-red-200 text-red-700 rounded p-2">
+                            ❌ 推送失败:{financePushFeedback.error}
+                          </div>
+                        ) : financePushFeedback.failedBatch ? (
+                          <div className="text-xs bg-red-50 border border-red-200 rounded p-2 space-y-2">
+                            <div className="flex flex-wrap gap-2 items-start justify-between">
+                              <div className="font-semibold text-red-700">
+                                ❌ binding「{financePushFeedback.name}」批次 #
+                                {financePushFeedback.failedBatch.index + 1}{' '}
+                                整批拒收 · HTTP{' '}
+                                {financePushFeedback.failedBatch.httpStatus}
+                                {financePushFeedback.failedBatch.code
+                                  ? ` · ${financePushFeedback.failedBatch.code}`
+                                  : ''}
+                              </div>
+                              <div className="flex gap-1 shrink-0">
                                 <button
-                                  onClick={() => onRemoveSource(idx)}
-                                  className="text-red-500 text-xs px-2 py-1"
+                                  onClick={() =>
+                                    onCopyPushFailure(
+                                      financePushFeedback,
+                                    ).catch((err) => setError(err.message))
+                                  }
+                                  className="px-2 py-0.5 border border-slate-300 text-slate-700 text-xs rounded bg-white hover:bg-slate-50"
+                                  title="复制完整失败详情(HTTP / 错误信息 / 推送 payload / 对方原始响应)到剪贴板"
                                 >
-                                  移除
+                                  复制详情
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    onSendPushFailureToAgent(
+                                      currentKind.id,
+                                      financePushFeedback,
+                                    )
+                                  }
+                                  className="px-2 py-0.5 bg-slate-900 text-white text-xs rounded"
+                                  title="把失败详情塞进右侧 Agent 输入框,让 Agent 修 DSL"
+                                >
+                                  发给 Agent
                                 </button>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                      <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded px-3 py-2">
-                        💡 表的语义就是「别名」(如"云境上海银行流水")。Agent 会把别名当作表定义读懂归属/银行/业务,然后用 lookup 等手段产出 storeId / companyId / bankAccount 等字段。
-                      </div>
-                      <label className="block text-xs text-slate-600 space-y-1">
-                        <div>备注</div>
-                        <input
-                          className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
-                          value={bindingForm.remark}
-                          onChange={(e) => updateForm('financeBinding', 'remark', e.target.value)}
-                        />
-                      </label>
-                      <div className="text-xs text-slate-400 flex flex-wrap gap-3">
-                        {currentBinding?.updatedAt ? (
-                          <span>绑定上次更新:{new Date(currentBinding.updatedAt).toLocaleString()}</span>
-                        ) : null}
-                        {currentTransform?.updatedAt ? (
-                          <span className={'text-emerald-600'}>
-                            DSL 已就绪 · {new Date(currentTransform.updatedAt).toLocaleString()}
-                          </span>
-                        ) : (
-                          <span className="text-amber-600">DSL 尚未就绪 — 请用右侧 Agent 生成</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 高级:Transform DSL(默认折叠) | @keyword-en transform dsl collapsed advanced */}
-                    <details className="bg-white border border-slate-200 rounded-xl">
-                      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900 select-none">
-                        高级:Transform DSL(可让 Agent 生成,通常无需手编)
-                      </summary>
-                      <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
-                        <textarea
-                          className="w-full border border-slate-300 rounded p-2 text-xs font-mono"
-                          rows={14}
-                          value={bindingForm.dslText}
-                          onChange={(e) => updateForm('financeBinding', 'dslText', e.target.value)}
-                          placeholder={'// 让 Agent 在右侧自动生成,或手填后点保存'}
-                        />
-                        <label className="block text-xs text-slate-600 space-y-1">
-                          <div>解读说明</div>
-                          <textarea
-                            className="w-full border border-slate-300 rounded p-2 text-xs"
-                            rows={2}
-                            value={bindingForm.explanation}
-                            onChange={(e) =>
-                              updateForm('financeBinding', 'explanation', e.target.value)
-                            }
-                          />
-                        </label>
-                        <button
-                          onClick={() =>
-                            onSubmitFinanceTransform().catch((err) => setError(err.message))
-                          }
-                          className="px-4 py-1.5 bg-slate-900 text-white text-xs rounded"
-                        >
-                          保存 DSL
-                        </button>
-                      </div>
-                    </details>
-                  </div>
-
-                  {/* 右栏:Agent 对话 | @keyword-en finance agent chat right column */}
-                  <div className="space-y-4">
-                    <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col h-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-3">
-                        <div className="min-w-0">
-                          <h2 className="font-semibold text-slate-900">{currentKind.label} - Agent</h2>
-                          <p className="text-xs text-slate-500 mt-1">
-                            让 AI 读飞书字段、自动生成 DSL。说"读字段"/"按下面方案存"等即可。
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => onClearFinanceChat(currentKind.id)}
-                          className="text-xs text-slate-500 hover:text-slate-800 whitespace-nowrap shrink-0"
-                        >
-                          清空
-                        </button>
-                      </div>
-                      <div className="flex-1 min-h-[20rem] border border-slate-200 rounded p-3 overflow-y-auto space-y-3 bg-slate-50">
-                        {chatState.messages.length === 0 ? (
-                          <div className="text-xs text-slate-400 text-center py-6">
-                            发起对话:"读一下当前绑定源的字段,给我一个 DSL 方案"
-                          </div>
-                        ) : (
-                          chatState.messages.map((m, i) => (
-                            <div key={i} className="text-sm">
-                              <div
-                                className={
-                                  'text-xs font-semibold mb-1 ' +
-                                  (m.role === 'user' ? 'text-slate-700' : 'text-blue-700')
-                                }
-                              >
-                                {m.role === 'user' ? '你' : 'Finance Agent'}
-                              </div>
-                              <div
-                                className="bg-white rounded p-2 border border-slate-200 overflow-hidden break-words finance-chat-bubble"
-                                data-color-mode="light"
-                              >
-                                <MDEditor.Markdown
-                                  source={toText(m.content)}
-                                  style={{ background: 'transparent', fontSize: 13 }}
-                                />
-                                {Array.isArray(m.tools) && m.tools.length > 0 ? (
-                                  <div className="mt-2 space-y-2">
-                                    {m.tools.map((tool, toolIndex) => {
-                                      const argsText = formatFinanceToolValue(
-                                        tool.argsText || tool.input,
-                                      );
-                                      const outputText = formatFinanceToolValue(tool.output);
-                                      const isDone = tool.status === 'completed';
-                                      return (
-                                        <div
-                                          key={tool.id || `${tool.name}-${toolIndex}`}
-                                          className="rounded border border-blue-100 bg-blue-50/70 px-2 py-1.5 text-xs text-slate-700"
-                                        >
-                                          <div className="flex items-center justify-between gap-2">
-                                            <span className="font-semibold text-blue-700">
-                                              Tool: {tool.name || 'tool'}
-                                            </span>
-                                            <span
-                                              className={
-                                                'rounded px-1.5 py-0.5 ' +
-                                                (isDone
-                                                  ? 'bg-emerald-100 text-emerald-700'
-                                                  : 'bg-amber-100 text-amber-700')
-                                              }
-                                            >
-                                              {isDone ? '完成' : '运行中'}
-                                            </span>
-                                          </div>
-                                          {argsText ? (
-                                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-1 font-mono text-[11px] text-slate-600">
-                                              {argsText}
-                                            </pre>
-                                          ) : null}
-                                          {outputText ? (
-                                            <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded bg-white p-1 font-mono text-[11px] text-slate-600">
-                                              {outputText}
-                                            </pre>
-                                          ) : null}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                ) : null}
-                                {m.role !== 'user' && m.status ? (
-                                  <div className="mt-2 text-xs text-slate-500">
-                                    {m.status}
-                                  </div>
-                                ) : null}
-                              </div>
+                            <div className="text-slate-600">
+                              成功 {financePushFeedback.successCount} / 共{' '}
+                              {financePushFeedback.transformedRows} 条; 源拉取{' '}
+                              {financePushFeedback.totalRows}(filter{' '}
+                              {financePushFeedback.filteredRows},transform 错{' '}
+                              {financePushFeedback.transformErrors}
+                              {financePushFeedback.dateFilteredRows > 0
+                                ? `,时间窗滤掉 ${financePushFeedback.dateFilteredRows}`
+                                : ''}
+                              )
                             </div>
-                          ))
-                        )}
-                        {chatState.loading ? (
-                          <div className="text-xs text-slate-500 italic">
-                            Agent 思考中(可能十几秒,期间会读字段 / 试跑 DSL)...
+                            <details open>
+                              <summary className="cursor-pointer text-slate-700 font-semibold">
+                                错误信息(完整)
+                                {financePushFeedback.failedBatch.contentType
+                                  ? ` · ${financePushFeedback.failedBatch.contentType}`
+                                  : ''}
+                              </summary>
+                              <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono text-red-700 whitespace-pre-wrap break-all">
+                                {financePushFeedback.failedBatch.message ||
+                                  '(无 message 字段)'}
+                              </pre>
+                            </details>
+                            {financePushFeedback.failedBatch.rawResponseBody !==
+                              undefined &&
+                            financePushFeedback.failedBatch.rawResponseBody !==
+                              null ? (
+                              <details>
+                                <summary className="cursor-pointer text-slate-500">
+                                  对方原始响应 body(完整)
+                                </summary>
+                                <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono whitespace-pre-wrap break-all">
+                                  {typeof financePushFeedback.failedBatch
+                                    .rawResponseBody === 'string'
+                                    ? financePushFeedback.failedBatch
+                                        .rawResponseBody
+                                    : JSON.stringify(
+                                        financePushFeedback.failedBatch
+                                          .rawResponseBody,
+                                        null,
+                                        2,
+                                      )}
+                                </pre>
+                              </details>
+                            ) : null}
+                            {Array.isArray(
+                              financePushFeedback.failedBatch.payloadAll,
+                            ) &&
+                            financePushFeedback.failedBatch.payloadAll.length >
+                              0 ? (
+                              <details>
+                                <summary className="cursor-pointer text-slate-500">
+                                  该批推送 payload(共{' '}
+                                  {
+                                    financePushFeedback.failedBatch.payloadAll
+                                      .length
+                                  }{' '}
+                                  条;展示首 3 条)
+                                </summary>
+                                <pre className="mt-1 bg-white border border-slate-200 rounded p-2 overflow-auto max-h-72 font-mono">
+                                  {JSON.stringify(
+                                    financePushFeedback.failedBatch.payloadAll.slice(
+                                      0,
+                                      3,
+                                    ),
+                                    null,
+                                    2,
+                                  )}
+                                </pre>
+                              </details>
+                            ) : null}
                           </div>
+                        ) : (
+                          <div className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 rounded p-2">
+                            ✅ 全部成功 · {financePushFeedback.successCount} 条
+                            / {financePushFeedback.batches} 批 (源拉取{' '}
+                            {financePushFeedback.totalRows},filter{' '}
+                            {financePushFeedback.filteredRows},transform 错{' '}
+                            {financePushFeedback.transformErrors}
+                            {financePushFeedback.dateFilteredRows > 0
+                              ? `,时间窗滤掉 ${financePushFeedback.dateFilteredRows}`
+                              : ''}
+                            )
+                          </div>
+                        )}
+                        {/* 执行日志(后端累积的关键步骤) | @keyword-en push run logs */}
+                        {Array.isArray(financePushFeedback.logs) &&
+                        financePushFeedback.logs.length > 0 ? (
+                          <details
+                            className="text-xs bg-slate-50 border border-slate-200 rounded"
+                            open
+                          >
+                            <summary className="cursor-pointer px-3 py-1.5 select-none text-slate-700">
+                              执行日志 · {financePushFeedback.logs.length} 条
+                            </summary>
+                            <div className="px-3 py-2 max-h-64 overflow-y-auto space-y-0.5 font-mono">
+                              {financePushFeedback.logs.map((entry, i) => (
+                                <div
+                                  key={i}
+                                  className={
+                                    entry.level === 'error'
+                                      ? 'text-red-600'
+                                      : entry.level === 'warn'
+                                        ? 'text-amber-600'
+                                        : 'text-slate-600'
+                                  }
+                                >
+                                  <span className="text-slate-400">
+                                    {new Date(entry.at).toLocaleTimeString()}
+                                  </span>{' '}
+                                  <span className="text-slate-400">
+                                    [{entry.level}]
+                                  </span>{' '}
+                                  {entry.msg}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
                         ) : null}
                       </div>
-                      <div className="flex gap-2 mt-3">
-                        <textarea
-                          className="flex-1 border border-slate-300 rounded p-2 text-sm"
-                          rows={2}
-                          placeholder="输入消息,回车发送"
-                          value={chatState.input}
-                          onChange={(e) =>
-                            onUpdateFinanceChatInput(currentKind.id, e.target.value)
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              if (!chatState.loading) {
-                                onSendFinanceChat(currentKind.id).catch((err) =>
-                                  setError(err.message),
-                                );
-                              }
-                            }
-                          }}
-                          disabled={chatState.loading}
-                        />
-                        <button
-                          onClick={() =>
-                            onSendFinanceChat(currentKind.id).catch((err) =>
-                              setError(err.message),
-                            )
-                          }
-                          disabled={chatState.loading || !toText(chatState.input).trim()}
-                          className="px-4 py-2 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300"
-                        >
-                          发送
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+                    ) : null}
 
-              {/* 多维表批量添加弹窗 | @keyword-en bitable batch picker modal */}
-              {bitableModal.open ? (
-                <div
-                  className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4"
-                  onClick={onCloseBitableModal}
-                >
-                  <div
-                    className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
-                      <div>
-                        <div className="font-semibold text-slate-900">
-                          添加飞书多维表 → {currentKind.label}
-                        </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          填入 appToken 加载该多维表下所有数据表,勾选后批量绑定。
-                        </div>
-                      </div>
-                      <button
-                        onClick={onCloseBitableModal}
-                        className="text-slate-400 hover:text-slate-700 text-lg leading-none"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <div className="px-5 py-3 border-b border-slate-200 flex gap-2">
-                      <input
-                        className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
-                        placeholder="appToken(多维表 URL 中的 base/xxxx 部分)"
-                        value={bitableModal.appToken}
-                        onChange={(e) =>
-                          setBitableModal((prev) => ({ ...prev, appToken: e.target.value }))
-                        }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !bitableModal.loading) {
-                            e.preventDefault();
-                            onLoadBitableTables();
+                    {/* 子 Tab(支出 / 应付) | @keyword-en finance sub tab bar */}
+                    <div className="flex gap-2 border-b border-slate-200 pb-2">
+                      {FINANCE_KINDS.map((k) => (
+                        <button
+                          key={k.id}
+                          onClick={() => setFinanceSubTab(k.id)}
+                          className={
+                            'px-4 py-1.5 text-sm rounded ' +
+                            (financeSubTab === k.id
+                              ? 'bg-slate-900 text-white'
+                              : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
                           }
-                        }}
-                      />
-                      <button
-                        onClick={onLoadBitableTables}
-                        disabled={bitableModal.loading}
-                        className="px-4 py-1.5 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300 whitespace-nowrap"
-                      >
-                        {bitableModal.loading ? '加载中…' : '加载数据表'}
-                      </button>
+                        >
+                          {k.label}
+                        </button>
+                      ))}
                     </div>
-                    <div className="flex-1 overflow-y-auto px-5 py-3 min-h-[200px]">
-                      {bitableModal.error ? (
-                        <div className="text-xs text-red-500 mb-2">{bitableModal.error}</div>
-                      ) : null}
-                      {bitableModal.tables.length === 0 ? (
-                        <div className="text-center text-slate-400 text-sm py-8">
-                          {bitableModal.loading ? '加载中…' : '尚未加载,输入 appToken 后点击右上方按钮'}
+
+                    {/* 主体:左 binding 编辑 | 右 Agent | @keyword-en finance editor and agent */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      <div className="lg:col-span-2 space-y-4">
+                        {/* 源绑定 + 备注 + 保存/推送 | @keyword-en source binding card */}
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
+                              <h2 className="font-semibold text-slate-900">
+                                {currentKind.label}
+                              </h2>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {currentKind.hint}。可同时绑定多个多维表 /
+                                审批,自动归类为{' '}
+                                {currentKind.flowDefault === 'out'
+                                  ? '支出'
+                                  : '收入'}
+                                。
+                              </p>
+                            </div>
+                            <div className="flex gap-2 flex-wrap shrink-0">
+                              <button
+                                onClick={onAddBitableSource}
+                                className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs rounded whitespace-nowrap"
+                              >
+                                + 多维表
+                              </button>
+                              <button
+                                onClick={onAddApprovalSource}
+                                className="px-3 py-1.5 bg-slate-100 text-slate-700 text-xs rounded whitespace-nowrap"
+                              >
+                                + 审批
+                              </button>
+                              <button
+                                onClick={() =>
+                                  onSubmitFinanceBinding().catch((err) =>
+                                    setError(err.message),
+                                  )
+                                }
+                                className="px-4 py-1.5 bg-slate-900 text-white text-xs rounded whitespace-nowrap"
+                              >
+                                保存
+                              </button>
+                              <button
+                                onClick={() => onRunFinancePush(currentKind.id)}
+                                disabled={!canRun || isRunning}
+                                title={
+                                  !pushConfig
+                                    ? '先保存推送配置(顶部)'
+                                    : (bindingForm.sources?.length || 0) === 0
+                                      ? '请先绑定数据源'
+                                      : !currentTransform?.dsl
+                                        ? '请先让 Agent 生成 / 手填 Transform DSL'
+                                        : ''
+                                }
+                                className="px-4 py-1.5 bg-emerald-600 text-white text-xs rounded whitespace-nowrap disabled:bg-slate-300"
+                              >
+                                {isRunning ? '推送中…' : '立即推送'}
+                              </button>
+                            </div>
+                          </div>
+                          {/* 推送时间窗(按 occurredAt 过滤;空=全量) | @keyword-en push date window inputs */}
+                          <div className="flex flex-wrap items-end gap-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                            <span className="text-slate-500">
+                              推送时间窗(按 occurredAt 过滤,留空=全量):
+                            </span>
+                            <label className="space-y-0.5">
+                              <div className="text-slate-400">起</div>
+                              <input
+                                type="date"
+                                className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                value={financePushDateWindow.startDate}
+                                onChange={(e) =>
+                                  setFinancePushDateWindow((p) => ({
+                                    ...p,
+                                    startDate: e.target.value,
+                                  }))
+                                }
+                              />
+                            </label>
+                            <label className="space-y-0.5">
+                              <div className="text-slate-400">止</div>
+                              <input
+                                type="date"
+                                className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                value={financePushDateWindow.endDate}
+                                onChange={(e) =>
+                                  setFinancePushDateWindow((p) => ({
+                                    ...p,
+                                    endDate: e.target.value,
+                                  }))
+                                }
+                              />
+                            </label>
+                            {financePushDateWindow.startDate ||
+                            financePushDateWindow.endDate ? (
+                              <button
+                                onClick={() =>
+                                  setFinancePushDateWindow({
+                                    startDate: '',
+                                    endDate: '',
+                                  })
+                                }
+                                className="text-slate-500 underline"
+                              >
+                                清空
+                              </button>
+                            ) : null}
+                          </div>
+
+                          {bindingForm.sources.length === 0 ? (
+                            <div className="text-center text-slate-400 text-sm py-4 border border-dashed border-slate-200 rounded">
+                              未绑定任何源,请用上方"+ 多维表"或"+ 审批"添加
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {bindingForm.sources.map((s, idx) => (
+                                <div
+                                  key={idx}
+                                  className="border border-slate-200 rounded p-2 space-y-2"
+                                >
+                                  <div className="flex items-start gap-2">
+                                    <span className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 mt-1">
+                                      {s.type === 'bitable' ? '多维表' : '审批'}
+                                    </span>
+                                    <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-2">
+                                      {s.type === 'bitable' ? (
+                                        <>
+                                          <input
+                                            className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                            placeholder="appToken"
+                                            value={s.appToken || ''}
+                                            onChange={(e) =>
+                                              onUpdateSourceField(
+                                                idx,
+                                                'appToken',
+                                                e.target.value,
+                                              )
+                                            }
+                                          />
+                                          <input
+                                            className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                            placeholder="tableId"
+                                            value={s.tableId || ''}
+                                            onChange={(e) =>
+                                              onUpdateSourceField(
+                                                idx,
+                                                'tableId',
+                                                e.target.value,
+                                              )
+                                            }
+                                          />
+                                        </>
+                                      ) : (
+                                        <input
+                                          className="md:col-span-2 border border-slate-300 rounded px-2 py-1 text-xs"
+                                          placeholder="approvalCode"
+                                          value={s.approvalCode || ''}
+                                          onChange={(e) =>
+                                            onUpdateSourceField(
+                                              idx,
+                                              'approvalCode',
+                                              e.target.value,
+                                            )
+                                          }
+                                        />
+                                      )}
+                                      <input
+                                        className="border border-slate-300 rounded px-2 py-1 text-xs"
+                                        placeholder="别名(可选)"
+                                        value={s.alias || ''}
+                                        onChange={(e) =>
+                                          onUpdateSourceField(
+                                            idx,
+                                            'alias',
+                                            e.target.value,
+                                          )
+                                        }
+                                      />
+                                    </div>
+                                    <button
+                                      onClick={() => onRemoveSource(idx)}
+                                      className="text-red-500 text-xs px-2 py-1"
+                                    >
+                                      移除
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                            💡 表的语义就是「别名」(如"云境上海银行流水")。Agent
+                            会把别名当作表定义读懂归属/银行/业务,然后用 lookup
+                            等手段产出 storeId / companyId / bankAccount
+                            等字段。
+                          </div>
+                          <label className="block text-xs text-slate-600 space-y-1">
+                            <div>备注</div>
+                            <input
+                              className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                              value={bindingForm.remark}
+                              onChange={(e) =>
+                                updateForm(
+                                  'financeBinding',
+                                  'remark',
+                                  e.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                          <div className="text-xs text-slate-400 flex flex-wrap gap-3">
+                            {currentBinding?.updatedAt ? (
+                              <span>
+                                绑定上次更新:
+                                {new Date(
+                                  currentBinding.updatedAt,
+                                ).toLocaleString()}
+                              </span>
+                            ) : null}
+                            {currentTransform?.updatedAt ? (
+                              <span className={'text-emerald-600'}>
+                                DSL 已就绪 ·{' '}
+                                {new Date(
+                                  currentTransform.updatedAt,
+                                ).toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-amber-600">
+                                DSL 尚未就绪 — 请用右侧 Agent 生成
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      ) : (
-                        (() => {
-                          const existed = new Set(
-                            (forms.financeBinding.sources || [])
-                              .filter((s) => s.type === 'bitable')
-                              .map(
-                                (s) =>
-                                  `${toText(s.appToken).trim()}::${toText(s.tableId).trim()}`,
-                              ),
-                          );
-                          const token = toText(bitableModal.appToken).trim();
-                          return (
-                            <div className="space-y-1">
-                              {bitableModal.tables.map((t) => {
-                                const isExisted = existed.has(`${token}::${t.tableId}`);
-                                const checked = !!bitableModal.selected[t.tableId];
-                                return (
-                                  <label
-                                    key={t.tableId}
+
+                        {/* 高级:Transform DSL(默认折叠) | @keyword-en transform dsl collapsed advanced */}
+                        <details className="bg-white border border-slate-200 rounded-xl">
+                          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-900 select-none">
+                            高级:Transform DSL(可让 Agent 生成,通常无需手编)
+                          </summary>
+                          <div className="px-4 pb-4 space-y-3 border-t border-slate-100 pt-3">
+                            <textarea
+                              className="w-full border border-slate-300 rounded p-2 text-xs font-mono"
+                              rows={14}
+                              value={bindingForm.dslText}
+                              onChange={(e) =>
+                                updateForm(
+                                  'financeBinding',
+                                  'dslText',
+                                  e.target.value,
+                                )
+                              }
+                              placeholder={
+                                '// 让 Agent 在右侧自动生成,或手填后点保存'
+                              }
+                            />
+                            <label className="block text-xs text-slate-600 space-y-1">
+                              <div>解读说明</div>
+                              <textarea
+                                className="w-full border border-slate-300 rounded p-2 text-xs"
+                                rows={2}
+                                value={bindingForm.explanation}
+                                onChange={(e) =>
+                                  updateForm(
+                                    'financeBinding',
+                                    'explanation',
+                                    e.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                            <button
+                              onClick={() =>
+                                onSubmitFinanceTransform().catch((err) =>
+                                  setError(err.message),
+                                )
+                              }
+                              className="px-4 py-1.5 bg-slate-900 text-white text-xs rounded"
+                            >
+                              保存 DSL
+                            </button>
+                          </div>
+                        </details>
+                      </div>
+
+                      {/* 右栏:Agent 对话 | @keyword-en finance agent chat right column */}
+                      <div className="space-y-4">
+                        <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col h-full lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)]">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between mb-3">
+                            <div className="min-w-0">
+                              <h2 className="font-semibold text-slate-900">
+                                {currentKind.label} - Agent
+                              </h2>
+                              <p className="text-xs text-slate-500 mt-1">
+                                让 AI 读飞书字段、自动生成
+                                DSL。说"读字段"/"按下面方案存"等即可。
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => onClearFinanceChat(currentKind.id)}
+                              className="text-xs text-slate-500 hover:text-slate-800 whitespace-nowrap shrink-0"
+                            >
+                              清空
+                            </button>
+                          </div>
+                          <div className="flex-1 min-h-[20rem] border border-slate-200 rounded p-3 overflow-y-auto space-y-3 bg-slate-50">
+                            {chatState.messages.length === 0 ? (
+                              <div className="text-xs text-slate-400 text-center py-6">
+                                发起对话:"读一下当前绑定源的字段,给我一个 DSL
+                                方案"
+                              </div>
+                            ) : (
+                              chatState.messages.map((m, i) => (
+                                <div key={i} className="text-sm">
+                                  <div
                                     className={
-                                      'flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer ' +
-                                      (isExisted
-                                        ? 'bg-slate-50 text-slate-400'
-                                        : 'hover:bg-slate-50')
+                                      'text-xs font-semibold mb-1 ' +
+                                      (m.role === 'user'
+                                        ? 'text-slate-700'
+                                        : 'text-blue-700')
                                     }
                                   >
-                                    <input
-                                      type="checkbox"
-                                      checked={isExisted || checked}
-                                      disabled={isExisted}
-                                      onChange={() => onToggleBitableTable(t.tableId)}
+                                    {m.role === 'user' ? '你' : 'Finance Agent'}
+                                  </div>
+                                  <div
+                                    className="bg-white rounded p-2 border border-slate-200 overflow-hidden break-words finance-chat-bubble"
+                                    data-color-mode="light"
+                                  >
+                                    <MDEditor.Markdown
+                                      source={toText(m.content)}
+                                      style={{
+                                        background: 'transparent',
+                                        fontSize: 13,
+                                      }}
                                     />
-                                    <span className="flex-1 truncate">{t.name}</span>
-                                    <span className="text-xs font-mono text-slate-400">
-                                      {t.tableId}
-                                    </span>
-                                    {isExisted ? (
-                                      <span className="text-xs text-slate-400">已绑定</span>
+                                    {Array.isArray(m.tools) &&
+                                    m.tools.length > 0 ? (
+                                      <div className="mt-2 space-y-2">
+                                        {m.tools.map((tool, toolIndex) => {
+                                          const argsText =
+                                            formatFinanceToolValue(
+                                              tool.argsText || tool.input,
+                                            );
+                                          const outputText =
+                                            formatFinanceToolValue(tool.output);
+                                          const isDone =
+                                            tool.status === 'completed';
+                                          return (
+                                            <div
+                                              key={
+                                                tool.id ||
+                                                `${tool.name}-${toolIndex}`
+                                              }
+                                              className="rounded border border-blue-100 bg-blue-50/70 px-2 py-1.5 text-xs text-slate-700"
+                                            >
+                                              <div className="flex items-center justify-between gap-2">
+                                                <span className="font-semibold text-blue-700">
+                                                  Tool: {tool.name || 'tool'}
+                                                </span>
+                                                <span
+                                                  className={
+                                                    'rounded px-1.5 py-0.5 ' +
+                                                    (isDone
+                                                      ? 'bg-emerald-100 text-emerald-700'
+                                                      : 'bg-amber-100 text-amber-700')
+                                                  }
+                                                >
+                                                  {isDone ? '完成' : '运行中'}
+                                                </span>
+                                              </div>
+                                              {argsText ? (
+                                                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded bg-white/70 p-1 font-mono text-[11px] text-slate-600">
+                                                  {argsText}
+                                                </pre>
+                                              ) : null}
+                                              {outputText ? (
+                                                <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded bg-white p-1 font-mono text-[11px] text-slate-600">
+                                                  {outputText}
+                                                </pre>
+                                              ) : null}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
                                     ) : null}
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          );
-                        })()
-                      )}
-                    </div>
-                    <div className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
-                      <button
-                        onClick={onCloseBitableModal}
-                        className="px-4 py-1.5 border border-slate-300 text-slate-700 text-sm rounded"
-                      >
-                        取消
-                      </button>
-                      <button
-                        onClick={onConfirmBitableModal}
-                        disabled={Object.values(bitableModal.selected).every((v) => !v)}
-                        className="px-4 py-1.5 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300"
-                      >
-                        添加 {Object.values(bitableModal.selected).filter(Boolean).length} 张表
-                      </button>
+                                    {m.role !== 'user' && m.status ? (
+                                      <div className="mt-2 text-xs text-slate-500">
+                                        {m.status}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                            {chatState.loading ? (
+                              <div className="text-xs text-slate-500 italic">
+                                Agent 思考中(可能十几秒,期间会读字段 / 试跑
+                                DSL)...
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="flex gap-2 mt-3">
+                            <textarea
+                              className="flex-1 border border-slate-300 rounded p-2 text-sm"
+                              rows={2}
+                              placeholder="输入消息,回车发送"
+                              value={chatState.input}
+                              onChange={(e) =>
+                                onUpdateFinanceChatInput(
+                                  currentKind.id,
+                                  e.target.value,
+                                )
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                  e.preventDefault();
+                                  if (!chatState.loading) {
+                                    onSendFinanceChat(currentKind.id).catch(
+                                      (err) => setError(err.message),
+                                    );
+                                  }
+                                }
+                              }}
+                              disabled={chatState.loading}
+                            />
+                            <button
+                              onClick={() =>
+                                onSendFinanceChat(currentKind.id).catch((err) =>
+                                  setError(err.message),
+                                )
+                              }
+                              disabled={
+                                chatState.loading ||
+                                !toText(chatState.input).trim()
+                              }
+                              className="px-4 py-2 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300"
+                            >
+                              发送
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ) : null}
-              </>
-            );
-          })()
-        ) : null}
+
+                  {/* 多维表批量添加弹窗 | @keyword-en bitable batch picker modal */}
+                  {bitableModal.open ? (
+                    <div
+                      className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4"
+                      onClick={onCloseBitableModal}
+                    >
+                      <div
+                        className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                          <div>
+                            <div className="font-semibold text-slate-900">
+                              添加飞书多维表 → {currentKind.label}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-0.5">
+                              填入 appToken
+                              加载该多维表下所有数据表,勾选后批量绑定。
+                            </div>
+                          </div>
+                          <button
+                            onClick={onCloseBitableModal}
+                            className="text-slate-400 hover:text-slate-700 text-lg leading-none"
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="px-5 py-3 border-b border-slate-200 flex gap-2">
+                          <input
+                            className="flex-1 border border-slate-300 rounded px-2 py-1.5 text-sm font-mono"
+                            placeholder="appToken(多维表 URL 中的 base/xxxx 部分)"
+                            value={bitableModal.appToken}
+                            onChange={(e) =>
+                              setBitableModal((prev) => ({
+                                ...prev,
+                                appToken: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !bitableModal.loading) {
+                                e.preventDefault();
+                                onLoadBitableTables();
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={onLoadBitableTables}
+                            disabled={bitableModal.loading}
+                            className="px-4 py-1.5 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300 whitespace-nowrap"
+                          >
+                            {bitableModal.loading ? '加载中…' : '加载数据表'}
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-5 py-3 min-h-[200px]">
+                          {bitableModal.error ? (
+                            <div className="text-xs text-red-500 mb-2">
+                              {bitableModal.error}
+                            </div>
+                          ) : null}
+                          {bitableModal.tables.length === 0 ? (
+                            <div className="text-center text-slate-400 text-sm py-8">
+                              {bitableModal.loading
+                                ? '加载中…'
+                                : '尚未加载,输入 appToken 后点击右上方按钮'}
+                            </div>
+                          ) : (
+                            (() => {
+                              const existed = new Set(
+                                (forms.financeBinding.sources || [])
+                                  .filter((s) => s.type === 'bitable')
+                                  .map(
+                                    (s) =>
+                                      `${toText(s.appToken).trim()}::${toText(s.tableId).trim()}`,
+                                  ),
+                              );
+                              const token = toText(
+                                bitableModal.appToken,
+                              ).trim();
+                              return (
+                                <div className="space-y-1">
+                                  {bitableModal.tables.map((t) => {
+                                    const isExisted = existed.has(
+                                      `${token}::${t.tableId}`,
+                                    );
+                                    const checked =
+                                      !!bitableModal.selected[t.tableId];
+                                    return (
+                                      <label
+                                        key={t.tableId}
+                                        className={
+                                          'flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer ' +
+                                          (isExisted
+                                            ? 'bg-slate-50 text-slate-400'
+                                            : 'hover:bg-slate-50')
+                                        }
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={isExisted || checked}
+                                          disabled={isExisted}
+                                          onChange={() =>
+                                            onToggleBitableTable(t.tableId)
+                                          }
+                                        />
+                                        <span className="flex-1 truncate">
+                                          {t.name}
+                                        </span>
+                                        <span className="text-xs font-mono text-slate-400">
+                                          {t.tableId}
+                                        </span>
+                                        {isExisted ? (
+                                          <span className="text-xs text-slate-400">
+                                            已绑定
+                                          </span>
+                                        ) : null}
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()
+                          )}
+                        </div>
+                        <div className="px-5 py-3 border-t border-slate-200 flex justify-end gap-2">
+                          <button
+                            onClick={onCloseBitableModal}
+                            className="px-4 py-1.5 border border-slate-300 text-slate-700 text-sm rounded"
+                          >
+                            取消
+                          </button>
+                          <button
+                            onClick={onConfirmBitableModal}
+                            disabled={Object.values(
+                              bitableModal.selected,
+                            ).every((v) => !v)}
+                            className="px-4 py-1.5 bg-slate-900 text-white text-sm rounded disabled:bg-slate-300"
+                          >
+                            添加{' '}
+                            {
+                              Object.values(bitableModal.selected).filter(
+                                Boolean,
+                              ).length
+                            }{' '}
+                            张表
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()
+          : null}
 
         {/* 平台AI配置 | @keyword-en platform info management */}
         {activeTab === 'platform_info' ? (
@@ -4018,14 +5267,20 @@ const AdminApp = () => {
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="font-semibold text-slate-900">平台AI补充说明</h2>
+                  <h2 className="font-semibold text-slate-900">
+                    平台AI补充说明
+                  </h2>
                   <p className="text-xs text-slate-500 mt-1">
                     此处的配置将作为AI补充提示，在所有LLM调用时自动注入，让AI更好地适应本平台的使用习惯。
                   </p>
                 </div>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => onSubmitPlatformInfo().catch((err) => setError(err.message))}
+                    onClick={() =>
+                      onSubmitPlatformInfo().catch((err) =>
+                        setError(err.message),
+                      )
+                    }
                     className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
                   >
                     保存配置
@@ -4037,8 +5292,12 @@ const AdminApp = () => {
                 {/* AI封面开关区域 | @keyword-en ai cover toggle area */}
                 <div className="mb-3 rounded-lg border border-slate-200 p-3 flex items-center justify-between">
                   <div>
-                    <div className="text-sm font-medium text-slate-800">是否开启AI封面</div>
-                    <div className="text-xs text-slate-500 mt-1">开启后，生成图文/图组时会优先走生图模型生成封面并入图库。</div>
+                    <div className="text-sm font-medium text-slate-800">
+                      是否开启AI封面
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      开启后，生成图文/图组时会优先走生图模型生成封面并入图库。
+                    </div>
                   </div>
                   <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                     <input
@@ -4054,7 +5313,9 @@ const AdminApp = () => {
                         }))
                       }
                     />
-                    <span>{forms.platformInfo.enableAiCover ? '已开启' : '已关闭'}</span>
+                    <span>
+                      {forms.platformInfo.enableAiCover ? '已开启' : '已关闭'}
+                    </span>
                   </label>
                 </div>
                 <MDEditor
@@ -4071,7 +5332,8 @@ const AdminApp = () => {
                   }
                   preview="edit"
                   textareaProps={{
-                    placeholder: '# 平台AI补充说明\n\n在这里填写适合本平台的AI使用习惯和补充提示，支持Markdown格式：\n\n- 使用简洁的中文回复\n- 适当使用Emoji增加可读性\n- ...',
+                    placeholder:
+                      '# 平台AI补充说明\n\n在这里填写适合本平台的AI使用习惯和补充提示，支持Markdown格式：\n\n- 使用简洁的中文回复\n- 适当使用Emoji增加可读性\n- ...',
                   }}
                 />
               </div>
