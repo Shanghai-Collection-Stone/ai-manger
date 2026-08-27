@@ -2,6 +2,9 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
+import { ModuleRef } from '@nestjs/core';
+import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
+import type { WorkspaceEntity } from '../../workspace/entities/workspace.entity.js';
 import type {
   ArticleLibraryCreateInput,
   ArticleLibraryEntity,
@@ -24,15 +27,18 @@ export class ArticleLibraryService {
   private readonly libraries: Collection<ArticleLibraryEntity>;
   private readonly articles: Collection<ArticleEntity>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
+  private readonly adminUsers: Collection<AdminUserEntity>;
   private readonly COUNTER_KEY = 'article_libraries';
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly config: ConfigService,
+    private readonly moduleRef: ModuleRef,
   ) {
     this.libraries = db.collection<ArticleLibraryEntity>('article_libraries');
     this.articles = db.collection<ArticleEntity>('articles');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
+    this.adminUsers = db.collection<AdminUserEntity>('admin_users');
     void this.ensureIndexes();
   }
 
@@ -47,6 +53,10 @@ export class ArticleLibraryService {
     await this.libraries.createIndex({ scope: 1, tenantId: 1, type: 1 });
     await this.ensureQrTokenIndex();
     await this.libraries.createIndex({ createdAt: -1 });
+    await this.libraries.createIndex(
+      { workspaceId: 1 },
+      { unique: true, sparse: true },
+    );
     await this.ensureCounterAtLeast(await this.getMaxArticleLibraryId());
   }
 
@@ -171,6 +181,7 @@ export class ArticleLibraryService {
       userId: input.userId,
       scope,
       tenantId: scope === 'tenant' ? input.tenantId : undefined,
+      workspaceId: input.workspaceId,
       name: input.name.trim(),
       type: String(input.type ?? '').trim(),
       pushConfig: this.normalizePushConfig(input.pushConfig),
@@ -179,6 +190,112 @@ export class ArticleLibraryService {
     };
     await this.libraries.insertOne(doc);
     return doc;
+  }
+
+  /**
+   * @description 先建立文章库专属工作区再创建记录；租户库使用绑定节点，平台库选择在线有余量节点。
+   * @keyword-cn 创建文章库工作区, 选择执行节点
+   * @keyword-en create-library-workspace, select-execution-node
+   */
+  async createWithWorkspace(
+    currentUser: AdminUserEntity,
+    input: Omit<ArticleLibraryCreateInput, 'userId' | 'workspaceId'> & {
+      workspaceCapacityBytes?: number;
+    },
+  ): Promise<ArticleLibraryEntity> {
+    const workspaceService = this.getWorkspaceService();
+    const { workspaceCapacityBytes, ...libraryInput } = input;
+    const workspace = await workspaceService.create(currentUser, {
+      tenantId: input.tenantId,
+      name: `文章库 · ${input.name.trim()}`,
+      description: `文章库「${input.name.trim()}」的专属任务工作区`,
+      capacityBytes: workspaceCapacityBytes,
+    });
+    try {
+      return await this.create({
+        ...libraryInput,
+        scope: libraryInput.scope ?? (input.tenantId ? 'tenant' : 'platform'),
+        userId: currentUser.username,
+        workspaceId: String(workspace._id),
+      });
+    } catch (error) {
+      await workspaceService
+        .remove(currentUser, String(workspace._id))
+        .catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /**
+   * @description 为历史文章库懒创建缺失的专属工作区，并以原子更新保证一库只绑定一个工作区。
+   * @keyword-cn 补建文章库工作区, 历史数据迁移
+   * @keyword-en ensure-library-workspace, legacy-workspace-backfill
+   */
+  async ensureWorkspace(id: number, tenantId?: string): Promise<string> {
+    const library = await this.get(id, tenantId);
+    if (!library) throw new Error('ARTICLE_LIBRARY_NOT_FOUND');
+    if (library.workspaceId) return library.workspaceId;
+    const scopedTenantId = library.tenantId?.trim() || undefined;
+    const owner = await this.adminUsers.findOne({
+      username: library.userId,
+      enabled: true,
+      ...(scopedTenantId
+        ? {
+            $or: [
+              { tenantId: scopedTenantId },
+              { tenantId: { $exists: false } },
+            ],
+          }
+        : { tenantId: { $exists: false } }),
+    });
+    if (!owner) throw new Error('ARTICLE_LIBRARY_OWNER_NOT_FOUND');
+    const workspaceService = this.getWorkspaceService();
+    const workspace = await workspaceService.create(owner, {
+      tenantId: scopedTenantId,
+      name: `文章库 · ${library.name}`,
+      description: `文章库「${library.name}」的专属任务工作区`,
+      capacityBytes: 0,
+    });
+    const updated = await this.libraries.findOneAndUpdate(
+      {
+        _id: library._id,
+        $or: [{ workspaceId: { $exists: false } }, { workspaceId: '' }],
+      },
+      {
+        $set: {
+          workspaceId: String(workspace._id),
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: 'after' },
+    );
+    if (updated?.workspaceId) return updated.workspaceId;
+    await workspaceService
+      .remove(owner, String(workspace._id))
+      .catch(() => undefined);
+    const current = await this.libraries.findOne({ _id: library._id });
+    if (!current?.workspaceId) throw new Error('WORKSPACE_BINDING_FAILED');
+    return current.workspaceId;
+  }
+
+  /**
+   * @description 从全局模块图取得工作区服务，避免文章工具链与对话模块形成静态循环依赖。
+   * @keyword-cn 获取工作区服务, 避免模块循环
+   * @keyword-en resolve-workspace-service, avoid-module-cycle
+   */
+  private getWorkspaceService(): {
+    create: (
+      user: AdminUserEntity,
+      input: {
+        tenantId?: string;
+        name: string;
+        description?: string;
+        capacityBytes?: number;
+      },
+    ) => Promise<WorkspaceEntity>;
+    remove: (user: AdminUserEntity, id: string) => Promise<boolean>;
+  } {
+    return this.moduleRef.get('WorkspaceService', { strict: false });
   }
 
   /**

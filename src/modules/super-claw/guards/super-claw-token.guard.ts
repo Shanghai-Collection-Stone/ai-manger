@@ -1,5 +1,9 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
-import { status, type ServerUnaryCall } from '@grpc/grpc-js';
+import {
+  status,
+  type ServerDuplexStream,
+  type ServerUnaryCall,
+} from '@grpc/grpc-js';
 import { RpcException } from '@nestjs/microservices';
 import { SuperClawService } from '../services/super-claw.service.js';
 
@@ -8,9 +12,9 @@ import { SuperClawService } from '../services/super-claw.service.js';
  * @keyword-cn 认证调用上下文, 节点标识
  * @keyword-en authenticated-call-context, node-id
  */
-export type AuthenticatedSuperClawCall = ServerUnaryCall<unknown, unknown> & {
-  superClawId?: string;
-};
+export type AuthenticatedSuperClawCall = (
+  ServerUnaryCall<unknown, unknown> | ServerDuplexStream<unknown, unknown>
+) & { superClawId?: string };
 
 /**
  * @description 校验 gRPC metadata 中的平台 SuperClaw Token
@@ -27,7 +31,15 @@ export class SuperClawTokenGuard implements CanActivate {
    * @keyword-en authorize-call, inject-identity
    */
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const call = context.getArgByIndex<AuthenticatedSuperClawCall>(2);
+    const unaryCall = context.getArgByIndex<AuthenticatedSuperClawCall>(2);
+    const streamCall = context.getArgByIndex<AuthenticatedSuperClawCall>(0);
+    const call = unaryCall?.metadata ? unaryCall : streamCall;
+    if (!call?.metadata) {
+      throw new RpcException({
+        code: status.UNAUTHENTICATED,
+        message: 'INVALID_SUPER_CLAW_TOKEN',
+      });
+    }
     const authorization = String(call.metadata.get('authorization')[0] ?? '');
     const dedicated = String(call.metadata.get('x-super-claw-token')[0] ?? '');
     const token = authorization.toLowerCase().startsWith('bearer ')

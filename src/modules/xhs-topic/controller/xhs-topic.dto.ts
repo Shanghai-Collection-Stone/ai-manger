@@ -71,9 +71,9 @@ export class RecommendXhsTopicPromptDto {
 }
 
 /**
- * @description 用户确认入库的单条选题标题和题目类型。
- * @keyword-cn 保存选题候选, 题目类型
- * @keyword-en persist-topic-candidate, topic-type
+ * @description 用户确认入库的单条选题标题、题目类型及母题可选的固定配图标签。
+ * @keyword-cn 保存选题候选, 题目类型, 母题配图标签
+ * @keyword-en persist-topic-candidate, topic-type, mother-image-tags
  */
 export class PersistXhsTopicCandidateDto {
   @IsString()
@@ -83,6 +83,13 @@ export class PersistXhsTopicCandidateDto {
   @IsString()
   @MaxLength(30)
   topicType!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  @MaxLength(50, { each: true })
+  imageTags?: string[];
 }
 
 /**
@@ -130,9 +137,9 @@ export class DeleteXhsTopicsDto {
 }
 
 /**
- * @description 修改真实选题标题、题目类型或业务状态的请求参数。
- * @keyword-cn 更新真实选题, 选题状态
- * @keyword-en update-persisted-topic, topic-status
+ * @description 修改真实选题标题、题目类型、业务状态或母题固定配图标签的请求参数。
+ * @keyword-cn 更新真实选题, 选题状态, 母题配图标签
+ * @keyword-en update-persisted-topic, topic-status, mother-image-tags
  */
 export class UpdateXhsTopicDto {
   @IsOptional()
@@ -144,6 +151,13 @@ export class UpdateXhsTopicDto {
   @IsString()
   @MaxLength(30)
   topicType?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  @MaxLength(50, { each: true })
+  imageTags?: string[];
 
   @IsOptional()
   @IsIn(['pending', 'draft', 'generated', 'published'])

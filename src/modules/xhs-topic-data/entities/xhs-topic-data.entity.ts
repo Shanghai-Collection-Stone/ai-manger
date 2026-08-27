@@ -17,6 +17,45 @@ export type XhsCrawlTaskStatus =
 export type XhsCrawlTaskTrigger = 'schedule' | 'manual';
 
 /**
+ * @description 专用抓取调度表的线性状态：等待、执行中、已取消或区间已完成。
+ * @keyword-cn 采集调度状态, 线性工作流
+ * @keyword-en crawl-schedule-status, linear-workflow
+ */
+export type XhsCrawlScheduleStatus =
+  'waiting' | 'running' | 'cancelled' | 'completed';
+
+/**
+ * @description 已发布文章对应的专用抓取调度记录，调度器仅按 nextRunAt 索引领取到期行。
+ * @keyword-cn 采集调度记录, 到期任务表
+ * @keyword-en crawl-schedule-entity, due-task-table
+ */
+export interface XhsCrawlScheduleEntity {
+  _id: ObjectId;
+  /** 一个子选题只维护一条周期调度记录。 */
+  topicId: number;
+  articleId: number;
+  libraryId: number;
+  tenantId?: string | null;
+  userId: string;
+  status: XhsCrawlScheduleStatus;
+  /** 本轮周期采集允许开始的时间。 */
+  startAt: Date;
+  /** 本轮周期采集硬截止时间，到期后不再创建任务。 */
+  endAt: Date;
+  /** waiting 时为下次抓取时间，running 时为下次运行态检查时间。 */
+  nextRunAt: Date;
+  currentTodoId?: number;
+  lastDispatchedAt?: Date;
+  lastFinishedAt?: Date;
+  lastError?: string;
+  /** 多实例原子领取的短租约。 */
+  lockToken?: string;
+  lockUntil?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
  * @description 子选题与抓取 Todo 的绑定记录，既是抓取任务明细的数据源，也是帖子数据回填 topicId 的依据。
  * @keyword-cn 抓取任务记录, 选题任务绑定
  * @keyword-en crawl-task-entity, topic-todo-binding
@@ -28,9 +67,9 @@ export interface XhsCrawlTaskEntity {
   userId: string;
   /** 归属子选题 ID */
   topicId: number;
-  /** 承载抓取执行的 Todo ID。长时采集任务会多次回写，因此同一个 todoId 可以有多行运行记录 */
+  /** 承载本次抓取执行的 Todo ID；每个周期 Todo 只对应这一条运行记录。 */
   todoId: number;
-  /** 同一个 Todo 下的第几次抓取，从 1 开始 */
+  /** 兼容字段；单次 Todo 工作流中恒为 1。 */
   runIndex: number;
   trigger: XhsCrawlTaskTrigger;
   status: XhsCrawlTaskStatus;
@@ -55,7 +94,7 @@ export interface XhsCrawlTaskView {
   id: number;
   topicId: number;
   todoId: number;
-  /** 同一个 Todo 下的第几次抓取 */
+  /** 兼容字段；单次 Todo 工作流中恒为 1。 */
   runIndex: number;
   trigger: XhsCrawlTaskTrigger;
   status: XhsCrawlTaskStatus;

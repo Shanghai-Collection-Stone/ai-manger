@@ -47,6 +47,8 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
   - `TagSelectCard`: tag 选择卡片(琥珀色徽章),展示标题/提示/推荐 chips 预览,内置**去重开关**(默认去重=每张图只用一次;关=不去重允许重复取图),点击触发 `TagSelectModal` 弹窗;确认后显示已选 chips + 去重模式状态,回写消息附带"（去重/不去重…）"供 AI 解析为 dedup 参数 | keywords: dedup, tag-select
   - `TagSelectModal`: 顶部搜索框 + 已选 chips + 内容区(无输入显示推荐计数 chips,有输入显示联想下拉),底部确认按钮校验 minTags/maxTags;`chatService.listGalleryTags` 拉全量 tags 用于联想
   - `HandoffCard`: 🆕 意图识别 → expert 路由胶囊。展示`→ 已切换至 {专家名} + reason 副标题`,6 个专家映射颜色(image/violet, article/sky, data/emerald, frontend/indigo, publisher/amber, task/rose)+ 图标；若后端 handoff-it 传入 `expertLabel/icon`,优先使用自定义展示名与图标（用于小红书专属专家）。后端意图识别路由到业务专家时通过 earlyEmit 推送 `\`\`\`handoff-it\`\`\`` fence 到主 SSE,前端即时渲染让用户感知到路由切换
+  - `TaskItCard({ todoId,initialPayload,onOpenTodo })` — 轮询任务状态并打开执行节点详情 | keywords: 任务状态卡片, 执行节点, task-status-card, execution-node
+  - `openTaskConversation(event)` — 接收任务详情页事件并切换到任务绑定会话 | keywords: 打开任务对话, 会话切换, open-task-conversation, session-switch
   - `AIMessage`: 多卡片渲染,strip 四种 fence 后走 markdown;新增 `onSubmitQuickMessage(text)` prop 用于卡片向 AI 回写用户消息
   - `handleSend(overrideText?)`: 支持 override 参数,无 override 时取 inputValue;TagSelectCard 通过该回调把所选 tags 拼成自然语言消息发回 AI
 
@@ -182,7 +184,13 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 通用任务详情页面。
 
-- **关键词**: task, detail, page, timeline, info
+- **关键词**: task, detail, page, timeline, info, human-intervention, qr-login
+- **函数**:
+  - `TaskTimelineTab({ task,onReload })` — 执行节点时间轴，在 waiting_user 时追加二维码或简短回复介入节点 | keywords: 执行介入节点, 等待介入中, execution-intervention-node, waiting-intervention
+  - `loadInteraction()` — 读取 Todo 当前人工介入请求 | keywords: 加载介入节点, 二维码登录, load-intervention-node, qr-login
+  - `handleInteractionDone()` — 点击已处理后恢复 Todo 并返回任务绑定对话 | keywords: 确认人工处理, 返回任务对话, confirm-human-intervention, return-task-conversation
+  - `web.AiCommander.task.openSession({ sessionId })` — 已处理后通知聊天视图切回任务绑定会话 | keywords: 打开任务对话, 会话切换, open-task-conversation, session-switch
+  - `TaskDetailPage({ task,onBack,onReload,assigneeTargets })` — 展示详情、执行节点和成果；等待介入任务默认打开执行节点 Tab | keywords: 任务详情页, 介入入口, task-detail-page, intervention-entry
 
 ### ToolsView.jsx
 

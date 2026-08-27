@@ -9,7 +9,7 @@
 
 ### tools.service.ts
 
-工具聚合服务。聚合所有子模块工具（含 dashboard、todo、analysis、article-library 等），统一向对话层暴露。
+工具聚合服务。聚合所有子模块工具（含 dashboard、todo、analysis、article-library 等），统一向对话层暴露；`FunctionCallScope` 可携带 `workspaceId`，供工作区任务对话向下传递执行范围。
 
 - **关键词**: tools, function-call, aggregation, thought-route, tool-whitelist, langchain, agent, service, dashboard, article-library
 - **函数**:

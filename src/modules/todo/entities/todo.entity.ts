@@ -20,7 +20,7 @@ export interface TodoAssociatedResource {
  */
 export interface TodoCallback {
   /** 回调事件类型 */
-  event: 'update_process_task' | string;
+  event: string;
   /** 事件参数 */
   params?: {
     /** 目标任务 ID（update_process_task 必填） */
@@ -60,15 +60,37 @@ export interface TodoEntity {
   aiPlan: string;
   /** 关联会话上下文键（用于 Claw 等需要持久化会话的场景） */
   sessionKey?: string;
+  /** 任务执行必须使用的平台工作区 ID。 */
+  workspaceId?: string;
   /** 任务专属token，用于skill回调接口鉴权 */
   taskToken?: string;
   /** 任务成果，由claw api最终返回的markdown内容 */
   taskResult?: string;
-  /** 长时任务截止时间（long_task 类型专用，非必填） */
+  /** 可选任务硬截止时间；单次任务也可用它限制最晚执行时间。 */
   deadline?: Date;
+  /** 平台主动推送的投递标识，由服务端租约管理。 */
+  taskDeliveryId?: string;
+  /** 当前持有任务租约的 SuperClaw 节点。 */
+  taskDeliverySuperClawId?: string;
+  /** 等待节点 ACK 的截止时间。 */
+  taskDeliveryAckDeadline?: Date;
+  /** 已 ACK 执行租约的到期时间。 */
+  taskDeliveryLeaseExpiresAt?: Date;
+  /** 当前投递是否已经由节点确认接收。 */
+  taskDeliveryAcknowledgedAt?: Date;
+  /** 历史主动投递尝试次数。 */
+  taskDispatchAttempts?: number;
+  /** 节点真正 ACK 并开始执行的次数；用于封顶反复领取导致的重复启动。 */
+  taskExecutionAttempts?: number;
   /** 任务完成后触发的回调事件列表 */
   callbacks?: TodoCallback[];
-  status: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
+  status:
+    | 'pending'
+    | 'in_progress'
+    | 'waiting_user'
+    | 'done'
+    | 'failed'
+    | 'cancelled';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -92,7 +114,11 @@ export interface TodoCreateInput {
   aiConsideration: string;
   decisionReason: string;
   aiPlan: string;
-  /** 长时任务截止时间（long_task 类型专用） */
+  /** 任务执行必须使用的平台工作区 ID。 */
+  workspaceId?: string;
+  /** 任务对应的平台会话 ID。 */
+  sessionKey?: string;
+  /** 可选任务硬截止时间。 */
   deadline?: Date;
   /** 任务完成后触发的回调事件列表 */
   callbacks?: TodoCallback[];
@@ -120,11 +146,20 @@ export interface TodoUpdateInput {
   decisionReason?: string;
   aiPlan?: string;
   sessionKey?: string;
+  workspaceId?: string;
   taskToken?: string;
+  /** 内部乐观鉴权条件：仅当数据库 Token 仍匹配时更新，不会写入实体。 */
+  expectedTaskToken?: string;
   taskResult?: string;
-  /** 长时任务截止时间（long_task 类型专用） */
+  /** 可选任务硬截止时间。 */
   deadline?: Date;
-  status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
+  status?:
+    | 'pending'
+    | 'in_progress'
+    | 'waiting_user'
+    | 'done'
+    | 'failed'
+    | 'cancelled';
   /** 任务完成后触发的回调事件列表 */
   callbacks?: TodoCallback[];
 }

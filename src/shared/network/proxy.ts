@@ -8,7 +8,8 @@ import type { Dispatcher } from 'undici';
  *   - PROXY_ENABLED=false 时返回 null(显式关闭)
  *   供 enableProxyFromEnv(全局 dispatcher) 与生图专用 dispatcher 复用同一份配置,
  *   避免各处各自读环境变量导致不一致。
- * @keyword-en resolve proxy uri from env unified config
+ * @keyword-cn 代理地址, 地址规范化, 统一代理配置
+ * @keyword-en resolve-proxy-uri, proxy-uri-normalization, unified-proxy-config
  */
 export function resolveProxyUriFromEnv(): string | null {
   const env = (process.env.NODE_ENV ?? '').toLowerCase();
@@ -35,7 +36,10 @@ export function resolveProxyUriFromEnv(): string | null {
   if (!proxy || typeof proxy !== 'string' || proxy.trim().length === 0) {
     return null;
   }
-  return proxy.trim();
+  const normalized = proxy.trim();
+  return /^[a-z][a-z\d+.-]*:\/\//i.test(normalized)
+    ? normalized
+    : `http://${normalized}`;
 }
 
 /**

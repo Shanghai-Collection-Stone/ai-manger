@@ -81,7 +81,11 @@ export class XhsTopicRepositoryService {
       .toArray();
     return new Set(
       storedArticles
-        .map((article) => Number(article.meta?.xhsTopicId))
+        .map((article) =>
+          Number(
+            (article.meta as { xhsTopicId?: unknown } | undefined)?.xhsTopicId,
+          ),
+        )
         .filter((topicId) => Number.isInteger(topicId) && topicId > 0),
     );
   }
@@ -130,6 +134,7 @@ export class XhsTopicRepositoryService {
           id: entity.id,
           title: entity.title,
           topicType: entity.topicType,
+          imageTags: this.normalizeMotherImageTags(entity.imageTags),
           topicCount: children.length,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt.toISOString(),
@@ -165,6 +170,10 @@ export class XhsTopicRepositoryService {
         topicType: String(candidate.topicType ?? '')
           .replace(/\s+/g, ' ')
           .trim(),
+        imageTags:
+          input.kind === 'mother'
+            ? this.normalizeMotherImageTags(candidate.imageTags)
+            : [],
       }))
       .filter((candidate) => candidate.title && candidate.topicType)
       .filter(
@@ -209,6 +218,7 @@ export class XhsTopicRepositoryService {
         parentId: input.kind === 'child' ? input.parentId : undefined,
         title: candidate.title.slice(0, 100),
         topicType: candidate.topicType.slice(0, 30),
+        imageTags: input.kind === 'mother' ? candidate.imageTags : undefined,
         status: 'pending',
         sourceTodoId: input.sourceTodoId,
         createdAt: now,
@@ -417,9 +427,9 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 修改当前用户选题的标题、题目类型或状态。
-   * @keyword-cn 更新选题, 发布状态
-   * @keyword-en update-topic, publish-status
+   * @description 修改当前用户选题的标题、题目类型、状态或母题固定配图标签。
+   * @keyword-cn 更新选题, 发布状态, 母题配图标签
+   * @keyword-en update-topic, publish-status, mother-image-tags
    */
   async update(
     id: number,
@@ -435,9 +445,17 @@ export class XhsTopicRepositoryService {
       const topicType = input.topicType.replace(/\s+/g, ' ').trim();
       if (topicType) updates.topicType = topicType.slice(0, 30);
     }
+    if (Array.isArray(input.imageTags)) {
+      updates.imageTags = this.normalizeMotherImageTags(input.imageTags);
+    }
     if (input.status) updates.status = input.status;
+    const filter: Filter<XhsTopicEntity> = {
+      ...this.buildScopeFilter(scope),
+      id,
+    };
+    if (Array.isArray(input.imageTags)) filter.kind = 'mother';
     return await this.topics.findOneAndUpdate(
-      { ...this.buildScopeFilter(scope), id },
+      filter,
       { $set: updates },
       { returnDocument: 'after' },
     );
@@ -531,6 +549,33 @@ export class XhsTopicRepositoryService {
   }
 
   /**
+   * @description 规整母选题固定配图标签，去除井号、空白和大小写重复项并限制为五个。
+   * @keyword-cn 母题配图标签, 标签去重
+   * @keyword-en mother-image-tags, normalize-mother-tags
+   * @param values 原始图库标签集合。
+   * @returns 最多五个可持久化的标签。
+   */
+  private normalizeMotherImageTags(values?: string[]): string[] {
+    const normalized: string[] = [];
+    for (const rawValue of Array.isArray(values) ? values : []) {
+      const value = String(rawValue ?? '')
+        .replace(/^#+/, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 50);
+      if (
+        !value ||
+        normalized.some((item) => item.toLowerCase() === value.toLowerCase())
+      ) {
+        continue;
+      }
+      normalized.push(value);
+      if (normalized.length >= 5) break;
+    }
+    return normalized;
+  }
+
+  /**
    * @description 切换子选题的数据抓取开关，恢复抓取时清空取消时间。
    * @keyword-cn 切换抓取状态, 取消恢复抓取
    * @keyword-en toggle-crawl-status, cancel-resume-crawl
@@ -597,22 +642,14 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 跨租户列出所有处于抓取中的子选题，仅供后台定时调度使用，不对外暴露。
-   * @keyword-cn 待调度子选题, 全局抓取列表
-   * @keyword-en schedulable-topics, global-crawling-list
-   * @returns {Promise<XhsTopicEntity[]>} 抓取状态为 crawling（含未写过该字段）的子选题。
+   * @description 按全局业务 ID 读取子选题，仅供发布事件驱动的内部抓取调度解析归属。
+   * @keyword-cn 发布选题解析, 内部选题读取
+   * @keyword-en published-topic-resolve, internal-topic-read
+   * @param id 子选题业务 ID。
+   * @returns {Promise<XhsTopicEntity | null>} 命中的子选题，不存在时为 null。
    */
-  async listCrawlingChildTopics(): Promise<XhsTopicEntity[]> {
-    return await this.topics
-      .find({
-        kind: 'child',
-        $or: [
-          { 'crawl.status': 'crawling' },
-          { 'crawl.status': { $exists: false } },
-          { crawl: { $exists: false } },
-        ],
-      })
-      .toArray();
+  async getChildTopicById(id: number): Promise<XhsTopicEntity | null> {
+    return await this.topics.findOne({ id, kind: 'child' });
   }
 
   /**

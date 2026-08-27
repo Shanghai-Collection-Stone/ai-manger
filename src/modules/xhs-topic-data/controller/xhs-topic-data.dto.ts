@@ -1,6 +1,7 @@
 import { Transform } from 'class-transformer';
 import {
   IsBoolean,
+  IsDateString,
   IsInt,
   IsOptional,
   IsString,
@@ -78,4 +79,17 @@ export class UpdateXhsCrawlSettingsDto {
   @Min(1)
   @Max(24 * 60)
   intervalMinutes!: number;
+}
+
+/**
+ * @description 校验单个已发布子选题的周期抓取起止时间，结束时间必须由服务层进一步确认晚于开始时间。
+ * @keyword-cn 抓取区间参数, 起止时间
+ * @keyword-en crawl-window-dto, start-end-time
+ */
+export class UpdateXhsCrawlWindowDto {
+  @IsDateString()
+  startAt!: string;
+
+  @IsDateString()
+  endAt!: string;
 }

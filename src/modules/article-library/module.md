@@ -1,12 +1,13 @@
-# Article-Library Module
+# 模块名称 (Module Name)
 
-## 模块名称 (Module Name)
 Article-Library
 
 ## 概述 (Overview)
-文章库模块提供“库容器 + 文章”的两层结构，支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。库和文章都使用 MongoDB 业务自增 ID，并在分配 ID 前校准 counter，避免计数器落后于既有数据后触发 duplicate key；二维码 token 唯一索引只约束真实字符串 token，空值不参与唯一性判断。
+
+文章库模块提供“库容器 + 专属工作区 + 文章”的结构。租户文章库按租户绑定关系建立工作区，平台文章库选择在线且有空余槽位的 SuperClaw 建立工作区，再把 `workspaceId` 固定写入文章库；容量由 `workspaceCapacityBytes` 控制，缺省或 `0` 表示无上限。模块同时支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。
 
 ## 文件清单 (File List)
+
 - `article-library.module.ts` — Nest 模块声明，导入 DataSource、Admin、Todo 模块并导出文章库服务。
 - `entities/article-library.entity.ts` — 文章库容器、推送配置、发布状态、统计结果和输入类型定义。
 - `entities/article.entity.ts` — 文章实体、内容载荷、入库输入、更新输入和租约领取结果定义。
@@ -14,8 +15,10 @@ Article-Library
 - `services/article.service.ts` — 文章入库、列表、更新、发布状态、FIFO 租约领取和文章 ID counter 校准服务。
 - `controller/article-library.controller.ts` — 管理端文章库与文章 REST 接口。
 - `controller/article-library-task.controller.ts` — task-token 与扫码 token 专项文章库接口。
+- `scripts/simulate-publish.mjs` — 创建模拟选题文章、调用真实扫码发布回调并等待单次抓取 Todo 的本地联调脚本。
 
 ## 函数清单 (Function List)
+
 - `ArticleLibraryModule()` — 注册文章库模块依赖、控制器和服务 | keywords: article-library, module
 - `ArticleLibraryService()` — 文章库容器服务 | keywords: article-library, service
 - `ensureIndexes()` — 建立文章库索引并校准 article_libraries counter | keywords: article-library-counter, 文章库计数器校准
@@ -24,7 +27,10 @@ Article-Library
 - `ensureCounterAtLeast(seq)` — 将 article_libraries counter 至少推进到指定下限 | keywords: article-library-counter, 文章库计数器校准
 - `nextId()` — 分配新文章库业务 ID 前先校准 counter | keywords: article-library-counter, 文章库计数器校准
 - `normalizePushConfig(input)` — 规范化文章库推送配置 | keywords: article-library, push-config
-- `create(input)` — 创建文章库容器 | keywords: article-library, create-library
+- `create(input)` — 创建已携带专属 workspaceId 的文章库容器 | keywords: article-library, create-library
+- `createWithWorkspace(currentUser,input)` — 租户库使用绑定节点、平台库选择在线节点创建专属工作区 | keywords: 创建文章库工作区, 选择执行节点, create-library-workspace, select-execution-node
+- `ensureWorkspace(id,tenantId?)` — 为历史文章库懒补专属工作区 | keywords: 补建文章库工作区, 历史数据迁移, ensure-library-workspace, legacy-workspace-backfill
+- `getWorkspaceService()` — 从模块图解析工作区服务并避免静态循环 | keywords: 获取工作区服务, 避免模块循环, resolve-workspace-service, avoid-module-cycle
 - `tenantScope(tenantId?)` — 构造强制租户作用域过滤，空 tenantId 收口到平台库 | keywords: tenant-scope-filter, mandatory-isolation, 租户作用域过滤
 - `get(id,tenantId?)` — 按业务 ID 获取当前租户可见文章库 | keywords: article-library, get-library
 - `ensureQrToken(id,tenantId?)` — 确保文章库存在并持久化二维码 token | keywords: article-library-qr, qr-token
@@ -49,6 +55,7 @@ Article-Library
 - `list(params)` — 按文章库、状态和 FIFO 顺序列出文章 | keywords: article, list
 - `update(input)` — 更新文章字段和 meta | keywords: article, update
 - `updatePublishStatus(id,status,tenantId?,leaseToken?,meta?)` — 更新发布状态并释放租约 | keywords: article, publish-status
+- `notifyCrawlSchedule(article,status)` — 小红书选题文章发布状态变化后通知专用采集调度表 | keywords: 发布触发采集, 调度表通知, publish-triggered-crawl, schedule-table-notify
 - `moveToLibrary({id,fromLibraryId,toLibraryId,tenantId?})` — 把文章移动到同租户下的另一个文章库，租约未过期的在途文章拒绝移动 | keywords: 移动文章, 跨库转移, move-article-to-library, cross-library-transfer
 - `delete(id,tenantId?)` — 删除单篇文章 | keywords: article, delete
 - `leaseNext(params)` — 以 CAS 方式领取下一篇未发布文章并写入租约 | keywords: article, lease-next
@@ -56,7 +63,7 @@ Article-Library
 - `ArticleLibraryController()` — 管理端文章库控制器 | keywords: article-library, admin-controller
 - `toAbsoluteImageUrl(url)` — 将相对图片路径拼接为完整地址 | keywords: prefix-image-url, app-base-url, 图片地址前缀拼接
 - `resolveAuthScope(req)` — 解析管理端请求鉴权作用域 | keywords: article-library, auth-scope
-- `createLibrary(body,req)` — 管理端创建文章库 | keywords: article-library, create-endpoint
+- `createLibrary(body,req)` — 管理端先创建可配置容量的专属工作区再创建文章库 | keywords: article-library, create-endpoint
 - `listLibraries(type,limit,offset,req)` — 管理端列出文章库并返回统计和缩略图 | keywords: article-library, list-endpoint
 - `getLibrary(libraryId,req)` — 管理端获取文章库详情 | keywords: article-library, get-endpoint
 - `getPushQr(libraryId,req)` — 管理端获取文章库二维码内容 | keywords: article-library-qr, push-qr-endpoint
@@ -82,31 +89,43 @@ Article-Library
 - `releaseLeaseByToken(articleId,body)` — 扫码 token 主动释放租约 | keywords: article-library-qr, release-by-token
 - `updateStatus(todoId,libraryId,articleId,taskToken,body)` — taskToken 兼容路由更新文章发布状态 | keywords: task-api, update-status
 - `releaseLease(todoId,libraryId,articleId,taskToken,body)` — taskToken 兼容路由释放文章租约 | keywords: task-api, release-lease
+- `parseArgs(argv)` — 解析模拟发文命令行参数 | keywords: 解析模拟参数, 发文脚本选项, parse-simulation-args, publish-script-options
+- `requestJson(baseUrl,path,options?)` — 调用本地 JSON 接口并解析错误 | keywords: 调用模拟接口, HTTP错误解析, call-simulation-api, http-error-parsing
+- `acquireAdminToken(baseUrl,args)` — 读取显式 Token 或登录取得后台 Token | keywords: 获取模拟令牌, 管理员登录, acquire-simulation-token, admin-login
+- `readPositiveId(value,name)` — 校验文章库或选题业务 ID | keywords: 校验业务ID, 正整数参数, validate-business-id, positive-integer-argument
+- `readNoteId(value)` — 校验 NOTE_CHANGE 回调携带的小红书笔记 ID | keywords: 校验小红书笔记ID, 发布回调笔记, validate-xhs-note-id, publish-callback-note
+- `selectTopic(groups,requestedTopicId?)` — 选择指定或首个抓取中的子选题 | keywords: 选择模拟选题, 抓取中子题, select-simulation-topic, crawling-child-topic
+- `waitForCrawlTask(baseUrl,token,topicId,startedAfter)` — 等待发布回调生成单次抓取 Todo | keywords: 等待单次抓取任务, 发布回调验证, wait-single-crawl-task, verify-publish-callback
+- `main()` — 创建模拟文章、执行扫码回调并验证单次任务 | keywords: 模拟发文回调, 创建单次任务, simulate-publish-callback, create-single-task
 
 ## 关键词索引 (Keyword Index)
-| 中文 | English |
-|---|---|
-| 文章库 | article-library |
-| 文章 | article |
-| 计数器校准 | article-library-counter |
-| 文章入库计数器 | article-id-counter |
-| 推送配置 | push-config |
-| 二维码 | article-library-qr |
-| 二维码索引 | article-library-qr-index |
-| 小红书短链 | short-link-redirect |
-| 租户隔离 | tenant-scope-filter |
-| 强制隔离 | mandatory-isolation |
-| 管理端接口 | admin-controller |
-| 专项任务接口 | task-api |
-| 扫码鉴权 | token-auth |
-| 状态元数据 | article-status-meta |
-| 队列领取 | lease-next |
-| 移动文章 | move-article-to-library |
-| 跨库转移 | cross-library-transfer |
-| 主动释放租约 | release-lease |
-| 缩略图 | thumbnail |
+
+| 中文             | English                  |
+| ---------------- | ------------------------ |
+| 文章库           | article-library          |
+| 文章             | article                  |
+| 计数器校准       | article-library-counter  |
+| 文章入库计数器   | article-id-counter       |
+| 推送配置         | push-config              |
+| 二维码           | article-library-qr       |
+| 二维码索引       | article-library-qr-index |
+| 小红书短链       | short-link-redirect      |
+| 租户隔离         | tenant-scope-filter      |
+| 强制隔离         | mandatory-isolation      |
+| 管理端接口       | admin-controller         |
+| 专项任务接口     | task-api                 |
+| 扫码鉴权         | token-auth               |
+| 状态元数据       | article-status-meta      |
+| 队列领取         | lease-next               |
+| 移动文章         | move-article-to-library  |
+| 跨库转移         | cross-library-transfer   |
+| 主动释放租约     | release-lease            |
+| 缩略图           | thumbnail                |
+| 校验小红书笔记ID | validate-xhs-note-id     |
+| 发布回调笔记     | publish-callback-note    |
 
 ## 类型导出 (Type Exports)
+
 - `ArticleLibraryScope` — 文章库作用域枚举 | keywords: article-library, scope
 - `ArticlePublishStatus` — 文章发布状态枚举 | keywords: article, publish-status
 - `ArticleLibraryPushConfig` — 文章库推送配置 | keywords: article-library, push-config
@@ -120,7 +139,8 @@ Article-Library
 - `ArticleUpdateInput` — 文章更新输入 | keywords: article, update-input
 - `ArticleLeaseResult` — 文章领取返回结果 | keywords: article, lease-result
 
-## 模块功能描述 (Module Feature Description)
+## 模块功能描述 (Module Description)
+
 管理端接口挂载在 `/api/article-library` 下，提供文章库创建、列表、详情、更新、删除、二维码内容获取、文章入库、文章列表、发布状态更新、文章跨库移动、文章删除和队列领取测试。跨库移动走 `PATCH /:libraryId/articles/:articleId/library`，校验来源库、目标库与文章都属于当前租户用户，源库与目标库相同返回 400，文章仍持有未过期租约返回 409。task 专项接口挂载在 `/task-api` 下，支持 todo 绑定资源鉴权与扫码 token 鉴权两种方式。
 
 文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；`pushConfig.qrToken` 使用 partial unique 索引，只索引字符串 token，历史 null token 会在索引初始化时清理。文章使用 `articles` 集合并对 `id` 建唯一索引，同时按租户、用户、来源与 `meta.xhsTopicId` 建组合索引，供选题工作台识别已经入库的来源子选题。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。

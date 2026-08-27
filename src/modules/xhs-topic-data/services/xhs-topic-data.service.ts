@@ -77,8 +77,7 @@ export class XhsTopicDataService {
     const topPost = this.pickTopPost(stats);
     const lastCrawledAt =
       topic.crawl?.lastCrawledAt ?? (latest ? latest.at : undefined);
-    const lastScheduledAt = topic.crawl?.lastScheduledAt;
-    const nextBaseline = lastScheduledAt ?? lastCrawledAt;
+    const nextRunAt = await this.crawl.getNextRunAt(topic.id);
 
     return {
       topicId: topic.id,
@@ -101,11 +100,9 @@ export class XhsTopicDataService {
         : undefined,
       lastCrawledCount: latest ? latest.stats.length : 0,
       nextCrawlAt:
-        topic.crawl?.status === 'cancelled' || !nextBaseline
+        topic.crawl?.status === 'cancelled' || !nextRunAt
           ? undefined
-          : new Date(
-              new Date(nextBaseline).getTime() + intervalMinutes * 60_000,
-            ).toISOString(),
+          : new Date(nextRunAt).toISOString(),
       crawlIntervalMinutes: intervalMinutes,
       trend,
     };
@@ -159,8 +156,8 @@ export class XhsTopicDataService {
     const map = new Map<string, CrawlBatch>();
     for (const stat of stats) {
       const at = new Date(stat.dataAt);
-      // 按抓取运行分批，而不是按 Todo：长时采集任务在同一个 todoId 下跑好几天，
-      // 按 Todo 分会把好几天的数据挤成一个批次，环比和趋势就全没了。
+      // 新工作流中一次调度创建一个 Todo 和一条运行记录；crawlRunId 是明确批次键，
+      // 历史缺少运行归属的数据继续按 todoId 兼容分组。
       const key =
         typeof stat.crawlRunId === 'number'
           ? `run:${stat.crawlRunId}`

@@ -9,6 +9,8 @@ import { RpcException } from '@nestjs/microservices';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { Inject } from '@nestjs/common';
+import { AdminService } from '../../admin/services/admin.service.js';
+import { SUPER_CLAW_DATA_TRACKING_AGENT_MODULE } from '../../auto-task-robot/services/robot-registry.service.js';
 import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
 import type { WorkspaceEntity } from '../../workspace/entities/workspace.entity.js';
 import type {
@@ -38,7 +40,10 @@ export class SuperClawService implements OnModuleInit {
   private readonly tenants: Collection<SassTenantEntity>;
   private readonly workspaces: Collection<WorkspaceEntity>;
 
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly adminService: AdminService,
+  ) {
     this.superClaws = db.collection<SuperClawEntity>('super_claws');
     this.tenants = db.collection<SassTenantEntity>('sass_tenants');
     this.workspaces = db.collection<WorkspaceEntity>('workspaces');
@@ -52,6 +57,200 @@ export class SuperClawService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.ensureIndexes();
     await this.reconcileAllocatedCapacity();
+    await this.ensureDataTrackingAgent();
+  }
+
+  /**
+   * @description 幂等创建供 SuperClaw gRPC 领取任务使用的专用数据抓取 Agent 配置。
+   * @keyword-cn 创建专用抓取Agent, SuperClaw任务代理
+   * @keyword-en ensure-data-tracking-agent, super-claw-task-agent
+   * @returns {Promise<void>}
+   */
+  async ensureDataTrackingAgent(): Promise<void> {
+    const configs = await this.adminService.listAgentConfigs();
+    if (
+      configs.some(
+        (item) => item.module === SUPER_CLAW_DATA_TRACKING_AGENT_MODULE,
+      )
+    ) {
+      return;
+    }
+    await this.adminService.createAgentConfig({
+      name: 'SuperClaw 数据抓取 Agent',
+      module: SUPER_CLAW_DATA_TRACKING_AGENT_MODULE,
+      enabled: true,
+      prompt: [
+        '你是 SuperClaw 专用数据抓取 Agent。',
+        '任务由节点通过 gRPC DispatchTask 领取，后续必须使用返回的 taskToken 调用任务 CRUD。',
+        '严格遵守任务 aiPlan 中的数据字段、抓取区间与 deadline，完成后回写结构化结果。',
+        '若浏览器要求登录，必须按任务 executionGuidance 使用 GetBrowserSession、CreateTaskInteraction、GetTaskInteraction、UpsertBrowserSession 完成二维码人工介入后继续原任务。',
+      ].join('\n'),
+    });
+  }
+
+  /**
+   * @description 校验租户确实归属于当前已认证 SuperClaw 节点，作为所有租户级 gRPC 指令的边界。
+   * @keyword-cn 校验租户节点归属, gRPC租户隔离
+   * @keyword-en require-tenant-assignment, grpc-tenant-isolation
+   * @param superClawId 已认证节点 ID。
+   * @param tenantId 请求中的租户 ID。
+   * @returns {Promise<SassTenantEntity>} 匹配的租户实体。
+   */
+  async requireTenantAssignment(
+    superClawId: string,
+    tenantId: string,
+  ): Promise<SassTenantEntity> {
+    if (!ObjectId.isValid(tenantId)) {
+      throw new RpcException({
+        code: status.INVALID_ARGUMENT,
+        message: 'INVALID_TENANT_ID',
+      });
+    }
+    const tenant = await this.tenants.findOne({
+      _id: new ObjectId(tenantId),
+      superClawId,
+    });
+    if (!tenant) {
+      throw new RpcException({
+        code: status.PERMISSION_DENIED,
+        message: 'TENANT_NOT_ASSIGNED_TO_SUPER_CLAW',
+      });
+    }
+    return tenant;
+  }
+
+  /**
+   * @description 列出平台分配给当前 SuperClaw 节点的全部租户 ID，供服务端主动路由任务。
+   * @keyword-cn 查询节点租户, 主动推送路由
+   * @keyword-en list-node-tenants, active-push-routing
+   */
+  async listAssignedTenantIds(superClawId: string): Promise<string[]> {
+    return await this.tenants
+      .find({ superClawId }, { projection: { _id: 1 } })
+      .map((tenant) => tenant._id.toHexString())
+      .toArray();
+  }
+
+  /**
+   * @description 查询租户当前分配的 SuperClaw 节点 ID，供新任务事件定位在线推送通道。
+   * @keyword-cn 查询租户节点, 任务推送定位
+   * @keyword-en resolve-tenant-node, task-push-location
+   */
+  async getAssignedSuperClawId(tenantId: string): Promise<string | undefined> {
+    if (!ObjectId.isValid(tenantId)) return undefined;
+    const tenant = await this.tenants.findOne(
+      { _id: new ObjectId(tenantId) },
+      { projection: { superClawId: 1 } },
+    );
+    return tenant?.superClawId?.trim() || undefined;
+  }
+
+  /**
+   * @description 查询工作区固定承载的 SuperClaw 节点，供平台级任务直接定位推送通道。
+   * @keyword-cn 查询工作区节点, 平台任务定位
+   * @keyword-en resolve-workspace-node, platform-task-routing
+   */
+  async getWorkspaceSuperClawId(
+    workspaceId: string,
+  ): Promise<string | undefined> {
+    if (!ObjectId.isValid(workspaceId)) return undefined;
+    const workspace = await this.workspaces.findOne(
+      { _id: new ObjectId(workspaceId) },
+      { projection: { superClawId: 1 } },
+    );
+    return workspace?.superClawId?.trim() || undefined;
+  }
+
+  /**
+   * @description 返回当前节点下指定租户的工作区列表，仅使用节点归属和租户双重过滤。
+   * @keyword-cn gRPC工作区列表, 节点租户过滤
+   * @keyword-en grpc-workspace-list, node-tenant-filter
+   * @param superClawId 已认证节点 ID。
+   * @param tenantId 请求中的租户 ID。
+   * @returns {Promise<WorkspaceEntity[]>} 对应工作区列表。
+   */
+  async listTenantWorkspaces(
+    superClawId: string,
+    tenantId: string,
+  ): Promise<WorkspaceEntity[]> {
+    await this.requireTenantAssignment(superClawId, tenantId);
+    return await this.workspaces
+      .find({ tenantId, superClawId })
+      .sort({ updatedAt: -1 })
+      .toArray();
+  }
+
+  /**
+   * @description 返回绑定节点尚未确认创建的工作区，供长连接重连后补发。
+   * @keyword-cn 查询待创建工作区, 节点重连补发
+   * @keyword-en list-pending-workspaces, reconnect-provision-replay
+   */
+  async listPendingWorkspaceProvisions(
+    superClawId: string,
+  ): Promise<WorkspaceEntity[]> {
+    return this.workspaces
+      .find({
+        superClawId,
+        $or: [
+          { provisionStatus: 'pending' },
+          { provisionStatus: { $exists: false } },
+        ],
+      })
+      .sort({ createdAt: 1 })
+      .toArray();
+  }
+
+  /**
+   * @description 返回绑定节点已经实际创建的工作区 ID，任务只能从这些工作区领取。
+   * @keyword-cn 查询已同步工作区, 任务工作区过滤
+   * @keyword-en list-provisioned-workspaces, task-workspace-filter
+   */
+  async listProvisionedWorkspaceIds(superClawId: string): Promise<string[]> {
+    const rows = await this.workspaces
+      .find(
+        { superClawId, provisionStatus: 'provisioned' },
+        { projection: { _id: 1 } },
+      )
+      .toArray();
+    return rows.map((row) => String(row._id));
+  }
+
+  /**
+   * @description 记录绑定节点对工作区创建指令的成功或失败回报。
+   * @keyword-cn 确认工作区同步, 记录创建结果
+   * @keyword-en confirm-workspace-provision, record-provision-result
+   */
+  async confirmWorkspaceProvision(input: {
+    superClawId: string;
+    workspaceId: string;
+    success: boolean;
+    error?: string;
+  }): Promise<boolean> {
+    const now = new Date();
+    const result = await this.workspaces.updateOne(
+      {
+        _id: this.toObjectId(input.workspaceId, 'INVALID_WORKSPACE_ID'),
+        superClawId: input.superClawId,
+      },
+      input.success
+        ? {
+            $set: {
+              provisionStatus: 'provisioned',
+              provisionedAt: now,
+              updatedAt: now,
+            },
+            $unset: { provisionError: '' },
+          }
+        : {
+            $set: {
+              provisionStatus: 'pending',
+              provisionError: input.error?.slice(0, 500) || 'UNKNOWN_ERROR',
+              updatedAt: now,
+            },
+            $unset: { provisionedAt: '' },
+          },
+    );
+    return result.matchedCount > 0;
   }
 
   /**
@@ -297,6 +496,35 @@ export class SuperClawService implements OnModuleInit {
   }
 
   /**
+   * @description 为平台级工作区原子选择当前在线且剩余槽位最多的节点，并固定占用一个工作区槽位。
+   * @keyword-cn 分配平台工作区, 选择在线节点
+   * @keyword-en reserve-platform-workspace, select-online-node
+   */
+  async reserveWorkspaceForPlatform(): Promise<string> {
+    const onlineAfter = new Date(
+      Date.now() - SUPER_CLAW_HEARTBEAT_INTERVAL_SECONDS * 3 * 1000,
+    );
+    const row = await this.superClaws.findOneAndUpdate(
+      {
+        status: 'online',
+        lastHeartbeatAt: { $gte: onlineAfter },
+        $expr: {
+          $lt: [{ $ifNull: ['$allocatedCapacity', 0] }, '$capacity'],
+        },
+      },
+      { $inc: { allocatedCapacity: 1 }, $set: { updatedAt: new Date() } },
+      {
+        sort: { allocatedCapacity: 1, lastHeartbeatAt: -1 },
+        returnDocument: 'after',
+      },
+    );
+    if (!row) {
+      throw new BadRequestException('SUPER_CLAW_CAPACITY_EXCEEDED');
+    }
+    return String(row._id);
+  }
+
+  /**
    * @description 删除工作区或创建失败时释放一个 SuperClaw 工作区槽位
    * @keyword-cn 释放工作区槽位, 容量归还
    * @keyword-en release-workspace-slot, capacity-return
@@ -524,7 +752,8 @@ export class SuperClawService implements OnModuleInit {
    * @keyword-en safe-view, offline-detection
    */
   private toView(row: SuperClawEntity): SuperClawView {
-    const { tokenHash: _tokenHash, ...safe } = row;
+    const { tokenHash, ...safe } = row;
+    void tokenHash;
     const offlineAfterMs = SUPER_CLAW_HEARTBEAT_INTERVAL_SECONDS * 3 * 1000;
     const status =
       row.status === 'online' &&

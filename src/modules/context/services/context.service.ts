@@ -79,7 +79,7 @@ export class ContextService {
 
   /**
    * @title 创建租户会话 Create Session With Scope
-   * @description 创建或返回租户用户范围内会话ID。
+   * @description 创建或返回租户用户范围内会话ID；可绑定工作区，指定会话跨工作区冲突时自动生成新 ID。
    * @keywords-cn 创建会话, 租户
    * @keywords-en create session, tenant scope
    */
@@ -89,6 +89,7 @@ export class ContextService {
       tenantId?: string;
       userId?: string;
       sessionType?: ConversationSessionType;
+      workspaceId?: string;
     },
   ): Promise<string> {
     const requestedSessionId = sessionId?.trim();
@@ -97,7 +98,23 @@ export class ContextService {
     const existing = await this.conversations.findOne(
       this.buildConversationFilter(sid, scope),
     );
-    if (existing) return sid;
+    if (existing) {
+      if (
+        scope?.workspaceId &&
+        existing.workspaceId &&
+        existing.workspaceId !== scope.workspaceId
+      ) {
+        sid = cryptoRandomId();
+      } else {
+        if (scope?.workspaceId && !existing.workspaceId) {
+          await this.conversations.updateOne(
+            { _id: existing._id },
+            { $set: { workspaceId: scope.workspaceId, updatedAt: now } },
+          );
+        }
+        return sid;
+      }
+    }
     try {
       await this.conversations.insertOne({
         _id: new ObjectId(),
@@ -105,6 +122,7 @@ export class ContextService {
         sessionType: this.normalizeSessionType(scope?.sessionType),
         tenantId: scope?.tenantId,
         userId: scope?.userId,
+        workspaceId: scope?.workspaceId,
         title: undefined,
         lastCheckpointId: undefined,
         createdAt: now,
@@ -113,7 +131,19 @@ export class ContextService {
     } catch (error) {
       if (this.isDuplicateKeyError(error)) {
         const raw = await this.conversations.findOne({ sessionId: sid });
-        if (raw && this.isConversationInScope(raw, scope)) {
+        if (
+          raw &&
+          this.isConversationInScope(raw, scope) &&
+          (!scope?.workspaceId ||
+            !raw.workspaceId ||
+            raw.workspaceId === scope.workspaceId)
+        ) {
+          if (scope?.workspaceId && !raw.workspaceId) {
+            await this.conversations.updateOne(
+              { _id: raw._id },
+              { $set: { workspaceId: scope.workspaceId, updatedAt: now } },
+            );
+          }
           return sid;
         }
         // sessionId 冲突但 sessionType 不匹配（如旧会话类型与新类型不同），生成新随机 ID
@@ -124,6 +154,7 @@ export class ContextService {
           sessionType: this.normalizeSessionType(scope?.sessionType),
           tenantId: scope?.tenantId,
           userId: scope?.userId,
+          workspaceId: scope?.workspaceId,
           title: undefined,
           lastCheckpointId: undefined,
           createdAt: now,

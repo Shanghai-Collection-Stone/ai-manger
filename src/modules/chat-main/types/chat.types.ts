@@ -27,6 +27,7 @@ export interface ChatRequest {
   now?: string;
   userId?: string;
   tenantId?: string;
+  workspaceId?: string;
 }
 
 /**

@@ -23,6 +23,7 @@ import type {
   ArticlePublishStatus,
 } from '../entities/article-library.entity.js';
 import type { ArticleCreateInput } from '../entities/article.entity.js';
+import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 
 /**
  * @description 合法发布状态集合（运行时校验）
@@ -69,6 +70,7 @@ export class ArticleLibraryController {
   private async resolveAuthScope(req: Request): Promise<{
     tenantId?: string;
     userId?: string;
+    user: AdminUserEntity;
   }> {
     const auth = req?.headers.authorization;
     if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
@@ -78,7 +80,7 @@ export class ArticleLibraryController {
     if (!token) throw new UnauthorizedException('AUTH_REQUIRED');
     const user = await this.adminService.getUserByToken(token);
     if (!user) throw new UnauthorizedException('AUTH_REQUIRED');
-    return { tenantId: user.tenantId, userId: user.username };
+    return { tenantId: user.tenantId, userId: user.username, user };
   }
 
   // ───── 文章库 CRUD ─────────────────────────────────────────────────────────
@@ -94,6 +96,8 @@ export class ArticleLibraryController {
       name?: string;
       type?: string;
       pushConfig?: Partial<ArticleLibraryPushConfig>;
+      /** 文章库工作区容量（字节），0 或缺省表示无上限。 */
+      workspaceCapacityBytes?: number;
     },
     @Req() req: Request,
   ) {
@@ -102,12 +106,19 @@ export class ArticleLibraryController {
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('NAME_REQUIRED');
     const type = String(body?.type ?? '').trim();
-    const lib = await this.library.create({
-      userId: scope.userId,
+    if (
+      typeof body?.workspaceCapacityBytes !== 'undefined' &&
+      (!Number.isFinite(body.workspaceCapacityBytes) ||
+        body.workspaceCapacityBytes < 0)
+    ) {
+      throw new BadRequestException('INVALID_WORKSPACE_CAPACITY');
+    }
+    const lib = await this.library.createWithWorkspace(scope.user, {
       tenantId: scope.tenantId,
       name,
       type,
       pushConfig: body?.pushConfig,
+      workspaceCapacityBytes: body?.workspaceCapacityBytes,
     });
     return { library: lib };
   }

@@ -8,16 +8,29 @@ import { ObjectId } from 'mongodb';
 export type WorkspaceMemberRole = 'owner' | 'editor' | 'viewer';
 
 /**
+ * @description 平台工作区向绑定 SuperClaw 下发后的创建状态。
+ * @keyword-en workspace-provision-status, claw-workspace-sync
+ * @keyword-cn 工作区下发状态, 节点工作区同步
+ */
+export type WorkspaceProvisionStatus = 'pending' | 'provisioned';
+
+/**
  * @description 工作区实体，隶属租户并作为 SuperClaw 子资源，含独立网盘容量
  * @keyword-en workspace-entity, super-claw-child
  * @keyword-cn 工作区实体, 节点子资源
  */
 export interface WorkspaceEntity {
   _id: ObjectId;
-  /** 归属租户 */
+  /** 归属租户；空字符串表示平台级工作区。 */
   tenantId: string;
   /** 承载该工作区的平台 SuperClaw 节点 ID */
   superClawId: string;
+  /** 绑定节点上的实际工作区创建状态；历史数据按 pending 补发。 */
+  provisionStatus?: WorkspaceProvisionStatus;
+  /** 节点确认完成创建的时间。 */
+  provisionedAt?: Date;
+  /** 最近一次节点创建失败原因。 */
+  provisionError?: string;
   /** 工作区名称(租户内唯一) */
   name: string;
   /** 工作区描述 */

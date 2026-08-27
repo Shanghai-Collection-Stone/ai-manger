@@ -203,9 +203,8 @@ export class XhsPostStatService {
   }
 
   /**
-   * @description 把一个抓取 Todo 下**尚未归属任何运行**的帖子数据，一次性划给指定的抓取运行与子选题。
-   *   长时采集任务会在同一个 todoId 下多次回写，用「有没有 crawlRunId」而不是「有没有 topicId」来判定，
-   *   才能把后一批数据划给新的运行，而不是被前一批的归属结果挡住。
+   * @description 把一个单次抓取 Todo 下尚未归属的数据划给它唯一的抓取运行与子选题。
+   *   使用 crawlRunId 判定可兼容同一次任务被拆成多个传输请求的情况。
    * @keyword-cn 回填抓取运行, 归属子选题, 分批划归
    * @keyword-en assign-crawl-run, backfill-topic-id, batch-attribution
    * @param {number} todoId - 抓取 Todo ID。

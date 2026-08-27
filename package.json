@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "compress:local-image": "node scripts/compress-local-image.mjs",
     "validate:dashboard-config": "node scripts/validate-dashboard-config.mjs",
+    "simulate:publish": "node src/modules/article-library/scripts/simulate-publish.mjs",
     "migration:up": "migrate-mongo up",
     "migration:down": "migrate-mongo down",
     "migration:status": "migrate-mongo status",

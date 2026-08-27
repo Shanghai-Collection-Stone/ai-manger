@@ -45,7 +45,7 @@ export interface XhsPostStatEntity {
   shareCount?: number;
   /** 归属子选题 ID，由抓取任务绑定关系回填，历史数据可能缺失 */
   topicId?: number;
-  /** 归属的抓取运行记录 ID。同一个 Todo 多次回写会分到不同的运行，趋势与环比按它分批 */
+  /** 归属的抓取运行记录 ID；一个周期 Todo 对应一个运行批次。 */
   crawlRunId?: number;
   /** 前 5 条热门评论快照 */
   topComments: XhsTopComment[];

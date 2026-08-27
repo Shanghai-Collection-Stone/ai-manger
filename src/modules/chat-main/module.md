@@ -90,7 +90,7 @@
   - `filterSubagentOnlyTools`: subagentOnly 集合中**只保留 topic_orchestrate / xhs_list_canvases / xhs_get_canvas_detail**;xhs_create_image_group_canvas 故意从 subagentOnly 移除,允许主 agent 直接调,工具内部 fire-and-forget 异步生图 + earlyEmit 即时推 canvas-it,主 agent 路径无 LLM 阻塞/filter subagent only tools
   - `buildDefaultSubagents`: 子代理配置（xhs-specialist 使用小红书专属 6 专家自动路由）/build default subagents
   - `getTools`: 获取工具/get tools
-  - `getRequestScope`: 解析租户范围/get request scope
+  - `getRequestScope`: 解析租户、用户与可选工作区范围/get tenant user workspace scope
   - `getToolsForInput`: 工具过滤；图文/文章意图保留 topic_orchestrate + tag_select_request/get tools for input
   - `buildDefaultSubagents`: 子代理配置/build default subagents
   - `normalizeSubagentTools`: 规范工具/normalize subagent tools
@@ -129,4 +129,4 @@
 
 类型定义。
 
-- **关键词**: types
+- **关键词**: types, workspace-id；`ChatRequest.workspaceId` 用于把任务对话绑定到指定平台工作区

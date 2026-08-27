@@ -24,6 +24,7 @@ import * as z from 'zod';
 export interface FunctionCallScope {
   tenantId?: string;
   userId?: string;
+  workspaceId?: string;
   category?: string;
   /**
    * 可选:tool 内部在产出 canvas-it 块的瞬间(如 createImageGroupCanvas 完成)
@@ -906,8 +907,7 @@ export class ToolsService {
     );
     const tXhsAll = this.mediaAgent.getXhsToolsHandle(scope) ?? [];
     const tUnusedImageGroups = tXhsAll.filter(
-      (t) =>
-        (t as { name?: string }).name === 'xhs_list_unused_image_groups',
+      (t) => (t as { name?: string }).name === 'xhs_list_unused_image_groups',
     );
     return [
       ...tTodo,

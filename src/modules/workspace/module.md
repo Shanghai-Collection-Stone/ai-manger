@@ -2,7 +2,7 @@
 
 ## 模块描述
 
-工作区模块(v2)，提供工作区(名称/描述/容量设定)CRUD 与成员管理。工作区隶属租户，同时是 SuperClaw 的直接子资源：每个工作区保存 `superClawId` 并占用节点 1 个工作区槽位。租户切换节点时，其工作区整体迁移。工作区按后台 JWT + CASL 鉴权(subject `Workspace`)，保持租户隔离。`capacityBytes` 与 `usedBytes` 是独立网盘字节配额；网盘模块通过 `WorkspaceService.getForQuota` / `addUsedBytes` 做配额记账。所有增删改操作自动埋点到审计日志(`workspace.*` 动作)。
+工作区模块(v2)，提供工作区(名称/描述/容量设定)CRUD 与成员管理。租户工作区使用租户唯一绑定的 SuperClaw；平台工作区从在线且有空余槽位的节点中选择。每个工作区保存固定 `superClawId` 并占用节点 1 个槽位。平台落库后通过节点双向流下发创建指令，`provisionStatus` 记录 `pending/provisioned`。`capacityBytes=0` 表示无上限，其余正整数表示独立字节配额。
 文件路径: `src/modules/workspace`
 路由前缀: `api/v2/workspaces`
 已知限制: 删除工作区要求 `usedBytes=0`(网盘为空)，网盘残留内容的级联清理留后续迭代。
@@ -18,8 +18,8 @@
   - `ensureIndexes`: 初始化工作区与成员索引/ensure workspace indexes | keywords: ensure-workspace-indexes
   - `list`: 工作区列表(租户隔离)/list workspaces | keywords: list-workspaces
   - `get`: 获取工作区(校验租户边界)/get workspace by id | keywords: get-workspace-by-id
-  - `create(currentUser, input)`: 在租户所属 SuperClaw 下创建工作区并占用槽位 | keywords: 创建工作区, 占用节点槽位, create-workspace, reserve-super-claw-slot
-  - `update`: 更新工作区(名称/描述/容量)/update workspace | keywords: update-workspace
+  - `create(currentUser, input)`: 租户使用绑定节点、平台选择空闲节点创建工作区并下发创建命令 | keywords: 创建工作区, 占用节点槽位, create-workspace, reserve-super-claw-slot
+  - `update`: 更新工作区名称、描述或容量并重新同步绑定节点/update workspace and re-provision bound node | keywords: update-workspace
   - `remove(currentUser, id)`: 删除工作区及成员并释放节点槽位 | keywords: 删除工作区, 释放节点槽位, delete-workspace, release-super-claw-slot
   - `listMembers`: 成员列表/list workspace members | keywords: list-workspace-members
   - `addMember`: 添加成员(校验同租户用户)/add workspace member | keywords: add-workspace-member
@@ -53,10 +53,10 @@
 
 ### entities/workspace.entity.ts
 
-工作区与成员实体定义；`WorkspaceEntity.superClawId` 表示直接父节点。
+工作区与成员实体定义；`WorkspaceEntity.superClawId` 表示直接父节点，`provisionStatus` 表示节点实际创建状态，`capacityBytes=0` 表示无上限。
 
 - **关键词**: entity, workspace, member, member-role, super-claw-child
-- **类型导出**: `WorkspaceEntity`, `WorkspaceMemberEntity`, `WorkspaceMemberRole`
+- **类型导出**: `WorkspaceEntity`, `WorkspaceMemberEntity`, `WorkspaceMemberRole`, `WorkspaceProvisionStatus`
 
 ### constants/workspace-audit.constants.ts
 

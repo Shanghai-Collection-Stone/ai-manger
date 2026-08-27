@@ -202,6 +202,7 @@ const TaskCenterView = ({ currentUser }) => {
           const statusInfo =
             todo.status === 'pending' ? { status: 'pending', statusText: '待接单' } :
             todo.status === 'in_progress' ? { status: 'inprogress', statusText: '执行中' } :
+            todo.status === 'waiting_user' ? { status: 'inprogress', statusText: '等待介入中' } :
             todo.status === 'done' ? { status: 'completed', statusText: '已完成' } :
             todo.status === 'failed' ? { status: 'abnormal', statusText: '异常' } :
             todo.status === 'cancelled' ? { status: 'abnormal', statusText: '已取消' } :
@@ -227,6 +228,8 @@ const TaskCenterView = ({ currentUser }) => {
             updatedAt: todo.updatedAt || '',
             resource: todo.resource || '',
             taskResult: todo.taskResult || '',
+            rawStatus: todo.status || '',
+            sessionKey: todo.sessionKey || '',
           };
         });
       setTasks(mapped);

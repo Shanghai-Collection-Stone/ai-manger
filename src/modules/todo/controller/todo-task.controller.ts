@@ -148,7 +148,13 @@ export class TodoTaskController {
     @Param('todoId') todoId: string,
     @Body()
     body: {
-      status?: 'pending' | 'in_progress' | 'done' | 'failed' | 'cancelled';
+      status?:
+        | 'pending'
+        | 'in_progress'
+        | 'waiting_user'
+        | 'done'
+        | 'failed'
+        | 'cancelled';
       title?: string;
       description?: string;
       aiPlan?: string;

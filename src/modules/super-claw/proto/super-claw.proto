@@ -10,6 +10,51 @@ service SuperClawGateway {
 
   // 续期节点在线状态并上报节点侧容量观测值。
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // 获取当前节点所辖租户的对话列表。
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
+
+  // 在租户范围发起一次非流式 AI 对话。
+  rpc StartConversation(StartConversationRequest) returns (StartConversationResponse);
+
+  // 获取当前节点所辖租户的工作区列表。
+  rpc ListWorkspaces(ListWorkspacesRequest) returns (ListWorkspacesResponse);
+
+  // 节点建立双向长连接；平台根据节点租户归属主动推送任务。
+  rpc OpenTaskChannel(stream TaskChannelRequest) returns (stream TaskChannelEvent);
+
+  // 兼容旧节点的按租户拉取入口；无状态节点应使用 OpenTaskChannel。
+  rpc DispatchTask(DispatchTaskRequest) returns (TaskEnvelope);
+
+  // 节点向平台创建任务，响应返回仅用于该任务的专用 Token。
+  rpc CreateTask(CreateTaskRequest) returns (TaskEnvelope);
+
+  // 按租户列出任务；列表永不返回任务 Token。
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+
+  // 使用任务专用 Token 获取单个任务。
+  rpc GetTask(GetTaskRequest) returns (TaskEnvelope);
+
+  // 使用任务专用 Token 更新单个任务。
+  rpc UpdateTask(UpdateTaskRequest) returns (TaskEnvelope);
+
+  // 使用任务专用 Token 删除单个任务。
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
+
+  // 使用任务专用 Token 读取当前工作区已保存的浏览器登录态。
+  rpc GetBrowserSession(BrowserSessionRequest) returns (BrowserSessionResponse);
+
+  // 使用任务专用 Token 加密保存当前工作区浏览器登录态。
+  rpc UpsertBrowserSession(UpsertBrowserSessionRequest) returns (BrowserSessionResponse);
+
+  // 使用任务专用 Token 使当前工作区浏览器登录态失效。
+  rpc InvalidateBrowserSession(BrowserSessionRequest) returns (InvalidateBrowserSessionResponse);
+
+  // 为执行中的任务创建二维码登录或简短文本交互，并进入 waiting_user。
+  rpc CreateTaskInteraction(CreateTaskInteractionRequest) returns (TaskInteractionEnvelope);
+
+  // 使用任务专用 Token 查询任务交互和用户回复。
+  rpc GetTaskInteraction(GetTaskInteractionRequest) returns (TaskInteractionEnvelope);
 }
 
 message RegisterRequest {
@@ -63,4 +108,326 @@ message HeartbeatResponse {
 
   // 服务端 UTC 时间，RFC 3339/ISO 8601 格式。
   string server_time = 4;
+}
+
+message ListConversationsRequest {
+  string tenant_id = 1;
+}
+
+message Conversation {
+  string session_id = 1;
+  string session_type = 2;
+  string title = 3;
+  string created_at = 4;
+  string updated_at = 5;
+  string workspace_id = 6;
+}
+
+message ListConversationsResponse {
+  repeated Conversation conversations = 1;
+}
+
+message StartConversationRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string session_id = 3;
+  string input = 4;
+  string session_type = 5;
+  string workspace_id = 6;
+}
+
+message StartConversationResponse {
+  string session_id = 1;
+  string text = 2;
+}
+
+message ListWorkspacesRequest {
+  string tenant_id = 1;
+}
+
+message Workspace {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  string description = 4;
+  int64 capacity_bytes = 5;
+  int64 used_bytes = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message ListWorkspacesResponse {
+  repeated Workspace workspaces = 1;
+}
+
+message TaskResource {
+  string type = 1;
+  string resource_id = 2;
+}
+
+message Task {
+  int64 id = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  string title = 4;
+  string description = 5;
+  string type = 6;
+  string category = 7;
+  string assignee = 8;
+  string status = 9;
+  string ai_consideration = 10;
+  string decision_reason = 11;
+  string ai_plan = 12;
+  string abnormal_reason = 13;
+  string task_result = 14;
+  string deadline = 15;
+  string created_at = 16;
+  string updated_at = 17;
+  repeated TaskResource associated_resources = 18;
+  string workspace_id = 19;
+  string session_id = 20;
+  // 节点执行时必须遵循的登录态复用与人工介入链路。
+  string execution_guidance = 21;
+}
+
+message TaskEnvelope {
+  bool found = 1;
+  Task task = 2;
+  string task_token = 3;
+}
+
+message DispatchTaskRequest {
+  string tenant_id = 1;
+}
+
+message TaskChannelReady {
+  string instance_id = 1;
+  int32 available_slots = 2;
+}
+
+message TaskDeliveryAck {
+  string delivery_id = 1;
+  int64 task_id = 2;
+}
+
+message TaskDeliveryNack {
+  string delivery_id = 1;
+  int64 task_id = 2;
+  string reason = 3;
+  bool retryable = 4;
+}
+
+message TaskLeaseHeartbeat {
+  string delivery_id = 1;
+  int64 task_id = 2;
+}
+
+message TaskDeliveryComplete {
+  string delivery_id = 1;
+  int64 task_id = 2;
+}
+
+message TaskChannelPing {
+  string client_time = 1;
+}
+
+message WorkspaceProvisionAck {
+  string delivery_id = 1;
+  string workspace_id = 2;
+  bool success = 3;
+  string error = 4;
+}
+
+message TaskChannelRequest {
+  oneof payload {
+    TaskChannelReady ready = 1;
+    TaskDeliveryAck ack = 2;
+    TaskDeliveryNack nack = 3;
+    TaskLeaseHeartbeat lease = 4;
+    TaskDeliveryComplete completed = 5;
+    TaskChannelPing ping = 6;
+    WorkspaceProvisionAck workspace_ack = 7;
+  }
+}
+
+message TaskChannelHello {
+  string super_claw_id = 1;
+  string server_time = 2;
+  int32 ack_timeout_seconds = 3;
+  int32 lease_seconds = 4;
+}
+
+message TaskDispatch {
+  string delivery_id = 1;
+  Task task = 2;
+  string task_token = 3;
+  string dispatched_at = 4;
+  string ack_deadline = 5;
+  int32 lease_seconds = 6;
+  int32 attempt = 7;
+}
+
+message TaskChannelPong {
+  string client_time = 1;
+  string server_time = 2;
+}
+
+message WorkspaceProvision {
+  string delivery_id = 1;
+  string workspace_id = 2;
+  string tenant_id = 3;
+  string name = 4;
+  string description = 5;
+  int64 capacity_bytes = 6;
+}
+
+message TaskChannelEvent {
+  oneof payload {
+    TaskChannelHello hello = 1;
+    TaskDispatch task = 2;
+    TaskChannelPong pong = 3;
+    WorkspaceProvision workspace = 4;
+  }
+}
+
+message CreateTaskRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string title = 3;
+  string description = 4;
+  string type = 5;
+  string category = 6;
+  string assignee = 7;
+  string ai_consideration = 8;
+  string decision_reason = 9;
+  string ai_plan = 10;
+  string deadline = 11;
+  repeated TaskResource associated_resources = 12;
+  string workspace_id = 13;
+  string session_id = 14;
+}
+
+message ListTasksRequest {
+  string tenant_id = 1;
+  string status = 2;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+}
+
+message GetTaskRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+}
+
+message UpdateTaskRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+  optional string title = 4;
+  optional string description = 5;
+  optional string status = 6;
+  optional string abnormal_reason = 7;
+  optional string task_result = 8;
+  repeated XhsPostStat xhs_stats = 9;
+}
+
+message XhsTopComment {
+  string content = 1;
+  int64 like_count = 2;
+  int64 reply_count = 3;
+}
+
+message XhsPostStat {
+  string tag = 1;
+  string post_title = 2;
+  string post_url = 3;
+  string author_url = 4;
+  int64 like_count = 5;
+  int64 comment_count = 6;
+  int64 collect_count = 7;
+  optional int64 view_count = 8;
+  optional int64 share_count = 9;
+  repeated XhsTopComment top_comments = 10;
+  string data_at = 11;
+}
+
+message DeleteTaskRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+}
+
+message DeleteTaskResponse {
+  bool deleted = 1;
+}
+
+message BrowserSessionRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+  string site = 4;
+  string profile = 5;
+}
+
+message UpsertBrowserSessionRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+  string site = 4;
+  string profile = 5;
+  string storage_state_json = 6;
+  string expires_at = 7;
+}
+
+message BrowserSessionResponse {
+  bool found = 1;
+  string site = 2;
+  string profile = 3;
+  string storage_state_json = 4;
+  string expires_at = 5;
+  string updated_at = 6;
+}
+
+message InvalidateBrowserSessionResponse {
+  bool deleted = 1;
+}
+
+message CreateTaskInteractionRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+  string kind = 4;
+  string title = 5;
+  string prompt = 6;
+  string qr_content = 7;
+  string expires_at = 8;
+}
+
+message GetTaskInteractionRequest {
+  string tenant_id = 1;
+  int64 task_id = 2;
+  string task_token = 3;
+  string interaction_id = 4;
+}
+
+message TaskInteraction {
+  string id = 1;
+  int64 task_id = 2;
+  string kind = 3;
+  string status = 4;
+  string title = 5;
+  string prompt = 6;
+  string qr_content = 7;
+  string response = 8;
+  string expires_at = 9;
+  string answered_at = 10;
+  string created_at = 11;
+}
+
+message TaskInteractionEnvelope {
+  bool found = 1;
+  TaskInteraction interaction = 2;
 }

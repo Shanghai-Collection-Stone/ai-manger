@@ -49,8 +49,31 @@ export class TodoService {
     await this.todos.createIndex({ userId: 1 });
     await this.todos.createIndex({ status: 1 });
     await this.todos.createIndex({ type: 1 });
+    await this.todos.createIndex({ workspaceId: 1, status: 1, createdAt: 1 });
     await this.todos.createIndex({ category: 1 });
     await this.todos.createIndex({ assignee: 1 });
+    await this.todos.createIndex({
+      tenantId: 1,
+      assignee: 1,
+      status: 1,
+      deadline: 1,
+      createdAt: 1,
+    });
+    await this.todos.createIndex({
+      taskDeliverySuperClawId: 1,
+      taskDeliveryLeaseExpiresAt: 1,
+      status: 1,
+    });
+    await this.todos.createIndex({
+      tenantId: 1,
+      status: 1,
+      taskDeliveryAckDeadline: 1,
+    });
+    await this.todos.createIndex({
+      tenantId: 1,
+      status: 1,
+      taskDeliveryLeaseExpiresAt: 1,
+    });
     await this.todos.createIndex(
       { taskToken: 1 },
       { unique: true, sparse: true },
@@ -151,6 +174,8 @@ export class TodoService {
       aiConsideration: input.aiConsideration,
       decisionReason: input.decisionReason,
       aiPlan: input.aiPlan,
+      workspaceId: input.workspaceId,
+      sessionKey: input.sessionKey,
       deadline: input.deadline,
       callbacks: input.callbacks,
       status: 'pending',
@@ -169,9 +194,13 @@ export class TodoService {
    * @since 2026-01-27
    */
   async update(input: TodoUpdateInput): Promise<TodoEntity | null> {
+    const authFilter = input.expectedTaskToken
+      ? { taskToken: input.expectedTaskToken }
+      : {};
     const existing = await this.todos.findOne({
       id: input.id,
       ...this.buildTenantFilter(input.tenantId),
+      ...authFilter,
     });
     if (!existing) {
       this.logger.warn(
@@ -194,7 +223,7 @@ export class TodoService {
     const now = new Date();
     const upd: Record<string, unknown> = { updatedAt: now };
     for (const [k, v] of Object.entries(input)) {
-      if (k === 'id') continue;
+      if (k === 'id' || k === 'expectedTaskToken') continue;
       if (typeof v !== 'undefined') upd[k] = v;
     }
     const nextAssignee =
@@ -213,9 +242,33 @@ export class TodoService {
     if (typeof input.associatedResources !== 'undefined') {
       upd.associatedResources = input.associatedResources;
     }
+    const terminal =
+      input.status === 'done' ||
+      input.status === 'failed' ||
+      input.status === 'cancelled';
+    if (terminal && existing.taskDeliveryId) {
+      upd.taskToken = randomUUID().replace(/-/g, '');
+    }
     const res = await this.todos.findOneAndUpdate(
-      { id: input.id, ...this.buildTenantFilter(input.tenantId) },
-      { $set: upd },
+      {
+        id: input.id,
+        ...this.buildTenantFilter(input.tenantId),
+        ...authFilter,
+      },
+      {
+        $set: upd,
+        ...(terminal
+          ? {
+              $unset: {
+                taskDeliveryId: '',
+                taskDeliverySuperClawId: '',
+                taskDeliveryAckDeadline: '',
+                taskDeliveryLeaseExpiresAt: '',
+                taskDeliveryAcknowledgedAt: '',
+              },
+            }
+          : {}),
+      },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     const updated = res.value ?? null;
@@ -226,10 +279,64 @@ export class TodoService {
       (updated.status === 'done' || updated.status === 'failed') &&
       existing.status !== updated.status
     ) {
-      this.callbackSvc.processCallbacks(updated as TodoEntity);
+      this.callbackSvc.processCallbacks(updated);
     }
 
     return updated;
+  }
+
+  /**
+   * @description 用户完成扫码或简短回复后恢复等待中的 Todo；有效租约仍在时回到执行中，
+   *   否则清理旧投递、轮换 Token 并回到 pending 等待重新下发。
+   * @keyword-cn 恢复等待用户任务, 轮换旧令牌
+   * @keyword-en resume-waiting-user-task, rotate-stale-token
+   */
+  async resumeAfterInteraction(
+    id: number,
+    tenantId?: string,
+  ): Promise<TodoEntity | null> {
+    const existing = await this.todos.findOne({
+      id,
+      ...this.buildTenantFilter(tenantId),
+      status: 'waiting_user',
+    });
+    if (!existing) return null;
+    const now = new Date();
+    const leaseActive = Boolean(
+      existing.taskDeliveryId &&
+        existing.taskDeliveryAcknowledgedAt &&
+        existing.taskDeliveryLeaseExpiresAt &&
+        existing.taskDeliveryLeaseExpiresAt.getTime() > now.getTime(),
+    );
+    const result = await this.todos.findOneAndUpdate(
+      {
+        id,
+        ...this.buildTenantFilter(tenantId),
+        status: 'waiting_user',
+      },
+      leaseActive
+        ? {
+            $set: { status: 'in_progress', updatedAt: now },
+            $unset: { abnormalReason: '' },
+          }
+        : {
+            $set: {
+              status: 'pending',
+              taskToken: randomUUID().replace(/-/g, ''),
+              updatedAt: now,
+            },
+            $unset: {
+              abnormalReason: '',
+              taskDeliveryId: '',
+              taskDeliverySuperClawId: '',
+              taskDeliveryAckDeadline: '',
+              taskDeliveryLeaseExpiresAt: '',
+              taskDeliveryAcknowledgedAt: '',
+            },
+          },
+      { returnDocument: 'after', includeResultMetadata: true },
+    );
+    return result.value ?? null;
   }
 
   /**
@@ -320,6 +427,369 @@ export class TodoService {
       .find(filter, { projection: { _id: 0 } })
       .sort({ updatedAt: -1 })
       .toArray();
+  }
+
+  /**
+   * @description 按租户和专用 Agent assignee 原子领取最早的 pending 任务并推进为 in_progress；跳过已被主动推送预留的任务。
+   * @keyword-cn 原子领取任务, SuperClaw下发
+   * @keyword-en atomic-task-claim, super-claw-dispatch
+   * @param input 租户与允许领取的 assignee 集合。
+   * @returns {Promise<TodoEntity | null>} 领取后的任务，无待领任务时为 null。
+   */
+  async claimNextByAssignees(input: {
+    tenantId: string;
+    assignees: string[];
+  }): Promise<TodoEntity | null> {
+    if (input.assignees.length === 0) return null;
+    const now = new Date();
+    return await this.todos.findOneAndUpdate(
+      {
+        tenantId: input.tenantId,
+        assignee: { $in: input.assignees },
+        status: 'pending',
+        $and: [
+          {
+            $or: [{ deadline: { $exists: false } }, { deadline: { $gt: now } }],
+          },
+          // 主动推送通道已经预留但还没 ACK 的任务在此不可见，
+          // 否则拉取端会与推送端同时领走同一条任务并重复启动抓取。
+          {
+            $or: [
+              { taskDeliveryAckDeadline: { $exists: false } },
+              { taskDeliveryAckDeadline: { $lte: now } },
+            ],
+          },
+        ],
+      },
+      { $set: { status: 'in_progress', updatedAt: now } },
+      { sort: { createdAt: 1 }, returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 为平台主动推送原子预留节点所辖租户中最早的 pending 任务，并在同一写操作轮换任务 Token。
+   * @keyword-cn 预留推送任务, 轮换任务令牌
+   * @keyword-en reserve-push-task, rotate-task-token
+   */
+  async reserveNextForDelivery(input: {
+    tenantIds: string[];
+    workspaceIds: string[];
+    assignees: string[];
+    includePlatform?: boolean;
+    superClawId: string;
+    deliveryId: string;
+    ackDeadline: Date;
+    maxExecutionAttempts?: number;
+  }): Promise<TodoEntity | null> {
+    if (
+      (!input.tenantIds.length && !input.includePlatform) ||
+      !input.workspaceIds.length ||
+      !input.assignees.length
+    ) {
+      return null;
+    }
+    await this.requeueExpiredTaskDeliveries(
+      input.tenantIds,
+      input.includePlatform,
+    );
+    if (input.maxExecutionAttempts) {
+      await this.failExhaustedTaskDeliveries(
+        input.workspaceIds,
+        input.maxExecutionAttempts,
+      );
+    }
+    const now = new Date();
+    return await this.todos.findOneAndUpdate(
+      {
+        $or: [
+          ...(input.tenantIds.length
+            ? [{ tenantId: { $in: input.tenantIds } }]
+            : []),
+          ...(input.includePlatform
+            ? [
+                { tenantId: '' },
+                { tenantId: { $type: 'null' as const } },
+                { tenantId: { $exists: false } },
+              ]
+            : []),
+        ],
+        workspaceId: { $in: input.workspaceIds },
+        assignee: { $in: input.assignees },
+        status: 'pending',
+        $and: [
+          {
+            $or: [{ deadline: { $exists: false } }, { deadline: { $gt: now } }],
+          },
+          {
+            $or: [
+              { taskDeliveryAckDeadline: { $exists: false } },
+              { taskDeliveryAckDeadline: { $lte: now } },
+            ],
+          },
+          ...(input.maxExecutionAttempts
+            ? [
+                {
+                  $or: [
+                    { taskExecutionAttempts: { $exists: false } },
+                    {
+                      taskExecutionAttempts: {
+                        $lt: input.maxExecutionAttempts,
+                      },
+                    },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      },
+      {
+        $set: {
+          taskToken: randomUUID().replace(/-/g, ''),
+          taskDeliveryId: input.deliveryId,
+          taskDeliverySuperClawId: input.superClawId,
+          taskDeliveryAckDeadline: input.ackDeadline,
+          updatedAt: now,
+        },
+        $unset: {
+          taskDeliveryLeaseExpiresAt: '',
+          taskDeliveryAcknowledgedAt: '',
+        },
+        $inc: { taskDispatchAttempts: 1 },
+      },
+      { sort: { createdAt: 1 }, returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 确认节点已经收到推送任务，并把预留转为带服务端租约的 in_progress。
+   * @keyword-cn 确认推送任务, 启动执行租约
+   * @keyword-en acknowledge-push-task, start-execution-lease
+   */
+  async acknowledgeTaskDelivery(input: {
+    id: number;
+    superClawId: string;
+    deliveryId: string;
+    leaseExpiresAt: Date;
+  }): Promise<TodoEntity | null> {
+    const now = new Date();
+    return await this.todos.findOneAndUpdate(
+      {
+        id: input.id,
+        status: 'pending',
+        taskDeliveryId: input.deliveryId,
+        taskDeliverySuperClawId: input.superClawId,
+        taskDeliveryAckDeadline: { $gt: now },
+      },
+      {
+        $set: {
+          status: 'in_progress',
+          taskDeliveryAcknowledgedAt: now,
+          taskDeliveryLeaseExpiresAt: input.leaseExpiresAt,
+          updatedAt: now,
+        },
+        // ACK 才代表节点真正开始跑这条任务，重复领取的封顶只按这个计数，
+        // 避免 EXECUTOR_BUSY 这类未开工的 NACK 也消耗重试额度。
+        $inc: { taskExecutionAttempts: 1 },
+        $unset: { taskDeliveryAckDeadline: '' },
+      },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 续期已确认任务的服务端执行租约；等待人工介入期间节点仍持有租约。
+   * @keyword-cn 续期任务租约, 节点执行心跳
+   * @keyword-en renew-task-lease, node-execution-heartbeat
+   */
+  async renewTaskDeliveryLease(input: {
+    id: number;
+    superClawId: string;
+    deliveryId: string;
+    leaseExpiresAt: Date;
+  }): Promise<boolean> {
+    const result = await this.todos.updateOne(
+      {
+        id: input.id,
+        status: { $in: ['in_progress', 'waiting_user'] },
+        taskDeliveryId: input.deliveryId,
+        taskDeliverySuperClawId: input.superClawId,
+      },
+      {
+        $set: {
+          taskDeliveryLeaseExpiresAt: input.leaseExpiresAt,
+          updatedAt: new Date(),
+        },
+      },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * @description 释放断线、拒绝或超时投递并立即轮换 Token；普通任务退回 pending，
+   *   等待人工介入的任务保持 waiting_user，避免尚未处理就被重复投递。
+   * @keyword-cn 释放任务租约, 失效旧令牌
+   * @keyword-en release-task-lease, invalidate-stale-token
+   */
+  async releaseTaskDelivery(input: {
+    id: number;
+    superClawId: string;
+    deliveryId: string;
+  }): Promise<boolean> {
+    const existing = await this.todos.findOne({
+      id: input.id,
+      status: { $in: ['pending', 'in_progress', 'waiting_user'] },
+      taskDeliveryId: input.deliveryId,
+      taskDeliverySuperClawId: input.superClawId,
+    });
+    if (!existing) return false;
+    const result = await this.todos.updateOne(
+      {
+        id: input.id,
+        status: existing.status,
+        taskDeliveryId: input.deliveryId,
+        taskDeliverySuperClawId: input.superClawId,
+      },
+      {
+        $set: {
+          status:
+            existing.status === 'waiting_user' ? 'waiting_user' : 'pending',
+          taskToken: randomUUID().replace(/-/g, ''),
+          updatedAt: new Date(),
+        },
+        $unset: {
+          taskDeliveryId: '',
+          taskDeliverySuperClawId: '',
+          taskDeliveryAckDeadline: '',
+          taskDeliveryLeaseExpiresAt: '',
+          taskDeliveryAcknowledgedAt: '',
+        },
+      },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * @description 把已经被节点反复领取但始终没写入终态的任务标记为 failed，阻断无限重投与重复启动抓取。
+   * @keyword-cn 封顶重复领取, 阻断无限重投
+   * @keyword-en cap-repeated-claim, stop-infinite-redelivery
+   * @param workspaceIds 参与主动推送的工作区集合。
+   * @param maxExecutionAttempts 允许节点开始执行同一任务的最大次数。
+   * @returns {Promise<number>} 被判定为耗尽重试的任务数量。
+   */
+  async failExhaustedTaskDeliveries(
+    workspaceIds: string[],
+    maxExecutionAttempts: number,
+  ): Promise<number> {
+    if (!workspaceIds.length || maxExecutionAttempts < 1) return 0;
+    const now = new Date();
+    const result = await this.todos.updateMany(
+      {
+        workspaceId: { $in: workspaceIds },
+        status: 'pending',
+        taskExecutionAttempts: { $gte: maxExecutionAttempts },
+      },
+      {
+        $set: {
+          status: 'failed',
+          abnormalReason: `SUPER_CLAW_REDELIVERY_EXHAUSTED: 已被节点领取执行 ${maxExecutionAttempts} 次仍未写入终态，平台停止重投。`,
+          taskToken: randomUUID().replace(/-/g, ''),
+          updatedAt: now,
+        },
+        $unset: {
+          taskDeliveryId: '',
+          taskDeliverySuperClawId: '',
+          taskDeliveryAckDeadline: '',
+          taskDeliveryLeaseExpiresAt: '',
+          taskDeliveryAcknowledgedAt: '',
+        },
+      },
+    );
+    if (result.modifiedCount > 0) {
+      this.logger.warn(
+        `[failExhaustedTaskDeliveries] count=${result.modifiedCount} maxExecutionAttempts=${maxExecutionAttempts}`,
+      );
+    }
+    return result.modifiedCount;
+  }
+
+  /**
+   * @description 回收节点异常退出或服务重启后已经过期的任务租约，并轮换全部旧 Token。
+   * @keyword-cn 回收过期租约, 恢复待推送任务
+   * @keyword-en reclaim-expired-leases, recover-pending-dispatch
+   */
+  async requeueExpiredTaskDeliveries(
+    tenantIds: string[],
+    includePlatform = false,
+  ): Promise<number> {
+    if (!tenantIds.length && !includePlatform) return 0;
+    const now = new Date();
+    const tenantScope = [
+      ...(tenantIds.length ? [{ tenantId: { $in: tenantIds } }] : []),
+      ...(includePlatform
+        ? [
+            { tenantId: '' },
+            { tenantId: { $type: 'null' as const } },
+            { tenantId: { $exists: false } },
+          ]
+        : []),
+    ];
+    const rows = await this.todos
+      .find({
+        status: { $in: ['pending', 'in_progress', 'waiting_user'] },
+        $and: [
+          { $or: tenantScope },
+          {
+            $or: [
+              { taskDeliveryAckDeadline: { $lte: now } },
+              { taskDeliveryLeaseExpiresAt: { $lte: now } },
+            ],
+          },
+        ],
+      })
+      .project<{
+        id: number;
+        tenantId?: string | null;
+        status: TodoEntity['status'];
+      }>({ id: 1, tenantId: 1, status: 1 })
+      .toArray();
+    let reclaimed = 0;
+    for (const row of rows) {
+      const result = await this.todos.updateOne(
+        {
+          id: row.id,
+          ...(row.tenantId
+            ? { tenantId: row.tenantId }
+            : {
+                $or: [
+                  { tenantId: '' },
+                  { tenantId: { $type: 'null' as const } },
+                  { tenantId: { $exists: false } },
+                ],
+              }),
+          status: row.status,
+          $or: [
+            { taskDeliveryAckDeadline: { $lte: now } },
+            { taskDeliveryLeaseExpiresAt: { $lte: now } },
+          ],
+        },
+        {
+          $set: {
+            status: row.status === 'waiting_user' ? 'waiting_user' : 'pending',
+            taskToken: randomUUID().replace(/-/g, ''),
+            updatedAt: now,
+          },
+          $unset: {
+            taskDeliveryId: '',
+            taskDeliverySuperClawId: '',
+            taskDeliveryAckDeadline: '',
+            taskDeliveryLeaseExpiresAt: '',
+            taskDeliveryAcknowledgedAt: '',
+          },
+        },
+      );
+      reclaimed += result.modifiedCount;
+    }
+    return reclaimed;
   }
 
   async createItem(input: TodoItemCreateInput): Promise<TodoItemEntity> {

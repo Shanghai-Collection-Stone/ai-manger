@@ -171,8 +171,7 @@ export class ChatMainService {
     const nonStreamToolCalls = ai.tool_calls;
     let derivedToolResults: { name?: unknown; output?: unknown }[] | undefined;
     const directToolResults:
-      | { name?: unknown; output?: unknown }[]
-      | undefined = Array.isArray(
+      { name?: unknown; output?: unknown }[] | undefined = Array.isArray(
       (ai as unknown as Record<string, unknown>)['tool_results'],
     )
       ? ((ai as unknown as Record<string, unknown>)['tool_results'] as {
@@ -442,8 +441,7 @@ export class ChatMainService {
           // 放弃 StateGraph: supervisor 作为图节点时 minimax 会被多代理执行上下文
           // 带偏(模仿历史里的工具调用文本、不老实输出路由词),拆成两步后彻底解耦。
           let preBuiltAgent:
-            | ReturnType<SupervisorGraphService['buildExpertAgent']>
-            | undefined;
+            ReturnType<SupervisorGraphService['buildExpertAgent']> | undefined;
           // ⚠️ ctx.appendMessage 在 stream 入口已写入当前 user 输入,历史已含最新一条。
           let streamMessages: BaseMessageLike[] = [
             new HumanMessage(request.input),
@@ -590,8 +588,7 @@ export class ChatMainService {
 
           let endToolCalls: unknown[] | undefined;
           let endToolResults:
-            | { name?: unknown; output?: unknown }[]
-            | undefined;
+            { name?: unknown; output?: unknown }[] | undefined;
           const observedToolResults: { name?: unknown; output?: unknown }[] =
             [];
 
@@ -670,8 +667,7 @@ export class ChatMainService {
               }
               case 'error': {
                 const errObj = step.data.error as
-                  | (Error & { code?: string; cause?: unknown })
-                  | undefined;
+                  (Error & { code?: string; cause?: unknown }) | undefined;
                 const errCode = errObj?.code || errObj?.name || 'STREAM_ERROR';
                 const errMsg = errObj?.message ?? 'STREAM_ERROR';
                 // 后端也完整打 log,避免前端能看到细节但后端只剩简短一行
@@ -1409,13 +1405,7 @@ export class ChatMainService {
   private getSupervisorPromptCN(
     envContext: string,
     currentActionSession?:
-      | 'image'
-      | 'article'
-      | 'data'
-      | 'frontend'
-      | 'publisher'
-      | 'task'
-      | null,
+      'image' | 'article' | 'data' | 'frontend' | 'publisher' | 'task' | null,
   ): string {
     const expertLabel: Record<string, string> = {
       image: '图组生图专家',
@@ -1524,13 +1514,7 @@ export class ChatMainService {
     sessionType: ConversationSessionType,
     envContext: string,
     currentActionSession?:
-      | 'image'
-      | 'article'
-      | 'data'
-      | 'frontend'
-      | 'publisher'
-      | 'task'
-      | null,
+      'image' | 'article' | 'data' | 'frontend' | 'publisher' | 'task' | null,
   ): string {
     if (sessionType === 'xhs-specialist') {
       return this.getXhsSupervisorPromptCN(envContext, currentActionSession);
@@ -1561,13 +1545,7 @@ export class ChatMainService {
   private getXhsSupervisorPromptCN(
     envContext: string,
     currentActionSession?:
-      | 'image'
-      | 'article'
-      | 'data'
-      | 'frontend'
-      | 'publisher'
-      | 'task'
-      | null,
+      'image' | 'article' | 'data' | 'frontend' | 'publisher' | 'task' | null,
   ): string {
     const actionCtx = currentActionSession
       ? `【当前会话上下文】上一轮已激活小红书专家路由: ${currentActionSession}。用户若在确认、补充时间/账号/篇数/标签/发布范围,优先延续该路由。`
@@ -2059,6 +2037,7 @@ export class ChatMainService {
   } {
     const tenantId = request.tenantId?.trim();
     const userId = request.userId?.trim();
+    const workspaceId = request.workspaceId?.trim();
     const validTypes: ConversationSessionType[] = [
       'default',
       'thought',
@@ -2078,6 +2057,7 @@ export class ChatMainService {
     return {
       tenantId: tenantId || undefined,
       userId: userId || undefined,
+      workspaceId: workspaceId || undefined,
       sessionType,
       category,
     };

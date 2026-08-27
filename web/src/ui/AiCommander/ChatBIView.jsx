@@ -591,8 +591,9 @@ function extractAllHandoffBlocks(text) {
 /* ─── Task-it Inline Card ─── */
 
 /**
- * @description Task-it 内联卡片：自动加载任务状态，展示执行节点，支持打开任务详情面板
- * @keyword-en TaskItCard inline task preview polling modal
+ * @description Task-it 内联卡片：自动加载任务状态，展示执行节点，支持打开任务详情面板。
+ * @keyword-cn 任务状态卡片, 执行节点
+ * @keyword-en task-status-card, execution-node
  */
 const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
   const [todo, setTodo] = useState(null);
@@ -654,13 +655,22 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
     loadTodo().finally(() => setLoading(false));
   }, [loadTodo]);
 
-  /* in_progress/pending 时每 6 秒轮询 */
+  /* in_progress/pending/waiting_user 时每 6 秒轮询 */
   useEffect(() => {
     const status = todo?.status;
-    if (status !== 'in_progress' && status !== 'pending') return;
+    if (
+      status !== 'in_progress' &&
+      status !== 'pending' &&
+      status !== 'waiting_user'
+    )
+      return;
     const timer = setInterval(async () => {
       const next = await loadTodo();
-      if (next?.status !== 'in_progress' && next?.status !== 'pending')
+      if (
+        next?.status !== 'in_progress' &&
+        next?.status !== 'pending' &&
+        next?.status !== 'waiting_user'
+      )
         clearInterval(timer);
     }, 6000);
     return () => clearInterval(timer);
@@ -672,7 +682,9 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
   }, [showModal, loadItems]);
 
   const status = todo?.status || initialPayload?.status || '';
-  const isActive = status === 'in_progress' || status === 'pending';
+  const isWaitingUser = status === 'waiting_user';
+  const isActive =
+    status === 'in_progress' || status === 'pending' || isWaitingUser;
   const title = todo?.title || `Todo#${todoId}`;
   const taskType = todo?.type || '';
 
@@ -680,6 +692,7 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
     {
       in_progress: 'text-blue-600',
       pending: 'text-amber-600',
+      waiting_user: 'text-violet-600',
       done: 'text-green-600',
       completed: 'text-green-600',
       failed: 'text-red-600',
@@ -689,6 +702,7 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
     {
       in_progress: '执行中',
       pending: '待接单',
+      waiting_user: '等待介入中',
       done: '已完成',
       completed: '已完成',
       failed: '失败',
@@ -748,7 +762,7 @@ const TaskItCard = React.memo(({ todoId, initialPayload, onOpenTodo }) => {
             {title !== `Todo#${todoId}` ? ` · ${title}` : ''}
           </span>
           {/* 状态指示 */}
-          {isActive ? (
+          {isActive && !isWaitingUser ? (
             <span
               className={`flex items-center gap-1 text-[11px] shrink-0 ${statusColor}`}
             >
@@ -1850,6 +1864,29 @@ const ChatBIView = ({
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    /**
+     * @description 接收任务详情页发出的返回对话事件并切换到任务绑定会话。
+     * @keyword-cn 打开任务对话, 会话切换
+     * @keyword-en open-task-conversation, session-switch
+     */
+    const openTaskConversation = (event) => {
+      const targetSessionId = String(event?.detail?.sessionId || '').trim();
+      if (!targetSessionId) return;
+      void handleSwitchSession({ sessionId: targetSessionId });
+    };
+    window.addEventListener(
+      'web.AiCommander.task.openSession',
+      openTaskConversation,
+    );
+    return () => {
+      window.removeEventListener(
+        'web.AiCommander.task.openSession',
+        openTaskConversation,
+      );
+    };
+  }, [sessionId, sessions]);
 
   /* ─── Send message with SSE streaming ─── */
   const handleSend = async (overrideText) => {

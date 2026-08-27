@@ -36,6 +36,7 @@ import { NoticeModule } from './modules/notice/notice.module.js';
 import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
 import { XhsTopicDataModule } from './modules/xhs-topic-data/xhs-topic-data.module.js';
 import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
+import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
     XhsTopicModule,
     XhsTopicDataModule,
     SuperClawModule,
+    BrowserAuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

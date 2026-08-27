@@ -14,7 +14,10 @@ import { SuperClawModule } from '../super-claw/super-claw.module.js';
 @Module({
   imports: [DataSourceModule, AdminModule, AuditLogModule, SuperClawModule],
   controllers: [WorkspaceController],
-  providers: [WorkspaceService],
-  exports: [WorkspaceService],
+  providers: [
+    WorkspaceService,
+    { provide: 'WorkspaceService', useExisting: WorkspaceService },
+  ],
+  exports: [WorkspaceService, 'WorkspaceService'],
 })
 export class WorkspaceModule {}

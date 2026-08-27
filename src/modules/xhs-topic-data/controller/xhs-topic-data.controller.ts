@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -26,6 +27,7 @@ import {
   DeleteXhsTopicDayDto,
   UpdateXhsCrawlSettingsDto,
   UpdateXhsCrawlStatusDto,
+  UpdateXhsCrawlWindowDto,
   XhsTopicDataPageDto,
   XhsTopicOpinionQueryDto,
 } from './xhs-topic-data.dto.js';
@@ -157,6 +159,7 @@ export class XhsTopicDataController {
       page,
       pageSize,
       agentAvailable: await this.crawlService.hasTrackingAgent(),
+      schedule: await this.crawlService.getScheduleStatus(topicId),
     };
   }
 
@@ -180,9 +183,15 @@ export class XhsTopicDataController {
     });
     if (!updated) throw new NotFoundException('XHS_TOPIC_NOT_FOUND');
     if (dto.status === 'cancelled') {
+      await this.crawlService.pauseScheduleForTopic(topicId);
       const cancelledTasks =
         await this.crawlService.cancelRunningTasks(topicId);
       return { crawlStatus: dto.status, cancelledTasks };
+    }
+    const resumedSchedule =
+      await this.crawlService.resumeScheduleForTopic(topicId);
+    if (resumedSchedule) {
+      return { crawlStatus: dto.status, scheduleResumed: true };
     }
     const task = await this.crawlService.createCrawlTask(updated, 'manual');
     return { crawlStatus: dto.status, resumedTaskId: task?.id };
@@ -203,6 +212,39 @@ export class XhsTopicDataController {
     const task = await this.crawlService.createCrawlTask(topic, 'manual');
     if (!task) throw new NotFoundException('XHS_CRAWL_AGENT_UNAVAILABLE');
     return { taskId: task.id, todoId: task.todoId };
+  }
+
+  /**
+   * @description 设置已发布子选题的周期抓取起止区间，默认两周区间可在这里覆盖。
+   * @keyword-cn 设置抓取区间接口, 采集时限
+   * @keyword-en update-crawl-window-endpoint, collection-deadline
+   */
+  @Put(':topicId/crawl-window')
+  @RequirePermission('update', 'XhsTopic')
+  async updateCrawlWindow(
+    @Req() req: AdminRequest,
+    @Param('topicId', ParseIntPipe) topicId: number,
+    @Body() dto: UpdateXhsCrawlWindowDto,
+  ) {
+    await this.requireTopic(req, topicId);
+    const startAt = new Date(dto.startAt);
+    const endAt = new Date(dto.endAt);
+    if (endAt.getTime() <= startAt.getTime()) {
+      throw new BadRequestException('INVALID_CRAWL_WINDOW');
+    }
+    const schedule = await this.crawlService.setScheduleWindow(
+      topicId,
+      startAt,
+      endAt,
+    );
+    if (!schedule) throw new NotFoundException('XHS_CRAWL_SCHEDULE_NOT_FOUND');
+    return {
+      topicId,
+      status: schedule.status,
+      startAt: schedule.startAt.toISOString(),
+      endAt: schedule.endAt.toISOString(),
+      nextRunAt: schedule.nextRunAt.toISOString(),
+    };
   }
 
   /**

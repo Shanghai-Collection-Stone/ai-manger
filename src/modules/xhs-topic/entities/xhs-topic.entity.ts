@@ -9,13 +9,14 @@ import type { ObjectId } from 'mongodb';
 export type XhsTopicKind = 'mother' | 'child';
 
 /**
- * @description Agent 通过内存追加工具写入的单条选题候选。
- * @keyword-cn 选题候选, 题目类型
- * @keyword-en topic-candidate, topic-type
+ * @description Agent 或用户写入的单条选题候选；母题可同时携带固定配图图库标签。
+ * @keyword-cn 选题候选, 题目类型, 母题配图标签
+ * @keyword-en topic-candidate, topic-type, mother-image-tags
  */
 export interface XhsTopicCandidate {
   title: string;
   topicType: string;
+  imageTags?: string[];
 }
 
 /**
@@ -162,6 +163,8 @@ export interface XhsTopicEntity {
   parentId?: number;
   title: string;
   topicType: string;
+  /** 母选题专用的固定配图图库标签，空数组表示沿用 Agent 自动匹配 */
+  imageTags?: string[];
   status: XhsTopicStatus;
   article?: XhsTopicArticle;
   /** 子选题专用的数据抓取开关状态，母选题不写该字段 */
@@ -216,6 +219,7 @@ export interface XhsTopicWorkspaceGroup {
   id: number;
   title: string;
   topicType: string;
+  imageTags: string[];
   topicCount: number;
   sourceTodoId?: number;
   createdAt: string;
@@ -224,13 +228,14 @@ export interface XhsTopicWorkspaceGroup {
 }
 
 /**
- * @description 修改已入库选题标题、题目类型或状态的输入。
- * @keyword-cn 更新选题输入, 选题状态
- * @keyword-en update-topic-input, topic-status
+ * @description 修改已入库选题标题、题目类型、状态或母题固定配图标签的输入。
+ * @keyword-cn 更新选题输入, 选题状态, 母题配图标签
+ * @keyword-en update-topic-input, topic-status, mother-image-tags
  */
 export interface XhsTopicUpdateInput {
   title?: string;
   topicType?: string;
+  imageTags?: string[];
   status?: XhsTopicStatus;
 }
 

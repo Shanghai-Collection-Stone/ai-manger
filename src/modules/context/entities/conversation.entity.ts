@@ -25,13 +25,7 @@ export type ConversationSessionType =
  * @keyword-en active expert agent persisted on conversation
  */
 export type ConversationActionSession =
-  | 'image'
-  | 'article'
-  | 'data'
-  | 'frontend'
-  | 'publisher'
-  | 'task'
-  | null;
+  'image' | 'article' | 'data' | 'frontend' | 'publisher' | 'task' | null;
 
 /**
  * @title 会话实体 Conversation Entity
@@ -47,6 +41,8 @@ export interface ConversationEntity {
   actionSession?: ConversationActionSession;
   tenantId?: string;
   userId?: string;
+  /** 会话绑定的平台工作区；任务型会话必须设置。 */
+  workspaceId?: string;
   title?: string;
   keywords?: string[];
   lastCheckpointId?: string;

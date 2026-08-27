@@ -18,6 +18,13 @@ const LONG_RUNNING_AGENT = new Agent({
   keepAliveMaxTimeout: 60 * 60 * 1000,
 });
 
+/**
+ * @description SuperClaw 节点通过 gRPC 领取数据采集 Todo 使用的专用 Agent 模块标识。
+ * @keyword-cn SuperClaw数据抓取, 专用代理模块
+ * @keyword-en super-claw-data-tracking, dedicated-agent-module
+ */
+export const SUPER_CLAW_DATA_TRACKING_AGENT_MODULE = 'super_claw_data_tracking';
+
 export interface AutoTaskRobotDescriptor {
   code: string;
   name: string;
@@ -227,6 +234,15 @@ export class RobotRegistryService {
       if (robotCode === 'claw') {
         await this.handleClawRobot(todo, agentConfig, agentCtx);
         this.logRobot('handle_completed', {
+          todoId: todo.id,
+          robotCode,
+          agentId,
+        });
+        return { triggered: true, robotCode };
+      }
+      if (robotCode === SUPER_CLAW_DATA_TRACKING_AGENT_MODULE) {
+        await this.handleSuperClawDataTracking(todo, agentCtx);
+        this.logRobot('handle_waiting_for_super_claw', {
           todoId: todo.id,
           robotCode,
           agentId,
@@ -617,7 +633,7 @@ export class RobotRegistryService {
     });
 
     // Fire-and-forget：长时 AI 任务使用 LONG_RUNNING_AGENT，超时 60 分钟
-    fetch(endpoint, {
+    void fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -626,7 +642,7 @@ export class RobotRegistryService {
         'x-openclaw-scopes': 'operator.read,operator.write',
       },
       body: JSON.stringify(body),
-      // @ts-ignore — undici dispatcher，原生 fetch 不带此类型但运行时支持
+      // @ts-expect-error — undici dispatcher，原生 fetch 不带此类型但运行时支持
       dispatcher: LONG_RUNNING_AGENT,
     })
       .then((res) => res.text()) // drain body，避免连接挂起
@@ -643,7 +659,7 @@ export class RobotRegistryService {
           agentId: agentCtx.agentId,
           error: err instanceof Error ? err.message : String(err),
         });
-        todoService?.update({
+        void todoService?.update({
           id: todo.id,
           tenantId: todo.tenantId,
           status: 'failed',
@@ -652,5 +668,56 @@ export class RobotRegistryService {
           }`,
         });
       });
+  }
+
+  /**
+   * @description 为 SuperClaw 数据抓取任务签发专用 token 并保持 pending，等待节点通过 gRPC 原子领取。
+   * @keyword-cn SuperClaw任务待领, 签发任务令牌
+   * @keyword-en super-claw-task-pending, issue-task-token
+   * @param todo 待 SuperClaw 节点领取的数据抓取任务。
+   * @param agentCtx 专用 Agent 配置上下文。
+   * @returns {Promise<void>}
+   */
+  private async handleSuperClawDataTracking(
+    todo: TodoEntity,
+    agentCtx: AgentContext,
+  ): Promise<void> {
+    const todoService = this.moduleRef.get(TodoService, { strict: false });
+    if (!todoService) throw new Error('TODO_SERVICE_UNAVAILABLE');
+    await todoService.ensureTaskToken(todo.id, todo.tenantId);
+    const items = await todoService.listItems(todo.id, todo.tenantId);
+    if (items.some((item) => item.stage === '等待 SuperClaw 领取')) {
+      await this.notifySuperClawTask(todo.tenantId, todo.workspaceId);
+      return;
+    }
+    await todoService.createItem({
+      todoId: todo.id,
+      tenantId: todo.tenantId,
+      title: `${agentCtx.name}等待节点领取`,
+      description:
+        '任务已进入 SuperClaw gRPC 下发队列，领取后使用任务专用 token 更新。',
+      status: 'pending',
+      stage: '等待 SuperClaw 领取',
+      doneNote: `source=${SUPER_CLAW_DATA_TRACKING_AGENT_MODULE}`,
+    });
+    await this.notifySuperClawTask(todo.tenantId, todo.workspaceId);
+  }
+
+  /**
+   * @description 按租户绑定或平台工作区固定节点通知任务通道主动推送；节点离线时保留 pending。
+   * @keyword-cn 通知SuperClaw任务, 主动推送触发
+   * @keyword-en notify-super-claw-task, active-push-trigger
+   */
+  private async notifySuperClawTask(
+    tenantId?: string | null,
+    workspaceId?: string,
+  ): Promise<void> {
+    if (!tenantId && !workspaceId) return;
+    const channel = this.moduleRef.get<{
+      notifyTenant: (id: string) => Promise<boolean>;
+      notifyWorkspace: (id: string) => Promise<boolean>;
+    }>('SuperClawTaskChannelService', { strict: false });
+    if (tenantId) await channel?.notifyTenant(tenantId);
+    else if (workspaceId) await channel?.notifyWorkspace(workspaceId);
   }
 }

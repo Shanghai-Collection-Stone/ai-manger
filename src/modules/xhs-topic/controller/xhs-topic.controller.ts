@@ -92,9 +92,9 @@ export class XhsTopicController {
   }
 
   /**
-   * @description 批量保存弹窗中确认的母选题或子选题，并返回刷新后的真实工作台。
-   * @keyword-cn 保存真实选题, 批量创建
-   * @keyword-en persist-selected-topics, bulk-create
+   * @description 批量保存弹窗中确认的母选题或子选题及母题配图标签，并返回刷新后的真实工作台。
+   * @keyword-cn 保存真实选题, 批量创建, 母题配图标签
+   * @keyword-en persist-selected-topics, bulk-create, mother-image-tags
    */
   @Post()
   @RequirePermission('create', 'XhsTopic')
@@ -118,6 +118,7 @@ export class XhsTopicController {
           parentId: entity.parentId,
           title: entity.title,
           topicType: entity.topicType,
+          imageTags: entity.imageTags ?? [],
           status: entity.status,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt,
@@ -151,9 +152,9 @@ export class XhsTopicController {
   }
 
   /**
-   * @description 修改真实选题的标题、类型或状态，并返回刷新后的工作台。
-   * @keyword-cn 更新真实选题, 发布状态
-   * @keyword-en update-persisted-topic, publish-status
+   * @description 修改真实选题的标题、类型、状态或母题配图标签，并返回刷新后的工作台。
+   * @keyword-cn 更新真实选题, 发布状态, 母题配图标签
+   * @keyword-en update-persisted-topic, publish-status, mother-image-tags
    */
   @Patch(':id')
   @RequirePermission('update', 'XhsTopic')
@@ -180,6 +181,7 @@ export class XhsTopicController {
         parentId: topic.parentId,
         title: topic.title,
         topicType: topic.topicType,
+        imageTags: topic.imageTags ?? [],
         status: topic.status,
         sourceTodoId: topic.sourceTodoId,
         createdAt: topic.createdAt,

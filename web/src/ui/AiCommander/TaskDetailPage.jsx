@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft, Clock, User, CheckCircle2, AlertTriangle, UserCheck,
-  CheckCircle, XCircle, CircleDot, Timer, X, ChevronRight
+  CheckCircle, XCircle, CircleDot, Timer, X, ChevronRight, QrCode, Loader2
 } from 'lucide-react';
 import { getAdminToken } from '../Admin/adminApi';
 import CanvasFeedView from './CanvasFeedView';
 import { chatService } from './chatService';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import { createQrCodeSvg } from './qrCodeSvg';
+import { $activeTab, $currentSessionId } from './store';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -164,12 +166,17 @@ const ItemDetailPopup = ({ item, onClose }) => {
 
 /**
  * @description 执行节点时间轴 Tab，可点击查看节点详情
- * @keyword-en TaskTimelineTab timeline nodes tab
+ * @keyword-cn 执行介入节点, 等待介入中
+ * @keyword-en execution-intervention-node, waiting-intervention
  */
-const TaskTimelineTab = ({ task }) => {
+const TaskTimelineTab = ({ task, onReload }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [interaction, setInteraction] = useState(null);
+  const [qrSvg, setQrSvg] = useState('');
+  const [handlingInteraction, setHandlingInteraction] = useState(false);
+  const [interactionResponse, setInteractionResponse] = useState('');
 
   useEffect(() => {
     if (!task?.id) return;
@@ -185,14 +192,104 @@ const TaskTimelineTab = ({ task }) => {
     return () => { cancelled = true; };
   }, [task?.id]);
 
+  /**
+   * @description 读取 Todo 当前等待人工介入的二维码交互节点。
+   * @keyword-cn 加载介入节点, 二维码登录
+   * @keyword-en load-intervention-node, qr-login
+   */
+  const loadInteraction = async () => {
+    if (!task?.id) return null;
+    try {
+      const res = await fetch(
+        `${API_BASE}/task-interactions/todo/${task.id}/active`,
+        { headers: buildAuthHeaders() },
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      const next = data?.found ? data.interaction : null;
+      setInteraction(next);
+      return next;
+    } catch {
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (task?.rawStatus === 'waiting_user') void loadInteraction();
+    else setInteraction(null);
+  }, [task?.id, task?.rawStatus]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (interaction?.kind !== 'qr_login' || !interaction.qrContent) {
+      setQrSvg('');
+      return () => {
+        cancelled = true;
+      };
+    }
+    createQrCodeSvg(interaction.qrContent, { scale: 5, margin: 2 })
+      .then((svg) => {
+        if (!cancelled) setQrSvg(svg);
+      })
+      .catch(() => {
+        if (!cancelled) setQrSvg('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [interaction]);
+
+  /**
+   * @description 用户确认已完成人工处理，恢复 Todo 并切回任务绑定对话。
+   * @keyword-cn 确认人工处理, 返回任务对话
+   * @keyword-en confirm-human-intervention, return-task-conversation
+   */
+  const handleInteractionDone = async () => {
+    if (!interaction?.id || handlingInteraction) return;
+    setHandlingInteraction(true);
+    try {
+      const res = await fetch(
+        `${API_BASE}/task-interactions/${encodeURIComponent(interaction.id)}/respond`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...buildAuthHeaders(),
+          },
+          body: JSON.stringify({
+            response:
+              interaction.kind === 'short_text'
+                ? interactionResponse
+                : '用户已确认人工处理完成',
+          }),
+        },
+      );
+      if (!res.ok) return;
+      setInteraction(null);
+      await onReload?.();
+      if (task.sessionKey) {
+        localStorage.setItem('ai_commander_session_id', task.sessionKey);
+        $currentSessionId.set(task.sessionKey);
+        window.dispatchEvent(
+          new CustomEvent('web.AiCommander.task.openSession', {
+            detail: { sessionId: task.sessionKey },
+          }),
+        );
+      }
+      $activeTab.set('chat');
+    } finally {
+      setHandlingInteraction(false);
+    }
+  };
+
   return (
     /* 执行节点列表 区域 */
     <div className="p-4 pb-24">
-      {loading ? (
+      {loading && !interaction ? (
         <div className="flex items-center justify-center py-16">
           <div className="w-6 h-6 border-2 border-indigo-200 border-t-indigo-600 rounded-full animate-spin" />
         </div>
-      ) : items.length === 0 ? (
+      ) : items.length === 0 && !interaction ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-400">
           <Clock size={32} className="mb-2 opacity-30" />
           <p className="text-sm">暂无执行节点</p>
@@ -245,12 +342,69 @@ const TaskTimelineTab = ({ task }) => {
                 </button>
               );
             })}
+            {interaction && (
+              <div className="relative flex gap-3 w-full text-left">
+                <div className="relative z-10 w-9 h-9 rounded-full border-2 flex items-center justify-center shrink-0 bg-violet-50 border-violet-200">
+                  <QrCode size={15} className="text-violet-600" />
+                </div>
+                <div className="flex-1 min-w-0 pb-1">
+                  <div className="bg-white rounded-xl border border-violet-200 p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-semibold text-slate-800">
+                          {interaction.title || '需要人工介入'}
+                        </h4>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-500 whitespace-pre-wrap">
+                          {interaction.prompt}
+                        </p>
+                      </div>
+                      <span className="shrink-0 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600">
+                        等待介入中
+                      </span>
+                    </div>
+                    {interaction.kind === 'qr_login' && qrSvg && (
+                      <div
+                        className="mt-4 w-48 max-w-full overflow-hidden rounded-xl border border-slate-100 bg-white p-2 shadow-sm"
+                        dangerouslySetInnerHTML={{ __html: qrSvg }}
+                      />
+                    )}
+                    {interaction.kind === 'short_text' && (
+                      <textarea
+                        value={interactionResponse}
+                        onChange={(event) =>
+                          setInteractionResponse(event.target.value)
+                        }
+                        maxLength={2000}
+                        rows={3}
+                        placeholder="请输入处理结果或简短回复"
+                        className="mt-4 w-full resize-none rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs text-slate-700 outline-none focus:border-violet-400"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      disabled={
+                        handlingInteraction ||
+                        (interaction.kind === 'short_text' &&
+                          !interactionResponse.trim())
+                      }
+                      onClick={() => void handleInteractionDone()}
+                      className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-violet-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {handlingInteraction && (
+                        <Loader2 size={12} className="animate-spin" />
+                      )}
+                      已处理
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {!loading && items.length > 0 && (
-        <p className="text-center text-[10px] text-slate-400 mt-4">共 {items.length} 个节点</p>
+      {!loading && (items.length > 0 || interaction) && (
+        <p className="text-center text-[10px] text-slate-400 mt-4">共 {items.length + (interaction ? 1 : 0)} 个节点</p>
       )}
 
       {/* 节点详情弹窗 */}
@@ -689,14 +843,17 @@ const TaskResultTab = ({ task }) => (
 
 /**
  * @description 任务详情页，全屏展示任务详情、执行节点信息、任务成果三个 Tab
- * @keyword-en TaskDetailPage task detail full page with tabs
+ * @keyword-cn 任务详情页, 介入入口
+ * @keyword-en task-detail-page, intervention-entry
  * @param {object} props.task - 任务对象
  * @param {function} props.onBack - 返回回调
  * @param {function} props.onReload - 刷新列表回调
  * @param {Array} props.assigneeTargets - 可选指派对象列表
  */
 const TaskDetailPage = ({ task, onBack, onReload, assigneeTargets }) => {
-  const [activeTab, setActiveTab] = useState('info');
+  const [activeTab, setActiveTab] = useState(
+    task.rawStatus === 'waiting_user' ? 'timeline' : 'info',
+  );
 
   const statusDotClass =
     task.status === 'inprogress' ? 'bg-blue-500' :
@@ -749,7 +906,7 @@ const TaskDetailPage = ({ task, onBack, onReload, assigneeTargets }) => {
       {/* 详情页内容区域 */}
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'info' && <TaskInfoTab task={task} onBack={onBack} onReload={onReload} assigneeTargets={assigneeTargets} />}
-        {activeTab === 'timeline' && <TaskTimelineTab task={task} />}
+        {activeTab === 'timeline' && <TaskTimelineTab task={task} onReload={onReload} />}
         {activeTab === 'result' && <TaskResultTab task={task} />}
       </div>
     </div>

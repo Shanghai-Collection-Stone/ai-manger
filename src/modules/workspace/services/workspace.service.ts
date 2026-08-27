@@ -15,6 +15,7 @@ import type {
 } from '../entities/workspace.entity.js';
 import { WORKSPACE_AUDIT_ACTIONS } from '../constants/workspace-audit.constants.js';
 import { SuperClawService } from '../../super-claw/services/super-claw.service.js';
+import { SuperClawTaskChannelService } from '../../super-claw/services/super-claw-task-channel.service.js';
 
 /**
  * @description 创建工作区入参
@@ -54,6 +55,7 @@ export class WorkspaceService {
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly auditLogService: AuditLogService,
     private readonly superClawService: SuperClawService,
+    private readonly taskChannelService: SuperClawTaskChannelService,
   ) {
     this.workspaces = db.collection<WorkspaceEntity>('workspaces');
     this.members = db.collection<WorkspaceMemberEntity>('workspace_members');
@@ -107,7 +109,7 @@ export class WorkspaceService {
   }
 
   /**
-   * @description 在租户所属 SuperClaw 下创建工作区并占用一个节点槽位
+   * @description 在租户所属 SuperClaw 下创建工作区、占用一个节点槽位，并通过双向流通知节点实际创建。
    * @keyword-en create-workspace, reserve-super-claw-slot
    * @keyword-cn 创建工作区, 占用节点槽位
    */
@@ -117,13 +119,15 @@ export class WorkspaceService {
   ): Promise<WorkspaceEntity> {
     const tenantId = this.resolveTenant(currentUser, input.tenantId);
     const capacityBytes = this.normalizeCapacity(input.capacityBytes);
-    const superClawId =
-      await this.superClawService.reserveWorkspaceForTenant(tenantId);
+    const superClawId = tenantId
+      ? await this.superClawService.reserveWorkspaceForTenant(tenantId)
+      : await this.superClawService.reserveWorkspaceForPlatform();
     const now = new Date();
     const doc: WorkspaceEntity = {
       _id: new ObjectId(),
       tenantId,
       superClawId,
+      provisionStatus: 'pending',
       name: input.name.trim(),
       description: input.description?.trim(),
       capacityBytes,
@@ -138,6 +142,7 @@ export class WorkspaceService {
       await this.superClawService.releaseWorkspace(superClawId);
       throw new BadRequestException('WORKSPACE_NAME_ALREADY_EXISTS');
     }
+    await this.taskChannelService.notifyWorkspaceProvision(doc);
     await this.audit(
       currentUser,
       WORKSPACE_AUDIT_ACTIONS.create,
@@ -152,9 +157,8 @@ export class WorkspaceService {
   }
 
   /**
-   * @description 更新工作区(名称/描述/容量设定)
-   * @keyword-en update workspace
-   * @keyword-cn 更新工作区
+   * @description 更新工作区名称、描述或容量，并重新通知租户绑定节点同步本地元数据。
+   * @keyword-en update-workspace
    */
   async update(
     currentUser: AdminUserEntity,
@@ -174,9 +178,19 @@ export class WorkspaceService {
       }
       updates.capacityBytes = capacity;
     }
+    const requiresProvision =
+      typeof input.name === 'string' ||
+      typeof input.description === 'string' ||
+      typeof input.capacityBytes === 'number';
+    if (requiresProvision) updates.provisionStatus = 'pending';
     const res = await this.workspaces.findOneAndUpdate(
       { _id: ws._id },
-      { $set: updates },
+      requiresProvision
+        ? {
+            $set: updates,
+            $unset: { provisionedAt: '', provisionError: '' },
+          }
+        : { $set: updates },
       { returnDocument: 'after' },
     );
     await this.audit(
@@ -186,7 +200,11 @@ export class WorkspaceService {
       id,
       updates,
     );
-    return res ?? ws;
+    const updated = res ?? ws;
+    if (requiresProvision) {
+      await this.taskChannelService.notifyWorkspaceProvision(updated);
+    }
+    return updated;
   }
 
   /**
@@ -244,7 +262,7 @@ export class WorkspaceService {
       _id: this.toId(input.userId, 'INVALID_USER_ID'),
     });
     if (!target) throw new NotFoundException('USER_NOT_FOUND');
-    if ((target.tenantId ?? undefined) !== ws.tenantId) {
+    if ((target.tenantId ?? '') !== ws.tenantId) {
       throw new ForbiddenException('CROSS_TENANT_FORBIDDEN');
     }
     const now = new Date();
@@ -376,9 +394,8 @@ export class WorkspaceService {
   }
 
   /**
-   * @description 解析新工作区归属租户(租户用户用自身，平台超管须显式传 tenantId)
-   * @keyword-en resolve workspace tenant
-   * @keyword-cn 解析工作区租户
+   * @description 解析工作区业务范围；租户用户固定使用自身租户，平台用户未指定租户时创建平台工作区。
+   * @keyword-en resolve-workspace-tenant
    */
   private resolveTenant(
     currentUser: AdminUserEntity,
@@ -386,8 +403,7 @@ export class WorkspaceService {
   ): string {
     if (currentUser.tenantId) return currentUser.tenantId;
     const value = tenantId?.trim();
-    if (!value) throw new BadRequestException('TENANT_ID_REQUIRED');
-    return value;
+    return value || '';
   }
 
   /**

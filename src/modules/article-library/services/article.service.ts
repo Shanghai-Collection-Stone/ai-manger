@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { randomUUID } from 'crypto';
 import type {
@@ -23,7 +24,10 @@ export class ArticleService {
   /** 租约持续时间：15 分钟 */
   private readonly LEASE_DURATION_MS = 15 * 60 * 1000;
 
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly moduleRef: ModuleRef,
+  ) {
     this.articles = db.collection<ArticleEntity>('articles');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     void this.ensureIndexes();
@@ -37,6 +41,7 @@ export class ArticleService {
   async ensureIndexes(): Promise<void> {
     await this.articles.createIndex({ id: 1 }, { unique: true });
     await this.articles.createIndex({ libraryId: 1, createdAt: 1 });
+    await this.articles.createIndex({ source: 1, publishStatus: 1 });
     await this.articles.createIndex({
       tenantId: 1,
       userId: 1,
@@ -136,6 +141,9 @@ export class ArticleService {
       updatedAt: now,
     };
     await this.articles.insertOne(doc);
+    if (doc.publishStatus === 'published') {
+      await this.notifyCrawlSchedule(doc, doc.publishStatus);
+    }
     return doc;
   }
 
@@ -212,12 +220,28 @@ export class ArticleService {
     }
     const filter: Record<string, unknown> = { id: input.id };
     if (input.tenantId) filter.tenantId = input.tenantId;
+    const previousStatus =
+      input.publishStatus !== undefined
+        ? (
+            await this.articles.findOne(filter, {
+              projection: { publishStatus: 1 },
+            })
+          )?.publishStatus
+        : undefined;
     const res = await this.articles.findOneAndUpdate(
       filter,
       { $set: set },
       { returnDocument: 'after', includeResultMetadata: true },
     );
-    return res.value ?? null;
+    const updated = res.value ?? null;
+    if (
+      updated &&
+      input.publishStatus !== undefined &&
+      previousStatus !== updated.publishStatus
+    ) {
+      await this.notifyCrawlSchedule(updated, updated.publishStatus);
+    }
+    return updated;
   }
 
   /**
@@ -240,19 +264,65 @@ export class ArticleService {
       filter.libraryId = opts.libraryId;
     }
     if (opts.leaseToken) filter.lastLeaseToken = opts.leaseToken;
+    const current = await this.articles.findOne(filter);
+    if (!current) return null;
     const set: Record<string, unknown> = {
       publishStatus: status,
       updatedAt: new Date(),
       lockExpireAt: null,
     };
     if (status === 'published') set.publishedAt = new Date();
-    if (opts.meta !== undefined) set.meta = opts.meta;
+    if (opts.meta !== undefined) {
+      set.meta = { ...(current.meta ?? {}), ...opts.meta };
+    }
     const res = await this.articles.findOneAndUpdate(
       filter,
       { $set: set },
       { returnDocument: 'after', includeResultMetadata: true },
     );
-    return res.value ?? null;
+    const updated = res.value ?? null;
+    if (updated && current.publishStatus !== status) {
+      await this.notifyCrawlSchedule(updated, status);
+    }
+    return updated;
+  }
+
+  /**
+   * @description 文章发布状态变化后通知小红书专用调度表，失败只记日志而不回滚真实发布结果。
+   * @keyword-cn 发布触发采集, 调度表通知
+   * @keyword-en publish-triggered-crawl, schedule-table-notify
+   * @param article 已更新发布状态的文章。
+   * @param status 目标发布状态。
+   * @returns {Promise<void>}
+   */
+  private async notifyCrawlSchedule(
+    article: ArticleEntity,
+    status: ArticlePublishStatus,
+  ): Promise<void> {
+    if (article.source !== 'xhs-topic') return;
+    const topicId = Number(article.meta?.xhsTopicId);
+    if (!Number.isInteger(topicId) || topicId <= 0) return;
+    try {
+      const crawlService = this.moduleRef.get<{
+        syncArticlePublishSchedule: (input: {
+          topicId: number;
+          articleId: number;
+          libraryId: number;
+          status: ArticlePublishStatus;
+        }) => Promise<boolean>;
+      }>('XhsTopicCrawlService', { strict: false });
+      if (!crawlService) return;
+      await crawlService.syncArticlePublishSchedule({
+        topicId,
+        articleId: article.id,
+        libraryId: article.libraryId,
+        status,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `[notifyCrawlSchedule] articleId=${article.id} topicId=${topicId} ${String(error)}`,
+      );
+    }
   }
 
   /**
@@ -291,8 +361,13 @@ export class ArticleService {
   async delete(id: number, tenantId?: string): Promise<boolean> {
     const filter: Record<string, unknown> = { id };
     if (tenantId) filter.tenantId = tenantId;
+    const current = await this.articles.findOne(filter);
     const res = await this.articles.deleteOne(filter);
-    return res.deletedCount === 1;
+    const deleted = res.deletedCount === 1;
+    if (deleted && current?.publishStatus === 'published') {
+      await this.notifyCrawlSchedule(current, 'unpublished');
+    }
+    return deleted;
   }
 
   /**
