@@ -26,6 +26,7 @@ COPY src/modules/data-source/sources ./dist/modules/data-source/sources
 COPY public ./public
 COPY config ./config
 COPY migrations ./migrations
+COPY src/modules/article-library/scripts ./src/modules/article-library/scripts
 COPY package.json ./package.json
 COPY pnpm-lock.yaml ./pnpm-lock.yaml
 

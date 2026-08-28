@@ -20,6 +20,7 @@
  *   node src/modules/article-library/scripts/backfill-xhs-topic-id.mjs --library=22
  *   node src/modules/article-library/scripts/backfill-xhs-topic-id.mjs --article=49
  *   node src/modules/article-library/scripts/backfill-xhs-topic-id.mjs --keep-marker
+ *   node src/modules/article-library/scripts/backfill-xhs-topic-id.mjs --db=ai_system   # 容器里只有 MONGODB_URI 时指定库名
  *
  * @keyword-cn 回填选题关联, 修复被覆盖的meta, 抓取调度补建
  * @keyword-en backfill-xhs-topic-id, repair-overwritten-meta, crawl-schedule-recovery
@@ -90,17 +91,22 @@ export function resolveMongoConnection() {
  * @keyword-cn 解析命令行参数, 脚本选项
  * @keyword-en parse-cli-args, script-options
  * @param {string[]} argv 原始参数数组。
- * @returns {{dryRun: boolean, keepMarker: boolean, verbose: boolean, limit: number, libraryId?: number, articleId?: number}} 选项。
+ * @returns {{dryRun: boolean, keepMarker: boolean, verbose: boolean, limit: number, libraryId?: number, articleId?: number, dbName?: string}} 选项。
  */
 export function parseArgs(argv) {
   const flags = new Set(argv.filter((item) => item.startsWith('--') && !item.includes('=')));
-  const readNumber = (key) => {
+  const readValue = (key) => {
     const hit = argv.find((item) => item.startsWith(`--${key}=`));
-    if (!hit) return undefined;
-    const value = Number(hit.split('=')[1]);
+    return hit ? hit.slice(key.length + 3) : undefined;
+  };
+  const readNumber = (key) => {
+    const raw = readValue(key);
+    if (raw === undefined) return undefined;
+    const value = Number(raw);
     return Number.isFinite(value) ? value : undefined;
   };
   return {
+    dbName: readValue('db'),
     dryRun: flags.has('--dry-run'),
     keepMarker: flags.has('--keep-marker'),
     verbose: flags.has('--verbose'),
@@ -285,10 +291,12 @@ export async function resetScheduleBackfillMarker(db) {
 export async function main() {
   loadEnvFiles();
   const args = parseArgs(process.argv.slice(2));
-  const { uri, dbName } = resolveMongoConnection();
+  const resolved = resolveMongoConnection();
+  const uri = resolved.uri;
+  const dbName = args.dbName ?? resolved.dbName;
 
   console.log('[backfill-xhs-topic-id]');
-  console.log(`  MongoDB: ${dbName}`);
+  console.log(`  MongoDB: ${dbName}${args.dbName ? ' (--db 覆盖)' : ''}`);
   console.log(`  Mode: ${args.dryRun ? 'DRY-RUN (只报告不写库)' : 'LIVE (会写库)'}`);
   if (args.libraryId) console.log(`  Library: ${args.libraryId}`);
   if (args.articleId) console.log(`  Article: ${args.articleId}`);
