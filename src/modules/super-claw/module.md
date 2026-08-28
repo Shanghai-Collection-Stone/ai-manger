@@ -69,6 +69,7 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 - `SuperClawGatewayService.renewTaskDelivery(superClawId,input)` — 续期节点执行中的服务端租约 | keywords: 续期主动任务, 执行租约心跳, renew-active-task, execution-lease-heartbeat
 - `SuperClawGatewayService.releaseTaskDelivery(superClawId,input)` — 回收投递并失效旧任务 Token | keywords: 释放主动任务, 失效任务令牌, release-active-task, invalidate-task-token
 - `SuperClawGatewayService.isTaskDeliveryComplete(superClawId,input)` — 释放执行槽位前确认任务已经写入终态 | keywords: 确认任务终态, 防止提前完成, confirm-task-terminal, prevent-early-completion
+- `SuperClawGatewayService.failNonTerminalDelivery(superClawId,input)` — 节点报告完成但任务未到终态时判为 failed 防止重新领取 | keywords: 标记未终态任务失败, 防止异常重投, fail-non-terminal-delivery, prevent-abnormal-redelivery
 - `SuperClawGatewayService.createTask(superClawId,request)` — 节点创建任务并取得 Token | keywords: gRPC创建任务, 返回任务令牌, create-grpc-task, return-task-token
 - `SuperClawGatewayService.listTasks(superClawId,request)` — 租户任务列表不暴露 Token | keywords: 列出租户任务, 隐藏令牌, list-tenant-tasks, hide-tokens
 - `SuperClawGatewayService.getTask(superClawId,request)` — 使用 Token 获取单个任务 | keywords: 获取令牌任务, 单任务读取, get-token-task, single-task-read
@@ -185,6 +186,7 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 | 断线保留租约  | keep-lease-on-disconnect  |
 | 重连挂回投递  | adopt-detached-delivery   |
 | 重复领取上限  | max-execution-attempts    |
+| 异常阻断重投  | abnormal-block-redelivery |
 
 ## 类型导出 (Type Exports)
 

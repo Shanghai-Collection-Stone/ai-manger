@@ -7,6 +7,7 @@ import { TodoModule } from '../todo/todo.module.js';
 import { XhsTopicModule } from '../xhs-topic/xhs-topic.module.js';
 import { ArticleLibraryModule } from '../article-library/article-library.module.js';
 import { ContextModule } from '../context/context.module.js';
+import { TikhubModule } from '../tikhub/tikhub.module.js';
 import { XhsTopicDataController } from './controller/xhs-topic-data.controller.js';
 import { XhsTopicCrawlService } from './services/xhs-topic-crawl.service.js';
 import { XhsTopicDataService } from './services/xhs-topic-data.service.js';
@@ -25,6 +26,7 @@ import { XhsTopicOpinionService } from './services/xhs-topic-opinion.service.js'
     AutoTaskRobotModule,
     DataSourceModule,
     ContextModule,
+    TikhubModule,
     TodoModule,
     XhsTopicModule,
   ],

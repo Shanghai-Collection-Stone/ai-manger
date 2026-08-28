@@ -107,6 +107,33 @@ async function request(path, options = {}) {
 }
 
 /**
+ * @description 业务API请求(不带 /admin 前缀,用于后台登录态可直接访问的业务路由)
+ * @keyword-cn 业务接口请求, 非admin前缀
+ * @keyword-en business api request, non-admin-prefix
+ */
+async function apiRequest(path, options = {}) {
+  const token = getAdminToken();
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (!res.ok) {
+    let message = `请求失败(${res.status})`;
+    try {
+      const data = await res.json();
+      message = data.message || data.error || message;
+    } catch {
+      message = `请求失败(${res.status})`;
+    }
+    throw new Error(message);
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+/**
  * @description 后台管理API封装
  * @keyword-en admin api service
  */
@@ -546,6 +573,40 @@ export const adminApi = {
   async deleteFeishuCredential(id) {
     return request(`/tenant-feishu-credentials/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    });
+  },
+
+  // ─── 小红书采集设置 ─────────────────────────────────────────────────────────
+
+  /**
+   * @description 读取小红书采集设置(抓取频率 / 采集渠道 / TikHub 配置视图 / 采集端可用性)
+   * @keyword-cn 读取采集设置, 采集渠道
+   * @keyword-en get xhs crawl settings, crawl channel
+   */
+  async getXhsCrawlSettings() {
+    return apiRequest('/api/xhs-topic-data/crawl-settings');
+  },
+
+  /**
+   * @description 保存小红书采集设置;tikhubApiKey 传空串=清空,不传=保持不变
+   * @keyword-cn 保存采集设置, 切换渠道
+   * @keyword-en save xhs crawl settings, switch channel
+   */
+  async saveXhsCrawlSettings(payload) {
+    return apiRequest('/api/xhs-topic-data/crawl-settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 用已保存的 Key 与域名做一次 TikHub 连通性自检
+   * @keyword-cn 测试TikHub连接, 密钥自检
+   * @keyword-en test tikhub connection, api key probe
+   */
+  async testTikhubConnection() {
+    return apiRequest('/api/xhs-topic-data/crawl-settings/test-tikhub', {
+      method: 'POST',
     });
   },
 

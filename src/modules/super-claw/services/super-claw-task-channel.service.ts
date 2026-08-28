@@ -327,7 +327,13 @@ export class SuperClawTaskChannelService
           taskId: Number(delivery.message.task.id),
         },
       );
-      if (!terminal) return;
+      // 节点报告完成但任务未到终态：标记为 failed 防止后续租约到期退回 pending 被重新领取
+      if (!terminal) {
+        await this.gatewayService.failNonTerminalDelivery(state.superClawId, {
+          tenantId: delivery.message.task.tenantId,
+          taskId: Number(delivery.message.task.id),
+        });
+      }
       this.removeDelivery(state, delivery.message.deliveryId);
       state.availableSlots = 1;
       await this.pushNext(state);

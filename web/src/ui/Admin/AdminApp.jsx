@@ -287,8 +287,51 @@ const ALL_TABS = [
   { id: 'dashboard_configs', label: '看板配置' },
   { id: 'platform_info', label: '平台AI配置' },
   { id: 'feishu_credentials', label: '飞书凭证' },
+  { id: 'xhs_crawl', label: '小红书采集' },
   { id: 'finance', label: '财务' },
 ];
+
+/**
+ * @description 小红书采集渠道选项(与后端 XhsCrawlChannel 一一对应)
+ * @keyword-cn 采集渠道选项, 渠道切换
+ * @keyword-en crawl channel options, channel switch
+ */
+const XHS_CRAWL_CHANNELS = [
+  {
+    id: 'super_claw',
+    label: 'SuperClaw 节点',
+    hint: '由绑定节点跑 Playwright 采集脚本，需要有已启用的数据追踪 Agent 和有效的小红书登录态。',
+  },
+  {
+    id: 'tikhub',
+    label: 'TikHub 开放接口',
+    hint: '平台直接调 TikHub 接口按 NoteId 取数，不占节点、不需要登录态，按调用次数计费。',
+  },
+];
+
+/**
+ * @description TikHub API 域名选项(与后端白名单逐字一致)
+ * @keyword-cn 接口域名选项, 国内直连
+ * @keyword-en base url options, mainland endpoint
+ */
+const TIKHUB_BASE_URLS = [
+  { id: 'https://api.tikhub.io', label: 'api.tikhub.io（默认）' },
+  { id: 'https://api.tikhub.dev', label: 'api.tikhub.dev（国内直连）' },
+];
+
+/**
+ * @description 小红书采集的默认每日定点(与后端 DEFAULT_CRAWL_DAILY_AT 一致):每天 23:59 取当日收盘数据
+ * @keyword-cn 默认抓取时刻, 每日定点
+ * @keyword-en default crawl time, daily fixed time
+ */
+const XHS_CRAWL_DEFAULT_AT = '23:59';
+
+/**
+ * @description 每日抓取时刻格式校验(HH:mm 24 小时制)
+ * @keyword-cn 时刻格式校验, 每日定点
+ * @keyword-en daily time pattern, daily fixed time
+ */
+const XHS_CRAWL_AT_PATTERN = /^([01]d|2[0-3]):[0-5]d$/;
 
 const AdminApp = () => {
   const [currentRole, setCurrentRole] = useState('');
@@ -325,6 +368,10 @@ const AdminApp = () => {
   const [agentConfigs, setAgentConfigs] = useState([]);
   const [xhsAccounts, setXhsAccounts] = useState([]);
   const [feishuCredentials, setFeishuCredentials] = useState([]);
+  /** 小红书采集设置(含渠道与 TikHub 配置视图) | @keyword-en xhs crawl settings state */
+  const [xhsCrawlSettings, setXhsCrawlSettings] = useState(null);
+  /** TikHub 连通性自检结果 | @keyword-en tikhub probe result state */
+  const [tikhubProbe, setTikhubProbe] = useState(null);
   /** binding 列表(按 name 任意多个) | @keyword-en finance bindings array */
   const [financeBindings, setFinanceBindings] = useState([]);
   /** transforms 按 name 索引 | @keyword-en finance transforms by name */
@@ -494,6 +541,13 @@ const AdminApp = () => {
       appSecret: '',
       remark: '',
     },
+    /** 小红书采集设置表单;tikhubApiKey 留空表示不改动已保存的 Key | @keyword-en xhs crawl settings form */
+    xhsCrawl: {
+      dailyCrawlAt: XHS_CRAWL_DEFAULT_AT,
+      channel: 'super_claw',
+      tikhubApiKey: '',
+      tikhubBaseUrl: 'https://api.tikhub.io',
+    },
     /** 当前编辑中的 binding 表单 | @keyword-en finance binding edit form */
     financeBinding: {
       name: '',
@@ -574,6 +628,23 @@ const AdminApp = () => {
       try {
         const xa = await adminApi.listXhsAccounts();
         setXhsAccounts(xa.accounts || []);
+      } catch {
+        // 忽略加载失败
+      }
+      // 加载小红书采集设置(租户用户级)
+      try {
+        const cs = await adminApi.getXhsCrawlSettings();
+        setXhsCrawlSettings(cs);
+        setForms((prev) => ({
+          ...prev,
+          xhsCrawl: {
+            dailyCrawlAt: cs?.dailyCrawlAt || prev.xhsCrawl.dailyCrawlAt,
+            channel: cs?.channel || prev.xhsCrawl.channel,
+            // Key 永远不回填明文，留空即代表"保持不变"
+            tikhubApiKey: '',
+            tikhubBaseUrl: cs?.tikhub?.baseUrl || prev.xhsCrawl.tikhubBaseUrl,
+          },
+        }));
       } catch {
         // 忽略加载失败
       }
@@ -864,6 +935,71 @@ const AdminApp = () => {
       feishuCredential: { appId: '', appSecret: '', remark: '' },
     }));
     setNotice('飞书凭证已删除');
+  };
+
+  /**
+   * @description 保存小红书采集设置(抓取频率 + 采集渠道 + TikHub 凭证)。
+   *   Key 输入框留空表示保持不变，所以只有用户真的填了才把该字段发上去。
+   * @keyword-cn 保存采集设置, 切换渠道
+   * @keyword-en submit xhs crawl settings, switch channel
+   */
+  const onSubmitXhsCrawlSettings = async () => {
+    const form = forms.xhsCrawl;
+    const dailyCrawlAt = toText(form.dailyCrawlAt).trim();
+    if (!XHS_CRAWL_AT_PATTERN.test(dailyCrawlAt)) {
+      throw new Error('每日抓取时刻必须是 HH:mm 形式，例如 23:59');
+    }
+    const apiKey = toText(form.tikhubApiKey).trim();
+    const payload = {
+      dailyCrawlAt,
+      channel: form.channel,
+      tikhubBaseUrl: form.tikhubBaseUrl,
+      ...(apiKey ? { tikhubApiKey: apiKey } : {}),
+    };
+    const saved = await adminApi.saveXhsCrawlSettings(payload);
+    setXhsCrawlSettings(saved);
+    setTikhubProbe(null);
+    setForms((prev) => ({
+      ...prev,
+      xhsCrawl: {
+        dailyCrawlAt: saved?.dailyCrawlAt || prev.xhsCrawl.dailyCrawlAt,
+        channel: saved?.channel || prev.xhsCrawl.channel,
+        tikhubApiKey: '',
+        tikhubBaseUrl: saved?.tikhub?.baseUrl || prev.xhsCrawl.tikhubBaseUrl,
+      },
+    }));
+    setNotice('采集设置已保存');
+  };
+
+  /**
+   * @description 清空已保存的 TikHub API Key(发空串给后端)。
+   * @keyword-cn 清空密钥, 移除凭证
+   * @keyword-en clear tikhub api key, remove credential
+   */
+  const onClearTikhubApiKey = async () => {
+    const saved = await adminApi.saveXhsCrawlSettings({ tikhubApiKey: '' });
+    setXhsCrawlSettings(saved);
+    setTikhubProbe(null);
+    setForms((prev) => ({
+      ...prev,
+      xhsCrawl: { ...prev.xhsCrawl, tikhubApiKey: '' },
+    }));
+    setNotice('TikHub API Key 已清空');
+  };
+
+  /**
+   * @description 用已保存的 Key 与域名做一次 TikHub 连通性自检。
+   * @keyword-cn 测试TikHub连接, 密钥自检
+   * @keyword-en test tikhub connection, api key probe
+   */
+  const onTestTikhubConnection = async () => {
+    setTikhubProbe({ testing: true });
+    try {
+      const result = await adminApi.testTikhubConnection();
+      setTikhubProbe({ ...result, testing: false });
+    } catch (err) {
+      setTikhubProbe({ ok: false, message: err.message, testing: false });
+    }
   };
 
   /**
@@ -4273,6 +4409,249 @@ const AdminApp = () => {
                       {ownCredential
                         ? `上次更新：${new Date(ownCredential.updatedAt).toLocaleString()}`
                         : '当前租户尚未配置凭证，填写后点击保存。'}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          : null}
+
+        {/* 小红书采集（渠道切换 + 抓取频率 + TikHub 凭证） | @keyword-en xhs crawl settings tab */}
+        {activeTab === 'xhs_crawl'
+          ? (() => {
+              const form = forms.xhsCrawl;
+              const tikhub = xhsCrawlSettings?.tikhub || null;
+              const collector = xhsCrawlSettings?.collector || null;
+              const isTikhub = form.channel === 'tikhub';
+              return (
+                <div className="grid lg:grid-cols-1 gap-4 pb-8">
+                  <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-4">
+                    {/* 头部说明 + 保存 | @keyword-en xhs crawl settings header */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h2 className="font-semibold text-slate-900">
+                          小红书数据采集
+                        </h2>
+                        <p className="text-xs text-slate-500 mt-1">
+                          决定已发布笔记的互动数据由谁来采。切换只影响之后新建的抓取任务，在途任务仍按原渠道跑完。
+                        </p>
+                      </div>
+                      <button
+                        onClick={() =>
+                          onSubmitXhsCrawlSettings().catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="px-4 py-2 bg-slate-900 text-white text-sm rounded"
+                      >
+                        保存设置
+                      </button>
+                    </div>
+
+                    {/* 采集渠道 | @keyword-en crawl channel selector */}
+                    <div className="space-y-2">
+                      <div className="text-xs text-slate-600">采集渠道</div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {XHS_CRAWL_CHANNELS.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() =>
+                              updateForm('xhsCrawl', 'channel', option.id)
+                            }
+                            className={`text-left border rounded-lg p-3 transition ${
+                              form.channel === option.id
+                                ? 'border-slate-900 bg-slate-50'
+                                : 'border-slate-200 hover:border-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`w-3 h-3 rounded-full border ${
+                                  form.channel === option.id
+                                    ? 'bg-slate-900 border-slate-900'
+                                    : 'border-slate-300'
+                                }`}
+                              />
+                              <span className="text-sm font-medium text-slate-900">
+                                {option.label}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                              {option.hint}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 每日抓取时刻 | @keyword-en daily crawl time input */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="text-xs text-slate-600 space-y-1">
+                        <div>每日抓取时刻</div>
+                        <input
+                          className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          type="time"
+                          value={form.dailyCrawlAt}
+                          onChange={(e) =>
+                            updateForm(
+                              'xhsCrawl',
+                              'dailyCrawlAt',
+                              e.target.value,
+                            )
+                          }
+                        />
+                        <div className="text-slate-400">
+                          每天固定在这个时刻抓一次（服务器本地时区），默认{' '}
+                          {XHS_CRAWL_DEFAULT_AT} 取当日收盘数据；两条渠道共用。
+                          发布、恢复抓取、改采集区间都不会即时开抓，一律排到下一个定点；
+                          要马上拿一次数据，用数据页的「立即抓取」。
+                        </div>
+                      </label>
+                    </div>
+
+                    {/* TikHub 凭证 | @keyword-en tikhub credential form */}
+                    <div
+                      className={`border rounded-lg p-3 space-y-3 ${
+                        isTikhub
+                          ? 'border-slate-300 bg-white'
+                          : 'border-slate-200 bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-medium text-slate-900">
+                          TikHub 凭证
+                          {!isTikhub ? (
+                            <span className="ml-2 text-xs font-normal text-slate-400">
+                              当前渠道未使用，仍可预先配置
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex gap-2">
+                          {tikhub?.apiKeySource === 'config' ? (
+                            <button
+                              onClick={() =>
+                                onClearTikhubApiKey().catch((err) =>
+                                  setError(err.message),
+                                )
+                              }
+                              className="px-3 py-1.5 border border-red-300 text-red-600 text-xs rounded"
+                            >
+                              清空 Key
+                            </button>
+                          ) : null}
+                          <button
+                            onClick={() => void onTestTikhubConnection()}
+                            disabled={Boolean(tikhubProbe?.testing)}
+                            className="px-3 py-1.5 border border-slate-300 text-slate-700 text-xs rounded disabled:opacity-50"
+                          >
+                            {tikhubProbe?.testing ? '测试中…' : '测试连接'}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label className="text-xs text-slate-600 space-y-1">
+                          <div>API Key</div>
+                          <input
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                            type="password"
+                            autoComplete="new-password"
+                            value={form.tikhubApiKey}
+                            onChange={(e) =>
+                              updateForm(
+                                'xhsCrawl',
+                                'tikhubApiKey',
+                                e.target.value,
+                              )
+                            }
+                            placeholder={
+                              tikhub?.hasApiKey
+                                ? `已配置 ${tikhub.apiKeyMasked}，留空即保持不变`
+                                : '在 TikHub 控制台生成后粘贴到这里'
+                            }
+                          />
+                          <div className="text-slate-400">
+                            出于安全考虑不回显已保存的 Key，留空即保持不变。
+                          </div>
+                        </label>
+                        <label className="text-xs text-slate-600 space-y-1">
+                          <div>API 域名</div>
+                          <select
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm bg-white"
+                            value={form.tikhubBaseUrl}
+                            onChange={(e) =>
+                              updateForm(
+                                'xhsCrawl',
+                                'tikhubBaseUrl',
+                                e.target.value,
+                              )
+                            }
+                          >
+                            {TIKHUB_BASE_URLS.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="text-slate-400">
+                            国内服务器直连选 api.tikhub.dev，无需代理。
+                          </div>
+                        </label>
+                      </div>
+                      {/* 自检结果 | @keyword-en tikhub probe result */}
+                      {tikhubProbe && !tikhubProbe.testing ? (
+                        <div
+                          className={`text-xs rounded px-2 py-1.5 ${
+                            tikhubProbe.ok
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-red-50 text-red-600'
+                          }`}
+                        >
+                          {tikhubProbe.ok
+                            ? `连接正常${
+                                typeof tikhubProbe.balance === 'number'
+                                  ? `，账户余额 ${tikhubProbe.balance}`
+                                  : ''
+                              }`
+                            : `连接失败：${tikhubProbe.message || '未知错误'}`}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {/* 当前状态 | @keyword-en collector availability status */}
+                    <div className="text-xs text-slate-500 space-y-1">
+                      <div>
+                        当前生效渠道：
+                        <span className="text-slate-900 font-medium">
+                          {XHS_CRAWL_CHANNELS.find(
+                            (c) => c.id === xhsCrawlSettings?.channel,
+                          )?.label || '未加载'}
+                        </span>
+                      </div>
+                      {collector ? (
+                        <div
+                          className={
+                            collector.available
+                              ? 'text-emerald-600'
+                              : 'text-amber-600'
+                          }
+                        >
+                          {collector.available
+                            ? '采集端就绪，调度器可以正常创建抓取任务。'
+                            : `采集端不可用：${collector.reason || '未知原因'}，调度器建不出任务。`}
+                        </div>
+                      ) : null}
+                      {tikhub?.apiKeySource === 'env' ? (
+                        <div className="text-slate-400">
+                          当前使用环境变量 TIKHUB_API_KEY 兜底；在此填写后以本页配置为准。
+                        </div>
+                      ) : null}
+                      {tikhub?.updatedAt ? (
+                        <div className="text-slate-400">
+                          TikHub 配置上次更新：
+                          {new Date(tikhub.updatedAt).toLocaleString()}
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>

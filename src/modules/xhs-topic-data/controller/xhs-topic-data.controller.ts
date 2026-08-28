@@ -34,6 +34,8 @@ import {
 import { XhsTopicCrawlService } from '../services/xhs-topic-crawl.service.js';
 import { XhsTopicDataService } from '../services/xhs-topic-data.service.js';
 import { XhsTopicOpinionService } from '../services/xhs-topic-opinion.service.js';
+import { TikhubConfigService } from '../../tikhub/services/tikhub-config.service.js';
+import { TikhubXhsService } from '../../tikhub/services/tikhub-xhs.service.js';
 
 /** @type {number} 明细与任务列表的默认每页条数。 */
 const DEFAULT_PAGE_SIZE = 20;
@@ -58,6 +60,8 @@ export class XhsTopicDataController {
     private readonly dataService: XhsTopicDataService,
     private readonly crawlService: XhsTopicCrawlService,
     private readonly opinionService: XhsTopicOpinionService,
+    private readonly tikhubConfig: TikhubConfigService,
+    private readonly tikhubXhs: TikhubXhsService,
   ) {}
 
   /**
@@ -145,7 +149,7 @@ export class XhsTopicDataController {
     @Param('topicId', ParseIntPipe) topicId: number,
     @Query() query: XhsTopicDataPageDto,
   ) {
-    await this.requireTopic(req, topicId);
+    const topic = await this.requireTopic(req, topicId);
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
     const { items, total } = await this.crawlService.listTasks(
@@ -153,18 +157,25 @@ export class XhsTopicDataController {
       page,
       pageSize,
     );
+    const collector = await this.crawlService.getCollectorAvailability({
+      tenantId: topic.tenantId,
+      userId: topic.userId,
+    });
     return {
       items,
       total,
       page,
       pageSize,
-      agentAvailable: await this.crawlService.hasTrackingAgent(),
+      // 兼容字段：老前端只认这个开关，新前端读 collector 才能区分渠道。
+      agentAvailable: collector.available,
+      collector,
       schedule: await this.crawlService.getScheduleStatus(topicId),
     };
   }
 
   /**
-   * @description 切换子选题的抓取开关。取消时同时停掉在途抓取任务，恢复时立即补跑一次抓取。
+   * @description 切换子选题的抓取开关。取消时同时停掉在途抓取任务；恢复只是把调度行排到下一个
+   *   每日定点，不会立刻开抓——要马上要数据请调手动抓取接口。
    * @keyword-cn 取消抓取接口, 恢复抓取
    * @keyword-en cancel-crawl-endpoint, resume-crawl
    */
@@ -198,7 +209,8 @@ export class XhsTopicDataController {
   }
 
   /**
-   * @description 立即为子选题发起一次抓取，不改变抓取开关状态。
+   * @description 手动触发一次抓取：这是唯一会立刻开抓的入口，发布、恢复、改区间都不再即时开抓。
+   *   本次抓取是计划外的一次性补数，不改变抓取开关，也不挪动每日定点的下次执行时间。
    * @keyword-cn 手动抓取接口, 立即抓取
    * @keyword-en manual-crawl-endpoint, crawl-now
    */
@@ -210,8 +222,24 @@ export class XhsTopicDataController {
   ) {
     const topic = await this.requireTopic(req, topicId);
     const task = await this.crawlService.createCrawlTask(topic, 'manual');
-    if (!task) throw new NotFoundException('XHS_CRAWL_AGENT_UNAVAILABLE');
-    return { taskId: task.id, todoId: task.todoId };
+    if (!task) {
+      const collector = await this.crawlService.getCollectorAvailability({
+        tenantId: topic.tenantId,
+        userId: topic.userId,
+      });
+      throw new NotFoundException(
+        collector.channel === 'tikhub' && !collector.available
+          ? 'TIKHUB_API_KEY_REQUIRED'
+          : 'XHS_CRAWL_AGENT_UNAVAILABLE',
+      );
+    }
+    return {
+      taskId: task.id,
+      todoId: task.todoId,
+      channel: task.channel ?? 'super_claw',
+      status: task.status,
+      collectedCount: task.collectedCount,
+    };
   }
 
   /**
@@ -269,26 +297,27 @@ export class XhsTopicDataController {
   }
 
   /**
-   * @description 读取当前用户生效的抓取频率。
-   * @keyword-cn 读取抓取频率, 调度设置
+   * @description 读取当前用户生效的每日抓取时刻、采集渠道与 TikHub 配置。
+   * @keyword-cn 读取抓取时刻, 调度设置
    * @keyword-en read-crawl-settings, schedule-config
    */
   @Get('crawl-settings')
   @RequirePermission('read', 'XhsTopic')
   async readCrawlSettings(@Req() req: AdminRequest) {
     const user = this.requireUser(req);
+    const scope = { tenantId: user.tenantId, userId: user._id.toHexString() };
     return {
-      intervalMinutes: await this.crawlService.getIntervalMinutes({
-        tenantId: user.tenantId,
-        userId: user._id.toHexString(),
-      }),
+      dailyCrawlAt: await this.crawlService.getDailyCrawlAt(scope),
+      channel: await this.crawlService.getChannel(scope),
+      tikhub: await this.tikhubConfig.getView(scope),
+      collector: await this.crawlService.getCollectorAvailability(scope),
     };
   }
 
   /**
-   * @description 保存抓取频率，前端「抓取数据频率」设置变更时同步下来供调度器使用。
-   * @keyword-cn 保存抓取频率, 同步设置
-   * @keyword-en save-crawl-settings, sync-interval
+   * @description 保存每日抓取时刻与采集渠道，并透传 TikHub 凭证；时刻变更会同时改排等待中的调度行。
+   * @keyword-cn 保存抓取时刻, 同步设置
+   * @keyword-en save-crawl-settings, sync-daily-time
    */
   @Put('crawl-settings')
   @RequirePermission('update', 'XhsTopic')
@@ -297,12 +326,47 @@ export class XhsTopicDataController {
     @Body() dto: UpdateXhsCrawlSettingsDto,
   ) {
     const user = this.requireUser(req);
+    const scope = { tenantId: user.tenantId, userId: user._id.toHexString() };
+    const dailyCrawlAt = dto.dailyCrawlAt
+      ? await this.crawlService.saveDailyCrawlAt(dto.dailyCrawlAt, scope)
+      : await this.crawlService.getDailyCrawlAt(scope);
+    if (dto.tikhubApiKey !== undefined || dto.tikhubBaseUrl !== undefined) {
+      await this.tikhubConfig.save(scope, {
+        apiKey: dto.tikhubApiKey,
+        baseUrl: dto.tikhubBaseUrl,
+      });
+    }
+    // 切到 TikHub 前先确认 Key 已经在库里，否则调度器只会一轮轮空跑。
+    if (
+      dto.channel === 'tikhub' &&
+      !(await this.tikhubConfig.resolveApiKey(scope))
+    ) {
+      throw new BadRequestException('TIKHUB_API_KEY_REQUIRED');
+    }
+    const channel = dto.channel
+      ? await this.crawlService.saveChannel(dto.channel, scope)
+      : await this.crawlService.getChannel(scope);
     return {
-      intervalMinutes: await this.crawlService.saveIntervalMinutes(
-        dto.intervalMinutes,
-        { tenantId: user.tenantId, userId: user._id.toHexString() },
-      ),
+      dailyCrawlAt,
+      channel,
+      tikhub: await this.tikhubConfig.getView(scope),
+      collector: await this.crawlService.getCollectorAvailability(scope),
     };
+  }
+
+  /**
+   * @description 用当前保存的 Key 与域名做一次 TikHub 连通性自检，配置页保存后点「测试连接」调用。
+   * @keyword-cn 测试TikHub连接, 密钥自检
+   * @keyword-en test-tikhub-connection, api-key-probe
+   */
+  @Post('crawl-settings/test-tikhub')
+  @RequirePermission('update', 'XhsTopic')
+  async testTikhubConnection(@Req() req: AdminRequest) {
+    const user = this.requireUser(req);
+    return this.tikhubXhs.probe({
+      tenantId: user.tenantId,
+      userId: user._id.toHexString(),
+    });
   }
 
   /**

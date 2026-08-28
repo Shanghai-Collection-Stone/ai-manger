@@ -31,14 +31,14 @@ Todo服务。
   - `create`: 创建待办/create
   - `update`: 更新待办/update
   - `listByScope`: 范围查询（支持 category 过滤）/list by scope
-  - `claimNextByAssignees({ tenantId, assignees })` — 通过租户、Agent、状态、截止时间和创建时间组合索引，原子领取最早 pending 任务；跳过主动推送已预留未 ACK 的任务 | keywords: 原子领取任务, SuperClaw下发, atomic-task-claim, super-claw-dispatch
-  - `reserveNextForDelivery({ tenantIds, workspaceIds, assignees, includePlatform?, superClawId, deliveryId, ackDeadline, maxExecutionAttempts? })` — 从节点所辖租户及平台工作区中预留最早任务并轮换本次投递 Token，跳过已达重复领取上限的任务 | keywords: 预留推送任务, 轮换任务令牌, reserve-push-task, rotate-task-token
+  - `claimNextByAssignees({ tenantId, assignees })` — 通过租户、Agent、状态、截止时间和创建时间组合索引，原子领取最早 pending 任务；跳过主动推送已预留未 ACK 的任务及已有 abnormalReason 的异常任务 | keywords: 原子领取任务, SuperClaw下发, atomic-task-claim, super-claw-dispatch
+  - `reserveNextForDelivery({ tenantIds, workspaceIds, assignees, includePlatform?, superClawId, deliveryId, ackDeadline, maxExecutionAttempts? })` — 从节点所辖租户及平台工作区中预留最早任务并轮换本次投递 Token，跳过已达重复领取上限及已有 abnormalReason 的任务 | keywords: 预留推送任务, 轮换任务令牌, reserve-push-task, rotate-task-token
   - `failExhaustedTaskDeliveries(workspaceIds,maxExecutionAttempts)` — 把被节点反复领取仍未写入终态的任务判为 failed，阻断无限重投 | keywords: 封顶重复领取, 阻断无限重投, cap-repeated-claim, stop-infinite-redelivery
   - `acknowledgeTaskDelivery({ id, superClawId, deliveryId, leaseExpiresAt })` — ACK 后把任务推进为执行中、开启租约并累加 `taskExecutionAttempts` | keywords: 确认推送任务, 启动执行租约, acknowledge-push-task, start-execution-lease
   - `renewTaskDeliveryLease({ id, superClawId, deliveryId, leaseExpiresAt })` — 执行中或等待人工介入时续期节点租约 | keywords: 续期任务租约, 节点执行心跳, renew-task-lease, node-execution-heartbeat
-  - `releaseTaskDelivery({ id, superClawId, deliveryId })` — 断线后轮换 Token，等待介入任务保持挂起而不重投 | keywords: 释放任务租约, 失效旧令牌, release-task-lease, invalidate-stale-token
+  - `releaseTaskDelivery({ id, superClawId, deliveryId })` — 断线后轮换 Token，带 abnormalReason 的任务判为 failed 阻断重投，等待介入任务保持挂起 | keywords: 释放任务租约, 异常阻断重投, release-task-lease, abnormal-block-redelivery
   - `resumeAfterInteraction(id,tenantId?)` — 用户完成扫码或短回复后按租约状态恢复执行或重新入队 | keywords: 恢复等待用户任务, 轮换旧令牌, resume-waiting-user-task, rotate-stale-token
-  - `requeueExpiredTaskDeliveries(tenantIds,includePlatform?)` — 回收节点所辖租户及平台工作区中的过期 ACK/执行租约 | keywords: 回收过期租约, 恢复待推送任务, reclaim-expired-leases, recover-pending-dispatch
+  - `requeueExpiredTaskDeliveries(tenantIds,includePlatform?)` — 回收节点所辖租户及平台工作区中的过期 ACK/执行租约；带 abnormalReason 的任务判为 failed 阻断重投 | keywords: 回收过期租约, 异常阻断重投, reclaim-expired-leases, abnormal-block-redelivery
   - `createItem`: 创建清单/create item
   - `buildTenantFilter`: 租户过滤/build tenant filter
 

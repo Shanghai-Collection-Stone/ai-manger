@@ -16,6 +16,7 @@ import { XhsPostStatService } from '../../todo/services/xhs-post-stat.service.js
 import { XhsTopicRepositoryService } from '../../xhs-topic/services/xhs-topic-repository.service.js';
 import type { XhsTopicEntity } from '../../xhs-topic/entities/xhs-topic.entity.js';
 import type {
+  XhsCrawlChannel,
   XhsCrawlSettingsEntity,
   XhsCrawlScheduleEntity,
   XhsCrawlTaskEntity,
@@ -26,13 +27,25 @@ import type {
 import { ArticleLibraryService } from '../../article-library/services/article-library.service.js';
 import { ContextService } from '../../context/services/context.service.js';
 import { ContextRole } from '../../context/enums/context.enums.js';
+import { TikhubXhsService } from '../../tikhub/services/tikhub-xhs.service.js';
 
 /**
- * @type {number} 未配置抓取频率时使用的默认间隔（分钟），与前端设置面板默认值一致。
- * @keyword-cn 默认抓取频率, 分钟间隔
- * @keyword-en default-crawl-interval, minute-frequency
+ * @type {string} 小红书数据采集按每天固定时刻跑：默认当天 23:59，取当日收盘数据。
+ *   `HH:mm` 按服务器本地时区解释，与看板按自然日分组用的是同一个时区口径。
+ * @keyword-cn 默认抓取时刻, 每日定点
+ * @keyword-en default-crawl-time, daily-fixed-time
  */
-export const DEFAULT_CRAWL_INTERVAL_MINUTES = 30;
+export const DEFAULT_CRAWL_DAILY_AT = '23:59';
+
+/**
+ * @type {number} 兼容字段用的名义间隔：定点调度后一天固定一次。
+ * @keyword-cn 兼容抓取间隔, 名义一天
+ * @keyword-en legacy-crawl-interval, nominal-daily
+ */
+export const DEFAULT_CRAWL_INTERVAL_MINUTES = 24 * 60;
+
+/** @type {RegExp} 每日抓取时刻的格式，`HH:mm` 24 小时制。 */
+const DAILY_AT_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 /**
  * @type {number} 发布后默认持续采集两周。
@@ -55,6 +68,9 @@ const RUNNING_CHECK_MS = 60_000;
 
 /** @type {number} 数据追踪 Agent 暂不可用时的退避时间。 */
 const AGENT_RETRY_MS = 5 * 60 * 1000;
+
+/** @type {number} 无 Todo 的直采运行超过这个时长仍在途，判定为进程中断留下的僵尸运行。 */
+const DIRECT_RUN_STALE_MS = 30 * 60 * 1000;
 
 /** @type {string} 数据追踪 Agent 的 module 标识，调度器据此挑选抓取执行方。 */
 const LEGACY_DATA_TRACKING_AGENT_MODULE = 'xhs_data_tracking';
@@ -101,6 +117,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     private readonly robots: RobotRegistryService,
     private readonly libraries: ArticleLibraryService,
     private readonly context: ContextService,
+    private readonly tikhub: TikhubXhsService,
   ) {
     this.tasks = db.collection<XhsCrawlTaskEntity>('xhs_topic_crawl_tasks');
     this.schedules = db.collection<XhsCrawlScheduleEntity>(
@@ -139,7 +156,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 建立抓取任务、专用调度表与配置索引，首次启用时回填既有已发布文章。
+   * @description 建立抓取任务、专用调度表与配置索引，迁移到每日定点调度并回填既有已发布文章。
    * @keyword-cn 抓取任务索引, 调度表初始化
    * @keyword-en crawl-task-indexes, schedule-table-init
    * @returns {Promise<void>}
@@ -186,7 +203,52 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     if (!exists) {
       await this.counters.insertOne({ _id: 'xhs_topic_crawl_tasks', seq: 0 });
     }
+    await this.migrateToDailySchedule();
     await this.backfillPublishedArticleSchedules();
+  }
+
+  /**
+   * @description 把存量配置与调度行从「按间隔」切到「每天定点」：配置行补上 `dailyCrawlAt`，
+   *   全部等待行改排到下一个定点——包括还没跑过的首轮，因为发布不再顺手抓一次。
+   * @keyword-cn 定点调度迁移, 存量调度重排
+   * @keyword-en migrate-to-daily-schedule, reschedule-existing
+   * @returns {Promise<void>}
+   */
+  private async migrateToDailySchedule(): Promise<void> {
+    const markerKey = 'xhs_topic_crawl_daily_at';
+    const marker = await this.counters.findOne({ _id: markerKey });
+    if ((marker?.seq ?? 0) >= 1) return;
+    const now = new Date();
+    const settingsResult = await this.settings.updateMany(
+      { dailyCrawlAt: { $exists: false } },
+      { $set: { dailyCrawlAt: DEFAULT_CRAWL_DAILY_AT, updatedAt: now } },
+    );
+    const rows = await this.schedules.find({ status: 'waiting' }).toArray();
+    let rescheduled = 0;
+    for (const row of rows) {
+      const dailyAt = await this.getDailyCrawlAt({
+        tenantId: row.tenantId,
+        userId: row.userId,
+      });
+      await this.schedules.updateOne(
+        { topicId: row.topicId, status: 'waiting' },
+        {
+          $set: {
+            nextRunAt: this.resolveNextDailyRunAt(dailyAt, now),
+            updatedAt: now,
+          },
+        },
+      );
+      rescheduled += 1;
+    }
+    await this.counters.updateOne(
+      { _id: markerKey },
+      { $set: { seq: 1 } },
+      { upsert: true },
+    );
+    this.logger.log(
+      `[migrateToDailySchedule] settings=${settingsResult.modifiedCount} schedules=${rescheduled}`,
+    );
   }
 
   /**
@@ -269,6 +331,12 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     const defaultEndAt = new Date(
       now.getTime() + DEFAULT_CRAWL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
     );
+    // 发布不再顺手抓一次：首轮同样排到下一个每日定点，要马上要数据走手动抓取接口。
+    const firstRunAt = await this.resolveFirstDailyRunAt(
+      { tenantId: topic.tenantId, userId: topic.userId },
+      now,
+      now,
+    );
     const scope = {
       articleId: input.articleId,
       libraryId: input.libraryId,
@@ -292,7 +360,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
                       : ('waiting' as const),
                   startAt: now,
                   endAt: defaultEndAt,
-                  nextRunAt: now,
+                  nextRunAt: firstRunAt,
                 }),
           },
           ...(!keepRunning
@@ -309,7 +377,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       status: topic.crawl?.status === 'cancelled' ? 'cancelled' : 'waiting',
       startAt: now,
       endAt: defaultEndAt,
-      nextRunAt: now,
+      nextRunAt: firstRunAt,
       createdAt: now,
     });
     return true;
@@ -345,20 +413,24 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     const current = await this.schedules.findOne({ topicId });
     if (!current) return false;
     const expired = new Date(current.endAt).getTime() <= now.getTime();
+    const startAt = expired ? now : current.startAt;
+    const nextRunAt = await this.resolveFirstDailyRunAt(
+      { tenantId: current.tenantId, userId: current.userId },
+      now,
+      startAt,
+    );
     const result = await this.schedules.updateOne(
       { topicId },
       {
         $set: {
           status: 'waiting',
-          startAt: expired ? now : current.startAt,
+          startAt,
           endAt: expired
             ? new Date(
                 now.getTime() + DEFAULT_CRAWL_WINDOW_DAYS * 24 * 60 * 60 * 1000,
               )
             : current.endAt,
-          nextRunAt: expired
-            ? now
-            : new Date(Math.max(now.getTime(), current.startAt.getTime())),
+          nextRunAt,
           updatedAt: now,
         },
         $unset: {
@@ -411,6 +483,14 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
             : current.status === 'running'
               ? 'running'
               : 'waiting';
+    const nextRunAt =
+      status === 'running'
+        ? current.nextRunAt
+        : await this.resolveFirstDailyRunAt(
+            { tenantId: current.tenantId, userId: current.userId },
+            now,
+            startAt,
+          );
     return await this.schedules.findOneAndUpdate(
       { topicId },
       {
@@ -418,10 +498,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
           startAt,
           endAt,
           status,
-          nextRunAt:
-            status === 'running'
-              ? current.nextRunAt
-              : new Date(Math.max(now.getTime(), startAt.getTime())),
+          nextRunAt,
           updatedAt: now,
         },
         ...(outsideActiveWindow
@@ -485,48 +562,159 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 读取当前租户用户生效的抓取间隔，未配置时回退默认值。
-   * @keyword-cn 读取抓取频率, 调度间隔
-   * @keyword-en read-crawl-interval, schedule-interval
+   * @description 读取当前租户用户生效的每日抓取时刻，未配置或格式不合法时回退 23:59。
+   * @keyword-cn 读取抓取时刻, 每日定点
+   * @keyword-en read-daily-crawl-time, daily-fixed-time
    * @param scope 当前租户与用户作用域。
-   * @returns {Promise<number>} 抓取间隔分钟数。
+   * @returns {Promise<string>} `HH:mm` 形式的每日抓取时刻。
    */
-  async getIntervalMinutes(scope: {
+  async getDailyCrawlAt(scope: {
     tenantId?: string | null;
     userId: string;
-  }): Promise<number> {
+  }): Promise<string> {
     const doc = await this.settings.findOne({
       tenantId: String(scope.tenantId ?? '').trim() || null,
       userId: scope.userId,
     });
-    const minutes = Number(doc?.intervalMinutes);
-    return Number.isFinite(minutes) && minutes > 0
-      ? minutes
-      : DEFAULT_CRAWL_INTERVAL_MINUTES;
+    return this.normalizeDailyAt(doc?.dailyCrawlAt);
   }
 
   /**
-   * @description 保存前端「抓取数据频率」设置，调度器下一轮即按新间隔建任务。
-   * @keyword-cn 保存抓取频率, 同步设置
-   * @keyword-en save-crawl-interval, sync-settings
-   * @param intervalMinutes 抓取间隔分钟数。
+   * @description 保存每日抓取时刻，并把该作用域下所有等待中的调度行改排到新的时间点。
+   *   不改时间点就落库的话，已经排好的行还会按旧时刻跑一次，用户会以为设置没生效。
+   * @keyword-cn 保存抓取时刻, 改排等待任务
+   * @keyword-en save-daily-crawl-time, reschedule-waiting
+   * @param dailyCrawlAt `HH:mm` 形式的每日抓取时刻。
    * @param scope 当前租户与用户作用域。
-   * @returns {Promise<number>} 实际生效的间隔分钟数。
+   * @returns {Promise<string>} 实际生效的每日抓取时刻。
    */
-  async saveIntervalMinutes(
-    intervalMinutes: number,
+  async saveDailyCrawlAt(
+    dailyCrawlAt: string,
     scope: { tenantId?: string | null; userId: string },
-  ): Promise<number> {
-    const minutes = Math.max(1, Math.round(Number(intervalMinutes) || 0));
+  ): Promise<string> {
+    const value = this.normalizeDailyAt(dailyCrawlAt);
+    const tenantId = String(scope.tenantId ?? '').trim() || null;
+    const now = new Date();
+    await this.settings.updateOne(
+      { tenantId, userId: scope.userId },
+      { $set: { dailyCrawlAt: value, updatedAt: now } },
+      { upsert: true },
+    );
+    const nextRunAt = this.resolveNextDailyRunAt(value, now);
+    await this.schedules.updateMany(
+      { tenantId, userId: scope.userId, status: 'waiting' },
+      { $set: { nextRunAt, updatedAt: now } },
+    );
+    return value;
+  }
+
+  /**
+   * @description 把配置值收敛成合法的 `HH:mm`，脏数据一律回退默认时刻。
+   * @keyword-cn 校验抓取时刻, 格式回退
+   * @keyword-en normalize-daily-time, format-fallback
+   * @param value 待校验的时刻字符串。
+   * @returns {string} 合法的 `HH:mm`。
+   */
+  private normalizeDailyAt(value?: string | null): string {
+    const text = String(value ?? '').trim();
+    return DAILY_AT_PATTERN.test(text) ? text : DEFAULT_CRAWL_DAILY_AT;
+  }
+
+  /**
+   * @description 算出 `HH:mm` 在 `from` 之后的下一个到达时刻：当天还没到就是今天，
+   *   已经过了就顺延到明天。按服务器本地时区计算，与看板按自然日分组同一口径。
+   * @keyword-cn 计算下次定点, 顺延次日
+   * @keyword-en resolve-next-daily-run, roll-to-tomorrow
+   * @param dailyCrawlAt `HH:mm` 形式的每日抓取时刻。
+   * @param from 计算基准时间。
+   * @returns {Date} 下一次抓取时间。
+   */
+  /**
+   * @description 算出一条调度行的首次到达时刻：从「现在」和「窗口开始时间」里取晚的那个作为基准，
+   *   再排到它之后的第一个定点。发布、恢复、改采集区间都走这里——自动链路一律不即时开抓，
+   *   要马上要数据用手动抓取接口 `POST /:topicId/crawl-now`。
+   * @keyword-cn 计算首次定点, 不即时开抓
+   * @keyword-en resolve-first-daily-run, no-immediate-crawl
+   * @param scope 调度行归属的租户与用户作用域。
+   * @param from 计算基准时间，通常是当前时间。
+   * @param startAt 采集窗口开始时间。
+   * @returns {Promise<Date>} 首次抓取时间。
+   */
+  private async resolveFirstDailyRunAt(
+    scope: { tenantId?: string | null; userId: string },
+    from: Date,
+    startAt: Date,
+  ): Promise<Date> {
+    const dailyAt = await this.getDailyCrawlAt(scope);
+    const base = new Date(Math.max(from.getTime(), startAt.getTime()));
+    return this.resolveNextDailyRunAt(dailyAt, base);
+  }
+
+  /**
+   * @description 算出 `HH:mm` 在 `from` 之后的下一个到达时刻：当天还没到就是今天，
+   *   已经过了就顺延到明天。按服务器本地时区计算，与看板按自然日分组同一口径。
+   * @keyword-cn 计算下次定点, 顺延次日
+   * @keyword-en resolve-next-daily-run, roll-to-tomorrow
+   * @param dailyCrawlAt `HH:mm` 形式的每日抓取时刻。
+   * @param from 计算基准时间。
+   * @returns {Date} 下一次抓取时间。
+   */
+  private resolveNextDailyRunAt(dailyCrawlAt: string, from: Date): Date {
+    const [hour, minute] = this.normalizeDailyAt(dailyCrawlAt)
+      .split(':')
+      .map((part) => Number(part));
+    const next = new Date(from);
+    next.setHours(hour, minute, 0, 0);
+    if (next.getTime() <= from.getTime()) {
+      next.setDate(next.getDate() + 1);
+    }
+    return next;
+  }
+
+  /**
+   * @description 读取当前租户用户生效的采集渠道，历史配置没有该字段时按 `super_claw` 处理。
+   * @keyword-cn 读取采集渠道, 渠道回退
+   * @keyword-en read-crawl-channel, channel-fallback
+   * @param scope 当前租户与用户作用域。
+   * @returns {Promise<XhsCrawlChannel>} 生效的采集渠道。
+   */
+  async getChannel(scope: {
+    tenantId?: string | null;
+    userId: string;
+  }): Promise<XhsCrawlChannel> {
+    const doc = await this.settings.findOne({
+      tenantId: String(scope.tenantId ?? '').trim() || null,
+      userId: scope.userId,
+    });
+    return doc?.channel === 'tikhub' ? 'tikhub' : 'super_claw';
+  }
+
+  /**
+   * @description 保存采集渠道。切换只影响之后新建的抓取运行，在途的 SuperClaw Todo 仍按原渠道跑完。
+   * @keyword-cn 保存采集渠道, 切换渠道
+   * @keyword-en save-crawl-channel, switch-channel
+   * @param channel 目标采集渠道。
+   * @param scope 当前租户与用户作用域。
+   * @returns {Promise<XhsCrawlChannel>} 实际生效的采集渠道。
+   */
+  async saveChannel(
+    channel: XhsCrawlChannel,
+    scope: { tenantId?: string | null; userId: string },
+  ): Promise<XhsCrawlChannel> {
+    const next: XhsCrawlChannel =
+      channel === 'tikhub' ? 'tikhub' : 'super_claw';
     await this.settings.updateOne(
       {
         tenantId: String(scope.tenantId ?? '').trim() || null,
         userId: scope.userId,
       },
-      { $set: { intervalMinutes: minutes, updatedAt: new Date() } },
+      {
+        $set: { channel: next, updatedAt: new Date() },
+        $setOnInsert: { dailyCrawlAt: DEFAULT_CRAWL_DAILY_AT },
+      },
       { upsert: true },
     );
-    return minutes;
+    return next;
   }
 
   /**
@@ -596,6 +784,11 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     if (inflight.length === 0) return;
     for (const task of inflight) {
       try {
+        if (!task.todoId) {
+          // TikHub 直采在进程内同步跑完并自己写终态，这里只兜底收掉进程重启留下的僵尸运行。
+          await this.settleStaleDirectRun(task);
+          continue;
+        }
         const todo = await this.todos.get(task.todoId);
         const status = this.mapTodoStatus(todo?.status);
         if (status === 'pending' || status === 'running') {
@@ -728,13 +921,6 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     beforeTrigger?: (task: XhsCrawlTaskEntity) => Promise<void>,
     deadline?: Date,
   ): Promise<XhsCrawlTaskEntity | null> {
-    const assignee = await this.resolveTrackingAssignee();
-    if (!assignee) {
-      this.logger.warn(
-        `[createCrawlTask] 未找到 module=${SUPER_CLAW_DATA_TRACKING_AGENT_MODULE} 的数据追踪 Agent，topicId=${topic.id}`,
-      );
-      return null;
-    }
     const now = new Date();
     const schedule = await this.schedules.findOne({ topicId: topic.id });
     if (!schedule) {
@@ -743,10 +929,6 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       );
       return null;
     }
-    const workspaceId = await this.libraries.ensureWorkspace(
-      schedule.libraryId,
-      topic.tenantId ?? undefined,
-    );
     // 抓取对象恒定是已发布笔记，且同一子选题可能发过多篇，这里一次把全部 NoteId 收齐。
     const notes = await this.resolvePublishedNotes(topic.id, schedule);
     if (!notes.length) {
@@ -755,6 +937,25 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       );
       return null;
     }
+    const channel = await this.getChannel({
+      tenantId: topic.tenantId,
+      userId: topic.userId,
+    });
+    if (channel === 'tikhub') {
+      // TikHub 是平台直采：没有 Todo、没有节点、没有工作区，本方法内同步跑完并自行推进调度。
+      return this.runTikhubCrawlTask(topic, trigger, notes);
+    }
+    const assignee = await this.resolveTrackingAssignee();
+    if (!assignee) {
+      this.logger.warn(
+        `[createCrawlTask] 未找到 module=${SUPER_CLAW_DATA_TRACKING_AGENT_MODULE} 的数据追踪 Agent，topicId=${topic.id}`,
+      );
+      return null;
+    }
+    const workspaceId = await this.libraries.ensureWorkspace(
+      schedule.libraryId,
+      topic.tenantId ?? undefined,
+    );
     const sessionKey = await this.context.createSessionWithScope(undefined, {
       tenantId: topic.tenantId ?? undefined,
       userId: topic.userId,
@@ -816,6 +1017,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       topicId: topic.id,
       todoId: todo.id,
       runIndex: 1,
+      channel: 'super_claw',
       trigger,
       status: 'pending',
       startedAt: now,
@@ -840,6 +1042,207 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * @description 收尾没有 Todo 的直采运行：正常情况下它在进程内同步写终态，只有进程重启才会留在途，
+   *   超过 `DIRECT_RUN_STALE_MS` 仍是 running 就判失败，免得列表里永远挂着「执行中」。
+   * @keyword-cn 收尾僵尸直采, 进程重启兜底
+   * @keyword-en settle-stale-direct-run, restart-recovery
+   * @param task 在途的直采运行记录。
+   * @returns {Promise<void>}
+   */
+  private async settleStaleDirectRun(task: XhsCrawlTaskEntity): Promise<void> {
+    const age = Date.now() - new Date(task.startedAt).getTime();
+    if (age < DIRECT_RUN_STALE_MS) return;
+    const now = new Date();
+    await this.tasks.updateOne(
+      { id: task.id, status: { $in: ['pending', 'running'] } },
+      {
+        $set: {
+          status: 'failed',
+          finishedAt: now,
+          updatedAt: now,
+          error: '直采任务未正常结束（服务重启或进程中断）',
+        },
+      },
+    );
+    if (task.trigger === 'schedule') {
+      await this.advanceScheduleForTopic(task.topicId, '直采任务未正常结束');
+    }
+  }
+
+  /**
+   * @description TikHub 直采路径：平台自己调开放接口把这批 NoteId 采完，落一条与 SuperClaw 同构的运行记录。
+   *   没有 Todo、没有节点、没有工作区，所以整批在本方法内跑完并直接写入终态；单篇失败不中断整批，
+   *   只要有一篇失败就把本次运行判为 `failed`，已采到的数据仍然入库——与 SuperClaw 侧的终态口径一致。
+   * @keyword-cn TikHub直采, 平台侧采集
+   * @keyword-en tikhub-direct-crawl, platform-side-collect
+   * @param topic 子选题实体。
+   * @param trigger 触发来源。
+   * @param notes 本次要采集的已发布笔记清单。
+   * @returns {Promise<XhsCrawlTaskEntity | null>} 本次运行记录；API Key 未配置时为 null。
+   */
+  private async runTikhubCrawlTask(
+    topic: XhsTopicEntity,
+    trigger: XhsCrawlTaskTrigger,
+    notes: CrawlTargetNote[],
+  ): Promise<XhsCrawlTaskEntity | null> {
+    const scope = { tenantId: topic.tenantId, userId: topic.userId };
+    if (!(await this.tikhub.isReady(scope))) {
+      this.logger.warn(
+        `[runTikhubCrawlTask] topicId=${topic.id} 未配置 TikHub API Key，跳过本次抓取`,
+      );
+      return null;
+    }
+    const now = new Date();
+    const id = await this.nextTaskId();
+    const task: XhsCrawlTaskEntity = {
+      _id: new ObjectId(),
+      id,
+      tenantId: topic.tenantId ?? null,
+      userId: topic.userId,
+      topicId: topic.id,
+      // TikHub 直采没有承载执行的 Todo，用 0 占位；对账与取消逻辑据此跳过 Todo 查询。
+      todoId: 0,
+      runIndex: 1,
+      channel: 'tikhub',
+      trigger,
+      status: 'running',
+      startedAt: now,
+      collectedCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.tasks.insertOne(task);
+    await this.topics.markCrawlScheduled(topic.id, now);
+    // 整批采集可能超过调度行的 2 分钟领取租约，先把租约和下次到期时间一起顶到僵尸判定线之后，
+    // 否则另一个实例会在采集还没跑完时重新领走同一条调度行，重复采一遍。
+    await this.schedules.updateOne(
+      { topicId: topic.id },
+      {
+        $set: {
+          status: 'running',
+          nextRunAt: new Date(now.getTime() + DIRECT_RUN_STALE_MS),
+          lockUntil: new Date(now.getTime() + DIRECT_RUN_STALE_MS),
+          lastDispatchedAt: now,
+          updatedAt: now,
+        },
+      },
+    );
+
+    let collected = 0;
+    let error: string | undefined;
+    try {
+      const result = await this.tikhub.collectNotes(notes, scope);
+      for (const stat of result.stats) {
+        await this.postStats.create({
+          todoId: 0,
+          topicId: topic.id,
+          crawlRunId: id,
+          tag: stat.tag,
+          postTitle: stat.title,
+          postUrl: stat.postUrl,
+          authorUrl: stat.authorUrl,
+          likeCount: stat.likeCount,
+          commentCount: stat.commentCount,
+          collectCount: stat.collectCount,
+          ...(stat.viewCount === undefined
+            ? {}
+            : { viewCount: stat.viewCount }),
+          ...(stat.shareCount === undefined
+            ? {}
+            : { shareCount: stat.shareCount }),
+          topComments: stat.topComments,
+          dataAt: stat.dataAt,
+        });
+        collected += 1;
+      }
+      if (result.failures.length) {
+        error =
+          `TikHub 采集 ${result.failures.length}/${notes.length} 篇失败：${result.failures
+            .map((item) => `${item.noteId}(${item.reason})`)
+            .join('；')}`.slice(0, 1000);
+      } else if (!result.stats.length) {
+        error = 'TikHub 未返回任何笔记数据';
+      }
+    } catch (unexpected) {
+      error =
+        unexpected instanceof Error ? unexpected.message : String(unexpected);
+    }
+
+    const finishedAt = new Date();
+    await this.tasks.updateOne(
+      { id },
+      {
+        $set: {
+          status: error ? 'failed' : 'done',
+          finishedAt,
+          collectedCount: collected,
+          updatedAt: finishedAt,
+          ...(error ? { error } : {}),
+        },
+        ...(error ? {} : { $unset: { error: '' } }),
+      },
+    );
+    if (collected > 0) await this.topics.markCrawled(topic.id, finishedAt);
+    // 只有调度触发的运行才推进调度行；手动抓取是计划外的一次性补数，不能改动定点节奏，
+    // 更不能把在途调度行的 currentTodoId 清掉。SuperClaw 侧同理：手动 Todo 从不是 currentTodoId。
+    if (trigger === 'schedule') {
+      await this.advanceScheduleForTopic(topic.id, error);
+    }
+    this.logger.log(
+      `[runTikhubCrawlTask] topicId=${topic.id} runId=${id} collected=${collected} status=${
+        error ? 'failed' : 'done'
+      }`,
+    );
+    return {
+      ...task,
+      status: error ? 'failed' : 'done',
+      collectedCount: collected,
+    };
+  }
+
+  /**
+   * @description TikHub 直采没有 Todo 可依附，按子选题把调度行推回 waiting 并排下一次到期时间。
+   *   同时清掉本轮领取租约，否则调度行会一直被锁着。
+   * @keyword-cn 直采后推进调度, 按选题推进
+   * @keyword-en advance-schedule-after-direct-run, advance-by-topic
+   * @param topicId 子选题业务 ID。
+   * @param error 本轮终态错误；成功时为空。
+   * @returns {Promise<void>}
+   */
+  private async advanceScheduleForTopic(
+    topicId: number,
+    error?: string,
+  ): Promise<void> {
+    const schedule = await this.schedules.findOne({ topicId });
+    if (!schedule || schedule.status === 'cancelled') return;
+    const dailyAt = await this.getDailyCrawlAt({
+      tenantId: schedule.tenantId,
+      userId: schedule.userId,
+    });
+    const now = new Date();
+    const nextRunAt = this.resolveNextDailyRunAt(dailyAt, now);
+    await this.schedules.updateOne(
+      { topicId, status: { $in: ['waiting', 'running'] } },
+      {
+        $set: {
+          status: 'waiting',
+          nextRunAt,
+          lastDispatchedAt: now,
+          lastFinishedAt: now,
+          updatedAt: now,
+          ...(error ? { lastError: error } : {}),
+        },
+        $unset: {
+          currentTodoId: '',
+          lockToken: '',
+          lockUntil: '',
+          ...(!error ? { lastError: '' } : {}),
+        },
+      },
+    );
+  }
+
+  /**
    * @description 取消某个子选题在途的抓取任务，取消抓取时连同尚未结束的 Todo 一起停掉。
    * @keyword-cn 取消在途任务, 停止抓取
    * @keyword-en cancel-running-tasks, stop-crawl
@@ -852,12 +1255,15 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       .toArray();
     const now = new Date();
     for (const task of running) {
-      try {
-        await this.todos.update({ id: task.todoId, status: 'cancelled' });
-      } catch (error) {
-        this.logger.warn(
-          `[cancelRunningTasks] 取消 Todo 失败 todoId=${task.todoId} ${String(error)}`,
-        );
+      // TikHub 直采没有 Todo 可取消，只把运行记录收进终态。
+      if (task.todoId) {
+        try {
+          await this.todos.update({ id: task.todoId, status: 'cancelled' });
+        } catch (error) {
+          this.logger.warn(
+            `[cancelRunningTasks] 取消 Todo 失败 todoId=${task.todoId} ${String(error)}`,
+          );
+        }
       }
       await this.tasks.updateOne(
         { id: task.id },
@@ -965,12 +1371,18 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if (new Date(schedule.startAt).getTime() > now.getTime()) {
+      // 还没到采集区间开始时间：退回等待，并且排到区间开始之后的第一个定点，
+      // 不要停在 startAt 上——否则区间一开始就会在非定点时刻抓一次。
       await this.schedules.updateOne(
         { topicId: schedule.topicId, lockToken: schedule.lockToken },
         {
           $set: {
             status: 'waiting',
-            nextRunAt: schedule.startAt,
+            nextRunAt: await this.resolveFirstDailyRunAt(
+              { tenantId: schedule.tenantId, userId: schedule.userId },
+              now,
+              schedule.startAt,
+            ),
             updatedAt: now,
           },
           $unset: { lockToken: '', lockUntil: '' },
@@ -1049,13 +1461,17 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       schedule.endAt,
     );
     if (!task) {
+      const availability = await this.getCollectorAvailability({
+        tenantId: topic.tenantId,
+        userId: topic.userId,
+      });
       await this.schedules.updateOne(
         { topicId: schedule.topicId, lockToken: schedule.lockToken },
         {
           $set: {
             status: 'waiting',
             nextRunAt: new Date(now.getTime() + AGENT_RETRY_MS),
-            lastError: '未找到可用的数据追踪 Agent',
+            lastError: availability.reason ?? '本次未能创建抓取任务',
             updatedAt: now,
           },
           $unset: { lockToken: '', lockUntil: '' },
@@ -1063,6 +1479,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       );
       return;
     }
+    // TikHub 直采在 createCrawlTask 内已经跑完并自行推进了调度行，这里不再需要收尾。
   }
 
   /**
@@ -1082,7 +1499,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       status: 'running',
     });
     if (!schedule) return;
-    const interval = await this.getIntervalMinutes({
+    const dailyAt = await this.getDailyCrawlAt({
       tenantId: schedule.tenantId,
       userId: schedule.userId,
     });
@@ -1092,7 +1509,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       {
         $set: {
           status: 'waiting',
-          nextRunAt: new Date(now.getTime() + interval * 60_000),
+          nextRunAt: this.resolveNextDailyRunAt(dailyAt, now),
           lastFinishedAt: now,
           updatedAt: now,
           ...(error ? { lastError: error } : {}),
@@ -1116,6 +1533,40 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
    */
   async hasTrackingAgent(): Promise<boolean> {
     return Boolean(await this.resolveTrackingAssignee());
+  }
+
+  /**
+   * @description 按当前生效渠道判断采集端是否可用：SuperClaw 看有没有数据追踪 Agent，
+   *   TikHub 看有没有配置 API Key。这个原因本来只落在服务端日志里，界面上只会看到一个空列表，
+   *   所以要能查，且必须区分渠道——否则切到 TikHub 后还会提示「缺少 Agent」。
+   * @keyword-cn 采集端可用性, 按渠道判定
+   * @keyword-en collector-availability, per-channel-check
+   * @param scope 当前租户与用户作用域。
+   * @returns {Promise<{channel: XhsCrawlChannel, available: boolean, reason?: string}>} 渠道与可用性。
+   */
+  async getCollectorAvailability(scope: {
+    tenantId?: string | null;
+    userId: string;
+  }): Promise<{
+    channel: XhsCrawlChannel;
+    available: boolean;
+    reason?: string;
+  }> {
+    const channel = await this.getChannel(scope);
+    if (channel === 'tikhub') {
+      const available = await this.tikhub.isReady(scope);
+      return {
+        channel,
+        available,
+        reason: available ? undefined : '未配置 TikHub API Key',
+      };
+    }
+    const available = await this.hasTrackingAgent();
+    return {
+      channel,
+      available,
+      reason: available ? undefined : '未找到可用的数据追踪 Agent',
+    };
   }
 
   /**
@@ -1277,6 +1728,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       topicId: task.topicId,
       todoId: task.todoId,
       runIndex: task.runIndex ?? 1,
+      channel: task.channel === 'tikhub' ? 'tikhub' : 'super_claw',
       trigger: task.trigger,
       status: task.status,
       startedAt: new Date(task.startedAt).toISOString(),

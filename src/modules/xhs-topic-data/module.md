@@ -6,7 +6,9 @@
 
 为小红书数据页的「数据总览 / 数据明细 / 抓取任务明细」三个 Tab 提供后端能力。抓取数据本身仍落在 `xhs_post_stats`（归 todo 模块所有），本模块补上它缺的那条链路：**子选题 ↔ 抓取任务 ↔ 抓取数据**。
 
-链路改为发布事件驱动的线性工作流：`xhs-topic` 来源文章第一次进入 `published` 后写入专用表 `xhs_topic_crawl_schedules`，一条子选题只维护一条 `waiting → running → waiting` 调度记录。计划默认在发布后14天内生效，表内保存 `startAt/endAt`；到期进入 `completed`，人工取消进入 `cancelled`。调度器每分钟只通过 `status + nextRunAt` 索引原子领取最多 20 条到期记录，不再扫描 `xhs_topics` 或全部文章。每次到期只创建一个 `auto_execute` 单次 Todo（优先指派给 `module=super_claw_data_tracking` 的专用 Agent）和一条 `xhs_topic_crawl_tasks` 绑定记录；本次 Todo 完成后，调度表再按用户抓取频率等待并创建下一个全新 Todo。
+采集渠道可切换：`super_claw`（默认，节点跑 Playwright 脚本）与 `tikhub`（平台直接调 TikHub 开放接口）。渠道存在抓取时刻同一份配置里（`xhs_topic_crawl_settings.channel`，缺省按 `super_claw`），由配置页 `crawl-settings` 一起读写。切到 `tikhub` 后，`createCrawlTask` 走 `runTikhubCrawlTask`：**不建 Todo、不建会话、不占工作区、不下发节点**，在本进程内把整批 NoteId 采完并直接写终态，然后自行把调度行推回 `waiting`。运行记录结构与 SuperClaw 完全一致，只是 `todoId` 恒为 0、`channel` 为 `tikhub`；帖子数据在写入时就带上 `topicId` 和 `crawlRunId`，不走 `recordCrawlRun` 的事后归属。切换只影响之后新建的运行，在途的 SuperClaw Todo 仍按原渠道跑完。API Key 与 API 域名归 `tikhub` 模块保管，本模块只透传配置页的读写与连通性自检。
+
+链路改为发布事件驱动的线性工作流：`xhs-topic` 来源文章第一次进入 `published` 后写入专用表 `xhs_topic_crawl_schedules`，一条子选题只维护一条 `waiting → running → waiting` 调度记录。计划默认在发布后14天内生效，表内保存 `startAt/endAt`；到期进入 `completed`，人工取消进入 `cancelled`。调度器每分钟只通过 `status + nextRunAt` 索引原子领取最多 20 条到期记录，不再扫描 `xhs_topics` 或全部文章。每次到期只创建一个 `auto_execute` 单次 Todo（优先指派给 `module=super_claw_data_tracking` 的专用 Agent）和一条 `xhs_topic_crawl_tasks` 绑定记录；本次 Todo 完成后，调度表把下一次排到**每天固定时刻**而不是「上次完成 + 间隔」。时刻存在 `xhs_topic_crawl_settings.dailyCrawlAt`（`HH:mm`，服务器本地时区，缺省 `23:59` 取当日收盘数据），与看板按自然日分组用同一个时区口径。`resolveNextDailyRunAt` 算下一个到达点：当天还没到就是今天，过了就顺延次日；调度器每分钟轮询一次，所以实际落点在目标分钟内。**自动链路一律不即时开抓**：发布建行、恢复抓取、改采集区间都经 `resolveFirstDailyRunAt` 排到「max(现在, 窗口开始) 之后的第一个定点」，`nextRunAt` 不再出现 `now`。唯一会立刻开抓的入口是手动抓取 `POST /:topicId/crawl-now`，它是计划外的一次性补数：既不改抓取开关，也不挪动调度行的下次执行时间（TikHub 直采按 `trigger` 判定，只有 `schedule` 触发的运行才推进调度行；SuperClaw 侧手动 Todo 本来就不会成为 `currentTodoId`）。改时刻会连带把该作用域下所有 `waiting` 行改排到新时间点，否则已排好的行还会按旧时刻跑一次，用户会以为设置没生效。服务启动时 `migrateToDailySchedule` 按迁移标记给存量配置补 `dailyCrawlAt`，并把跑过至少一轮的等待行改排到下一个定点（从没跑过的首轮行保持原样）。
 
 每个单次抓取 Todo 创建前先读取文章库专属 `workspaceId`（历史文章库会懒补工作区），建立绑定该工作区的 `xhs-tracker` 会话，再把 `workspaceId/sessionKey` 写入 Todo。只有租户绑定节点已经确认创建该工作区后，平台才会下发 Todo。
 
@@ -30,11 +32,11 @@
 
 ## 文件清单 (File List)
 
-- `xhs-topic-data.module.ts` — NestJS 模块入口，装配后台鉴权、文章库工作区、会话、Todo、抓取机器人与选题仓储。
+- `xhs-topic-data.module.ts` — NestJS 模块入口，装配后台鉴权、文章库工作区、会话、Todo、抓取机器人、TikHub 接入与选题仓储。
 - `controller/xhs-topic-data.controller.ts` — 数据看板 HTTP 接口与权限声明。
-- `controller/xhs-topic-data.dto.ts` — 分页、按天删除、抓取开关与抓取频率的入参校验。
-- `entities/xhs-topic-data.entity.ts` — 抓取任务、总览指标、明细行、舆论分析与调度配置类型。
-- `services/xhs-topic-crawl.service.ts` — 发布事件驱动的专用调度表、到期任务原子领取、抓取任务绑定、Todo 状态对账与抓取频率配置。
+- `controller/xhs-topic-data.dto.ts` — 分页、按天删除、抓取开关、每日抓取时刻与采集渠道/TikHub 凭证的入参校验。
+- `entities/xhs-topic-data.entity.ts` — 抓取任务、采集渠道、总览指标、明细行、舆论分析与调度配置类型。
+- `services/xhs-topic-crawl.service.ts` — 发布事件驱动的专用调度表、每日定点排程、到期任务原子领取、抓取任务绑定、Todo 状态对账、TikHub 直采分支与时刻/渠道配置。
 - `services/xhs-topic-data.service.ts` — 抓取批次聚合、总览指标、趋势、分页明细与按天删除。
 - `services/xhs-topic-opinion.service.ts` — 舆论导向分析 Agent、结果缓存与词频兜底。
 
@@ -44,34 +46,42 @@
 - `DeleteXhsTopicDayDto({ day })` — 校验按自然日删除的日期参数 | keywords: 按天删除参数, 日期校验, delete-day-dto, date-validation
 - `XhsTopicOpinionQueryDto({ force? })` — 校验舆论分析是否跳过缓存 | keywords: 舆论分析参数, 强制刷新, opinion-dto, force-refresh
 - `UpdateXhsCrawlStatusDto({ status })` — 校验取消/恢复抓取的目标状态 | keywords: 抓取状态参数, 取消恢复, crawl-status-dto, cancel-resume
-- `UpdateXhsCrawlSettingsDto({ intervalMinutes })` — 校验抓取频率分钟数 | keywords: 抓取频率参数, 调度间隔, crawl-settings-dto, schedule-interval
+- `UpdateXhsCrawlSettingsDto({ dailyCrawlAt?,channel?,tikhubApiKey?,tikhubBaseUrl?,intervalMinutes? })` — 校验每日抓取时刻（`HH:mm`）、采集渠道与 TikHub 凭证；Key 传空串清空、不传保持不变，`intervalMinutes` 为废弃字段传了也忽略 | keywords: 抓取时刻参数, 每日定点, crawl-settings-dto, daily-crawl-time
 - `UpdateXhsCrawlWindowDto({ startAt,endAt })` — 校验单选题抓取区间起止时间 | keywords: 抓取区间参数, 起止时间, crawl-window-dto, start-end-time
 - `XhsTopicDataController.topics(req)` — 返回看板左侧母/子选题列表，保留已存入文章库的子题 | keywords: 看板选题列表, 保留已入库子题, dashboard-topic-list, include-stored-topics
 - `XhsTopicDataController.overview(req, topicId)` — 返回子选题数据总览 | keywords: 数据总览接口, 指标汇总, overview-endpoint, metric-summary
 - `XhsTopicDataController.details(req, topicId, query)` — 分页返回抓取明细 | keywords: 数据明细接口, 分页明细, details-endpoint, paged-details
 - `XhsTopicDataController.deleteDay(req, topicId, query)` — 删除某个自然日的抓取数据 | keywords: 按天删除接口, 清理抓取数据, delete-day-endpoint, purge-day-stats
 - `XhsTopicDataController.crawlTasks(req, topicId, query)` — 分页返回抓取任务明细 | keywords: 抓取任务接口, 任务明细, crawl-tasks-endpoint, task-details
-- `XhsTopicDataController.updateCrawlStatus(req,topicId,dto)` — 取消时暂停专用调度并停止在途 Todo，恢复时令既有调度立即到期 | keywords: 取消抓取接口, 恢复抓取, cancel-crawl-endpoint, resume-crawl
-- `XhsTopicDataController.crawlNow(req, topicId)` — 立即发起一次抓取 | keywords: 手动抓取接口, 立即抓取, manual-crawl-endpoint, crawl-now
+- `XhsTopicDataController.updateCrawlStatus(req,topicId,dto)` — 取消时暂停专用调度并停止在途 Todo，恢复时把调度行排到下一个每日定点而非立刻开抓 | keywords: 取消抓取接口, 恢复抓取, cancel-crawl-endpoint, resume-crawl
+- `XhsTopicDataController.crawlNow(req, topicId)` — 手动触发一次抓取，唯一会立刻开抓的入口；不改抓取开关，也不挪动下次定点 | keywords: 手动抓取接口, 立即抓取, manual-crawl-endpoint, crawl-now
 - `XhsTopicDataController.updateCrawlWindow(req,topicId,dto)` — 覆盖已发布子选题的默认两周抓取区间 | keywords: 设置抓取区间接口, 采集时限, update-crawl-window-endpoint, collection-deadline
 - `XhsTopicDataController.opinion(req, topicId, query)` — 返回舆论导向分析 | keywords: 舆论分析接口, 情感关键词, opinion-endpoint, sentiment-keywords
-- `XhsTopicDataController.readCrawlSettings(req)` — 读取生效的抓取频率 | keywords: 读取抓取频率, 调度设置, read-crawl-settings, schedule-config
-- `XhsTopicDataController.saveCrawlSettings(req, dto)` — 保存抓取频率供调度器使用 | keywords: 保存抓取频率, 同步设置, save-crawl-settings, sync-interval
+- `XhsTopicDataController.readCrawlSettings(req)` — 读取生效的每日抓取时刻、采集渠道、TikHub 配置视图与采集端可用性 | keywords: 读取抓取时刻, 调度设置, read-crawl-settings, schedule-config
+- `XhsTopicDataController.saveCrawlSettings(req, dto)` — 保存每日抓取时刻与采集渠道，并透传 TikHub 凭证；切到 TikHub 前先校验 Key 已存在 | keywords: 保存抓取时刻, 同步设置, save-crawl-settings, sync-daily-time
+- `XhsTopicDataController.testTikhubConnection(req)` — 用已保存的 Key 与域名做一次 TikHub 连通性自检 | keywords: 测试TikHub连接, 密钥自检, test-tikhub-connection, api-key-probe
 - `XhsTopicDataController.requireTopic(req, topicId)` — 校验子选题归属，越权按 404 处理 | keywords: 校验选题归属, 越权防护, require-owned-topic, ownership-guard
 - `XhsTopicDataController.requireUser(req)` — 取出当前后台用户 | keywords: 当前后台用户, 登录校验, require-admin-user, auth-check
 - `XhsTopicCrawlService.onModuleInit()` — 启动抓取调度轮询 | keywords: 启动调度, 定时轮询, start-scheduler, interval-tick
 - `XhsTopicCrawlService.onModuleDestroy()` — 停止抓取调度轮询 | keywords: 停止调度, 释放定时器, stop-scheduler, clear-timer
-- `XhsTopicCrawlService.ensureIndexes()` — 建立抓取任务与专用调度表索引并执行首次回填 | keywords: 抓取任务索引, 调度表初始化, crawl-task-indexes, schedule-table-init
+- `XhsTopicCrawlService.ensureIndexes()` — 建立抓取任务与专用调度表索引，按天归一采集频率并执行首次回填 | keywords: 抓取任务索引, 调度表初始化, crawl-task-indexes, schedule-table-init
+- `XhsTopicCrawlService.migrateToDailySchedule()` — 给存量配置补每日时刻并把全部等待行改排到下一个定点 | keywords: 定点调度迁移, 存量调度重排, migrate-to-daily-schedule, reschedule-existing
+- `XhsTopicCrawlService.resolveFirstDailyRunAt(scope,from,startAt)` — 算调度行首次到达时刻，发布/恢复/改区间共用，自动链路不即时开抓 | keywords: 计算首次定点, 不即时开抓, resolve-first-daily-run, no-immediate-crawl
 - `XhsTopicCrawlService.backfillPublishedArticleSchedules()` — 首次启用时按迁移标记幂等回填既有已发布选题文章 | keywords: 已发布文章回填, 调度表迁移, published-article-backfill, schedule-table-migration
 - `XhsTopicCrawlService.syncArticlePublishSchedule(input)` — 根据文章发布状态创建、激活或暂停专用调度行 | keywords: 发布触发调度, 同步采集计划, publish-triggered-schedule, sync-crawl-plan
 - `XhsTopicCrawlService.pauseScheduleForTopic(topicId)` — 暂停子选题的周期采集计划 | keywords: 暂停采集计划, 取消调度, pause-crawl-schedule, cancel-schedule
-- `XhsTopicCrawlService.resumeScheduleForTopic(topicId)` — 恢复已有采集计划并令其立即到期 | keywords: 恢复采集计划, 立即到期, resume-crawl-schedule, schedule-due-now
+- `XhsTopicCrawlService.resumeScheduleForTopic(topicId)` — 恢复已有采集计划并排到下一个每日定点 | keywords: 恢复采集计划, 下一个定点, resume-crawl-schedule, next-daily-slot
 - `XhsTopicCrawlService.setScheduleWindow(topicId,startAt,endAt)` — 设置周期采集的开始和硬截止时间 | keywords: 设置抓取区间, 采集时限, set-crawl-window, collection-deadline
 - `XhsTopicCrawlService.getNextRunAt(topicId)` — 从调度表读取真实的下次采集时间 | keywords: 下次采集时间, 调度表查询, next-crawl-time, schedule-table-query
 - `XhsTopicCrawlService.getScheduleStatus(topicId)` — 返回调度状态、下次时间与最近阻断原因 | keywords: 查询调度诊断, 任务阻断原因, get-schedule-diagnostics, task-block-reason
 - `XhsTopicCrawlService.readArticleTopicId(meta)` — 从文章元数据解析来源子选题 | keywords: 解析来源选题, 文章调度关联, parse-source-topic, article-schedule-binding
-- `XhsTopicCrawlService.getIntervalMinutes(scope)` — 读取生效抓取间隔 | keywords: 读取抓取频率, 调度间隔, read-crawl-interval, schedule-interval
-- `XhsTopicCrawlService.saveIntervalMinutes(intervalMinutes, scope)` — 保存抓取间隔 | keywords: 保存抓取频率, 同步设置, save-crawl-interval, sync-settings
+- `XhsTopicCrawlService.getDailyCrawlAt(scope)` — 读取生效的每日抓取时刻，脏数据回退 23:59 | keywords: 读取抓取时刻, 每日定点, read-daily-crawl-time, daily-fixed-time
+- `XhsTopicCrawlService.saveDailyCrawlAt(dailyCrawlAt, scope)` — 保存每日抓取时刻并改排该作用域全部等待中的调度行 | keywords: 保存抓取时刻, 改排等待任务, save-daily-crawl-time, reschedule-waiting
+- `XhsTopicCrawlService.normalizeDailyAt(value?)` — 把配置值收敛成合法 `HH:mm`，脏数据回退默认时刻 | keywords: 校验抓取时刻, 格式回退, normalize-daily-time, format-fallback
+- `XhsTopicCrawlService.resolveNextDailyRunAt(dailyCrawlAt, from)` — 算出时刻在基准时间之后的下一个到达点，过点顺延次日 | keywords: 计算下次定点, 顺延次日, resolve-next-daily-run, roll-to-tomorrow
+- `XhsTopicCrawlService.getChannel(scope)` — 读取生效采集渠道，历史配置缺字段时按 super_claw 处理 | keywords: 读取采集渠道, 渠道回退, read-crawl-channel, channel-fallback
+- `XhsTopicCrawlService.saveChannel(channel, scope)` — 保存采集渠道，只影响之后新建的抓取运行 | keywords: 保存采集渠道, 切换渠道, save-crawl-channel, switch-channel
+- `XhsTopicCrawlService.getCollectorAvailability(scope)` — 按渠道判定采集端可用性并给出不可用原因 | keywords: 采集端可用性, 按渠道判定, collector-availability, per-channel-check
 - `XhsTopicCrawlService.listTasks(topicId, page, pageSize)` — 分页读取抓取任务明细 | keywords: 抓取任务明细, 分页任务, crawl-task-list, paged-tasks
 - `XhsTopicCrawlService.countTasks(topicId)` — 统计抓取任务总数 | keywords: 抓取任务计数, 总览统计, crawl-task-count, overview-stat
 - `XhsTopicCrawlService.getLatestTask(topicId)` — 读取最近一次抓取任务 | keywords: 最近抓取任务, 下次抓取, latest-crawl-task, next-crawl-at
@@ -79,7 +89,10 @@
 - `XhsTopicCrawlService.recordCrawlRun(todoId)` — 把单次 Todo 的回写数据划入唯一运行并继承 Todo 真实终态 | keywords: 记录抓取运行, 每次抓取一条, 回写归属, record-crawl-run, per-crawl-record, write-attribution
 - `XhsTopicCrawlService.hasTrackingAgent()` — 当前是否存在可用的数据追踪 Agent | keywords: 数据追踪可用性, 抓取前置条件, tracking-agent-available, crawl-precondition
 - `XhsTopicCrawlService.createCrawlTask(topic,trigger,beforeTrigger?,deadline?)` — 基于文章库工作区建立任务会话，收齐 NoteId 后创建一次性 Todo 并等待绑定节点领取；没有任何带 NoteId 的已发布文章时不建任务 | keywords: 创建抓取任务, 指派数据追踪, create-crawl-task, assign-tracking-agent
-- `XhsTopicCrawlService.cancelRunningTasks(topicId)` — 取消在途抓取任务 | keywords: 取消在途任务, 停止抓取, cancel-running-tasks, stop-crawl
+- `XhsTopicCrawlService.runTikhubCrawlTask(topic,trigger,notes)` — TikHub 直采：进程内采完整批 NoteId、落运行记录与帖子数据并写终态 | keywords: TikHub直采, 平台侧采集, tikhub-direct-crawl, platform-side-collect
+- `XhsTopicCrawlService.advanceScheduleForTopic(topicId,error?)` — 直采后按子选题把调度行推回 waiting 并排下次到期时间 | keywords: 直采后推进调度, 按选题推进, advance-schedule-after-direct-run, advance-by-topic
+- `XhsTopicCrawlService.settleStaleDirectRun(task)` — 收尾进程重启留下的僵尸直采运行 | keywords: 收尾僵尸直采, 进程重启兜底, settle-stale-direct-run, restart-recovery
+- `XhsTopicCrawlService.cancelRunningTasks(topicId)` — 取消在途抓取任务；直采运行没有 Todo 可取消，只收进终态 | keywords: 取消在途任务, 停止抓取, cancel-running-tasks, stop-crawl
 - `XhsTopicCrawlService.tickScheduler()` — 按 nextRunAt 索引分批领取到期调度行 | keywords: 到期任务领取, 索引调度, due-task-claim, indexed-scheduling
 - `XhsTopicCrawlService.claimDueSchedule()` — 原子领取最早到期调度行并写入多实例租约 | keywords: 原子领取调度, 多实例租约, atomic-schedule-claim, multi-instance-lease
 - `XhsTopicCrawlService.processClaimedSchedule(schedule)` — 按等待态或运行态推进线性调度 | keywords: 推进线性调度, 运行态对账, advance-linear-schedule, running-state-reconcile
@@ -141,6 +154,17 @@
 | 抓取区间          | crawl-window               |
 | 两周时限          | two-week-deadline          |
 | SuperClaw数据抓取 | super-claw-data-tracking   |
+| 采集渠道          | crawl-channel              |
+| 渠道切换          | channel-switch             |
+| 读取采集渠道      | read-crawl-channel         |
+| 保存采集渠道      | save-crawl-channel         |
+| TikHub直采        | tikhub-direct-crawl        |
+| 平台侧采集        | platform-side-collect      |
+| 直采后推进调度    | advance-by-topic           |
+| 收尾僵尸直采      | settle-stale-direct-run    |
+| 采集端可用性      | collector-availability     |
+| 按渠道判定        | per-channel-check          |
+| 测试TikHub连接    | test-tikhub-connection     |
 | 创建抓取任务      | create-crawl-task          |
 | 抓取任务绑定      | crawl-task-binding         |
 | 抓取任务对账      | reconcile-crawl-tasks      |
@@ -151,7 +175,18 @@
 | 数据追踪可用性    | tracking-agent-available   |
 | 取消抓取          | cancel-crawl               |
 | 恢复抓取          | resume-crawl               |
-| 抓取频率配置      | crawl-settings             |
+| 抓取时刻配置      | crawl-settings             |
+| 每日定点          | daily-fixed-time           |
+| 读取抓取时刻      | read-daily-crawl-time      |
+| 保存抓取时刻      | save-daily-crawl-time      |
+| 计算下次定点      | resolve-next-daily-run     |
+| 顺延次日          | roll-to-tomorrow           |
+| 计算首次定点      | resolve-first-daily-run    |
+| 不即时开抓        | no-immediate-crawl         |
+| 手动抓取          | crawl-now                  |
+| 改排等待任务      | reschedule-waiting         |
+| 定点调度迁移      | migrate-to-daily-schedule  |
+| 存量调度重排      | reschedule-existing        |
 | 数据追踪代理      | tracking-agent-lookup      |
 | 舆论导向分析      | opinion-analysis           |
 | 情感分布          | sentiment-distribution     |
@@ -165,13 +200,15 @@
 ## 类型导出 (Type Exports)
 
 - `XhsCrawlTaskStatus` / `XhsCrawlTaskTrigger` — 抓取任务状态与触发来源
-- `XhsCrawlTaskEntity` / `XhsCrawlTaskView` — 单次 Todo 的抓取运行实体与前端表格行；兼容字段 `runIndex` 在新工作流中恒为 1
+- `XhsCrawlChannel` — 采集渠道 `super_claw` / `tikhub`，缺省按 `super_claw`
+- `XhsCrawlTaskEntity` / `XhsCrawlTaskView` — 单次抓取运行实体与前端表格行；兼容字段 `runIndex` 恒为 1，`channel` 标明渠道，TikHub 直采的 `todoId` 恒为 0
 - `XhsCrawlScheduleStatus` / `XhsCrawlScheduleEntity` — 专用调度行状态与实体，保存 `startAt/endAt` 并以 `nextRunAt` 驱动线性采集工作流
 - `XhsTopicMetricValue` / `XhsTopicTrendPoint` / `XhsTopicOverview` — 指标卡、趋势点与总览返回体
 - `XhsTopicDetailRow` — 数据明细表格行
 - `XhsOpinionSentiment` / `XhsTopicOpinion` / `XhsTopicOpinionEntity` — 舆论分析结果与缓存文档
-- `XhsCrawlSettingsEntity` — 抓取频率配置文档
-- `DEFAULT_CRAWL_INTERVAL_MINUTES` — 默认抓取间隔（30 分钟） | keywords: 默认抓取频率, 分钟间隔, default-crawl-interval, minute-frequency
+- `XhsCrawlSettingsEntity` — 每日抓取时刻（`dailyCrawlAt`）与采集渠道配置文档；`intervalMinutes` 为历史字段
+- `DEFAULT_CRAWL_DAILY_AT` — 默认每日抓取时刻（`23:59`，服务器本地时区） | keywords: 默认抓取时刻, 每日定点, default-crawl-time, daily-fixed-time
+- `DEFAULT_CRAWL_INTERVAL_MINUTES` — 兼容字段用的名义间隔（1440），总览返回体里的 `crawlIntervalMinutes` 恒取此值 | keywords: 兼容抓取间隔, 名义一天, legacy-crawl-interval, nominal-daily
 - `DEFAULT_CRAWL_WINDOW_DAYS` — 发布后默认周期抓取时限（14天） | keywords: 默认抓取区间, 两周时限, default-crawl-window, two-week-deadline
 - `HOT_POST_INTERACTION_THRESHOLD` — 爆文互动阈值（1000）
 
@@ -190,13 +227,14 @@
 | `POST /api/xhs-topic-data/:topicId/crawl-now`                | create XhsTopic | 立即抓取一次                      |
 | `PUT /api/xhs-topic-data/:topicId/crawl-window`              | update XhsTopic | 设置单选题抓取起止区间            |
 | `GET /api/xhs-topic-data/:topicId/opinion`                   | read XhsTopic   | 舆论导向分析                      |
-| `GET /api/xhs-topic-data/crawl-settings`                     | read XhsTopic   | 读取抓取频率                      |
-| `PUT /api/xhs-topic-data/crawl-settings`                     | update XhsTopic | 保存抓取频率                      |
+| `GET /api/xhs-topic-data/crawl-settings`                     | read XhsTopic   | 读取抓取时刻 / 渠道 / TikHub 配置 |
+| `PUT /api/xhs-topic-data/crawl-settings`                     | update XhsTopic | 保存抓取时刻 / 渠道 / TikHub 凭证 |
+| `POST /api/xhs-topic-data/crawl-settings/test-tikhub`        | update XhsTopic | TikHub 连通性自检                 |
 
 越权访问他人子选题一律返回 404 而不是 403，避免泄露选题的存在性。
 
-`GET /:topicId/crawl-tasks` 额外返回 `agentAvailable`：没有已启用的 `xhs_data_tracking` 代理时调度器一条任务都建不出来，这个原因原本只落在服务端日志里，界面上只会看到一个空列表，所以要在接口上说清楚。
+`GET /:topicId/crawl-tasks` 额外返回 `collector`（`{ channel, available, reason }`）：调度器建不出任务的原因原本只落在服务端日志里，界面上只会看到一个空列表，所以要在接口上说清楚——SuperClaw 渠道缺的是已启用的 `xhs_data_tracking` 代理，TikHub 渠道缺的是 API Key，不能再笼统提示「缺少 Agent」。兼容字段 `agentAvailable` 保留，取值等于 `collector.available`。
 
-新增集合：`xhs_topic_crawl_schedules`（已发布文章驱动的周期调度表，每个子选题一行）、`xhs_topic_crawl_tasks`（单次 Todo 的抓取运行记录，一次任务一行）、`xhs_topic_crawl_settings`（租户用户级抓取频率）、`xhs_topic_opinions`（舆论分析缓存）。同时在既有集合上加了字段：`xhs_post_stats` 增加 `viewCount` / `shareCount` / `topicId` / `crawlRunId`，`xhs_topics` 增加 `crawl` 子文档（`status` / `lastCrawledAt` / `lastScheduledAt` / `cancelledAt`）。周期计划只负责按时创建新的单次 Todo，不承载业务执行，也不会复用旧 Todo。
+新增集合：`xhs_topic_crawl_schedules`（已发布文章驱动的周期调度表，每个子选题一行）、`xhs_topic_crawl_tasks`（单次 Todo 的抓取运行记录，一次任务一行）、`xhs_topic_crawl_settings`（租户用户级每日抓取时刻与采集渠道）、`xhs_topic_opinions`（舆论分析缓存）。同时在既有集合上加了字段：`xhs_post_stats` 增加 `viewCount` / `shareCount` / `topicId` / `crawlRunId`，`xhs_topics` 增加 `crawl` 子文档（`status` / `lastCrawledAt` / `lastScheduledAt` / `cancelledAt`）。周期计划只负责按时创建新的单次 Todo，不承载业务执行，也不会复用旧 Todo。
 
-依赖：`ArticleLibraryModule`（文章库专属工作区）、`ContextModule`（任务会话）、`TodoModule`（Todo 生命周期与 `XhsPostStatService`）、`XhsTopicModule`（选题仓储）、`AutoTaskRobotModule`（触发数据追踪 Agent）、`AiAgentModule`（舆论分析）、`AdminModule`（鉴权与 Agent 配置）。
+依赖：`TikhubModule`（TikHub 凭证与小红书直采）、`ArticleLibraryModule`（文章库专属工作区）、`ContextModule`（任务会话）、`TodoModule`（Todo 生命周期与 `XhsPostStatService`）、`XhsTopicModule`（选题仓储）、`AutoTaskRobotModule`（触发数据追踪 Agent）、`AiAgentModule`（舆论分析）、`AdminModule`（鉴权与 Agent 配置）。

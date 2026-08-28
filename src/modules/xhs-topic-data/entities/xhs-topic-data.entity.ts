@@ -67,10 +67,12 @@ export interface XhsCrawlTaskEntity {
   userId: string;
   /** 归属子选题 ID */
   topicId: number;
-  /** 承载本次抓取执行的 Todo ID；每个周期 Todo 只对应这一条运行记录。 */
+  /** 承载本次抓取执行的 Todo ID；每个周期 Todo 只对应这一条运行记录。TikHub 直采没有 Todo，恒为 0。 */
   todoId: number;
   /** 兼容字段；单次 Todo 工作流中恒为 1。 */
   runIndex: number;
+  /** 本次运行走的采集渠道，缺省视为 `super_claw`。 */
+  channel?: XhsCrawlChannel;
   trigger: XhsCrawlTaskTrigger;
   status: XhsCrawlTaskStatus;
   /** 任务创建时间 */
@@ -93,9 +95,12 @@ export interface XhsCrawlTaskEntity {
 export interface XhsCrawlTaskView {
   id: number;
   topicId: number;
+  /** TikHub 直采没有 Todo，这里为 0，前端据此不渲染 Todo 跳转。 */
   todoId: number;
   /** 兼容字段；单次 Todo 工作流中恒为 1。 */
   runIndex: number;
+  /** 本次运行走的采集渠道。 */
+  channel: XhsCrawlChannel;
   trigger: XhsCrawlTaskTrigger;
   status: XhsCrawlTaskStatus;
   startedAt: string;
@@ -172,9 +177,11 @@ export interface XhsTopicOverview {
   lastCrawledAt?: string;
   /** 最近一次抓取带回的条数 */
   lastCrawledCount: number;
-  /** 按抓取频率推算的下次抓取时间 */
+  /** 调度表里真实排定的下次抓取时间 */
   nextCrawlAt?: string;
-  /** 当前生效的抓取间隔（分钟） */
+  /** 当前生效的每日抓取时刻，`HH:mm`（服务器本地时区） */
+  crawlDailyAt: string;
+  /** @deprecated 兼容字段，定点调度后恒为 1440；新前端读 `crawlDailyAt`。 */
   crawlIntervalMinutes: number;
   trend: XhsTopicTrendPoint[];
 }
@@ -258,14 +265,27 @@ export interface XhsTopicOpinionEntity extends Omit<
 }
 
 /**
- * @description 租户用户级的抓取调度配置，由前端「抓取数据频率」设置同步下来。
- * @keyword-cn 抓取频率配置, 调度间隔
- * @keyword-en crawl-settings, schedule-interval
+ * @description 小红书数据采集渠道：`super_claw` 走节点跑 Playwright 脚本，`tikhub` 由平台直接调 TikHub 开放接口。
+ *   缺省一律按 `super_claw` 处理，保证历史配置行为不变。
+ * @keyword-cn 采集渠道, 渠道切换
+ * @keyword-en crawl-channel, channel-switch
+ */
+export type XhsCrawlChannel = 'super_claw' | 'tikhub';
+
+/**
+ * @description 租户用户级的抓取调度配置，由后台「小红书采集」页同步下来，含每日抓取时刻与采集渠道。
+ * @keyword-cn 抓取时刻配置, 每日定点
+ * @keyword-en crawl-settings, daily-crawl-time
  */
 export interface XhsCrawlSettingsEntity {
   _id: ObjectId;
   tenantId?: string | null;
   userId: string;
-  intervalMinutes: number;
+  /** 每天固定抓取时刻，`HH:mm`，按服务器本地时区解释；缺省视为 `23:59`。 */
+  dailyCrawlAt?: string;
+  /** @deprecated 旧的分钟级间隔，调度已改为每天定点，只为读取历史文档保留。 */
+  intervalMinutes?: number;
+  /** 缺省视为 `super_claw`，历史文档没有这个字段。 */
+  channel?: XhsCrawlChannel;
   updatedAt: Date;
 }

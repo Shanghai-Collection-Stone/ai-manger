@@ -4,6 +4,7 @@
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
 支持 AI 提供商按模型类型管理(llm/em/image),并支持平台 AI 配置中的"是否开启 AI 封面"开关。
+新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
 
 文件路径: `web/src/ui/Admin`
@@ -63,6 +64,11 @@
 - `toText` / `toLower` / `readAdminActiveTab` / `writeAdminActiveTab` / `toDateInput` / `getRoleLabel` / `hasAdminFullAccess` / `isSuperAdmin` / `ALL_TABS` / `buildPagedRows` / `renderPager` / `loadData` / `updateForm` / `updateFilter` / `gotoPage`
 - `reloadDashboardConfigs` / `onSubmitDashboardConfig` / `onDeleteDashboardConfig` / `onSubmitPlatformInfo`
 - `onSubmitFeishuCredential` / `onDeleteFeishuCredential`
+- `onSubmitXhsCrawlSettings()` — 保存每日抓取时刻(`HH:mm`)、采集渠道与 TikHub 凭证；Key 输入框留空即不改动已保存的 Key | keywords: 保存采集设置, 每日定点, submit-xhs-crawl-settings, daily-crawl-time
+- `onClearTikhubApiKey()` — 发空串清空已保存的 TikHub API Key | keywords: 清空密钥, 移除凭证, clear-tikhub-api-key, remove-credential
+- `onTestTikhubConnection()` — 用已保存的 Key 与域名做一次 TikHub 连通性自检 | keywords: 测试TikHub连接, 密钥自检, test-tikhub-connection, api-key-probe
+- `XHS_CRAWL_CHANNELS` / `TIKHUB_BASE_URLS` — 采集渠道与 API 域名选项，取值与后端 `XhsCrawlChannel`、域名白名单逐字一致 | keywords: 采集渠道选项, 接口域名选项, crawl-channel-options, base-url-options
+- `XHS_CRAWL_DEFAULT_AT` / `XHS_CRAWL_AT_PATTERN` — 默认每日抓取时刻(`23:59`，与后端 `DEFAULT_CRAWL_DAILY_AT` 一致)与 `HH:mm` 格式校验 | keywords: 默认抓取时刻, 每日定点, default-crawl-time, daily-fixed-time
 - `onTestProvider(id)`: AI 提供商测试连接按钮 handler(列表里每行的「测试连接」按钮触发,成功时绿色 notice 显示状态+延迟+模型数+前 3 个模型名,失败时红色 error 显示状态+endpoint+原始错误 message,disable 阻止重复点击)/test ai provider handler
 - `reloadSuperClaws()` — 刷新平台节点与容量 | keywords: 刷新节点, 容量状态, reload-super-claws, capacity-status
 - `onSubmitSuperClaw()` — 创建或更新 SuperClaw | keywords: 提交节点, 总容量, submit-super-claw, total-capacity
@@ -91,6 +97,8 @@
   - `getAdminToken` / `setAdminToken` / `clearAdminToken`: token 存取
   - `resolveAdminPageHref` / `resolveFrontendPageHref` / `resolveLoginPageHref`: 页面跳转
   - `request`: 统一请求(内置 `/admin` 前缀)
+  - `apiRequest`: 业务接口请求(不带 `/admin` 前缀,复用同一份后台 token;小红书采集设置走的是 `/api/xhs-topic-data/*`)/business api request
+  - `adminApi.getXhsCrawlSettings` / `saveXhsCrawlSettings` / `testTikhubConnection`: 小红书采集设置读写与 TikHub 连通性自检
   - `adminApi.listXhsAccounts` / `createXhsAccount` / `updateXhsAccount` / `deleteXhsAccount` / `testLoginXhsAccount`
   - `adminApi.listFeishuCredentials` / `upsertFeishuCredential` / `deleteFeishuCredential`: 飞书凭证 CRUD
   - `adminApi.listFinanceBindings` / `upsertFinanceBinding` / `deleteFinanceBinding`: 财务源绑定 CRUD(按 name)

@@ -459,6 +459,14 @@ export class TodoService {
               { taskDeliveryAckDeadline: { $lte: now } },
             ],
           },
+          // 排除已有异常原因的任务，防止异常任务被重新领取
+          {
+            $or: [
+              { abnormalReason: { $exists: false } },
+              { abnormalReason: '' },
+              { abnormalReason: { $type: 'null' as const } },
+            ],
+          },
         ],
       },
       { $set: { status: 'in_progress', updatedAt: now } },
@@ -524,6 +532,14 @@ export class TodoService {
             $or: [
               { taskDeliveryAckDeadline: { $exists: false } },
               { taskDeliveryAckDeadline: { $lte: now } },
+            ],
+          },
+          // 排除已有异常原因的任务，防止异常任务被重新领取
+          {
+            $or: [
+              { abnormalReason: { $exists: false } },
+              { abnormalReason: '' },
+              { abnormalReason: { $type: 'null' as const } },
             ],
           },
           ...(input.maxExecutionAttempts
@@ -642,6 +658,7 @@ export class TodoService {
       taskDeliverySuperClawId: input.superClawId,
     });
     if (!existing) return false;
+    const hasAbnormalReason = Boolean(existing.abnormalReason);
     const result = await this.todos.updateOne(
       {
         id: input.id,
@@ -651,8 +668,16 @@ export class TodoService {
       },
       {
         $set: {
-          status:
-            existing.status === 'waiting_user' ? 'waiting_user' : 'pending',
+          status: hasAbnormalReason
+            ? 'failed'
+            : existing.status === 'waiting_user'
+              ? 'waiting_user'
+              : 'pending',
+          ...(hasAbnormalReason
+            ? {
+                abnormalReason: `RELEASE_DELIVERY: 节点断线或租约超时，任务已有异常原因(${existing.abnormalReason})，平台判为失败。`,
+              }
+            : {}),
           taskToken: randomUUID().replace(/-/g, ''),
           updatedAt: new Date(),
         },
@@ -665,6 +690,11 @@ export class TodoService {
         },
       },
     );
+    if (result.modifiedCount > 0 && hasAbnormalReason) {
+      this.logger.warn(
+        `[releaseTaskDelivery] id=${input.id} 已有 abnormalReason，判为 failed 而非退回 pending`,
+      );
+    }
     return result.modifiedCount > 0;
   }
 
@@ -750,10 +780,13 @@ export class TodoService {
         id: number;
         tenantId?: string | null;
         status: TodoEntity['status'];
-      }>({ id: 1, tenantId: 1, status: 1 })
+        abnormalReason?: string;
+      }>({ id: 1, tenantId: 1, status: 1, abnormalReason: 1 })
       .toArray();
     let reclaimed = 0;
+    let failedInstead = 0;
     for (const row of rows) {
+      const hasAbnormalReason = Boolean(row.abnormalReason);
       const result = await this.todos.updateOne(
         {
           id: row.id,
@@ -774,7 +807,16 @@ export class TodoService {
         },
         {
           $set: {
-            status: row.status === 'waiting_user' ? 'waiting_user' : 'pending',
+            status: hasAbnormalReason
+              ? 'failed'
+              : row.status === 'waiting_user'
+                ? 'waiting_user'
+                : 'pending',
+            ...(hasAbnormalReason
+              ? {
+                  abnormalReason: `REQUEUE_EXPIRED: 过期租约回收，任务已有异常原因(${row.abnormalReason})，平台判为失败。`,
+                }
+              : {}),
             taskToken: randomUUID().replace(/-/g, ''),
             updatedAt: now,
           },
@@ -787,7 +829,15 @@ export class TodoService {
           },
         },
       );
-      reclaimed += result.modifiedCount;
+      if (result.modifiedCount > 0) {
+        reclaimed++;
+        if (hasAbnormalReason) failedInstead++;
+      }
+    }
+    if (failedInstead > 0) {
+      this.logger.warn(
+        `[requeueExpiredTaskDeliveries] ${failedInstead} 条任务已有 abnormalReason，判为 failed 而非退回 pending`,
+      );
     }
     return reclaimed;
   }

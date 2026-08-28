@@ -7,6 +7,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -74,11 +75,42 @@ export class UpdateXhsCrawlStatusDto {
  * @keyword-en crawl-settings-dto, schedule-interval
  */
 export class UpdateXhsCrawlSettingsDto {
+  /** 每天固定抓取时刻，`HH:mm` 24 小时制，按服务器本地时区解释。 */
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, {
+    message: 'dailyCrawlAt 必须是 HH:mm 形式的每日抓取时刻',
+  })
+  dailyCrawlAt?: string;
+
+  /** @deprecated 旧的分钟级间隔，调度已改为每天定点，传了也会被忽略。 */
+  @IsOptional()
   @Transform(({ value }) => Number(value))
   @IsInt()
   @Min(1)
   @Max(24 * 60)
-  intervalMinutes!: number;
+  intervalMinutes?: number;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^(super_claw|tikhub)$/, {
+    message: 'channel 只能是 super_claw 或 tikhub',
+  })
+  channel?: 'super_claw' | 'tikhub';
+
+  /** 传空串表示清空已保存的 Key；不传表示保持不变，配置页因此不必回填明文。 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(256)
+  tikhubApiKey?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^https:\/\/api\.tikhub\.(io|dev)$/, {
+    message:
+      'tikhubBaseUrl 只能是 https://api.tikhub.io 或 https://api.tikhub.dev',
+  })
+  tikhubBaseUrl?: string;
 }
 
 /**

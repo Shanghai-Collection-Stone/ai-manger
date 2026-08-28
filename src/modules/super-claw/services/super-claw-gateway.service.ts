@@ -344,6 +344,50 @@ export class SuperClawGatewayService {
   }
 
   /**
+   * @description 节点报告完成但任务未到终态时，将其判为 failed 防止被重新领取。
+   * @keyword-cn 标记未终态任务失败, 防止异常重投
+   * @keyword-en fail-non-terminal-delivery, prevent-abnormal-redelivery
+   */
+  async failNonTerminalDelivery(
+    superClawId: string,
+    input: { tenantId: string; taskId: number },
+  ): Promise<boolean> {
+    const rawTenantId = input.tenantId.trim();
+    const tenantId = rawTenantId
+      ? await this.requireTenant(superClawId, rawTenantId)
+      : undefined;
+    const todo = await this.todoService.get(input.taskId, tenantId);
+    if (!todo) return false;
+    if (!tenantId && todo) {
+      const workspaceIds =
+        await this.superClawService.listProvisionedWorkspaceIds(superClawId);
+      if (!todo.workspaceId || !workspaceIds.includes(todo.workspaceId)) {
+        return false;
+      }
+    }
+    // 已到终态则无需处理
+    if (
+      todo.status === 'done' ||
+      todo.status === 'failed' ||
+      todo.status === 'cancelled'
+    ) {
+      return true;
+    }
+    const updated = await this.todoService.update({
+      id: todo.id,
+      tenantId: todo.tenantId,
+      status: 'failed',
+      abnormalReason: `COMPLETED_WITHOUT_TERMINAL: 节点发送 completed 但任务仍为 ${todo.status}，平台判为失败防止重新领取。`,
+    });
+    if (updated) {
+      this.logger.warn(
+        `[failNonTerminalDelivery] taskId=${todo.id} 原状态=${todo.status} 已判为 failed`,
+      );
+    }
+    return Boolean(updated);
+  }
+
+  /**
    * @description 节点在所属租户内创建任务并取得后续 CRUD 使用的专用 Token。
    * @keyword-cn gRPC创建任务, 返回任务令牌
    * @keyword-en create-grpc-task, return-task-token

@@ -8,7 +8,10 @@ import type {
   XhsTopicOverview,
   XhsTopicTrendPoint,
 } from '../entities/xhs-topic-data.entity.js';
-import { XhsTopicCrawlService } from './xhs-topic-crawl.service.js';
+import {
+  DEFAULT_CRAWL_INTERVAL_MINUTES,
+  XhsTopicCrawlService,
+} from './xhs-topic-crawl.service.js';
 
 /** @type {number} 单篇互动量达到该阈值即计入爆文。 */
 export const HOT_POST_INTERACTION_THRESHOLD = 1000;
@@ -49,7 +52,7 @@ export class XhsTopicDataService {
     const stats = await this.postStats.listByTopic(topic.id);
     const batches = this.groupByBatch(stats);
     const latest = batches[batches.length - 1];
-    const intervalMinutes = await this.crawl.getIntervalMinutes({
+    const crawlDailyAt = await this.crawl.getDailyCrawlAt({
       tenantId: topic.tenantId,
       userId: topic.userId,
     });
@@ -103,7 +106,8 @@ export class XhsTopicDataService {
         topic.crawl?.status === 'cancelled' || !nextRunAt
           ? undefined
           : new Date(nextRunAt).toISOString(),
-      crawlIntervalMinutes: intervalMinutes,
+      crawlDailyAt,
+      crawlIntervalMinutes: DEFAULT_CRAWL_INTERVAL_MINUTES,
       trend,
     };
   }
