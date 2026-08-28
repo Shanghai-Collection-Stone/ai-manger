@@ -200,8 +200,10 @@ export class ArticleService {
   }
 
   /**
-   * @description 更新文章字段
-   * @keyword-en article update fields
+   * @description 更新文章字段。`meta` 按键合并而不是整体覆盖，与 `updatePublishStatus` 保持一致：
+   *   发布回调只回传自己那几个键（NoteId 等），整体覆盖会抹掉入库时写的 `xhsTopicId`，
+   *   导致选题关联丢失、数据看板无法开启监控。
+   * @keyword-en article update fields merge meta
    */
   async update(input: ArticleUpdateInput): Promise<ArticleEntity | null> {
     const set: Record<string, unknown> = { updatedAt: new Date() };
@@ -211,7 +213,6 @@ export class ArticleService {
     if (input.text !== undefined) set.text = input.text;
     if (input.imageUrls !== undefined) set.imageUrls = input.imageUrls;
     if (input.imageIds !== undefined) set.imageIds = input.imageIds;
-    if (input.meta !== undefined) set.meta = input.meta;
     if (input.publishStatus !== undefined) {
       set.publishStatus = input.publishStatus;
       if (input.publishStatus === 'published') {
@@ -220,14 +221,18 @@ export class ArticleService {
     }
     const filter: Record<string, unknown> = { id: input.id };
     if (input.tenantId) filter.tenantId = input.tenantId;
+    /* meta 合并与状态变更通知都要旧值，这里一次读取复用。 */
+    const current =
+      input.meta !== undefined || input.publishStatus !== undefined
+        ? await this.articles.findOne(filter, {
+            projection: { meta: 1, publishStatus: 1 },
+          })
+        : null;
+    if (input.meta !== undefined) {
+      set.meta = { ...(current?.meta ?? {}), ...input.meta };
+    }
     const previousStatus =
-      input.publishStatus !== undefined
-        ? (
-            await this.articles.findOne(filter, {
-              projection: { publishStatus: 1 },
-            })
-          )?.publishStatus
-        : undefined;
+      input.publishStatus !== undefined ? current?.publishStatus : undefined;
     const res = await this.articles.findOneAndUpdate(
       filter,
       { $set: set },

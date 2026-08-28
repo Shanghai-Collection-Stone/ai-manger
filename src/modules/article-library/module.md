@@ -54,7 +54,7 @@ Article-Library
 - `bulkCreate(inputs)` — 批量文章入库 | keywords: article, bulk-create
 - `get(id,tenantId?)` — 获取当前租户可见文章 | keywords: article, get
 - `list(params)` — 按文章库、状态和 FIFO 顺序列出文章 | keywords: article, list
-- `update(input)` — 更新文章字段和 meta | keywords: article, update
+- `update(input)` — 更新文章字段，meta 按键合并不整体覆盖 | keywords: article, update
 - `updatePublishStatus(id,status,tenantId?,leaseToken?,meta?)` — 更新发布状态并释放租约 | keywords: article, publish-status
 - `notifyCrawlSchedule(article,status)` — 小红书选题文章发布状态变化后通知专用采集调度表 | keywords: 发布触发采集, 调度表通知, publish-triggered-crawl, schedule-table-notify
 - `moveToLibrary({id,fromLibraryId,toLibraryId,tenantId?})` — 把文章移动到同租户下的另一个文章库，租约未过期的在途文章拒绝移动 | keywords: 移动文章, 跨库转移, move-article-to-library, cross-library-transfer
