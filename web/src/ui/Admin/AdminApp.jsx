@@ -331,7 +331,7 @@ const XHS_CRAWL_DEFAULT_AT = '23:59';
  * @keyword-cn 时刻格式校验, 每日定点
  * @keyword-en daily time pattern, daily fixed time
  */
-const XHS_CRAWL_AT_PATTERN = /^([01]d|2[0-3]):[0-5]d$/;
+const XHS_CRAWL_AT_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const AdminApp = () => {
   const [currentRole, setCurrentRole] = useState('');
@@ -945,7 +945,8 @@ const AdminApp = () => {
    */
   const onSubmitXhsCrawlSettings = async () => {
     const form = forms.xhsCrawl;
-    const dailyCrawlAt = toText(form.dailyCrawlAt).trim();
+    // 部分浏览器的 time 控件会带上秒（HH:mm:ss），后端只认 HH:mm，这里先截掉再校验。
+    const dailyCrawlAt = toText(form.dailyCrawlAt).trim().slice(0, 5);
     if (!XHS_CRAWL_AT_PATTERN.test(dailyCrawlAt)) {
       throw new Error('每日抓取时刻必须是 HH:mm 形式，例如 23:59');
     }
@@ -4492,6 +4493,7 @@ const AdminApp = () => {
                         <input
                           className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
                           type="time"
+                          step="60"
                           value={form.dailyCrawlAt}
                           onChange={(e) =>
                             updateForm(
