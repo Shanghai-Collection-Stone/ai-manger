@@ -16,6 +16,7 @@ Article-Library
 - `controller/article-library.controller.ts` — 管理端文章库与文章 REST 接口。
 - `controller/article-library-task.controller.ts` — task-token 与扫码 token 专项文章库接口。
 - `scripts/simulate-publish.mjs` — 创建模拟选题文章、调用真实扫码发布回调并等待单次抓取 Todo 的本地联调脚本。
+- `scripts/backfill-xhs-topic-id.mjs` — 回填被发布回调覆盖 meta 而丢失 `meta.xhsTopicId` 的历史文章，并清除抓取调度回填标记的修复脚本。
 
 ## 函数清单 (Function List)
 
@@ -97,6 +98,18 @@ Article-Library
 - `selectTopic(groups,requestedTopicId?)` — 选择指定或首个抓取中的子选题 | keywords: 选择模拟选题, 抓取中子题, select-simulation-topic, crawling-child-topic
 - `waitForCrawlTask(baseUrl,token,topicId,startedAfter)` — 等待发布回调生成单次抓取 Todo | keywords: 等待单次抓取任务, 发布回调验证, wait-single-crawl-task, verify-publish-callback
 - `main()` — 创建模拟文章、执行扫码回调并验证单次任务 | keywords: 模拟发文回调, 创建单次任务, simulate-publish-callback, create-single-task
+- `loadEnvFiles()` — 按 migrate-mongo 顺序载入 .env 与开发态覆盖 | keywords: 载入环境变量, 开发环境覆盖, load-env-files, dev-env-override
+- `resolveMongoConnection()` — 复刻共享解析优先级得到连接串与库名 | keywords: 解析数据库连接, 复用连接优先级, resolve-mongo-connection, shared-uri-priority
+- `parseArgs(argv)` — 解析回填脚本命令行选项 | keywords: 解析命令行参数, 脚本选项, parse-cli-args, script-options
+- `normalizeText(value)` — 去除空白、emoji 与标点后归一化文本 | keywords: 文本归一化, 标题比对, normalize-text, title-comparison
+- `readTopicId(meta)` — 读取 meta 中合法的来源子选题 ID | keywords: 读取选题ID, 判定有效关联, read-topic-id, valid-link-check
+- `isSameScope(article,topic)` — 校验文章与子选题同租户，两侧 userId 不同源不参与比对 | keywords: 租户归属校验, 跨租户防护, tenant-scope-check, cross-tenant-guard
+- `resolveTopicIdBySchedule(db,article)` — 用抓取调度表做确定性 articleId→topicId 恢复 | keywords: 调度表恢复, 确定性映射, schedule-table-recovery, deterministic-mapping
+- `matchTopicByContent(article,candidates)` — 按标题精确、正文前缀、标题包含依次匹配候选子选题并拒绝歧义 | keywords: 标题匹配, 正文匹配, 歧义拒绝, title-match, body-match, ambiguity-guard
+- `buildLibraryParentMap(db)` — 由完好文章推断各文章库对应母选题 | keywords: 母选题推断, 候选集收敛, infer-parent-topic, candidate-narrowing
+- `buildTakenTopicMap(db)` — 按「文章库+子选题」收集绑定关系，防止同库重复绑定 | keywords: 已占用选题, 重复绑定防护, taken-topic-ids, duplicate-binding-guard
+- `resetScheduleBackfillMarker(db)` — 清除调度表一次性回填标记以便重新补建 | keywords: 重置调度标记, 触发调度补建, reset-schedule-marker, trigger-schedule-backfill
+- `main()` — 找出受损文章、恢复选题关联并输出修复报告 | keywords: 回填主流程, 修复报告, backfill-main, repair-report
 
 ## 关键词索引 (Keyword Index)
 
@@ -118,6 +131,12 @@ Article-Library
 | 状态元数据       | article-status-meta      |
 | 队列领取         | lease-next               |
 | 移动文章         | move-article-to-library  |
+| 回填选题关联     | backfill-xhs-topic-id    |
+| 修复被覆盖的meta | repair-overwritten-meta  |
+| 调度表恢复       | schedule-table-recovery  |
+| 重复绑定防护     | duplicate-binding-guard  |
+| 重置调度标记     | reset-schedule-marker    |
+| 跨租户防护       | cross-tenant-guard       |
 | 跨库转移         | cross-library-transfer   |
 | 主动释放租约     | release-lease            |
 | 缩略图           | thumbnail                |
