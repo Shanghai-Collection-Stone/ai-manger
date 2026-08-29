@@ -12,6 +12,7 @@
 - **collage-cover-5inner**: 1横拼图封面 + 5竖内页单图
 - **collage-cover-5collage**: 1横拼图封面 + 5横拼图内页；自动版式下竖图不足但横图充足时优先回退到该版式
 - 横图只允许进入拼图/拼图封面；单张封面和单张内页只接受竖图，图片不足时进入不足/失败流程，不降级为单张横图。
+- **封面优先拼图（`preferCollageCover`）**：入参打开后，文章没有显式 `layout` 时先按 `collage-cover-5inner` 试算，图片池够就用拼图当封面底图；不够则原样回落交替版式，再由既有的全拼图回退兜底，**不会因为这个偏好而让生成失败**。该版式相比默认 `portrait-cover-5inner` 只多要 1 张竖图、少要 2 张横图，多数图库能直接满足。小红书专家生文链路默认开启。
 
 ## 封面文案风格
 - LLM 生成主标题（6-16汉字）+ 副标题（10-24汉字）作为结构化元数据
@@ -24,13 +25,15 @@
 - 装饰层固定生成**纯绿色 `#00FF00` 实底**，不请求、不依赖任何模型的透明通道；前景装饰禁止使用绿色系，避免与绿幕混淆。
 - 合成前由 sharp 按绿色通道优势度生成软边 alpha 色键，再统一以 `over` 模式叠到真实照片上。
 - 文字海报素材可用性两道闸，任一不过就回退到未叠加的真实照片封面：① 绿幕像素占比 `<0.30`；② 色键后的前景占比 `>0.68`。
-- 两种策略产出的封面都不是拼图，`collage` 为空。
+- `ai-direct` 是模型重画整张图，产出物不是拼图，`collage` 恒为空。
+- **拼图只是底图，浮在上面的 AI 素材照旧**：素材是独立文生图产出的，prompt 不看底图；两道质量闸算的是素材自身像素；素材元数据的 `canvasWidth/canvasHeight` 与 `buildCollageLayout` 的拼图画布尺寸**同为 640×853**，所以合成时底图 resize 对拼图是空操作、编辑器里两者按同一比例缩放，素材始终居中占 70%。改 `AI_OVERLAY_*` 或拼图尺寸时必须让这两个参照系保持一致。拼图封面出图仍是 640×853 竖版 3:4（`collage-cover-*` 里的"横拼图"指源图是横图），换成拼图封面不改变封面比例。
+- `ai-overlay` 只在真实照片上叠一层贴纸、底图像素不被重绘，所以**封面底图是拼图时会把拼图画布格式一起带下去**：`editableBase` 指向未合成的拼图原图，`collage` 的格子逐格与它对齐，进设计编辑器后拼图仍可逐张换图，海报素材是叠在上面的独立图层。
 
 ## 拼图画布格式
 - 拼图除了产出合成好的 PNG，还在 `CanvasGroupImage.collage` 上带一份画布格式：拼图画布尺寸 + 每张源图的格子（`imageId` / `url` / `x` / `y` / `width` / `height` / `objectFit`）
 - 格子坐标与 sharp 合成时用的网格逐格一致（`resolveMultiCollageCells`，2=上下 / 3=上1下2 / 4=2x2）
 - 合成图仍是发布与预览用的单张图；画布格式只供设计编辑器把拼图还原成逐格图层，后续可以单独换掉其中某一张图
-- AI 封面、单张竖图与重生成产出的图不是拼图，`collage` 为空
+- `ai-direct` 封面、单张竖图与重生成产出的图不是拼图，`collage` 为空；`ai-overlay` 封面在底图本身是拼图时保留 `collage`
 
 ## 功能描述及关键词
 
@@ -58,7 +61,7 @@ Canvas控制器。
 Canvas服务。
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）。透传 `dedup` 到后台 runImageGroupGeneration
-- `generateArticleImageGroups(input)` — 不创建独立 Canvas，直接复用生文图片阶段按相关 tag 生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机 | keywords: 生文配图工作流, 文章图组, 封面策略, article-image-workflow, generated-image-group, cover-strategy
+- `generateArticleImageGroups(input)` — 不创建独立 Canvas，直接复用生文图片阶段按相关 tag 生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机，`input.preferCollageCover` 让封面优先用拼图底图 | keywords: 生文配图工作流, 文章图组, 封面策略, 封面优先拼图, article-image-workflow, generated-image-group, cover-strategy, prefer-collage-cover
 - `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)。**`dedup` 参数**: 缺省/true=去重(排除 isUsed+生成后 markUsed);false=不去重(命中已用图、随机取图、不写 isUsed) | keywords: dedup, includeUsed
 - `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项，参考图最多 4 张 | keywords: cover-regenerate, article-cover-only
 - `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张；透传 `includeSystemPrompt`(默认 true) 决定是否叠加系统自带封面/内页提示词 | keywords: article-image-regenerate, image-slot-regenerate, system-prompt-toggle
@@ -103,7 +106,8 @@ Canvas服务。
 - `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用 | keywords: render, prepared, image-group, concurrency, dedup
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
-- `planImageGroupAllocation(pool, articles)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；自动版式可在竖图不足时切到全拼图版式 | keywords: plan, allocation, no-reuse
+- `planImageGroupAllocation(pool, articles, options?)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；`options.preferCollageCover` 先试拼图封面版式、池子不够即回落，自动版式还可在竖图不足时切到全拼图版式 | keywords: plan, allocation, no-reuse, 封面优先拼图, prefer-collage-cover
+- `PREFERRED_COLLAGE_COVER_LAYOUT` — 「封面优先拼图」命中的版式常量（`collage-cover-5inner`） | keywords: 封面优先拼图, 拼图封面, prefer-collage-cover, collage-cover
 - `buildImageGroupAllocationRequests(articles, options?)` — 根据文章列表生成图组版式槽位需求，支持自动版式覆盖 | keywords: plan, allocation, layout
 - `summarizeImageGroupAllocationStats(requestedGroups, availablePortrait, availableLandscape)` — 统计分配所需竖图/横图数量与素材缺口 | keywords: stats, allocation, shortage
 - `allocateRequestedImageGroups(requestedGroups, portraitPool, landscapePool, stats)` — 按确认槽位实际领取源图并保证 Canvas 内不复用 | keywords: allocate, no-reuse, image-group

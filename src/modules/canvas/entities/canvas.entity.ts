@@ -202,6 +202,15 @@ export interface CanvasImageGroupCreateInput {
    * @keyword-en cover-style-preset
    */
   coverStyle?: string;
+
+  /**
+   * @description 封面是否优先使用拼图。true=文章没有显式版式时先试拼图封面版式
+   *  （`collage-cover-5inner`），图片池够就用拼图当封面底图，不够再回落原来的交替版式；
+   *  缺省或 false 完全保持既有行为。小红书专家生文链路默认开启。
+   * @keyword-cn 封面优先拼图, 拼图封面
+   * @keyword-en prefer-collage-cover, collage-cover
+   */
+  preferCollageCover?: boolean;
 }
 
 /**

@@ -4,7 +4,7 @@
 
 ## 概述 (Overview)
 
-提供母选题与子选题候选生成、真实选题列表、文章生成、批量入库和级联删除接口。母选题可持久化最多五个 `imageTags`，创建与更新后由工作台列表原样返回；该母题下首次生成或重新生成配图时，服务端会校验这些标签仍存在于真实图库、限制 Agent 的可选标签范围，并在进入配图工作流前重新锁定固定标签，空数组才沿用原有自动匹配链路。候选与文章生成都先创建 Todo；选题 Agent 只通过工具逐项写入候选，文章 Agent 只通过工具分别设置标题、正文、文章标签并从真实图库标签中选择相关配图标签，模型最终文本均不参与结果解析。文章内存完整校验后，复用既有生文图片阶段按相关标签生成无字封面底图、五张内页、动态拼图与可选 AI 封面底图；小红书专家的 `ai-overlay` 封面可通过 `coverStyle` 选择素材风格预设或传 `random` 随机，并把生成出的透明文字海报层以 `ai素材` 标签同步入图库，同时把封面文案保存为灵感画布可编辑图层元数据，最终将文章与完整图组一并写入对应子选题的 `article` 字段。Agent 可按需使用已配置的 DuckDuckGo MCP 搜索工具，默认提示词强制执行法律、平台与高风险内容合规边界。
+提供母选题与子选题候选生成、真实选题列表、文章生成、批量入库和级联删除接口。母选题可持久化最多五个 `imageTags`，创建与更新后由工作台列表原样返回；该母题下首次生成或重新生成配图时，服务端会校验这些标签仍存在于真实图库、限制 Agent 的可选标签范围，并在进入配图工作流前重新锁定固定标签，空数组才沿用原有自动匹配链路。候选与文章生成都先创建 Todo；选题 Agent 只通过工具逐项写入候选，文章 Agent 只通过工具分别设置标题、正文、文章标签并从真实图库标签中选择相关配图标签，模型最终文本均不参与结果解析。文章内存完整校验后，复用既有生文图片阶段按相关标签生成无字封面底图、五张内页、动态拼图与可选 AI 封面底图，封面底图优先用拼图（`preferCollageCover: true`，横图不够时自动回落单张竖图，不会因此生成失败）；小红书专家的 `ai-overlay` 封面可通过 `coverStyle` 选择素材风格预设或传 `random` 随机，并把生成出的透明文字海报层以 `ai素材` 标签同步入图库，同时把封面文案保存为灵感画布可编辑图层元数据，最终将文章与完整图组一并写入对应子选题的 `article` 字段。Agent 可按需使用已配置的 DuckDuckGo MCP 搜索工具，默认提示词强制执行法律、平台与高风险内容合规边界。
 
 ## 文件清单 (File List)
 
@@ -81,7 +81,7 @@
 - `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章合规、搜索、母题固定配图和工具交付提示词 | keywords: 构造文章提示词, 工具交付约束, 母题配图约束, build-article-prompt, tool-delivery-contract, mother-image-constraint
 - `XhsArticleGenerationService.runAgent(system, tools, draft)` — 执行文章 Agent 并忽略最终文本 | keywords: 执行文章Agent, 忽略最终文本, run-article-agent, ignore-final-text
 - `XhsArticleGenerationService.isArticleComplete(draft, requireImageTags)` — 校验标题、正文、文章标签，并仅在首次配图时要求图库标签 | keywords: 校验文章完整性, 内存文章, validate-article-completeness, in-memory-article
-- `XhsArticleGenerationService.generateArticleImagesByWorkflow(input, scope)` — 按去重与封面风格规则生成图片组，并把合成封面拆成原照片与已融合文字的独立海报素材画板元数据 | keywords: 生文配图工作流, 可编辑封面, article-image-workflow, editable-cover
+- `XhsArticleGenerationService.generateArticleImagesByWorkflow(input, scope)` — 按去重与封面风格规则生成图片组、请求拼图优先的封面底图，并把合成封面拆成原照片与已融合文字的独立海报素材画板元数据 | keywords: 生文配图工作流, 可编辑封面, 封面优先拼图, article-image-workflow, editable-cover, prefer-collage-cover
 - `XhsArticleGenerationService.toCanvasBoardCollage(collage?)` — 把图组拼图的画布格式转成文章画板元数据，源图格子随文章持久化 | keywords: 拼图画布格式, 可换图拼图, collage-canvas-format, swappable-collage
 - `XhsArticleGenerationService.buildResult(topicId, article, searchEnabled, searchAvailable)` — 构造可写入 Todo 的文章结果 | keywords: 构造文章结果, 日期序列化, build-article-result, serialize-dates
 - `XhsTopicController({ xhsTopicService, articleGenerationService, repository })` — 暴露带后台鉴权的选题、真实文章生成与持久化接口 | keywords: 小红书选题接口, 待办返回, xhs-topic-controller, todo-response
@@ -126,6 +126,7 @@
 | 读取当前文章     | read-current-article              | `xhs_article_read_current` 工具与文章修改、重写前置协议                                     |
 | 文章落库         | persist-article                   | 完整性校验后统一持久化                                                                      |
 | 生文配图工作流   | article-image-workflow            | 相关图库标签取图、动态拼图、封面与可选 AI 生图                                              |
+| 封面优先拼图     | prefer-collage-cover              | 生文封面底图优先用拼图，图库横图不够时自动回落单张竖图，不因此让生成失败                    |
 | 可编辑封面       | editable-cover                    | 无字封面底图与灵感画布主副标题图层元数据                                                    |
 | 装饰素材叠加     | decoration-overlay                | 小红书封面走 `ai-overlay`：AI 输出文字与装饰融合的绿幕海报素材，真实照片主体不被重绘        |
 | 可编辑装饰素材   | editable-decoration-material      | 合成预览保留用于发布，画板另外保存原照片、透明素材、绿幕原图与特效参数                      |

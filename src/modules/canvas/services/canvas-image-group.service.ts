@@ -76,6 +76,15 @@ let _coverFontBase64: string | null | undefined = undefined;
 /** @description 历史烧字方法使用的字体路径缓存；新封面生成流程不再调用。 */
 let _coverFontPath: string | null | undefined = undefined;
 
+/**
+ * @description 「封面优先拼图」命中的版式：横拼图封面 + 竖图为主的内页。
+ *  相比默认的 `portrait-cover-5inner`（3 竖 + 6 横）只多要 1 张竖图、少要 2 张横图，
+ *  所以大多数图库都能直接满足，满足不了才回落交替版式。
+ * @keyword-cn 封面优先拼图, 拼图封面
+ * @keyword-en prefer-collage-cover, collage-cover
+ */
+const PREFERRED_COLLAGE_COVER_LAYOUT: ImageGroupLayout = 'collage-cover-5inner';
+
 /** @description 交替版式列表 */
 const ALTERNATING_LAYOUTS: ImageGroupLayout[] = [
   'portrait-cover-5inner',
@@ -584,7 +593,9 @@ export class CanvasImageGroupService {
     );
 
     // --- 3. 先做 Canvas 级统一分配；不足时整体进入补图流程，不再跨组复用 ---
-    const allocation = this.planImageGroupAllocation(pool, articles);
+    const allocation = this.planImageGroupAllocation(pool, articles, {
+      preferCollageCover: input.preferCollageCover === true,
+    });
     if (!allocation.ok) {
       this.logger.warn(
         `[image-group] insufficient_source_images articleCount=${articles.length} ` +
@@ -837,6 +848,12 @@ export class CanvasImageGroupService {
           isOverlayCover ? aiCover.preview : aiCover,
           'cover',
           coverText,
+          // ai-overlay 只在真实照片上叠一层贴纸，底图像素没被重绘，
+          // 拼图格子仍然逐格对得上 editableBase，因此把画布格式一起带下去；
+          // ai-direct 是模型重画整张图，格子不再成立，保持为空。
+          isOverlayCover && coverPlan.kind === 'collage'
+            ? coverPlan.collage
+            : undefined,
         );
         if (isOverlayCover) {
           coverImage.editableBase = aiCover.editableBase;
@@ -895,6 +912,7 @@ export class CanvasImageGroupService {
   private planImageGroupAllocation(
     pool: GalleryImageEntity[],
     articles: CanvasImageGroupCreateInput['articles'],
+    options?: { preferCollageCover?: boolean },
   ): ImageGroupAllocationResult {
     const portraitPool = this.dedup(
       pool.filter((img) => img.isPortrait === true),
@@ -915,6 +933,39 @@ export class CanvasImageGroupService {
     const hasExplicitLayout = articles.some(
       (art) => typeof art.layout === 'string' && art.layout.length > 0,
     );
+
+    // 封面优先拼图：先按拼图封面版式试算，图片池够就改用它，
+    // 不够则原样落回交替版式，再由下面的全拼图回退继续兜底。
+    if (options?.preferCollageCover === true && !hasExplicitLayout) {
+      const collageCoverGroups = this.buildImageGroupAllocationRequests(
+        articles,
+        { forceAutoLayout: PREFERRED_COLLAGE_COVER_LAYOUT },
+      );
+      const collageCoverStats = this.summarizeImageGroupAllocationStats(
+        collageCoverGroups,
+        portraitPool.length,
+        landscapePool.length,
+      );
+      if (
+        collageCoverStats.missingPortrait === 0 &&
+        collageCoverStats.missingLandscape === 0
+      ) {
+        this.logger.debug(
+          `[image-group] allocation_prefer_collage_cover layout=${PREFERRED_COLLAGE_COVER_LAYOUT} ` +
+            `portrait=${collageCoverStats.availablePortrait}/${collageCoverStats.requiredPortrait} ` +
+            `landscape=${collageCoverStats.availableLandscape}/${collageCoverStats.requiredLandscape}`,
+        );
+        requestedGroups = collageCoverGroups;
+        stats = collageCoverStats;
+      } else {
+        this.logger.debug(
+          `[image-group] allocation_prefer_collage_cover_skipped ` +
+            `missingPortrait=${collageCoverStats.missingPortrait} ` +
+            `missingLandscape=${collageCoverStats.missingLandscape}`,
+        );
+      }
+    }
+
     if (stats.missingPortrait > 0 && !hasExplicitLayout) {
       const collageOnlyGroups = this.buildImageGroupAllocationRequests(
         articles,

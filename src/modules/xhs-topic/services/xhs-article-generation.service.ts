@@ -829,6 +829,8 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
       dedup: input.dedup,
       // 小红书封面走"AI 出装饰素材 + 真实照片拼合"，模型不重绘人物，保住实拍质感
       coverStrategy: 'ai-overlay',
+      // 封面底图优先用拼图：一张封面能带出多张实拍，信息量比单图大；图库横图不够时自动回落单竖图
+      preferCollageCover: true,
       // 封面文字海报的视觉风格，来自素材风格库；空串表示不指定，回落到内置写死风格
       ...(input.coverStyle ? { coverStyle: input.coverStyle } : {}),
     });
