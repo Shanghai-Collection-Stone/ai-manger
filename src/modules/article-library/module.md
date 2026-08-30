@@ -4,7 +4,7 @@ Article-Library
 
 ## 概述 (Overview)
 
-文章库模块提供“库容器 + 专属工作区 + 文章”的结构。租户文章库按租户绑定关系建立工作区，平台文章库选择在线且有空余槽位的 SuperClaw 建立工作区，再把 `workspaceId` 固定写入文章库；容量由 `workspaceCapacityBytes` 控制，缺省或 `0` 表示无上限。模块同时支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。
+文章库模块提供“库容器 + 专属工作区 + 文章”的结构。专属工作区只在该用户的小红书采集渠道为 `super_claw` 时才随建库一起创建（租户库按租户绑定节点，平台库选择在线且有空余槽位的 SuperClaw），并把 `workspaceId` 写入文章库；渠道为 `tikhub`（平台直采、不经节点）时建库不占节点槽位、不写 `workspaceId`，之后若真的要跑 SuperClaw 抓取，再由 `ensureWorkspace` 懒补建。容量由 `workspaceCapacityBytes` 控制，缺省或 `0` 表示无上限。模块同时支持文章库 CRUD、文章入库、发布状态回写、FIFO 队列领取、二维码 token 推送入口，以及 task-token 专项接口。
 
 ## 文件清单 (File List)
 
@@ -28,8 +28,9 @@ Article-Library
 - `ensureCounterAtLeast(seq)` — 将 article_libraries counter 至少推进到指定下限 | keywords: article-library-counter, 文章库计数器校准
 - `nextId()` — 分配新文章库业务 ID 前先校准 counter | keywords: article-library-counter, 文章库计数器校准
 - `normalizePushConfig(input)` — 规范化文章库推送配置 | keywords: article-library, push-config
-- `create(input)` — 创建已携带专属 workspaceId 的文章库容器 | keywords: article-library, create-library
-- `createWithWorkspace(currentUser,input)` — 租户库使用绑定节点、平台库选择在线节点创建专属工作区 | keywords: 创建文章库工作区, 选择执行节点, create-library-workspace, select-execution-node
+- `create(input)` — 创建文章库容器，workspaceId 缺省时不写该字段 | keywords: article-library, create-library
+- `createWithWorkspace(currentUser,input)` — 仅 super_claw 渠道建专属工作区并占用节点槽位，其余渠道直接落库 | keywords: 创建文章库工作区, 按渠道占用槽位, create-library-workspace, channel-gated-reservation
+- `requiresSuperClawWorkspace(scope)` — 读取采集渠道判断建库是否需要节点工作区 | keywords: 判断是否需要节点工作区, 采集渠道判定, requires-super-claw-workspace, crawl-channel-check
 - `ensureWorkspace(id,tenantId?)` — 为历史文章库懒补专属工作区 | keywords: 补建文章库工作区, 历史数据迁移, ensure-library-workspace, legacy-workspace-backfill
 - `getWorkspaceService()` — 从模块图解析工作区服务并避免静态循环 | keywords: 获取工作区服务, 避免模块循环, resolve-workspace-service, avoid-module-cycle
 - `tenantScope(tenantId?)` — 构造强制租户作用域过滤，空 tenantId 收口到平台库 | keywords: tenant-scope-filter, mandatory-isolation, 租户作用域过滤
@@ -142,6 +143,8 @@ Article-Library
 | 缩略图           | thumbnail                |
 | 校验小红书笔记ID | validate-xhs-note-id     |
 | 发布回调笔记     | publish-callback-note    |
+| 按渠道占用槽位   | channel-gated-reservation |
+| 采集渠道判定     | crawl-channel-check      |
 
 ## 类型导出 (Type Exports)
 

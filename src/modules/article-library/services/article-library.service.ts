@@ -181,7 +181,7 @@ export class ArticleLibraryService {
       userId: input.userId,
       scope,
       tenantId: scope === 'tenant' ? input.tenantId : undefined,
-      workspaceId: input.workspaceId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       name: input.name.trim(),
       type: String(input.type ?? '').trim(),
       pushConfig: this.normalizePushConfig(input.pushConfig),
@@ -193,9 +193,10 @@ export class ArticleLibraryService {
   }
 
   /**
-   * @description 先建立文章库专属工作区再创建记录；租户库使用绑定节点，平台库选择在线有余量节点。
-   * @keyword-cn 创建文章库工作区, 选择执行节点
-   * @keyword-en create-library-workspace, select-execution-node
+   * @description 创建文章库：仅当该用户的小红书采集渠道是 super_claw 时才同时建专属工作区并占用节点槽位；
+   * 其余渠道（如 tikhub 平台直采）不需要节点执行，直接落库，日后真要跑 SuperClaw 抓取时由 ensureWorkspace 懒补建。
+   * @keyword-cn 创建文章库工作区, 按渠道占用槽位
+   * @keyword-en create-library-workspace, channel-gated-reservation
    */
   async createWithWorkspace(
     currentUser: AdminUserEntity,
@@ -203,8 +204,21 @@ export class ArticleLibraryService {
       workspaceCapacityBytes?: number;
     },
   ): Promise<ArticleLibraryEntity> {
-    const workspaceService = this.getWorkspaceService();
     const { workspaceCapacityBytes, ...libraryInput } = input;
+    const scope =
+      libraryInput.scope ?? (input.tenantId ? 'tenant' : 'platform');
+    const requiresWorkspace = await this.requiresSuperClawWorkspace({
+      tenantId: input.tenantId,
+      userId: currentUser.username,
+    });
+    if (!requiresWorkspace) {
+      return this.create({
+        ...libraryInput,
+        scope,
+        userId: currentUser.username,
+      });
+    }
+    const workspaceService = this.getWorkspaceService();
     const workspace = await workspaceService.create(currentUser, {
       tenantId: input.tenantId,
       name: `文章库 · ${input.name.trim()}`,
@@ -214,7 +228,7 @@ export class ArticleLibraryService {
     try {
       return await this.create({
         ...libraryInput,
-        scope: libraryInput.scope ?? (input.tenantId ? 'tenant' : 'platform'),
+        scope,
         userId: currentUser.username,
         workspaceId: String(workspace._id),
       });
@@ -223,6 +237,34 @@ export class ArticleLibraryService {
         .remove(currentUser, String(workspace._id))
         .catch(() => undefined);
       throw error;
+    }
+  }
+
+  /**
+   * @description 判断该租户用户的采集渠道是否需要 SuperClaw 节点工作区；渠道为 tikhub 时不需要，
+   * 取不到抓取服务（模块未装载等）时按历史默认 super_claw 处理，保持既有行为。
+   * @keyword-cn 判断是否需要节点工作区, 采集渠道判定
+   * @keyword-en requires-super-claw-workspace, crawl-channel-check
+   */
+  private async requiresSuperClawWorkspace(scope: {
+    tenantId?: string;
+    userId: string;
+  }): Promise<boolean> {
+    try {
+      const crawlService = this.moduleRef.get<{
+        getChannel: (input: {
+          tenantId?: string | null;
+          userId: string;
+        }) => Promise<string>;
+      }>('XhsTopicCrawlService', { strict: false });
+      return (await crawlService.getChannel(scope)) !== 'tikhub';
+    } catch (error) {
+      this.logger.warn(
+        `[requiresSuperClawWorkspace] 读取采集渠道失败，按 super_claw 处理: ${
+          (error as Error)?.message ?? String(error)
+        }`,
+      );
+      return true;
     }
   }
 
@@ -259,7 +301,12 @@ export class ArticleLibraryService {
     const updated = await this.libraries.findOneAndUpdate(
       {
         _id: library._id,
-        $or: [{ workspaceId: { $exists: false } }, { workspaceId: '' }],
+        // 历史数据里既可能没有该字段，也可能被写成 null / 空串，三种都视为未绑定工作区。
+        $or: [
+          { workspaceId: { $exists: false } },
+          { workspaceId: { $eq: null as unknown as string } },
+          { workspaceId: '' },
+        ],
       },
       {
         $set: {

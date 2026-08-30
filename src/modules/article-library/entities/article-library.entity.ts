@@ -29,8 +29,8 @@ export interface ArticleLibraryEntity {
   userId: string;
   scope: ArticleLibraryScope;
   tenantId?: string;
-  /** 文章库对应的平台工作区 ID。 */
-  workspaceId: string;
+  /** 文章库对应的平台工作区 ID；采集渠道非 super_claw 时可缺省，抓取任务需要时再懒补建。 */
+  workspaceId?: string;
   name: string;
   /** 类型：自由字符串（不枚举，由使用方自定） */
   type: string;
@@ -47,7 +47,8 @@ export interface ArticleLibraryCreateInput {
   userId: string;
   scope?: ArticleLibraryScope;
   tenantId?: string;
-  workspaceId: string;
+  /** 采集渠道非 super_claw 时可缺省。 */
+  workspaceId?: string;
   name: string;
   type: string;
   pushConfig?: Partial<ArticleLibraryPushConfig>;
