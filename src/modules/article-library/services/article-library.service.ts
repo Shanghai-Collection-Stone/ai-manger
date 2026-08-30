@@ -17,6 +17,21 @@ import type {
 import type { ArticleEntity } from '../entities/article.entity.js';
 
 /**
+ * @description SuperClaw 侧「节点不可用」的错误码集合：整套节点没配、全部离线、节点记录已删、
+ * 租户没绑节点。这些都不是容量问题，建库时命中就退化成不带工作区落库，等节点就绪后由
+ * ensureWorkspace 懒补建。SUPER_CLAW_CAPACITY_EXCEEDED 不在其中：那说明节点在跑但槽位真不够，
+ * 需要运维扩容，静默降级只会把问题盖住。
+ * @keyword-cn 节点不可用错误码, 建库降级
+ * @keyword-en degradable-super-claw-errors, library-create-fallback
+ */
+const DEGRADABLE_SUPER_CLAW_ERRORS = new Set([
+  'SUPER_CLAW_NOT_CONFIGURED',
+  'SUPER_CLAW_OFFLINE',
+  'SUPER_CLAW_NOT_FOUND',
+  'TENANT_SUPER_CLAW_REQUIRED',
+]);
+
+/**
  * @title 文章库容器服务 Article Library Container Service
  * @description 管理文章库（容器）的增删改查与统计，不负责具体文章文档操作。
  * @keyword-en article library container service crud stats
@@ -194,7 +209,8 @@ export class ArticleLibraryService {
 
   /**
    * @description 创建文章库：仅当该用户的小红书采集渠道是 super_claw 时才同时建专属工作区并占用节点槽位；
-   * 其余渠道（如 tikhub 平台直采）不需要节点执行，直接落库，日后真要跑 SuperClaw 抓取时由 ensureWorkspace 懒补建。
+   * 其余渠道（如 tikhub 平台直采）不需要节点执行，直接落库。节点整套没配、全部离线或租户没绑节点时同样降级落库，
+   * 只有「节点在跑但槽位已满」才报错。缺工作区的库日后真要跑 SuperClaw 抓取时由 ensureWorkspace 懒补建。
    * @keyword-cn 创建文章库工作区, 按渠道占用槽位
    * @keyword-en create-library-workspace, channel-gated-reservation
    */
@@ -219,12 +235,26 @@ export class ArticleLibraryService {
       });
     }
     const workspaceService = this.getWorkspaceService();
-    const workspace = await workspaceService.create(currentUser, {
-      tenantId: input.tenantId,
-      name: `文章库 · ${input.name.trim()}`,
-      description: `文章库「${input.name.trim()}」的专属任务工作区`,
-      capacityBytes: workspaceCapacityBytes,
-    });
+    let workspace: WorkspaceEntity;
+    try {
+      workspace = await workspaceService.create(currentUser, {
+        tenantId: input.tenantId,
+        name: `文章库 · ${input.name.trim()}`,
+        description: `文章库「${input.name.trim()}」的专属任务工作区`,
+        capacityBytes: workspaceCapacityBytes,
+      });
+    } catch (error) {
+      const code = (error as Error)?.message ?? '';
+      if (!DEGRADABLE_SUPER_CLAW_ERRORS.has(code)) throw error;
+      this.logger.warn(
+        `[createWithWorkspace] SuperClaw 节点不可用（${code}），文章库「${input.name.trim()}」先不带工作区落库，节点就绪后由 ensureWorkspace 补建。`,
+      );
+      return this.create({
+        ...libraryInput,
+        scope,
+        userId: currentUser.username,
+      });
+    }
     try {
       return await this.create({
         ...libraryInput,
