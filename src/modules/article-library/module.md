@@ -17,6 +17,7 @@ Article-Library
 - `controller/article-library-task.controller.ts` — task-token 与扫码 token 专项文章库接口。
 - `scripts/simulate-publish.mjs` — 创建模拟选题文章、调用真实扫码发布回调并等待单次抓取 Todo 的本地联调脚本。
 - `scripts/backfill-xhs-topic-id.mjs` — 回填被发布回调覆盖 meta 而丢失 `meta.xhsTopicId` 的历史文章，并清除抓取调度回填标记的修复脚本。
+- `scripts/purge-orphan-library-workspaces.mjs` — 回收「库已删、专属工作区还在」的孤儿工作区并重算节点已占槽位的清理脚本（默认只报告，`--apply` 才删）。
 
 ## 函数清单 (Function List)
 
@@ -43,7 +44,7 @@ Article-Library
 - `getByQrToken(id,token)` — 通过文章库 ID 与二维码 token 获取文章库 | keywords: article-library-qr, get-by-token
 - `list(params)` — 列出当前租户可见文章库 | keywords: article-library, list-libraries
 - `update(input)` — 更新文章库基础信息和推送配置 | keywords: article-library, update-library
-- `delete(id,tenantId?)` — 删除文章库并级联删除所属文章 | keywords: article-library, delete-library
+- `delete(id,tenantId?)` — 删除文章库并级联删除所属文章与专属工作区（释放节点槽位） | keywords: article-library, delete-library, cascade-purge-workspace
 - `getStats(libraryId)` — 聚合文章库内发布状态和租约占用统计 | keywords: article-library, stats
 - `getThumbnailImages(libraryId,limit?)` — 读取文章库缩略图所需的最近文章首图 | keywords: article-library, thumbnail
 - `ArticleService()` — 文章服务 | keywords: article, service
@@ -145,6 +146,8 @@ Article-Library
 | 发布回调笔记     | publish-callback-note    |
 | 按渠道占用槽位   | channel-gated-reservation |
 | 采集渠道判定     | crawl-channel-check      |
+| 级联销毁工作区   | cascade-purge-workspace  |
+| 回收孤儿工作区   | purge-orphan-workspaces  |
 
 ## 类型导出 (Type Exports)
 

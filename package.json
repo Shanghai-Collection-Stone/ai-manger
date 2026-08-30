@@ -22,6 +22,7 @@
     "validate:dashboard-config": "node scripts/validate-dashboard-config.mjs",
     "simulate:publish": "node src/modules/article-library/scripts/simulate-publish.mjs",
     "repair:xhs-topic-id": "node src/modules/article-library/scripts/backfill-xhs-topic-id.mjs",
+    "purge:orphan-library-workspaces": "node src/modules/article-library/scripts/purge-orphan-library-workspaces.mjs",
     "migration:up": "migrate-mongo up",
     "migration:down": "migrate-mongo down",
     "migration:status": "migrate-mongo status",

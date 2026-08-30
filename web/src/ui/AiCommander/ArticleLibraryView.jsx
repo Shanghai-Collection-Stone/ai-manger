@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Plus, Trash2, Loader2, Folder, ChevronLeft, Check, Pencil, RefreshCw, FileText, QrCode,
 } from 'lucide-react';
-import { articleLibraryService } from './articleLibraryService';
+import { articleLibraryService, describeLibraryError } from './articleLibraryService';
 import { createQrCodeSvg } from './qrCodeSvg';
 import { showToast } from './blocks/shared';
 
@@ -737,7 +737,7 @@ const ArticleLibraryView = ({
   const handleCreate = async ({ name, type }) => {
     const res = await articleLibraryService.createLibrary({ name, type });
     if (!res?.library) {
-      showToast('创建失败', 'error');
+      showToast(describeLibraryError(res, '创建失败'), 'error');
       return;
     }
     showToast('已创建', 'success');

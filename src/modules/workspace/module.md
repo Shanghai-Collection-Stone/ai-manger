@@ -21,6 +21,7 @@
   - `create(currentUser, input)`: 租户使用绑定节点、平台选择空闲节点创建工作区并下发创建命令 | keywords: 创建工作区, 占用节点槽位, create-workspace, reserve-super-claw-slot
   - `update`: 更新工作区名称、描述或容量并重新同步绑定节点/update workspace and re-provision bound node | keywords: update-workspace
   - `remove(currentUser, id)`: 删除工作区及成员并释放节点槽位 | keywords: 删除工作区, 释放节点槽位, delete-workspace, release-super-claw-slot
+  - `purge(workspaceId, actor?)`: 系统内部销毁归属对象的专属工作区并释放槽位，不校验租户与网盘用量 | keywords: 销毁专属工作区, 级联释放槽位, purge-owned-workspace, cascade-release-slot
   - `listMembers`: 成员列表/list workspace members | keywords: list-workspace-members
   - `addMember`: 添加成员(校验同租户用户)/add workspace member | keywords: add-workspace-member
   - `updateMember`: 更新成员角色/update workspace member role | keywords: update-workspace-member-role

@@ -341,6 +341,7 @@ export class ArticleLibraryService {
       },
     ) => Promise<WorkspaceEntity>;
     remove: (user: AdminUserEntity, id: string) => Promise<boolean>;
+    purge: (id: string, actor?: AdminUserEntity) => Promise<boolean>;
   } {
     return this.moduleRef.get('WorkspaceService', { strict: false });
   }
@@ -648,7 +649,20 @@ export class ArticleLibraryService {
     if (!existing) return false;
     await this.articles.deleteMany({ libraryId: id });
     const res = await this.libraries.deleteOne({ id });
-    return res.deletedCount === 1;
+    if (res.deletedCount !== 1) return false;
+    // 专属工作区随库销毁，否则它会一直占着 SuperClaw 节点槽位，且重启校准时被重新计入占用。
+    if (existing.workspaceId) {
+      try {
+        await this.getWorkspaceService().purge(existing.workspaceId);
+      } catch (error) {
+        this.logger.error(
+          `[delete] 文章库 ${id} 的工作区 ${existing.workspaceId} 销毁失败，节点槽位未释放: ${
+            (error as Error)?.message ?? String(error)
+          }`,
+        );
+      }
+    }
+    return true;
   }
 
   /**

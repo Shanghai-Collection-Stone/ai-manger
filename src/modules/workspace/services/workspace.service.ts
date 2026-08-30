@@ -235,6 +235,34 @@ export class WorkspaceService {
   }
 
   /**
+   * @description 系统内部销毁工作区：删除成员、删除工作区并释放 SuperClaw 槽位，不做租户校验也不校验网盘用量。
+   * 仅供拥有该工作区的业务对象（如文章库）级联删除时调用，外部入口一律走 remove。
+   * @keyword-cn 销毁专属工作区, 级联释放槽位
+   * @keyword-en purge-owned-workspace, cascade-release-slot
+   */
+  async purge(workspaceId: string, actor?: AdminUserEntity): Promise<boolean> {
+    if (!ObjectId.isValid(workspaceId)) return false;
+    const ws = await this.workspaces.findOne({
+      _id: new ObjectId(workspaceId),
+    });
+    if (!ws) return false;
+    await this.members.deleteMany({ workspaceId });
+    const res = await this.workspaces.deleteOne({ _id: ws._id });
+    if (res.deletedCount !== 1) return false;
+    await this.superClawService.releaseWorkspace(ws.superClawId);
+    await this.auditLogService.record({
+      tenantId: ws.tenantId,
+      actorUserId: actor ? String(actor._id) : 'system',
+      actorUsername: actor?.username ?? 'system',
+      action: WORKSPACE_AUDIT_ACTIONS.delete,
+      targetType: 'workspace',
+      targetId: workspaceId,
+      detail: { name: ws.name, reason: 'owner-deleted' },
+    });
+    return true;
+  }
+
+  /**
    * @description 工作区成员列表
    * @keyword-en list workspace members
    * @keyword-cn 成员列表

@@ -452,7 +452,8 @@ AI Commander 前端 API client，封装 Canvas、图库、会话以及小红书�
 
 - **关键词**: article-library, api-client, fetch, bearer, crud, lease, qrcode
 - **函数**:
-  - `listLibraries` / `getLibrary` / `createLibrary` / `updateLibrary` / `deleteLibrary`: 库 CRUD
+  - `listLibraries` / `getLibrary` / `createLibrary` / `updateLibrary` / `deleteLibrary`: 库 CRUD（`createLibrary` 失败时返回 `{ library: null, message }`，错误码交给 `describeLibraryError`）
+  - `describeLibraryError(res, fallback)`: 把 SUPER_CLAW_OFFLINE / SUPER_CLAW_CAPACITY_EXCEEDED 等建库错误码翻成可读提示 | keywords: 文章库错误码文案, describe-library-error
   - `getPushQr`: 获取二维码 payload 与 `qrContent`
   - `listArticles` / `putArticles` / `updateArticleStatus` / `deleteArticle`: 文章 CRUD + 状态更新
   - `leaseNext`: 管理端队列领取（测试用）

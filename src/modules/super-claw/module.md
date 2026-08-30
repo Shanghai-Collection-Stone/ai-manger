@@ -115,8 +115,8 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 - `SuperClawService.remove(id)` — 删除无租户占用的节点 | keywords: 删除节点, 占用保护, delete-node, allocation-guard
 - `SuperClawService.rotateToken(id)` — 轮换节点 Token 并使旧密钥失效 | keywords: 轮换令牌, 密钥失效, rotate-token, secret-revocation
 - `SuperClawService.assignTenant(tenantId, superClawId?)` — 调整租户节点并整体迁移工作区 | keywords: 分配租户节点, 迁移工作区, assign-tenant-node, migrate-workspaces
-- `SuperClawService.reserveWorkspaceForTenant(tenantId)` — 创建工作区前占用所属节点槽位 | keywords: 占用工作区槽位, 租户节点归属, reserve-workspace-slot, tenant-node-assignment
-- `SuperClawService.reserveWorkspaceForPlatform()` — 为平台工作区选择在线有余量节点并占用槽位 | keywords: 分配平台工作区, 选择在线节点, reserve-platform-workspace, select-online-node
+- `SuperClawService.reserveWorkspaceForTenant(tenantId)` — 创建工作区前占用所属节点槽位，节点已删与槽位已满分开报错 | keywords: 占用工作区槽位, 租户节点归属, reserve-workspace-slot, tenant-node-assignment
+- `SuperClawService.reserveWorkspaceForPlatform()` — 为平台工作区选择在线有余量节点并占用槽位，失败按未配置/离线/满槽分别报错 | keywords: 分配平台工作区, 选择在线节点, 节点不可用诊断, reserve-platform-workspace, select-online-node, node-availability-diagnosis
 - `SuperClawService.releaseWorkspace(superClawId)` — 删除工作区或创建失败时释放节点槽位 | keywords: 释放工作区槽位, 容量归还, release-workspace-slot, capacity-return
 - `SuperClawService.authenticateToken(token)` — 校验 gRPC Token 并解析节点身份 | keywords: 校验令牌, 节点身份, authenticate-token, node-identity
 - `SuperClawService.register(superClawId, request)` — 注册实例并建立在线连接 | keywords: 注册实例, 建立连接, register-instance, establish-connection

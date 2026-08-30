@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Loader2, Image as ImageIcon, ChevronLeft, ChevronRight, Trash2, Pencil, Check, Plus, Library, Sparkles, Download, Copy, ClipboardList } from 'lucide-react';
 import { chatService } from './chatService';
-import { articleLibraryService } from './articleLibraryService';
+import { articleLibraryService, describeLibraryError } from './articleLibraryService';
 import { showToast } from './blocks/shared';
 import CoverRegenerateDialog from './CoverRegenerateDialog';
 
@@ -1189,7 +1189,7 @@ const LibraryPickerDialog = ({ target, onClose, onPick }) => {
     const res = await articleLibraryService.createLibrary({ name, type: newType.trim() });
     setCreating(false);
     if (!res?.library) {
-      showToast('创建失败', 'error');
+      showToast(describeLibraryError(res, '创建失败'), 'error');
       return;
     }
     setNewName('');

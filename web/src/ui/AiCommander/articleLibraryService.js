@@ -42,6 +42,34 @@ const request = async (path, options = {}) => {
   }
 };
 
+/** @type {Record<string, string>} 后端建库错误码 → 可读提示。 */
+const LIBRARY_ERROR_TEXT = {
+  SUPER_CLAW_NOT_CONFIGURED: '后台还没有配置 SuperClaw 节点',
+  SUPER_CLAW_OFFLINE: 'SuperClaw 节点全部离线，请先让节点连上再建库',
+  SUPER_CLAW_CAPACITY_EXCEEDED: 'SuperClaw 节点工作区槽位已满，请扩容或清理闲置工作区',
+  SUPER_CLAW_NOT_FOUND: '租户绑定的 SuperClaw 节点已不存在，请重新分配节点',
+  TENANT_SUPER_CLAW_REQUIRED: '当前租户还没有绑定 SuperClaw 节点',
+  WORKSPACE_NAME_ALREADY_EXISTS: '同名工作区已存在，换个文章库名称再试',
+  NAME_REQUIRED: '请输入文章库名称',
+};
+
+/**
+ * @description 把后端返回的错误码翻译成可读文案，未知错误码原样附在后面便于排查。
+ * @keyword-en describe library error code
+ * @keyword-cn 文章库错误码文案
+ * @param {any} res 请求返回体，失败时形如 { message: 'SUPER_CLAW_OFFLINE' }
+ * @param {string} fallback 兜底文案
+ * @returns {string}
+ */
+export const describeLibraryError = (res, fallback) => {
+  const raw = Array.isArray(res?.message) ? res.message[0] : res?.message;
+  const code = typeof raw === 'string' ? raw.trim() : '';
+  if (!code) return fallback;
+  return LIBRARY_ERROR_TEXT[code]
+    ? `${fallback}：${LIBRARY_ERROR_TEXT[code]}`
+    : `${fallback}（${code}）`;
+};
+
 /**
  * @description 文章库前端 API Client
  * @keyword-en article library frontend api client crud lease
@@ -88,7 +116,8 @@ export const articleLibraryService = {
       method: 'POST',
       body: JSON.stringify({ name, type, pushConfig }),
     });
-    return ok ? data : null;
+    // 失败时也把响应体带回去：调用方判空看的是 data.library，错误码留给 describeLibraryError。
+    return ok ? data : { ...(data || {}), library: null };
   },
 
   /**

@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 import { chatService } from './chatService';
-import { articleLibraryService } from './articleLibraryService';
+import { articleLibraryService, describeLibraryError } from './articleLibraryService';
 import { featuredArticleService } from './featuredArticleService';
 import { showToast } from './blocks/shared';
 
@@ -949,7 +949,7 @@ const FeaturedLibraryPickerDialog = ({ open, storing, onClose, onPick }) => {
     const created = await articleLibraryService.createLibrary({ name, type: newType.trim() || '小红书' });
     const createdId = created?.library?.id ?? created?.id;
     if (!createdId) {
-      showToast('创建文章库失败', 'error');
+      showToast(describeLibraryError(created, '创建文章库失败'), 'error');
       return;
     }
     await onPick(createdId);

@@ -485,20 +485,22 @@ export class SuperClawService implements OnModuleInit {
     if (!tenant.superClawId) {
       throw new BadRequestException('TENANT_SUPER_CLAW_REQUIRED');
     }
-    const reserved = await this.reserveCapacity(
-      this.toObjectId(tenant.superClawId, 'INVALID_SUPER_CLAW_ID'),
-      1,
-    );
+    const nodeId = this.toObjectId(tenant.superClawId, 'INVALID_SUPER_CLAW_ID');
+    const reserved = await this.reserveCapacity(nodeId, 1);
     if (!reserved) {
+      // 预留失败只有两种原因：节点记录已被删掉，或槽位真的用完了。分开报，运维不用去猜。
+      const node = await this.superClaws.findOne({ _id: nodeId });
+      if (!node) throw new NotFoundException('SUPER_CLAW_NOT_FOUND');
       throw new BadRequestException('SUPER_CLAW_CAPACITY_EXCEEDED');
     }
     return tenant.superClawId;
   }
 
   /**
-   * @description 为平台级工作区原子选择当前在线且剩余槽位最多的节点，并固定占用一个工作区槽位。
-   * @keyword-cn 分配平台工作区, 选择在线节点
-   * @keyword-en reserve-platform-workspace, select-online-node
+   * @description 为平台级工作区原子选择当前在线且剩余槽位最多的节点，并固定占用一个工作区槽位；
+   * 预留不到时按「未配置节点 / 节点离线 / 容量已满」分别抛出对应错误码。
+   * @keyword-cn 分配平台工作区, 选择在线节点, 节点不可用诊断
+   * @keyword-en reserve-platform-workspace, select-online-node, node-availability-diagnosis
    */
   async reserveWorkspaceForPlatform(): Promise<string> {
     const onlineAfter = new Date(
@@ -519,6 +521,22 @@ export class SuperClawService implements OnModuleInit {
       },
     );
     if (!row) {
+      // 上面的筛选把「没有节点」「节点全离线」「全部满槽」并成了一个空结果，
+      // 这里回查一次把三种情况拆成各自的错误码，否则离线故障会被误报成容量超限。
+      const onlineFilter = {
+        status: 'online' as const,
+        lastHeartbeatAt: { $gte: onlineAfter },
+      };
+      const [total, online] = await Promise.all([
+        this.superClaws.countDocuments({}),
+        this.superClaws.countDocuments(onlineFilter),
+      ]);
+      if (total === 0) {
+        throw new BadRequestException('SUPER_CLAW_NOT_CONFIGURED');
+      }
+      if (online === 0) {
+        throw new BadRequestException('SUPER_CLAW_OFFLINE');
+      }
       throw new BadRequestException('SUPER_CLAW_CAPACITY_EXCEEDED');
     }
     return String(row._id);
