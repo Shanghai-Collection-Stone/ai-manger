@@ -35,6 +35,7 @@ import { NetdiskModule } from './modules/netdisk/netdisk.module.js';
 import { NoticeModule } from './modules/notice/notice.module.js';
 import { XhsTopicModule } from './modules/xhs-topic/xhs-topic.module.js';
 import { XhsTopicDataModule } from './modules/xhs-topic-data/xhs-topic-data.module.js';
+import { HotTopicModule } from './modules/hot-topic/hot-topic.module.js';
 import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
 import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js';
 
@@ -77,6 +78,7 @@ import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js
     NoticeModule,
     XhsTopicModule,
     XhsTopicDataModule,
+    HotTopicModule,
     SuperClawModule,
     BrowserAuthModule,
   ],

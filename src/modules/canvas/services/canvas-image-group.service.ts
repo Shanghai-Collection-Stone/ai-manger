@@ -516,10 +516,11 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 仅做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件。
+   * @description 仅做图片组源图准备：从已选标签并集或完整图库随机取图，再统一分配竖图/横图，不生成成品文件。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
    * @returns {Promise<ImageGroupSourcePreparation>} 分配结果；不足时返回 failed 图组。
-   * @keyword-en prepare, source-allocation, no-render
+   * @keyword-cn 图组源图准备, 标签随机取图
+   * @keyword-en image-group-source-preparation, tag-random-selection
    */
   async prepareImageGroupSources(
     input: CanvasImageGroupCreateInput,
@@ -578,7 +579,7 @@ export class CanvasImageGroupService {
         (typeof id === 'number' && Number.isFinite(id)) ||
         typeof id === 'string',
     );
-    // 严格按 tags 取池：图源不足不再跨 tag 补充（不足量由上游工具预检并询问用户）
+    // 有 tags 时从全部已选标签的并集随机取池；无 tags 时从完整可见图库随机取池。
     const pool = await this.fetchImagePool(
       input,
       allTags,
@@ -2157,13 +2158,14 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 从图库拉取图片池（优先 tag 匹配，不足则补随机）
+   * @description 从图库完整候选集合随机取图；有标签时匹配任一已选标签，无标签时使用全部可见图片。
    * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 基础作用域
    * @param {string[]} tags - 标签列表
    * @param {number|'regular'|'collage'} wantCountOrType - 要获取的数量或图片类型
    * @param {'regular'|'collage'} [imageType] - 图片类型（当 wantCountOrType 为数字时使用）
    * @returns {Promise<GalleryImageEntity[]>} 图片列表（唯一）
-   * @keyword-en fetch image pool by tags
+   * @keyword-cn 标签随机取图, 全图池随机取图
+   * @keyword-en tag-random-selection, full-pool-random-selection
    */
   private async fetchImagePool(
     input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId' | 'dedup'>,
@@ -2180,21 +2182,18 @@ export class CanvasImageGroupService {
     } else {
       imgType = wantCountOrType;
     }
-    let images: GalleryImageEntity[] = [];
+    const images = await this.gallery.sampleRandom({
+      userId: input.userId,
+      tenantId: input.tenantId,
+      tags,
+      limit: wantCount,
+      imageType: imgType,
+      excludedGroupIds,
+      excludedTags: Array.from(COVER_TAG_SET),
+      includeUsed: input.dedup === false,
+    });
 
-    if (tags.length > 0) {
-      images = await this.gallery.searchByTags({
-        userId: input.userId,
-        tenantId: input.tenantId,
-        tags,
-        limit: wantCount,
-        imageType: imgType,
-        // 不去重(dedup===false)时包含已用图，命中池后再由 shuffleArray 随机取图
-        includeUsed: input.dedup === false,
-      });
-    }
-
-    // 去重并排除可能已带烧字设计的历史封面素材；不足时不再补随机/跨 tag。
+    // 再做一次进程内防御性过滤，兼容历史数据中的分组 ID 和封面标签异常值。
     return this.dedup(
       this.filterOutExcludedGroups(images, excludedGroupIds),
     ).filter((image) => !this.hasCoverTag(image));

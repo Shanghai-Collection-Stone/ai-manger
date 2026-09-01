@@ -3512,9 +3512,14 @@ export class ArticleGraphService {
   }
 
   /**
-   * @description 按所有蓝图 tag 一次性拉取图片池（regular 类型），供文章配图并发复用。
-   * 优先 tag 匹配，不足则补全量 accessible 图片。
-   * @keyword-en fetch article image pool by blueprint tags once for all articles
+   * @description 按所有蓝图 tag 一次性随机拉取图片池（regular 类型），供文章配图与拼图并发复用。
+   * 选了 tag 就在**全部已选 tag 的并集**里随机取，没选 tag 就在完整可见图池里随机取；
+   * tag 命中不足 wantCount 时再用完整图池随机补齐。
+   * 这里刻意用 `sampleRandom`（`$sample`）而不是 `searchByTags` / `findAccessibleImages`：
+   * 后两者按 `id` / `createdAt` 倒序返回，每次生成都拿到同一批最新图，拼图来源被钉死，
+   * 表现出来就是「拼图不够随机」。
+   * @keyword-cn 文章图池, 标签并集随机取图, 全图池随机取图
+   * @keyword-en fetch-article-image-pool, tag-union-random-selection, full-pool-random-selection
    */
   private async fetchArticleImagePool(input: {
     userId: string;
@@ -3543,26 +3548,29 @@ export class ArticleGraphService {
       }
     };
     if (input.tags.length > 0) {
-      const byTags = await this.gallery.searchByTags({
+      const byTags = await this.gallery.sampleRandom({
         userId: input.userId,
         tenantId: input.tenantId,
         tags: input.tags,
         limit: wantCount,
         imageType: 'regular',
+        excludedGroupIds: input.excludedGroupIds,
         // 不去重(dedup===false)时包含已用图
         includeUsed: input.dedup === false,
       });
       dedup(byTags);
     }
     if (pool.length < wantCount) {
-      const more = await this.gallery.findAccessibleImages(
-        input.userId,
-        input.tenantId,
-        {
-          imageType: 'regular',
-          limit: wantCount,
-        },
-      );
+      // 全池兜底沿用原有口径：不按 isUsed 过滤，只把顺序换成随机，
+      // 否则可用池会比改动前小，原本能出图的场景会被改判成图片不足。
+      const more = await this.gallery.sampleRandom({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        limit: wantCount,
+        imageType: 'regular',
+        excludedGroupIds: input.excludedGroupIds,
+        includeUsed: true,
+      });
       dedup(more);
     }
     this.logger.debug(

@@ -317,7 +317,7 @@ export class GalleryService {
   }
 
   /**
-   * @description 按租户可见性查找图片（租户隔离）
+   * @description 按租户可见性查找图片，支持过滤、游标分页和按创建时间升降序排列。
    * @param {string} userId - 用户ID
    * @param {string} [tenantId] - 租户ID
    * @param {Object} [options] - 查询选项
@@ -325,8 +325,10 @@ export class GalleryService {
    * @param {string} [options.tag] - 标签
    * @param {number} [options.cursorId] - 游标
    * @param {number} [options.limit=50] - 返回条数
+   * @param {'asc'|'desc'} [options.sortOrder='desc'] - 创建时间排序方向
    * @returns {Promise<GalleryImageEntity[]>} 图片列表
-   * @keyword-en find accessible images by tenant scope
+   * @keyword-cn 租户图片查询, 图库时间排序
+   * @keyword-en tenant-image-query, gallery-time-sort
    * @since 2026-03-23
    */
   async findAccessibleImages(
@@ -339,6 +341,7 @@ export class GalleryService {
       limit?: number;
       includeCollage?: boolean;
       imageType?: 'all' | 'regular' | 'collage';
+      sortOrder?: 'asc' | 'desc';
     },
   ): Promise<GalleryImageEntity[]> {
     const {
@@ -348,7 +351,9 @@ export class GalleryService {
       limit = 50,
       includeCollage = true,
       imageType,
+      sortOrder = 'desc',
     } = options ?? {};
+    const sortDirection = sortOrder === 'asc' ? 1 : -1;
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(userId, tenantId),
     ];
@@ -360,7 +365,9 @@ export class GalleryService {
     if (groupId !== undefined) clauses.push({ groupId });
     if (tag) clauses.push({ tags: tag });
     if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
-      clauses.push({ id: { $lt: cursorId } });
+      clauses.push({
+        id: sortDirection === 1 ? { $gt: cursorId } : { $lt: cursorId },
+      });
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
@@ -372,7 +379,7 @@ export class GalleryService {
     );
     return this.images
       .find(filter, { projection: { _id: 0 } })
-      .sort({ id: -1 })
+      .sort({ createdAt: sortDirection, id: sortDirection })
       .limit(lim)
       .toArray();
   }
@@ -727,32 +734,75 @@ export class GalleryService {
   }
 
   /**
-   * @description 随机采样图片。默认排除 isUsed=true,
-   *  传 includeUsed=true 关闭过滤(素材管理类查询)。
-   * @keyword-en random sample images excluding used by default
+   * @description 在完整可见图库或指定标签并集中随机采样图片，并支持图片类型、分组和排除条件；默认排除 isUsed=true。
+   * @keyword-cn 图库随机采样, 标签随机取图
+   * @keyword-en gallery-random-sample, tag-random-selection
    */
   async sampleRandom(input: {
     userId?: string;
     tenantId?: string;
     groupId?: string | number;
+    tags?: string[];
+    imageType?: 'all' | 'regular' | 'collage';
+    excludedGroupIds?: Array<string | number>;
+    excludedTags?: string[];
     limit?: number;
     /** 是否包含已使用图片, 默认 false */
     includeUsed?: boolean;
   }): Promise<GalleryImageEntity[]> {
-    // 使用租户过滤构建基础 filter
-    const baseFilter = this.buildTenantFilter(input.userId, input.tenantId);
+    const clauses: Record<string, unknown>[] = [
+      this.buildTenantFilter(input.userId, input.tenantId),
+    ];
     if (
       input.groupId !== undefined &&
       ((typeof input.groupId === 'number' && Number.isFinite(input.groupId)) ||
         typeof input.groupId === 'string')
     ) {
-      baseFilter.groupId = input.groupId;
+      clauses.push({ groupId: input.groupId });
+    }
+    const tags = Array.from(
+      new Set(
+        (Array.isArray(input.tags) ? input.tags : [])
+          .map((tag) => String(tag ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (tags.length > 0) {
+      clauses.push({ tags: { $in: tags } });
+    }
+    if (input.imageType && input.imageType !== 'all') {
+      clauses.push(this.buildImageTypeFilter(input.imageType));
+    }
+    const excludedGroupIds = Array.from(
+      new Set(
+        (Array.isArray(input.excludedGroupIds) ? input.excludedGroupIds : [])
+          .filter(
+            (id): id is string | number =>
+              (typeof id === 'number' && Number.isFinite(id)) ||
+              (typeof id === 'string' && id.trim().length > 0),
+          )
+          .map((id) => (typeof id === 'string' ? id.trim() : id)),
+      ),
+    );
+    if (excludedGroupIds.length > 0) {
+      clauses.push({ groupId: { $nin: excludedGroupIds } });
+    }
+    const excludedTags = Array.from(
+      new Set(
+        (Array.isArray(input.excludedTags) ? input.excludedTags : [])
+          .map((tag) => String(tag ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (excludedTags.length > 0) {
+      clauses.push({ tags: { $nin: excludedTags } });
     }
     if (input.includeUsed !== true) {
-      baseFilter.isUsed = { $ne: true };
+      clauses.push({ isUsed: { $ne: true } });
     }
+    const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
-    const pipe: Record<string, unknown>[] = [{ $match: baseFilter }];
+    const pipe: Record<string, unknown>[] = [{ $match: filter }];
     pipe.push({ $sample: { size: lim } });
     pipe.push({ $project: { _id: 0 } });
     return this.images.aggregate<GalleryImageEntity>(pipe).toArray();

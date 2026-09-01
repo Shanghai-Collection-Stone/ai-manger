@@ -5,6 +5,7 @@
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
 支持 AI 提供商按模型类型管理(llm/em/image),并支持平台 AI 配置中的"是否开启 AI 封面"开关。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
+新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
 
 文件路径: `web/src/ui/Admin`
@@ -78,6 +79,32 @@
 - `onSubmitTenant()` — 保存租户并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
 - `onDeleteTenant(id)` — 删除未分配节点的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
 
+### HotTopicPanel.jsx
+
+后台「热点采集榜」Tab 的独立面板组件,由 `AdminApp.jsx` 在 `activeTab === 'hot_topic'` 时挂载并透传 `onNotice` / `onError` 两个顶层提示回调。分四块:采集规则表格(勾选参与本次采集、启用开关、**是否可用徽标 + 失败原因 + 最近自检时间**、自检/编辑/删除、初始化预置规则)、规则编辑表单(榜单地址、榜单数组路径、标题/链接/热度/摘要取值路径、链接模板、兜底标签、附加请求头 JSON)、执行采集(「采集前清除之前的」**默认勾选**、「采集后 AI 归类打标」默认勾选、逐规则回执)、当前热点榜(分类/来源/标签/标题关键词过滤 + 分页 + 补跑归类 + 清空)与按母选题推荐热点。榜单表格的**标题列限宽并单行截断**(标题与摘要都 `truncate`,悬停 `title` 看全文),标签列固定 132px:摘要动辄上百字,不限宽会把来源/热度/采集时间几列挤出屏幕。「查看采集标签」按钮打开弹窗,把全部 AI 归类标签按条目数倒序线性铺开(标签、条目数、最近时间、出现分类、示例标题),点任一标签即把下方榜单过滤到该标签。后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
+
+- **关键词**: hot topic panel, collect rule table, availability badge, clear previous default, ai tag dialog, parent topic recommend
+- **常量**:
+  - `HEALTH_BADGES` — 可用性状态徽标映射,取值与后端 `HotTopicRuleHealthStatus` 逐字一致 | keywords: 可用状态映射, 状态徽标, health-status-map, status-badge
+  - `EMPTY_RULE_FORM` — 新建规则表单初始值,字段与后端 `CreateHotTopicRuleDto` 一一对应 | keywords: 规则表单初值, 表单字段, empty-rule-form, form-fields
+- **函数**:
+  - `ruleToForm(rule)` — 把规则实体铺平成表单值供编辑回填 | keywords: 规则转表单, 编辑回填, rule-to-form, edit-prefill
+  - `formToPayload(form)` — 表单值转接口入参,请求头按 JSON 解析,非法即抛 | keywords: 表单转入参, 请求头解析, form-to-payload, headers-parse
+  - `formatTime(value)` — 时间格式化成 `YYYY-MM-DD HH:mm`,空值显示占位符 | keywords: 时间格式化, 空值占位, format-datetime, empty-placeholder
+  - `HotTopicPanel({ onNotice, onError })` — 热点采集榜面板主体 | keywords: 热点采集面板, 采集规则管理, 标签弹窗, hot-topic-panel, collect-rule-admin, tag-dialog
+  - `run(key, fn, successText)` — 统一包装异步动作:置忙、失败上抛顶层错误、成功给 notice | keywords: 异步动作包装, 统一提示, async-action-wrapper, unified-feedback
+  - `loadRules()` / `loadItems(nextFilter)` — 拉取采集规则列表与按当前过滤条件拉榜单条目和概况 | keywords: 加载采集规则, 加载榜单条目, load-rules, load-items
+  - `onSeed()` — 初始化内置社会/娱乐热点预置规则 | keywords: 初始化预置规则, 幂等补齐, seed-builtin-rules, idempotent-fill
+  - `onCheckRule(rule)` — 对一条规则做真实抓取自检并刷新可用性徽标 | keywords: 规则自检, 可用性探测, rule-self-check, availability-probe
+  - `onToggleEnabled(rule)` — 切换规则启用状态;停用后不再参与任何采集 | keywords: 切换启用, 采集闸门, toggle-enabled, collect-gate
+  - `onDeleteRule(rule)` / `onSubmitRule()` — 删除规则(二次确认)与提交新建/更新规则表单 | keywords: 删除采集规则, 提交规则表单, delete-rule, submit-rule-form
+  - `onCollect()` — 触发采集:默认先清除历史再采,采完自动 AI 归类 | keywords: 触发采集, 默认清除历史, trigger-collect, clear-previous-default
+  - `onRetag()` / `onClearItems()` — 补跑未归类条目的 AI 归类与清空榜单(二次确认) | keywords: 补跑归类, 清空榜单, retag-pending, clear-items
+  - `onOpenTagDialog()` — 打开标签弹窗,线性拉取全部归类标签及条目数与示例标题 | keywords: 打开标签弹窗, 线性查看标签, open-tag-dialog, linear-tag-view
+  - `onPickTag(tag)` — 从标签弹窗点标签,直接把榜单过滤到该标签 | keywords: 按标签过滤, 弹窗联动, filter-by-tag, dialog-linkage
+  - `onRecommend()` — 按母选题调用推荐接口并展示结构化推荐结果;结果头部回显 `matchedTags`(候选被哪几个标签圈出来的)或「未命中相关标签,已在全量榜单里判定」 | keywords: 热点推荐, 母选题匹配, 粗筛标签回显, recommend-hot-topics, parent-topic-match, matched-tags-echo
+  - `onApplyFilter(patch)` — 应用榜单过滤条件并回到第一页 | keywords: 应用过滤, 重置分页, apply-filter, reset-page
+
 ### AdminLoginApp.jsx
 
 后台登录页:选择租户并登录,写入 token 并跳转。
@@ -99,6 +126,15 @@
   - `request`: 统一请求(内置 `/admin` 前缀)
   - `apiRequest`: 业务接口请求(不带 `/admin` 前缀,复用同一份后台 token;小红书采集设置走的是 `/api/xhs-topic-data/*`)/business api request
   - `adminApi.getXhsCrawlSettings` / `saveXhsCrawlSettings` / `testTikhubConnection`: 小红书采集设置读写与 TikHub 连通性自检
+  - `adminApi.getHotTopicMeta`: 读取热点分类枚举与 AI 归类推荐词表 | keywords: 热点元数据, 分类枚举, hot-topic-meta, category-enum
+  - `adminApi.listHotTopicRules` / `createHotTopicRule` / `updateHotTopicRule` / `deleteHotTopicRule`: 热点采集规则 CRUD(启用开关也走 update) | keywords: 采集规则CRUD, 启用开关, hot-topic-rule-crud, enabled-toggle
+  - `adminApi.seedHotTopicRules`: 幂等初始化内置社会/娱乐热点预置规则 | keywords: 初始化预置规则, 幂等补齐, seed-builtin-rules, idempotent-fill
+  - `adminApi.checkHotTopicRule(id)`: 对采集规则做真实抓取自检并回写可用性(只跑不落库) | keywords: 规则自检, 可用性探测, check-hot-topic-rule, availability-probe
+  - `adminApi.collectHotTopics(payload)`: 触发一次采集;`clearPrevious` 不传即按默认 true(先清后采) | keywords: 触发热点采集, 默认清除历史, collect-hot-topics, clear-previous-default
+  - `adminApi.retagHotTopics`: 对尚未 AI 归类的条目补跑一次归类 | keywords: 补跑归类, 未归类条目, retag-hot-topics, untagged-items
+  - `adminApi.listHotTopicItems(query)` / `clearHotTopicItems(ruleIds?)`: 榜单条目分页查询(分类/规则/标签/关键词)与清库 | keywords: 榜单列表, 清空榜单, list-hot-topic-items, clear-hot-topic-items
+  - `adminApi.listHotTopicTags`: 线性读取全部 AI 归类标签及条目数/分类/示例标题(标签弹窗数据源) | keywords: 采集标签汇总, 线性查看标签, hot-topic-tag-summary, linear-tag-view
+  - `adminApi.recommendHotTopics(payload)`: 按母选题从当前热点榜推荐适配热点(后端两阶段:先按标签粗筛圈定范围,再看该范围内全部热点标题),返回结构化 JSON 并带 `matchedTags` / `tagFiltered` | keywords: 热点推荐, 母选题匹配, 两阶段推荐, recommend-hot-topics, parent-topic-match, two-stage-recommend
   - `adminApi.listXhsAccounts` / `createXhsAccount` / `updateXhsAccount` / `deleteXhsAccount` / `testLoginXhsAccount`
   - `adminApi.listFeishuCredentials` / `upsertFeishuCredential` / `deleteFeishuCredential`: 飞书凭证 CRUD
   - `adminApi.listFinanceBindings` / `upsertFinanceBinding` / `deleteFinanceBinding`: 财务源绑定 CRUD(按 name)

@@ -145,9 +145,9 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 批量保存用户确认的候选，子题必须关联当前用户拥有的母题。
-   * @keyword-cn 批量创建选题, 父题校验
-   * @keyword-en create-topics, parent-validation
+   * @description 批量保存用户确认的候选及子题文章生成风格，子题必须关联当前用户拥有的母题。
+   * @keyword-cn 批量创建选题, 父题校验, 文章生成风格
+   * @keyword-en create-topics, parent-validation, article-writing-style
    */
   async createMany(
     input: XhsTopicCreateInput,
@@ -174,6 +174,12 @@ export class XhsTopicRepositoryService {
           input.kind === 'mother'
             ? this.normalizeMotherImageTags(candidate.imageTags)
             : [],
+        articleStyle:
+          input.kind === 'child'
+            ? String(candidate.articleStyle ?? '')
+                .trim()
+                .slice(0, 500) || undefined
+            : undefined,
       }))
       .filter((candidate) => candidate.title && candidate.topicType)
       .filter(
@@ -219,6 +225,8 @@ export class XhsTopicRepositoryService {
         title: candidate.title.slice(0, 100),
         topicType: candidate.topicType.slice(0, 30),
         imageTags: input.kind === 'mother' ? candidate.imageTags : undefined,
+        articleStyle:
+          input.kind === 'child' ? candidate.articleStyle : undefined,
         status: 'pending',
         sourceTodoId: input.sourceTodoId,
         createdAt: now,
@@ -427,9 +435,9 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 修改当前用户选题的标题、题目类型、状态或母题固定配图标签。
-   * @keyword-cn 更新选题, 发布状态, 母题配图标签
-   * @keyword-en update-topic, publish-status, mother-image-tags
+   * @description 修改当前用户选题的标题、题目类型、状态、母题配图标签或子题文章生成风格。
+   * @keyword-cn 更新选题, 发布状态, 母题配图标签, 文章生成风格
+   * @keyword-en update-topic, publish-status, mother-image-tags, article-writing-style
    */
   async update(
     id: number,
@@ -448,15 +456,25 @@ export class XhsTopicRepositoryService {
     if (Array.isArray(input.imageTags)) {
       updates.imageTags = this.normalizeMotherImageTags(input.imageTags);
     }
+    let clearArticleStyle = false;
+    if (typeof input.articleStyle === 'string') {
+      const articleStyle = input.articleStyle.trim().slice(0, 500);
+      if (articleStyle) updates.articleStyle = articleStyle;
+      else clearArticleStyle = true;
+    }
     if (input.status) updates.status = input.status;
     const filter: Filter<XhsTopicEntity> = {
       ...this.buildScopeFilter(scope),
       id,
     };
     if (Array.isArray(input.imageTags)) filter.kind = 'mother';
+    if (typeof input.articleStyle === 'string') filter.kind = 'child';
     return await this.topics.findOneAndUpdate(
       filter,
-      { $set: updates },
+      {
+        $set: updates,
+        ...(clearArticleStyle ? { $unset: { articleStyle: '' } } : {}),
+      },
       { returnDocument: 'after' },
     );
   }
@@ -653,9 +671,9 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 将子选题数据库实体转换为前端列表结构。
-   * @keyword-cn 子选题转换, 接口视图
-   * @keyword-en child-topic-view, api-view
+   * @description 将子选题数据库实体及文章生成风格转换为前端列表结构。
+   * @keyword-cn 子选题转换, 接口视图, 文章生成风格
+   * @keyword-en child-topic-view, api-view, article-writing-style
    */
   private toChildView(entity: XhsTopicEntity): XhsChildTopicView {
     return {
@@ -663,6 +681,7 @@ export class XhsTopicRepositoryService {
       parentId: entity.parentId as number,
       title: entity.title,
       topicType: entity.topicType,
+      articleStyle: entity.articleStyle,
       status: entity.status,
       article: entity.article
         ? {

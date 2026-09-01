@@ -28,6 +28,8 @@ export const ADMIN_SUBJECTS = {
   User: 'User',
   /** 小红书 AI 选题生成 */
   XhsTopic: 'XhsTopic',
+  /** 热点采集榜（采集规则、榜单条目、归类标签与热点推荐） */
+  HotTopic: 'HotTopic',
   /** 角色 */
   Role: 'Role',
   /** 工作区(含成员管理) */

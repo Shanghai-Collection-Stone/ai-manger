@@ -1,13 +1,16 @@
 # Canvas Module
 
 ## 模块描述
+
 该模块基于MongoDB存储画布，支持两种 canvas 类型：
+
 - **article**（默认）：图文拼盘，包含 articles 列表。
 - **image-group**：图片组拼盘，根据文章 tag 批量匹配配图，按固定版式组合图组，异步生成。
 
 文件路径: `src/modules/canvas`
 
 ## 固定版式（每组 6 张：1 封面 + 5 内页）
+
 - **portrait-cover-5inner**: 1竖封面单图 + 5内页（拼图/竖图交替）
 - **collage-cover-5inner**: 1横拼图封面 + 5竖内页单图
 - **collage-cover-5collage**: 1横拼图封面 + 5横拼图内页；自动版式下竖图不足但横图充足时优先回退到该版式
@@ -15,11 +18,13 @@
 - **封面优先拼图（`preferCollageCover`）**：入参打开后，文章没有显式 `layout` 时先按 `collage-cover-5inner` 试算，图片池够就用拼图当封面底图；不够则原样回落交替版式，再由既有的全拼图回退兜底，**不会因为这个偏好而让生成失败**。该版式相比默认 `portrait-cover-5inner` 只多要 1 张竖图、少要 2 张横图，多数图库能直接满足。小红书专家生文链路默认开启。
 
 ## 封面文案风格
+
 - LLM 生成主标题（6-16汉字）+ 副标题（10-24汉字）作为结构化元数据
 - `ai-direct` 封面图片仅生成无字底图，不再调用字体库或 SVG 烧字
 - `ai-direct` 的主副标题由调用方按画布格式转换为独立可编辑文字图层；`ai-overlay` 则把主副标题直接生成到文字海报素材中
 
 ## AI 封面策略（coverStrategy）
+
 - **ai-direct**（默认，canvas 发文链路）：把封面源图当底图丢给生图模型做二次编辑，模型产出物**直接作为封面成品**。走 `/images/edits`，`buildAiCoverPrompt` 的视觉指令 + `AgentService.buildMeituEditPrompt` 的封面硬性规格叠加下发。
 - **ai-overlay**（小红书专家链路）：AI 产出**文字与装饰融合的海报素材层**，指定主副标题直接成为素材像素的一部分，真实照片主体不经过模型重绘。默认视觉语言采用亮粉/明黄/天蓝/奶白、粗黑描边的高对比波普贴纸风；服务端同时保存合成预览图、原照片底图、绿幕原素材和去底 PNG，进入灵感画布后还原成“照片 + 可加特效的文字海报素材”两个独立图层。素材默认按画布宽高的 70% 居中摆放，不再铺满画布，也不重复创建原生文字层。
 - 装饰层固定生成**纯绿色 `#00FF00` 实底**，不请求、不依赖任何模型的透明通道；前景装饰禁止使用绿色系，避免与绿幕混淆。
@@ -30,6 +35,7 @@
 - `ai-overlay` 只在真实照片上叠一层贴纸、底图像素不被重绘，所以**封面底图是拼图时会把拼图画布格式一起带下去**：`editableBase` 指向未合成的拼图原图，`collage` 的格子逐格与它对齐，进设计编辑器后拼图仍可逐张换图，海报素材是叠在上面的独立图层。
 
 ## 拼图画布格式
+
 - 拼图除了产出合成好的 PNG，还在 `CanvasGroupImage.collage` 上带一份画布格式：拼图画布尺寸 + 每张源图的格子（`imageId` / `url` / `x` / `y` / `width` / `height` / `objectFit`）
 - 格子坐标与 sharp 合成时用的网格逐格一致（`resolveMultiCollageCells`，2=上下 / 3=上1下2 / 4=2x2）
 - 合成图仍是发布与预览用的单张图；画布格式只供设计编辑器把拼图还原成逐格图层，后续可以单独换掉其中某一张图
@@ -38,12 +44,14 @@
 ## 功能描述及关键词
 
 ### canvas.controller.ts
+
 Canvas控制器。
+
 - `POST /canvas` — 创建图文 Canvas
 - `POST /canvas/image-group` — 创建图片组 Canvas（异步，立即返回 generating）
 - `GET /canvas/:id` — 获取单个 Canvas
 - `GET /canvas` — 列表 Canvas（支持 type/skip/tag 参数分页过滤）
-- `POST /canvas/:id/articles` — 追加文章 
+- `POST /canvas/:id/articles` — 追加文章
 - `PATCH /canvas/:id/status` — 更新状态
 - `PATCH /canvas/:id/articles/:articleId` — 更新文章
 - `POST /canvas/:id/articles/:articleId/cover/regenerate` — 选择一张或多张图库图片重新生成图文 Canvas 单篇封面；仅替换首图并把 Canvas 暂置为 generating | keywords: cover-regenerate, article-cover-only
@@ -58,7 +66,9 @@ Canvas控制器。
 - **关键词**: canvas, articles, image-group, outline, style, content-json, image-ids, status, sent-at, mongo, controller
 
 ### canvas.service.ts
+
 Canvas服务。
+
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）。透传 `dedup` 到后台 runImageGroupGeneration
 - `generateArticleImageGroups(input)` — 不创建独立 Canvas，直接复用生文图片阶段按相关 tag 生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机，`input.preferCollageCover` 让封面优先用拼图底图 | keywords: 生文配图工作流, 文章图组, 封面策略, 封面优先拼图, article-image-workflow, generated-image-group, cover-strategy, prefer-collage-cover
@@ -99,11 +109,13 @@ Canvas服务。
 - **关键词**: service, image-group, async, sent-at, pagination
 
 ### canvas-image-group.service.ts
+
 图片组生成服务。
-- `generateImageGroups` — 根据文章 tag 严格匹配图库配图（**不再跨 tag 随机补图**），先在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重；图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
+
+- `generateImageGroups` — 有文章 tag 时从全部已选 tag 的并集随机取图库配图，无 tag 时从完整可见图池随机取图；随后在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重。图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
 - `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库；`includeSystemPrompt=false` 时只用用户提示词(必填)并向下游传 kind=cover | keywords: cover-regenerate, selected-source-images, system-prompt-toggle
 - `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
-- `prepareImageGroupSources(input)` — 只做图片组源图准备：统一取图、统一分配竖图/横图，不生成 AI 封面、带文封面或拼图文件 | keywords: prepare, source-allocation, no-render
+- `prepareImageGroupSources(input)` — 从已选标签并集或完整图库随机取图，再统一分配竖图/横图，不生成成品文件 | keywords: 图组源图准备, 标签随机取图, image-group-source-preparation, tag-random-selection
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用 | keywords: render, prepared, image-group, concurrency, dedup
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
 - `planImageGroupAllocation(pool, articles, options?)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；`options.preferCollageCover` 先试拼图封面版式、池子不够即回落，自动版式还可在竖图不足时切到全拼图版式 | keywords: plan, allocation, no-reuse, 封面优先拼图, prefer-collage-cover
@@ -125,7 +137,7 @@ Canvas服务。
 - `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和默认占画布 70% 的居中可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
 - `buildGeneratedAssetTags(generatedKind, sourceImages?)` — 为封面、拼图、内页或 AI 文字海报素材生成隔离的图库标签 | keywords: AI素材标签, 生成素材标签, ai-material-tag, generated-asset-tags
 - `composeCoverWithOverlay(basePath, overlayPath)` — sharp 对纯绿素材做软边色键，将透明 PNG 缩至画布 70% 并居中叠加，同时输出素材与 640x853 合成预览 | keywords: 装饰素材叠加, 绿幕色键, 可编辑装饰素材, composite-overlay-on-photo, green-screen-keying, editable-decoration-material
-- `fetchImagePool` — tag匹配取图（过滤默认动态封面/动态拼图分组）。**已移除"不足时补随机/相近标签"逻辑**,只严格按 tags 取池,不足由上游工具预检+用户决策。`dedup===false` 时传 `includeUsed=true` 命中已用图(取池后由 shuffleArray 随机取图) | keywords: dedup, includeUsed
+- `fetchImagePool(input, tags, wantCountOrType, imageType?, excludedGroupIds?)` — 在完整候选集合上随机采样；有标签时匹配任一已选标签，无标签时使用全部可见图片，并排除动态生成分组与历史封面素材 | keywords: 标签随机取图, 全图池随机取图, tag-random-selection, full-pool-random-selection
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
 - `pickPortrait` — 从池中选竖图（必须全局未使用；不跨组复用，不降级为横图）
 - `pickAndMakeCollage` — 仅选 2 张全局未使用横图动态合成拼图（上下拼，640x853，等比缩放不裁切；不跨组复用，不降级为竖图/任意方向）
@@ -143,7 +155,9 @@ Canvas服务。
 - **关键词**: image-group, layout, tag-match, gallery, collage, collage-canvas-format, font, linux-compat
 
 ### canvas.entity.ts
+
 Canvas实体，含新类型定义。
+
 - `CanvasType` — 'article' | 'image-group'
 - `ImageGroupLayout` — 固定版式枚举（portrait-cover-5inner / collage-cover-5inner / collage-cover-5collage）
 - `CanvasImageGroup` — 单个图片组实体
@@ -161,5 +175,7 @@ Canvas实体，含新类型定义。
 - **关键词**: entity, sent-at, keywords, embedding
 
 ### canvas.module.ts
+
 Canvas模块定义，导入 GalleryModule。
+
 - **关键词**: module

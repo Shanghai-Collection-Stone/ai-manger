@@ -28,9 +28,9 @@ import type {
 } from '../entities/xhs-topic.entity.js';
 
 /**
- * @description 请求 Agent 生成母选题或子选题候选的参数。
- * @keyword-cn 选题生成参数, 提示词数量
- * @keyword-en topic-generation-dto, prompt-quantity
+ * @description 请求 Agent 生成母选题或子选题候选的参数，子题可指定文章生成风格。
+ * @keyword-cn 选题生成参数, 提示词数量, 文章生成风格
+ * @keyword-en topic-generation-dto, prompt-quantity, article-writing-style
  */
 export class GenerateXhsTopicDto {
   @IsIn(['mother', 'child'])
@@ -45,6 +45,11 @@ export class GenerateXhsTopicDto {
   @IsString()
   @MaxLength(200)
   parentTopic?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  articleStyle?: string;
 
   @IsOptional()
   @Type(() => Number)
@@ -71,9 +76,9 @@ export class RecommendXhsTopicPromptDto {
 }
 
 /**
- * @description 用户确认入库的单条选题标题、题目类型及母题可选的固定配图标签。
- * @keyword-cn 保存选题候选, 题目类型, 母题配图标签
- * @keyword-en persist-topic-candidate, topic-type, mother-image-tags
+ * @description 用户确认入库的单条选题标题、题目类型、母题配图标签或子题文章生成风格。
+ * @keyword-cn 保存选题候选, 题目类型, 母题配图标签, 文章生成风格
+ * @keyword-en persist-topic-candidate, topic-type, mother-image-tags, article-writing-style
  */
 export class PersistXhsTopicCandidateDto {
   @IsString()
@@ -83,6 +88,11 @@ export class PersistXhsTopicCandidateDto {
   @IsString()
   @MaxLength(30)
   topicType!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  articleStyle?: string;
 
   @IsOptional()
   @IsArray()
@@ -137,9 +147,9 @@ export class DeleteXhsTopicsDto {
 }
 
 /**
- * @description 修改真实选题标题、题目类型、业务状态或母题固定配图标签的请求参数。
- * @keyword-cn 更新真实选题, 选题状态, 母题配图标签
- * @keyword-en update-persisted-topic, topic-status, mother-image-tags
+ * @description 修改真实选题标题、题目类型、业务状态、母题配图标签或子题文章生成风格的请求参数。
+ * @keyword-cn 更新真实选题, 选题状态, 母题配图标签, 文章生成风格
+ * @keyword-en update-persisted-topic, topic-status, mother-image-tags, article-writing-style
  */
 export class UpdateXhsTopicDto {
   @IsOptional()
@@ -151,6 +161,11 @@ export class UpdateXhsTopicDto {
   @IsString()
   @MaxLength(30)
   topicType?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  articleStyle?: string;
 
   @IsOptional()
   @IsArray()

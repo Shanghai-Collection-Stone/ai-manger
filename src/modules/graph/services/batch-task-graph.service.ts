@@ -1106,9 +1106,11 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       const chosen = (tagMap.get(i) ?? []).filter((t) => tags.includes(t));
       const useTags = chosen.length > 0 ? chosen : fallbackTags;
 
+      // 在全部已选 tag 的并集里随机取，而不是按 id 倒序取最新的 24 张：
+      // 倒序会让每篇补图都命中同一批图，补出来的配图和拼图来源高度重复。
       const byTagsRaw =
         useTags.length > 0
-          ? await this.gallery.searchByTags({
+          ? await this.gallery.sampleRandom({
               userId: galleryUserId,
               tenantId,
               groupId,

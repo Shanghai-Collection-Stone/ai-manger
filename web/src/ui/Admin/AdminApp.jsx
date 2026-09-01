@@ -6,6 +6,7 @@ import {
   resolveFrontendPageHref,
   resolveLoginPageHref,
 } from './adminApi';
+import HotTopicPanel from './HotTopicPanel';
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
 const LazyMDMarkdown = React.lazy(() =>
@@ -288,6 +289,7 @@ const ALL_TABS = [
   { id: 'platform_info', label: '平台AI配置' },
   { id: 'feishu_credentials', label: '飞书凭证' },
   { id: 'xhs_crawl', label: '小红书采集' },
+  { id: 'hot_topic', label: '热点采集榜' },
   { id: 'finance', label: '财务' },
 ];
 
@@ -4660,6 +4662,11 @@ const AdminApp = () => {
               );
             })()
           : null}
+
+        {/* 热点采集榜（采集规则管理 + 是否可用自检 + 采集 + AI 归类标签 + 母选题推荐） | @keyword-en hot topic board tab */}
+        {activeTab === 'hot_topic' ? (
+          <HotTopicPanel onNotice={setNotice} onError={setError} />
+        ) : null}
 
         {/* 财务（内含 支出 / 应付 / 推送配置 三个子 Tab） | @keyword-en finance tab with category and push sub tabs */}
         {/* 财务 Tab(回归"支出/应付"子 Tab,name 由 FINANCE_KINDS 自动注入,用户不感知) | @keyword-en finance tab simplified preset kinds */}

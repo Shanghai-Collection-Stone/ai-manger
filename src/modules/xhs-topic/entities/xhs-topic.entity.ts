@@ -9,14 +9,15 @@ import type { ObjectId } from 'mongodb';
 export type XhsTopicKind = 'mother' | 'child';
 
 /**
- * @description Agent 或用户写入的单条选题候选；母题可同时携带固定配图图库标签。
- * @keyword-cn 选题候选, 题目类型, 母题配图标签
- * @keyword-en topic-candidate, topic-type, mother-image-tags
+ * @description Agent 或用户写入的单条选题候选；母题可携带固定配图标签，子题可携带后续生文沿用的文章风格。
+ * @keyword-cn 选题候选, 题目类型, 母题配图标签, 文章生成风格
+ * @keyword-en topic-candidate, topic-type, mother-image-tags, article-writing-style
  */
 export interface XhsTopicCandidate {
   title: string;
   topicType: string;
   imageTags?: string[];
+  articleStyle?: string;
 }
 
 /**
@@ -165,6 +166,8 @@ export interface XhsTopicEntity {
   topicType: string;
   /** 母选题专用的固定配图图库标签，空数组表示沿用 Agent 自动匹配 */
   imageTags?: string[];
+  /** 子选题专用的文章生成风格，首次生文与重写都会注入 Agent 提示词 */
+  articleStyle?: string;
   status: XhsTopicStatus;
   article?: XhsTopicArticle;
   /** 子选题专用的数据抓取开关状态，母选题不写该字段 */
@@ -196,6 +199,7 @@ export interface XhsChildTopicView {
   parentId: number;
   title: string;
   topicType: string;
+  articleStyle?: string;
   status: XhsTopicStatus;
   article?: Omit<XhsTopicArticle, 'createdAt' | 'updatedAt'> & {
     createdAt: string;
@@ -228,14 +232,15 @@ export interface XhsTopicWorkspaceGroup {
 }
 
 /**
- * @description 修改已入库选题标题、题目类型、状态或母题固定配图标签的输入。
- * @keyword-cn 更新选题输入, 选题状态, 母题配图标签
- * @keyword-en update-topic-input, topic-status, mother-image-tags
+ * @description 修改已入库选题标题、题目类型、状态、母题配图标签或子题文章生成风格的输入。
+ * @keyword-cn 更新选题输入, 选题状态, 母题配图标签, 文章生成风格
+ * @keyword-en update-topic-input, topic-status, mother-image-tags, article-writing-style
  */
 export interface XhsTopicUpdateInput {
   title?: string;
   topicType?: string;
   imageTags?: string[];
+  articleStyle?: string;
   status?: XhsTopicStatus;
 }
 
@@ -318,14 +323,15 @@ export interface XhsArticleGenerationState {
 }
 
 /**
- * @description 小红书选题生成请求在业务层使用的标准输入。
- * @keyword-cn 选题生成输入, 提示词数量
- * @keyword-en topic-generation-input, prompt-quantity
+ * @description 小红书选题生成请求在业务层使用的标准输入，子题可指定关联的文章生成风格。
+ * @keyword-cn 选题生成输入, 提示词数量, 文章生成风格
+ * @keyword-en topic-generation-input, prompt-quantity, article-writing-style
  */
 export interface XhsTopicGenerateInput {
   kind: XhsTopicKind;
   prompt?: string;
   parentTopic?: string;
+  articleStyle?: string;
   count?: number;
   useSearch?: boolean;
 }
@@ -339,6 +345,7 @@ export interface XhsTopicGenerationResult {
   kind: XhsTopicKind;
   prompt: string;
   parentTopic?: string;
+  articleStyle?: string;
   requestedCount: number;
   generatedCount: number;
   complete: boolean;

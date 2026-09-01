@@ -30,7 +30,7 @@ Graph控制器。
   - `assignImageGroupsToCanvasArticles`: 在同一 Canvas 使用图组同源逻辑合并文章配图，并校验单篇 6-8 张目标/merge image-group results into article fields with per-article image count checks
   - `collectImageGroupsFromCanvases(input)` — 从指定 image-group Canvas 收集尚未 used 的 group，按输入顺序返回 group 与 source canvasId | keywords: 未使用图组, collect-image-group-source
   - `summarizeImageGroupUsageSources(items)` — 汇总被选中的 source canvas/groupIds，供生文消费完成后标记 partial/used | keywords: 图组已使用, source-summary
-  - `fetchArticleImagePool`: 按所有蓝图tag一次性拉取regular图片池；`dedup===false` 时 searchByTags 传 includeUsed 命中已用图(不去重生成)/fetch article image pool by blueprint tags once | keywords: dedup, includeUsed
+  - `fetchArticleImagePool`: 按所有蓝图 tag 一次性**随机**拉取 regular 图片池——选了 tag 就在全部已选 tag 的并集里随机取(`sampleRandom`/`$sample`)，tag 命中不足 wantCount 时再用完整可见图池随机补齐；`dedup===false` 时 tag 分支传 includeUsed 命中已用图(不去重生成)，全池兜底分支恒 includeUsed(沿用改动前口径，不缩小可用池)/fetch article image pool by blueprint tags once with random sampling | keywords: dedup, includeUsed, 标签并集随机取图, 全图池随机取图, tag-union-random-selection, full-pool-random-selection
   - `resolveArticleImages`: 从共享池按article tag优先选图+拼图/封面生成，返回配图数据/resolve article images from shared pool with collage cover（**拼图必须使用横图 isPortrait !== true，且过滤默认动态封面/动态拼图分组**）
   - `isAiCoverEnabled`: 读取租户 AI 封面开关/resolve ai cover toggle
   - `buildAiCoverImagePrompt`: 根据文章类型与封面文案推演实景照片优先的生图提示词，并强制注入封面主/副标题浮动文字约束/build ai cover image prompt
@@ -56,6 +56,8 @@ Graph控制器。
 - **关键词**: batch-task, publishing, mcp, task-it, todo-summary, service
 - 发布封面渲染支持项目内自定义字体：默认读取 `public/fonts/cover-cjk.ttf`，并兼容 `dist/public/fonts/cover-cjk.ttf` 与 `web/public/fonts/cover-cjk.ttf`；也可通过环境变量 `COVER_FONT_PATH` 指定绝对/相对路径。若封面文案包含中文且字体文件不存在，则直接抛错（不再降级为豆腐块或随机回退）。
 - **拼图来源过滤**：动态拼图（发文/内容拼图）必须使用横图（isPortrait !== true），不允许竖图参与。
+- **拼图取图必须随机**：`fetchArticleImagePool` 与 `ensureCanvasImages` 都走 `gallery.sampleRandom`(`$sample`)，不用 `searchByTags` / `findAccessibleImages`——后两者按 `id` / `createdAt` 倒序返回，每次生成都拿到同一批最新图，拼图来源被钉死，表现出来就是「拼图不够随机」。口径统一为：**选了 tag 就在全部已选 tag 的并集里随机挑，没选 tag 就在完整图池里随机挑**。
+- `ensureCanvasImages`: 给缺图文章补配图。有匹配 tag 时在 tag 并集里 `sampleRandom` 随机取 24 张，没命中再在完整图池 `sampleRandom` 兜底/ensure canvas article images with random tag-union selection | keywords: 标签并集随机取图, 全图池随机取图, tag-union-random-selection, full-pool-random-selection
 
 ### graph.module.ts
 Graph模块定义。

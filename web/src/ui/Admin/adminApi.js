@@ -610,6 +610,147 @@ export const adminApi = {
     });
   },
 
+  // ─── 热点采集榜 ─────────────────────────────────────────────────────────────
+
+  /**
+   * @description 读取热点分类枚举与 AI 归类推荐词表
+   * @keyword-cn 热点元数据, 分类枚举
+   * @keyword-en hot topic meta, category enum
+   */
+  async getHotTopicMeta() {
+    return apiRequest('/api/hot-topic/meta');
+  },
+
+  /**
+   * @description 列出全部热点采集规则(含最近一次自检/采集得到的可用性状态)
+   * @keyword-cn 采集规则列表, 是否可用
+   * @keyword-en list hot topic rules, availability status
+   */
+  async listHotTopicRules() {
+    return apiRequest('/api/hot-topic/rules');
+  },
+
+  /**
+   * @description 新建一条热点采集规则
+   * @keyword-cn 新建采集规则, 榜单地址
+   * @keyword-en create hot topic rule, board endpoint
+   */
+  async createHotTopicRule(payload) {
+    return apiRequest('/api/hot-topic/rules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 增量更新一条热点采集规则(启用开关也走这里)
+   * @keyword-cn 更新采集规则, 启用开关
+   * @keyword-en update hot topic rule, enabled toggle
+   */
+  async updateHotTopicRule(id, payload) {
+    return apiRequest(`/api/hot-topic/rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除一条热点采集规则
+   * @keyword-cn 删除采集规则
+   * @keyword-en delete hot topic rule
+   */
+  async deleteHotTopicRule(id) {
+    return apiRequest(`/api/hot-topic/rules/${id}`, { method: 'DELETE' });
+  },
+
+  /**
+   * @description 幂等初始化平台内置的社会/娱乐热点预置规则
+   * @keyword-cn 初始化预置规则, 幂等补齐
+   * @keyword-en seed builtin rules, idempotent fill
+   */
+  async seedHotTopicRules() {
+    return apiRequest('/api/hot-topic/rules/seed', { method: 'POST' });
+  },
+
+  /**
+   * @description 对一条采集规则做真实抓取自检并回写可用性(只跑不落库)
+   * @keyword-cn 规则自检, 可用性探测
+   * @keyword-en check hot topic rule, availability probe
+   */
+  async checkHotTopicRule(id) {
+    return apiRequest(`/api/hot-topic/rules/${id}/check`, { method: 'POST' });
+  },
+
+  /**
+   * @description 触发一次热点采集;clearPrevious 不传即按默认 true(先清后采)
+   * @keyword-cn 触发热点采集, 默认清除历史
+   * @keyword-en collect hot topics, clear previous default
+   */
+  async collectHotTopics(payload) {
+    return apiRequest('/api/hot-topic/collect', {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    });
+  },
+
+  /**
+   * @description 对尚未 AI 归类的热点条目补跑一次归类
+   * @keyword-cn 补跑归类, 未归类条目
+   * @keyword-en retag hot topics, untagged items
+   */
+  async retagHotTopics() {
+    return apiRequest('/api/hot-topic/retag', { method: 'POST' });
+  },
+
+  /**
+   * @description 分页读取当前热点采集榜(支持分类/规则/标签/关键词过滤)
+   * @keyword-cn 榜单列表, 分页过滤
+   * @keyword-en list hot topic items, paged filter
+   */
+  async listHotTopicItems(query = {}) {
+    const search = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        search.set(key, String(value));
+      }
+    });
+    const qs = search.toString();
+    return apiRequest(`/api/hot-topic/items${qs ? `?${qs}` : ''}`);
+  },
+
+  /**
+   * @description 清空当前热点榜条目(可只清指定规则)
+   * @keyword-cn 清空榜单, 按规则清除
+   * @keyword-en clear hot topic items, clear by rule
+   */
+  async clearHotTopicItems(ruleIds) {
+    return apiRequest('/api/hot-topic/items', {
+      method: 'DELETE',
+      body: JSON.stringify(ruleIds?.length ? { ruleIds } : {}),
+    });
+  },
+
+  /**
+   * @description 线性读取全部 AI 归类标签及条目数/分类/示例标题(标签弹窗数据源)
+   * @keyword-cn 采集标签汇总, 线性查看标签
+   * @keyword-en hot topic tag summary, linear tag view
+   */
+  async listHotTopicTags() {
+    return apiRequest('/api/hot-topic/tags');
+  },
+
+  /**
+   * @description 按母选题从当前热点榜推荐适配热点,返回结构化 JSON
+   * @keyword-cn 热点推荐, 母选题匹配
+   * @keyword-en recommend hot topics, parent topic match
+   */
+  async recommendHotTopics(payload) {
+    return apiRequest('/api/hot-topic/recommend', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   // ─── 财务配置管理 ───────────────────────────────────────────────────────────
 
   /**

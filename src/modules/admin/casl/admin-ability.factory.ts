@@ -61,6 +61,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
     permissions: [
       { action: 'manage', subject: 'User' },
       { action: 'manage', subject: 'XhsTopic' },
+      { action: 'manage', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'manage', subject: 'Workspace' },
       { action: 'manage', subject: 'WorkspaceAgent' },
@@ -80,6 +81,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
     permissions: [
       { action: 'read', subject: 'User' },
       { action: 'manage', subject: 'XhsTopic' },
+      // 操作员只读热点榜与推荐；采集规则的增删改留给租户管理员
+      { action: 'read', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'read', subject: 'Workspace' },
       { action: 'read', subject: 'WorkspaceAgent' },

@@ -933,15 +933,18 @@ export class GalleryController {
   }
 
   /**
-   * @description 列出图库图片，支持按 userId/tag/groupId 过滤，并支持基于自增 id 的游标分页。
+   * @description 列出图库图片，支持过滤、游标分页和按创建时间升降序排列。
    * @param {string} [userId] - 查询参数：用户ID。
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [groupId] - 查询参数：图库组ID。
    * @param {string} [tag] - 查询参数：标签。
-   * @param {string} [cursorId] - 查询参数：游标（仅返回 id < cursorId 的更早数据）。
+   * @param {string} [cursorId] - 查询参数：游标；降序取 id 更小项，升序取 id 更大项。
    * @param {string} [limit] - 查询参数：返回条数上限。
+   * @param {Request} [req] - 当前 HTTP 请求。
+   * @param {'asc'|'desc'} [sortOrder] - 查询参数：创建时间排序方向，默认 desc。
    * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 图片列表。
-   * @keyword gallery, controller, list
+   * @keyword-cn 图库时间排序
+   * @keyword-en gallery-time-sort
    * @since 2026-02-04
    */
   @Get()
@@ -955,6 +958,7 @@ export class GalleryController {
     @Query('cursorId') cursorId?: string,
     @Query('limit') limit?: string,
     @Req() req?: Request,
+    @Query('sortOrder') sortOrder?: string,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     // 优先从请求token解析tenantId，其次使用query参数
     const authScope = req ? await this.resolveAuthScope(req) : {};
@@ -983,6 +987,7 @@ export class GalleryController {
         cursorId:
           typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
         limit: lim ?? 50,
+        sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
       },
     );
     return { images: rows as Array<Omit<GalleryImageEntity, '_id'>> };
