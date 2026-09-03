@@ -5,6 +5,10 @@ services:
     image: mongo:7.0
     container_name: ${MONGO_CONTAINER_NAME:-ai_manger_shanghai_mongodb}
     restart: unless-stopped
+    # 不封顶时 mongo 会按整机内存的一半开 WiredTiger cache，和同机 Node 应用抢内存。
+    # MONGO_WT_CACHE_GB 建议设为 mem_limit 的一半左右。
+    command: ["mongod", "--wiredTigerCacheSizeGB", "${MONGO_WT_CACHE_GB:-0.25}"]
+    mem_limit: ${MONGO_MEM_LIMIT:-768m}
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:?set MONGODB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASS:?set MONGODB_PASS}

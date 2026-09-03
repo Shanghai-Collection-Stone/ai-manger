@@ -105,6 +105,9 @@ let jimpModulePromise: Promise<unknown> | null = null;
 export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   private graphJobTimer: ReturnType<typeof setInterval> | null = null;
   private graphJobBusy = false;
+  /** 空轮询退避：连续空转时按 1/2/4/8s 递减轮询频率，认领到任务立即归零。 */
+  private graphJobIdleStreak = 0;
+  private static readonly GRAPH_JOB_MAX_IDLE_SKIP = 8;
   private customCoverFontBase64: string | null = null;
   private customCoverFontLoaded = false;
   private fontconfigSetupDone = false;
@@ -130,13 +133,33 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     this.graphJobTimer = null;
   }
 
+  /**
+   * @description graph 队列 worker 的单次 tick：认领并执行一条小红书批量发布任务。
+   * @returns {Promise<void>} 无返回值。
+   * @keyword-cn 队列轮询, 空转退避, 批量发布
+   * @keyword-en graph-job-tick, idle-backoff, xhs-batch-publish
+   * @since 2026-09-03
+   */
   private async tickGraphJobWorker(): Promise<void> {
     if (this.graphJobBusy) return;
+    // 队列为空时不必每秒都打一次 findAndModify：它要拿全局写意向锁与
+    // flow-control 令牌，机器吃紧时这类空查询会互相排队放大延迟。
+    if (this.graphJobIdleStreak > 0) {
+      this.graphJobIdleStreak -= 1;
+      return;
+    }
     this.graphJobBusy = true;
     let claimedId: number | null = null;
     try {
       const task = await this.batch.claimNextGraphJob('xhs_batch_publish');
-      if (!task) return;
+      if (!task) {
+        this.graphJobIdleStreak = Math.min(
+          BatchTaskGraphService.GRAPH_JOB_MAX_IDLE_SKIP,
+          this.graphJobIdleStreak * 2 + 1,
+        );
+        return;
+      }
+      this.graphJobIdleStreak = 0;
       claimedId = task.id;
       const input = task.graphJob?.input;
       if (!input || input.kind !== 'xhs_batch_publish') {

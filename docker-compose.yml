@@ -3,6 +3,10 @@ services:
   mongodb:
     image: mongo:7.0
     container_name: ai_system_mongodb
+    # 同机存在多个 mongod 时必须显式封顶：默认 cache = (总内存-1G)/2，
+    # 两个实例会各自认为能拿走一半，加起来把整机内存吃光。
+    command: ["mongod", "--wiredTigerCacheSizeGB", "${MONGO_WT_CACHE_GB:-0.25}"]
+    mem_limit: ${MONGO_MEM_LIMIT:-768m}
     ports:
       - "27017:27017"
     environment:

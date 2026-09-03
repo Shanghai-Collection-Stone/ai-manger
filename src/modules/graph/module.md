@@ -54,6 +54,7 @@ Graph控制器。
 ### batch-task-graph.service.ts
 批量发布图服务。
 - **关键词**: batch-task, publishing, mcp, task-it, todo-summary, service
+- tickGraphJobWorker() — graph 队列单次轮询，空转时按 1/2/4/8s 退避 | keywords: graph-job-tick, idle-backoff, xhs-batch-publish
 - 发布封面渲染支持项目内自定义字体：默认读取 `public/fonts/cover-cjk.ttf`，并兼容 `dist/public/fonts/cover-cjk.ttf` 与 `web/public/fonts/cover-cjk.ttf`；也可通过环境变量 `COVER_FONT_PATH` 指定绝对/相对路径。若封面文案包含中文且字体文件不存在，则直接抛错（不再降级为豆腐块或随机回退）。
 - **拼图来源过滤**：动态拼图（发文/内容拼图）必须使用横图（isPortrait !== true），不允许竖图参与。
 - **拼图取图必须随机**：`fetchArticleImagePool` 与 `ensureCanvasImages` 都走 `gallery.sampleRandom`(`$sample`)，不用 `searchByTags` / `findAccessibleImages`——后两者按 `id` / `createdAt` 倒序返回，每次生成都拿到同一批最新图，拼图来源被钉死，表现出来就是「拼图不够随机」。口径统一为：**选了 tag 就在全部已选 tag 的并集里随机挑，没选 tag 就在完整图池里随机挑**。

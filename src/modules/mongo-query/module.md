@@ -23,6 +23,10 @@ Mongo 通用查询模块：提供一个“复杂 JSON filter + 可选关联查�
 ### services/mongo-query.service.ts
 查询服务，负责鉴权范围解析、filter DSL 解析、租户隔离注入、`$lookup` 聚合管道构建，以及子租户 sass_schema 白名单校验。
 - **关键词**: service, filter dsl, lookup, aggregate, tenant isolation, sass_schema whitelist
+- buildAggregatePipeline(input) — 拼 join 管道；可安全前置时把 $sort/$skip/$limit 压到 $lookup 之前 | keywords: hoist-paging, pipeline-reorder, query-memory
+- canHoistPagingBeforeJoins(joins, sort) — 判断前置分页是否改变语义（unwind 或排序键落在 join 字段上则不可） | keywords: hoist-paging, pipeline-reorder, query-memory
+- joinAffectsRowCount(join) — 判断 join 是否改变行数，count 模式据此跳过无谓 $lookup | keywords: join-affects-row-count, count-optimization
+- QUERY_MAX_TIME_MS — 单次查询服务端硬上限 15s，所有 find/aggregate/countDocuments 均挂载 | keywords: max-time-ms, query-timeout
 - **函数**:
   - `isObjectRecord`: 对象记录判断/check object record
   - `parseApiKey`: 解析API Key/parse api key header

@@ -21,6 +21,12 @@ import type {
 } from '../types/mongo-query.types.js';
 
 /**
+ * 单次查询的服务端硬上限。没有它，跑飞的 $lookup/$sort 只能等自己结束，
+ * 期间 WiredTiger cache 会被扫过的文档灌满，拖垮同实例其它查询。
+ */
+const QUERY_MAX_TIME_MS = 15_000;
+
+/**
  * @description 判断值是否为对象记录
  * @keyword-en check object record
  */
@@ -356,13 +362,20 @@ export class MongoQueryService {
         limit,
         customPipeline: input.pipeline,
       });
-      const rows = await col.aggregate(pipeline).toArray();
+      const rows = await col
+        .aggregate(pipeline, {
+          maxTimeMS: QUERY_MAX_TIME_MS,
+          allowDiskUse: true,
+        })
+        .toArray();
       return { rows: rows as unknown as Record<string, unknown>[] };
     }
 
     if (joins.length === 0) {
       if (input.mode === 'count') {
-        const count = await col.countDocuments(baseFilter);
+        const count = await col.countDocuments(baseFilter, {
+          maxTimeMS: QUERY_MAX_TIME_MS,
+        });
         return { count };
       }
       const rows = await col
@@ -370,6 +383,7 @@ export class MongoQueryService {
         .sort(sort ?? { _id: -1 })
         .skip(skip)
         .limit(limit)
+        .maxTimeMS(QUERY_MAX_TIME_MS)
         .toArray();
       return { rows: rows as unknown as Record<string, unknown>[] };
     }
@@ -386,7 +400,9 @@ export class MongoQueryService {
       mode: input.mode,
     });
 
-    const rows = await col.aggregate(pipeline).toArray();
+    const rows = await col
+      .aggregate(pipeline, { maxTimeMS: QUERY_MAX_TIME_MS, allowDiskUse: true })
+      .toArray();
     if (input.mode === 'count') {
       const first = rows[0] as Record<string, unknown> | undefined;
       const count = typeof first?.count === 'number' ? first.count : 0;
@@ -790,26 +806,84 @@ export class MongoQueryService {
     const pipeline: Record<string, unknown>[] = [];
     pipeline.push({ $match: input.baseMatch });
 
-    for (const join of input.joins) {
-      pipeline.push(...this.buildLookupStages(join, input.tenantId));
-    }
-
     if (input.mode === 'count') {
+      // $lookup 只加字段不删行，只有 preserveNullAndEmptyArrays:false 的 $unwind
+      // 才会改变行数。其余情况下为了 count 去跑 join 是纯浪费。
+      for (const join of input.joins) {
+        if (!this.joinAffectsRowCount(join)) continue;
+        pipeline.push(...this.buildLookupStages(join, input.tenantId));
+      }
       pipeline.push({ $count: 'count' });
       return pipeline;
     }
 
+    const sort =
+      input.sort && Object.keys(input.sort).length > 0
+        ? input.sort
+        : { _id: -1 as const };
+
+    // 关键：能提前收敛时，把 $sort/$skip/$limit 压到 $lookup 之前。
+    // 否则 join 会对 $match 命中的每一行都跑一遍，$sort 再把 join 展开后的
+    // 整个流缓冲进内存——limit 放在末尾只限制返回行数，不限制工作量。
+    if (this.canHoistPagingBeforeJoins(input.joins, sort)) {
+      pipeline.push({ $sort: sort });
+      if (input.skip > 0) pipeline.push({ $skip: input.skip });
+      pipeline.push({ $limit: input.limit });
+      for (const join of input.joins) {
+        pipeline.push(...this.buildLookupStages(join, input.tenantId));
+      }
+      if (input.projection && Object.keys(input.projection).length > 0) {
+        pipeline.push({ $project: input.projection });
+      }
+      return pipeline;
+    }
+
+    for (const join of input.joins) {
+      pipeline.push(...this.buildLookupStages(join, input.tenantId));
+    }
     if (input.projection && Object.keys(input.projection).length > 0) {
       pipeline.push({ $project: input.projection });
     }
-    if (input.sort && Object.keys(input.sort).length > 0) {
-      pipeline.push({ $sort: input.sort });
-    } else {
-      pipeline.push({ $sort: { _id: -1 } });
-    }
+    pipeline.push({ $sort: sort });
     if (input.skip > 0) pipeline.push({ $skip: input.skip });
     pipeline.push({ $limit: input.limit });
     return pipeline;
+  }
+
+  /**
+   * @description 判断 join 是否会改变行数（仅显式 preserveNullAndEmptyArrays:false 的 unwind 会）。
+   * @param {MongoQueryJoin} join - 关联配置。
+   * @returns {boolean} true 表示该 join 会过滤掉无匹配的父行。
+   * @keyword-cn 关联行数影响, 计数优化
+   * @keyword-en join-affects-row-count, count-optimization
+   * @since 2026-09-03
+   */
+  private joinAffectsRowCount(join: MongoQueryJoin): boolean {
+    if (!join.unwind) return false;
+    if (typeof join.unwind === 'boolean') return false;
+    return join.unwind.preserveNullAndEmptyArrays === false;
+  }
+
+  /**
+   * @description 判断能否把 $sort/$skip/$limit 提到 $lookup 之前而不改变语义。
+   * @param {MongoQueryJoin[]} joins - 关联配置列表。
+   * @param {Record<string, 1 | -1>} sort - 生效的排序键。
+   * @returns {boolean} true 表示可安全前置分页。
+   * @keyword-cn 分页前置, 管道重排, 查询内存
+   * @keyword-en hoist-paging, pipeline-reorder, query-memory
+   * @since 2026-09-03
+   */
+  private canHoistPagingBeforeJoins(
+    joins: MongoQueryJoin[],
+    sort: Record<string, 1 | -1>,
+  ): boolean {
+    if (joins.length === 0) return true;
+    // unwind 会把一行拆成多行，limit 的计数口径不同，不能前置。
+    if (joins.some((join) => Boolean(join.unwind))) return false;
+    // 排序键落在 join 产出的字段上时，必须先 join 才能排。
+    return !Object.keys(sort).some((key) =>
+      joins.some((join) => key === join.as || key.startsWith(`${join.as}.`)),
+    );
   }
 
   /**

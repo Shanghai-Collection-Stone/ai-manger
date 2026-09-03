@@ -74,6 +74,19 @@ export interface BatchTaskEntity {
   updatedAt: Date;
 }
 
+/**
+ * @description 队列认领的精简投影结果，仅含 worker 驱动一次执行所需字段。
+ * @keyword-cn 队列认领投影, 精简任务
+ * @keyword-en graph-job-claim, projection-shape
+ * @since 2026-09-03
+ */
+export interface BatchTaskGraphJobClaim {
+  id: number;
+  userId: string;
+  mcpTaskId?: string;
+  graphJob?: Pick<BatchTaskGraphJobEntity, 'status' | 'input' | 'attempts'>;
+}
+
 export interface BatchTaskCreateInput {
   userId: string;
   tenantId?: string;

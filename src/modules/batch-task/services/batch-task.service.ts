@@ -7,6 +7,7 @@ import type {
   BatchTaskCallbackInput,
   BatchTaskCreateInput,
   BatchTaskEntity,
+  BatchTaskGraphJobClaim,
   BatchTaskGraphJobInputXhs,
   BatchTaskPostEntity,
   BatchTaskRunInput,
@@ -161,8 +162,31 @@ export class BatchTaskService {
     await this.tasks.createIndex({ status: 1 });
     await this.tasks.createIndex({ mcpTaskId: 1 });
     await this.tasks.createIndex({ userId: 1, canvasId: 1, updatedAt: -1 });
-    await this.tasks.createIndex({ 'graphJob.status': 1, updatedAt: -1 });
-    await this.tasks.createIndex({ 'graphJob.input.kind': 1, updatedAt: -1 });
+    // 队列认领索引：与 claimNextGraphJob 的 query + sort 逐字对齐，
+    // partialFilterExpression 只收录 queued 文档，索引体积与队列长度同阶。
+    await this.tasks.createIndex(
+      {
+        'graphJob.status': 1,
+        'graphJob.input.kind': 1,
+        'graphJob.enqueuedAt': 1,
+        updatedAt: 1,
+      },
+      {
+        name: 'graphJob_claim_queued',
+        partialFilterExpression: { 'graphJob.status': 'queued' },
+      },
+    );
+    // 旧索引覆盖不了 kind 过滤与 enqueuedAt 排序，会退化成 FETCH + 内存 SORT，移除。
+    for (const stale of [
+      'graphJob.status_1_updatedAt_-1',
+      'graphJob.input.kind_1_updatedAt_-1',
+    ]) {
+      try {
+        await this.tasks.dropIndex(stale);
+      } catch {
+        // 索引不存在时忽略
+      }
+    }
     // 租户隔离索引
     await this.tasks.createIndex({ tenantId: 1, userId: 1 });
     const exists = await this.counters.findOne({ _id: 'batch_tasks' });
@@ -871,9 +895,18 @@ export class BatchTaskService {
     );
   }
 
+  /**
+   * @description 原子认领一条 queued 状态的 graph 队列任务，只回传 worker 需要的字段。
+   * @param {BatchTaskGraphJobInputXhs['kind']} kind - 队列类型。
+   * @returns {Promise<BatchTaskGraphJobClaim | null>} 认领到的精简任务，无队列任务时为 null。
+   * @throws {Error} 当MongoDB写入失败时抛出。
+   * @keyword-cn 队列认领, 原子更新, 投影
+   * @keyword-en claim-graph-job, atomic-claim, projection
+   * @since 2026-09-03
+   */
   async claimNextGraphJob(
     kind: BatchTaskGraphJobInputXhs['kind'],
-  ): Promise<BatchTaskEntity | null> {
+  ): Promise<BatchTaskGraphJobClaim | null> {
     const now = new Date();
     const res = await this.tasks.findOneAndUpdate(
       {
@@ -890,13 +923,24 @@ export class BatchTaskService {
         $inc: { 'graphJob.attempts': 1 },
       },
       {
+        // 与 graphJob_claim_queued 索引键序一致，避免内存 SORT。
         sort: { 'graphJob.enqueuedAt': 1, updatedAt: 1 },
         returnDocument: 'after',
         includeResultMetadata: true,
-        projection: { _id: 0 },
+        // 绝不回传 posts[]：单条 batch_task 的 posts.result 可达数十 MB，
+        // 每秒轮询整文档会把 Node 堆和 WiredTiger cache 一起顶爆。
+        projection: {
+          _id: 0,
+          id: 1,
+          userId: 1,
+          mcpTaskId: 1,
+          'graphJob.status': 1,
+          'graphJob.input': 1,
+          'graphJob.attempts': 1,
+        },
       },
     );
-    return (res.value as BatchTaskEntity | null) ?? null;
+    return (res.value as BatchTaskGraphJobClaim | null) ?? null;
   }
 
   async markGraphJobDone(batchTaskId: number): Promise<void> {
