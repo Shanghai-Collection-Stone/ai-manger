@@ -135,6 +135,8 @@ export class ArticleService {
       imageIds: Array.isArray(input.imageIds) ? input.imageIds : undefined,
       meta: input.meta,
       publishStatus: input.publishStatus ?? 'unpublished',
+      // 直接以已发布入库（例如数据监控手动添加的笔记链接）时同样记下发布时间，列表才有发布时间可展示
+      ...(input.publishStatus === 'published' ? { publishedAt: now } : {}),
       source: input.source,
       sourceRef: input.sourceRef,
       createdAt: now,

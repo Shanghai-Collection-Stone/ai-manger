@@ -30,6 +30,7 @@ import {
 } from './xhs-topic.dto.js';
 import {
   describeXhsArticleError,
+  XhsArticleGenerationError,
   XhsArticleGenerationService,
 } from '../services/xhs-article-generation.service.js';
 import { XhsTopicService } from '../services/xhs-topic.service.js';
@@ -120,6 +121,7 @@ export class XhsTopicController {
           topicType: entity.topicType,
           articleStyle: entity.articleStyle,
           imageTags: entity.imageTags ?? [],
+          imageRule: entity.imageRule ?? 'default',
           status: entity.status,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt,
@@ -153,9 +155,9 @@ export class XhsTopicController {
   }
 
   /**
-   * @description 修改真实选题的标题、类型、状态、母题配图标签或子题文章风格，并返回刷新后的工作台。
-   * @keyword-cn 更新真实选题, 发布状态, 母题配图标签, 文章生成风格
-   * @keyword-en update-persisted-topic, publish-status, mother-image-tags, article-writing-style
+   * @description 修改真实选题的标题、类型、状态、母题配图标签与配图规则或子题文章风格，并返回刷新后的工作台。
+   * @keyword-cn 更新真实选题, 发布状态, 母题配图标签, 母题配图规则, 文章生成风格
+   * @keyword-en update-persisted-topic, publish-status, mother-image-tags, mother-image-rule, article-writing-style
    */
   @Patch(':id')
   @RequirePermission('update', 'XhsTopic')
@@ -184,6 +186,7 @@ export class XhsTopicController {
         topicType: topic.topicType,
         articleStyle: topic.articleStyle,
         imageTags: topic.imageTags ?? [],
+        imageRule: topic.imageRule ?? 'default',
         status: topic.status,
         sourceTodoId: topic.sourceTodoId,
         createdAt: topic.createdAt,
@@ -211,7 +214,7 @@ export class XhsTopicController {
   }
 
   /**
-   * @description 为指定子选题异步启动文章生成，立即返回 in_progress 的 Todo，进度与失败原因由状态接口轮询。
+   * @description 为指定子选题异步排队生成文章，立即返回 pending Todo，等待、进度与失败原因由状态接口轮询。
    * @keyword-cn 生成真实文章接口, 异步生成文章, 并发生成
    * @keyword-en generate-persisted-article-api, start-article-generation, concurrent-generation
    */
@@ -236,9 +239,11 @@ export class XhsTopicController {
     } catch (error) {
       if (error instanceof HttpException) throw error;
       const code = error instanceof Error ? error.message : String(error);
+      const detail =
+        error instanceof XhsArticleGenerationError ? error.detail : undefined;
       throw new BadRequestException({
         code,
-        message: describeXhsArticleError(code),
+        message: describeXhsArticleError(code, detail),
       });
     }
   }

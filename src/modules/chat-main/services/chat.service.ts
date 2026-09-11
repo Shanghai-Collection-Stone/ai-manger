@@ -70,6 +70,7 @@ export class ChatMainService {
   async send(request: ChatRequest): Promise<ChatResponse> {
     const scope = this.getRequestScope(request);
     const sid = await this.ctx.createSessionWithScope(request.sessionId, scope);
+    const billingOperationId = `chat:${sid}:${Date.now()}`;
     await this.ctx.appendMessage(
       sid,
       {
@@ -140,6 +141,14 @@ export class ChatMainService {
         config: {
           temperature: request.temperature ?? 0.5,
           tenantId: scope.tenantId,
+          billingContext: {
+            tenantId: scope.tenantId,
+            userId: scope.userId,
+            sessionId: sid,
+            operationId: billingOperationId,
+            platformScope: !scope.tenantId,
+            source: 'chat-send',
+          },
           tools: mainAgentTools,
           subagents,
           system: sysContent,
@@ -313,6 +322,7 @@ export class ChatMainService {
           );
           sid = await this.ctx.createSessionWithScope(request.sessionId, scope);
           if (!sid) throw new Error('SESSION_ID_MISSING');
+          const billingOperationId = `chat:${sid}:${Date.now()}`;
           if (shouldStop()) return;
 
           await this.ctx.appendMessage(
@@ -468,10 +478,26 @@ export class ChatMainService {
               const expertLLM = await this.agent.buildLLM({
                 temperature: request.temperature ?? 0.1,
                 tenantId: scope.tenantId,
+                billingContext: {
+                  tenantId: scope.tenantId,
+                  userId: scope.userId,
+                  sessionId: sid,
+                  operationId: billingOperationId,
+                  platformScope: !scope.tenantId,
+                  source: 'chat-expert',
+                },
               });
               const intentLLM = await this.agent.buildLLM({
                 temperature: 0,
                 tenantId: scope.tenantId,
+                billingContext: {
+                  tenantId: scope.tenantId,
+                  userId: scope.userId,
+                  sessionId: sid,
+                  operationId: billingOperationId,
+                  platformScope: !scope.tenantId,
+                  source: 'chat-intent',
+                },
               });
               const checkpointer =
                 this.agent.getCheckpointer() as unknown as Parameters<
@@ -567,6 +593,14 @@ export class ChatMainService {
             config: {
               temperature: request.temperature ?? 0.1,
               tenantId: scope.tenantId,
+              billingContext: {
+                tenantId: scope.tenantId,
+                userId: scope.userId,
+                sessionId: sid,
+                operationId: billingOperationId,
+                platformScope: !scope.tenantId,
+                source: 'chat-stream',
+              },
               tools: mainAgentTools,
               subagents,
               system: sysContent,
@@ -807,10 +841,20 @@ export class ChatMainService {
             }
           }
           if (!subscriber.closed) {
+            const creditExhausted =
+              e.name === 'CREDIT_EXHAUSTED' ||
+              e.message.includes('CREDIT_EXHAUSTED');
             subscriber.next({
               data: {
                 type: 'error',
-                data: { code: 'STREAM_ERROR', message: e.message },
+                data: {
+                  code: creditExhausted
+                    ? 'CREDIT_EXHAUSTED'
+                    : 'STREAM_ERROR',
+                  message: creditExhausted
+                    ? '额度已用尽，已保留本次生成的部分内容'
+                    : e.message,
+                },
               },
             } as MessageEvent);
           }

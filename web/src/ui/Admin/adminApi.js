@@ -202,6 +202,25 @@ export const adminApi = {
       method: 'POST',
     });
   },
+  /**
+   * @description 读取代码内固定的收费服务目录与当前 Credit 点数。
+   * @keyword-cn 服务管理列表, 生效点数
+   * @keyword-en service-management-list, effective-credit
+   */
+  async listAiServices() {
+    return request('/ai-services');
+  },
+  /**
+   * @description 修改固定服务编码对应的 Credit 消耗点数。
+   * @keyword-cn 更新服务点数, 固定服务编码
+   * @keyword-en update-service-credit, immutable-service-code
+   */
+  async updateAiServiceCredit(code, creditCost) {
+    return request(`/ai-services/${encodeURIComponent(code)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ creditCost }),
+    });
+  },
   async listTenants() {
     return request('/tenants');
   },
@@ -220,6 +239,40 @@ export const adminApi = {
   async deleteTenant(id) {
     return request(`/tenants/${id}`, {
       method: 'DELETE',
+    });
+  },
+  /**
+   * @description 查询租户 Credit 余额与追加式流水。
+   * @keyword-cn Credit账户查询, 流水查询
+   * @keyword-en credit-account-query, transaction-list
+   */
+  async getTenantCreditAccount(id, query = {}) {
+    const search = new URLSearchParams();
+    if (query.limit) search.set('limit', String(query.limit));
+    if (query.before) search.set('before', String(query.before));
+    const suffix = search.toString();
+    return request(`/tenants/${id}/credits${suffix ? `?${suffix}` : ''}`);
+  },
+  /**
+   * @description 为租户新增一笔充值流水。
+   * @keyword-cn 租户充值, 追加流水
+   * @keyword-en tenant-recharge, append-ledger
+   */
+  async rechargeTenantCredit(id, payload) {
+    return request(`/tenants/${id}/credits/recharge`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  /**
+   * @description 为租户新增一笔正数或负数人工调账流水。
+   * @keyword-cn 人工调账, 余额增减
+   * @keyword-en manual-credit-adjustment, balance-change
+   */
+  async adjustTenantCredit(id, payload) {
+    return request(`/tenants/${id}/credits/adjust`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 
@@ -392,10 +445,18 @@ export const adminApi = {
    * @description 更新平台信息（AI补充说明）
    * @keyword-en upsert platform info
    */
-  async upsertPlatformInfo(aiPromptSupplement, enableAiCover = false) {
+  async upsertPlatformInfo(
+    aiPromptSupplement,
+    enableAiCover = false,
+    xhsArticleGlobalConcurrencyLimit,
+  ) {
     return request('/platform-info', {
       method: 'PUT',
-      body: JSON.stringify({ aiPromptSupplement, enableAiCover }),
+      body: JSON.stringify({
+        aiPromptSupplement,
+        enableAiCover,
+        xhsArticleGlobalConcurrencyLimit,
+      }),
     });
   },
 

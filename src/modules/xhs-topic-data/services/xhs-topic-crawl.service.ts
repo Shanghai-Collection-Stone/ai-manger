@@ -162,6 +162,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
    * @returns {Promise<void>}
    */
   async ensureIndexes(): Promise<void> {
+    await this.dropLegacyUniqueTodoIndex();
     await this.tasks.createIndex({ id: 1 }, { unique: true });
     await this.tasks.createIndex({ topicId: 1, startedAt: -1 });
     await this.tasks.createIndex({ todoId: 1, runIndex: -1 });
@@ -205,6 +206,37 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     }
     await this.migrateToDailySchedule();
     await this.backfillPublishedArticleSchedules();
+  }
+
+  /**
+   * @description 删掉抓取运行表上历史遗留的 `todoId` 单键唯一索引。TikHub 直采不建 Todo，运行记录的 `todoId` 恒为 0，
+   *   有这条唯一索引时第二次直采就会撞 E11000；SuperClaw「一个 Todo 一条运行」由建任务流程保证，不靠这条索引。
+   *   查询用的 `{ todoId, runIndex }` 普通复合索引照常保留。失败只记日志，不阻断启动。
+   * @keyword-cn 清理遗留唯一索引, 直采运行记录
+   * @keyword-en drop-legacy-unique-index, direct-crawl-run-record
+   * @returns {Promise<void>}
+   */
+  private async dropLegacyUniqueTodoIndex(): Promise<void> {
+    try {
+      const indexes = await this.tasks.indexes();
+      for (const index of indexes) {
+        const keys = Object.keys(index.key ?? {});
+        if (
+          index.unique === true &&
+          keys.length === 1 &&
+          keys[0] === 'todoId'
+        ) {
+          await this.tasks.dropIndex(String(index.name));
+          this.logger.warn(
+            `[ensureIndexes] 已删除遗留唯一索引 ${String(index.name)}（TikHub 直采 todoId 恒为 0）`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[ensureIndexes] 检查遗留 todoId 唯一索引失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

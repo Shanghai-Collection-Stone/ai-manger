@@ -221,6 +221,10 @@ export class DataSourceController {
               model: 'deepseek-chat',
               temperature: 0.3,
               system: sys,
+              billingContext: {
+                platformScope: true,
+                source: 'data-source.schema-import',
+              },
             };
             const messages = this.agentService.toMessages([
               { role: 'system', content: sys },

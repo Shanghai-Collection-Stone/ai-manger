@@ -85,13 +85,13 @@ export class SkillThoughtController {
     const content = String(input.content || '').trim();
     const summary =
       String(input.summary || '').trim() ||
-      (await this.thoughts.generateSummary(content));
+      (await this.thoughts.generateSummary(content, scope));
     const keywords =
       Array.isArray(input.keywords) && input.keywords.length > 0
         ? input.keywords
             .map((item) => String(item || '').trim())
             .filter(Boolean)
-        : await this.thoughts.extractKeywords(content);
+        : await this.thoughts.extractKeywords(content, scope);
     const row = await this.thoughts.create({
       content,
       summary,

@@ -22,7 +22,7 @@ Graph控制器。
   - `sanitizeCopyrightRiskText(raw)` — 将创作文案/生图提示词中的高风险 IP、商标、角色专名替换为版权安全的泛化表达 | keywords: sanitize, copyright-safe, image-prompt
   - `sanitizeCopyrightRiskList(items?)` — 清洗列表型创作提示，去重后返回版权安全表达 | keywords: sanitize, copyright-safe, list
   - `sanitizeBlueprintForCreativePrompt(blueprint)` — 为创作/生图提示词构造版权安全蓝图，保留业务主旨但泛化 IP 专名 | keywords: sanitize, blueprint, copyright-safe
-  - `planArticleTasks(input)` — LLM规划文章蓝图列表；蓝图包含 title/mainIdea/imageIntent/requirements，并接收 userPrompt/dataSummary/writingStyle，显式图库标签必须透传到 tags 和 imageIntent；内部 LLM 调用不跟随主流 | keywords: plan, blueprint, explicit-tags
+  - `planArticleTasks(input)` — LLM规划文章蓝图列表并按 input 租户计费；蓝图包含 title/mainIdea/imageIntent/requirements，并接收 userPrompt/dataSummary/writingStyle | keywords: plan, blueprint, explicit-tags
   - `extractExplicitImageTagsFromPrompt(input)` — 从最后用户要求中提取 tag带有/标签/#tag 等显式图库标签，作为 image-group 生文配图硬门槛 | keywords: extract, explicit-tags, image-group
   - `normalizeExplicitImageTag(raw)` — 清洗显式图库标签 token 并过滤连接词 | keywords: normalize, explicit-tags, token
   - `mergeExplicitImageTagsIntoBlueprints(blueprints, explicitTags)` — 将用户显式图库标签合并进每个选题蓝图 | keywords: merge, explicit-tags, blueprint
@@ -40,7 +40,7 @@ Graph控制器。
   - `planBlueprintsBySubAgent`: 子代理规划蓝图/plan blueprints by subagent
   - `appendOneArticleToCanvas`: 单篇写入Canvas/append one article
   - `generateOneArticleFromBlueprint`: 单篇文章生成（融合 userPrompt + dataSummary）/generate one article
-  - `generateOneArticle(input)` — 根据单篇蓝图生成正文，并透传平台文风、主旨和配图意图；内部 LLM 调用不跟随主流 | keywords: generate, article, writing-style
+  - `generateOneArticle(input)` — 根据单篇蓝图生成正文、按 input 租户计费，并透传平台文风、主旨和配图意图 | keywords: generate, article, writing-style
   - `saveGeneratedImageToGallery`: 本地生成图片写入图库（cover/collage 均标记 isCollage=true，自动写入动态封面/动态拼图默认分组，并持久化 width/height）/save generated image to gallery
   - `assignImagesForCanvasBySubAgent`: 子代理配图/assign images by subagent
   - `normalizeBlueprints`: 蓝图去机械化/normalize blueprints

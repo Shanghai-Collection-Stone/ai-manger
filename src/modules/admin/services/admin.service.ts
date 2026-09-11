@@ -2,10 +2,11 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Inject } from '@nestjs/common';
-import { Collection, Db, ObjectId } from 'mongodb';
+import { Collection, Db, ObjectId, type ClientSession } from 'mongodb';
 import {
   createHash,
   createHmac,
@@ -23,6 +24,12 @@ import type {
 import type { SassApiKeyEntity } from '../../sass/entities/sass-api-key.entity.js';
 import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
 import { SassService } from '../../sass/services/sass.service.js';
+import {
+  AI_CREDIT_SERVICE_CATALOG,
+  type AiCreditServiceView,
+  type AiServiceCreditConfigEntity,
+} from '../../ai-billing/entities/ai-service-credit.entity.js';
+import type { AiCreditTransactionEntity } from '../../ai-billing/entities/ai-credit-transaction.entity.js';
 import {
   ROLE_CATALOG,
   type RoleCatalogEntry,
@@ -52,6 +59,8 @@ export class AdminService {
   private readonly users: Collection<AdminUserEntity>;
   private readonly sessions: Collection<AdminSessionEntity>;
   private readonly aiProviders: Collection<AdminAiProviderEntity>;
+  private readonly aiServiceConfigs: Collection<AiServiceCreditConfigEntity>;
+  private readonly creditTransactions: Collection<AiCreditTransactionEntity>;
   private readonly clawConfigs: Collection<AdminClawConfigEntity>;
   private readonly agentConfigs: Collection<AdminAgentConfigEntity>;
   private readonly llmSettings: Collection<AdminLlmSettingEntity>;
@@ -71,6 +80,12 @@ export class AdminService {
     this.sessions = db.collection<AdminSessionEntity>('admin_sessions');
     this.aiProviders =
       db.collection<AdminAiProviderEntity>('admin_ai_providers');
+    this.aiServiceConfigs = db.collection<AiServiceCreditConfigEntity>(
+      'ai_service_credit_configs',
+    );
+    this.creditTransactions = db.collection<AiCreditTransactionEntity>(
+      'ai_credit_transactions',
+    );
     this.clawConfigs =
       db.collection<AdminClawConfigEntity>('admin_claw_configs');
     this.agentConfigs = db.collection<AdminAgentConfigEntity>(
@@ -139,6 +154,29 @@ export class AdminService {
       { unique: true },
     );
     await this.aiProviders.createIndex({ enabled: 1 });
+    await this.aiServiceConfigs.createIndex(
+      { serviceCode: 1 },
+      { unique: true },
+    );
+    await this.creditTransactions.createIndex(
+      { transactionId: 1 },
+      { unique: true },
+    );
+    await this.creditTransactions.createIndex({ tenantId: 1, createdAt: -1 });
+    await this.creditTransactions
+      .dropIndex('tenantId_1_referenceId_1')
+      .catch(() => undefined);
+    await this.creditTransactions.createIndex(
+      { tenantId: 1, referenceId: 1 },
+      {
+        name: 'admin_credit_reference_unique',
+        unique: true,
+        partialFilterExpression: {
+          operatorType: 'admin',
+          referenceId: { $type: 'string' },
+        },
+      },
+    );
     // 旧部署可能留下同名但 partialFilterExpression 为 { isDefault: {} } 的畸形索引，
     // 直接 createIndex 会因 IndexKeySpecsConflict(code 86) 启动崩溃；先按既有约定 drop 再重建。
     await this.aiProviders
@@ -304,6 +342,36 @@ export class AdminService {
   }
 
   /**
+   * @description 按登录态中的租户边界查询当前用户自己的 Credit 余额与倒序流水。
+   * @keyword-cn 当前Credit账户, 自身流水
+   * @keyword-en current-credit-account, own-transaction-list
+   */
+  async getCurrentCreditAccount(
+    currentUser: AdminUserEntity,
+    input: { limit?: number; before?: Date },
+  ): Promise<{
+    tenant: SassTenantEntity | null;
+    transactions: AiCreditTransactionEntity[];
+  }> {
+    if (!currentUser.tenantId) {
+      return { tenant: null, transactions: [] };
+    }
+    const tenantId = this.toObjectId(currentUser.tenantId, 'INVALID_TENANT_ID');
+    const tenant = await this.sassTenants.findOne({ _id: tenantId });
+    if (!tenant) throw new NotFoundException('TENANT_NOT_FOUND');
+    const filter: Record<string, unknown> = {
+      tenantId: tenantId.toHexString(),
+    };
+    if (input.before) filter.createdAt = { $lt: input.before };
+    const transactions = await this.creditTransactions
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(200, Math.max(1, input.limit ?? 50)))
+      .toArray();
+    return { tenant, transactions };
+  }
+
+  /**
    * @description 用户列表
    * @keyword-en list admin users
    */
@@ -451,6 +519,71 @@ export class AdminService {
   }
 
   /**
+   * @description 合并代码内固定服务目录与数据库点数覆盖，供后台服务管理展示。
+   * @keyword-cn 服务管理列表, 固定服务目录
+   * @keyword-en service-management-list, fixed-service-catalog
+   */
+  async listAiServices(
+    currentUser: AdminUserEntity,
+  ): Promise<AiCreditServiceView[]> {
+    this.assertSuperAdmin(currentUser);
+    const configs = await this.aiServiceConfigs.find({}).toArray();
+    const configByCode = new Map(
+      configs.map((config) => [config.serviceCode, config]),
+    );
+    return AI_CREDIT_SERVICE_CATALOG.map((definition) => {
+      const config = configByCode.get(definition.code);
+      return {
+        ...definition,
+        creditCost: config?.creditCost ?? definition.defaultCreditCost,
+        configured: Boolean(config),
+        updatedAt: config?.updatedAt,
+      };
+    });
+  }
+
+  /**
+   * @description 仅更新固定服务编码对应的 Credit 消耗点数，不允许后台新增或改名服务。
+   * @keyword-cn 更新服务点数, 固定服务编码
+   * @keyword-en update-service-credit, immutable-service-code
+   */
+  async updateAiServiceCredit(
+    currentUser: AdminUserEntity,
+    serviceCode: string,
+    creditCost: number,
+  ): Promise<AiCreditServiceView> {
+    this.assertSuperAdmin(currentUser);
+    const definition = AI_CREDIT_SERVICE_CATALOG.find(
+      (item) => item.code === serviceCode,
+    );
+    if (!definition) throw new BadRequestException('AI_SERVICE_NOT_FOUND');
+    const normalizedCost = Math.round(creditCost * 1_000_000) / 1_000_000;
+    const now = new Date();
+    await this.aiServiceConfigs.updateOne(
+      { serviceCode: definition.code },
+      {
+        $set: {
+          creditCost: normalizedCost,
+          updatedBy: currentUser._id.toHexString(),
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          _id: new ObjectId(),
+          serviceCode: definition.code,
+          createdAt: now,
+        },
+      },
+      { upsert: true },
+    );
+    return {
+      ...definition,
+      creditCost: normalizedCost,
+      configured: true,
+      updatedAt: now,
+    };
+  }
+
+  /**
    * @description 创建或更新AI提供商
    * @keyword-en upsert ai provider
    */
@@ -465,6 +598,8 @@ export class AdminService {
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
+      tokensPerCredit?: number;
+      fixedTokensPerCall?: number;
     },
   ): Promise<AdminAiProviderEntity> {
     this.assertSuperAdmin(currentUser);
@@ -489,6 +624,11 @@ export class AdminService {
           : undefined,
       enabled: input.enabled ?? true,
       isDefault: input.isDefault ?? false,
+      tokensPerCredit: input.tokensPerCredit,
+      fixedTokensPerCall:
+        input.fixedTokensPerCall && input.fixedTokensPerCall > 0
+          ? input.fixedTokensPerCall
+          : undefined,
       updatedAt: now,
     };
     // 先清掉同类目下其它默认项, 再 upsert 目标为默认, 避免与旧默认项同时
@@ -527,6 +667,8 @@ export class AdminService {
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
+      tokensPerCredit?: number;
+      fixedTokensPerCall?: number;
     },
   ): Promise<AdminAiProviderEntity | null> {
     this.assertSuperAdmin(currentUser);
@@ -561,6 +703,13 @@ export class AdminService {
     }
     if (typeof input.isDefault === 'boolean') {
       updates.isDefault = input.isDefault;
+    }
+    if (typeof input.tokensPerCredit === 'number') {
+      updates.tokensPerCredit = input.tokensPerCredit;
+    }
+    if (typeof input.fixedTokensPerCall === 'number') {
+      updates.fixedTokensPerCall =
+        input.fixedTokensPerCall > 0 ? input.fixedTokensPerCall : undefined;
     }
     // 先清掉同类目下其它默认项, 再把目标置为默认。
     // 否则在 findOneAndUpdate 设默认的瞬间会与旧默认项同时满足
@@ -813,18 +962,24 @@ export class AdminService {
    * @keyword-en get default ai provider runtime config
    */
   async getDefaultAiProviderRuntime(): Promise<{
+    providerId: string;
     providerCode: string;
     model?: string;
     baseUrl?: string;
     apiKey?: string;
+    tokensPerCredit?: number;
+    fixedTokensPerCall?: number;
   } | null> {
     const row = await this.getDefaultAiProvider('llm');
     if (!row) return null;
     return {
+      providerId: String(row._id),
       providerCode: row.providerCode,
       model: row.model,
       baseUrl: row.baseUrl,
       apiKey: row.apiKey,
+      tokensPerCredit: row.tokensPerCredit,
+      fixedTokensPerCall: row.fixedTokensPerCall,
     };
   }
 
@@ -855,10 +1010,13 @@ export class AdminService {
    * @keyword-en get default image generation runtime config
    */
   async getDefaultImageProviderRuntime(): Promise<{
+    providerId: string;
     providerCode: string;
     model?: string;
     baseUrl?: string;
     apiKey?: string;
+    tokensPerCredit?: number;
+    fixedTokensPerCall?: number;
   } | null> {
     // image 严格按 isDefault=true 查找：未显式设为默认时直接返回 null，
     // 让调用方走 meitu-cli 降级。不复用 getDefaultAiProvider，避免其
@@ -869,11 +1027,41 @@ export class AdminService {
     );
     if (!row) return null;
     return {
+      providerId: String(row._id),
       providerCode: row.providerCode,
       model: row.model,
       baseUrl: row.baseUrl,
       apiKey: row.apiKey,
+      tokensPerCredit: row.tokensPerCredit,
+      fixedTokensPerCall: row.fixedTokensPerCall,
     };
+  }
+
+  /**
+   * @description 按提供商代码、模型类型与可选模型读取调用时计费配置。
+   * @keyword-cn 提供商计费配置, Token兑换率
+   * @keyword-en provider-billing-config, token-credit-rate
+   */
+  async getAiProviderBillingConfig(
+    providerCode: string,
+    modelCategory: 'llm' | 'image',
+    model?: string,
+  ): Promise<AdminAiProviderEntity | null> {
+    const code = String(providerCode ?? '').trim();
+    const normalizedModel = String(model ?? '').trim();
+    const exact = normalizedModel
+      ? await this.aiProviders.findOne({
+          enabled: true,
+          providerCode: code,
+          modelCategory,
+          model: normalizedModel,
+        })
+      : null;
+    if (exact) return exact;
+    return this.aiProviders.findOne(
+      { enabled: true, providerCode: code, modelCategory },
+      { sort: { isDefault: -1, updatedAt: -1 } },
+    );
   }
 
   /**
@@ -894,10 +1082,43 @@ export class AdminService {
    */
   async createTenant(
     currentUser: AdminUserEntity,
-    input: { name: string; description?: string },
+    input: {
+      name: string;
+      description?: string;
+      xhsArticleConcurrencyLimit?: number;
+      credit?: number;
+    },
   ) {
     this.assertSuperAdmin(currentUser);
-    return this.sassService.createTenant(input);
+    const initialCredit = input.credit ?? 0;
+    const tenant = await this.sassService.createTenant({
+      ...input,
+      credit: 0,
+    });
+    if (initialCredit > 0) {
+      const result = await this.applyCreditChange(currentUser, tenant._id, {
+        amount: initialCredit,
+        type: 'initial_credit',
+        reason: '创建租户初始额度',
+      });
+      return result.tenant;
+    }
+    await this.creditTransactions.insertOne({
+      _id: new ObjectId(),
+      transactionId: randomUUID(),
+      tenantId: tenant._id.toHexString(),
+      type: 'initial_credit',
+      amount: 0,
+      amountUnits: 0,
+      balanceBefore: 0,
+      balanceAfter: 0,
+      reason: '创建租户初始额度',
+      operatorType: 'admin',
+      operatorId: currentUser._id.toHexString(),
+      operatorName: currentUser.displayName || currentUser.username,
+      createdAt: new Date(),
+    });
+    return tenant;
   }
 
   /**
@@ -907,7 +1128,11 @@ export class AdminService {
   async updateTenant(
     currentUser: AdminUserEntity,
     id: string,
-    input: { name?: string; description?: string },
+    input: {
+      name?: string;
+      description?: string;
+      xhsArticleConcurrencyLimit?: number;
+    },
   ): Promise<SassTenantEntity | null> {
     this.assertSuperAdmin(currentUser);
     const tenantId = this.toObjectId(id, 'INVALID_TENANT_ID');
@@ -918,12 +1143,262 @@ export class AdminService {
     if (typeof input.description === 'string') {
       updates.description = input.description.trim() || undefined;
     }
+    if (typeof input.xhsArticleConcurrencyLimit === 'number') {
+      updates.xhsArticleConcurrencyLimit = input.xhsArticleConcurrencyLimit;
+    }
     const res = await this.sassTenants.findOneAndUpdate(
       { _id: tenantId },
       { $set: updates },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;
+  }
+
+  /**
+   * @description 查询租户当前 Credit 余额及不可篡改的倒序流水。
+   * @keyword-cn Credit账户查询, 流水查询
+   * @keyword-en credit-account-query, transaction-list
+   */
+  async getTenantCreditAccount(
+    currentUser: AdminUserEntity,
+    id: string,
+    input: { limit?: number; before?: Date },
+  ): Promise<{
+    tenant: SassTenantEntity;
+    transactions: AiCreditTransactionEntity[];
+  }> {
+    this.assertSuperAdmin(currentUser);
+    const tenantId = this.toObjectId(id, 'INVALID_TENANT_ID');
+    const tenant = await this.sassTenants.findOne({ _id: tenantId });
+    if (!tenant) throw new NotFoundException('TENANT_NOT_FOUND');
+    const filter: Record<string, unknown> = {
+      tenantId: tenantId.toHexString(),
+    };
+    if (input.before) filter.createdAt = { $lt: input.before };
+    const transactions = await this.creditTransactions
+      .find(filter)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(200, Math.max(1, input.limit ?? 50)))
+      .toArray();
+    return { tenant, transactions };
+  }
+
+  /**
+   * @description 为租户追加一笔正数充值并原子更新 Credit 余额。
+   * @keyword-cn 租户充值, 原子入账
+   * @keyword-en tenant-recharge, atomic-credit
+   */
+  async rechargeTenantCredit(
+    currentUser: AdminUserEntity,
+    id: string,
+    input: { amount: number; reason: string; referenceId?: string },
+  ) {
+    this.assertSuperAdmin(currentUser);
+    return this.applyCreditChange(
+      currentUser,
+      this.toObjectId(id, 'INVALID_TENANT_ID'),
+      { ...input, type: 'recharge' },
+    );
+  }
+
+  /**
+   * @description 为租户追加一笔正数或负数人工调账并原子更新余额。
+   * @keyword-cn 人工调账, 原子余额
+   * @keyword-en manual-credit-adjustment, atomic-balance
+   */
+  async adjustTenantCredit(
+    currentUser: AdminUserEntity,
+    id: string,
+    input: { amount: number; reason: string; referenceId?: string },
+  ) {
+    this.assertSuperAdmin(currentUser);
+    return this.applyCreditChange(
+      currentUser,
+      this.toObjectId(id, 'INVALID_TENANT_ID'),
+      { ...input, type: 'manual_adjustment' },
+    );
+  }
+
+  /**
+   * @description 在 Mongo 事务中同时写入余额与追加式流水，负数调账不允许透支。
+   * @keyword-cn 余额流水事务, 禁止透支
+   * @keyword-en balance-ledger-transaction, overdraft-guard
+   */
+  private async applyCreditChange(
+    currentUser: AdminUserEntity,
+    tenantId: ObjectId,
+    input: {
+      amount: number;
+      type: 'initial_credit' | 'recharge' | 'manual_adjustment';
+      reason: string;
+      referenceId?: string;
+    },
+  ): Promise<{
+    tenant: SassTenantEntity;
+    transaction: AiCreditTransactionEntity;
+  }> {
+    const amountUnits = Math.round(input.amount * 1_000_000);
+    if (!Number.isSafeInteger(amountUnits) || amountUnits === 0) {
+      throw new BadRequestException('CREDIT_AMOUNT_INVALID');
+    }
+    const session = this.db.client.startSession();
+    try {
+      let result:
+        | {
+            tenant: SassTenantEntity;
+            transaction: AiCreditTransactionEntity;
+          }
+        | undefined;
+      try {
+        await session.withTransaction(async () => {
+          result = await this.commitCreditChange(
+            currentUser,
+            tenantId,
+            input,
+            amountUnits,
+            session,
+          );
+        });
+      } catch (error) {
+        if (!this.isMongoTransactionUnsupported(error)) throw error;
+        result = await this.commitCreditChange(
+          currentUser,
+          tenantId,
+          input,
+          amountUnits,
+        );
+      }
+      if (!result) throw new Error('CREDIT_TRANSACTION_NOT_COMMITTED');
+      return result;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  /**
+   * @description 执行一次余额条件更新与流水追加；单机模式写流水失败时补偿回滚余额。
+   * @keyword-cn 提交余额流水, 单机补偿
+   * @keyword-en commit-credit-ledger, standalone-compensation
+   */
+  private async commitCreditChange(
+    currentUser: AdminUserEntity,
+    tenantId: ObjectId,
+    input: {
+      amount: number;
+      type: 'initial_credit' | 'recharge' | 'manual_adjustment';
+      reason: string;
+      referenceId?: string;
+    },
+    amountUnits: number,
+    session?: ClientSession,
+  ): Promise<{
+    tenant: SassTenantEntity;
+    transaction: AiCreditTransactionEntity;
+  }> {
+    const referenceId = input.referenceId?.trim() || undefined;
+    const options = session ? { session } : undefined;
+    if (referenceId) {
+      const existing = await this.creditTransactions.findOne(
+        {
+          tenantId: tenantId.toHexString(),
+          referenceId,
+          operatorType: 'admin',
+        },
+        options,
+      );
+      if (existing) {
+        const existingTenant = await this.sassTenants.findOne(
+          { _id: tenantId },
+          options,
+        );
+        if (!existingTenant) throw new NotFoundException('TENANT_NOT_FOUND');
+        return { tenant: existingTenant, transaction: existing };
+      }
+    }
+    const tenant = await this.sassTenants.findOne({ _id: tenantId }, options);
+    if (!tenant) throw new NotFoundException('TENANT_NOT_FOUND');
+    const wasUnlimited = tenant.credit === -1 || tenant.creditUnits === -1;
+    if (wasUnlimited && amountUnits < 0) {
+      throw new BadRequestException('UNLIMITED_CREDIT_CANNOT_DEBIT');
+    }
+    const beforeUnits = wasUnlimited
+      ? -1
+      : typeof tenant.creditUnits === 'number'
+        ? tenant.creditUnits
+        : Math.round(Math.max(0, tenant.credit) * 1_000_000);
+    const afterUnits = wasUnlimited ? amountUnits : beforeUnits + amountUnits;
+    if (afterUnits < 0) throw new BadRequestException('CREDIT_OVERDRAFT');
+    const now = new Date();
+    const balanceFilter: Record<string, unknown> = wasUnlimited
+      ? { _id: tenantId, credit: -1 }
+      : { _id: tenantId, creditUnits: beforeUnits };
+    const update = await this.sassTenants.findOneAndUpdate(
+      balanceFilter,
+      {
+        $set: {
+          creditUnits: afterUnits,
+          credit: afterUnits / 1_000_000,
+          updatedAt: now,
+        },
+      },
+      { returnDocument: 'after', includeResultMetadata: true, ...options },
+    );
+    if (!update.value) throw new BadRequestException('CREDIT_BALANCE_CONFLICT');
+    const transaction: AiCreditTransactionEntity = {
+      _id: new ObjectId(),
+      transactionId: randomUUID(),
+      tenantId: tenantId.toHexString(),
+      type: input.type,
+      amount: amountUnits / 1_000_000,
+      amountUnits,
+      balanceBefore: wasUnlimited ? -1 : beforeUnits / 1_000_000,
+      balanceAfter: afterUnits / 1_000_000,
+      reason: input.reason.trim(),
+      operatorType: 'admin',
+      operatorId: currentUser._id.toHexString(),
+      operatorName: currentUser.displayName || currentUser.username,
+      referenceId,
+      createdAt: now,
+    };
+    try {
+      await this.creditTransactions.insertOne(transaction, options);
+    } catch (error) {
+      if (!session) {
+        await this.sassTenants.updateOne(
+          { _id: tenantId, creditUnits: afterUnits },
+          {
+            $set: {
+              creditUnits: beforeUnits,
+              credit: wasUnlimited ? -1 : beforeUnits / 1_000_000,
+              updatedAt: new Date(),
+            },
+          },
+        );
+      }
+      throw error;
+    }
+    return { tenant: update.value, transaction };
+  }
+
+  /**
+   * @description 识别 Mongo 单机不支持事务的稳定错误，允许切换到补偿式写入。
+   * @keyword-cn 单机事务识别, 降级写入
+   * @keyword-en transaction-support-detect, fallback-write
+   */
+  private isMongoTransactionUnsupported(error: unknown): boolean {
+    const record =
+      error && typeof error === 'object'
+        ? (error as { code?: unknown; message?: unknown })
+        : {};
+    const code = Number(record.code);
+    const message =
+      typeof record.message === 'string' ? record.message.toLowerCase() : '';
+    return (
+      code === 20 ||
+      code === 263 ||
+      message.includes('transaction numbers are only allowed') ||
+      message.includes('transactions are not supported')
+    );
   }
 
   /**
@@ -1749,17 +2224,17 @@ export class AdminService {
   }
 
   /**
-   * @description 按 tenantId 获取平台 AI 补充说明文本。
+   * @description 按 tenantId 获取平台 AI 补充说明文本，母平台调用时读取全局平台配置。
    * @param {string | undefined} tenantId - 租户 ID。
    * @returns {Promise<string>} 补充说明文本；无配置时返回空字符串。
-   * @keyword-en get tenant platform ai prompt supplement
+   * @keyword-cn 平台AI提示词, 母平台回退
+   * @keyword-en platform-ai-prompt, platform-scope-fallback
    */
   async getTenantPlatformAiPromptSupplement(
     tenantId?: string,
   ): Promise<string> {
     const id = String(tenantId ?? '').trim();
-    if (!id) return '';
-    const info = await this.sassService.getPlatformInfo(id);
+    const info = await this.sassService.getPlatformInfo(id || undefined);
     return String(info?.aiPromptSupplement ?? '').trim();
   }
 
@@ -1775,6 +2250,7 @@ export class AdminService {
     adminUser: AdminUserEntity,
     aiPromptSupplement: string,
     enableAiCover?: boolean,
+    xhsArticleGlobalConcurrencyLimit?: number,
   ): Promise<object> {
     // 租户管理员只能管理自己的租户，平台管理员可以管理任何租户
     if (adminUser.role !== 'tenant_admin' && adminUser.role !== 'super_admin') {
@@ -1789,8 +2265,36 @@ export class AdminService {
       tenantId,
       aiPromptSupplement,
       enableAiCover,
+      adminUser.role === 'super_admin'
+        ? xhsArticleGlobalConcurrencyLimit
+        : undefined,
     );
     return { platformInfo: info };
+  }
+
+  /**
+   * @description 读取文章生成的全平台与指定租户并发上限，历史配置使用安全默认值。
+   * @keyword-cn 文章生成并发配置, 租户并发上限
+   * @keyword-en article-generation-concurrency, tenant-concurrency-limit
+   */
+  async getXhsArticleConcurrencyLimits(tenantId?: string): Promise<{
+    globalLimit: number;
+    tenantLimit: number;
+  }> {
+    const normalized = String(tenantId ?? '').trim();
+    const [platformInfo, tenant] = await Promise.all([
+      this.sassService.getPlatformInfo(),
+      normalized
+        ? this.sassService.getTenant(normalized)
+        : Promise.resolve(null),
+    ]);
+    return {
+      globalLimit: Math.max(
+        1,
+        platformInfo?.xhsArticleGlobalConcurrencyLimit ?? 4,
+      ),
+      tenantLimit: Math.max(1, tenant?.xhsArticleConcurrencyLimit ?? 2),
+    };
   }
 
   // ─── LLM Settings CRUD ───────────────────────────────────────────────────────

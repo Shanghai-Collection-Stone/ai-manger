@@ -176,6 +176,20 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'kimi', label: 'Kimi (Moonshot)' },
 ];
 
+/**
+ * @description Credit 流水类型的后台中文标签。
+ * @keyword-cn 流水类型标签, Credit账本
+ * @keyword-en transaction-type-label, credit-ledger
+ */
+const CREDIT_TRANSACTION_LABELS = {
+  initial_credit: '初始额度',
+  recharge: '充值',
+  manual_adjustment: '人工调账',
+  service_charge: '服务消费',
+  provider_charge: '模型消费',
+  refund: '退款',
+};
+
 const getRoleLabel = (role) => {
   const match = ROLE_OPTIONS.find((item) => item.value === role);
   return match?.label || role || '';
@@ -278,6 +292,7 @@ const FINANCE_KINDS = [
 const ALL_TABS = [
   { id: 'users', label: '用户管理' },
   { id: 'providers', label: 'Ai提供商设置', platformOnly: true },
+  { id: 'ai_services', label: '服务管理', platformOnly: true },
   { id: 'tenants', label: '租户管理', platformOnly: true },
   { id: 'keys', label: 'key管理' },
   { id: 'sources', label: '数据源管理' },
@@ -359,6 +374,8 @@ const AdminApp = () => {
   const [me, setMe] = useState(null);
   const [users, setUsers] = useState([]);
   const [providers, setProviders] = useState([]);
+  const [aiServices, setAiServices] = useState([]);
+  const [savingServiceCode, setSavingServiceCode] = useState('');
   const [tenants, setTenants] = useState([]);
   const [keys, setKeys] = useState([]);
   const [sources, setSources] = useState([]);
@@ -416,6 +433,18 @@ const AdminApp = () => {
   const [editingUserId, setEditingUserId] = useState('');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
+  /** Credit 充值/调账及流水弹窗状态 | @keyword-en credit account dialog state */
+  const [creditAccountDialog, setCreditAccountDialog] = useState({
+    open: false,
+    tenant: null,
+    transactions: [],
+    loading: false,
+    submitting: false,
+    mode: 'recharge',
+    amount: '',
+    reason: '',
+    referenceId: '',
+  });
   const [editingKeyId, setEditingKeyId] = useState('');
   const [editingSourceCode, setEditingSourceCode] = useState('');
   const [editingDashboardConfigId, setEditingDashboardConfigId] = useState('');
@@ -482,11 +511,15 @@ const AdminApp = () => {
       apiKey: '',
       enabled: true,
       isDefault: false,
+      tokensPerCredit: '',
+      fixedTokensPerCall: '',
     },
     tenant: {
       name: '',
       description: '',
       superClawId: '',
+      xhsArticleConcurrencyLimit: 2,
+      initialCredit: 0,
     },
     key: {
       tenantId: '',
@@ -511,6 +544,7 @@ const AdminApp = () => {
     platformInfo: {
       aiPromptSupplement: '',
       enableAiCover: false,
+      xhsArticleGlobalConcurrencyLimit: 4,
     },
     clawConfig: {
       name: '',
@@ -582,9 +616,10 @@ const AdminApp = () => {
       const isSA = meRes?.role === 'super_admin';
 
       // 母平台加载全部数据；租户跳过 providers / tenants
-      const [u, p, t, k, s, dc] = await Promise.all([
+      const [u, p, serviceResult, t, k, s, dc] = await Promise.all([
         adminApi.listUsers(),
         isSA ? adminApi.listProviders() : { providers: [] },
+        isSA ? adminApi.listAiServices() : { services: [] },
         adminApi.listTenants(),
         adminApi.listKeys(),
         adminApi.listDataSources(),
@@ -593,6 +628,7 @@ const AdminApp = () => {
       const tenantRows = t.tenants || [];
       setUsers(u.users || []);
       setProviders(p.providers || []);
+      setAiServices(serviceResult.services || []);
       setTenants(tenantRows);
       setKeys(k.keys || []);
       setSources(s.sources || []);
@@ -621,6 +657,8 @@ const AdminApp = () => {
           platformInfo: {
             aiPromptSupplement: pi.platformInfo?.aiPromptSupplement || '',
             enableAiCover: Boolean(pi.platformInfo?.enableAiCover),
+            xhsArticleGlobalConcurrencyLimit:
+              pi.platformInfo?.xhsArticleGlobalConcurrencyLimit || 4,
           },
         }));
       } catch {
@@ -881,6 +919,7 @@ const AdminApp = () => {
     const res = await adminApi.upsertPlatformInfo(
       forms.platformInfo.aiPromptSupplement,
       forms.platformInfo.enableAiCover,
+      Number(forms.platformInfo.xhsArticleGlobalConcurrencyLimit) || 4,
     );
     setPlatformInfo(res.platformInfo || null);
     setForms((prev) => ({
@@ -888,6 +927,8 @@ const AdminApp = () => {
       platformInfo: {
         aiPromptSupplement: res.platformInfo?.aiPromptSupplement || '',
         enableAiCover: Boolean(res.platformInfo?.enableAiCover),
+        xhsArticleGlobalConcurrencyLimit:
+          res.platformInfo?.xhsArticleGlobalConcurrencyLimit || 4,
       },
     }));
     setNotice('平台AI配置已保存');
@@ -2034,6 +2075,15 @@ const AdminApp = () => {
       apiKey: forms.provider.apiKey.trim() || undefined,
       enabled: forms.provider.enabled,
       isDefault: forms.provider.isDefault,
+      tokensPerCredit:
+        Number(forms.provider.tokensPerCredit) > 0
+          ? Number(forms.provider.tokensPerCredit)
+          : undefined,
+      fixedTokensPerCall:
+        Number(forms.provider.fixedTokensPerCall) >= 0 &&
+        forms.provider.fixedTokensPerCall !== ''
+          ? Number(forms.provider.fixedTokensPerCall)
+          : undefined,
     };
     if (editingProviderId) {
       const res = await adminApi.updateProvider(editingProviderId, payload);
@@ -2060,6 +2110,31 @@ const AdminApp = () => {
     await adminApi.deleteProvider(id);
     setProviders((prev) => prev.filter((item) => item._id !== id));
     setNotice('AI提供商已删除');
+  };
+
+  /**
+   * @description 保存代码内固定服务的 Credit 消耗点数并刷新该行。
+   * @keyword-cn 保存服务点数, 服务管理
+   * @keyword-en save-service-credit, service-management
+   */
+  const onSaveAiServiceCredit = async (service) => {
+    const creditCost = Number(service.creditCost);
+    if (!Number.isFinite(creditCost) || creditCost < 0) {
+      throw new Error('Credit 点数必须是大于或等于 0 的数字');
+    }
+    setSavingServiceCode(service.code);
+    try {
+      const res = await adminApi.updateAiServiceCredit(
+        service.code,
+        creditCost,
+      );
+      setAiServices((prev) =>
+        prev.map((item) => (item.code === service.code ? res.service : item)),
+      );
+      setNotice(`${service.name}点数已更新`);
+    } finally {
+      setSavingServiceCode('');
+    }
   };
 
   const [testingProviderId, setTestingProviderId] = useState('');
@@ -2100,6 +2175,11 @@ const AdminApp = () => {
     const payload = {
       name: forms.tenant.name.trim(),
       description: forms.tenant.description.trim() || undefined,
+      xhsArticleConcurrencyLimit:
+        Number(forms.tenant.xhsArticleConcurrencyLimit) || 2,
+      ...(!editingTenantId
+        ? { credit: Math.max(0, Number(forms.tenant.initialCredit) || 0) }
+        : {}),
     };
     const superClawId = toText(forms.tenant.superClawId).trim();
     if (editingTenantId) {
@@ -2136,6 +2216,85 @@ const AdminApp = () => {
     }
     await reloadSuperClaws();
     setNotice('租户已创建');
+  };
+
+  /**
+   * @description 打开租户 Credit 账户弹窗并读取最新余额和流水。
+   * @keyword-cn 打开充值流水, Credit账户
+   * @keyword-en open-credit-ledger, credit-account
+   */
+  const onOpenCreditAccount = async (tenant) => {
+    setCreditAccountDialog((prev) => ({
+      ...prev,
+      open: true,
+      tenant,
+      transactions: [],
+      loading: true,
+      amount: '',
+      reason: '',
+      referenceId: '',
+    }));
+    try {
+      const account = await adminApi.getTenantCreditAccount(tenant._id, {
+        limit: 100,
+      });
+      setCreditAccountDialog((prev) => ({
+        ...prev,
+        tenant: account.tenant,
+        transactions: account.transactions || [],
+      }));
+    } finally {
+      setCreditAccountDialog((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  /**
+   * @description 追加充值或人工调账流水，并用接口返回余额刷新租户列表。
+   * @keyword-cn 提交充值调账, 余额刷新
+   * @keyword-en submit-credit-change, balance-refresh
+   */
+  const onSubmitCreditChange = async () => {
+    const tenantId = creditAccountDialog.tenant?._id;
+    const amount = Number(creditAccountDialog.amount);
+    const reason = toText(creditAccountDialog.reason).trim();
+    if (!tenantId) throw new Error('租户不存在');
+    if (!Number.isFinite(amount) || amount === 0) {
+      throw new Error('请输入非零 Credit 数量');
+    }
+    if (creditAccountDialog.mode === 'recharge' && amount <= 0) {
+      throw new Error('充值数量必须大于 0');
+    }
+    if (reason.length < 2) throw new Error('请填写至少 2 个字的原因');
+    const payload = {
+      amount,
+      reason,
+      referenceId: toText(creditAccountDialog.referenceId).trim() || undefined,
+    };
+    setCreditAccountDialog((prev) => ({ ...prev, submitting: true }));
+    try {
+      const result =
+        creditAccountDialog.mode === 'recharge'
+          ? await adminApi.rechargeTenantCredit(tenantId, payload)
+          : await adminApi.adjustTenantCredit(tenantId, payload);
+      setTenants((prev) =>
+        prev.map((item) => (item._id === tenantId ? result.tenant : item)),
+      );
+      setCreditAccountDialog((prev) => ({
+        ...prev,
+        tenant: result.tenant,
+        transactions: [result.transaction, ...prev.transactions],
+        amount: '',
+        reason: '',
+        referenceId: '',
+      }));
+      setNotice(
+        creditAccountDialog.mode === 'recharge'
+          ? 'Credit 充值已入账'
+          : 'Credit 调账已入账',
+      );
+    } finally {
+      setCreditAccountDialog((prev) => ({ ...prev, submitting: false }));
+    }
   };
 
   /**
@@ -2672,6 +2831,28 @@ const AdminApp = () => {
                   updateForm('provider', 'apiKey', e.target.value)
                 }
               />
+              <input
+                type="number"
+                min="1"
+                step="1"
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="1 Credit 对应 Token 数"
+                value={forms.provider.tokensPerCredit}
+                onChange={(e) =>
+                  updateForm('provider', 'tokensPerCredit', e.target.value)
+                }
+              />
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className="w-full border rounded px-3 py-2 text-sm"
+                placeholder="每次固定 Token（非流式/生图有限额度必填）"
+                value={forms.provider.fixedTokensPerCall}
+                onChange={(e) =>
+                  updateForm('provider', 'fixedTokensPerCall', e.target.value)
+                }
+              />
               <select
                 className="w-full border rounded px-3 py-2 text-sm"
                 value={forms.provider.enabled ? '1' : '0'}
@@ -2744,6 +2925,16 @@ const AdminApp = () => {
                         模型：{item.model || '-'}
                       </div>
                       <div className="text-xs text-slate-500">
+                        兑换：1 Credit = {item.tokensPerCredit || '未配置'}{' '}
+                        Token
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        计费：
+                        {item.fixedTokensPerCall
+                          ? `每次固定 ${item.fixedTokensPerCall} Token`
+                          : '按真实 Token'}
+                      </div>
+                      <div className="text-xs text-slate-500">
                         {item.isDefault
                           ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : '非EM'}默认`
                           : '候选提供商'}
@@ -2765,6 +2956,8 @@ const AdminApp = () => {
                               apiKey: item.apiKey || '',
                               enabled: Boolean(item.enabled),
                               isDefault: Boolean(item.isDefault),
+                              tokensPerCredit: item.tokensPerCredit || '',
+                              fixedTokensPerCall: item.fixedTokensPerCall || '',
                             },
                           }));
                         }}
@@ -2808,6 +3001,79 @@ const AdminApp = () => {
           </div>
         ) : null}
 
+        {activeTab === 'ai_services' ? (
+          <div className="bg-white border border-slate-200 rounded-xl p-4">
+            <div className="mb-4">
+              <h2 className="font-semibold text-slate-900">服务管理</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                服务编码和名称固定在代码中，后台仅可修改每次调用消耗的 Credit
+                点数。
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-slate-500">
+                    <th className="px-3 py-2 font-medium">英文编码</th>
+                    <th className="px-3 py-2 font-medium">服务名</th>
+                    <th className="px-3 py-2 font-medium">消耗 Credit</th>
+                    <th className="px-3 py-2 font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aiServices.map((service) => (
+                    <tr
+                      key={service.code}
+                      className="border-b border-slate-100"
+                    >
+                      <td className="px-3 py-3 font-mono text-xs text-slate-700">
+                        {service.code}
+                      </td>
+                      <td className="px-3 py-3 text-slate-900">
+                        {service.name}
+                      </td>
+                      <td className="px-3 py-3">
+                        <input
+                          type="number"
+                          min="0"
+                          max="1000000"
+                          step="0.000001"
+                          className="w-40 border rounded px-3 py-2 text-sm"
+                          value={service.creditCost}
+                          onChange={(event) =>
+                            setAiServices((prev) =>
+                              prev.map((item) =>
+                                item.code === service.code
+                                  ? { ...item, creditCost: event.target.value }
+                                  : item,
+                              ),
+                            )
+                          }
+                        />
+                      </td>
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={() =>
+                            onSaveAiServiceCredit(service).catch((err) =>
+                              setError(err.message),
+                            )
+                          }
+                          disabled={savingServiceCode === service.code}
+                          className="px-3 py-2 bg-slate-900 text-white text-xs rounded disabled:opacity-60"
+                        >
+                          {savingServiceCode === service.code
+                            ? '保存中…'
+                            : '保存点数'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+
         {activeTab === 'tenants' ? (
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
@@ -2828,6 +3094,42 @@ const AdminApp = () => {
                   updateForm('tenant', 'description', e.target.value)
                 }
               />
+              <label className="block text-xs text-slate-600">
+                文章生成并发上限
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                  value={forms.tenant.xhsArticleConcurrencyLimit}
+                  onChange={(e) =>
+                    updateForm(
+                      'tenant',
+                      'xhsArticleConcurrencyLimit',
+                      e.target.value,
+                    )
+                  }
+                />
+              </label>
+              {!editingTenantId ? (
+                <label className="block text-xs text-slate-600">
+                  初始 Credit（创建后请通过充值或调账变更）
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.000001"
+                    className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                    value={forms.tenant.initialCredit}
+                    onChange={(e) =>
+                      updateForm('tenant', 'initialCredit', e.target.value)
+                    }
+                  />
+                </label>
+              ) : (
+                <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Credit 余额不允许直接覆盖，请在租户列表中点击“充值/流水”。
+                </div>
+              )}
               <select
                 className="w-full border rounded px-3 py-2 text-sm"
                 value={forms.tenant.superClawId}
@@ -2865,6 +3167,8 @@ const AdminApp = () => {
                           name: '',
                           description: '',
                           superClawId: '',
+                          xhsArticleConcurrencyLimit: 2,
+                          initialCredit: 0,
                         },
                       }));
                     }}
@@ -2900,8 +3204,25 @@ const AdminApp = () => {
                           (node) => node._id === item.superClawId,
                         )?.name || '未分配'}
                       </div>
+                      <div className="text-xs text-slate-500">
+                        文章并发：{item.xhsArticleConcurrencyLimit || 2}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        Credit：
+                        {item.credit === -1 ? '∞' : (item.credit ?? -1)}
+                      </div>
                     </div>
                     <div className="flex flex-col gap-1">
+                      <button
+                        onClick={() =>
+                          onOpenCreditAccount(item).catch((err) =>
+                            setError(err.message),
+                          )
+                        }
+                        className="text-xs px-2 py-1 h-fit rounded border border-emerald-300 text-emerald-700"
+                      >
+                        充值/流水
+                      </button>
                       <button
                         onClick={() => {
                           setEditingTenantId(item._id);
@@ -2912,6 +3233,9 @@ const AdminApp = () => {
                               name: item.name || '',
                               description: item.description || '',
                               superClawId: item.superClawId || '',
+                              xhsArticleConcurrencyLimit:
+                                item.xhsArticleConcurrencyLimit || 2,
+                              initialCredit: 0,
                             },
                           }));
                         }}
@@ -2938,6 +3262,205 @@ const AdminApp = () => {
                 () => gotoPage('tenants', pages.tenants - 1),
                 () => gotoPage('tenants', pages.tenants + 1),
               )}
+            </div>
+          </div>
+        ) : null}
+
+        {creditAccountDialog.open ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+            <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white shadow-xl">
+              <div className="sticky top-0 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4">
+                <div>
+                  <h2 className="font-semibold text-slate-900">
+                    {creditAccountDialog.tenant?.name || '租户'} · Credit 账户
+                  </h2>
+                  <div className="mt-1 text-sm text-slate-500">
+                    当前余额：
+                    <span className="font-semibold text-slate-900">
+                      {creditAccountDialog.tenant?.credit === -1
+                        ? '∞'
+                        : (creditAccountDialog.tenant?.credit ?? '-')}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() =>
+                    setCreditAccountDialog((prev) => ({
+                      ...prev,
+                      open: false,
+                    }))
+                  }
+                  className="rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-600"
+                >
+                  关闭
+                </button>
+              </div>
+
+              <div className="grid gap-4 p-5 lg:grid-cols-[280px_1fr]">
+                <div className="h-fit space-y-3 rounded-lg border border-slate-200 p-4">
+                  <div className="flex rounded-lg bg-slate-100 p-1 text-sm">
+                    {[
+                      { id: 'recharge', label: '充值' },
+                      { id: 'adjust', label: '人工调账' },
+                    ].map((mode) => (
+                      <button
+                        key={mode.id}
+                        onClick={() =>
+                          setCreditAccountDialog((prev) => ({
+                            ...prev,
+                            mode: mode.id,
+                            amount: '',
+                          }))
+                        }
+                        className={`flex-1 rounded px-2 py-1.5 ${
+                          creditAccountDialog.mode === mode.id
+                            ? 'bg-white font-medium text-slate-900 shadow-sm'
+                            : 'text-slate-500'
+                        }`}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+                  {creditAccountDialog.tenant?.credit === -1 ? (
+                    // 服务端对无限额度租户入账时直接把余额置为本次数量，之后按余额计费，这里提前说清楚
+                    <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                      当前是无限额度（∞）。入账后会切换为按余额计费，余额等于本次填写的数量；无限额度下不能扣减。
+                    </div>
+                  ) : null}
+                  <label className="block text-xs text-slate-600">
+                    {creditAccountDialog.mode === 'recharge'
+                      ? '充值 Credit'
+                      : '变动 Credit（负数为扣减）'}
+                    <input
+                      type="number"
+                      min={
+                        creditAccountDialog.mode === 'recharge'
+                          ? '0.000001'
+                          : undefined
+                      }
+                      step="0.000001"
+                      value={creditAccountDialog.amount}
+                      onChange={(event) =>
+                        setCreditAccountDialog((prev) => ({
+                          ...prev,
+                          amount: event.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full rounded border px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-600">
+                    原因（必填）
+                    <textarea
+                      value={creditAccountDialog.reason}
+                      onChange={(event) =>
+                        setCreditAccountDialog((prev) => ({
+                          ...prev,
+                          reason: event.target.value,
+                        }))
+                      }
+                      rows={3}
+                      className="mt-1 w-full rounded border px-3 py-2 text-sm"
+                      placeholder="例如：线下付款充值"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-600">
+                    外部单号（可选）
+                    <input
+                      value={creditAccountDialog.referenceId}
+                      onChange={(event) =>
+                        setCreditAccountDialog((prev) => ({
+                          ...prev,
+                          referenceId: event.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full rounded border px-3 py-2 text-sm"
+                      placeholder="支付单号或内部审批号"
+                    />
+                  </label>
+                  <button
+                    onClick={() =>
+                      onSubmitCreditChange().catch((err) =>
+                        setError(err.message),
+                      )
+                    }
+                    disabled={creditAccountDialog.submitting}
+                    className="w-full rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-60"
+                  >
+                    {creditAccountDialog.submitting
+                      ? '入账中…'
+                      : creditAccountDialog.mode === 'recharge'
+                        ? '确认充值'
+                        : '确认调账'}
+                  </button>
+                </div>
+
+                <div className="overflow-hidden rounded-lg border border-slate-200">
+                  <div className="border-b border-slate-200 px-4 py-3 font-medium text-slate-900">
+                    Credit 流水
+                  </div>
+                  {creditAccountDialog.loading ? (
+                    <div className="p-6 text-center text-sm text-slate-500">
+                      加载中…
+                    </div>
+                  ) : creditAccountDialog.transactions.length === 0 ? (
+                    <div className="p-6 text-center text-sm text-slate-500">
+                      暂无流水
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {creditAccountDialog.transactions.map((transaction) => (
+                        <div key={transaction.transactionId} className="p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-medium text-slate-900">
+                                {CREDIT_TRANSACTION_LABELS[transaction.type] ||
+                                  transaction.type}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {transaction.reason}
+                              </div>
+                            </div>
+                            <div
+                              className={`font-mono text-sm font-semibold ${
+                                transaction.amount >= 0
+                                  ? 'text-emerald-600'
+                                  : 'text-rose-600'
+                              }`}
+                            >
+                              {transaction.amount >= 0 ? '+' : ''}
+                              {transaction.amount}
+                            </div>
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                            <span>
+                              余额：{transaction.balanceBefore} →{' '}
+                              {transaction.balanceAfter}
+                            </span>
+                            <span>
+                              {new Date(transaction.createdAt).toLocaleString()}
+                            </span>
+                            <span>
+                              操作人：
+                              {transaction.operatorName ||
+                                (transaction.operatorType === 'system'
+                                  ? '系统'
+                                  : '-')}
+                            </span>
+                            {transaction.referenceId ? (
+                              <span>单号：{transaction.referenceId}</span>
+                            ) : null}
+                            {transaction.serviceName ? (
+                              <span>服务：{transaction.serviceName}</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         ) : null}
@@ -4647,7 +5170,8 @@ const AdminApp = () => {
                       ) : null}
                       {tikhub?.apiKeySource === 'env' ? (
                         <div className="text-slate-400">
-                          当前使用环境变量 TIKHUB_API_KEY 兜底；在此填写后以本页配置为准。
+                          当前使用环境变量 TIKHUB_API_KEY
+                          兜底；在此填写后以本页配置为准。
                         </div>
                       ) : null}
                       {tikhub?.updatedAt ? (
@@ -5706,6 +6230,30 @@ const AdminApp = () => {
                     </span>
                   </label>
                 </div>
+                {isSuperAdmin(currentRole) ? (
+                  <label className="mb-3 block rounded-lg border border-slate-200 p-3 text-sm text-slate-800">
+                    全平台文章生成总并发上限
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      className="mt-2 w-full border rounded px-3 py-2 text-sm"
+                      value={
+                        forms.platformInfo.xhsArticleGlobalConcurrencyLimit
+                      }
+                      onChange={(e) =>
+                        updateForm(
+                          'platformInfo',
+                          'xhsArticleGlobalConcurrencyLimit',
+                          e.target.value,
+                        )
+                      }
+                    />
+                    <span className="mt-1 block text-xs text-slate-500">
+                      所有租户正在执行的文章任务合计不会超过此值，超出的任务进入等待队列。
+                    </span>
+                  </label>
+                ) : null}
                 <MDEditor
                   height={500}
                   value={forms.platformInfo.aiPromptSupplement}

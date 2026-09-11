@@ -53,7 +53,7 @@ Article-Library
 - `getMaxArticleId()` — 读取当前最大文章业务 ID | keywords: article-id-counter, 文章入库, 计数器校准
 - `ensureCounterAtLeast(seq)` — 将 articles counter 至少推进到指定下限 | keywords: article-id-counter, 文章入库, 计数器校准
 - `nextId()` — 分配新文章业务 ID 前先校准 counter | keywords: article-id-counter, 文章入库, 计数器校准
-- `create(input)` — 单篇文章入库 | keywords: article, create
+- `create(input)` — 单篇文章入库；以 `published` 入库时同时写 `publishedAt` 并通知抓取调度 | keywords: article, create
 - `bulkCreate(inputs)` — 批量文章入库 | keywords: article, bulk-create
 - `get(id,tenantId?)` — 获取当前租户可见文章 | keywords: article, get
 - `list(params)` — 按文章库、状态和 FIFO 顺序列出文章 | keywords: article, list

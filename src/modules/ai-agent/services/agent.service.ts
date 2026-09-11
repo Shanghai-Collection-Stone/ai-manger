@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { Agent as UndiciAgent, ProxyAgent as UndiciProxyAgent } from 'undici';
 import { resolveProxyUriFromEnv } from '../../../shared/network/proxy.js';
@@ -45,6 +46,11 @@ import { MongoClient } from 'mongodb';
 import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AntiDetectionService } from '../../image-anti-detection/services/anti-detection.service.js';
+import { AiBillingService } from '../../ai-billing/services/ai-billing.service.js';
+import type {
+  AiBillingContext,
+  AiProviderBillingSnapshot,
+} from '../../ai-billing/entities/ai-usage-record.entity.js';
 
 type DeepAgentReturn = Awaited<ReturnType<typeof createDeepAgent>>;
 type InteropZodObject =
@@ -97,6 +103,7 @@ export class AgentService {
     config: ConfigService,
     private readonly adminService: AdminService,
     private readonly antiDetection: AntiDetectionService,
+    private readonly aiBilling: AiBillingService,
   ) {
     const env = (config.get<string>('NODE_ENV') ?? '').toLowerCase();
     const isDev = env === 'development' || env === 'dev';
@@ -163,10 +170,13 @@ export class AgentService {
     // 的专用 LLM),否则回退 admin 默认 runtime。之前无条件用 resolveDefaultRuntime,
     // 导致 config 传入的 provider/model/apiKey/baseUrl 被完全忽略。
     const runtime: {
+      providerId?: string;
       providerCode: string;
       model?: string;
       apiKey?: string;
       baseUrl?: string;
+      tokensPerCredit?: number;
+      fixedTokensPerCall?: number;
     } =
       config.provider && config.model
         ? {
@@ -190,6 +200,26 @@ export class AgentService {
     const modelProvider = m?.[1];
     const modelName = (m?.[2] ?? rawModel).trim();
     if (!modelName) throw new Error('AI_MODEL_NOT_CONFIGURED');
+    const billingRow = await this.adminService.getAiProviderBillingConfig(
+      runtime.providerCode,
+      'llm',
+      rawModel,
+    );
+    const billingContext: AiBillingContext = config.billingContext;
+    const billingProvider: AiProviderBillingSnapshot = {
+      providerId: billingRow ? String(billingRow._id) : runtime.providerId,
+      providerCode: runtime.providerCode,
+      model: rawModel,
+      modelCategory: 'llm',
+      tokensPerCredit: billingRow?.tokensPerCredit ?? runtime.tokensPerCredit,
+      fixedTokensPerCall:
+        billingRow?.fixedTokensPerCall ?? runtime.fixedTokensPerCall,
+      streaming: !config.nonStreaming,
+    };
+    const billingCallback = this.aiBilling.createCallback(
+      billingContext,
+      billingProvider,
+    );
     // 可观测: 打印实际生效的 provider / baseUrl / model,便于排查 404 page not found
     // 这类"请求打到错误 URL"问题(NVIDIA 等 OpenAI 兼容厂商 baseUrl 配错最常见)。
     this.logger.log(
@@ -231,6 +261,7 @@ export class AgentService {
         baseUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
+        callbacks: [billingCallback],
       });
     }
     if (protocol === 'anthropic') {
@@ -240,6 +271,7 @@ export class AgentService {
         anthropicApiUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
+        callbacks: [billingCallback],
       });
     }
     if (this.isKimiProvider(provider)) {
@@ -249,6 +281,7 @@ export class AgentService {
         baseUrl: runtime.baseUrl,
         temperature,
         streaming: !config.nonStreaming,
+        callbacks: [billingCallback],
       });
     }
     return new ChatOpenAI({
@@ -258,6 +291,7 @@ export class AgentService {
       streaming: !config.nonStreaming,
       useResponsesApi: false,
       configuration: runtime.baseUrl ? { baseURL: runtime.baseUrl } : undefined,
+      callbacks: [billingCallback],
     });
   }
 
@@ -285,6 +319,7 @@ export class AgentService {
     baseUrl?: string;
     temperature?: number;
     streaming: boolean;
+    callbacks?: Callbacks;
   }): ChatOpenAI {
     return new ChatOpenAI({
       model: input.modelName,
@@ -294,6 +329,7 @@ export class AgentService {
       useResponsesApi: false,
       configuration: input.baseUrl ? { baseURL: input.baseUrl } : undefined,
       modelKwargs: this.resolveKimiModelKwargs(input.modelName),
+      callbacks: input.callbacks,
     });
   }
 
@@ -581,10 +617,13 @@ export class AgentService {
    * @keywords-en runtime, default config
    */
   private async resolveDefaultRuntime(): Promise<{
+    providerId?: string;
     providerCode: string;
     model: string;
     apiKey?: string;
     baseUrl?: string;
+    tokensPerCredit?: number;
+    fixedTokensPerCall?: number;
   }> {
     const runtime = await this.adminService.getDefaultAiProviderRuntime();
     const providerCode = String(runtime?.providerCode ?? '').trim();
@@ -600,7 +639,15 @@ export class AgentService {
 
     if (!apiKey) throw new Error('AI_API_KEY_NOT_CONFIGURED');
 
-    return { providerCode, model, apiKey, baseUrl };
+    return {
+      providerId: runtime?.providerId,
+      providerCode,
+      model,
+      apiKey,
+      baseUrl,
+      tokensPerCredit: runtime?.tokensPerCredit,
+      fixedTokensPerCall: runtime?.fixedTokensPerCall,
+    };
   }
 
   /**
@@ -655,10 +702,13 @@ export class AgentService {
    * @keyword-en resolve default image runtime config
    */
   private async resolveDefaultImageRuntime(): Promise<{
+    providerId?: string;
     providerCode: string;
     model: string;
     apiKey: string;
     baseUrl?: string;
+    tokensPerCredit?: number;
+    fixedTokensPerCall?: number;
   }> {
     const runtime = await this.adminService.getDefaultImageProviderRuntime();
     const providerCode = String(runtime?.providerCode ?? '').trim();
@@ -670,7 +720,15 @@ export class AgentService {
     if (!model) throw new Error('IMAGE_MODEL_NOT_CONFIGURED');
     if (!apiKey) throw new Error('IMAGE_API_KEY_NOT_CONFIGURED');
 
-    return { providerCode, model, apiKey, baseUrl };
+    return {
+      providerId: runtime?.providerId,
+      providerCode,
+      model,
+      apiKey,
+      baseUrl,
+      tokensPerCredit: runtime?.tokensPerCredit,
+      fixedTokensPerCall: runtime?.fixedTokensPerCall,
+    };
   }
 
   /**
@@ -679,10 +737,13 @@ export class AgentService {
    * @keyword-en resolve available default image runtime
    */
   private async resolveAvailableDefaultImageRuntime(): Promise<{
+    providerId?: string;
     providerCode: string;
     model: string;
     apiKey: string;
     baseUrl?: string;
+    tokensPerCredit?: number;
+    fixedTokensPerCall?: number;
   } | null> {
     const runtime = await this.adminService.getDefaultImageProviderRuntime();
     const providerCode = String(runtime?.providerCode ?? '').trim();
@@ -690,7 +751,15 @@ export class AgentService {
     const apiKey = String(runtime?.apiKey ?? '').trim();
     const baseUrl = String(runtime?.baseUrl ?? '').trim() || undefined;
     if (!providerCode || !model || !apiKey) return null;
-    return { providerCode, model, apiKey, baseUrl };
+    return {
+      providerId: runtime?.providerId,
+      providerCode,
+      model,
+      apiKey,
+      baseUrl,
+      tokensPerCredit: runtime?.tokensPerCredit,
+      fixedTokensPerCall: runtime?.fixedTokensPerCall,
+    };
   }
 
   /**
@@ -943,7 +1012,7 @@ export class AgentService {
   /**
    * @description 使用指定默认生图运行时发送提示词并返回本地图片路径。
    * @param {{ providerCode: string; model: string; apiKey: string; baseUrl?: string }} runtime - 生图运行时。
-   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[] }} input - 生图请求。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[]; maxRetries?: number }} input - 生图请求与物理重试上限。
    * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
    * @keyword-en generate image by configured provider runtime
    */
@@ -959,6 +1028,7 @@ export class AgentService {
       size?: string;
       baseImagePath?: string;
       baseImageCandidates?: string[];
+      maxRetries?: number;
     },
   ): Promise<{
     providerCode: string;
@@ -1197,6 +1267,7 @@ export class AgentService {
               } as RequestInit;
             },
             'edit',
+            input.maxRetries ?? 2,
           );
         } catch (err) {
           const e = err as Error & { cause?: unknown; code?: string };
@@ -1279,6 +1350,7 @@ export class AgentService {
               dispatcher: this.imageGenDispatcher,
             }) as RequestInit,
           'generate',
+          input.maxRetries ?? 2,
         );
       } catch (err) {
         const e = err as Error & { cause?: unknown; code?: string };
@@ -2187,6 +2259,7 @@ export class AgentService {
     baseImageCandidates?: string[];
     kind?: 'cover' | 'inner';
     includeSystemPrompt?: boolean;
+    billingContext: AiBillingContext;
   }): Promise<{
     providerCode: string;
     model: string;
@@ -2211,12 +2284,27 @@ export class AgentService {
         `[ai-cover][tool] use_default_runtime provider=${runtime.providerCode} model=${runtime.model}`,
       );
       try {
-        return await this.generateImageByRuntime(runtime, {
-          prompt: finalPrompt,
-          size: input.size,
-          baseImagePath: input.baseImagePath,
-          baseImageCandidates: input.baseImageCandidates,
-        });
+        return await this.executeBilledImageCall(
+          {
+            providerId: runtime.providerId,
+            providerCode: runtime.providerCode,
+            model: runtime.model,
+            modelCategory: 'image',
+            tokensPerCredit: runtime.tokensPerCredit,
+            fixedTokensPerCall: runtime.fixedTokensPerCall,
+          },
+          input.billingContext,
+          () =>
+            this.generateImageByRuntime(runtime, {
+              prompt: finalPrompt,
+              size: input.size,
+              baseImagePath: input.baseImagePath,
+              baseImageCandidates: input.baseImageCandidates,
+              // 单个计费流水只覆盖一次供应商请求；禁用内部隐式重试，
+              // 失败后的 meitu 降级会创建独立流水并再次预扣。
+              maxRetries: 0,
+            }),
+        );
       } catch (error) {
         const msg =
           error instanceof Error ? error.message : String(error ?? '');
@@ -2229,7 +2317,7 @@ export class AgentService {
           this.logger.warn(
             `[ai-cover][tool] runtime_provider_not_supported provider=${runtime.providerCode}, fallback=meitu`,
           );
-          return this.generateImageByMeituSkill({
+          return this.generateBilledMeituImage(input.billingContext, {
             prompt: finalPrompt,
             size: input.size,
             baseImagePath: input.baseImagePath,
@@ -2242,7 +2330,7 @@ export class AgentService {
           this.logger.warn(
             `[ai-cover][tool] runtime_call_failed provider=${runtime.providerCode} fallback=meitu message=${msg.slice(0, 1200)}`,
           );
-          return this.generateImageByMeituSkill({
+          return this.generateBilledMeituImage(input.billingContext, {
             prompt: finalPrompt,
             size: input.size,
             baseImagePath: input.baseImagePath,
@@ -2255,12 +2343,74 @@ export class AgentService {
     this.logger.warn(
       '[ai-cover][tool] default_image_runtime_missing, fallback=meitu',
     );
-    return this.generateImageByMeituSkill({
+    return this.generateBilledMeituImage(input.billingContext, {
       prompt: finalPrompt,
       size: input.size,
       baseImagePath: input.baseImagePath,
       baseImageCandidates: input.baseImageCandidates,
     });
+  }
+
+  /**
+   * @description 对一次生图物理调用执行固定 Token 预扣、成功结算与失败流水记录；内部隐式重试关闭，降级调用独立计费。
+   * @keyword-cn 生图调用计费, 固定Token预扣
+   * @keyword-en billed-image-call, fixed-token-precharge
+   */
+  private async executeBilledImageCall(
+    provider: AiProviderBillingSnapshot,
+    billingContext: AiBillingContext,
+    execute: () => Promise<{
+      providerCode: string;
+      model: string;
+      imagePath: string;
+    }>,
+  ): Promise<{ providerCode: string; model: string; imagePath: string }> {
+    const callId = randomUUID();
+    await this.aiBilling.beginImageCall({
+      callId,
+      context: billingContext,
+      provider,
+    });
+    try {
+      const result = await execute();
+      await this.aiBilling.completeImageCall(callId);
+      return result;
+    } catch (error) {
+      await this.aiBilling.failImageCall(callId, error);
+      throw error;
+    }
+  }
+
+  /**
+   * @description 读取 meitu image Provider 的固定计费配置并执行受控降级生图。
+   * @keyword-cn 美图降级计费, 降级防漏扣
+   * @keyword-en meitu-fallback-billing, fallback-charge-guard
+   */
+  private async generateBilledMeituImage(
+    billingContext: AiBillingContext,
+    input: {
+      prompt: string;
+      size?: string;
+      baseImagePath?: string;
+      baseImageCandidates?: string[];
+    },
+  ): Promise<{ providerCode: string; model: string; imagePath: string }> {
+    const row = await this.adminService.getAiProviderBillingConfig(
+      'meitu',
+      'image',
+    );
+    return this.executeBilledImageCall(
+      {
+        providerId: row ? String(row._id) : undefined,
+        providerCode: 'meitu',
+        model: row?.model ?? 'meitu-image-edit',
+        modelCategory: 'image',
+        tokensPerCredit: row?.tokensPerCredit,
+        fixedTokensPerCall: row?.fixedTokensPerCall,
+      },
+      billingContext,
+      () => this.generateImageByMeituSkill(input),
+    );
   }
 
   /**
@@ -2280,6 +2430,7 @@ export class AgentService {
     baseImageCandidates?: string[];
     kind?: 'cover' | 'inner';
     includeSystemPrompt?: boolean;
+    billingContext: AiBillingContext;
   }): Promise<{
     providerCode: string;
     model: string;
@@ -2294,6 +2445,7 @@ export class AgentService {
       baseImageCandidates: input.baseImageCandidates,
       kind: input.kind,
       includeSystemPrompt: input.includeSystemPrompt,
+      billingContext: input.billingContext,
     });
   }
 
@@ -2877,12 +3029,31 @@ export class AgentService {
     return parts.join(' <- ');
   }
 
+  /**
+   * @description 将模型流异常归一为稳定错误码；计费错误即使被中间件包装也保持可识别。
+   * @keyword-cn 流错误归一, 计费错误透传
+   * @keyword-en normalize-stream-error, billing-error-forwarding
+   */
   private normalizeStreamError(error: Error): {
     code: string;
     message: string;
   } {
     const raw = String(error.message || '').trim();
     if (!raw) return { code: 'STREAM_ERROR', message: 'STREAM_ERROR' };
+    if (raw.includes('CREDIT_EXHAUSTED')) {
+      return {
+        code: 'CREDIT_EXHAUSTED',
+        message: '额度已用尽，已保留本次生成的部分内容',
+      };
+    }
+    for (const code of [
+      'AI_BILLING_PROVIDER_NOT_CONFIGURED',
+      'TEXT_FIXED_TOKEN_NOT_CONFIGURED',
+      'IMAGE_FIXED_TOKEN_NOT_CONFIGURED',
+      'AI_BILLING_CONTEXT_REQUIRED',
+    ]) {
+      if (raw.includes(code)) return { code, message: code };
+    }
     if (/invalid chat setting|\(2013\)/i.test(raw)) {
       return {
         code: 'MODEL_CHAT_SETTING_INVALID',

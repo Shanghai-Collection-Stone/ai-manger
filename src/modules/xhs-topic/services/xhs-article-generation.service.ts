@@ -1,14 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { tool } from '@langchain/core/tools';
 import type { CreateAgentParams } from 'langchain';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import { AiBillingService } from '../../ai-billing/services/ai-billing.service.js';
+import { AdminService } from '../../admin/services/admin.service.js';
 import { CanvasService } from '../../canvas/services/canvas.service.js';
 import { McpAdaptersService } from '../../function-call/mcp/services/mcp-adapter.service.js';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
 import { TodoService } from '../../todo/services/todo.service.js';
 import type { TodoEntity } from '../../todo/entities/todo.entity.js';
-import type { CanvasCollageLayout } from '../../canvas/entities/canvas.entity.js';
+import type {
+  CanvasCollageLayout,
+  CanvasImageDedupMode,
+  CanvasImageGroupCreateInput,
+  ImageGroupLayout,
+} from '../../canvas/entities/canvas.entity.js';
+import type { ImageGroupSourcePreparation } from '../../canvas/services/canvas-image-group.service.js';
 import type {
   XhsArticleGenerateInput,
   XhsArticleGenerationState,
@@ -16,11 +25,46 @@ import type {
   XhsArticleCanvasBoard,
   XhsArticleCanvasCollage,
   XhsArticleMemoryDraft,
+  XhsMotherImageRule,
   XhsTopicArticle,
   XhsTopicEntity,
 } from '../entities/xhs-topic.entity.js';
 import { XHS_TOPIC_COMPLIANCE_PROMPT } from './xhs-topic.service.js';
 import { XhsTopicRepositoryService } from './xhs-topic-repository.service.js';
+
+type XhsArticleGenerationJob = {
+  todo: TodoEntity;
+  topicId: number;
+  topic: XhsTopicEntity;
+  parent: XhsTopicEntity | null;
+  currentArticle?: XhsTopicArticle;
+  userPrompt: string;
+  useSearch: boolean;
+  dedup: CanvasImageDedupMode;
+  coverStyle: string;
+  regenerateImages: boolean;
+  imageRule: XhsMotherImageRule;
+  allowImageRepeat: boolean;
+  scope: { tenantId?: string; userId: string };
+};
+
+/**
+ * @description 母题配图规则对应的固定版式（每篇 1 封面 + 5 内页）。图库凑不齐时不再悄悄换版式，
+ *  而是抛回「横图太少 / 竖图太少」让用户选择改用另一种图或允许重复。
+ *  - default：5 拼图 + 末页 1 竖图
+ *  - collage-first：6 张全拼图
+ *  - portrait-first：6 张全竖图
+ * @keyword-cn 母题配图规则, 规则版式
+ * @keyword-en mother-image-rule, rule-layout
+ */
+export const XHS_MOTHER_IMAGE_RULE_LAYOUT: Record<
+  XhsMotherImageRule,
+  ImageGroupLayout
+> = {
+  default: 'collage-cover-4collage-1portrait',
+  'collage-first': 'collage-cover-5collage',
+  'portrait-first': 'portrait-cover-5portrait',
+};
 
 /**
  * @description 小红书文章生成失败码与前端可读中文原因的对照表，供接口层直接下发给用户。
@@ -28,6 +72,7 @@ import { XhsTopicRepositoryService } from './xhs-topic-repository.service.js';
  * @keyword-en article-error-code, failure-reason-text
  */
 export const XHS_ARTICLE_ERROR_MESSAGES: Record<string, string> = {
+  CREDIT_EXHAUSTED: 'Credit 点数不足，请充值后再生成文章。',
   XHS_CHILD_TOPIC_NOT_FOUND: '子选题不存在或无权访问，请刷新选题列表后重试。',
   XHS_ARTICLE_GALLERY_TAGS_EMPTY:
     '图库里还没有任何可用标签，请先上传带标签的图片再生成文章。',
@@ -39,6 +84,10 @@ export const XHS_ARTICLE_ERROR_MESSAGES: Record<string, string> = {
     'AI 没有写完标题、正文或标签，本次生成不完整，请补充要求后重试。',
   XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT:
     '所选图库标签下可用源图不足，凑不齐 1 张封面加 5 张内页，请先补充这些标签的图片或换一组标签。',
+  XHS_ARTICLE_LANDSCAPE_INSUFFICIENT:
+    '横图太少了，凑不齐当前配图规则需要的拼图。可以改用竖图，或允许重复使用图片后重试。',
+  XHS_ARTICLE_PORTRAIT_INSUFFICIENT:
+    '竖图太少了，凑不齐当前配图规则需要的单图。可以改用拼图，或允许重复使用图片后重试。',
   XHS_ARTICLE_PERSIST_FAILED: '文章已生成但写入数据库失败，请稍后重试。',
   XHS_ARTICLE_GENERATION_ALREADY_RUNNING:
     '该子选题正在生成中，请等本次生成结束后再试。',
@@ -74,6 +123,13 @@ export const XHS_ARTICLE_TODO_RESOURCE_TYPE = 'xhs_topic';
 export const XHS_ARTICLE_RUNTIME_MISS_LIMIT = 2;
 
 /**
+ * @description 小红书生文工作流对应的固定收费服务编码。
+ * @keyword-cn 生文服务编码, 服务计费
+ * @keyword-en text-service-code, service-billing
+ */
+export const XHS_ARTICLE_SERVICE_CODE = 'text-generation' as const;
+
+/**
  * @description 携带失败码与明细的文章生成错误，供接口层原样抛给前端而不是被吞成通用失败。
  * @keyword-cn 文章生成错误, 失败码
  * @keyword-en article-generation-error, failure-code
@@ -97,14 +153,28 @@ export class XhsArticleGenerationError extends Error {
 export class XhsArticleGenerationService {
   private readonly logger = new Logger(XhsArticleGenerationService.name);
 
-  /** 正在后台生成的子选题键，避免同一子选题被重复触发；不同子选题可并发 */
+  /** 正在后台生成的子选题键，数量受全局与租户并发配置约束 */
   private readonly runningTopics = new Set<string>();
+
+  /** 正在本进程等待并发槽位的子选题键 */
+  private readonly queuedTopics = new Set<string>();
+
+  /** 按租户记录当前实际执行数量 */
+  private readonly runningTenantCounts = new Map<string, number>();
+
+  /** FIFO 等待队列 */
+  private readonly generationQueue: XhsArticleGenerationJob[] = [];
+
+  /** 串行化队列调度，防止多个请求同时超发槽位 */
+  private queueDrainTail: Promise<void> = Promise.resolve();
 
   /** 持久化运行态与当前进程执行态不一致的连续查询次数，达到阈值才判定服务中断 */
   private readonly runtimeMissConfirmations = new Map<string, number>();
 
   constructor(
+    private readonly adminService: AdminService,
     private readonly agentService: AgentService,
+    private readonly aiBillingService: AiBillingService,
     private readonly mcpAdapters: McpAdaptersService,
     private readonly todoService: TodoService,
     private readonly repository: XhsTopicRepositoryService,
@@ -117,8 +187,8 @@ export class XhsArticleGenerationService {
    * @param {number} topicId - 子选题业务 ID。
    * @param {XhsArticleGenerateInput} input - 生成或改写要求。
    * @param {{ tenantId?: string; userId: string }} scope - 租户用户作用域。
-   * @returns {Promise<{ todo: TodoEntity }>} 已置为 in_progress 的生成 Todo。
-   * @throws {XhsArticleGenerationError} 子选题不存在或本子选题已在生成中。
+   * @returns {Promise<{ todo: TodoEntity }>} 已进入等待队列的 pending Todo。
+   * @throws {XhsArticleGenerationError} 子选题不存在、本子选题已在生成中，或母题锁定标签下横/竖图不够（扣费前拦截）。
    * @keyword-cn 异步生成文章, 后台任务, 并发生成
    * @keyword-en start-article-generation, background-task, concurrent-generation
    */
@@ -132,66 +202,204 @@ export class XhsArticleGenerationService {
       throw new XhsArticleGenerationError('XHS_CHILD_TOPIC_NOT_FOUND');
     }
     const runningKey = `${scope.tenantId ?? ''}:${topicId}`;
-    if (this.runningTopics.has(runningKey)) {
+    if (
+      this.runningTopics.has(runningKey) ||
+      this.queuedTopics.has(runningKey)
+    ) {
       throw new XhsArticleGenerationError(
         'XHS_ARTICLE_GENERATION_ALREADY_RUNNING',
       );
     }
-    const parent = topic.parentId
-      ? await this.repository.getOwnedTopic(topic.parentId, scope)
-      : null;
-    const currentArticle = topic.article;
-    const userPrompt =
-      String(input.prompt ?? '').trim() ||
-      (currentArticle
-        ? '先读取当前文章，在保留可靠信息与原有配图的基础上优化标题和正文，使表达更自然、更有信息量。'
-        : '写成适合小红书发布的真实、有信息量、有情绪共鸣的图文文章。');
-    const useSearch = input.useSearch !== false;
-    const dedup = input.dedup === true;
-    const coverStyle = String(input.coverStyle ?? '').trim();
-    const regenerateImages = input.regenerateImages === true;
-    const todo = await this.todoService.create({
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      title: `AI ${currentArticle ? '修改' : '生成'}文章：${topic.title}`,
-      description: userPrompt,
-      type: 'other',
-      category: 'xhs-article',
-      associatedResources: [
-        { type: XHS_ARTICLE_TODO_RESOURCE_TYPE, resourceId: topicId },
-      ],
-      aiConsideration: currentArticle
-        ? '先读取当前文章，再根据用户提示词修改或重新生成合规的小红书标题、正文和标签。'
-        : '围绕已选子选题生成合规的小红书标题、正文和标签。',
-      decisionReason:
-        'Agent 先通过读取工具获取当前文章，再只通过文章调整工具写入内存，完整校验后持久化。',
-      aiPlan: currentArticle
-        ? regenerateImages
-          ? '读取现有文章并预载到内存，按用户要求修改或重写标题、正文和标签，重新匹配图库并生成全新配图后落库。'
-          : '读取现有文章并预载到内存，按用户要求修改或重写标题、正文和标签，保留现有配图后落库。'
-        : '创建内存文章，按需搜索，写入标题、正文、文章标签和相关图库标签，再复用生文工作流生成封面、拼图与内页后落库。',
-    });
-    const runningTodo =
-      (await this.todoService.update({
-        id: todo.id,
+    this.queuedTopics.add(runningKey);
+    try {
+      const parent = topic.parentId
+        ? await this.repository.getOwnedTopic(topic.parentId, scope)
+        : null;
+      const allowImageRepeat = input.allowImageRepeat === true;
+      // 「允许重复」覆盖严格去重；否则严格去重只在显式开启时生效，默认优先用没用过的图，不够再复用
+      const dedup: CanvasImageDedupMode =
+        input.dedup === true && !allowImageRepeat ? true : 'prefer';
+      const imageRule: XhsMotherImageRule =
+        input.imageRule ?? parent?.imageRule ?? 'default';
+      const regenerateImages = input.regenerateImages === true;
+      const shouldGenerateImages =
+        !topic.article?.images?.length || regenerateImages;
+      // 母题锁定了配图标签时，扣费和跑 Agent 之前先按规则试分配一次源图，横/竖图不够直接抛回
+      if (shouldGenerateImages && (parent?.imageTags?.length ?? 0) > 0) {
+        await this.precheckMotherImageSources(
+          {
+            parentTitle: parent?.title,
+            topicTitle: topic.title,
+            configuredTags: parent?.imageTags ?? [],
+            dedup,
+            imageRule,
+            allowImageRepeat,
+          },
+          scope,
+        );
+      }
+      await this.aiBillingService.chargeService({
+        serviceCode: XHS_ARTICLE_SERVICE_CODE,
         tenantId: scope.tenantId,
+        userId: scope.userId,
+        operationId: `xhs-article:${topicId}:${randomUUID()}`,
+        source: 'xhs-topic.article-generation',
+        platformScope: !scope.tenantId,
+      });
+      const currentArticle = topic.article;
+      const userPrompt =
+        String(input.prompt ?? '').trim() ||
+        (currentArticle
+          ? '先读取当前文章，在保留可靠信息与原有配图的基础上优化标题和正文，使表达更自然、更有信息量。'
+          : '写成适合小红书发布的真实、有信息量、有情绪共鸣的图文文章。');
+      const useSearch = input.useSearch !== false;
+      const coverStyle = String(input.coverStyle ?? '').trim();
+      const todo = await this.todoService.create({
+        tenantId: scope.tenantId,
+        userId: scope.userId,
+        title: `AI ${currentArticle ? '修改' : '生成'}文章：${topic.title}`,
+        description: userPrompt,
+        type: 'other',
+        category: 'xhs-article',
+        associatedResources: [
+          { type: XHS_ARTICLE_TODO_RESOURCE_TYPE, resourceId: topicId },
+        ],
+        aiConsideration: currentArticle
+          ? '先读取当前文章，再根据用户提示词修改或重新生成合规的小红书标题、正文和标签。'
+          : '围绕已选子选题生成合规的小红书标题、正文和标签。',
+        decisionReason:
+          'Agent 先通过读取工具获取当前文章，再只通过文章调整工具写入内存，完整校验后持久化。',
+        aiPlan: currentArticle
+          ? regenerateImages
+            ? '读取现有文章并预载到内存，按用户要求修改或重写标题、正文和标签，重新匹配图库并生成全新配图后落库。'
+            : '读取现有文章并预载到内存，按用户要求修改或重写标题、正文和标签，保留现有配图后落库。'
+          : '创建内存文章，按需搜索，写入标题、正文、文章标签和相关图库标签，再复用生文工作流生成封面、拼图与内页后落库。',
+      });
+      this.generationQueue.push({
+        todo,
+        topicId,
+        topic,
+        parent,
+        currentArticle,
+        userPrompt,
+        useSearch,
+        dedup,
+        coverStyle,
+        regenerateImages,
+        imageRule,
+        allowImageRepeat,
+        scope,
+      });
+      this.requestGenerationQueueDrain();
+      return { todo };
+    } catch (error) {
+      this.queuedTopics.delete(runningKey);
+      throw error;
+    }
+  }
+
+  /**
+   * @description 串行触发文章等待队列调度，避免并发请求同时占用同一个额度。
+   * @keyword-cn 文章生成排队, 并发槽位
+   * @keyword-en article-generation-queue, concurrency-slot
+   */
+  private requestGenerationQueueDrain(): void {
+    this.queueDrainTail = this.queueDrainTail
+      .then(() => this.drainGenerationQueue())
+      .catch((error) => {
+        this.logger.error(
+          `[queue] drain failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+  }
+
+  /**
+   * @description 按全局上限、租户上限和 FIFO 顺序为等待任务分配执行槽位。
+   * @keyword-cn 租户并发上限, 全局并发上限, 等待队列
+   * @keyword-en tenant-concurrency-limit, global-concurrency-limit, waiting-queue
+   */
+  private async drainGenerationQueue(): Promise<void> {
+    const limitCache = new Map<
+      string,
+      { globalLimit: number; tenantLimit: number }
+    >();
+    while (this.generationQueue.length > 0) {
+      let selectedIndex = -1;
+      let selectedTenantKey = '';
+      for (let index = 0; index < this.generationQueue.length; index += 1) {
+        const candidate = this.generationQueue[index];
+        const tenantKey = String(candidate.scope.tenantId ?? '__platform__');
+        let limits = limitCache.get(tenantKey);
+        if (!limits) {
+          limits = await this.adminService.getXhsArticleConcurrencyLimits(
+            candidate.scope.tenantId,
+          );
+          limitCache.set(tenantKey, limits);
+        }
+        if (this.runningTopics.size >= limits.globalLimit) return;
+        if (
+          (this.runningTenantCounts.get(tenantKey) ?? 0) < limits.tenantLimit
+        ) {
+          selectedIndex = index;
+          selectedTenantKey = tenantKey;
+          break;
+        }
+      }
+      if (selectedIndex < 0) return;
+      const [job] = this.generationQueue.splice(selectedIndex, 1);
+      await this.launchQueuedGeneration(job, selectedTenantKey);
+    }
+  }
+
+  /**
+   * @description 将获得槽位的等待任务切换为执行中，并在结束后释放全局和租户槽位。
+   * @keyword-cn 启动排队任务, 释放并发槽位
+   * @keyword-en launch-queued-generation, release-concurrency-slot
+   */
+  private async launchQueuedGeneration(
+    job: XhsArticleGenerationJob,
+    tenantKey: string,
+  ): Promise<void> {
+    const runningKey = `${job.scope.tenantId ?? ''}:${job.topicId}`;
+    try {
+      const runningTodo = await this.todoService.update({
+        id: job.todo.id,
+        tenantId: job.scope.tenantId,
         status: 'in_progress',
-      })) ?? todo;
-    this.runningTopics.add(runningKey);
-    void this.runGeneration({
-      todo: runningTodo,
-      topicId,
-      topic,
-      parent,
-      currentArticle,
-      userPrompt,
-      useSearch,
-      dedup,
-      coverStyle,
-      regenerateImages,
-      scope,
-    }).finally(() => this.runningTopics.delete(runningKey));
-    return { todo: runningTodo };
+      });
+      if (!runningTodo) throw new Error('XHS_ARTICLE_TODO_NOT_FOUND');
+      this.queuedTopics.delete(runningKey);
+      this.runningTopics.add(runningKey);
+      this.runningTenantCounts.set(
+        tenantKey,
+        (this.runningTenantCounts.get(tenantKey) ?? 0) + 1,
+      );
+      void this.aiBillingService
+        .runWithServiceBilling(() =>
+          this.runGeneration({ ...job, todo: runningTodo }),
+        )
+        .catch((error) => {
+          this.logger.error(
+            `[queue] generation promise rejected todo=${job.todo.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        })
+        .finally(() => {
+          this.runningTopics.delete(runningKey);
+          const remaining = (this.runningTenantCounts.get(tenantKey) ?? 1) - 1;
+          if (remaining > 0) this.runningTenantCounts.set(tenantKey, remaining);
+          else this.runningTenantCounts.delete(tenantKey);
+          this.requestGenerationQueueDrain();
+        });
+    } catch (error) {
+      this.queuedTopics.delete(runningKey);
+      const message = error instanceof Error ? error.message : String(error);
+      await this.todoService.update({
+        id: job.todo.id,
+        tenantId: job.scope.tenantId,
+        status: 'failed',
+        abnormalReason: message,
+      });
+    }
   }
 
   /**
@@ -201,19 +409,7 @@ export class XhsArticleGenerationService {
    * @keyword-cn 后台生成文章, 待办回写
    * @keyword-en run-article-generation, todo-writeback
    */
-  private async runGeneration(params: {
-    todo: TodoEntity;
-    topicId: number;
-    topic: XhsTopicEntity;
-    parent: XhsTopicEntity | null;
-    currentArticle?: XhsTopicArticle;
-    userPrompt: string;
-    useSearch: boolean;
-    dedup: boolean;
-    coverStyle: string;
-    regenerateImages: boolean;
-    scope: { tenantId?: string; userId: string };
-  }): Promise<void> {
+  private async runGeneration(params: XhsArticleGenerationJob): Promise<void> {
     const {
       todo,
       topicId,
@@ -225,6 +421,8 @@ export class XhsArticleGenerationService {
       dedup,
       coverStyle,
       regenerateImages,
+      imageRule,
+      allowImageRepeat,
       scope,
     } = params;
     const hasCurrentImages = Boolean(currentArticle?.images?.length);
@@ -303,12 +501,13 @@ export class XhsArticleGenerationService {
         hasCurrentArticle: Boolean(currentArticle),
         preserveCurrentImages: hasCurrentImages && !regenerateImages,
       });
-      await this.runAgent(system, tools, draft);
+      await this.runAgent(system, tools, draft, scope);
       if (!readState.called) {
         await this.runAgent(
           `${system}\n你尚未履行读取协议。立即先调用 xhs_article_read_current，再根据返回内容完成后续修改。`,
           tools,
           draft,
+          scope,
         );
       }
       if (!readState.called) {
@@ -324,6 +523,7 @@ export class XhsArticleGenerationService {
           `${system}\n当前内存文章仍不完整：标题=${draft.title ? '已有' : '缺失'}，正文=${draft.body ? `${draft.body.length}字` : '缺失'}，文章标签=${draft.tags.length}个${shouldGenerateImages ? `，图库标签=${draft.imageTags.length}个` : '，现有配图将保留'}。继续调用工具补全，不要输出正文作为最终回答。`,
           tools,
           draft,
+          scope,
         );
       }
       if (fixedMotherImageTags.length > 0) {
@@ -343,6 +543,8 @@ export class XhsArticleGenerationService {
               draft,
               dedup,
               coverStyle,
+              imageRule,
+              allowImageRepeat,
             },
             scope,
           )
@@ -428,6 +630,8 @@ export class XhsArticleGenerationService {
     tenantId?: string;
     userId: string;
   }): Promise<XhsArticleGenerationState[]> {
+    // 后台提高额度后，无需等待当前任务结束；下一次状态轮询即可补充占用新槽位。
+    this.requestGenerationQueueDrain();
     const todos = await this.todoService.list(
       scope.userId,
       scope.tenantId,
@@ -452,6 +656,9 @@ export class XhsArticleGenerationService {
       } else if (todo.status === 'failed' || todo.status === 'cancelled') {
         this.runtimeMissConfirmations.delete(confirmationKey);
         status = 'failed';
+      } else if (this.isRuntimeGenerationQueued(scope, topicId)) {
+        this.runtimeMissConfirmations.delete(confirmationKey);
+        status = 'queued';
       } else if (this.isRuntimeGenerationActive(scope, topicId)) {
         this.runtimeMissConfirmations.delete(confirmationKey);
         status = 'running';
@@ -516,6 +723,18 @@ export class XhsArticleGenerationService {
     topicId: number,
   ): boolean {
     return this.runningTopics.has(`${scope.tenantId ?? ''}:${topicId}`);
+  }
+
+  /**
+   * @description 检查指定子选题是否仍在当前进程的并发等待队列中。
+   * @keyword-cn 等待队列确认, 异步存活确认
+   * @keyword-en waiting-queue-check, async-liveness-confirmation
+   */
+  private isRuntimeGenerationQueued(
+    scope: { tenantId?: string; userId: string },
+    topicId: number,
+  ): boolean {
+    return this.queuedTopics.has(`${scope.tenantId ?? ''}:${topicId}`);
   }
 
   /**
@@ -766,6 +985,7 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
     system: string,
     tools: NonNullable<CreateAgentParams['tools']>,
     draft: XhsArticleMemoryDraft,
+    scope: { tenantId?: string; userId: string },
   ): Promise<void> {
     await this.agentService.runWithMessages({
       config: {
@@ -774,6 +994,13 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
         temperature: 0.45,
         noPostHook: true,
         nonStreaming: true,
+        tenantId: scope.tenantId,
+        billingContext: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          source: 'xhs-topic.article-generation',
+          platformScope: !scope.tenantId,
+        },
       },
       messages: [
         {
@@ -805,9 +1032,116 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
   }
 
   /**
-   * @description 复用生文配图工作流，生成含字海报素材封面、内页，以及可供灵感画布加特效的照片/素材分层元数据。
-   * @keyword-cn 生文配图工作流, 可编辑封面
-   * @keyword-en article-image-workflow, editable-cover
+   * @description 构造生文图片阶段的 Canvas 入参：版式固定取母题配图规则对应版式，允许重复时同时放开本篇内源图复用。
+   * @keyword-cn 生文配图入参, 母题配图规则
+   * @keyword-en article-image-input, mother-image-rule
+   */
+  private buildArticleImageInput(
+    input: {
+      parentTitle?: string;
+      topicTitle: string;
+      articleTitle: string;
+      imageTags: string[];
+      dedup: CanvasImageDedupMode;
+      imageRule: XhsMotherImageRule;
+      allowImageRepeat: boolean;
+      coverStyle?: string;
+    },
+    scope: { tenantId?: string; userId: string },
+  ): CanvasImageGroupCreateInput {
+    return {
+      userId: scope.userId,
+      tenantId: scope.tenantId,
+      topic: [input.parentTitle, input.topicTitle].filter(Boolean).join('｜'),
+      articles: [{ title: input.articleTitle, tags: input.imageTags }],
+      dedup: input.dedup,
+      // 小红书封面走"AI 出装饰素材 + 真实照片拼合"，模型不重绘人物，保住实拍质感
+      coverStrategy: 'ai-overlay',
+      // 拼图/单图配比严格按母题配图规则，凑不齐不换版式，由 assertImageSourcesSufficient 抛回让用户选择
+      layoutCandidates: [
+        XHS_MOTHER_IMAGE_RULE_LAYOUT[input.imageRule] ??
+          XHS_MOTHER_IMAGE_RULE_LAYOUT.default,
+      ],
+      allowSourceReuse: input.allowImageRepeat,
+      // 封面文字海报的视觉风格，来自素材风格库；空串表示不指定，回落到内置写死风格
+      ...(input.coverStyle ? { coverStyle: input.coverStyle } : {}),
+    };
+  }
+
+  /**
+   * @description 源图分配失败时按缺口抛回可操作的错误：横图不够提示改用竖图或允许重复，竖图不够提示改用拼图或允许重复。
+   * @keyword-cn 横图太少, 竖图太少, 源图缺口统计
+   * @keyword-en landscape-insufficient, portrait-insufficient, source-shortage-stats
+   */
+  private assertImageSourcesSufficient(
+    preparation: ImageGroupSourcePreparation,
+    imageTags: string[],
+  ): asserts preparation is Extract<ImageGroupSourcePreparation, { ok: true }> {
+    if (preparation.ok) return;
+    const { stats } = preparation;
+    const tagDetail = `图库标签：${imageTags.join('、') || '未选择'}`;
+    if (stats.missingLandscape > 0) {
+      throw new XhsArticleGenerationError(
+        'XHS_ARTICLE_LANDSCAPE_INSUFFICIENT',
+        `需要横图 ${stats.requiredLandscape} 张，可用 ${stats.availableLandscape} 张；${tagDetail}`,
+      );
+    }
+    if (stats.missingPortrait > 0) {
+      throw new XhsArticleGenerationError(
+        'XHS_ARTICLE_PORTRAIT_INSUFFICIENT',
+        `需要竖图 ${stats.requiredPortrait} 张，可用 ${stats.availablePortrait} 张；${tagDetail}`,
+      );
+    }
+    throw new XhsArticleGenerationError(
+      'XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT',
+      tagDetail,
+    );
+  }
+
+  /**
+   * @description 母题锁定配图标签时，在扣费和运行 Agent 之前按规则试分配一次源图；标签失效或横/竖图不够直接抛回，不浪费一次生文。
+   * @keyword-cn 配图预检, 横图太少, 扣费前拦截
+   * @keyword-en image-source-precheck, landscape-insufficient, pre-charge-guard
+   */
+  private async precheckMotherImageSources(
+    input: {
+      parentTitle?: string;
+      topicTitle: string;
+      configuredTags: string[];
+      dedup: CanvasImageDedupMode;
+      imageRule: XhsMotherImageRule;
+      allowImageRepeat: boolean;
+    },
+    scope: { tenantId?: string; userId: string },
+  ): Promise<void> {
+    const availableTags = await this.galleryService.listDistinctTagsWithTenant(
+      scope.userId,
+      scope.tenantId,
+      5000,
+    );
+    const imageTags = this.resolveMotherImageTags(
+      input.configuredTags,
+      availableTags,
+    );
+    if (imageTags.length === 0) {
+      throw new XhsArticleGenerationError(
+        'XHS_ARTICLE_MOTHER_IMAGE_TAGS_UNAVAILABLE',
+        `母选题标签：${input.configuredTags.join('、')}`,
+      );
+    }
+    const preparation = await this.canvasService.prepareArticleImageSources(
+      this.buildArticleImageInput(
+        { ...input, articleTitle: input.topicTitle, imageTags },
+        scope,
+      ),
+    );
+    this.assertImageSourcesSufficient(preparation, imageTags);
+  }
+
+  /**
+   * @description 复用生文配图工作流，按母题配图规则对应版式与优先不重复（或严格去重、允许重复）取图，横/竖图不够时抛回可操作错误；生成含字海报素材封面、内页，以及可供灵感画布加特效的照片/素材分层元数据。
+   * @keyword-cn 生文配图工作流, 可编辑封面, 母题配图规则
+   * @keyword-en article-image-workflow, editable-cover, mother-image-rule
    */
   private async generateArticleImagesByWorkflow(
     input: {
@@ -815,29 +1149,33 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
       topicTitle: string;
       topicType: string;
       draft: XhsArticleMemoryDraft;
-      dedup: boolean;
+      dedup: CanvasImageDedupMode;
       coverStyle?: string;
+      imageRule: XhsMotherImageRule;
+      allowImageRepeat: boolean;
     },
     scope: { tenantId?: string; userId: string },
   ): Promise<{ images: string[]; canvasBoards: XhsArticleCanvasBoard[] }> {
-    const imageGroups = await this.canvasService.generateArticleImageGroups({
-      userId: scope.userId,
-      tenantId: scope.tenantId,
-      topic: [input.parentTitle, input.topicTitle].filter(Boolean).join('｜'),
-      articles: [
-        {
-          title: input.draft.title as string,
-          tags: input.draft.imageTags,
-        },
-      ],
-      dedup: input.dedup,
-      // 小红书封面走"AI 出装饰素材 + 真实照片拼合"，模型不重绘人物，保住实拍质感
-      coverStrategy: 'ai-overlay',
-      // 封面底图优先用拼图：一张封面能带出多张实拍，信息量比单图大；图库横图不够时自动回落单竖图
-      preferCollageCover: true,
-      // 封面文字海报的视觉风格，来自素材风格库；空串表示不指定，回落到内置写死风格
-      ...(input.coverStyle ? { coverStyle: input.coverStyle } : {}),
-    });
+    const canvasInput = this.buildArticleImageInput(
+      {
+        parentTitle: input.parentTitle,
+        topicTitle: input.topicTitle,
+        articleTitle: input.draft.title as string,
+        imageTags: input.draft.imageTags,
+        dedup: input.dedup,
+        imageRule: input.imageRule,
+        allowImageRepeat: input.allowImageRepeat,
+        coverStyle: input.coverStyle,
+      },
+      scope,
+    );
+    const preparation =
+      await this.canvasService.prepareArticleImageSources(canvasInput);
+    this.assertImageSourcesSufficient(preparation, input.draft.imageTags);
+    const imageGroups = await this.canvasService.renderArticleImageGroups(
+      canvasInput,
+      preparation,
+    );
     const group = imageGroups[0];
     if (!group || group.status !== 'done') {
       throw new XhsArticleGenerationError(

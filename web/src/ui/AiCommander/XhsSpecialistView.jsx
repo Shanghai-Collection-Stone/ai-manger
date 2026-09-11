@@ -624,10 +624,11 @@ const XhsSpecialistView = ({ onBack }) => {
     for (const generation of Array.isArray(generations) ? generations : []) {
       const topicId = Number(generation?.topicId);
       if (!Number.isInteger(topicId) || topicId < 1) continue;
-      const status =
-        generation?.status === 'done' || generation?.status === 'failed'
-          ? generation.status
-          : 'running';
+      const status = ['queued', 'running', 'done', 'failed'].includes(
+        generation?.status,
+      )
+        ? generation.status
+        : 'running';
       const generationKey =
         generation?.todoId ?? generation?.updatedAt ?? 'local-error';
       if (
@@ -637,7 +638,10 @@ const XhsSpecialistView = ({ onBack }) => {
         delete next[topicId];
         continue;
       }
-      if (current[topicId]?.status === 'running' && status === 'done') {
+      if (
+        ['queued', 'running'].includes(current[topicId]?.status) &&
+        status === 'done'
+      ) {
         hasNewCompletion = true;
       }
       next[topicId] = { ...generation, topicId, status };
@@ -890,7 +894,9 @@ const XhsSpecialistView = ({ onBack }) => {
               ? 'done'
               : response?.todo?.status === 'failed'
                 ? 'failed'
-                : 'running',
+                : response?.todo?.status === 'pending'
+                  ? 'queued'
+                  : 'running',
           errorMessage: response?.todo?.abnormalReason,
           updatedAt:
             response?.todo?.updatedAt ?? response?.todo?.createdAt ?? '',
@@ -1075,7 +1081,7 @@ const XhsSpecialistView = ({ onBack }) => {
 
   const hasRunningArticleGeneration = Object.values(
     articleGenerationsByTopic,
-  ).some((generation) => generation?.status === 'running');
+  ).some((generation) => ['queued', 'running'].includes(generation?.status));
 
   useEffect(() => {
     if (!hasRunningArticleGeneration) return undefined;
@@ -1945,7 +1951,8 @@ const XhsSpecialistView = ({ onBack }) => {
       ? articleGenerationsByTopic[selectedTopic.id]
       : undefined;
     const selectedArticleGenerating =
-      selectedArticleGeneration?.status === 'running';
+      selectedArticleGeneration?.status === 'running' ||
+      selectedArticleGeneration?.status === 'queued';
     const articleReady = Boolean(selectedTopic?.article);
     const isPublished =
       selectedTopic && publishedTopicIds.includes(selectedTopic.id);
@@ -2241,8 +2248,10 @@ const XhsSpecialistView = ({ onBack }) => {
                     const articleGenerated = Boolean(item.article);
                     const articleGeneration =
                       articleGenerationsByTopic[item.id];
+                    const articleQueued =
+                      articleGeneration?.status === 'queued';
                     const articleGenerating =
-                      articleGeneration?.status === 'running';
+                      articleGeneration?.status === 'running' || articleQueued;
                     const articleGenerationError =
                       articleGeneration?.status === 'failed'
                         ? articleGeneration.errorMessage ||
@@ -2276,11 +2285,13 @@ const XhsSpecialistView = ({ onBack }) => {
                             >
                               {published
                                 ? '已生成 · 已发布'
-                                : articleGenerating
-                                  ? '文章生成中'
-                                  : articleGenerated
-                                    ? '文章已生成'
-                                    : '待生成文章'}
+                                : articleQueued
+                                  ? '等待生成'
+                                  : articleGenerating
+                                    ? '文章生成中'
+                                    : articleGenerated
+                                      ? '文章已生成'
+                                      : '待生成文章'}
                             </p>
                             <div className="flex shrink-0 items-center gap-1">
                               <button
@@ -2302,7 +2313,9 @@ const XhsSpecialistView = ({ onBack }) => {
                                   />
                                 )}
                                 {articleGenerating
-                                  ? '生成中'
+                                  ? articleQueued
+                                    ? '等待中'
+                                    : '生成中'
                                   : articleGenerated
                                     ? '重新生成'
                                     : '生成文章'}
@@ -2901,7 +2914,9 @@ const XhsSpecialistView = ({ onBack }) => {
             prompt={articleRegeneratePrompt}
             generating={
               articleGenerationsByTopic[articleRegenerateTopicId]?.status ===
-              'running'
+                'running' ||
+              articleGenerationsByTopic[articleRegenerateTopicId]?.status ===
+                'queued'
             }
             error={articleRegenerateError}
             onPromptChange={setArticleRegeneratePrompt}

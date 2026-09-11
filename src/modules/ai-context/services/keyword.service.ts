@@ -84,6 +84,11 @@ export class KeywordService {
         apiKey: aiConfig.apiKey,
         baseUrl: aiConfig.baseUrl,
         tenantId,
+        billingContext: {
+          tenantId,
+          source: 'ai-context.keyword-extraction',
+          platformScope: !tenantId,
+        },
       });
       const aiResult = await llm.invoke([
         new SystemMessage(

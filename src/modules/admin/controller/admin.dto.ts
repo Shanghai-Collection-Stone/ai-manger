@@ -3,6 +3,7 @@ import {
   IsIn,
   IsInt,
   IsMongoId,
+  IsNumber,
   IsObject,
   Max,
   IsOptional,
@@ -10,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  NotEquals,
 } from 'class-validator';
 import type {
   DataSourceStatus,
@@ -137,6 +139,16 @@ export class UpsertAiProviderDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  tokensPerCredit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  fixedTokensPerCall?: number;
 }
 
 /**
@@ -183,6 +195,73 @@ export class UpdateAiProviderDto {
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  tokensPerCredit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  fixedTokensPerCall?: number;
+}
+
+/**
+ * @description 更新固定 AI 服务 Credit 消耗点数请求体。
+ * @keyword-cn 更新服务点数, 服务计费
+ * @keyword-en update-service-credit, service-billing
+ */
+export class UpdateAiServiceCreditDto {
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1_000_000)
+  creditCost!: number;
+}
+
+/**
+ * @description 租户 Credit 充值请求体，充值只追加流水。
+ * @keyword-cn 租户充值, 追加流水
+ * @keyword-en tenant-recharge, append-ledger
+ */
+export class RechargeTenantCreditDto {
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0.000001)
+  @Max(1_000_000_000)
+  amount!: number;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(200)
+  reason!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  referenceId?: string;
+}
+
+/**
+ * @description 租户 Credit 人工增减调账请求体，零变动不允许入账。
+ * @keyword-cn 人工调账, 非零变动
+ * @keyword-en manual-adjustment, nonzero-change
+ */
+export class AdjustTenantCreditDto {
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(-1_000_000_000)
+  @Max(1_000_000_000)
+  @NotEquals(0)
+  amount!: number;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(200)
+  reason!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  referenceId?: string;
 }
 
 /**
@@ -199,6 +278,18 @@ export class CreateTenantByAdminDto {
   @IsString()
   @MaxLength(200)
   description?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  xhsArticleConcurrencyLimit?: number;
+
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1_000_000_000)
+  credit?: number;
 }
 
 /**
@@ -216,6 +307,12 @@ export class UpdateTenantByAdminDto {
   @IsString()
   @MaxLength(200)
   description?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  xhsArticleConcurrencyLimit?: number;
 }
 
 /**
@@ -486,6 +583,12 @@ export class UpsertPlatformInfoDto {
   @IsOptional()
   @IsBoolean()
   enableAiCover?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  xhsArticleGlobalConcurrencyLimit?: number;
 }
 
 /**

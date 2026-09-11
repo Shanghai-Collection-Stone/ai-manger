@@ -35,7 +35,10 @@ export class FrontendFunctionCallService {
    * @description 获取工具句柄集合
    * @keyword-en get handle
    */
-  getHandle(): CreateAgentParams['tools'] {
+  getHandle(scope?: {
+    tenantId?: string;
+    userId?: string;
+  }): CreateAgentParams['tools'] {
     const plan = tool(
       ({ input, contentType, uiFramework, layout }) => {
         const text = typeof input === 'string' ? input : '';
@@ -214,6 +217,9 @@ export class FrontendFunctionCallService {
             temperature,
             layout,
             missing: miss,
+            tenantId: scope?.tenantId,
+            userId: scope?.userId,
+            sessionId,
           });
         }, 200);
 
@@ -296,6 +302,9 @@ export class FrontendFunctionCallService {
     temperature?: number;
     layout?: string;
     missing: string[];
+    tenantId?: string;
+    userId?: string;
+    sessionId?: string;
   }): Promise<void> {
     try {
       if (Array.isArray(params.missing) && params.missing.length > 0) {
@@ -332,6 +341,14 @@ export class FrontendFunctionCallService {
         nonStreaming: true,
         tools,
         subagents: [subagent],
+        tenantId: params.tenantId,
+        billingContext: {
+          tenantId: params.tenantId,
+          userId: params.userId,
+          sessionId: params.sessionId,
+          source: 'function-call.frontend-generation',
+          platformScope: !params.tenantId,
+        },
       };
       const baseReq = `${params.input}\n类型:${params.contentType ?? 'chart'} 框架:${params.uiFramework ?? 'antd'} 布局:${params.layout ?? 'dashboard'}`;
       const userContent = params.prevHtml

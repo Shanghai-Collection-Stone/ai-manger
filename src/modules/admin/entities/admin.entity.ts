@@ -53,6 +53,10 @@ export interface AdminAiProviderEntity {
   apiKey?: string;
   enabled: boolean;
   isDefault?: boolean;
+  /** 一个 Credit 对应的 Token 数 */
+  tokensPerCredit?: number;
+  /** 每次物理调用固定计费 Token；空值表示按真实 usage */
+  fixedTokensPerCall?: number;
   createdAt: Date;
   updatedAt: Date;
 }

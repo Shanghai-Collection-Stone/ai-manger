@@ -1,17 +1,26 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Collection, Db, Document, Filter } from 'mongodb';
 import { ObjectId } from 'mongodb';
-import type {
-  XhsArticleCanvasCollage,
-  XhsArticleUpdateInput,
-  XhsChildTopicView,
-  XhsTopicArticle,
-  XhsTopicCreateInput,
-  XhsTopicEntity,
-  XhsTopicCrawlStatus,
-  XhsTopicUpdateInput,
-  XhsTopicWorkspaceGroup,
+import {
+  XHS_MOTHER_IMAGE_RULES,
+  type XhsArticleCanvasCollage,
+  type XhsArticleUpdateInput,
+  type XhsChildTopicView,
+  type XhsMotherImageRule,
+  type XhsTopicArticle,
+  type XhsTopicCreateInput,
+  type XhsTopicEntity,
+  type XhsTopicCrawlStatus,
+  type XhsTopicUpdateInput,
+  type XhsTopicWorkspaceGroup,
 } from '../entities/xhs-topic.entity.js';
+
+/**
+ * @description 手动添加笔记链接时独立子选题使用的题目类型，数据监控行副标题会展示它。
+ * @keyword-cn 手动链接选题, 题目类型
+ * @keyword-en manual-link-topic, topic-type
+ */
+export const XHS_MANUAL_LINK_TOPIC_TYPE = '手动链接';
 
 /**
  * @description 小红书选题 MongoDB 仓储，提供租户用户隔离的列表、批量创建与级联删除。
@@ -135,6 +144,7 @@ export class XhsTopicRepositoryService {
           title: entity.title,
           topicType: entity.topicType,
           imageTags: this.normalizeMotherImageTags(entity.imageTags),
+          imageRule: this.normalizeMotherImageRule(entity.imageRule),
           topicCount: children.length,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt.toISOString(),
@@ -174,6 +184,7 @@ export class XhsTopicRepositoryService {
           input.kind === 'mother'
             ? this.normalizeMotherImageTags(candidate.imageTags)
             : [],
+        imageRule: this.normalizeMotherImageRule(candidate.imageRule),
         articleStyle:
           input.kind === 'child'
             ? String(candidate.articleStyle ?? '')
@@ -225,6 +236,7 @@ export class XhsTopicRepositoryService {
         title: candidate.title.slice(0, 100),
         topicType: candidate.topicType.slice(0, 30),
         imageTags: input.kind === 'mother' ? candidate.imageTags : undefined,
+        imageRule: input.kind === 'mother' ? candidate.imageRule : undefined,
         articleStyle:
           input.kind === 'child' ? candidate.articleStyle : undefined,
         status: 'pending',
@@ -435,9 +447,9 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 修改当前用户选题的标题、题目类型、状态、母题配图标签或子题文章生成风格。
-   * @keyword-cn 更新选题, 发布状态, 母题配图标签, 文章生成风格
-   * @keyword-en update-topic, publish-status, mother-image-tags, article-writing-style
+   * @description 修改当前用户选题的标题、题目类型、状态、母题配图标签与配图规则或子题文章生成风格。
+   * @keyword-cn 更新选题, 发布状态, 母题配图标签, 母题配图规则, 文章生成风格
+   * @keyword-en update-topic, publish-status, mother-image-tags, mother-image-rule, article-writing-style
    */
   async update(
     id: number,
@@ -456,6 +468,10 @@ export class XhsTopicRepositoryService {
     if (Array.isArray(input.imageTags)) {
       updates.imageTags = this.normalizeMotherImageTags(input.imageTags);
     }
+    const updatesImageRule = typeof input.imageRule === 'string';
+    if (updatesImageRule) {
+      updates.imageRule = this.normalizeMotherImageRule(input.imageRule);
+    }
     let clearArticleStyle = false;
     if (typeof input.articleStyle === 'string') {
       const articleStyle = input.articleStyle.trim().slice(0, 500);
@@ -467,7 +483,8 @@ export class XhsTopicRepositoryService {
       ...this.buildScopeFilter(scope),
       id,
     };
-    if (Array.isArray(input.imageTags)) filter.kind = 'mother';
+    if (Array.isArray(input.imageTags) || updatesImageRule)
+      filter.kind = 'mother';
     if (typeof input.articleStyle === 'string') filter.kind = 'child';
     return await this.topics.findOneAndUpdate(
       filter,
@@ -594,6 +611,17 @@ export class XhsTopicRepositoryService {
   }
 
   /**
+   * @description 规整母选题配图规则，历史数据缺字段或非法值一律回落 default。
+   * @keyword-cn 母题配图规则, 规则归一化
+   * @keyword-en mother-image-rule, normalize-image-rule
+   * @param value 原始配图规则。
+   * @returns 合法的配图规则。
+   */
+  private normalizeMotherImageRule(value?: unknown): XhsMotherImageRule {
+    return XHS_MOTHER_IMAGE_RULES.find((rule) => rule === value) ?? 'default';
+  }
+
+  /**
    * @description 切换子选题的数据抓取开关，恢复抓取时清空取消时间。
    * @keyword-cn 切换抓取状态, 取消恢复抓取
    * @keyword-en toggle-crawl-status, cancel-resume-crawl
@@ -668,6 +696,60 @@ export class XhsTopicRepositoryService {
    */
   async getChildTopicById(id: number): Promise<XhsTopicEntity | null> {
     return await this.topics.findOne({ id, kind: 'child' });
+  }
+
+  /**
+   * @description 为数据监控手动添加的笔记链接建一条不挂母题的独立子选题，作为抓取调度与指标查询的 topicId；
+   *   没有 parentId，所以选题工作台列表天然不展示它。
+   * @keyword-cn 手动链接选题, 独立子选题
+   * @keyword-en manual-link-topic, standalone-child-topic
+   * @param input 笔记标题。
+   * @param scope 当前租户与用户作用域。
+   * @returns {Promise<XhsTopicEntity>} 已发布且处于抓取中的独立子选题。
+   */
+  async createManualLinkTopic(
+    input: { title: string },
+    scope: { tenantId?: string; userId: string },
+  ): Promise<XhsTopicEntity> {
+    const now = new Date();
+    const [id] = await this.nextIds(1);
+    const document: XhsTopicEntity = {
+      _id: new ObjectId(),
+      id,
+      tenantId: String(scope.tenantId ?? '').trim() || null,
+      userId: scope.userId,
+      kind: 'child',
+      title: input.title.replace(/\s+/g, ' ').trim().slice(0, 100),
+      topicType: XHS_MANUAL_LINK_TOPIC_TYPE,
+      status: 'published',
+      crawl: { status: 'crawling' },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.topics.insertOne(document);
+    return document;
+  }
+
+  /**
+   * @description 列出当前用户不挂母题的独立子选题（手动添加的笔记链接），供数据监控补齐抓取状态。
+   * @keyword-cn 独立子选题, 手动链接选题
+   * @keyword-en standalone-child-topic, manual-link-topic
+   * @param scope 当前租户与用户作用域。
+   * @returns {Promise<XhsChildTopicView[]>} 独立子选题列表。
+   */
+  async listStandaloneChildren(scope: {
+    tenantId?: string;
+    userId: string;
+  }): Promise<XhsChildTopicView[]> {
+    const entities = await this.topics
+      .find({
+        ...this.buildScopeFilter(scope),
+        kind: 'child',
+        parentId: { $exists: false },
+      })
+      .sort({ createdAt: 1, id: 1 })
+      .toArray();
+    return entities.map((entity) => this.toChildView(entity));
   }
 
   /**

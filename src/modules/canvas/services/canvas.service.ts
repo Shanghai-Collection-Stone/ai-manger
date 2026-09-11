@@ -1249,16 +1249,35 @@ export class CanvasService {
   }
 
   /**
-   * @description 复用生文图片阶段，按文章相关标签生成带封面、内页、拼图及可选 AI 生图的完整图组，不创建独立 Canvas。
-   * @param {CanvasImageGroupCreateInput} input - 文章标题、相关图库标签与作用域。
+   * @description 生文图片阶段第一步：按文章相关标签取图并完成版式与源图分配，不生成文件、不创建独立 Canvas；
+   *  不足时返回带竖图/横图缺口统计的失败结果，供调用方提前拦截并告诉用户缺哪种图。
+   * @param {CanvasImageGroupCreateInput} input - 文章标题、相关图库标签、版式与去重参数。
+   * @returns {Promise<ImageGroupSourcePreparation>} 源图分配结果或缺口统计。
+   * @keyword-cn 生文配图工作流, 源图缺口统计
+   * @keyword-en article-image-workflow, source-shortage-stats
+   */
+  async prepareArticleImageSources(
+    input: CanvasImageGroupCreateInput,
+  ): Promise<ImageGroupSourcePreparation> {
+    return await this.imageGroupService.prepareImageGroupSources(input);
+  }
+
+  /**
+   * @description 生文图片阶段第二步：按已完成的源图分配渲染封面、内页、拼图及可选 AI 生图，不创建独立 Canvas。
+   * @param {CanvasImageGroupCreateInput} input - 与准备阶段相同的入参。
+   * @param {Extract<ImageGroupSourcePreparation, { ok: true }>} preparation - 准备阶段的成功结果。
    * @returns {Promise<CanvasImageGroup[]>} 生文工作流渲染完成的文章图组。
    * @keyword-cn 生文配图工作流, 文章图组
    * @keyword-en article-image-workflow, generated-image-group
    */
-  async generateArticleImageGroups(
+  async renderArticleImageGroups(
     input: CanvasImageGroupCreateInput,
+    preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
   ): Promise<CanvasImageGroup[]> {
-    return await this.imageGroupService.generateImageGroups(input);
+    return await this.imageGroupService.renderPreparedImageGroups(
+      input,
+      preparation,
+    );
   }
 
   /**
@@ -1275,8 +1294,8 @@ export class CanvasService {
     articles: CanvasImageGroupCreateInput['articles'];
     /** true=追加到现有图组(复用 Canvas 再生成);false/缺省=覆盖(新建 Canvas 首次生成) */
     append?: boolean;
-    /** 是否去重(默认 true)。false=不去重: 命中已用图、随机取图、生成后不写 isUsed */
-    dedup?: boolean;
+    /** 是否去重(默认 true)。false=不去重: 命中已用图、随机取图、生成后不写 isUsed；'prefer'=优先不重复 */
+    dedup?: CanvasImageGroupCreateInput['dedup'];
   }): Promise<CanvasImageGroup[]> {
     const groups = await this.imageGroupService.generateImageGroups({
       userId: input.userId,

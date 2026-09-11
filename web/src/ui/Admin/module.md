@@ -3,7 +3,7 @@
 ## 模块描述
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
-支持 AI 提供商按模型类型管理(llm/em/image),并支持平台 AI 配置中的"是否开启 AI 封面"开关。
+支持 AI 提供商按模型类型管理(llm/em/image)，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
@@ -71,12 +71,15 @@
 - `XHS_CRAWL_CHANNELS` / `TIKHUB_BASE_URLS` — 采集渠道与 API 域名选项，取值与后端 `XhsCrawlChannel`、域名白名单逐字一致 | keywords: 采集渠道选项, 接口域名选项, crawl-channel-options, base-url-options
 - `XHS_CRAWL_DEFAULT_AT` / `XHS_CRAWL_AT_PATTERN` — 默认每日抓取时刻(`23:59`，与后端 `DEFAULT_CRAWL_DAILY_AT` 一致)与 `HH:mm` 格式校验 | keywords: 默认抓取时刻, 每日定点, default-crawl-time, daily-fixed-time
 - `onTestProvider(id)`: AI 提供商测试连接按钮 handler(列表里每行的「测试连接」按钮触发,成功时绿色 notice 显示状态+延迟+模型数+前 3 个模型名,失败时红色 error 显示状态+endpoint+原始错误 message,disable 阻止重复点击)/test ai provider handler
+- `onSaveAiServiceCredit(service)` — 保存固定服务 Credit 点数并刷新列表行 | keywords: 保存服务点数, 服务管理, save-service-credit, service-management
+- `onOpenCreditAccount(tenant)` — 打开租户充值弹窗并加载流水 | keywords: 打开充值流水, Credit账户, open-credit-ledger, credit-account
+- `onSubmitCreditChange()` — 新增充值或调账流水并刷新余额 | keywords: 提交充值调账, 余额刷新, submit-credit-change, balance-refresh
 - `reloadSuperClaws()` — 刷新平台节点与容量 | keywords: 刷新节点, 容量状态, reload-super-claws, capacity-status
 - `onSubmitSuperClaw()` — 创建或更新 SuperClaw | keywords: 提交节点, 总容量, submit-super-claw, total-capacity
 - `onDeleteSuperClaw(id)` — 删除空闲 SuperClaw | keywords: 删除节点, 占用保护, delete-super-claw, allocation-guard
 - `onRotateSuperClawToken(id)` — 轮换并展示一次性 Token | keywords: 轮换密钥, 一次性令牌, rotate-super-claw-token, one-time-token
 - `onCopySuperClawToken()` — 复制一次性 Token | keywords: 复制密钥, 一次性展示, copy-super-claw-token, one-time-display
-- `onSubmitTenant()` — 保存租户并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
+- `onSubmitTenant()` — 保存租户文章并发上限并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
 - `onDeleteTenant(id)` — 删除未分配节点的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
 
 ### HotTopicPanel.jsx
@@ -147,6 +150,11 @@
   - `adminApi.chatFinanceAgent`: 财务 Agent 同步聊天(传 `{ name, messages }`)
   - `adminApi.chatFinanceAgentStream(payload, callbacks)`: 财务 Agent SSE 流式聊天封装(fetch + ReadableStream + TextDecoder,逐帧分发 token/tool/end/error)/finance agent chat stream | keywords: finance-agent-chat-stream, sse-chat
   - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活, 15s 超时, 不消耗配额)/test ai provider
+  - `adminApi.listAiServices()` — 读取固定服务目录与生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
+  - `adminApi.updateAiServiceCredit(code,creditCost)` — 修改固定服务消耗点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code
+  - `adminApi.getTenantCreditAccount(id,query)` — 查询余额与流水 | keywords: Credit账户查询, 流水查询, credit-account-query, transaction-list
+  - `adminApi.rechargeTenantCredit(id,payload)` — 新增充值流水 | keywords: 租户充值, 追加流水, tenant-recharge, append-ledger
+  - `adminApi.adjustTenantCredit(id,payload)` — 新增人工调账流水 | keywords: 人工调账, 余额增减, manual-credit-adjustment, balance-change
   - `adminApi.listSuperClaws()` — 平台 SuperClaw 节点列表 | keywords: 节点列表, 平台管理, super-claw-list, platform-management
   - `adminApi.createSuperClaw(payload)` — 创建节点并接收一次性 Token | keywords: 创建节点, 一次性令牌, super-claw-create, one-time-token
   - `adminApi.updateSuperClaw(id, payload)` — 更新节点与容量 | keywords: 更新节点, 容量上限, super-claw-update, capacity-limit

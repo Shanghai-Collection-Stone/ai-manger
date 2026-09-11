@@ -397,6 +397,10 @@ export class SassService {
         typeof input.description === 'string'
           ? input.description.trim()
           : undefined,
+      xhsArticleConcurrencyLimit: input.xhsArticleConcurrencyLimit,
+      credit: input.credit ?? 0,
+      creditUnits:
+        input.credit === -1 ? -1 : Math.floor((input.credit ?? 0) * 1_000_000),
       createdAt: now,
       updatedAt: now,
     };
@@ -760,12 +764,7 @@ export class SassService {
     tenantId: string;
     keyId?: string;
     operation:
-      | 'insert'
-      | 'patch'
-      | 'list'
-      | 'find_one'
-      | 'update_one'
-      | 'delete_one';
+      'insert' | 'patch' | 'list' | 'find_one' | 'update_one' | 'delete_one';
     collectionName: string;
     request: Record<string, unknown>;
     result: Record<string, unknown>;
@@ -1288,6 +1287,7 @@ export class SassService {
     tenantId: string,
     aiPromptSupplement: string,
     enableAiCover?: boolean,
+    xhsArticleGlobalConcurrencyLimit?: number,
   ): Promise<PlatformInfoEntity> {
     const normalized = (tenantId ?? '').trim();
     if (!normalized) throw new BadRequestException('TENANT_ID_REQUIRED');
@@ -1305,6 +1305,10 @@ export class SassService {
       setDoc.enableAiCover = enableAiCover;
     } else {
       setOnInsertDoc.enableAiCover = false;
+    }
+    if (typeof xhsArticleGlobalConcurrencyLimit === 'number') {
+      setDoc.xhsArticleGlobalConcurrencyLimit =
+        xhsArticleGlobalConcurrencyLimit;
     }
     const res = await this.platformInfos.findOneAndUpdate(
       { tenantId: normalized },

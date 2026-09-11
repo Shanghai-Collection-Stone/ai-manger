@@ -92,9 +92,15 @@ export class SkillThoughtService {
   ): Promise<void> {
     try {
       // 1. 生成摘要
-      const summary = await this.generateSummary(input.content);
+      const summary = await this.generateSummary(input.content, {
+        tenantId: input.tenantId,
+        userId: input.userId,
+      });
       // 2. 提取关键词
-      const keywords = await this.extractKeywords(input.content);
+      const keywords = await this.extractKeywords(input.content, {
+        tenantId: input.tenantId,
+        userId: input.userId,
+      });
 
       // 3. 生成向量
       const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
@@ -323,7 +329,7 @@ ${newContent}`;
     );
 
     // 使用 AI 生成新的摘要
-    const newSummary = await this.generateSummary(mergedContent);
+    const newSummary = await this.generateSummary(mergedContent, scope);
 
     return this.update(
       existingId,
@@ -420,8 +426,13 @@ ${newContent}`;
 
   /**
    * @title 使用 AI 生成摘要 Generate Summary with AI
+   * @keyword-cn AI摘要, 租户计费
+   * @keyword-en ai-summary, tenant-billing
    */
-  async generateSummary(content: string): Promise<string> {
+  async generateSummary(
+    content: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): Promise<string> {
     try {
       const aiConfig = await this.resolveDefaultAiConfig();
       const messages = this.agentService.toMessages([
@@ -451,6 +462,12 @@ ${newContent}`;
           temperature: 0.3,
           apiKey: aiConfig.apiKey,
           baseUrl: aiConfig.baseUrl,
+          billingContext: {
+            tenantId: scope?.tenantId,
+            userId: scope?.userId,
+            source: 'skill-thought.summary',
+            platformScope: !scope?.tenantId,
+          },
         },
         messages,
       });
@@ -468,8 +485,13 @@ ${newContent}`;
 
   /**
    * @title 使用 AI 提取关键词 Extract Keywords with AI
+   * @keyword-cn AI关键词, 租户计费
+   * @keyword-en ai-keywords, tenant-billing
    */
-  async extractKeywords(content: string): Promise<string[]> {
+  async extractKeywords(
+    content: string,
+    scope?: { tenantId?: string; userId?: string },
+  ): Promise<string[]> {
     try {
       const aiConfig = await this.resolveDefaultAiConfig();
       const messages = this.agentService.toMessages([
@@ -503,6 +525,12 @@ ${newContent}`;
           temperature: 0.1,
           apiKey: aiConfig.apiKey,
           baseUrl: aiConfig.baseUrl,
+          billingContext: {
+            tenantId: scope?.tenantId,
+            userId: scope?.userId,
+            source: 'skill-thought.keywords',
+            platformScope: !scope?.tenantId,
+          },
         },
         messages,
       });

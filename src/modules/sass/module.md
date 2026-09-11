@@ -2,7 +2,7 @@
 
 ## 模块描述
 
-该模块提供SaaS数据源接入能力，包含Schema定义管理、租户与API Key管理、基于API Key租户识别的数据隔离CRUD接口，并提供非租户对接payload到SaaS payload的同步入库接口。
+该模块提供SaaS数据源接入能力，包含Schema定义管理、租户与API Key管理、租户 Credit 余额（`-1` 为无限）及基于API Key租户识别的数据隔离CRUD接口，并提供非租户对接payload到SaaS payload的同步入库接口。
 文件路径: `src/modules/sass`
 标识策略: 统一使用 MongoDB `_id`（ObjectId 字符串），不再维护自增数字 id。
 
@@ -19,7 +19,7 @@ Sass控制器，提供Schema、Tenant、API Key、租户数据CRUD接口，统�
   - `getSchema`: 获取schema/get schema
   - `updateSchema`: 更新schema/update schema
   - `deleteSchema`: 删除schema/delete schema
-  - `createTenant`: 创建租户/create tenant
+  - `createTenant`: 创建含文章生成并发上限与初始 Credit 的租户/create tenant with credit
   - `listTenant`: 列出租户/list tenant
   - `getTenant`: 获取租户/get tenant
   - `getPlatformInfo`: 获取平台AI配置/get platform info
@@ -77,7 +77,7 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `deleteSchema`: 删除schema/delete schema
   - `getSchema`: 获取schema/get schema
   - `listSchema`: 列出schema/list schema
-  - `createTenant`: 创建租户/create tenant
+- `createTenant`: 创建租户，新租户 Credit 缺省为 0，历史无限租户继续使用 -1/create tenant
   - `getTenant`: 获取租户/get tenant
   - `listTenant`: 列出租户/list tenant
   - `createApiKey`: 创建api key/create api key
@@ -93,7 +93,7 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `syncUsagesToSchema`: 同步订单使用入库/sync usages to schema
   - `syncRefundsToSchema`: 同步订单退单入库/sync refunds to schema
   - `getPlatformInfo`: 获取租户平台AI配置/get platform info
-  - `upsertPlatformInfo`: 更新租户平台AI配置（含enableAiCover）/upsert platform info
+  - `upsertPlatformInfo`: 更新租户平台AI配置（含enableAiCover与平台文章总并发）/upsert platform info
 
 ### sass-tenant-auth.middleware.ts
 
@@ -125,7 +125,7 @@ Schema实体定义。
 
 ### sass-tenant.entity.ts
 
-租户实体定义；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，容量由实际工作区数量汇总。
+租户实体定义；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，`xhsArticleConcurrencyLimit` 保存文章生成租户并发上限。
 
 - **关键词**: entity, tenant, tenant-node-assignment, workspace-count
 
@@ -137,7 +137,7 @@ API Key实体定义。
 
 ### platform-info.entity.ts
 
-平台AI配置实体定义。
+平台AI配置实体定义，平台作用域保存小红书文章生成总并发上限。
 
 - **关键词**: entity, platform-info, ai-prompt-supplement, enable-ai-cover
 

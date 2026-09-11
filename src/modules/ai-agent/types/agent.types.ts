@@ -6,6 +6,7 @@ import {
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { CreateAgentParams } from 'langchain';
 import type { SubAgent, SupportedResponseFormat } from 'deepagents';
+import type { AiBillingContext } from '../../ai-billing/entities/ai-usage-record.entity.js';
 
 /**
  * @title Agent提供方 Agent Provider
@@ -30,6 +31,8 @@ export interface AgentConfig {
   system?: string;
   /** 租户 ID，用于统一注入平台 AI 补充说明 */
   tenantId?: string;
+  /** 模型调用的租户、用户、会话与业务操作归属 */
+  billingContext: AiBillingContext;
   /** 直接传入的平台 AI 补充说明（优先级高于 tenantId 自动查询） */
   platformAiPromptSupplement?: string;
   tools?: CreateAgentParams['tools'];

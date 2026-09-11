@@ -739,6 +739,8 @@ export class ArticleGraphService {
   }
 
   private async generateCoverCopyByLlm(input: {
+    tenantId?: string;
+    userId?: string;
     articleTitle: string;
     articleTags?: string[];
     imageQuery?: string;
@@ -788,6 +790,12 @@ export class ArticleGraphService {
         nonStreaming: true,
         recursionLimit: 20,
         system: sys,
+        billingContext: {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          source: 'graph.cover-copy',
+          platformScope: !input.tenantId,
+        },
       });
       const structured = llm.withStructuredOutput(ZCoverCopy);
       const output = await structured.invoke(
@@ -859,6 +867,8 @@ export class ArticleGraphService {
    * @keyword-en build ai cover image prompt
    */
   private async buildAiCoverImagePrompt(input: {
+    tenantId?: string;
+    userId?: string;
     topic?: string;
     articleTitle: string;
     articleTags?: string[];
@@ -914,6 +924,12 @@ export class ArticleGraphService {
       const llm = await this.agent.buildLLM({
         nonStreaming: true,
         temperature: 0.4,
+        billingContext: {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          source: 'graph.cover-image-prompt',
+          platformScope: !input.tenantId,
+        },
       });
       const res = await llm.invoke(
         [
@@ -989,6 +1005,8 @@ export class ArticleGraphService {
   }): Promise<GalleryImageEntity | null> {
     try {
       const prompt = await this.buildAiCoverImagePrompt({
+        tenantId: input.tenantId,
+        userId: input.galleryUserId,
         topic: input.topic,
         articleTitle: input.articleTitle,
         articleTags: input.articleTags,
@@ -1002,6 +1020,12 @@ export class ArticleGraphService {
         prompt,
         size: '640x853',
         baseImageCandidates: input.baseImageCandidates,
+        billingContext: {
+          tenantId: input.tenantId,
+          userId: input.galleryUserId,
+          platformScope: !input.tenantId,
+          source: 'article-cover-generate',
+        },
       });
       const imageUrl = String(generated.imagePath ?? '').trim();
       if (!imageUrl.startsWith('/static/uploads/')) {
@@ -2014,6 +2038,8 @@ export class ArticleGraphService {
     }
 
     const plannedBlueprints = await this.planArticleTasks({
+      tenantId: input.tenantId,
+      userId: input.galleryUserId,
       provider,
       model,
       temperature,
@@ -2492,6 +2518,8 @@ export class ArticleGraphService {
    * @keyword-en plan, blueprint, explicit-tags
    */
   private async planArticleTasks(input: {
+    tenantId?: string;
+    userId?: string;
     provider?: 'gemini' | 'deepseek';
     model?: string;
     temperature: number;
@@ -2556,6 +2584,12 @@ export class ArticleGraphService {
       nonStreaming: true,
       recursionLimit: 30,
       system: sys,
+      billingContext: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        source: 'graph.article-plan',
+        platformScope: !input.tenantId,
+      },
     };
 
     const messages: BaseMessage[] = [
@@ -2972,6 +3006,8 @@ export class ArticleGraphService {
                 ]
               : imageGroupTagsByBlueprintIndex.get(bp.index);
           const articlePromise = this.generateOneArticle({
+            tenantId: input.tenantId,
+            userId: input.galleryUserId,
             provider: input.provider,
             model: input.model,
             temperature: input.temperature,
@@ -3319,6 +3355,8 @@ export class ArticleGraphService {
    * @keyword-en generate, article, writing-style
    */
   private async generateOneArticle(input: {
+    tenantId?: string;
+    userId?: string;
     provider?: 'gemini' | 'deepseek';
     model?: string;
     temperature: number;
@@ -3417,6 +3455,12 @@ export class ArticleGraphService {
       nonStreaming: true,
       recursionLimit: 30,
       system: sys,
+      billingContext: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        source: 'graph.article-generation',
+        platformScope: !input.tenantId,
+      },
     };
 
     const messages: BaseMessage[] = [
@@ -3900,6 +3944,8 @@ export class ArticleGraphService {
       if (collagePath) {
         try {
           const coverCopy = await this.generateCoverCopyByLlm({
+            tenantId: input.tenantId,
+            userId: input.galleryUserId,
             articleTitle: input.articleTitle,
             articleTags: input.articleTags,
             imageQuery: queryText,

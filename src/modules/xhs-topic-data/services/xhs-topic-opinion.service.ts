@@ -142,6 +142,13 @@ export class XhsTopicOpinionService {
           temperature: 0.2,
           noPostHook: true,
           nonStreaming: true,
+          tenantId: topic.tenantId ?? undefined,
+          billingContext: {
+            tenantId: topic.tenantId ?? undefined,
+            userId: topic.userId,
+            source: 'xhs-topic-data.opinion-analysis',
+            platformScope: !topic.tenantId,
+          },
         },
         messages: [
           {

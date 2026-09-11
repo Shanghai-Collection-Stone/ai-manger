@@ -117,6 +117,13 @@ export class DecisionCardService {
           baseUrl: runtime.baseUrl,
           temperature: 0.2,
           tenantId: input.tenantId,
+          billingContext: {
+            tenantId: input.tenantId,
+            userId: input.userId,
+            sessionId: input.sessionId,
+            source: 'decision-card.generate',
+            platformScope: !input.tenantId,
+          },
           system: sys,
         },
         messages,
@@ -876,6 +883,12 @@ export class DecisionCardService {
         temperature: 0.1,
         nonStreaming: true,
         tenantId: scope?.tenantId,
+        billingContext: {
+          tenantId: scope?.tenantId,
+          userId: scope?.userId,
+          source: 'decision-card.todo-plan',
+          platformScope: !scope?.tenantId,
+        },
         system: undefined,
       });
     } catch (e) {

@@ -24,6 +24,7 @@ import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
 import { XhsTopicRepositoryService } from '../../xhs-topic/services/xhs-topic-repository.service.js';
 import type { XhsTopicEntity } from '../../xhs-topic/entities/xhs-topic.entity.js';
 import {
+  CreateXhsManualLinkDto,
   DeleteXhsTopicDayDto,
   UpdateXhsCrawlSettingsDto,
   UpdateXhsCrawlStatusDto,
@@ -32,6 +33,7 @@ import {
   XhsTopicOpinionQueryDto,
 } from './xhs-topic-data.dto.js';
 import { XhsTopicCrawlService } from '../services/xhs-topic-crawl.service.js';
+import { XhsManualLinkService } from '../services/xhs-manual-link.service.js';
 import { XhsTopicDataService } from '../services/xhs-topic-data.service.js';
 import { XhsTopicOpinionService } from '../services/xhs-topic-opinion.service.js';
 import { TikhubConfigService } from '../../tikhub/services/tikhub-config.service.js';
@@ -62,23 +64,51 @@ export class XhsTopicDataController {
     private readonly opinionService: XhsTopicOpinionService,
     private readonly tikhubConfig: TikhubConfigService,
     private readonly tikhubXhs: TikhubXhsService,
+    private readonly manualLinkService: XhsManualLinkService,
   ) {}
 
   /**
    * @description 返回数据看板左侧母选题与子选题列表。与选题页不同，这里**保留**已存入文章库的子选题——
    *   已发文的子选题恰恰是最需要看抓取数据的那批，把它们剔掉会让数据页看不到主要数据源。
-   * @keyword-cn 看板选题列表, 保留已入库子题
-   * @keyword-en dashboard-topic-list, include-stored-topics
+   *   手动添加链接建的独立子选题不挂母题，单独放在 `standaloneTopics` 里返回。
+   * @keyword-cn 看板选题列表, 保留已入库子题, 独立子选题
+   * @keyword-en dashboard-topic-list, include-stored-topics, standalone-child-topic
    */
   @Get('topics')
   @RequirePermission('read', 'XhsTopic')
   async topics(@Req() req: AdminRequest) {
     const user = this.requireUser(req);
+    const scope = { tenantId: user.tenantId, userId: user._id.toHexString() };
     return {
-      groups: await this.repository.listWorkspace(
-        { tenantId: user.tenantId, userId: user._id.toHexString() },
-        { includeStoredArticles: true },
-      ),
+      groups: await this.repository.listWorkspace(scope, {
+        includeStoredArticles: true,
+      }),
+      standaloneTopics: await this.repository.listStandaloneChildren(scope),
+    };
+  }
+
+  /**
+   * @description 手动添加一条小红书笔记链接到指定文章库：从链接解析 NoteId（解析不到直接 400），
+   *   建独立子选题并以已发布状态入库，入库即进入发布驱动的抓取调度，默认处于监控中。
+   * @keyword-cn 手动添加链接接口, 解析笔记ID
+   * @keyword-en manual-link-endpoint, parse-note-id
+   */
+  @Post('manual-links')
+  @RequirePermission('create', 'XhsTopic')
+  async createManualLink(
+    @Req() req: AdminRequest,
+    @Body() dto: CreateXhsManualLinkDto,
+  ) {
+    const user = this.requireUser(req);
+    const { article, topic } = await this.manualLinkService.create(dto, {
+      tenantId: user.tenantId,
+      userId: user._id.toHexString(),
+      username: user.username,
+    });
+    return {
+      article: { ...article, _id: undefined },
+      topicId: topic.id,
+      noteId: article.meta?.NoteId,
     };
   }
 

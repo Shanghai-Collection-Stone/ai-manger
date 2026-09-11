@@ -142,7 +142,7 @@ export class ToolsService {
       return this.getXhsArticleExpertSessionTools(scope);
     }
     const tools: CreateAgentParams['tools'] = [];
-    const tFrontend = this.frontend.getHandle() ?? [];
+    const tFrontend = this.frontend.getHandle(scope) ?? [];
     const tAnalysis = this.analysis.getHandle() ?? [];
     const tTitle = this.title.getHandle() ?? [];
     const tSkillThought = this.skillThought.getHandle(scope) ?? [];

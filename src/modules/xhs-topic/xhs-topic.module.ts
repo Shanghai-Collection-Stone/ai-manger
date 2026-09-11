@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AdminModule } from '../admin/admin.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
+import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
 import { CanvasModule } from '../canvas/canvas.module.js';
 import { McpFunctionCallModule } from '../function-call/mcp/mcp.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
@@ -20,6 +21,7 @@ import { XhsArticleGenerationService } from './services/xhs-article-generation.s
   imports: [
     AdminModule,
     AiAgentModule,
+    AiBillingModule,
     CanvasModule,
     DataSourceModule,
     GalleryModule,

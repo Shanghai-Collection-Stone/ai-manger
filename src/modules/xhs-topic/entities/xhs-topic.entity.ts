@@ -9,14 +9,34 @@ import type { ObjectId } from 'mongodb';
 export type XhsTopicKind = 'mother' | 'child';
 
 /**
- * @description Agent 或用户写入的单条选题候选；母题可携带固定配图标签，子题可携带后续生文沿用的文章风格。
- * @keyword-cn 选题候选, 题目类型, 母题配图标签, 文章生成风格
- * @keyword-en topic-candidate, topic-type, mother-image-tags, article-writing-style
+ * @description 母选题的配图规则：`default`=拼图:单图 5:1 且单图排最后，`collage-first`=全拼图，`portrait-first`=全竖图单图。
+ *  图库不够时按规则的回退链换最接近的版式，不会因规则本身让生成失败。
+ * @keyword-cn 母题配图规则, 拼图优先, 竖图优先
+ * @keyword-en mother-image-rule, collage-first, portrait-first
+ */
+export type XhsMotherImageRule = 'default' | 'collage-first' | 'portrait-first';
+
+/**
+ * @description 母选题配图规则的合法取值，DTO 校验与仓储归一化共用。
+ * @keyword-cn 母题配图规则, 规则取值
+ * @keyword-en mother-image-rule, image-rule-values
+ */
+export const XHS_MOTHER_IMAGE_RULES: readonly XhsMotherImageRule[] = [
+  'default',
+  'collage-first',
+  'portrait-first',
+];
+
+/**
+ * @description Agent 或用户写入的单条选题候选；母题可携带固定配图标签与配图规则，子题可携带后续生文沿用的文章风格。
+ * @keyword-cn 选题候选, 题目类型, 母题配图标签, 母题配图规则, 文章生成风格
+ * @keyword-en topic-candidate, topic-type, mother-image-tags, mother-image-rule, article-writing-style
  */
 export interface XhsTopicCandidate {
   title: string;
   topicType: string;
   imageTags?: string[];
+  imageRule?: XhsMotherImageRule;
   articleStyle?: string;
 }
 
@@ -166,6 +186,8 @@ export interface XhsTopicEntity {
   topicType: string;
   /** 母选题专用的固定配图图库标签，空数组表示沿用 Agent 自动匹配 */
   imageTags?: string[];
+  /** 母选题专用的配图规则，缺省视为 default */
+  imageRule?: XhsMotherImageRule;
   /** 子选题专用的文章生成风格，首次生文与重写都会注入 Agent 提示词 */
   articleStyle?: string;
   status: XhsTopicStatus;
@@ -224,6 +246,7 @@ export interface XhsTopicWorkspaceGroup {
   title: string;
   topicType: string;
   imageTags: string[];
+  imageRule: XhsMotherImageRule;
   topicCount: number;
   sourceTodoId?: number;
   createdAt: string;
@@ -232,14 +255,15 @@ export interface XhsTopicWorkspaceGroup {
 }
 
 /**
- * @description 修改已入库选题标题、题目类型、状态、母题配图标签或子题文章生成风格的输入。
- * @keyword-cn 更新选题输入, 选题状态, 母题配图标签, 文章生成风格
- * @keyword-en update-topic-input, topic-status, mother-image-tags, article-writing-style
+ * @description 修改已入库选题标题、题目类型、状态、母题配图标签、母题配图规则或子题文章生成风格的输入。
+ * @keyword-cn 更新选题输入, 选题状态, 母题配图标签, 母题配图规则, 文章生成风格
+ * @keyword-en update-topic-input, topic-status, mother-image-tags, mother-image-rule, article-writing-style
  */
 export interface XhsTopicUpdateInput {
   title?: string;
   topicType?: string;
   imageTags?: string[];
+  imageRule?: XhsMotherImageRule;
   articleStyle?: string;
   status?: XhsTopicStatus;
 }
@@ -279,10 +303,15 @@ export interface XhsArticleMemoryDraft {
 export interface XhsArticleGenerateInput {
   prompt?: string;
   useSearch?: boolean;
+  /** true=严格去重（不够即失败）；缺省或 false=优先不重复，未用图不够时允许复用已用图 */
   dedup?: boolean;
   /** 素材风格库预设 id；`random` 表示由服务端为本次封面随机选择。 */
   coverStyle?: string;
   regenerateImages?: boolean;
+  /** 仅本次生成覆盖母题配图规则，用于「横/竖图太少」后改用竖图或拼图重试，不改母题设置 */
+  imageRule?: XhsMotherImageRule;
+  /** 仅本次生成允许重复用图：忽略严格去重，未用图不够复用已用图，仍不够再在本篇内轮换复用 */
+  allowImageRepeat?: boolean;
 }
 
 /**
@@ -314,7 +343,7 @@ export interface XhsArticleGenerationResult {
 export interface XhsArticleGenerationState {
   topicId: number;
   todoId: number;
-  status: 'running' | 'done' | 'failed';
+  status: 'queued' | 'running' | 'done' | 'failed';
   /** 失败码，仅 status=failed 时存在 */
   error?: string;
   /** 前端可直接展示的中文失败原因，仅 status=failed 时存在 */

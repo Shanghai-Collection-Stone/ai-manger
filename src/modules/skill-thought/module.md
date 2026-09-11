@@ -21,6 +21,8 @@
   - `buildReadScopeFilter`: 读场景范围兼容/build read scope filter
   - `resolveDefaultAiConfig`: 默认模型解析/resolve default ai config
   - `resolveDefaultEmbeddingConfig`: 默认向量配置解析/resolve default embedding config
+  - `generateSummary(content, scope?)` — 生成可检索摘要并按租户记录用量 | keywords: AI摘要, 租户计费, ai-summary, tenant-billing
+  - `extractKeywords(content, scope?)` — 提取检索关键词并按租户记录用量 | keywords: AI关键词, 租户计费, ai-keywords, tenant-billing
 
 ### tools/skill-thought.tools.ts
 思维链工具。

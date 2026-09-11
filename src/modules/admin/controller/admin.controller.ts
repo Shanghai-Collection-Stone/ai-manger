@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -22,6 +23,7 @@ import { AdminService } from '../services/admin.service.js';
 import type { AdminRequest } from '../types/admin-request.types.js';
 import {
   AdminLoginDto,
+  AdjustTenantCreditDto,
   CreateAdminUserDto,
   CreateAgentConfigDto,
   CreateApiKeyByAdminDto,
@@ -29,8 +31,10 @@ import {
   CreateDataSourceByAdminDto,
   CreateTenantByAdminDto,
   CreateXhsAccountDto,
+  RechargeTenantCreditDto,
   UpdateAgentConfigDto,
   UpdateAiProviderDto,
+  UpdateAiServiceCreditDto,
   UpdateAdminUserDto,
   UpdateApiKeyByAdminDto,
   UpdateClawConfigDto,
@@ -86,6 +90,33 @@ export class AdminController {
   @Get('auth/me')
   async me(@Req() req: Request) {
     return this.adminService.getMe(this.requireUser(req));
+  }
+
+  /**
+   * @description 查询当前登录租户自己的 Credit 余额与倒序不可变流水。
+   * @keyword-cn 当前Credit账户, 自身流水
+   * @keyword-en current-credit-account, own-transaction-list
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
+  @Get('auth/credit-account')
+  async getCurrentCreditAccount(
+    @Req() req: Request,
+    @Query('limit') limit?: string,
+    @Query('before') before?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    const parsedBefore = before ? new Date(before) : undefined;
+    if (parsedLimit !== undefined && !Number.isInteger(parsedLimit)) {
+      throw new BadRequestException('CREDIT_LIMIT_INVALID');
+    }
+    if (parsedBefore && Number.isNaN(parsedBefore.getTime())) {
+      throw new BadRequestException('CREDIT_BEFORE_INVALID');
+    }
+    return this.adminService.getCurrentCreditAccount(this.requireUser(req), {
+      limit: parsedLimit,
+      before: parsedBefore,
+    });
   }
 
   /**
@@ -178,7 +209,8 @@ export class AdminController {
    * @description AI提供商配置列表
    * @keyword-en admin ai providers list endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'AiProvider')
   @Get('ai-providers')
   async listAiProviders(@Req() req: Request) {
     const rows = await this.adminService.listAiProviders(this.requireUser(req));
@@ -189,7 +221,8 @@ export class AdminController {
    * @description AI提供商配置新增或更新
    * @keyword-en admin ai providers upsert endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('create', 'AiProvider')
   @Post('ai-providers')
   async upsertAiProvider(
     @Req() req: Request,
@@ -206,7 +239,8 @@ export class AdminController {
    * @description AI提供商配置更新
    * @keyword-en admin ai providers update endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'AiProvider')
   @Patch('ai-providers/:id')
   async updateAiProvider(
     @Req() req: Request,
@@ -225,7 +259,8 @@ export class AdminController {
    * @description AI提供商配置删除
    * @keyword-en admin ai providers delete endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('delete', 'AiProvider')
   @Delete('ai-providers/:id')
   async deleteAiProvider(@Req() req: Request, @Param('id') id: string) {
     const ok = await this.adminService.deleteAiProvider(
@@ -241,7 +276,8 @@ export class AdminController {
    *   主要用于诊断 baseUrl/apiKey 配置或国内直连 OpenAI 网络问题。
    * @keyword-en admin ai providers test connectivity endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'AiProvider')
   @Post('ai-providers/:id/test')
   async testAiProvider(@Req() req: Request, @Param('id') id: string) {
     const result = await this.adminService.testAiProvider(
@@ -252,10 +288,47 @@ export class AdminController {
   }
 
   /**
+   * @description 列出代码内固定的收费服务及当前生效 Credit 点数。
+   * @keyword-cn 服务管理列表, 生效点数
+   * @keyword-en service-management-list, effective-credit
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'AiService')
+  @Get('ai-services')
+  async listAiServices(@Req() req: Request) {
+    const services = await this.adminService.listAiServices(
+      this.requireUser(req),
+    );
+    return { services };
+  }
+
+  /**
+   * @description 修改固定服务编码的 Credit 消耗点数。
+   * @keyword-cn 更新服务点数, 固定服务编码
+   * @keyword-en update-service-credit, immutable-service-code
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'AiService')
+  @Patch('ai-services/:code')
+  async updateAiServiceCredit(
+    @Req() req: Request,
+    @Param('code') code: string,
+    @Body() body: UpdateAiServiceCreditDto,
+  ) {
+    const service = await this.adminService.updateAiServiceCredit(
+      this.requireUser(req),
+      code,
+      body.creditCost,
+    );
+    return { service };
+  }
+
+  /**
    * @description 租户管理列表
    * @keyword-en admin tenants list endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
   @Get('tenants')
   async listTenants(@Req() req: Request) {
     const tenants = await this.adminService.listTenants(this.requireUser(req));
@@ -266,7 +339,8 @@ export class AdminController {
    * @description 租户管理新增
    * @keyword-en admin tenants create endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('create', 'User')
   @Post('tenants')
   async createTenant(
     @Req() req: Request,
@@ -283,7 +357,8 @@ export class AdminController {
    * @description 租户管理更新
    * @keyword-en admin tenants update endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'User')
   @Patch('tenants/:id')
   async updateTenant(
     @Req() req: Request,
@@ -299,10 +374,79 @@ export class AdminController {
   }
 
   /**
+   * @description 查询租户 Credit 当前余额与倒序不可变流水。
+   * @keyword-cn Credit账户查询, 流水查询
+   * @keyword-en credit-account-query, transaction-list
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
+  @Get('tenants/:id/credits')
+  async getTenantCreditAccount(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('before') before?: string,
+  ) {
+    const parsedLimit = limit ? Number(limit) : undefined;
+    const parsedBefore = before ? new Date(before) : undefined;
+    if (parsedLimit !== undefined && !Number.isInteger(parsedLimit)) {
+      throw new BadRequestException('CREDIT_LIMIT_INVALID');
+    }
+    if (parsedBefore && Number.isNaN(parsedBefore.getTime())) {
+      throw new BadRequestException('CREDIT_BEFORE_INVALID');
+    }
+    return this.adminService.getTenantCreditAccount(this.requireUser(req), id, {
+      limit: parsedLimit,
+      before: parsedBefore,
+    });
+  }
+
+  /**
+   * @description 为租户追加一笔 Credit 充值流水并更新余额。
+   * @keyword-cn 租户充值接口, 追加流水
+   * @keyword-en tenant-recharge-endpoint, append-ledger
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'User')
+  @Post('tenants/:id/credits/recharge')
+  async rechargeTenantCredit(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: RechargeTenantCreditDto,
+  ) {
+    return this.adminService.rechargeTenantCredit(
+      this.requireUser(req),
+      id,
+      body,
+    );
+  }
+
+  /**
+   * @description 为租户追加一笔正数或负数 Credit 人工调账流水。
+   * @keyword-cn 人工调账接口, 余额增减
+   * @keyword-en credit-adjustment-endpoint, balance-change
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'User')
+  @Post('tenants/:id/credits/adjust')
+  async adjustTenantCredit(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: AdjustTenantCreditDto,
+  ) {
+    return this.adminService.adjustTenantCredit(
+      this.requireUser(req),
+      id,
+      body,
+    );
+  }
+
+  /**
    * @description 租户管理删除
    * @keyword-en admin tenants delete endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('delete', 'User')
   @Delete('tenants/:id')
   async deleteTenant(@Req() req: Request, @Param('id') id: string) {
     const ok = await this.adminService.deleteTenant(this.requireUser(req), id);
@@ -426,7 +570,8 @@ export class AdminController {
    * @description 获取平台信息（AI补充说明）
    * @keyword-en admin get platform info endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'PlatformSetting')
   @Get('platform-info')
   async getPlatformInfo(@Req() req: Request) {
     return this.adminService.getPlatformInfo(this.requireUser(req));
@@ -436,7 +581,8 @@ export class AdminController {
    * @description 更新平台信息（AI补充说明）
    * @keyword-en admin upsert platform info endpoint
    */
-  @UseGuards(AdminAuthGuard)
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'PlatformSetting')
   @Put('platform-info')
   async upsertPlatformInfo(
     @Req() req: Request,
@@ -446,6 +592,7 @@ export class AdminController {
       this.requireUser(req),
       body.aiPromptSupplement ?? '',
       body.enableAiCover,
+      body.xhsArticleGlobalConcurrencyLimit,
     );
   }
 

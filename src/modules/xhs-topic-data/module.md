@@ -30,15 +30,18 @@
 
 抓取开关取消时会连带把在途 Todo 一起停掉，恢复时立即补跑一次抓取；历史数据在两个方向上都保留。
 
+**手动添加笔记链接**：数据监控页可以不经选题工作台直接添加一条已发布笔记。`XhsManualLinkService` 先用 `parseXhsNoteId` 从链接里解析 24 位 NoteId（`/explore/{id}`、`/discovery/item/{id}`、`/user/profile/{uid}/{id}`、`noteId`/`note_id` 参数，允许夹在分享文本里；`xhslink.com` 短链不带 NoteId，一律 400 `XHS_NOTE_ID_NOT_FOUND`），再校验文章库归属与同库重复（409 `XHS_NOTE_ALREADY_EXISTS`），然后建一条**不挂母题**的独立子选题（`topicType=手动链接`、`status=published`、`crawl.status=crawling`）作为 topicId，最后以 `source=xhs-topic`、`publishStatus=published`、`meta={ xhsTopicId, NoteId, noteUrl, manualLink: true }` 入库。入库即走既有的发布驱动调度，之后的抓取、指标、开关与选题工作台发出的文章完全一致。独立子选题没有 `parentId`，选题工作台天然不展示；`GET /topics` 通过 `standaloneTopics` 单独返回，供前端补齐抓取状态。数据监控里的「删除」复用文章库删除接口，删除已发布文章时调度行随之取消。
+
 ## 文件清单 (File List)
 
 - `xhs-topic-data.module.ts` — NestJS 模块入口，装配后台鉴权、文章库工作区、会话、Todo、抓取机器人、TikHub 接入与选题仓储。
 - `controller/xhs-topic-data.controller.ts` — 数据看板 HTTP 接口与权限声明。
-- `controller/xhs-topic-data.dto.ts` — 分页、按天删除、抓取开关、每日抓取时刻与采集渠道/TikHub 凭证的入参校验。
+- `controller/xhs-topic-data.dto.ts` — 分页、按天删除、抓取开关、每日抓取时刻、采集渠道/TikHub 凭证与手动添加链接的入参校验。
 - `entities/xhs-topic-data.entity.ts` — 抓取任务、采集渠道、总览指标、明细行、舆论分析与调度配置类型。
 - `services/xhs-topic-crawl.service.ts` — 发布事件驱动的专用调度表、每日定点排程、到期任务原子领取、抓取任务绑定、Todo 状态对账、TikHub 直采分支与时刻/渠道配置。
 - `services/xhs-topic-data.service.ts` — 抓取批次聚合、总览指标、趋势、分页明细与按天删除。
 - `services/xhs-topic-opinion.service.ts` — 舆论导向分析 Agent、结果缓存与词频兜底。
+- `services/xhs-manual-link.service.ts` — 笔记链接 NoteId 解析、手动添加链接的重复校验、独立子选题与已发布文章入库。
 
 ## 函数清单 (Function List)
 
@@ -48,7 +51,13 @@
 - `UpdateXhsCrawlStatusDto({ status })` — 校验取消/恢复抓取的目标状态 | keywords: 抓取状态参数, 取消恢复, crawl-status-dto, cancel-resume
 - `UpdateXhsCrawlSettingsDto({ dailyCrawlAt?,channel?,tikhubApiKey?,tikhubBaseUrl?,intervalMinutes? })` — 校验每日抓取时刻（`HH:mm`）、采集渠道与 TikHub 凭证；Key 传空串清空、不传保持不变，`intervalMinutes` 为废弃字段传了也忽略 | keywords: 抓取时刻参数, 每日定点, crawl-settings-dto, daily-crawl-time
 - `UpdateXhsCrawlWindowDto({ startAt,endAt })` — 校验单选题抓取区间起止时间 | keywords: 抓取区间参数, 起止时间, crawl-window-dto, start-end-time
-- `XhsTopicDataController.topics(req)` — 返回看板左侧母/子选题列表，保留已存入文章库的子题 | keywords: 看板选题列表, 保留已入库子题, dashboard-topic-list, include-stored-topics
+- `CreateXhsManualLinkDto({ libraryId,title,url })` — 校验手动添加链接的目标文章库、标题（≤100）与链接（≤2000） | keywords: 手动添加链接参数, 标题链接, manual-link-dto, title-url
+- `XhsTopicDataController.topics(req)` — 返回看板左侧母/子选题列表，保留已存入文章库的子题，并在 `standaloneTopics` 返回手动链接的独立子选题 | keywords: 看板选题列表, 保留已入库子题, 独立子选题, dashboard-topic-list, include-stored-topics, standalone-child-topic
+- `XhsTopicDataController.createManualLink(req, dto)` — 手动添加笔记链接，解析不到 NoteId 返回 400，入库即进入监控 | keywords: 手动添加链接接口, 解析笔记ID, manual-link-endpoint, parse-note-id
+- `XHS_NOTE_ID_PATTERN` — 小红书笔记 ID 形态（24 位十六进制） | keywords: 小红书笔记ID, 链接解析, xhs-note-id, link-parse
+- `parseXhsNoteId(link)` — 从笔记链接或分享文本解析 NoteId，短链与位数不对返回 null | keywords: 解析笔记ID, 链接解析, parse-note-id, link-parse
+- `XhsManualLinkService({ db, libraryService, articleService, repository })` — 手动添加笔记链接服务 | keywords: 手动添加链接, 数据监控, manual-note-link, data-monitor
+- `XhsManualLinkService.create(input, user)` — 解析 NoteId、校验文章库与同库重复，建独立子选题并以已发布状态入库，失败时回收子选题 | keywords: 手动添加链接, 解析笔记ID, 重复笔记拦截, manual-note-link, parse-note-id, duplicate-note-guard
 - `XhsTopicDataController.overview(req, topicId)` — 返回子选题数据总览 | keywords: 数据总览接口, 指标汇总, overview-endpoint, metric-summary
 - `XhsTopicDataController.details(req, topicId, query)` — 分页返回抓取明细 | keywords: 数据明细接口, 分页明细, details-endpoint, paged-details
 - `XhsTopicDataController.deleteDay(req, topicId, query)` — 删除某个自然日的抓取数据 | keywords: 按天删除接口, 清理抓取数据, delete-day-endpoint, purge-day-stats
@@ -65,6 +74,7 @@
 - `XhsTopicCrawlService.onModuleInit()` — 启动抓取调度轮询 | keywords: 启动调度, 定时轮询, start-scheduler, interval-tick
 - `XhsTopicCrawlService.onModuleDestroy()` — 停止抓取调度轮询 | keywords: 停止调度, 释放定时器, stop-scheduler, clear-timer
 - `XhsTopicCrawlService.ensureIndexes()` — 建立抓取任务与专用调度表索引，按天归一采集频率并执行首次回填 | keywords: 抓取任务索引, 调度表初始化, crawl-task-indexes, schedule-table-init
+- `XhsTopicCrawlService.dropLegacyUniqueTodoIndex()` — 启动时删掉运行表遗留的 `todoId` 单键唯一索引，否则 TikHub 直采（`todoId` 恒为 0）第二次就撞 E11000；失败只记日志 | keywords: 清理遗留唯一索引, 直采运行记录, drop-legacy-unique-index, direct-crawl-run-record
 - `XhsTopicCrawlService.migrateToDailySchedule()` — 给存量配置补每日时刻并把全部等待行改排到下一个定点 | keywords: 定点调度迁移, 存量调度重排, migrate-to-daily-schedule, reschedule-existing
 - `XhsTopicCrawlService.resolveFirstDailyRunAt(scope,from,startAt)` — 算调度行首次到达时刻，发布/恢复/改区间共用，自动链路不即时开抓 | keywords: 计算首次定点, 不即时开抓, resolve-first-daily-run, no-immediate-crawl
 - `XhsTopicCrawlService.backfillPublishedArticleSchedules()` — 首次启用时按迁移标记幂等回填既有已发布选题文章 | keywords: 已发布文章回填, 调度表迁移, published-article-backfill, schedule-table-migration
@@ -162,6 +172,8 @@
 | 平台侧采集        | platform-side-collect      |
 | 直采后推进调度    | advance-by-topic           |
 | 收尾僵尸直采      | settle-stale-direct-run    |
+| 清理遗留唯一索引  | drop-legacy-unique-index   |
+| 直采运行记录      | direct-crawl-run-record    |
 | 采集端可用性      | collector-availability     |
 | 按渠道判定        | per-channel-check          |
 | 测试TikHub连接    | test-tikhub-connection     |
@@ -196,6 +208,14 @@
 | 校验选题归属      | require-owned-topic        |
 | 看板选题列表      | dashboard-topic-list       |
 | 保留已入库子题    | include-stored-topics      |
+| 独立子选题        | standalone-child-topic     |
+| 手动添加链接      | manual-note-link           |
+| 手动添加链接接口  | manual-link-endpoint       |
+| 手动添加链接参数  | manual-link-dto            |
+| 解析笔记ID        | parse-note-id              |
+| 小红书笔记ID      | xhs-note-id                |
+| 链接解析          | link-parse                 |
+| 重复笔记拦截      | duplicate-note-guard       |
 
 ## 类型导出 (Type Exports)
 
@@ -218,7 +238,8 @@
 
 | 方法与路径                                                   | 权限            | 用途                              |
 | ------------------------------------------------------------ | --------------- | --------------------------------- |
-| `GET /api/xhs-topic-data/topics`                             | read XhsTopic   | 看板母/子选题列表（含已发文子题） |
+| `GET /api/xhs-topic-data/topics`                             | read XhsTopic   | 看板母/子选题列表（含已发文子题与独立子选题） |
+| `POST /api/xhs-topic-data/manual-links`                      | create XhsTopic | 手动添加笔记链接                  |
 | `GET /api/xhs-topic-data/:topicId/overview`                  | read XhsTopic   | 数据总览                          |
 | `GET /api/xhs-topic-data/:topicId/details`                   | read XhsTopic   | 数据明细分页                      |
 | `DELETE /api/xhs-topic-data/:topicId/details?day=YYYY-MM-DD` | delete XhsTopic | 删除某天数据                      |

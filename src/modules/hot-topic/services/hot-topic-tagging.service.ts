@@ -139,6 +139,11 @@ export class HotTopicTaggingService {
           noPostHook: true,
           nonStreaming: true,
           ...(tenantId ? { tenantId } : {}),
+          billingContext: {
+            tenantId,
+            source: 'hot-topic.tagging',
+            platformScope: !tenantId,
+          },
         },
         messages: [
           {

@@ -911,6 +911,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async pickGalleryTags(input: {
+    userId: string;
     provider: 'gemini' | 'deepseek';
     model: string;
     temperature: number;
@@ -950,6 +951,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
       model: input.model,
       temperature: input.temperature,
       tenantId: input.tenantId,
+      billingContext: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        source: 'graph.batch-gallery-tags',
+        platformScope: !input.tenantId,
+      },
       system: sys,
       responseFormat:
         input.provider === 'deepseek'
@@ -1081,6 +1088,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     const model = 'deepseek-chat';
     const temperature = 0.2;
     const tagMap = await this.pickGalleryTags({
+      userId: input.userId,
       provider,
       model,
       temperature,
@@ -1241,6 +1249,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     taskCount: number;
     tasksPreview: string[];
     tenantId?: string;
+    userId?: string;
     provider?: 'gemini' | 'deepseek';
     model?: string;
     temperature?: number;
@@ -1265,6 +1274,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           ? input.temperature
           : 0.2,
       tenantId: input.tenantId,
+      billingContext: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        source: 'graph.batch-description',
+        platformScope: !input.tenantId,
+      },
       system: sys,
       responseFormat:
         provider === 'deepseek'
@@ -1603,6 +1618,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
             ? (summary.tasksPreview as string[])
             : [],
           tenantId,
+          userId: input.userId,
           provider: input.provider,
           model: input.model,
           temperature: input.temperature,
@@ -1744,6 +1760,7 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
         taskCount: postsInit.length,
         tasksPreview,
         tenantId,
+        userId: input.userId,
         provider: input.provider,
         model: input.model,
         temperature: input.temperature,
@@ -2045,6 +2062,12 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
           model: state.model,
           temperature: state.temperature,
           tenantId: state.tenantId,
+          billingContext: {
+            tenantId: state.tenantId,
+            userId: state.userId,
+            source: 'graph.batch-post-generation',
+            platformScope: !state.tenantId,
+          },
           system: sys,
           nonStreaming: true,
           responseFormat:

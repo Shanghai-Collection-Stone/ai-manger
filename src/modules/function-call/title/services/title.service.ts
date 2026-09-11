@@ -48,6 +48,12 @@ export class TitleFunctionCallService {
           config: {
             temperature: 0.3,
             tenantId,
+            billingContext: {
+              tenantId,
+              sessionId,
+              source: 'function-call.title-create',
+              platformScope: !tenantId,
+            },
             system: sys,
           },
           messages,
@@ -106,11 +112,18 @@ export class TitleFunctionCallService {
         content: `任务：Q: ${q}\nA: ${a}`,
       },
     ]);
+    const tenantId =
+      typeof meta?.tenantId === 'string' ? meta.tenantId : undefined;
     const ai = await this.agent.runWithMessages({
       config: {
         temperature: 0.3,
-        tenantId:
-          typeof meta?.tenantId === 'string' ? meta.tenantId : undefined,
+        tenantId,
+        billingContext: {
+          tenantId,
+          sessionId,
+          source: 'function-call.title-update',
+          platformScope: !tenantId,
+        },
         system: sys,
       },
       messages,

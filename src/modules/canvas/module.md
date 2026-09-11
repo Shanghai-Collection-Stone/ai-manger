@@ -15,7 +15,17 @@
 - **collage-cover-5inner**: 1横拼图封面 + 5竖内页单图
 - **collage-cover-5collage**: 1横拼图封面 + 5横拼图内页；自动版式下竖图不足但横图充足时优先回退到该版式
 - 横图只允许进入拼图/拼图封面；单张封面和单张内页只接受竖图，图片不足时进入不足/失败流程，不降级为单张横图。
-- **封面优先拼图（`preferCollageCover`）**：入参打开后，文章没有显式 `layout` 时先按 `collage-cover-5inner` 试算，图片池够就用拼图当封面底图；不够则原样回落交替版式，再由既有的全拼图回退兜底，**不会因为这个偏好而让生成失败**。该版式相比默认 `portrait-cover-5inner` 只多要 1 张竖图、少要 2 张横图，多数图库能直接满足。小红书专家生文链路默认开启。
+- **collage-cover-4collage-1portrait**: 1横拼图封面 + 4拼图内页 + 末页1竖图（拼图:单图 5:1，数量少的单图排最后），小红书母题配图规则「默认」的首选版式
+- **portrait-cover-5portrait**: 1竖封面 + 5竖图内页（全单图），小红书母题配图规则「竖图优先」的首选版式
+- **封面优先拼图（`preferCollageCover`）**：入参打开后，文章没有显式 `layout` 时先按 `collage-cover-5inner` 试算，图片池够就用拼图当封面底图；不够则原样回落交替版式，再由既有的全拼图回退兜底，**不会因为这个偏好而让生成失败**。该版式相比默认 `portrait-cover-5inner` 只多要 1 张竖图、少要 2 张横图，多数图库能直接满足。
+- **候选版式链（`layoutCandidates`）**：调用方按优先级给出一组版式，文章没有显式 `layout` 时逐个试算，取第一个图片池能满足的版式；全部不满足才按首选版式的缺口报源图不足。传入后接管 `preferCollageCover` 与全拼图兜底。小红书专家生文只传母题配图规则（默认 / 拼图优先 / 竖图优先）对应的**单个**版式，凑不齐就按缺口报不足，由上游提示用户，见 [xhs-topic](../xhs-topic/module.md) 的 `XHS_MOTHER_IMAGE_RULE_LAYOUT`。
+- **本次生成内复用源图（`allowSourceReuse`）**：缺省每张源图在一次 Canvas 生成里只用一次；开启后不重复的图先用完，再按池内顺序轮换复用补齐槽位，同一张拼图的两格仍取不同图，只要拼图版式至少 2 张横图、单图版式至少 1 张竖图即可生成。
+
+## 取图去重模式（dedup）
+
+- `true`（缺省）：严格去重，只取 `isUsed=false` 的图，不够即失败，生成后 `markUsedBatch`。
+- `false`：不去重，随机命中已用图，生成后不写 `isUsed`。
+- `'prefer'`：优先不重复。`fetchImagePool` 先采未用图，不够再从含已用图的全集补采，池子按「未用图（各自打乱）+ 已用图（各自打乱）」排列且不再整体洗牌，分配按顺序领取，所以未用图总是先被用上；生成后照常 `markUsedBatch`，让下一次继续优先避开。小红书专家生文默认走该模式。
 
 ## 封面文案风格
 
@@ -71,8 +81,9 @@ Canvas服务。
 
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）。透传 `dedup` 到后台 runImageGroupGeneration
-- `generateArticleImageGroups(input)` — 不创建独立 Canvas，直接复用生文图片阶段按相关 tag 生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机，`input.preferCollageCover` 让封面优先用拼图底图 | keywords: 生文配图工作流, 文章图组, 封面策略, 封面优先拼图, article-image-workflow, generated-image-group, cover-strategy, prefer-collage-cover
-- `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)。**`dedup` 参数**: 缺省/true=去重(排除 isUsed+生成后 markUsed);false=不去重(命中已用图、随机取图、不写 isUsed) | keywords: dedup, includeUsed
+- `prepareArticleImageSources(input)` — 生文图片阶段第一步：不创建独立 Canvas，按相关 tag 取图并完成版式与源图分配，不生成文件；不足时返回带竖图/横图缺口的 `stats`，供调用方提前拦截或告诉用户缺哪种图。`input.layoutCandidates` 指定版式，`input.dedup='prefer'` 优先用未用图，`input.allowSourceReuse` 放开本次内复用 | keywords: 生文配图工作流, 源图缺口统计, article-image-workflow, source-shortage-stats
+- `renderArticleImageGroups(input, preparation)` — 生文图片阶段第二步：按分配结果生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机 | keywords: 生文配图工作流, 文章图组, article-image-workflow, generated-image-group
+- `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)。**`dedup` 参数**: 缺省/true=去重(排除 isUsed+生成后 markUsed);false=不去重(命中已用图、随机取图、不写 isUsed);'prefer'=优先不重复(未用图先分配、不够补已用图、生成后 markUsed) | keywords: dedup, includeUsed
 - `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项，参考图最多 4 张 | keywords: cover-regenerate, article-cover-only
 - `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张；透传 `includeSystemPrompt`(默认 true) 决定是否叠加系统自带封面/内页提示词 | keywords: article-image-regenerate, image-slot-regenerate, system-prompt-toggle
 - `startImageGroupCoverRegeneration(input)` — 启动图片组 Canvas 单组封面重生成，立即置为 generating，后台仅替换目标组 role=cover 图片，参考图最多 4 张 | keywords: cover-regenerate, image-group-cover-only
@@ -115,14 +126,15 @@ Canvas服务。
 - `generateImageGroups` — 有文章 tag 时从全部已选 tag 的并集随机取图库配图，无 tag 时从完整可见图池随机取图；随后在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重。图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
 - `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库；`includeSystemPrompt=false` 时只用用户提示词(必填)并向下游传 kind=cover | keywords: cover-regenerate, selected-source-images, system-prompt-toggle
 - `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
-- `prepareImageGroupSources(input)` — 从已选标签并集或完整图库随机取图，再统一分配竖图/横图，不生成成品文件 | keywords: 图组源图准备, 标签随机取图, image-group-source-preparation, tag-random-selection
-- `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用 | keywords: render, prepared, image-group, concurrency, dedup
+- `prepareImageGroupSources(input)` — 从已选标签并集或完整图库随机取图，再按 `input.layoutCandidates` / `preferCollageCover` 统一分配竖图/横图，不生成成品文件；`dedup='prefer'` 时保留池子「未用在前」的顺序不整体洗牌 | keywords: 图组源图准备, 标签随机取图, image-group-source-preparation, tag-random-selection
+- `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用；严格去重与 `'prefer'` 都会 markUsed | keywords: render, prepared, image-group, concurrency, dedup
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
-- `planImageGroupAllocation(pool, articles, options?)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；`options.preferCollageCover` 先试拼图封面版式、池子不够即回落，自动版式还可在竖图不足时切到全拼图版式 | keywords: plan, allocation, no-reuse, 封面优先拼图, prefer-collage-cover
+- `planImageGroupAllocation(pool, articles, options?)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；`options.layoutCandidates` 按优先级取第一个池子能满足的版式、全不满足报不足；`options.allowSourceReuse` 放宽为「拼图≥2 横图、单图≥1 竖图」即可分配；未传时 `options.preferCollageCover` 先试拼图封面版式、池子不够即回落，自动版式还可在竖图不足时切到全拼图版式 | keywords: 候选版式, 配图规则, plan, allocation, no-reuse, layout-candidates
 - `PREFERRED_COLLAGE_COVER_LAYOUT` — 「封面优先拼图」命中的版式常量（`collage-cover-5inner`） | keywords: 封面优先拼图, 拼图封面, prefer-collage-cover, collage-cover
 - `buildImageGroupAllocationRequests(articles, options?)` — 根据文章列表生成图组版式槽位需求，支持自动版式覆盖 | keywords: plan, allocation, layout
 - `summarizeImageGroupAllocationStats(requestedGroups, availablePortrait, availableLandscape)` — 统计分配所需竖图/横图数量与素材缺口 | keywords: stats, allocation, shortage
-- `allocateRequestedImageGroups(requestedGroups, portraitPool, landscapePool, stats)` — 按确认槽位实际领取源图并保证 Canvas 内不复用 | keywords: allocate, no-reuse, image-group
+- `isAllocationSatisfiable(stats, allowReuse)` — 判断图片池能否满足分配：默认竖横图都不缺，允许复用时拼图≥2 横图、单图≥1 竖图 | keywords: 允许重复用图, 分配可行性, allow-source-reuse, allocation-feasibility
+- `allocateRequestedImageGroups(requestedGroups, portraitPool, landscapePool, stats, allowReuse?)` — 按确认槽位实际领取源图，默认保证 Canvas 内不复用；允许复用时先用完不重复的图再按池内顺序轮换，同一拼图两格不同图 | keywords: 允许重复用图, 源图复用, allocate, no-reuse, image-group, allow-source-reuse
 - `buildInsufficientImageGroups(articles)` — 构造图片不足时的 failed 空图组，供文章/Canvas 进入 requires_human 补图流程 | keywords: insufficient, requires-human, image-group
 - `collectPlanSourceImages(plan)` — 收集图组分配计划中的全部源图，用于文章正文和封面文案共享图片语义 | keywords: collect, allocation, image-context
 - `persistPlannedCollage(input)` — 将统一分配好的两张横图合成为动态拼图并入库，同时返回拼图画布格式 | keywords: collage, allocation, gallery, collage-canvas-format
@@ -137,7 +149,7 @@ Canvas服务。
 - `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和默认占画布 70% 的居中可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
 - `buildGeneratedAssetTags(generatedKind, sourceImages?)` — 为封面、拼图、内页或 AI 文字海报素材生成隔离的图库标签 | keywords: AI素材标签, 生成素材标签, ai-material-tag, generated-asset-tags
 - `composeCoverWithOverlay(basePath, overlayPath)` — sharp 对纯绿素材做软边色键，将透明 PNG 缩至画布 70% 并居中叠加，同时输出素材与 640x853 合成预览 | keywords: 装饰素材叠加, 绿幕色键, 可编辑装饰素材, composite-overlay-on-photo, green-screen-keying, editable-decoration-material
-- `fetchImagePool(input, tags, wantCountOrType, imageType?, excludedGroupIds?)` — 在完整候选集合上随机采样；有标签时匹配任一已选标签，无标签时使用全部可见图片，并排除动态生成分组与历史封面素材 | keywords: 标签随机取图, 全图池随机取图, tag-random-selection, full-pool-random-selection
+- `fetchImagePool(input, tags, wantCountOrType, imageType?, excludedGroupIds?)` — 在完整候选集合上随机采样；有标签时匹配任一已选标签，无标签时使用全部可见图片，并排除动态生成分组与历史封面素材；`input.dedup='prefer'` 时先采未用图、不够再补已用图，返回「未用在前、已用在后」 | keywords: 标签随机取图, 全图池随机取图, 优先不重复, tag-random-selection, full-pool-random-selection, prefer-unused
 - `shuffleArray` — Fisher-Yates 洗牌打乱图片池顺序，避免封面/内页顺序性重复
 - `pickPortrait` — 从池中选竖图（必须全局未使用；不跨组复用，不降级为横图）
 - `pickAndMakeCollage` — 仅选 2 张全局未使用横图动态合成拼图（上下拼，640x853，等比缩放不裁切；不跨组复用，不降级为竖图/任意方向）
@@ -159,7 +171,8 @@ Canvas服务。
 Canvas实体，含新类型定义。
 
 - `CanvasType` — 'article' | 'image-group'
-- `ImageGroupLayout` — 固定版式枚举（portrait-cover-5inner / collage-cover-5inner / collage-cover-5collage）
+- `ImageGroupLayout` — 固定版式枚举（portrait-cover-5inner / collage-cover-5inner / collage-cover-5collage / collage-cover-4collage-1portrait / portrait-cover-5portrait）
+- `CanvasImageDedupMode` — 取图去重模式：`true` 严格去重 / `false` 不去重 / `'prefer'` 优先不重复 | keywords: 配图去重模式, 优先不重复, image-dedup-mode, prefer-unused
 - `CanvasImageGroup` — 单个图片组实体
 - `CanvasImageGroupUsage` — image-group Canvas 使用状态（unused/partial/used + usedGroupIds/usedAt/usedByCanvasId）
 - `CanvasCollageCell` — 拼图内单张源图的格子（imageId/url/x/y/width/height/objectFit）
@@ -167,7 +180,7 @@ Canvas实体，含新类型定义。
 - `CanvasGroupImage` — 图组内单张图片；封面可带 `editableBase` 原照片、`materials` 独立素材、封面文案元数据和拼图格式。
 - `CanvasEditableCoverBase` — 合成预览对应的原始照片底图 | keywords: 可编辑封面底图, 图层分离, editable-cover-base, separated-layers
 - `CanvasEditableMaterialLayer` — 保留透明素材、绿幕原图、坐标、特效参数及 `includesText` 文字融合标记的可编辑素材层 | keywords: 可编辑装饰素材, 图层分离, editable-decoration-material, separated-layers
-- `CanvasImageGroupCreateInput` — 创建图片组入参（含可选 `dedup?: boolean` 去重开关，默认 true；`coverStrategy?: CanvasCoverStrategy` 封面策略，默认 ai-direct）
+- `CanvasImageGroupCreateInput` — 创建图片组入参（含可选 `dedup?: CanvasImageDedupMode` 去重模式，默认 true；`coverStrategy?: CanvasCoverStrategy` 封面策略，默认 ai-direct；`layoutCandidates?: ImageGroupLayout[]` 候选版式链；`allowSourceReuse?: boolean` 本次生成内允许复用源图）
 - `CanvasCoverStrategy` — 封面生成策略：`ai-direct` 直接生成成品；`ai-overlay` 同时产出合成预览和照片/素材分层元数据 | keywords: 封面策略, 装饰素材叠加, cover-strategy, decoration-overlay
 - `CanvasArticleEntity.sentAt` — 文章成功发送时间戳（null 表示未发送）
 - `CanvasEntity.keywords` — 画布关键词（向量搜索/分类过滤）

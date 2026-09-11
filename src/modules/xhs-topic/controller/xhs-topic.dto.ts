@@ -17,14 +17,16 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import type {
-  XhsArticleCanvasBoard,
-  XhsArticleCanvasCollage,
-  XhsArticleCanvasCollageCell,
-  XhsArticleCanvasEditorSize,
-  XhsArticleCanvasEditorState,
-  XhsArticleCanvasMaterial,
-  XhsTopicKind,
+import {
+  XHS_MOTHER_IMAGE_RULES,
+  type XhsArticleCanvasBoard,
+  type XhsArticleCanvasCollage,
+  type XhsArticleCanvasCollageCell,
+  type XhsArticleCanvasEditorSize,
+  type XhsArticleCanvasEditorState,
+  type XhsArticleCanvasMaterial,
+  type XhsMotherImageRule,
+  type XhsTopicKind,
 } from '../entities/xhs-topic.entity.js';
 
 /**
@@ -76,9 +78,9 @@ export class RecommendXhsTopicPromptDto {
 }
 
 /**
- * @description 用户确认入库的单条选题标题、题目类型、母题配图标签或子题文章生成风格。
- * @keyword-cn 保存选题候选, 题目类型, 母题配图标签, 文章生成风格
- * @keyword-en persist-topic-candidate, topic-type, mother-image-tags, article-writing-style
+ * @description 用户确认入库的单条选题标题、题目类型、母题配图标签与配图规则或子题文章生成风格。
+ * @keyword-cn 保存选题候选, 题目类型, 母题配图标签, 母题配图规则, 文章生成风格
+ * @keyword-en persist-topic-candidate, topic-type, mother-image-tags, mother-image-rule, article-writing-style
  */
 export class PersistXhsTopicCandidateDto {
   @IsString()
@@ -100,6 +102,10 @@ export class PersistXhsTopicCandidateDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   imageTags?: string[];
+
+  @IsOptional()
+  @IsIn(XHS_MOTHER_IMAGE_RULES)
+  imageRule?: XhsMotherImageRule;
 }
 
 /**
@@ -147,9 +153,9 @@ export class DeleteXhsTopicsDto {
 }
 
 /**
- * @description 修改真实选题标题、题目类型、业务状态、母题配图标签或子题文章生成风格的请求参数。
- * @keyword-cn 更新真实选题, 选题状态, 母题配图标签, 文章生成风格
- * @keyword-en update-persisted-topic, topic-status, mother-image-tags, article-writing-style
+ * @description 修改真实选题标题、题目类型、业务状态、母题配图标签与配图规则或子题文章生成风格的请求参数。
+ * @keyword-cn 更新真实选题, 选题状态, 母题配图标签, 母题配图规则, 文章生成风格
+ * @keyword-en update-persisted-topic, topic-status, mother-image-tags, mother-image-rule, article-writing-style
  */
 export class UpdateXhsTopicDto {
   @IsOptional()
@@ -175,12 +181,16 @@ export class UpdateXhsTopicDto {
   imageTags?: string[];
 
   @IsOptional()
+  @IsIn(XHS_MOTHER_IMAGE_RULES)
+  imageRule?: XhsMotherImageRule;
+
+  @IsOptional()
   @IsIn(['pending', 'draft', 'generated', 'published'])
   status?: 'pending' | 'draft' | 'generated' | 'published';
 }
 
 /**
- * @description 请求 Agent 为指定子选题生成真实文章的参数。
+ * @description 请求 Agent 为指定子选题生成真实文章的参数，可在「横/竖图太少」后仅本次覆盖配图规则或允许重复用图。
  * @keyword-cn 文章生成参数, 文章提示词
  * @keyword-en article-generation-dto, article-prompt
  */
@@ -209,6 +219,15 @@ export class GenerateXhsArticleDto {
   @Type(() => Boolean)
   @IsBoolean()
   regenerateImages?: boolean;
+
+  @IsOptional()
+  @IsIn(XHS_MOTHER_IMAGE_RULES)
+  imageRule?: XhsMotherImageRule;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  allowImageRepeat?: boolean;
 }
 
 /**

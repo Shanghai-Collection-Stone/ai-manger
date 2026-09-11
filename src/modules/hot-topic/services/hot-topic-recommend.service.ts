@@ -231,6 +231,12 @@ export class HotTopicRecommendService {
           noPostHook: true,
           nonStreaming: true,
           ...(scope.tenantId ? { tenantId: scope.tenantId } : {}),
+          billingContext: {
+            tenantId: scope.tenantId,
+            userId: scope.userId,
+            source: 'hot-topic.tag-prefilter',
+            platformScope: !scope.tenantId,
+          },
         },
         messages: [
           {
@@ -379,6 +385,11 @@ ${tagBlock}
           noPostHook: true,
           nonStreaming: true,
           ...(tenantId ? { tenantId } : {}),
+          billingContext: {
+            tenantId,
+            source: 'hot-topic.recommend',
+            platformScope: !tenantId,
+          },
         },
         messages: [
           {

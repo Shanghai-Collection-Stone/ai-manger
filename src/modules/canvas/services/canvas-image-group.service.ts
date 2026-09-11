@@ -25,7 +25,7 @@ import type {
   CanvasImageGroupCreateInput,
 } from '../entities/canvas.entity.js';
 
-/** @description 两种固定版式的需求规格（每组 6 张：1 封面 + 5 内页） */
+/** @description 固定版式的需求规格（每组 6 张：1 封面 + 5 内页） */
 const LAYOUT_SPECS: Record<
   ImageGroupLayout,
   { cover: 'portrait' | 'collage'; inner: ('collage' | 'portrait')[] }
@@ -41,6 +41,15 @@ const LAYOUT_SPECS: Record<
   'collage-cover-5collage': {
     cover: 'collage',
     inner: ['collage', 'collage', 'collage', 'collage', 'collage'],
+  },
+  // 拼图:单图 = 5:1，数量少的单图排在最后一页
+  'collage-cover-4collage-1portrait': {
+    cover: 'collage',
+    inner: ['collage', 'collage', 'collage', 'collage', 'portrait'],
+  },
+  'portrait-cover-5portrait': {
+    cover: 'portrait',
+    inner: ['portrait', 'portrait', 'portrait', 'portrait', 'portrait'],
   },
 };
 
@@ -371,6 +380,12 @@ export class CanvasImageGroupService {
       baseImageCandidates,
       kind: 'cover',
       includeSystemPrompt,
+      billingContext: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        platformScope: !input.tenantId,
+        source: 'canvas-cover-regenerate',
+      },
     });
     const generatedRecord =
       generated && typeof generated === 'object'
@@ -485,6 +500,12 @@ export class CanvasImageGroupService {
       baseImageCandidates,
       kind: 'inner',
       includeSystemPrompt,
+      billingContext: {
+        tenantId: input.tenantId,
+        userId: input.userId,
+        platformScope: !input.tenantId,
+        source: 'canvas-inner-regenerate',
+      },
     });
     const generatedRecord =
       generated && typeof generated === 'object'
@@ -587,8 +608,9 @@ export class CanvasImageGroupService {
       'regular',
       excludedGeneratedGroupIds,
     );
-    // 对图片池进行随机打乱，避免封面和内页出现顺序性重复
-    this.shuffleArray(pool);
+    // 对图片池进行随机打乱，避免封面和内页出现顺序性重复；
+    // 优先不重复模式下池子已按「未用图在前、已用图在后」分层各自打乱，整体再洗会打乱优先级。
+    if (input.dedup !== 'prefer') this.shuffleArray(pool);
     this.logger.debug(
       `[image-group] pool_ready pool=${pool.length} tags=${allTags.length}`,
     );
@@ -596,6 +618,8 @@ export class CanvasImageGroupService {
     // --- 3. 先做 Canvas 级统一分配；不足时整体进入补图流程，不再跨组复用 ---
     const allocation = this.planImageGroupAllocation(pool, articles, {
       preferCollageCover: input.preferCollageCover === true,
+      layoutCandidates: input.layoutCandidates,
+      allowSourceReuse: input.allowSourceReuse === true,
     });
     if (!allocation.ok) {
       this.logger.warn(
@@ -655,7 +679,8 @@ export class CanvasImageGroupService {
       for (const id of usedIds) usedSourceIds.add(id);
     }
 
-    // 不去重(dedup===false)时不写 isUsed，源图保留可无限复用；仅去重模式消耗源图
+    // 不去重(dedup===false)时不写 isUsed，源图保留可无限复用；
+    // 严格去重与优先不重复都消耗源图，后者靠 isUsed 让下一次继续优先避开这些图
     if (input.dedup !== false && usedSourceIds.size > 0) {
       try {
         await this.gallery.markUsedBatch({ ids: Array.from(usedSourceIds) });
@@ -904,17 +929,24 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 在 Canvas 级别一次性规划所有图组的源图，严格全局去重，不做跨组复用。
+   * @description 在 Canvas 级别一次性规划所有图组的源图，严格全局去重，不做跨组复用；传入候选版式时按优先级取第一个池子能满足的版式。
    * @param {GalleryImageEntity[]} pool - 已按 tags 取回并打乱的图片池。
    * @param {CanvasImageGroupCreateInput['articles']} articles - 图组文章列表。
+   * @param {{ preferCollageCover?: boolean; layoutCandidates?: ImageGroupLayout[]; allowSourceReuse?: boolean }} [options] - 封面优先拼图开关、候选版式链与本次生成内源图复用开关。
    * @returns {ImageGroupAllocationResult} 分配结果与缺口统计。
-   * @keyword-en plan, allocation, no-reuse
+   * @keyword-cn 候选版式, 配图规则
+   * @keyword-en plan, allocation, no-reuse, layout-candidates
    */
   private planImageGroupAllocation(
     pool: GalleryImageEntity[],
     articles: CanvasImageGroupCreateInput['articles'],
-    options?: { preferCollageCover?: boolean },
+    options?: {
+      preferCollageCover?: boolean;
+      layoutCandidates?: ImageGroupLayout[];
+      allowSourceReuse?: boolean;
+    },
   ): ImageGroupAllocationResult {
+    const allowReuse = options?.allowSourceReuse === true;
     const portraitPool = this.dedup(
       pool.filter((img) => img.isPortrait === true),
     );
@@ -934,6 +966,42 @@ export class CanvasImageGroupService {
     const hasExplicitLayout = articles.some(
       (art) => typeof art.layout === 'string' && art.layout.length > 0,
     );
+
+    // 候选版式链：按调用方给的优先级逐个试算，第一个不缺图的版式胜出；
+    // 全部不满足时用首选版式的缺口统计报不足，不再走下面的封面优先拼图/全拼图兜底。
+    const layoutCandidates = (options?.layoutCandidates ?? []).filter(
+      (layout) => Boolean(LAYOUT_SPECS[layout]),
+    );
+    if (layoutCandidates.length > 0 && !hasExplicitLayout) {
+      let firstStats: ImageGroupAllocationStats | null = null;
+      for (const layout of layoutCandidates) {
+        const candidateGroups = this.buildImageGroupAllocationRequests(
+          articles,
+          { forceAutoLayout: layout },
+        );
+        const candidateStats = this.summarizeImageGroupAllocationStats(
+          candidateGroups,
+          portraitPool.length,
+          landscapePool.length,
+        );
+        firstStats ??= candidateStats;
+        if (this.isAllocationSatisfiable(candidateStats, allowReuse)) {
+          this.logger.debug(
+            `[image-group] allocation_layout_candidate layout=${layout} reuse=${allowReuse} ` +
+              `portrait=${candidateStats.availablePortrait}/${candidateStats.requiredPortrait} ` +
+              `landscape=${candidateStats.availableLandscape}/${candidateStats.requiredLandscape}`,
+          );
+          return this.allocateRequestedImageGroups(
+            candidateGroups,
+            portraitPool,
+            landscapePool,
+            candidateStats,
+            allowReuse,
+          );
+        }
+      }
+      return { ok: false, stats: firstStats ?? stats };
+    }
 
     // 封面优先拼图：先按拼图封面版式试算，图片池够就改用它，
     // 不够则原样落回交替版式，再由下面的全拼图回退继续兜底。
@@ -990,7 +1058,7 @@ export class CanvasImageGroupService {
       }
     }
 
-    if (stats.missingPortrait > 0 || stats.missingLandscape > 0) {
+    if (!this.isAllocationSatisfiable(stats, allowReuse)) {
       return { ok: false, stats };
     }
 
@@ -999,6 +1067,7 @@ export class CanvasImageGroupService {
       portraitPool,
       landscapePool,
       stats,
+      allowReuse,
     );
   }
 
@@ -1076,41 +1145,66 @@ export class CanvasImageGroupService {
   }
 
   /**
-   * @description 按已确认的槽位需求实际领取源图，保证同一 Canvas 内源图不跨组复用。
+   * @description 判断图片池能否满足一次分配：默认要求竖图、横图都不缺；允许复用时只要拼图版式至少有 2 张横图、单图版式至少有 1 张竖图。
+   * @param {ImageGroupAllocationStats} stats - 分配需求与缺口统计。
+   * @param {boolean} allowReuse - 是否允许本次生成内重复用图。
+   * @returns {boolean} 能否分配。
+   * @keyword-cn 允许重复用图, 分配可行性
+   * @keyword-en allow-source-reuse, allocation-feasibility
+   */
+  private isAllocationSatisfiable(
+    stats: ImageGroupAllocationStats,
+    allowReuse: boolean,
+  ): boolean {
+    if (!allowReuse) {
+      return stats.missingPortrait === 0 && stats.missingLandscape === 0;
+    }
+    return (
+      (stats.requiredPortrait === 0 || stats.availablePortrait >= 1) &&
+      (stats.requiredLandscape === 0 || stats.availableLandscape >= 2)
+    );
+  }
+
+  /**
+   * @description 按已确认的槽位需求实际领取源图，默认保证同一 Canvas 内源图不跨组复用；允许复用时不重复的图先用完，再按池内顺序轮换复用补齐，同一张拼图的两格仍取不同图。
    * @param {ImageGroupAllocationRequest[]} requestedGroups - 图组槽位需求。
    * @param {GalleryImageEntity[]} portraitPool - 去重后的竖图池。
    * @param {GalleryImageEntity[]} landscapePool - 去重后的横图池。
    * @param {ImageGroupAllocationStats} stats - 已计算的需求统计。
+   * @param {boolean} [allowReuse=false] - 是否允许本次生成内重复用图。
    * @returns {ImageGroupAllocationResult} 分配好的图组计划。
-   * @keyword-en allocate, no-reuse, image-group
+   * @keyword-cn 允许重复用图, 源图复用
+   * @keyword-en allocate, no-reuse, image-group, allow-source-reuse
    */
   private allocateRequestedImageGroups(
     requestedGroups: ImageGroupAllocationRequest[],
     portraitPool: GalleryImageEntity[],
     landscapePool: GalleryImageEntity[],
     stats: ImageGroupAllocationStats,
+    allowReuse = false,
   ): ImageGroupAllocationResult {
-    let portraitCursor = 0;
-    let landscapeCursor = 0;
     const usedSourceIds = new Set<number>();
-    const takePortrait = (): GalleryImageEntity | null => {
-      while (portraitCursor < portraitPool.length) {
-        const img = portraitPool[portraitCursor++];
-        if (usedSourceIds.has(img.id)) continue;
-        usedSourceIds.add(img.id);
-        return img;
-      }
-      return null;
+    /** 从池里领一张图：先按顺序取没用过的，用完且允许复用时再按池内顺序轮换，跳过 excludeId。 */
+    const createTaker = (pool: GalleryImageEntity[]) => {
+      let cursor = 0;
+      let reuseCursor = 0;
+      return (excludeId?: number): GalleryImageEntity | null => {
+        while (cursor < pool.length) {
+          const img = pool[cursor++];
+          if (usedSourceIds.has(img.id)) continue;
+          usedSourceIds.add(img.id);
+          return img;
+        }
+        if (!allowReuse) return null;
+        for (let tried = 0; tried < pool.length; tried += 1) {
+          const img = pool[reuseCursor++ % pool.length];
+          if (img.id !== excludeId) return img;
+        }
+        return null;
+      };
     };
-    const takeLandscape = (): GalleryImageEntity | null => {
-      while (landscapeCursor < landscapePool.length) {
-        const img = landscapePool[landscapeCursor++];
-        if (usedSourceIds.has(img.id)) continue;
-        usedSourceIds.add(img.id);
-        return img;
-      }
-      return null;
-    };
+    const takePortrait = createTaker(portraitPool);
+    const takeLandscape = createTaker(landscapePool);
 
     const plans: ImageGroupAllocationPlan[] = [];
     for (const group of requestedGroups) {
@@ -1123,7 +1217,7 @@ export class CanvasImageGroupService {
           continue;
         }
         const imgA = takeLandscape();
-        const imgB = takeLandscape();
+        const imgB = imgA ? takeLandscape(imgA.id) : null;
         if (!imgA || !imgB) return { ok: false, stats };
         slots.push({ kind: 'collage', role: slot.role, imgA, imgB });
       }
@@ -1625,6 +1719,12 @@ export class CanvasImageGroupService {
         size: '640x853',
         baseImageCandidates,
         kind: 'cover',
+        billingContext: {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          platformScope: !input.tenantId,
+          source: 'canvas-cover-generate',
+        },
       });
       const generatedRecord =
         generated && typeof generated === 'object'
@@ -1714,6 +1814,12 @@ export class CanvasImageGroupService {
         size: `${COLLAGE_WIDTH}x${COLLAGE_HEIGHT}`,
         kind: 'cover',
         includeSystemPrompt: false,
+        billingContext: {
+          tenantId: input.tenantId,
+          userId: input.userId,
+          platformScope: !input.tenantId,
+          source: 'canvas-overlay-generate',
+        },
       });
       const generatedRecord =
         generated && typeof generated === 'object'
@@ -2159,13 +2265,15 @@ export class CanvasImageGroupService {
 
   /**
    * @description 从图库完整候选集合随机取图；有标签时匹配任一已选标签，无标签时使用全部可见图片。
-   * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId'>} input - 基础作用域
+   *  `dedup='prefer'` 时先取未用图，不够再用已用图补齐，返回顺序为「未用图（打乱）+ 已用图（打乱）」，
+   *  分配时按顺序领取，因此未用图总是先被用上。
+   * @param {Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId' | 'dedup'>} input - 基础作用域与去重模式
    * @param {string[]} tags - 标签列表
    * @param {number|'regular'|'collage'} wantCountOrType - 要获取的数量或图片类型
    * @param {'regular'|'collage'} [imageType] - 图片类型（当 wantCountOrType 为数字时使用）
    * @returns {Promise<GalleryImageEntity[]>} 图片列表（唯一）
-   * @keyword-cn 标签随机取图, 全图池随机取图
-   * @keyword-en tag-random-selection, full-pool-random-selection
+   * @keyword-cn 标签随机取图, 全图池随机取图, 优先不重复
+   * @keyword-en tag-random-selection, full-pool-random-selection, prefer-unused
    */
   private async fetchImagePool(
     input: Pick<CanvasImageGroupCreateInput, 'userId' | 'tenantId' | 'dedup'>,
@@ -2182,21 +2290,40 @@ export class CanvasImageGroupService {
     } else {
       imgType = wantCountOrType;
     }
-    const images = await this.gallery.sampleRandom({
-      userId: input.userId,
-      tenantId: input.tenantId,
-      tags,
-      limit: wantCount,
-      imageType: imgType,
-      excludedGroupIds,
-      excludedTags: Array.from(COVER_TAG_SET),
-      includeUsed: input.dedup === false,
-    });
-
+    const sample = (includeUsed: boolean) =>
+      this.gallery.sampleRandom({
+        userId: input.userId,
+        tenantId: input.tenantId,
+        tags,
+        limit: wantCount,
+        imageType: imgType,
+        excludedGroupIds,
+        excludedTags: Array.from(COVER_TAG_SET),
+        includeUsed,
+      });
     // 再做一次进程内防御性过滤，兼容历史数据中的分组 ID 和封面标签异常值。
-    return this.dedup(
-      this.filterOutExcludedGroups(images, excludedGroupIds),
-    ).filter((image) => !this.hasCoverTag(image));
+    const sanitize = (list: GalleryImageEntity[]) =>
+      this.dedup(this.filterOutExcludedGroups(list, excludedGroupIds)).filter(
+        (image) => !this.hasCoverTag(image),
+      );
+
+    if (input.dedup !== 'prefer') {
+      return sanitize(await sample(input.dedup === false));
+    }
+
+    const unused = sanitize(await sample(false));
+    this.shuffleArray(unused);
+    if (unused.length >= wantCount) return unused;
+    // 未用图不够：从含已用图的全集里再采一批，剔掉已拿到的，剩下的就是补位用的已用图
+    const unusedIds = new Set(unused.map((image) => image.id));
+    const reused = sanitize(await sample(true)).filter(
+      (image) => !unusedIds.has(image.id),
+    );
+    this.shuffleArray(reused);
+    this.logger.debug(
+      `[image-group] pool_prefer_unused unused=${unused.length} reused=${reused.length} want=${wantCount}`,
+    );
+    return [...unused, ...reused];
   }
 
   /**
@@ -2262,6 +2389,11 @@ export class CanvasImageGroupService {
         nonStreaming: true,
         temperature: 0.8,
         tenantId,
+        billingContext: {
+          tenantId,
+          source: 'canvas.cover-text-generation',
+          platformScope: !tenantId,
+        },
       });
       const titlesBlock = articles
         .map((a, i) => {

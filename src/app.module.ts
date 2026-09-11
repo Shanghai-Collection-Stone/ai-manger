@@ -14,6 +14,7 @@ import { SkillThoughtModule } from './modules/skill-thought/skill-thought.module
 import { SkillThoughtTestModule } from './modules/skill-thought-test/skill-thought-test.module';
 import { BatchTaskModule } from './modules/batch-task/batch-task.module';
 import { GalleryModule } from './modules/gallery/gallery.module';
+import { VideoLibraryModule } from './modules/video-library/video-library.module.js';
 import { GalleryZipImportModule } from './modules/gallery/zip-import/gallery-zip-import.module';
 import { CanvasModule } from './modules/canvas/canvas.module';
 import { GraphModule } from './modules/graph/graph.module';
@@ -38,6 +39,8 @@ import { XhsTopicDataModule } from './modules/xhs-topic-data/xhs-topic-data.modu
 import { HotTopicModule } from './modules/hot-topic/hot-topic.module.js';
 import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
 import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js';
+import { AiBillingModule } from './modules/ai-billing/ai-billing.module.js';
+import { DouyinWorkbenchModule } from './modules/douyin-workbench/douyin-workbench.module.js';
 
 @Module({
   imports: [
@@ -58,6 +61,7 @@ import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js
     BatchTaskModule,
     GalleryModule,
     GalleryZipImportModule,
+    VideoLibraryModule,
     CanvasModule,
     GraphModule,
     DashboardModule,
@@ -81,6 +85,8 @@ import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js
     HotTopicModule,
     SuperClawModule,
     BrowserAuthModule,
+    AiBillingModule,
+    DouyinWorkbenchModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -26,8 +26,16 @@ export type AdminAction = (typeof ADMIN_ACTIONS)[number];
 export const ADMIN_SUBJECTS = {
   /** 后台用户 */
   User: 'User',
+  /** 平台 AI 提供商与计费换算配置 */
+  AiProvider: 'AiProvider',
+  /** 平台固定收费服务与 Credit 点数配置 */
+  AiService: 'AiService',
   /** 小红书 AI 选题生成 */
   XhsTopic: 'XhsTopic',
+  /** 抖音母子选题、分镜、视频生成、发布与抓取 */
+  DouyinWorkbench: 'DouyinWorkbench',
+  /** 平台与租户运行参数 */
+  PlatformSetting: 'PlatformSetting',
   /** 热点采集榜（采集规则、榜单条目、归类标签与热点推荐） */
   HotTopic: 'HotTopic',
   /** 角色 */

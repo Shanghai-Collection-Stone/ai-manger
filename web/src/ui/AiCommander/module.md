@@ -66,7 +66,7 @@ AI 对话交互主视图。支持 canvas-it、task-it、decision-it、**tag-sele
 
 页面不再内置标题、正文、标签、图片或账号名模拟内容。帖子预览只使用数据库文章；真实图库选图、上传图片、标题与正文失焦编辑、标签增删和发布形式切换都会写回文章数据。
 选题数据尚未加载、未选择子选题或子选题没有文章时，正文操作区使用空态守卫，不会在遮罩显示前读取不存在的选题标识。
-文章生成采用后台 Todo 异步执行，不同子选题可同时运行；前端按子选题轮询状态，只禁用正在生成的那一条。失败时接口返回的 `code` 与中文 `message` 会显示在对应子选题条目下方的可关闭红色提示中，重生成请求若启动失败也会在弹层展示同一条原因（例如所选图库标签下源图不足）。
+文章生成采用后台 Todo 异步排队，受平台总并发与租户并发上限约束；前端按子选题轮询等待/生成状态，只禁用对应条目。失败时接口返回的 `code` 与中文 `message` 会显示在对应子选题条目下方的可关闭红色提示中，重生成请求若启动失败也会在弹层展示同一条原因（例如所选图库标签下源图不足）。
 
 - **关键词**: xhs, specialist, subagent, task, xiaohongshu, chart, intent-routing, topic-workspace, post-preview, dual-list, inspiration-canvas, topic-generation, text-candidate-list, mother-topic-generation, multi-select, gallery-picker, article-editor, surface-failure-reason
 - **函数**:

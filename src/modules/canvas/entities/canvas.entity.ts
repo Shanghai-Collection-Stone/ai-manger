@@ -15,11 +15,25 @@ export type CanvasType = 'article' | 'image-group';
  * - portrait-cover-5inner: 1竖封面 + 5内页（拼图+竖图混合）
  * - collage-cover-5inner: 1横拼图封面 + 5竖内页单图
  * - collage-cover-5collage: 1横拼图封面 + 5横拼图内页
+ * - collage-cover-4collage-1portrait: 1横拼图封面 + 4拼图内页 + 末页1竖图（拼图:单图 5:1，单图排最后）
+ * - portrait-cover-5portrait: 1竖封面 + 5竖图内页（全单图）
  */
 export type ImageGroupLayout =
   | 'portrait-cover-5inner'
   | 'collage-cover-5inner'
-  | 'collage-cover-5collage';
+  | 'collage-cover-5collage'
+  | 'collage-cover-4collage-1portrait'
+  | 'portrait-cover-5portrait';
+
+/**
+ * @description 图组取源图的去重模式。
+ *  `true`=严格去重（只取 isUsed=false，不够即失败，生成后 markUsed）；
+ *  `false`=不去重（随机命中已用图，生成后不写 isUsed）；
+ *  `'prefer'`=优先不重复（先取未用图，不够再用已用图补齐，生成后 markUsed 让下次继续优先避开）。
+ * @keyword-cn 配图去重模式, 优先不重复
+ * @keyword-en image-dedup-mode, prefer-unused
+ */
+export type CanvasImageDedupMode = boolean | 'prefer';
 
 /**
  * @description 拼图内单张源图在拼图画布上的格子位置，坐标以拼图画布像素为单位。
@@ -182,9 +196,10 @@ export interface CanvasImageGroupCreateInput {
   }>;
   /**
    * @description 是否去重(每张源图跨生成只用一次)。默认 true=去重(排除 isUsed + 生成后 markUsed);
-   *  false=不去重(命中已用图、按标签随机取图、生成后不写 isUsed，图片可无限复用)。
+   *  false=不去重(命中已用图、按标签随机取图、生成后不写 isUsed，图片可无限复用);
+   *  'prefer'=优先不重复(未用图排在前面先分配，不够再用已用图补齐，生成后 markUsed)。
    */
-  dedup?: boolean;
+  dedup?: CanvasImageDedupMode;
   /**
    * @description 封面生成策略。
    *  `ai-direct`(默认)=AI 基于源图二次编辑，产出物直接作为封面成品;
@@ -211,6 +226,24 @@ export interface CanvasImageGroupCreateInput {
    * @keyword-en prefer-collage-cover, collage-cover
    */
   preferCollageCover?: boolean;
+
+  /**
+   * @description 按优先级排好的候选版式。文章没有显式版式时依次试算，取第一个图片池能满足的版式；
+   *  全部不满足才判定源图不足。传入后接管 `preferCollageCover` 与全拼图兜底逻辑，
+   *  供小红书母题「配图规则」（默认 / 拼图优先 / 竖图优先）精确控制拼图与单图配比。
+   * @keyword-cn 候选版式, 配图规则
+   * @keyword-en layout-candidates, image-layout-rule
+   */
+  layoutCandidates?: ImageGroupLayout[];
+
+  /**
+   * @description 同一次生成内源图不够时是否允许重复使用。缺省 false=每张源图在本次 Canvas 内只用一次，
+   *  凑不齐即判定不足；true=先把不重复的图用完，再轮换复用池内已分配的图补齐槽位（同一张拼图的两格仍取不同图），
+   *  只要拼图版式至少有 2 张横图、单图版式至少有 1 张竖图即可生成。小红书生文用户在「横/竖图太少」提示里选「允许重复」时开启。
+   * @keyword-cn 允许重复用图, 源图复用
+   * @keyword-en allow-source-reuse, source-image-reuse
+   */
+  allowSourceReuse?: boolean;
 }
 
 /**

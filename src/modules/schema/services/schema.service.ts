@@ -134,6 +134,10 @@ export class SchemaService {
       system: sys,
       contextSchema:
         ZOverrides as unknown as CreateAgentParams['contextSchema'],
+      billingContext: {
+        platformScope: true,
+        source: 'schema.cache-optimization',
+      },
     };
     const overrides: Overrides = {};
     const messages = this.agent.toMessages([{ role: 'system', content: sys }]);

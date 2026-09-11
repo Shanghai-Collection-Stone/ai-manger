@@ -13,7 +13,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `getHandle`: 函数句柄/handle
   - `buildChatModel`: 构建模型（GLM国际端z.ai与Kimi/Moonshot走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）/build model
   - `getCheckpointer`: 🆕 公开 MongoDBSaver 实例,供 chat.service supervisor graph 复用同一个 checkpointer + 同一个 thread_id,实现 multi-agent graph 多轮对话 state 持久化(否则 supervisor 每次只看一条用户消息会导致路由误判)/expose checkpointer for supervisor graph
-  - `buildLLM`: 构建 BaseChatModel。**配置来源**: config 显式传入 provider+model 时优先用 config(如 keyword.service 的专用 LLM),否则回退 admin 默认 runtime —— 之前无条件用 resolveDefaultRuntime,导致 config 传入的 provider/model/apiKey/baseUrl 被忽略。Kimi/Moonshot 命中专用适配器,注入禁用 thinking 的请求参数,避免 LangChain tool-call 历史缺 reasoning_content。启动时 logger.log 实际生效的 provider/model/baseUrl/source,便于排查 NVIDIA 等 OpenAI 兼容厂商 `404 page not found`(baseUrl 配错)问题/build llm with config override
+  - `buildLLM`: 构建 BaseChatModel；强制接收 billingContext，并把每次物理模型调用接入 Token 流水与 Credit 扣费。配置来源: config 显式传入 provider+model 时优先用 config，否则回退 admin 默认 runtime/build llm with config override and billing
   - `isKimiProvider(provider)` — 识别 Kimi/Moonshot OpenAI 兼容厂商,决定是否走专用适配 | keywords: kimi-adapter, openai-compatible
   - `buildKimiChatModel(input)` — 构建 Kimi 专用 ChatOpenAI,为 LangChain tool-call 兼容禁用 thinking | keywords: kimi-adapter, disable-thinking
   - `resolveKimiModelKwargs(modelName)` — 生成 Kimi 请求扩展参数,禁用 thinking 避免多步工具调用历史缺 reasoning_content | keywords: kimi-adapter, disable-thinking
@@ -39,7 +39,9 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `resolveMeituEditableBaseImage`: 匹配可编辑底图（优先调用方传入候选）/resolve meitu editable base image
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底（stdout 非 JSON 时走 parseMeituKeyValueText 扁平 key-value 兜底；result 字段取 http(s) URL 作为最终图片地址）/generate image by meitu image-edit fallback
   - `parseMeituKeyValueText`: 解析 meitu-cli "code: 0 message: success result: https://... progress: 1" 这类扁平键值空格串（即使加 --json CLI 仍可能如此输出）/parse meitu cli flat key value text
-  - `sendPrompt`: 调用AI封面生成工具生图（入参 prompt/size/底图候选；`kind`=cover|inner 决定下游补封面规格还是内页"少文字重内容"规格；`includeSystemPrompt`=false 时仅用用户提示词）/send prompt for image generation, inner-page-spec, system-prompt-toggle
+  - `sendPrompt`: 调用 AI 生图并强制携带 billingContext；有限额度租户在网络调用前按 Provider 固定 Token 预扣/send prompt for billed image generation
+  - `executeBilledImageCall(provider,billingContext,execute)` — 包装一次生图物理调用的预扣、成功结算与失败流水；关闭同一流水中的隐式网络重试，降级调用另开流水 | keywords: 生图调用计费, 固定Token预扣, billed-image-call, fixed-token-precharge
+  - `generateBilledMeituImage(billingContext,input)` — 对 meitu 降级调用独立计费，避免主 Provider 失败后免费重试 | keywords: 美图降级计费, 降级防漏扣, meitu-fallback-billing, fallback-charge-guard
   - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection
   - `run`: 运行/run
   - `runWithMessages(input)`: 消息运行;默认以 nonStreaming + `nostream` tag 执行,用于 tool 内部/子代理内部 LLM 时不绑定主流 token handler | keywords: 运行, 消息, 调用, 工具内部非流, run, messages, invoke, internal-llm-nostream
@@ -53,7 +55,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `toMessages`: 消息转换/message convert
   - `stream`: 流式;catch 用 this.logger.error 打完整 stack + 递归 cause chain(避免被 console.error 在某些 logger 环境下吞掉),确保后端日志能看到与前端 SSE 错误事件相同的完整诊断信息。**支持 `input.preBuiltAgent` 参数**:外部(chat.service supervisor 路径)可直接传入已构建的 LangGraph CompiledStateGraph(如 SupervisorGraph),跳过 buildChatModel,使 multi-agent graph 接入现有 [namespace, mode, data] 三元组 stream 事件处理逻辑。**🆕 isAIChunk 文本提取支持 Anthropic content block 数组** —— minimax 走 ChatAnthropic 返回 `[{type:'thinking',...},{type:'text',text:'...'}]`,旧代码 `typeof content==='string'` 失败 → textStr='' → fullText=0 → 前端"无内容";现按 string / block 数组分别提取(数组取 type==='text' 的 block,跳过 thinking)。**🆕 preBuiltAgent 模式**: (1) 跳过 `tools:*` 命名空间里的内部工具/子图 LLM 输出,避免 topic_orchestrate 生文 JSON(items) 混进用户可见 token; (2) **只累加真正的流式增量 chunk,跳过完整 AIMessage**: chat.service 把完整历史 messages 注入 graph input,会被 messages streamMode 当完整 AIMessage emit,若累加会把上一轮 fence/文字"重放"进本轮 fullText。**⚠️ chunk 判定必须用 `message.constructor.name === 'AIMessageChunk'`,不能用 `message['type']`** —— message 是 AIMessageChunk 实例时 `['type']` 是 undefined(实例只有 `_getType()` 方法,无 type 属性),旧代码 `msgType!=='AIMessageChunk'` 恒真,把 preBuiltAgent 模式下**每个 token 都跳过** → fullText 永远 0 → 前端"无内容"(supervisor 直接回答 / chat_expert 闲聊全空的根因)/stream with pre-built agent main-output handling and history-replay guard
   - `collectCauseChain`: 递归提取 Error.cause 链(undici fetch failed / langchain MiddlewareError 等多层嵌套),格式化为 `Name:Code:Message <- ...`/collect error cause chain
-  - `normalizeStreamError`: 把 raw error 归一化成 {code, message} 给前端;code 提取 regex 要求 ≥3 个大写字母+冒号(避免把句首字母 "I" 误当 code)/normalize stream error
+  - `normalizeStreamError(error)` — 把 raw error 归一化成稳定错误码，并透传被中间件包装的 Credit 计费错误 | keywords: 流错误归一, 计费错误透传, normalize-stream-error, billing-error-forwarding
 
 ### agent.types.ts
 类型定义。

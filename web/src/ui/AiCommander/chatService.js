@@ -360,12 +360,12 @@ export const chatService = {
   },
 
   /**
-   * @description 异步启动指定子选题的文章生成，立即返回 in_progress 的 Todo；进度与失败原因由 listXhsArticleGenerations 轮询。
+   * @description 异步排队指定子选题的文章生成，立即返回 pending Todo；等待、进度与失败原因由 listXhsArticleGenerations 轮询。
    * @keyword-cn 生成真实文章, 读取当前文章, 文章改写, 异步生成文章
    * @keyword-en generate-persisted-article, read-current-article, article-rewrite, start-article-generation
    * @param {number} topicId - 子选题业务 ID。
    * @param {{ prompt?: string, useSearch?: boolean }} input - 可选文章要求。
-   * @returns {Promise<{ todo: object }>} 已置为 in_progress 的生成 Todo。
+   * @returns {Promise<{ todo: object }>} 已进入等待队列的生成 Todo。
    * @throws {Error} 启动失败时抛出带 code 与中文 message 的错误，供界面直接展示。
    */
   async generateXhsArticle(topicId, input = {}) {
@@ -400,7 +400,8 @@ export const chatService = {
     const res = await fetch(`${API_BASE}/api/xhs-topic/article/generations`, {
       headers: getAuthHeaders(),
     });
-    if (!res.ok) throw new Error(`XHS_ARTICLE_GENERATIONS_FAILED_${res.status}`);
+    if (!res.ok)
+      throw new Error(`XHS_ARTICLE_GENERATIONS_FAILED_${res.status}`);
     return await res.json();
   },
 

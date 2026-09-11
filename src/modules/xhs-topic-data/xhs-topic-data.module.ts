@@ -10,6 +10,7 @@ import { ContextModule } from '../context/context.module.js';
 import { TikhubModule } from '../tikhub/tikhub.module.js';
 import { XhsTopicDataController } from './controller/xhs-topic-data.controller.js';
 import { XhsTopicCrawlService } from './services/xhs-topic-crawl.service.js';
+import { XhsManualLinkService } from './services/xhs-manual-link.service.js';
 import { XhsTopicDataService } from './services/xhs-topic-data.service.js';
 import { XhsTopicOpinionService } from './services/xhs-topic-opinion.service.js';
 
@@ -38,6 +39,7 @@ import { XhsTopicOpinionService } from './services/xhs-topic-opinion.service.js'
     { provide: 'XhsTopicCrawlService', useExisting: XhsTopicCrawlService },
     XhsTopicDataService,
     XhsTopicOpinionService,
+    XhsManualLinkService,
   ],
   exports: [XhsTopicCrawlService, XhsTopicDataService, XhsTopicOpinionService],
 })

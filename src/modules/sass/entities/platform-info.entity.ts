@@ -11,6 +11,8 @@ export interface PlatformInfoEntity {
   aiPromptSupplement: string;
   /** 是否开启 AI 封面生成 */
   enableAiCover?: boolean;
+  /** 全平台小红书文章生成总并发上限 */
+  xhsArticleGlobalConcurrencyLimit?: number;
   createdAt: Date;
   updatedAt: Date;
 }

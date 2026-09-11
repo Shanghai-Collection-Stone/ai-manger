@@ -108,6 +108,10 @@ export class FrontendAgentService {
       contextSchema:
         ZPageResult as unknown as CreateAgentParams['contextSchema'],
       subagents: [subagent],
+      billingContext: {
+        platformScope: true,
+        source: 'frontend-agent.page-generation',
+      },
     };
     const messages: BaseMessage[] = [
       ...params.history,

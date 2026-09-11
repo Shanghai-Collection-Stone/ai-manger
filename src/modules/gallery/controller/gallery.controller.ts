@@ -877,6 +877,12 @@ export class GalleryController {
       ...(referenceImageUrl
         ? { baseImageCandidates: [referenceImageUrl] }
         : {}),
+      billingContext: {
+        tenantId,
+        userId,
+        platformScope: !tenantId,
+        source: 'gallery-ai-material',
+      },
     });
     const file = this.resolveGeneratedMaterialFile(
       String(generated?.imagePath ?? ''),

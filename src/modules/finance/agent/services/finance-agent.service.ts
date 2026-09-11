@@ -244,6 +244,12 @@ export class FinanceAgentService {
         system: FINANCE_AGENT_SYSTEM_PROMPT,
         tools,
         tenantId: scope.adminUser.tenantId,
+        billingContext: {
+          tenantId: scope.adminUser.tenantId,
+          userId: String(scope.adminUser._id),
+          source: 'finance.agent-run',
+          platformScope: !scope.adminUser.tenantId,
+        },
         nonStreaming: true,
       },
       messages: langchainMessages,
@@ -287,6 +293,12 @@ export class FinanceAgentService {
         system: FINANCE_AGENT_SYSTEM_PROMPT,
         tools,
         tenantId: scope.adminUser.tenantId,
+        billingContext: {
+          tenantId: scope.adminUser.tenantId,
+          userId: String(scope.adminUser._id),
+          source: 'finance.agent-stream',
+          platformScope: !scope.adminUser.tenantId,
+        },
       },
       messages: langchainMessages,
     });

@@ -122,6 +122,12 @@ export class XhsTopicService {
       const ai = await this.agentService.runWithMessages({
         config: {
           tenantId: scope.tenantId,
+          billingContext: {
+            tenantId: scope.tenantId,
+            userId: scope.userId,
+            source: 'xhs-topic.prompt-recommendation',
+            platformScope: !scope.tenantId,
+          },
           temperature: 0.35,
           noPostHook: true,
           nonStreaming: true,
@@ -235,7 +241,7 @@ export class XhsTopicService {
         searchAvailable,
       });
 
-      await this.runAgent(system, tools, requestedCount);
+      await this.runAgent(system, tools, requestedCount, scope);
       if (candidates.length < requestedCount) {
         const existingTitles = candidates
           .map((candidate) => `《${candidate.title}》`)
@@ -244,6 +250,7 @@ export class XhsTopicService {
           `${system}\n当前内存中已经记录 ${candidates.length} 项，还缺 ${requestedCount - candidates.length} 项。已有题目：${existingTitles || '无'}。不要重复已有题目，继续调用 xhs_topic_add_candidate，直到总数达到 ${requestedCount}。`,
           tools,
           requestedCount - candidates.length,
+          scope,
         );
       }
 
@@ -420,6 +427,7 @@ ${searchInstruction}
     system: string,
     tools: NonNullable<CreateAgentParams['tools']>,
     remainingCount: number,
+    scope: { tenantId?: string; userId: string },
   ): Promise<void> {
     await this.agentService.runWithMessages({
       config: {
@@ -428,6 +436,13 @@ ${searchInstruction}
         temperature: 0.4,
         noPostHook: true,
         nonStreaming: true,
+        tenantId: scope.tenantId,
+        billingContext: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          source: 'xhs-topic.candidate-generation',
+          platformScope: !scope.tenantId,
+        },
       },
       messages: [
         {

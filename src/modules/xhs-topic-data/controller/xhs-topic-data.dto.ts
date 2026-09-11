@@ -32,6 +32,26 @@ export class XhsTopicDataPageDto {
 }
 
 /**
+ * @description 校验数据监控手动添加笔记链接的参数：目标文章库、标题与链接；NoteId 由服务层从链接解析。
+ * @keyword-cn 手动添加链接参数, 标题链接
+ * @keyword-en manual-link-dto, title-url
+ */
+export class CreateXhsManualLinkDto {
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  libraryId!: number;
+
+  @IsString()
+  @MaxLength(100)
+  title!: string;
+
+  @IsString()
+  @MaxLength(2000)
+  url!: string;
+}
+
+/**
  * @description 校验按自然日删除抓取数据的日期参数，只接受 `YYYY-MM-DD`。
  * @keyword-cn 按天删除参数, 日期校验
  * @keyword-en delete-day-dto, date-validation
