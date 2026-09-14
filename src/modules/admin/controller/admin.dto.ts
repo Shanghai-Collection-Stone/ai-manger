@@ -8,6 +8,7 @@ import {
   Max,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   Min,
   MinLength,
@@ -37,6 +38,34 @@ export class AdminLoginDto {
   @IsOptional()
   @IsMongoId()
   tenantId?: string;
+}
+
+/**
+ * @description 自助注册请求体（租户按名称精确匹配）
+ * @keyword-cn 自助注册请求体, 租户名称
+ * @keyword-en admin-register-dto, tenant-name
+ */
+export class AdminRegisterDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  tenantName!: string;
+
+  @IsString()
+  @MinLength(3)
+  @MaxLength(60)
+  username!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(60)
+  displayName?: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(120)
+  password!: string;
 }
 
 /**
@@ -589,6 +618,21 @@ export class UpsertPlatformInfoDto {
   @Min(1)
   @Max(100)
   xhsArticleGlobalConcurrencyLimit?: number;
+
+  /** 注册页业务员微信二维码：http(s) 地址或 data:image base64，空串表示清除 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(700000)
+  @Matches(/^$|^https?:\/\/|^data:image\/(png|jpeg|webp);base64,/, {
+    message: 'SALES_QRCODE_URL_INVALID',
+  })
+  salesWechatQrCodeUrl?: string;
+
+  /** 业务员二维码提示语 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  salesContactTip?: string;
 }
 
 /**

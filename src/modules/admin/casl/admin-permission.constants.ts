@@ -58,6 +58,8 @@ export const ADMIN_SUBJECTS = {
   NoticeRead: 'NoticeRead',
   /** 平台专属 SuperClaw 节点、Token 与租户容量分配 */
   SuperClaw: 'SuperClaw',
+  /** 平台短信验证码服务商配置(阿里云 AccessKey/签名/模板)，仅超管 */
+  SmsSetting: 'SmsSetting',
   /** 通配全部主体 */
   All: 'all',
 } as const;

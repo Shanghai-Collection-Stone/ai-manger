@@ -21,8 +21,11 @@ import { AdminPoliciesGuard } from '../guards/policies.guard.js';
 import { RequirePermission } from '../decorators/require-permission.decorator.js';
 import { AdminService } from '../services/admin.service.js';
 import type { AdminRequest } from '../types/admin-request.types.js';
+import { RequireSmsCode } from '../../sms-verification/decorators/require-sms-code.decorator.js';
+import type { SmsVerifiedRequest } from '../../sms-verification/entities/sms-verification.entity.js';
 import {
   AdminLoginDto,
+  AdminRegisterDto,
   AdjustTenantCreditDto,
   CreateAdminUserDto,
   CreateAgentConfigDto,
@@ -70,6 +73,22 @@ export class AdminController {
   @Post('auth/login')
   async login(@Body() body: AdminLoginDto) {
     return this.adminService.login(body);
+  }
+
+  /**
+   * @description 自助注册（与登录同为公开免鉴权入口，需短信验证码）：按租户名称匹配，未入驻返回业务员微信二维码
+   * @keyword-cn 自助注册接口, 租户名称匹配
+   * @keyword-en self-register-endpoint, tenant-name-match
+   */
+  @Post('auth/register')
+  @RequireSmsCode('register')
+  async register(
+    @Req() req: SmsVerifiedRequest,
+    @Body() body: AdminRegisterDto,
+  ) {
+    const phone = req.smsVerification?.phone;
+    if (!phone) throw new BadRequestException('SMS_CODE_REQUIRED');
+    return this.adminService.register({ ...body, phone });
   }
 
   /**
@@ -593,6 +612,10 @@ export class AdminController {
       body.aiPromptSupplement ?? '',
       body.enableAiCover,
       body.xhsArticleGlobalConcurrencyLimit,
+      {
+        wechatQrCodeUrl: body.salesWechatQrCodeUrl,
+        tip: body.salesContactTip,
+      },
     );
   }
 

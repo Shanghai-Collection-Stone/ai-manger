@@ -7,6 +7,7 @@ import {
   resolveLoginPageHref,
 } from './adminApi';
 import HotTopicPanel from './HotTopicPanel';
+import SmsSettingPanel from './SmsSettingPanel';
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
 const LazyMDMarkdown = React.lazy(() =>
@@ -305,6 +306,7 @@ const ALL_TABS = [
   { id: 'feishu_credentials', label: '飞书凭证' },
   { id: 'xhs_crawl', label: '小红书采集' },
   { id: 'hot_topic', label: '热点采集榜' },
+  { id: 'sms_settings', label: '短信验证码', platformOnly: true },
   { id: 'finance', label: '财务' },
 ];
 
@@ -545,6 +547,8 @@ const AdminApp = () => {
       aiPromptSupplement: '',
       enableAiCover: false,
       xhsArticleGlobalConcurrencyLimit: 4,
+      salesWechatQrCodeUrl: '',
+      salesContactTip: '',
     },
     clawConfig: {
       name: '',
@@ -659,6 +663,8 @@ const AdminApp = () => {
             enableAiCover: Boolean(pi.platformInfo?.enableAiCover),
             xhsArticleGlobalConcurrencyLimit:
               pi.platformInfo?.xhsArticleGlobalConcurrencyLimit || 4,
+            salesWechatQrCodeUrl: pi.platformInfo?.salesWechatQrCodeUrl || '',
+            salesContactTip: pi.platformInfo?.salesContactTip || '',
           },
         }));
       } catch {
@@ -920,6 +926,12 @@ const AdminApp = () => {
       forms.platformInfo.aiPromptSupplement,
       forms.platformInfo.enableAiCover,
       Number(forms.platformInfo.xhsArticleGlobalConcurrencyLimit) || 4,
+      isSuperAdmin(currentRole)
+        ? {
+            wechatQrCodeUrl: forms.platformInfo.salesWechatQrCodeUrl,
+            tip: forms.platformInfo.salesContactTip,
+          }
+        : undefined,
     );
     setPlatformInfo(res.platformInfo || null);
     setForms((prev) => ({
@@ -929,9 +941,35 @@ const AdminApp = () => {
         enableAiCover: Boolean(res.platformInfo?.enableAiCover),
         xhsArticleGlobalConcurrencyLimit:
           res.platformInfo?.xhsArticleGlobalConcurrencyLimit || 4,
+        salesWechatQrCodeUrl: res.platformInfo?.salesWechatQrCodeUrl || '',
+        salesContactTip: res.platformInfo?.salesContactTip || '',
       },
     }));
     setNotice('平台AI配置已保存');
+  };
+
+  /**
+   * @description 选择业务员微信二维码图片并转为 data URI 写入表单（≤500KB，保存后生效）
+   * @keyword-cn 上传业务员二维码, 图片转DataURI
+   * @keyword-en pick-sales-qrcode, image-to-data-uri
+   * @param {File | undefined} file - 选中的图片文件
+   * @returns {void}
+   */
+  const onPickSalesQrCode = (file) => {
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) {
+      setError('二维码仅支持 PNG / JPG / WEBP 图片');
+      return;
+    }
+    if (file.size > 500 * 1024) {
+      setError('二维码图片不能超过 500KB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () =>
+      updateForm('platformInfo', 'salesWechatQrCodeUrl', String(reader.result));
+    reader.onerror = () => setError('读取二维码图片失败');
+    reader.readAsDataURL(file);
   };
 
   /**
@@ -5192,6 +5230,11 @@ const AdminApp = () => {
           <HotTopicPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
+        {/* 短信验证码（阿里云 AccessKey / 签名 / 模板 + 测试发送，仅超管） | @keyword-en sms verification setting tab */}
+        {activeTab === 'sms_settings' ? (
+          <SmsSettingPanel onNotice={setNotice} onError={setError} />
+        ) : null}
+
         {/* 财务（内含 支出 / 应付 / 推送配置 三个子 Tab） | @keyword-en finance tab with category and push sub tabs */}
         {/* 财务 Tab(回归"支出/应付"子 Tab,name 由 FINANCE_KINDS 自动注入,用户不感知) | @keyword-en finance tab simplified preset kinds */}
         {activeTab === 'finance'
@@ -6253,6 +6296,83 @@ const AdminApp = () => {
                       所有租户正在执行的文章任务合计不会超过此值，超出的任务进入等待队列。
                     </span>
                   </label>
+                ) : null}
+                {/* 注册页业务员二维码 | @keyword-en sales wechat qrcode setting */}
+                {isSuperAdmin(currentRole) ? (
+                  <div className="mb-3 rounded-lg border border-slate-200 p-3 text-sm text-slate-800 space-y-2">
+                    <div>
+                      <div className="font-medium">注册页业务员微信二维码</div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        用户自助注册时，填写的租户名称未入驻，注册接口直接返回此二维码与提示语。
+                      </div>
+                    </div>
+                    <input
+                      className="w-full border rounded px-3 py-2 text-sm"
+                      placeholder={
+                        forms.platformInfo.salesWechatQrCodeUrl.startsWith(
+                          'data:',
+                        )
+                          ? '已上传本地图片（填写地址将覆盖）'
+                          : '二维码图片地址 https://...'
+                      }
+                      value={
+                        forms.platformInfo.salesWechatQrCodeUrl.startsWith(
+                          'data:',
+                        )
+                          ? ''
+                          : forms.platformInfo.salesWechatQrCodeUrl
+                      }
+                      onChange={(e) =>
+                        updateForm(
+                          'platformInfo',
+                          'salesWechatQrCodeUrl',
+                          e.target.value,
+                        )
+                      }
+                    />
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="text-xs"
+                        onChange={(e) => {
+                          onPickSalesQrCode(e.target.files?.[0]);
+                          e.target.value = '';
+                        }}
+                      />
+                      {forms.platformInfo.salesWechatQrCodeUrl ? (
+                        <button
+                          type="button"
+                          className="text-xs text-red-600"
+                          onClick={() =>
+                            updateForm('platformInfo', 'salesWechatQrCodeUrl', '')
+                          }
+                        >
+                          清除二维码
+                        </button>
+                      ) : null}
+                    </div>
+                    {forms.platformInfo.salesWechatQrCodeUrl ? (
+                      <img
+                        src={forms.platformInfo.salesWechatQrCodeUrl}
+                        alt="业务员微信二维码预览"
+                        className="h-32 w-32 object-contain border rounded"
+                      />
+                    ) : null}
+                    <input
+                      className="w-full border rounded px-3 py-2 text-sm"
+                      maxLength={200}
+                      placeholder="提示语，例如：贵公司尚未入驻，请扫码添加业务员微信"
+                      value={forms.platformInfo.salesContactTip}
+                      onChange={(e) =>
+                        updateForm(
+                          'platformInfo',
+                          'salesContactTip',
+                          e.target.value,
+                        )
+                      }
+                    />
+                  </div>
                 ) : null}
                 <MDEditor
                   height={500}

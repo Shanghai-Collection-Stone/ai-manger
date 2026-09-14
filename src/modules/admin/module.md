@@ -12,6 +12,7 @@
 - **关键词**: admin, auth, login, jwt, tenants, providers, ai service, service credit, users, keys, controller, claw, agent, llm settings
 - **函数**:
   - `login`: 登录/login
+  - `register(req,body)` — POST /admin/auth/register 公开自助注册，挂 `@RequireSmsCode('register')` 需 smsPhone/smsCode，按租户名称匹配，未入驻返回业务员微信二维码 | keywords: 自助注册接口, 租户名称匹配, self-register-endpoint, tenant-name-match
   - `listLoginTenants`: 登录租户选项/list login tenants
   - `me`: 当前用户/me
   - `getCurrentCreditAccount(limit?,before?)` — 查询当前登录租户自己的余额与倒序流水 | keywords: 当前Credit账户, 自身流水, current-credit-account, own-transaction-list
@@ -51,6 +52,8 @@
   - `ensureIndexes()` — 后台索引初始化，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重，每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login`: 登录签发JWT/login issue jwt
+  - `register({tenantName,username,displayName?,password,phone})` — 租户名称精确匹配：命中建停用状态的 operator(待租户管理员启用，保存已短信验证的 phone)，重名抛 TENANT_NAME_AMBIGUOUS，未命中返回 `{registered:false,reason:'TENANT_NOT_ONBOARDED',salesContact}`；暂不含入驻 | keywords: 自助注册, 租户名称匹配, 业务员二维码, self-register, tenant-name-match, sales-wechat-qrcode
+  - `upsertPlatformInfo(adminUser,aiPromptSupplement,enableAiCover?,globalLimit?,salesContact?)` — 更新平台信息，业务员二维码与提示语仅超管写入平台作用域 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
   - `getUserByToken`: token解析用户/get user by token
   - `listRoles`: 角色列表(静态RBAC角色目录及权限矩阵，只读)/list admin roles | keywords: list-admin-roles
   - `logout`: 注销会话/logout
@@ -114,7 +117,7 @@
   - `createForUser`: 依据登录用户角色构建 CASL ability/create ability for admin user | keywords: create-ability-for-admin-user
 
 ### casl/admin-permission.constants.ts
-后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`、抖音真实工作台主体 `DouyinWorkbench`、运行参数主体 `PlatformSetting`、热点采集榜主体 `HotTopic` 与平台节点主体 `SuperClaw`。租户管理员与操作员均可管理各自租户用户边界内的抖音选题、分镜和直连调用；`HotTopic` 覆盖采集规则、榜单条目、归类标签与热点推荐：`tenant_admin` 授 `manage HotTopic`，`operator` 只授 `read HotTopic`(能看榜单、能调推荐，改不了采集规则)。
+后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`、抖音真实工作台主体 `DouyinWorkbench`、运行参数主体 `PlatformSetting`、热点采集榜主体 `HotTopic`、平台节点主体 `SuperClaw` 与短信验证码配置主体 `SmsSetting`(不在任何非超管角色目录中，仅超管可用)。租户管理员与操作员均可管理各自租户用户边界内的抖音选题、分镜和直连调用；`HotTopic` 覆盖采集规则、榜单条目、归类标签与热点推荐：`tenant_admin` 授 `manage HotTopic`，`operator` 只授 `read HotTopic`(能看榜单、能调推荐，改不了采集规则)。
 - **关键词**: permission, subject, action, registry, root-key, casl
 - **类型导出**: `AdminAction`, `AdminSubject`; 常量 `ADMIN_ACTIONS`, `ADMIN_SUBJECTS`
 
@@ -126,12 +129,14 @@
 
 ### entities/admin.entity.ts
 后台实体定义。
-- **关键词**: user entity, session entity, provider entity, claw config entity, agent config entity, llm setting entity, jwt payload
+- **关键词**: user entity, session entity, provider entity, claw config entity, agent config entity, llm setting entity, jwt payload, user phone (自助注册短信验证手机号)
 
 ### controller/admin.dto.ts
 后台请求体定义。
 - **关键词**: dto, login dto, tenant, provider default, claw config dto, agent config dto, llm setting dto
 - **函数**:
+  - `AdminRegisterDto` — 自助注册请求体(tenantName/username/displayName?/password) | keywords: 自助注册请求体, 租户名称, admin-register-dto, tenant-name
+  - `UpsertPlatformInfoDto` — 新增 `salesWechatQrCodeUrl`(http(s) 或 data:image base64，≤700000 字符) 与 `salesContactTip`(≤200) | keywords: 业务员二维码, 平台信息, sales-wechat-qrcode, platform-info
   - `UpdateAiServiceCreditDto` — 校验最多六位小数的非负服务点数 | keywords: 更新服务点数, 服务计费, update-service-credit, service-billing
   - `RechargeTenantCreditDto` — 校验正数充值、原因和外部单号 | keywords: 租户充值, 追加流水, tenant-recharge, append-ledger
   - `AdjustTenantCreditDto` — 校验非零人工调账 | keywords: 人工调账, 非零变动, manual-adjustment, nonzero-change

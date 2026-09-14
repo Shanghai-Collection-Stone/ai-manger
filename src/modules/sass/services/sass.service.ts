@@ -1280,14 +1280,17 @@ export class SassService {
    * @param {string} tenantId - 租户ID
    * @param {string} aiPromptSupplement - AI补充说明（markdown）
    * @param {boolean | undefined} enableAiCover - 是否开启 AI 封面生成
+   * @param {{ wechatQrCodeUrl?: string; tip?: string } | undefined} salesContact - 业务员联系方式（仅平台作用域使用，未传字段不改动）
    * @returns {Promise<PlatformInfoEntity>} 更新后的平台信息
-   * @keyword-en upsert platform info
+   * @keyword-cn 更新平台信息, 业务员二维码
+   * @keyword-en upsert platform info, sales-wechat-qrcode
    */
   async upsertPlatformInfo(
     tenantId: string,
     aiPromptSupplement: string,
     enableAiCover?: boolean,
     xhsArticleGlobalConcurrencyLimit?: number,
+    salesContact?: { wechatQrCodeUrl?: string; tip?: string },
   ): Promise<PlatformInfoEntity> {
     const normalized = (tenantId ?? '').trim();
     if (!normalized) throw new BadRequestException('TENANT_ID_REQUIRED');
@@ -1309,6 +1312,12 @@ export class SassService {
     if (typeof xhsArticleGlobalConcurrencyLimit === 'number') {
       setDoc.xhsArticleGlobalConcurrencyLimit =
         xhsArticleGlobalConcurrencyLimit;
+    }
+    if (typeof salesContact?.wechatQrCodeUrl === 'string') {
+      setDoc.salesWechatQrCodeUrl = salesContact.wechatQrCodeUrl.trim();
+    }
+    if (typeof salesContact?.tip === 'string') {
+      setDoc.salesContactTip = salesContact.tip.trim();
     }
     const res = await this.platformInfos.findOneAndUpdate(
       { tenantId: normalized },

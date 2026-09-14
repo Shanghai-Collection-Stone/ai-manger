@@ -298,6 +298,72 @@ export class AdminService {
   }
 
   /**
+   * @description 自助注册：按租户名称精确匹配已入驻租户，命中则创建待租户管理员启用的操作员账号；未命中直接返回平台配置的业务员微信二维码（暂不含入驻流程）
+   * @keyword-cn 自助注册, 租户名称匹配, 业务员二维码
+   * @keyword-en self-register, tenant-name-match, sales-wechat-qrcode
+   */
+  async register(input: {
+    tenantName: string;
+    username: string;
+    displayName?: string;
+    password: string;
+    phone: string;
+  }): Promise<
+    | { registered: true; pendingApproval: true; user: AdminUserPublic }
+    | {
+        registered: false;
+        reason: 'TENANT_NOT_ONBOARDED';
+        salesContact: { wechatQrCodeUrl: string; tip: string };
+      }
+  > {
+    const tenantName = input.tenantName.trim();
+    if (!tenantName) throw new BadRequestException('TENANT_NAME_REQUIRED');
+    const tenants = await this.sassTenants
+      .find({ name: tenantName })
+      .limit(2)
+      .toArray();
+    if (tenants.length === 0) {
+      const info = await this.sassService.getPlatformInfo();
+      return {
+        registered: false,
+        reason: 'TENANT_NOT_ONBOARDED',
+        salesContact: {
+          wechatQrCodeUrl: String(info?.salesWechatQrCodeUrl ?? ''),
+          tip: String(info?.salesContactTip ?? ''),
+        },
+      };
+    }
+    if (tenants.length > 1) {
+      throw new BadRequestException('TENANT_NAME_AMBIGUOUS');
+    }
+    const username = input.username.trim();
+    const now = new Date();
+    const doc: AdminUserEntity = {
+      _id: new ObjectId(),
+      username,
+      passwordHash: this.hashPassword(input.password),
+      displayName: input.displayName?.trim() || username,
+      role: 'operator',
+      tenantId: String(tenants[0]._id),
+      phone: input.phone,
+      // 自助注册默认停用，需租户管理员在用户管理中启用后才能登录
+      enabled: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await this.users.insertOne(doc);
+    } catch {
+      throw new BadRequestException('USERNAME_ALREADY_EXISTS');
+    }
+    return {
+      registered: true,
+      pendingApproval: true,
+      user: this.toPublicUser(doc),
+    };
+  }
+
+  /**
    * @description 通过token读取登录用户
    * @keyword-en get user from token
    */
@@ -2243,14 +2309,17 @@ export class AdminService {
    * @param {AdminUserEntity} adminUser - 管理员用户
    * @param {string} aiPromptSupplement - AI补充说明
    * @param {boolean | undefined} enableAiCover - 是否开启 AI 封面
+   * @param {{ wechatQrCodeUrl?: string; tip?: string } | undefined} salesContact - 注册页业务员联系方式，仅超管写入平台作用域
    * @returns {Promise<object>} 更新后的平台信息
-   * @keyword-en upsert platform info
+   * @keyword-cn 更新平台信息, 业务员二维码
+   * @keyword-en upsert platform info, sales-wechat-qrcode
    */
   async upsertPlatformInfo(
     adminUser: AdminUserEntity,
     aiPromptSupplement: string,
     enableAiCover?: boolean,
     xhsArticleGlobalConcurrencyLimit?: number,
+    salesContact?: { wechatQrCodeUrl?: string; tip?: string },
   ): Promise<object> {
     // 租户管理员只能管理自己的租户，平台管理员可以管理任何租户
     if (adminUser.role !== 'tenant_admin' && adminUser.role !== 'super_admin') {
@@ -2268,6 +2337,7 @@ export class AdminService {
       adminUser.role === 'super_admin'
         ? xhsArticleGlobalConcurrencyLimit
         : undefined,
+      adminUser.role === 'super_admin' ? salesContact : undefined,
     );
     return { platformInfo: info };
   }

@@ -93,7 +93,7 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `syncUsagesToSchema`: 同步订单使用入库/sync usages to schema
   - `syncRefundsToSchema`: 同步订单退单入库/sync refunds to schema
   - `getPlatformInfo`: 获取租户平台AI配置/get platform info
-  - `upsertPlatformInfo`: 更新租户平台AI配置（含enableAiCover与平台文章总并发）/upsert platform info
+  - `upsertPlatformInfo(tenantId,aiPromptSupplement,enableAiCover?,globalLimit?,salesContact?)` — 更新租户平台AI配置（含enableAiCover、平台文章总并发与注册页业务员二维码/提示语） | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
 
 ### sass-tenant-auth.middleware.ts
 
@@ -137,9 +137,9 @@ API Key实体定义。
 
 ### platform-info.entity.ts
 
-平台AI配置实体定义，平台作用域保存小红书文章生成总并发上限。
+平台AI配置实体定义，平台作用域保存小红书文章生成总并发上限，以及自助注册未入驻时返回的业务员微信二维码 `salesWechatQrCodeUrl` 与提示语 `salesContactTip`。
 
-- **关键词**: entity, platform-info, ai-prompt-supplement, enable-ai-cover
+- **关键词**: entity, platform-info, ai-prompt-supplement, enable-ai-cover, sales-wechat-qrcode
 
 ### sass-database-log.entity.ts
 

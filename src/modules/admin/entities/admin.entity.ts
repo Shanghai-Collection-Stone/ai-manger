@@ -17,6 +17,8 @@ export interface AdminUserEntity {
   displayName: string;
   role: AdminUserRole;
   tenantId?: string;
+  /** 自助注册时经短信验证的手机号 */
+  phone?: string;
   enabled: boolean;
   lastLoginAt?: Date;
   createdAt: Date;

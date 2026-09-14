@@ -41,6 +41,7 @@ import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
 import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js';
 import { AiBillingModule } from './modules/ai-billing/ai-billing.module.js';
 import { DouyinWorkbenchModule } from './modules/douyin-workbench/douyin-workbench.module.js';
+import { SmsVerificationModule } from './modules/sms-verification/sms-verification.module.js';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { DouyinWorkbenchModule } from './modules/douyin-workbench/douyin-workben
     HotTopicModule,
     SuperClawModule,
     BrowserAuthModule,
+    SmsVerificationModule,
     AiBillingModule,
     DouyinWorkbenchModule,
   ],

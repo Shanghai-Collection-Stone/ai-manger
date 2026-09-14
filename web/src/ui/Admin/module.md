@@ -65,6 +65,7 @@
 - `toText` / `toLower` / `readAdminActiveTab` / `writeAdminActiveTab` / `toDateInput` / `getRoleLabel` / `hasAdminFullAccess` / `isSuperAdmin` / `ALL_TABS` / `buildPagedRows` / `renderPager` / `loadData` / `updateForm` / `updateFilter` / `gotoPage`
 - `reloadDashboardConfigs` / `onSubmitDashboardConfig` / `onDeleteDashboardConfig` / `onSubmitPlatformInfo`
 - `onSubmitFeishuCredential` / `onDeleteFeishuCredential`
+- `onPickSalesQrCode(file)` — 平台信息 Tab(仅超管)选择业务员微信二维码图片转 data URI(≤500KB)，`onSubmitPlatformInfo` 随平台信息一并保存二维码与提示语 | keywords: 上传业务员二维码, 图片转DataURI, pick-sales-qrcode, image-to-data-uri
 - `onSubmitXhsCrawlSettings()` — 保存每日抓取时刻(`HH:mm`)、采集渠道与 TikHub 凭证；Key 输入框留空即不改动已保存的 Key | keywords: 保存采集设置, 每日定点, submit-xhs-crawl-settings, daily-crawl-time
 - `onClearTikhubApiKey()` — 发空串清空已保存的 TikHub API Key | keywords: 清空密钥, 移除凭证, clear-tikhub-api-key, remove-credential
 - `onTestTikhubConnection()` — 用已保存的 Key 与域名做一次 TikHub 连通性自检 | keywords: 测试TikHub连接, 密钥自检, test-tikhub-connection, api-key-probe
@@ -108,6 +109,21 @@
   - `onRecommend()` — 按母选题调用推荐接口并展示结构化推荐结果;结果头部回显 `matchedTags`(候选被哪几个标签圈出来的)或「未命中相关标签,已在全量榜单里判定」 | keywords: 热点推荐, 母选题匹配, 粗筛标签回显, recommend-hot-topics, parent-topic-match, matched-tags-echo
   - `onApplyFilter(patch)` — 应用榜单过滤条件并回到第一页 | keywords: 应用过滤, 重置分页, apply-filter, reset-page
 
+### SmsSettingPanel.jsx
+
+后台「短信验证码」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'sms_settings'` 时挂载。维护阿里云 AccessKey ID / Secret(留空不改、可清空，只显示掩码)、签名、模板编码、模板变量名与启用开关，显示就绪/模拟模式状态，并可向指定手机号真实测试发送。后端见 [sms-verification 模块](../../../../src/modules/sms-verification/module.md)。
+
+- **关键词**: sms setting panel, aliyun sms, access key secret mask, test send
+- **函数**:
+  - `SmsSettingPanel({ onNotice, onError })` — 短信配置面板主体 | keywords: 短信配置面板, 阿里云短信, sms-setting-panel, aliyun-sms
+  - `EMPTY_SMS_FORM` — 表单初始值，字段与后端 `SaveSmsSettingDto` 一一对应 | keywords: 短信配置表单初值, empty-sms-setting-form
+  - `applySetting(next)` — 用接口视图回填表单，Secret 输入框留空 | keywords: 回填短信配置, apply-sms-setting
+  - `run(key, fn)` — 统一包装异步动作 | keywords: 异步动作包装, async-action-wrapper
+  - `onSave()` — 保存配置，Secret 留空不改动 | keywords: 保存短信配置, submit-sms-setting
+  - `onClearSecret()` — 清空已保存 Secret | keywords: 清空短信密钥, clear-sms-secret
+  - `onTest()` — 向测试手机号真实发送验证码 | keywords: 测试发送短信, test-send-sms
+  - `setField(key, value)` — 更新单个表单字段 | keywords: 更新表单字段, update-form-field
+
 ### AdminLoginApp.jsx
 
 后台登录页:选择租户并登录,写入 token 并跳转。
@@ -149,6 +165,11 @@
   - `adminApi.listFinanceTransforms` / `upsertFinanceTransform` / `deleteFinanceTransform`: 财务 transform DSL CRUD(按 name)
   - `adminApi.chatFinanceAgent`: 财务 Agent 同步聊天(传 `{ name, messages }`)
   - `adminApi.chatFinanceAgentStream(payload, callbacks)`: 财务 Agent SSE 流式聊天封装(fetch + ReadableStream + TextDecoder,逐帧分发 token/tool/end/error)/finance agent chat stream | keywords: finance-agent-chat-stream, sse-chat
+  - `adminApi.upsertPlatformInfo(aiPromptSupplement,enableAiCover,globalLimit,salesContact?)` — 更新平台信息，salesContact 映射为业务员二维码与提示语 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
+  - `adminApi.register(payload)` — 公开自助注册 POST /admin/auth/register，payload 需展开 `SmsCodeInput` 的 `{ smsPhone, smsCode }` | keywords: 自助注册, 业务员二维码, self-register, sales-wechat-qrcode
+  - `adminApi.getSmsSettings()` — 读取平台短信配置(Secret 掩码) | keywords: 读取短信配置, get-sms-settings
+  - `adminApi.saveSmsSettings(payload)` — 保存平台短信配置 | keywords: 保存短信配置, save-sms-settings
+  - `adminApi.testSmsSettings(phone)` — 真实测试发送验证码 | keywords: 测试发送短信, test-sms-settings
   - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活, 15s 超时, 不消耗配额)/test ai provider
   - `adminApi.listAiServices()` — 读取固定服务目录与生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
   - `adminApi.updateAiServiceCredit(code,creditCost)` — 修改固定服务消耗点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code

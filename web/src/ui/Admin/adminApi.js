@@ -442,13 +442,15 @@ export const adminApi = {
   },
 
   /**
-   * @description 更新平台信息（AI补充说明）
-   * @keyword-en upsert platform info
+   * @description 更新平台信息（AI补充说明；salesContact 仅超管生效，含业务员微信二维码与提示语）
+   * @keyword-cn 更新平台信息, 业务员二维码
+   * @keyword-en upsert platform info, sales-wechat-qrcode
    */
   async upsertPlatformInfo(
     aiPromptSupplement,
     enableAiCover = false,
     xhsArticleGlobalConcurrencyLimit,
+    salesContact,
   ) {
     return request('/platform-info', {
       method: 'PUT',
@@ -456,7 +458,58 @@ export const adminApi = {
         aiPromptSupplement,
         enableAiCover,
         xhsArticleGlobalConcurrencyLimit,
+        ...(salesContact
+          ? {
+              salesWechatQrCodeUrl: salesContact.wechatQrCodeUrl,
+              salesContactTip: salesContact.tip,
+            }
+          : {}),
       }),
+    });
+  },
+
+  /**
+   * @description 自助注册（公开接口）：命中租户返回待启用账号，未入驻返回业务员微信二维码
+   * @keyword-cn 自助注册, 业务员二维码
+   * @keyword-en self-register, sales-wechat-qrcode
+   */
+  async register(payload) {
+    return request('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 读取平台短信验证码配置（Secret 仅掩码，仅超管）
+   * @keyword-cn 读取短信配置
+   * @keyword-en get-sms-settings
+   */
+  async getSmsSettings() {
+    return apiRequest('/api/sms-verification/settings');
+  },
+
+  /**
+   * @description 保存平台短信验证码配置（accessKeySecret 空串清空、不传不改）
+   * @keyword-cn 保存短信配置
+   * @keyword-en save-sms-settings
+   */
+  async saveSmsSettings(payload) {
+    return apiRequest('/api/sms-verification/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 用已保存配置向指定手机号真实发送测试验证码
+   * @keyword-cn 测试发送短信
+   * @keyword-en test-sms-settings
+   */
+  async testSmsSettings(phone) {
+    return apiRequest('/api/sms-verification/settings/test', {
+      method: 'POST',
+      body: JSON.stringify({ phone }),
     });
   },
 
