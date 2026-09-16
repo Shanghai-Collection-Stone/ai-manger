@@ -41,20 +41,56 @@ export class AdminLoginDto {
 }
 
 /**
- * @description 自助注册请求体（租户按名称精确匹配）
- * @keyword-cn 自助注册请求体, 租户名称
- * @keyword-en admin-register-dto, tenant-name
+ * @description 两步登录第一步请求体：账号可为手机号或历史用户名
+ * @keyword-cn 登录识别请求体, 手机号登录
+ * @keyword-en login-identify-dto, phone-login
  */
-export class AdminRegisterDto {
-  @IsString()
-  @MinLength(1)
-  @MaxLength(100)
-  tenantName!: string;
-
+export class AdminLoginIdentifyDto {
   @IsString()
   @MinLength(3)
   @MaxLength(60)
-  username!: string;
+  account!: string;
+
+  @IsString()
+  @MinLength(6)
+  @MaxLength(120)
+  password!: string;
+}
+
+/**
+ * @description 两步登录第二步请求体：用登录票据选择租户，平台端身份不传 tenantId
+ * @keyword-cn 选择租户请求体, 登录票据
+ * @keyword-en login-select-dto, login-ticket
+ */
+export class AdminLoginSelectDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(4000)
+  loginTicket!: string;
+
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
+}
+
+/**
+ * @description 自助注册请求体：以已验证手机号为身份固定注册进默认租户；tenantName 仅为兼容旧客户端保留且被忽略
+ * @keyword-cn 自助注册请求体, 默认租户
+ * @keyword-en admin-register-dto, default-tenant
+ */
+export class AdminRegisterDto {
+  /** @deprecated 旧客户端字段，服务端忽略 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  tenantName?: string;
+
+  /** 旧客户端会传；缺省时用户名取手机号 */
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(60)
+  username?: string;
 
   @IsOptional()
   @IsString()
@@ -94,6 +130,11 @@ export class CreateAdminUserDto {
   @IsOptional()
   @IsMongoId()
   tenantId?: string;
+
+  /** 填写后按手机号关联账号：已有账号直接加入本租户（沿用其密码），没有则用本次密码新建 */
+  @IsOptional()
+  @Matches(/^1[3-9]\d{9}$/, { message: 'PHONE_INVALID' })
+  phone?: string;
 }
 
 /**

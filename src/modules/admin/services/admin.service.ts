@@ -35,11 +35,14 @@ import {
   type RoleCatalogEntry,
 } from '../casl/admin-ability.factory.js';
 import type {
+  AdminAccountEntity,
   AdminAiProviderEntity,
   AdminAgentConfigEntity,
   AdminClawConfigEntity,
   AdminJwtPayload,
   AdminLlmSettingEntity,
+  AdminLoginTenantOption,
+  AdminLoginTicketPayload,
   AdminSessionEntity,
   AdminUserEntity,
   AdminUserRole,
@@ -57,6 +60,7 @@ type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & { id: string };
 export class AdminService {
   private readonly PLATFORM_INFO_SCOPE_TENANT_ID = '__platform__';
   private readonly users: Collection<AdminUserEntity>;
+  private readonly accounts: Collection<AdminAccountEntity>;
   private readonly sessions: Collection<AdminSessionEntity>;
   private readonly aiProviders: Collection<AdminAiProviderEntity>;
   private readonly aiServiceConfigs: Collection<AiServiceCreditConfigEntity>;
@@ -69,6 +73,7 @@ export class AdminService {
   private readonly sassApiKeys: Collection<SassApiKeyEntity>;
   private readonly dataSources: Collection<DataSourceEntity>;
   private readonly SESSION_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
+  private readonly LOGIN_TICKET_EXPIRE_SECONDS = 5 * 60;
   private readonly jwtSecret: string;
 
   constructor(
@@ -77,6 +82,7 @@ export class AdminService {
     private readonly dataSourceService: DataSourceService,
   ) {
     this.users = db.collection<AdminUserEntity>('admin_users');
+    this.accounts = db.collection<AdminAccountEntity>('admin_accounts');
     this.sessions = db.collection<AdminSessionEntity>('admin_sessions');
     this.aiProviders =
       db.collection<AdminAiProviderEntity>('admin_ai_providers');
@@ -111,6 +117,9 @@ export class AdminService {
   private async initializeAdminInfrastructure(): Promise<void> {
     await this.ensureIndexes();
     await this.ensureBootstrapUser();
+    await this.ensureAccountsFromLegacyPhones();
+    // 默认租户重名时注册接口会返回明确错误码，这里不阻塞后续初始化
+    await this.ensureSelfRegisterTenant().catch(() => undefined);
     await this.ensureProvidersFromEnv();
   }
 
@@ -129,6 +138,8 @@ export class AdminService {
       { unique: true },
     );
     await this.users.createIndex({ tenantId: 1 });
+    await this.users.createIndex({ accountId: 1 });
+    await this.accounts.createIndex({ phone: 1 }, { unique: true });
     await this.sessions.createIndex({ tokenHash: 1 }, { unique: true });
     await this.sessions.createIndex({ sessionId: 1 }, { unique: true });
     await this.sessions.createIndex({ userId: 1 });
@@ -247,8 +258,9 @@ export class AdminService {
   }
 
   /**
-   * @description 登录并颁发token
-   * @keyword-en login and issue token
+   * @description 旧版单步登录（用户名 + 租户），保留兼容；关联了手机号账号的成员以账号密码校验
+   * @keyword-cn 兼容登录, 用户名登录
+   * @keyword-en legacy-login, username-login
    */
   async login(input: {
     username: string;
@@ -264,9 +276,167 @@ export class AdminService {
     );
     if (!user) throw new UnauthorizedException('INVALID_USERNAME_OR_PASSWORD');
     if (!user.enabled) throw new ForbiddenException('ACCOUNT_DISABLED');
-    if (!this.verifyPassword(input.password, user.passwordHash)) {
+    if (!(await this.verifyUserPassword(user, input.password))) {
       throw new UnauthorizedException('INVALID_USERNAME_OR_PASSWORD');
     }
+    return this.issueSession(user);
+  }
+
+  /**
+   * @description 两步登录第一步：按手机号账号或历史用户名校验密码，返回短期登录票据与已绑定的可选租户
+   * @keyword-cn 两步登录, 手机号登录, 可选租户
+   * @keyword-en two-step-login, phone-login, login-tenant-options
+   */
+  async identifyLogin(input: { account: string; password: string }): Promise<{
+    loginTicket: string;
+    expiresIn: number;
+    tenants: AdminLoginTenantOption[];
+  }> {
+    const matched = await this.findPasswordMatchedUsers(
+      input.account.trim(),
+      input.password,
+    );
+    if (matched.length === 0) {
+      throw new UnauthorizedException('INVALID_USERNAME_OR_PASSWORD');
+    }
+    const byTenant = new Map<string, AdminUserEntity>();
+    for (const user of matched
+      .filter((row) => row.enabled)
+      .sort(
+        (a, b) =>
+          (b.lastLoginAt?.getTime() ?? 0) - (a.lastLoginAt?.getTime() ?? 0),
+      )) {
+      // 同一租户下关联了多行时只保留最近登录的一行
+      const key = user.tenantId ?? '';
+      if (!byTenant.has(key)) byTenant.set(key, user);
+    }
+    const candidates = [...byTenant.values()];
+    if (candidates.length === 0) throw new ForbiddenException('ACCOUNT_DISABLED');
+    const tenantIds = candidates
+      .map((user) => user.tenantId)
+      .filter((id): id is string => Boolean(id) && ObjectId.isValid(id!));
+    const tenants = tenantIds.length
+      ? await this.sassTenants
+          .find({ _id: { $in: tenantIds.map((id) => new ObjectId(id)) } })
+          .toArray()
+      : [];
+    const tenantNames = new Map(tenants.map((row) => [String(row._id), row.name]));
+    const iat = Math.floor(Date.now() / 1000);
+    const exp = iat + this.LOGIN_TICKET_EXPIRE_SECONDS;
+    return {
+      loginTicket: this.signLoginTicket({
+        typ: 'login_ticket',
+        uids: candidates.map((user) => String(user._id)),
+        iat,
+        exp,
+      }),
+      expiresIn: this.LOGIN_TICKET_EXPIRE_SECONDS,
+      tenants: candidates.map((user) => ({
+        tenantId: user.tenantId ?? '',
+        tenantName: user.tenantId
+          ? tenantNames.get(user.tenantId) ?? '未知租户'
+          : '平台端',
+        role: user.role,
+        displayName: user.displayName,
+        lastLoginAt: user.lastLoginAt,
+      })),
+    };
+  }
+
+  /**
+   * @description 两步登录第二步：凭登录票据在已校验的候选成员中选定租户并签发会话
+   * @keyword-cn 选择登录租户, 签发会话
+   * @keyword-en select-login-tenant, issue-session
+   */
+  async selectLoginTenant(input: {
+    loginTicket: string;
+    tenantId?: string;
+  }): Promise<{ token: string; user: AdminUserPublic }> {
+    const ticket = this.verifyLoginTicket(input.loginTicket);
+    if (!ticket) throw new UnauthorizedException('LOGIN_TICKET_EXPIRED');
+    const tenantId = input.tenantId?.trim() ?? '';
+    const ids = ticket.uids
+      .filter((id) => ObjectId.isValid(id))
+      .map((id) => new ObjectId(id));
+    const rows = await this.users.find({ _id: { $in: ids } }).toArray();
+    const user = rows.find((row) => (row.tenantId ?? '') === tenantId);
+    if (!user) throw new ForbiddenException('TENANT_NOT_BOUND');
+    if (!user.enabled) throw new ForbiddenException('ACCOUNT_DISABLED');
+    return this.issueSession(user);
+  }
+
+  /**
+   * @description 读取入驻页展示的业务员微信二维码与提示语（平台作用域配置）
+   * @keyword-cn 业务员二维码, 租户入驻
+   * @keyword-en sales-wechat-qrcode, tenant-onboarding
+   */
+  async getSalesContact(): Promise<{ wechatQrCodeUrl: string; tip: string }> {
+    const info = await this.sassService.getPlatformInfo();
+    return {
+      wechatQrCodeUrl: String(info?.salesWechatQrCodeUrl ?? ''),
+      tip: String(info?.salesContactTip ?? ''),
+    };
+  }
+
+  /**
+   * @description 收集密码校验通过的成员行：手机号账号关联的全部成员 + 同名历史用户名成员
+   * @keyword-cn 密码匹配成员, 手机号账号
+   * @keyword-en password-matched-members, phone-account
+   */
+  private async findPasswordMatchedUsers(
+    account: string,
+    password: string,
+  ): Promise<AdminUserEntity[]> {
+    const matched = new Map<string, AdminUserEntity>();
+    const phone = this.normalizeLoginPhone(account);
+    if (phone) {
+      const owner = await this.accounts.findOne({ phone });
+      if (owner && this.verifyPassword(password, owner.passwordHash)) {
+        const rows = await this.users
+          .find({ accountId: String(owner._id) })
+          .toArray();
+        for (const row of rows) matched.set(String(row._id), row);
+      }
+    }
+    const legacyRows = await this.users
+      .find({ username: account })
+      .limit(50)
+      .toArray();
+    for (const row of legacyRows) {
+      if (matched.has(String(row._id))) continue;
+      if (await this.verifyUserPassword(row, password)) {
+        matched.set(String(row._id), row);
+      }
+    }
+    return [...matched.values()];
+  }
+
+  /**
+   * @description 校验成员登录密码：已关联账号以账号密码为准，账号缺失或未关联时回退成员自身密码
+   * @keyword-cn 成员密码校验, 账号密码
+   * @keyword-en verify-member-password, account-password
+   */
+  private async verifyUserPassword(
+    user: AdminUserEntity,
+    password: string,
+  ): Promise<boolean> {
+    if (user.accountId && ObjectId.isValid(user.accountId)) {
+      const owner = await this.accounts.findOne({
+        _id: new ObjectId(user.accountId),
+      });
+      if (owner) return this.verifyPassword(password, owner.passwordHash);
+    }
+    return this.verifyPassword(password, user.passwordHash);
+  }
+
+  /**
+   * @description 为指定成员签发 JWT 并落库会话，刷新最近登录时间
+   * @keyword-cn 签发会话, 登录令牌
+   * @keyword-en issue-session, login-token
+   */
+  private async issueSession(
+    user: AdminUserEntity,
+  ): Promise<{ token: string; user: AdminUserPublic }> {
     const now = new Date();
     const exp = Math.floor((now.getTime() + this.SESSION_EXPIRE_MS) / 1000);
     const iat = Math.floor(now.getTime() / 1000);
@@ -298,69 +468,135 @@ export class AdminService {
   }
 
   /**
-   * @description 自助注册：按租户名称精确匹配已入驻租户，命中则创建待租户管理员启用的操作员账号；未命中直接返回平台配置的业务员微信二维码（暂不含入驻流程）
-   * @keyword-cn 自助注册, 租户名称匹配, 业务员二维码
-   * @keyword-en self-register, tenant-name-match, sales-wechat-qrcode
+   * @description 自助注册：以已短信验证的手机号新建账号，固定加入默认租户（「其他」）并立即可登录；手机号已注册直接拒绝，不允许自行选择其他租户
+   * @keyword-cn 自助注册, 手机号账号, 默认租户
+   * @keyword-en self-register, phone-account, default-tenant
    */
   async register(input: {
-    tenantName: string;
-    username: string;
+    username?: string;
     displayName?: string;
     password: string;
     phone: string;
-  }): Promise<
-    | { registered: true; pendingApproval: true; user: AdminUserPublic }
-    | {
-        registered: false;
-        reason: 'TENANT_NOT_ONBOARDED';
-        salesContact: { wechatQrCodeUrl: string; tip: string };
-      }
-  > {
-    const tenantName = input.tenantName.trim();
-    if (!tenantName) throw new BadRequestException('TENANT_NAME_REQUIRED');
-    const tenants = await this.sassTenants
-      .find({ name: tenantName })
-      .limit(2)
-      .toArray();
-    if (tenants.length === 0) {
-      const info = await this.sassService.getPlatformInfo();
-      return {
-        registered: false,
-        reason: 'TENANT_NOT_ONBOARDED',
-        salesContact: {
-          wechatQrCodeUrl: String(info?.salesWechatQrCodeUrl ?? ''),
-          tip: String(info?.salesContactTip ?? ''),
-        },
-      };
+  }): Promise<{
+    registered: true;
+    pendingApproval: false;
+    tenantName: string;
+    user: AdminUserPublic;
+  }> {
+    const phone = input.phone;
+    if (await this.accounts.findOne({ phone })) {
+      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
     }
-    if (tenants.length > 1) {
-      throw new BadRequestException('TENANT_NAME_AMBIGUOUS');
-    }
-    const username = input.username.trim();
+    const tenant = await this.ensureSelfRegisterTenant();
     const now = new Date();
+    const displayName = input.displayName?.trim() || phone;
+    const passwordHash = this.hashPassword(input.password);
+    const owner: AdminAccountEntity = {
+      _id: new ObjectId(),
+      phone,
+      passwordHash,
+      displayName,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await this.accounts.insertOne(owner);
+    } catch {
+      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+    }
     const doc: AdminUserEntity = {
       _id: new ObjectId(),
-      username,
-      passwordHash: this.hashPassword(input.password),
-      displayName: input.displayName?.trim() || username,
+      username: input.username?.trim() || phone,
+      passwordHash,
+      displayName,
       role: 'operator',
-      tenantId: String(tenants[0]._id),
-      phone: input.phone,
-      // 自助注册默认停用，需租户管理员在用户管理中启用后才能登录
-      enabled: false,
+      tenantId: String(tenant._id),
+      phone,
+      accountId: String(owner._id),
+      enabled: true,
       createdAt: now,
       updatedAt: now,
     };
     try {
       await this.users.insertOne(doc);
     } catch {
+      await this.accounts.deleteOne({ _id: owner._id });
       throw new BadRequestException('USERNAME_ALREADY_EXISTS');
     }
     return {
       registered: true,
-      pendingApproval: true,
+      pendingApproval: false,
+      tenantName: tenant.name,
       user: this.toPublicUser(doc),
     };
+  }
+
+  /**
+   * @description 确保自助注册默认租户存在：按名称查找（默认「其他」，可用 SELF_REGISTER_TENANT_NAME 覆盖），不存在则创建，重名拒绝
+   * @keyword-cn 默认注册租户, 自动建租户
+   * @keyword-en self-register-tenant, ensure-default-tenant
+   */
+  private async ensureSelfRegisterTenant(): Promise<SassTenantEntity> {
+    const name = process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
+    const tenants = await this.sassTenants.find({ name }).limit(2).toArray();
+    if (tenants.length > 1) {
+      throw new BadRequestException('SELF_REGISTER_TENANT_AMBIGUOUS');
+    }
+    if (tenants[0]) return tenants[0];
+    return this.sassService.createTenant({
+      name,
+      description: '自助注册默认租户',
+    });
+  }
+
+  /**
+   * @description 启动迁移：为带手机号但未关联账号的历史成员按手机号建账号并关联，新账号沿用该号最近登录成员的密码
+   * @keyword-cn 手机号账号迁移, 历史成员关联
+   * @keyword-en migrate-phone-accounts, link-legacy-members
+   */
+  private async ensureAccountsFromLegacyPhones(): Promise<void> {
+    const rows = await this.users
+      .find({
+        phone: { $type: 'string', $ne: '' },
+        accountId: { $exists: false },
+      })
+      .toArray();
+    const byPhone = new Map<string, AdminUserEntity[]>();
+    for (const row of rows) {
+      const phone = String(row.phone);
+      byPhone.set(phone, [...(byPhone.get(phone) ?? []), row]);
+    }
+    for (const [phone, group] of byPhone) {
+      let owner = await this.accounts.findOne({ phone });
+      if (!owner) {
+        const latest = [...group].sort(
+          (a, b) =>
+            (b.lastLoginAt ?? b.updatedAt).getTime() -
+            (a.lastLoginAt ?? a.updatedAt).getTime(),
+        )[0];
+        const now = new Date();
+        const created: AdminAccountEntity = {
+          _id: new ObjectId(),
+          phone,
+          passwordHash: latest.passwordHash,
+          displayName: latest.displayName,
+          createdAt: now,
+          updatedAt: now,
+        };
+        try {
+          await this.accounts.insertOne(created);
+          owner = created;
+        } catch {
+          // 多实例并发迁移时另一实例已建好
+          owner = await this.accounts.findOne({ phone });
+          if (!owner) continue;
+        }
+      }
+      await this.users.updateMany(
+        { _id: { $in: group.map((row) => row._id) } },
+        { $set: { accountId: String(owner._id) } },
+      );
+    }
   }
 
   /**
@@ -464,8 +700,9 @@ export class AdminService {
   }
 
   /**
-   * @description 创建用户
-   * @keyword-en create admin user
+   * @description 创建用户（租户成员）；填写手机号时关联手机号账号：已有账号直接加入本租户并沿用其密码，没有则用本次密码新建账号
+   * @keyword-cn 创建成员, 手机号关联, 多租户成员
+   * @keyword-en create-admin-user, link-phone-account, multi-tenant-member
    */
   async createUser(
     currentUser: AdminUserEntity,
@@ -475,10 +712,41 @@ export class AdminService {
       password: string;
       role: AdminUserRole;
       tenantId?: string;
+      phone?: string;
     },
   ): Promise<AdminUserPublic> {
     const payloadTenantId = this.resolveNewUserTenant(currentUser, input);
     const now = new Date();
+    const phone = input.phone?.trim() || undefined;
+    let accountId: string | undefined;
+    let createdAccountId: ObjectId | undefined;
+    if (phone) {
+      const owner = await this.accounts.findOne({ phone });
+      if (owner) {
+        accountId = String(owner._id);
+        const existing = await this.users.findOne(
+          payloadTenantId
+            ? { accountId, tenantId: payloadTenantId }
+            : { accountId, tenantId: { $exists: false } },
+        );
+        if (existing) throw new BadRequestException('PHONE_ALREADY_IN_TENANT');
+      } else {
+        createdAccountId = new ObjectId();
+        try {
+          await this.accounts.insertOne({
+            _id: createdAccountId,
+            phone,
+            passwordHash: this.hashPassword(input.password),
+            displayName: input.displayName.trim(),
+            createdAt: now,
+            updatedAt: now,
+          });
+        } catch {
+          throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+        }
+        accountId = String(createdAccountId);
+      }
+    }
     const doc: AdminUserEntity = {
       _id: new ObjectId(),
       username: input.username.trim(),
@@ -486,6 +754,7 @@ export class AdminService {
       displayName: input.displayName.trim(),
       role: input.role,
       tenantId: payloadTenantId,
+      ...(phone ? { phone, accountId } : {}),
       enabled: true,
       createdAt: now,
       updatedAt: now,
@@ -493,6 +762,9 @@ export class AdminService {
     try {
       await this.users.insertOne(doc);
     } catch {
+      if (createdAccountId) {
+        await this.accounts.deleteOne({ _id: createdAccountId });
+      }
       throw new BadRequestException('USERNAME_ALREADY_EXISTS');
     }
     return this.toPublicUser(doc);
@@ -532,7 +804,23 @@ export class AdminService {
       updates.displayName = input.displayName.trim();
     }
     if (typeof input.password === 'string' && input.password.trim()) {
-      updates.passwordHash = this.hashPassword(input.password);
+      if (target.accountId && ObjectId.isValid(target.accountId)) {
+        // 账号密码跨租户共享，只允许超管重置，避免租户管理员借此接管该手机号在其他租户的登录
+        if (currentUser.role !== 'super_admin') {
+          throw new ForbiddenException('LINKED_ACCOUNT_PASSWORD_FORBIDDEN');
+        }
+        await this.accounts.updateOne(
+          { _id: new ObjectId(target.accountId) },
+          {
+            $set: {
+              passwordHash: this.hashPassword(input.password),
+              updatedAt: new Date(),
+            },
+          },
+        );
+      } else {
+        updates.passwordHash = this.hashPassword(input.password);
+      }
     }
     if (typeof input.role === 'string') {
       updates.role = input.role;
@@ -1750,6 +2038,69 @@ export class AdminService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * @description 签发两步登录票据；HMAC 输入带 `login_ticket:` 域前缀，签名与访问 JWT 互不通用
+   * @keyword-cn 签发登录票据, 签名域隔离
+   * @keyword-en sign-login-ticket, signature-domain-separation
+   */
+  private signLoginTicket(payload: AdminLoginTicketPayload): string {
+    const header = Buffer.from(
+      JSON.stringify({ alg: 'HS256', typ: 'LTK' }),
+    ).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const unsigned = `${header}.${body}`;
+    const signature = createHmac('sha256', this.jwtSecret)
+      .update(`login_ticket:${unsigned}`)
+      .digest('base64url');
+    return `${unsigned}.${signature}`;
+  }
+
+  /**
+   * @description 校验两步登录票据签名、类型与有效期，失败返回 null
+   * @keyword-cn 校验登录票据, 票据过期
+   * @keyword-en verify-login-ticket, ticket-expiry
+   */
+  private verifyLoginTicket(ticket: string): AdminLoginTicketPayload | null {
+    const segments = String(ticket ?? '').split('.');
+    if (segments.length !== 3) return null;
+    const [header, body, signature] = segments;
+    if (!header || !body || !signature) return null;
+    const expected = createHmac('sha256', this.jwtSecret)
+      .update(`login_ticket:${header}.${body}`)
+      .digest('base64url');
+    if (
+      signature.length !== expected.length ||
+      !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+    ) {
+      return null;
+    }
+    try {
+      const payload = JSON.parse(
+        Buffer.from(body, 'base64url').toString('utf8'),
+      ) as AdminLoginTicketPayload;
+      if (payload?.typ !== 'login_ticket') return null;
+      if (!Array.isArray(payload.uids) || payload.uids.length === 0) return null;
+      if (typeof payload.exp !== 'number' || payload.exp * 1000 <= Date.now()) {
+        return null;
+      }
+      return payload;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * @description 把登录账号规范成大陆手机号（去空格、连字符与 +86 前缀），不是手机号返回空串
+   * @keyword-cn 登录手机号规范化, 大陆手机号
+   * @keyword-en normalize-login-phone, mainland-mobile
+   */
+  private normalizeLoginPhone(account: string): string {
+    const compact = String(account ?? '')
+      .replace(/[\s-]/g, '')
+      .replace(/^(\+?86)(?=1\d{10}$)/, '');
+    return /^1[3-9]\d{9}$/.test(compact) ? compact : '';
   }
 
   /**

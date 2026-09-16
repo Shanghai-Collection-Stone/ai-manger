@@ -25,6 +25,8 @@ import { RequireSmsCode } from '../../sms-verification/decorators/require-sms-co
 import type { SmsVerifiedRequest } from '../../sms-verification/entities/sms-verification.entity.js';
 import {
   AdminLoginDto,
+  AdminLoginIdentifyDto,
+  AdminLoginSelectDto,
   AdminRegisterDto,
   AdjustTenantCreditDto,
   CreateAdminUserDto,
@@ -67,8 +69,9 @@ export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
   /**
-   * @description 登录
-   * @keyword-en admin login endpoint
+   * @description 旧版单步登录（用户名 + 租户），公开免鉴权，保留兼容
+   * @keyword-cn 兼容登录接口, 用户名登录
+   * @keyword-en legacy-login-endpoint, username-login
    */
   @Post('auth/login')
   async login(@Body() body: AdminLoginDto) {
@@ -76,9 +79,39 @@ export class AdminController {
   }
 
   /**
-   * @description 自助注册（与登录同为公开免鉴权入口，需短信验证码）：按租户名称匹配，未入驻返回业务员微信二维码
-   * @keyword-cn 自助注册接口, 租户名称匹配
-   * @keyword-en self-register-endpoint, tenant-name-match
+   * @description 两步登录第一步（公开免鉴权）：手机号或用户名 + 密码，返回登录票据与已绑定租户
+   * @keyword-cn 登录识别接口, 手机号登录
+   * @keyword-en login-identify-endpoint, phone-login
+   */
+  @Post('auth/login/identify')
+  async identifyLogin(@Body() body: AdminLoginIdentifyDto) {
+    return this.adminService.identifyLogin(body);
+  }
+
+  /**
+   * @description 两步登录第二步（公开免鉴权，凭登录票据）：选定租户并签发会话
+   * @keyword-cn 选择租户接口, 签发会话
+   * @keyword-en login-select-endpoint, issue-session
+   */
+  @Post('auth/login/select')
+  async selectLoginTenant(@Body() body: AdminLoginSelectDto) {
+    return this.adminService.selectLoginTenant(body);
+  }
+
+  /**
+   * @description 租户入驻页的业务员微信二维码与提示语（公开免鉴权，只读平台配置）
+   * @keyword-cn 业务员二维码接口, 租户入驻
+   * @keyword-en sales-contact-endpoint, tenant-onboarding
+   */
+  @Get('auth/sales-contact')
+  async getSalesContact() {
+    return this.adminService.getSalesContact();
+  }
+
+  /**
+   * @description 自助注册（与登录同为公开免鉴权入口，需短信验证码）：以已验证手机号建账号，固定加入默认租户「其他」
+   * @keyword-cn 自助注册接口, 默认租户
+   * @keyword-en self-register-endpoint, default-tenant
    */
   @Post('auth/register')
   @RequireSmsCode('register')

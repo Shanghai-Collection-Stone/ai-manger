@@ -19,10 +19,53 @@ export interface AdminUserEntity {
   tenantId?: string;
   /** 自助注册时经短信验证的手机号 */
   phone?: string;
+  /** 关联的手机号账号 `admin_accounts._id`；有值时登录密码以账号为准，本行 passwordHash 不再参与校验 */
+  accountId?: string;
   enabled: boolean;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * @description 手机号账号实体：一个人一条，经 `admin_users.accountId` 关联多个租户成员身份
+ * @keyword-cn 手机号账号, 多租户身份
+ * @keyword-en phone-account-entity, multi-tenant-identity
+ */
+export interface AdminAccountEntity {
+  _id: ObjectId;
+  /** 已短信验证的大陆手机号，全局唯一 */
+  phone: string;
+  passwordHash: string;
+  displayName: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * @description 登录第一步签发的短期票据载荷，只能换取所列候选成员的会话，不能当作访问 token
+ * @keyword-cn 登录票据, 候选租户
+ * @keyword-en login-ticket-payload, tenant-candidates
+ */
+export interface AdminLoginTicketPayload {
+  typ: 'login_ticket';
+  /** 已通过密码校验的 `admin_users._id` 列表 */
+  uids: string[];
+  exp: number;
+  iat: number;
+}
+
+/**
+ * @description 登录第一步返回的可选租户项，`tenantId` 为空串表示平台端身份
+ * @keyword-cn 可选租户, 登录租户选择
+ * @keyword-en login-tenant-option, tenant-selection
+ */
+export interface AdminLoginTenantOption {
+  tenantId: string;
+  tenantName: string;
+  role: AdminUserRole;
+  displayName: string;
+  lastLoginAt?: Date;
 }
 
 /**
