@@ -14,6 +14,8 @@ import { extname, join } from 'path';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AiBillingService } from '../../ai-billing/services/ai-billing.service.js';
+import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
+import { buildPersonaVoiceSection } from '../../douyin-persona/services/douyin-persona-prompt.js';
 import type {
   PixmaxAsset,
   PixmaxRuntime,
@@ -91,11 +93,13 @@ export const DOUYIN_VOICE_LANGUAGE_LABELS: Record<
  * @keyword-en audio-section, voiceover-language-rule
  * @param audio 声音设置。
  * @param clamped 时长是否被压缩（配音时允许精简口播）。
+ * @param personaVoice 预设人物的音色补充句，为空表示没选人物、不约束音色。
  * @returns {string} 声音段文本。
  */
 export function buildVideoAudioSection(
   audio: DouyinVideoAudioSetting,
   clamped = false,
+  personaVoice = '',
 ): string {
   if (audio.mode === 'mute') {
     return '【声音】无声视频：不要任何人声、旁白、音乐或音效。';
@@ -106,6 +110,7 @@ export function buildVideoAudioSection(
   const language = DOUYIN_VOICE_LANGUAGE_LABELS[audio.language];
   return [
     `【声音】旁白配音：使用${language}朗读【口播稿】，语速自然、情绪贴合画面；除${language}外不要出现任何其他语言的人声、对白或歌词；背景音乐轻柔，不盖过人声。`,
+    personaVoice,
     clamped ? `时长不够读完时可以精简口播稿，但必须保持${language}。` : '',
   ]
     .filter(Boolean)
@@ -196,6 +201,7 @@ export function buildShotVideoPrompt(input: {
   index: number;
   hasImage: boolean;
   audio: DouyinVideoAudioSetting;
+  personaVoice?: string;
   extra?: string;
 }): string {
   const { shot } = input;
@@ -204,7 +210,7 @@ export function buildShotVideoPrompt(input: {
     `【视频】竖屏 9:16 抖音短视频《${input.title}》的第 ${input.index + 1} 个镜头，景别${shot.shotType || '中景'}，时长约 ${shot.duration} 秒。`,
     `【画面】${shot.visual}`,
     narration ? `【口播稿】${narration}` : '【口播稿】本镜没有口播。',
-    buildVideoAudioSection(input.audio),
+    buildVideoAudioSection(input.audio, false, input.personaVoice),
     input.hasImage
       ? '【参考图】参考图是这一镜的首帧与主体外观，保持人物、场景和色调一致，让画面自然动起来。'
       : '',
@@ -232,6 +238,7 @@ export function buildFullVideoPrompt(input: {
   seconds?: number;
   referModel?: string;
   audio: DouyinVideoAudioSetting;
+  personaVoice?: string;
   extra?: string;
 }): string {
   const { shots, images } = input;
@@ -286,7 +293,7 @@ export function buildFullVideoPrompt(input: {
     script
       ? `【口播稿】${input.audio.mode === 'voiceover' ? '按时间轴节奏朗读' : '仅用于理解内容，不要朗读'}：\n${script}`
       : '',
-    buildVideoAudioSection(input.audio, scale < 1),
+    buildVideoAudioSection(input.audio, scale < 1, input.personaVoice),
     referNote,
     scale < 1
       ? `【时长】分镜原计划 ${planned} 秒，本次最长 ${total} 秒，按比例压缩每个镜头，所有镜头都要出现。`
@@ -314,6 +321,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly repository: DouyinWorkbenchRepositoryService,
+    private readonly personas: DouyinPersonaRepositoryService,
     private readonly billing: AiBillingService,
     private readonly adminService: AdminService,
     private readonly pixmax: PixmaxClientService,
@@ -387,6 +395,10 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
         : undefined;
     const targetSeconds = chosenSeconds ?? plannedSeconds;
     const audio = normalizeVideoAudio(topic.videoAudio);
+    const persona = topic.personaId
+      ? await this.personas.get(topic.personaId, scope)
+      : null;
+    const personaVoice = buildPersonaVoiceSection(persona);
     const plan = buildPixmaxVideoParams({
       modelCode: runtime.model,
       prompt: '',
@@ -407,6 +419,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
             index: shotIndex,
             hasImage: usedImages.length > 0,
             audio,
+            personaVoice,
             extra,
           })
         : buildFullVideoPrompt({
@@ -417,6 +430,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
             seconds: plan.duration,
             referModel: plan.referModel,
             audio,
+            personaVoice,
             extra,
           });
     const scriptIncluded =

@@ -4,10 +4,14 @@ import { tool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { AiBillingService } from '../../ai-billing/services/ai-billing.service.js';
-import type {
-  DouyinGenerationJobProgress,
-  DouyinStoryboardShot,
+import {
+  DOUYIN_SCRIPT_STYLES,
+  type DouyinGenerationJobProgress,
+  type DouyinScriptStyle,
+  type DouyinStoryboardShot,
 } from '../entities/douyin-workbench.entity.js';
+import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
+import { buildPersonaScriptBrief } from '../../douyin-persona/services/douyin-persona-prompt.js';
 import {
   DouyinWorkbenchRepositoryService,
   normalizeStoryboardPreference,
@@ -30,11 +34,12 @@ type DouyinScope = { tenantId?: string; userId: string };
 type ProgressReporter = (progress: DouyinGenerationJobProgress) => void;
 
 /**
- * @description AI 出图偏向下同一条分镜同时文生图的镜头数，避免一次把生图运行时打满。
- * @keyword-cn 分镜出图并发, 生图限流
- * @keyword-en shot-image-concurrency, image-rate-limit
+ * @description AI 出图偏向下逐镜出图的方式：线性串行。第 N 镜以第 N-1 镜刚生成的画面为底图，
+ *   镜头之间的场景、光线与人物状态才能延续；代价是不能并发，一条分镜的出图时间约等于镜头数乘单张耗时。
+ * @keyword-cn 线性连贯出图, 串行出图
+ * @keyword-en linear-shot-imaging, serial-image-generation
  */
-export const STORYBOARD_IMAGE_GENERATION_CONCURRENCY = 2;
+export const STORYBOARD_IMAGE_GENERATION_LINEAR = true;
 
 /**
  * @description AI 出图偏向下交给 LLM 的配图说明：不提供图库清单，只要求把 image_prompt 写好。
@@ -56,6 +61,7 @@ export class DouyinStoryboardGenerationService {
   constructor(
     private readonly agentService: AgentService,
     private readonly billing: AiBillingService,
+    private readonly personas: DouyinPersonaRepositoryService,
     private readonly repository: DouyinWorkbenchRepositoryService,
     private readonly images: DouyinStoryboardImageService,
     private readonly shotImages: DouyinShotImageService,
@@ -92,6 +98,10 @@ export class DouyinStoryboardGenerationService {
     const preference = normalizeStoryboardPreference(
       topic.storyboardPreference,
     );
+    const persona = topic.personaId
+      ? await this.personas.get(topic.personaId, scope)
+      : null;
+    const style = topic.scriptStyle;
     const useGallery = preference.imageSource === 'gallery';
     const candidates = useGallery
       ? await this.images.loadCandidates(
@@ -126,6 +136,8 @@ export class DouyinStoryboardGenerationService {
         shots,
         addShot,
         scope,
+        persona,
+        style,
       );
       if (shots.length < 4) {
         await this.runAgent(
@@ -137,6 +149,8 @@ export class DouyinStoryboardGenerationService {
           shots,
           addShot,
           scope,
+          persona,
+          style,
         );
       }
     });
@@ -160,10 +174,11 @@ export class DouyinStoryboardGenerationService {
   }
 
   /**
-   * @description 文字分镜落库后逐镜文生图：按固定并发出图，每出完一张回报 `imaging` 进度；
-   *   单镜出图失败只计数，已成功的画面已经各自写回，不会被回滚。
-   * @keyword-cn 逐镜出图, 先文字后配图
-   * @keyword-en generate-shot-images, text-first-imaging
+   * @description 文字分镜落库后逐镜文生图：线性串行出图，第 N 镜把第 N-1 镜刚生成的画面当底图，
+   *   保证场景、色调与人物状态在镜头之间连贯；每出完一张回报 `imaging` 进度。
+   *   单镜出图失败只计数并断开这一处的连贯链（下一镜改从人物形象图起头），已成功的画面不会被回滚。
+   * @keyword-cn 逐镜出图, 线性连贯出图, 先文字后配图
+   * @keyword-en generate-shot-images, linear-shot-imaging, text-first-imaging
    * @param topicId 子选题（脚本）ID。
    * @param shots 刚保存的文字分镜。
    * @param scope 当前租户用户作用域。
@@ -178,39 +193,33 @@ export class DouyinStoryboardGenerationService {
   ): Promise<{ imageCount: number; imageFailedCount: number }> {
     let imageCount = 0;
     let imageFailedCount = 0;
-    let cursor = 0;
+    let previousImageUrl = '';
     onProgress?.({ stage: 'imaging', current: 0, total: shots.length });
-    const worker = async () => {
-      while (cursor < shots.length) {
-        const shot = shots[cursor];
-        cursor += 1;
-        try {
-          await this.shotImages.regenerate(topicId, shot.id, undefined, scope);
-          imageCount += 1;
-        } catch (error) {
-          imageFailedCount += 1;
-          this.logger.warn(
-            `[generateShotImages] 出图失败 topic=${topicId} shot=${shot.id}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        onProgress?.({
-          stage: 'imaging',
-          current: imageCount + imageFailedCount,
-          total: shots.length,
-        });
+    for (const shot of shots) {
+      try {
+        const result = await this.shotImages.regenerate(
+          topicId,
+          shot.id,
+          undefined,
+          scope,
+          previousImageUrl ? { previousImageUrl } : undefined,
+        );
+        previousImageUrl = result.imageUrl;
+        imageCount += 1;
+      } catch (error) {
+        // 断开连贯链：下一镜不再拿这张失败的图当底图，改由人物形象图与参考图起头
+        previousImageUrl = '';
+        imageFailedCount += 1;
+        this.logger.warn(
+          `[generateShotImages] 出图失败 topic=${topicId} shot=${shot.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
-    };
-    await Promise.all(
-      Array.from(
-        {
-          length: Math.min(
-            STORYBOARD_IMAGE_GENERATION_CONCURRENCY,
-            shots.length,
-          ),
-        },
-        worker,
-      ),
-    );
+      onProgress?.({
+        stage: 'imaging',
+        current: imageCount + imageFailedCount,
+        total: shots.length,
+      });
+    }
     return { imageCount, imageFailedCount };
   }
 
@@ -311,6 +320,8 @@ export class DouyinStoryboardGenerationService {
     shots: DouyinStoryboardShot[],
     addShot: ReturnType<typeof tool>,
     scope: DouyinScope,
+    persona: Parameters<typeof buildPersonaScriptBrief>[0],
+    style: DouyinScriptStyle | undefined,
   ): Promise<void> {
     await this.agentService.runWithMessages({
       config: {
@@ -328,6 +339,16 @@ export class DouyinStoryboardGenerationService {
           '不得编造真实数据、虚假承诺或违法违规内容。',
           '画面描述要能和所配图片对应上：选了图就围绕这张图的内容写画面，不要写图片里没有的元素。',
           '每段都要给 image_prompt：一句可以直接拿去文生图的竖屏画面描述，写清主体、动作、环境、镜头语言和光线氛围，不要含文字水印要求。',
+          persona
+            ? '本条视频有固定出镜人物，每段画面与 image_prompt 都要把这个人物写进去，且全片长相、发型、服装保持一致；旁白保持这个人物的第一人称。'
+            : '',
+          style
+            ? '全片画面风格统一为「' +
+              DOUYIN_SCRIPT_STYLES[style].label +
+              '」：' +
+              DOUYIN_SCRIPT_STYLES[style].visual +
+              '。每段 image_prompt 都要体现这个风格，相邻镜头的场景与色调要能顺下来，不要各拍各的。'
+            : '',
           imagePrompt,
         ].join('\n'),
         tools: [addShot],
@@ -352,6 +373,10 @@ export class DouyinStoryboardGenerationService {
               ? `脚本正文（必须按它拆分镜头，旁白直接取自这段正文）：\n<script>${script}</script>`
               : '脚本正文：无，请按标题自行撰写旁白。',
             `内容类型：${topicType || '由你判断'}`,
+            buildPersonaScriptBrief(persona),
+            style
+              ? `叙事与画面风格：${DOUYIN_SCRIPT_STYLES[style].label} —— ${DOUYIN_SCRIPT_STYLES[style].tone}`
+              : '',
             requirement ? `补充要求：${requirement}` : '',
             `当前已保存 ${shots.length} 段，请继续完成。`,
           ]

@@ -14,6 +14,10 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { DOUYIN_SCRIPT_STYLES } from '../entities/douyin-workbench.entity.js';
+
+/** @type {string[]} 允许的脚本风格键名，取自实体登记表，前后端同源。 */
+const SCRIPT_STYLE_KEYS = Object.keys(DOUYIN_SCRIPT_STYLES);
 
 /**
  * @description 校验分镜素材引用，只允许真实图库或视频库业务 ID 与地址。
@@ -120,6 +124,16 @@ export class GenerateDouyinChildrenDto {
   @IsString()
   @MaxLength(1000)
   prompt?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  personaId?: number;
+
+  @IsOptional()
+  @IsIn(SCRIPT_STYLE_KEYS)
+  scriptStyle?: string;
 }
 
 /**
@@ -136,6 +150,34 @@ export class DouyinStoryboardPreferenceDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   galleryTags!: string[];
+}
+
+/**
+ * @description 校验脚本参考图：只接受真实图库图片，最多 4 张，出图时作为底图候选。
+ * @keyword-cn 脚本参考图参数, 底图候选
+ * @keyword-en reference-image-dto, base-image-candidate
+ */
+export class DouyinReferenceImageDto {
+  @IsIn(['image'])
+  type!: 'image';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  id!: number;
+
+  @IsString()
+  @MaxLength(200)
+  name!: string;
+
+  @IsString()
+  @MaxLength(2000)
+  url!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  coverUrl?: string;
 }
 
 /**
@@ -175,6 +217,23 @@ export class DouyinScriptDraftPickDto {
   @ValidateNested()
   @Type(() => DouyinStoryboardPreferenceDto)
   storyboardPreference!: DouyinStoryboardPreferenceDto;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  personaId?: number;
+
+  @IsOptional()
+  @IsIn(SCRIPT_STYLE_KEYS)
+  scriptStyle?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinReferenceImageDto)
+  referenceImages?: DouyinReferenceImageDto[];
 }
 
 /**
@@ -219,6 +278,23 @@ export class UpdateDouyinTopicDto {
   storyboardPreference?: DouyinStoryboardPreferenceDto;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  personaId?: number;
+
+  @IsOptional()
+  @IsIn([...SCRIPT_STYLE_KEYS, ''])
+  scriptStyle?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinReferenceImageDto)
+  referenceImages?: DouyinReferenceImageDto[];
+
+  @IsOptional()
   @ValidateNested()
   @Type(() => DouyinVideoAudioDto)
   videoAudio?: DouyinVideoAudioDto;
@@ -241,6 +317,38 @@ export class UpdateDouyinTopicDto {
   @IsInt()
   @Min(1)
   generatedVideoId?: number;
+}
+
+/**
+ * @description 校验脚本 AI 微调请求：要改的正文与一句话修改指令；不落库，改完由前端决定是否保存。
+ * @keyword-cn 脚本微调参数, 修改指令
+ * @keyword-en refine-script-dto, revision-instruction
+ */
+export class RefineDouyinScriptDto {
+  @IsString()
+  @MinLength(20)
+  @MaxLength(8000)
+  script!: string;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(500)
+  instruction!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  title?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  personaId?: number;
+
+  @IsOptional()
+  @IsIn(SCRIPT_STYLE_KEYS)
+  scriptStyle?: string;
 }
 
 /**

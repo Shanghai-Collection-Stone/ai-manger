@@ -30,8 +30,13 @@ import {
   GenerateDouyinStoryboardDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
+  RefineDouyinScriptDto,
   UpdateDouyinTopicDto,
 } from './douyin-workbench.dto.js';
+import {
+  DOUYIN_SCRIPT_STYLES,
+  type DouyinScriptStyle,
+} from '../entities/douyin-workbench.entity.js';
 import { DouyinOperationService } from '../services/douyin-operation.service.js';
 import { DouyinChildTopicGenerationService } from '../services/douyin-child-topic-generation.service.js';
 import { DouyinGenerationJobService } from '../services/douyin-generation-job.service.js';
@@ -111,8 +116,45 @@ export class DouyinWorkbenchController {
         this.readId(id),
         dto.prompt,
         this.scopeOf(this.requireUser(req)),
+        {
+          personaId: dto.personaId,
+          scriptStyle: dto.scriptStyle as DouyinScriptStyle | undefined,
+        },
       ),
     };
+  }
+
+  /**
+   * @description 返回脚本风格登记表，供前端渲染风格下拉，取值与后端校验同源。
+   * @keyword-cn 脚本风格选项接口, 风格登记表
+   * @keyword-en script-style-options-api, style-registry
+   */
+  @Get('script-styles')
+  @RequirePermission('read', 'DouyinWorkbench')
+  listScriptStyles() {
+    return {
+      styles: Object.entries(DOUYIN_SCRIPT_STYLES).map(([key, value]) => ({
+        key,
+        ...value,
+      })),
+    };
+  }
+
+  /**
+   * @description 按一句话指令 AI 微调一段口播正文，只返回改写结果，不落库。
+   * @keyword-cn 脚本微调接口, 按指令改写
+   * @keyword-en refine-script-api, instruction-rewrite
+   */
+  @Post('script/refine')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async refineScript(
+    @Req() req: AdminRequest,
+    @Body() dto: RefineDouyinScriptDto,
+  ) {
+    return this.childTopics.refineScript(
+      dto,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /**

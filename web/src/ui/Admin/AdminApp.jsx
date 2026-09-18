@@ -6,6 +6,7 @@ import {
   resolveFrontendPageHref,
   resolveLoginPageHref,
 } from './adminApi';
+import DouyinPersonaPanel from './DouyinPersonaPanel';
 import HotTopicPanel from './HotTopicPanel';
 import SmsSettingPanel from './SmsSettingPanel';
 import WorkflowModelPanel from './WorkflowModelPanel';
@@ -309,6 +310,7 @@ const ALL_TABS = [
   { id: 'feishu_credentials', label: '飞书凭证' },
   { id: 'xhs_crawl', label: '小红书采集' },
   { id: 'hot_topic', label: '热点采集榜' },
+  { id: 'douyin_personas', label: '抖音预设人物' },
   { id: 'sms_settings', label: '短信验证码', platformOnly: true },
   { id: 'finance', label: '财务' },
 ];
@@ -5255,6 +5257,11 @@ const AdminApp = () => {
         {/* 热点采集榜（采集规则管理 + 是否可用自检 + 采集 + AI 归类标签 + 母选题推荐） | @keyword-en hot topic board tab */}
         {activeTab === 'hot_topic' ? (
           <HotTopicPanel onNotice={setNotice} onError={setError} />
+        ) : null}
+
+        {/* 抖音预设人物（人设 / 音色 / AI 三视图形象图，供工作台按脚本选用） | @keyword-en douyin persona tab */}
+        {activeTab === 'douyin_personas' ? (
+          <DouyinPersonaPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
         {/* 工作流节点模型（为预设工作流的每个节点指定提供商与模型，仅超管） | @keyword-en workflow node model tab */}

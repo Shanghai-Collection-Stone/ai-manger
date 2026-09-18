@@ -43,6 +43,7 @@ export const WORKFLOW_NODES = {
     script: 'script',
     storyboard: 'storyboard',
     shotImage: 'shot-image',
+    personaImage: 'persona-image',
     shotVideo: 'shot-video',
     fullVideo: 'full-video',
   },
@@ -129,6 +130,12 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         key: 'shot-image',
         label: '分镜画面',
         description: '按分镜的配图提示词文生图',
+        category: 'image',
+      },
+      {
+        key: 'persona-image',
+        label: '人物形象图',
+        description: '为预设人物生成正面 / 侧身 / 特写三视图形象图',
         category: 'image',
       },
       {

@@ -10,15 +10,19 @@ import type { CreateAgentParams } from 'langchain';
 import { z } from 'zod';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
+import { buildPersonaScriptBrief } from '../../douyin-persona/services/douyin-persona-prompt.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 import {
   toWorkflowLlmConfig,
   WorkflowModelService,
 } from '../../workflow-model/services/workflow-model.service.js';
 import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
-import type {
-  DouyinGenerationJobProgress,
-  DouyinScriptDraft,
+import {
+  DOUYIN_SCRIPT_STYLES,
+  type DouyinGenerationJobProgress,
+  type DouyinScriptDraft,
+  type DouyinScriptStyle,
 } from '../entities/douyin-workbench.entity.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -38,6 +42,7 @@ export class DouyinChildTopicGenerationService {
   constructor(
     private readonly agentService: AgentService,
     private readonly adminService: AdminService,
+    private readonly personas: DouyinPersonaRepositoryService,
     private readonly repository: DouyinWorkbenchRepositoryService,
     private readonly workflowModels: WorkflowModelService,
   ) {}
@@ -50,7 +55,7 @@ export class DouyinChildTopicGenerationService {
    */
   async generate(
     parentId: number,
-    input: { prompt?: string },
+    input: { prompt?: string; personaId?: number; scriptStyle?: string },
     scope: DouyinScope,
     onProgress?: ProgressReporter,
   ): Promise<{ decidedCount: number; drafts: DouyinScriptDraft[] }> {
@@ -70,10 +75,20 @@ export class DouyinChildTopicGenerationService {
       ),
     ] as NonNullable<CreateAgentParams['tools']>;
     onProgress?.({ stage: 'planning', current: 0 });
+    const persona = input.personaId
+      ? await this.personas.get(input.personaId, scope)
+      : null;
+    const style = (
+      input.scriptStyle && input.scriptStyle in DOUYIN_SCRIPT_STYLES
+        ? input.scriptStyle
+        : undefined
+    ) as DouyinScriptStyle | undefined;
     const system = this.buildSystemPrompt({
       motherTitle: context.motherTitle,
       userPrompt,
       existingTitles: context.existingTitles,
+      persona,
+      style,
     });
 
     await this.runAgent(
@@ -172,6 +187,104 @@ export class DouyinChildTopicGenerationService {
       );
       return { prompt: fallback };
     }
+  }
+
+  /**
+   * @description 按一句话修改指令微调一段口播正文：保留原意与结构，只按指令改写。结果不落库，
+   *   由前端决定替换与保存。选了预设人物或风格时一并作为约束，避免改写把人称和调性带偏。
+   * @keyword-cn 脚本AI微调, 按指令改写
+   * @keyword-en refine-script, instruction-rewrite
+   * @param input 原正文、修改指令、可选标题、可选人物与风格。
+   * @param scope 租户用户作用域。
+   * @returns {Promise<{script: string}>} 改写后的正文。
+   * @throws {BadRequestException} 模型没有产出可用正文时抛出。
+   */
+  async refineScript(
+    input: {
+      script: string;
+      instruction: string;
+      title?: string;
+      personaId?: number;
+      scriptStyle?: string;
+    },
+    scope: DouyinScope,
+  ): Promise<{ script: string }> {
+    const original = String(input.script ?? '')
+      .trim()
+      .slice(0, 8000);
+    const instruction = String(input.instruction ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500);
+    const persona = input.personaId
+      ? await this.personas.get(input.personaId, scope)
+      : null;
+    const style = (
+      input.scriptStyle && input.scriptStyle in DOUYIN_SCRIPT_STYLES
+        ? input.scriptStyle
+        : undefined
+    ) as DouyinScriptStyle | undefined;
+    const personaBrief = buildPersonaScriptBrief(persona);
+
+    const result = await this.agentService.runWithMessages({
+      config: {
+        ...toWorkflowLlmConfig(
+          await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.douyinWorkbench.key,
+            WORKFLOW_NODES.douyinWorkbench.script,
+          ),
+        ),
+        tenantId: scope.tenantId,
+        temperature: 0.5,
+        noPostHook: true,
+        nonStreaming: true,
+        billingContext: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          source: 'douyin-workbench.script-refine',
+          platformScope: !scope.tenantId,
+        },
+        system: [
+          '你负责按用户的一句话指令微调一段抖音短视频口播稿。',
+          '只做用户指令要求的改动：没被点名的部分尽量保留原句，不要整篇重写、不要改变原本的主题和结论。',
+          '保持可以直接念出来的口语，保留分段换行；不要写镜头号、时间码、标题、Markdown 或任何解释。',
+          '不编造事实，不加入违法、危险、歧视、低俗、侵权或效果承诺类内容。',
+          personaBrief
+            ? '这段口播稿有固定出镜人物，改写后必须仍然是这个人物的第一人称、语气一致：\n' +
+              personaBrief
+            : '',
+          style
+            ? '整体调性保持「' +
+              DOUYIN_SCRIPT_STYLES[style].label +
+              '」：' +
+              DOUYIN_SCRIPT_STYLES[style].tone +
+              '。'
+            : '',
+          '只输出改写后的口播正文本身。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            input.title ? `脚本标题：${input.title}` : '',
+            `原口播正文：<script>${original}</script>`,
+            `修改指令：<instruction>${instruction}</instruction>`,
+            '请输出改写后的完整口播正文。',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+      ],
+    });
+
+    const refined = this.readAgentText(result).slice(0, 8000);
+    if (refined.length < 20) {
+      throw new BadRequestException('DOUYIN_SCRIPT_REFINE_FAILED');
+    }
+    return { script: refined };
   }
 
   /**
@@ -309,12 +422,30 @@ export class DouyinChildTopicGenerationService {
     motherTitle: string;
     userPrompt: string;
     existingTitles: string[];
+    persona: Parameters<typeof buildPersonaScriptBrief>[0];
+    style: DouyinScriptStyle | undefined;
   }): string {
+    const personaBrief = buildPersonaScriptBrief(input.persona);
+    const styleBrief = input.style
+      ? `本次统一风格：${DOUYIN_SCRIPT_STYLES[input.style].label} —— ${DOUYIN_SCRIPT_STYLES[input.style].tone}。每条脚本都按这个风格写。`
+      : '';
     return `你是抖音短视频脚本策划 Agent。请围绕母选题规划并生成能够直接进入分镜制作的具体脚本（标题 + 完整口播正文）。
 
 母选题：<mother_topic>${input.motherTitle}</mother_topic>
 本次用户补充要求：<user_requirement>${input.userPrompt || '无额外要求'}</user_requirement>
 已有子选题：<existing_titles>${input.existingTitles.join('；') || '无'}</existing_titles>
+${
+  personaBrief
+    ? `出镜人物设定（全部脚本共用）：
+${personaBrief}
+`
+    : ''
+}${
+      styleBrief
+        ? `${styleBrief}
+`
+        : ''
+    }
 
 约束：
 1. 内容形态固定为竖屏短视频，不要询问或输出“内容类型”，每条脚本都要能直接拆成镜头分镜。
@@ -323,7 +454,8 @@ export class DouyinChildTopicGenerationService {
 4. 然后按规划数量逐项调用 douyin_workbench_add_child_topic，每次同时给出标题和完整口播正文。各标题角度必须明显不同，且不能与已有题目或本轮题目重复。
 5. 口播正文按 15-60 秒短视频体量撰写：前 3 秒是强钩子，中间分 2-4 个要点，结尾有收束或行动引导；写成可以直接念出来的口语，不要写镜头号、时间码或 Markdown。
 6. 不编造事实，不生成违法、危险、歧视、色情低俗、侵权、虚假承诺或违规引流内容；医疗、金融、法律方向不得作效果承诺。
-7. 所有候选只能通过工具交付；禁止用最终文本、列表或 JSON 交付。完成工具调用后最终只回复“已完成”。`;
+7. ${personaBrief ? '全部脚本都以上面这个出镜人物的第一人称来写，语气和视角保持一致，不要换人称、不要出现第二个说话人。' : '不指定出镜人物时，口播稿用统一的第一人称叙述即可。'}
+8. 所有候选只能通过工具交付；禁止用最终文本、列表或 JSON 交付。完成工具调用后最终只回复“已完成”。`;
   }
 
   /**

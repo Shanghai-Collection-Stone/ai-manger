@@ -62,6 +62,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'User' },
       { action: 'manage', subject: 'XhsTopic' },
       { action: 'manage', subject: 'DouyinWorkbench' },
+      { action: 'manage', subject: 'DouyinPersona' },
       { action: 'manage', subject: 'PlatformSetting' },
       { action: 'manage', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },
@@ -84,6 +85,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'read', subject: 'User' },
       { action: 'manage', subject: 'XhsTopic' },
       { action: 'manage', subject: 'DouyinWorkbench' },
+      // 操作员只能在工作台选用预设人物；人设的增删改留给租户管理员
+      { action: 'read', subject: 'DouyinPersona' },
       // 操作员只读热点榜与推荐；采集规则的增删改留给租户管理员
       { action: 'read', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },

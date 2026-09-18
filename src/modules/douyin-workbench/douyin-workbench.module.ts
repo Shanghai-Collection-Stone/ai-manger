@@ -3,6 +3,7 @@ import { AdminModule } from '../admin/admin.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
+import { DouyinPersonaModule } from '../douyin-persona/douyin-persona.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
 import { WorkflowModelModule } from '../workflow-model/workflow-model.module.js';
 import { PixmaxModule } from '../pixmax/pixmax.module.js';
@@ -18,7 +19,7 @@ import { DouyinStoryboardImageService } from './services/douyin-storyboard-image
 import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-repository.service.js';
 
 /**
- * @description 装配抖音母子选题、分镜、视频生成、发布与抓取真实业务能力。
+ * @description 装配抖音母子选题、分镜、视频生成、发布与抓取真实业务能力（含预设人物能力，用于脚本、分镜与出图的人物一致性）。
  * @keyword-cn 抖音工作台模块, 视频业务编排
  * @keyword-en douyin-workbench-module, video-business-orchestration
  */
@@ -28,6 +29,7 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     AiAgentModule,
     AiBillingModule,
     DataSourceModule,
+    DouyinPersonaModule,
     GalleryModule,
     WorkflowModelModule,
     PixmaxModule,

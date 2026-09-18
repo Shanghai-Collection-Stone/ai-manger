@@ -34,6 +34,8 @@ export const ADMIN_SUBJECTS = {
   XhsTopic: 'XhsTopic',
   /** 抖音母子选题、分镜、视频生成、发布与抓取 */
   DouyinWorkbench: 'DouyinWorkbench',
+  /** 抖音预设人物（人设、音色与形象三视图），租户内共享 */
+  DouyinPersona: 'DouyinPersona',
   /** 平台与租户运行参数 */
   PlatformSetting: 'PlatformSetting',
   /** 热点采集榜（采集规则、榜单条目、归类标签与热点推荐） */

@@ -5,6 +5,7 @@
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
 支持 AI 提供商按模型类型管理(llm/em/image/video，video 为生视频；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含 PixMax(`pixmax`)，选中时表单提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
+新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
 
@@ -82,6 +83,27 @@
 - `onCopySuperClawToken()` — 复制一次性 Token | keywords: 复制密钥, 一次性展示, copy-super-claw-token, one-time-display
 - `onSubmitTenant()` — 保存租户文章并发上限并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
 - `onDeleteTenant(id)` — 删除未分配节点的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
+
+### DouyinPersonaPanel.jsx
+
+后台「抖音预设人物」Tab 的独立面板组件,由 `AdminApp.jsx` 在 `activeTab === 'douyin_personas'` 时挂载并透传 `onNotice` / `onError`。左列是人物列表(三视图缩略图、叙事视角徽标、音色一句话、外貌摘要,以及编辑/生成三视图/删除)。**缩略图可点开全屏灯箱看原图**——三视图的用处就是核对「三张是不是同一个人」,14×20 的缩略图看不出五官差异,不能放大等于白生成,右列是人设表单。表单顶部可写一句人物需求让 AI 起草人设并回填,管理员确认或修改后再保存——**人物先保存,再单独点「生成三视图」出形象图**,因为三张图串行出、耗时长,不适合卡在保存流程里。外貌设定是形象图与后续每一镜画面的唯一依据,因此校验最少 20 字。音色是写进生视频提示词【声音】段的结构化描述,不是固定音色 ID,面板里明说这一点避免误解。改了外貌后保存会提示重新生成三视图,否则分镜仍按旧形象出图。后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
+
+- **关键词**: douyin persona panel, persona form, reference sheet generation, persona voice, ai draft persona, persona image lightbox
+- **常量**:
+  - `VOICE_OPTIONS` — 音色性别/年龄感/语速的中文选项,取值与后端 `DouyinPersonaVoice` 逐字一致 | keywords: 音色选项, 音色维度, voice-options, voice-dimensions
+  - `EMPTY_FORM` — 新建人物表单初始值,字段与后端 `CreateDouyinPersonaDto` 一一对应 | keywords: 人物表单初值, 表单字段, empty-persona-form, form-fields
+  - `VIEW_LABELS` — 三视图位次中文名,与后端 `DOUYIN_PERSONA_VIEW_SPECS` 的 label 一致 | keywords: 三视图位次文案, 形象图标题, persona-view-labels, reference-sheet-caption
+- **函数**:
+  - `personaToForm(row)` — 把人物实体铺平成表单值供编辑回填 | keywords: 人物转表单, 编辑回填, persona-to-form, edit-prefill
+  - `describeVoice(voice)` — 音色拼成一句中文,与后端 `describePersonaVoice` 说法一致 | keywords: 音色短文案, 音色一句话, voice-label, timbre-one-liner
+  - `PersonaImageLightbox({ images, index, name, onIndexChange, onClose })` — 形象图全屏灯箱:左右箭头 / 方向键 / 底部胶片条切图,Esc 或点背景关闭,可在新标签打开原图 | keywords: 形象图灯箱, 三视图放大, persona-image-lightbox, reference-sheet-zoom
+  - `onKeyDown(event)` — 灯箱的方向键切图与 Esc 关闭 | keywords: 灯箱键盘操作, 左右切图, lightbox-keyboard, arrow-navigation
+  - `DouyinPersonaPanel({ onNotice, onError })` — 预设人物面板主体 | keywords: 预设人物管理页, 三视图生成, 人物音色, douyin-persona-panel, reference-sheet-generation, persona-voice
+  - `reload()` — 并行拉取人物列表与视角登记表 | keywords: 加载预设人物, 视角登记表, load-personas, perspective-registry
+  - `draftPersona()` — 按一句话需求让 AI 写人设草稿并回填表单 | keywords: AI生成人设, 草稿回填, ai-draft-persona, hydrate-form
+  - `submit()` — 新建或更新人物,外貌不足 20 字直接拦下 | keywords: 保存预设人物, 外貌必填, save-persona, appearance-required
+  - `generateSheet(row)` — 串行生成三视图形象图,期间禁用该行按钮 | keywords: 生成人物三视图, 形象一致, generate-reference-sheet, identity-consistency
+  - `remove(row)` — 删除人物(二次确认),已选用它的脚本退回不指定出镜人物 | keywords: 删除预设人物, 引用降级, delete-persona, dangling-reference
 
 ### HotTopicPanel.jsx
 
@@ -171,6 +193,9 @@
   - `adminApi.listHotTopicItems(query)` / `clearHotTopicItems(ruleIds?)`: 榜单条目分页查询(分类/规则/标签/关键词)与清库 | keywords: 榜单列表, 清空榜单, list-hot-topic-items, clear-hot-topic-items
   - `adminApi.listHotTopicTags`: 线性读取全部 AI 归类标签及条目数/分类/示例标题(标签弹窗数据源) | keywords: 采集标签汇总, 线性查看标签, hot-topic-tag-summary, linear-tag-view
   - `adminApi.recommendHotTopics(payload)`: 按母选题从当前热点榜推荐适配热点(后端两阶段:先按标签粗筛圈定范围,再看该范围内全部热点标题),返回结构化 JSON 并带 `matchedTags` / `tagFiltered` | keywords: 热点推荐, 母选题匹配, 两阶段推荐, recommend-hot-topics, parent-topic-match, two-stage-recommend
+  - `adminApi.listDouyinPersonas` / `getDouyinPersonaOptions` / `createDouyinPersona` / `updateDouyinPersona` / `deleteDouyinPersona`: 抖音预设人物 CRUD 与视角登记表(走 `/api/douyin-persona/*`) | keywords: 预设人物CRUD, 视角登记表, douyin-persona-crud, perspective-registry
+  - `adminApi.draftDouyinPersona(brief)`: 按一句话需求让 AI 写出人设草稿(不入库) | keywords: AI生成人设, 人设草稿, ai-draft-persona, persona-draft
+  - `adminApi.generateDouyinPersonaSheet(id)`: 串行生成人物正面/侧身/特写三视图形象图并整组替换 | keywords: 生成人物三视图, 形象一致, generate-reference-sheet, identity-consistency
   - `adminApi.listXhsAccounts` / `createXhsAccount` / `updateXhsAccount` / `deleteXhsAccount` / `testLoginXhsAccount`
   - `adminApi.listFeishuCredentials` / `upsertFeishuCredential` / `deleteFeishuCredential`: 飞书凭证 CRUD
   - `adminApi.listFinanceBindings` / `upsertFinanceBinding` / `deleteFinanceBinding`: 财务源绑定 CRUD(按 name)

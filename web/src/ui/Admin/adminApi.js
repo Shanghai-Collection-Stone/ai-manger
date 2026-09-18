@@ -773,6 +773,80 @@ export const adminApi = {
   // ─── 热点采集榜 ─────────────────────────────────────────────────────────────
 
   /**
+   * @description 列出本租户的抖音预设人物(含已归档)
+   * @keyword-cn 查询预设人物, 人物列表
+   * @keyword-en list douyin personas, persona list
+   */
+  async listDouyinPersonas() {
+    return apiRequest('/api/douyin-persona?includeArchived=1');
+  },
+
+  /**
+   * @description 读取叙事视角与三视图登记表,用于渲染人物表单下拉
+   * @keyword-cn 人物选项, 视角登记表
+   * @keyword-en persona options, perspective registry
+   */
+  async getDouyinPersonaOptions() {
+    return apiRequest('/api/douyin-persona/options');
+  },
+
+  /**
+   * @description 新建一个预设人物(形象图留空,保存后再生成三视图)
+   * @keyword-cn 新建预设人物, 人设入库
+   * @keyword-en create douyin persona, persist persona
+   */
+  async createDouyinPersona(payload) {
+    return apiRequest('/api/douyin-persona', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 按一句话需求让 AI 写出人设草稿(不入库)
+   * @keyword-cn AI生成人设, 人设草稿
+   * @keyword-en ai draft persona, persona draft
+   */
+  async draftDouyinPersona(brief) {
+    return apiRequest('/api/douyin-persona/draft', {
+      method: 'POST',
+      body: JSON.stringify({ brief }),
+    });
+  },
+
+  /**
+   * @description 更新人设或归档状态
+   * @keyword-cn 更新预设人物, 归档人物
+   * @keyword-en update douyin persona, archive persona
+   */
+  async updateDouyinPersona(id, payload) {
+    return apiRequest(`/api/douyin-persona/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 按外貌设定串行生成正面 / 侧身 / 特写三视图形象图并整组替换
+   * @keyword-cn 生成人物三视图, 形象一致
+   * @keyword-en generate reference sheet, identity consistency
+   */
+  async generateDouyinPersonaSheet(id) {
+    return apiRequest(`/api/douyin-persona/${id}/reference-sheet`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * @description 删除一个预设人物
+   * @keyword-cn 删除预设人物, 移除人设
+   * @keyword-en delete douyin persona, remove persona
+   */
+  async deleteDouyinPersona(id) {
+    return apiRequest(`/api/douyin-persona/${id}`, { method: 'DELETE' });
+  },
+
+  /**
    * @description 读取热点分类枚举与 AI 归类推荐词表
    * @keyword-cn 热点元数据, 分类枚举
    * @keyword-en hot topic meta, category enum

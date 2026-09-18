@@ -5,13 +5,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
-import type {
-  DouyinMediaReference,
-  DouyinStoryboardPreference,
-  DouyinStoryboardShot,
-  DouyinTopicEntity,
-  DouyinVideoAudioSetting,
-  DouyinWorkspaceGroup,
+import {
+  DOUYIN_SCRIPT_STYLES,
+  type DouyinMediaReference,
+  type DouyinScriptStyle,
+  type DouyinStoryboardPreference,
+  type DouyinStoryboardShot,
+  type DouyinTopicEntity,
+  type DouyinVideoAudioSetting,
+  type DouyinWorkspaceGroup,
 } from '../entities/douyin-workbench.entity.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -59,6 +61,50 @@ export function normalizeVideoAudio(
     mode: mode === 'music' || mode === 'mute' ? mode : 'voiceover',
     language: language === 'yue' || language === 'en' ? language : 'zh-CN',
   };
+}
+
+/**
+ * @description 规整脚本风格：未登记的风格键一律回退为不指定（undefined）。
+ * @keyword-cn 规整脚本风格, 默认不指定风格
+ * @keyword-en normalize-script-style, default-no-style
+ * @param input 前端传入的风格键。
+ * @returns {DouyinScriptStyle|undefined} 规整后的风格，不指定时为 undefined。
+ */
+export function normalizeScriptStyle(
+  input?: string | null,
+): DouyinScriptStyle | undefined {
+  const key = String(input ?? '') as DouyinScriptStyle;
+  return key in DOUYIN_SCRIPT_STYLES ? key : undefined;
+}
+
+/**
+ * @description 规整脚本参考图引用：只保留图片、去重、最多 4 张，越权与伪造由 `validateMediaReferences` 另行拦截。
+ * @keyword-cn 规整脚本参考图, 参考图去重
+ * @keyword-en normalize-reference-images, reference-dedupe
+ * @param input 前端传入的参考图列表。
+ * @returns {DouyinMediaReference[]} 规整后的参考图。
+ */
+export function normalizeReferenceImages(
+  input?: Array<Partial<DouyinMediaReference>> | null,
+): DouyinMediaReference[] {
+  const seen = new Set<number>();
+  const list: DouyinMediaReference[] = [];
+  for (const item of Array.isArray(input) ? input : []) {
+    const id = Number(item?.id);
+    if (!Number.isInteger(id) || id < 1 || seen.has(id)) continue;
+    seen.add(id);
+    list.push({
+      type: 'image',
+      id,
+      name: String(item?.name ?? `图片 #${id}`).slice(0, 200),
+      url: String(item?.url ?? '').slice(0, 2000),
+      ...(item?.coverUrl
+        ? { coverUrl: String(item.coverUrl).slice(0, 2000) }
+        : {}),
+    });
+    if (list.length >= 4) break;
+  }
+  return list;
 }
 
 /**
@@ -168,6 +214,9 @@ export class DouyinWorkbenchRepositoryService {
       title: string;
       script?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
+      personaId?: number;
+      scriptStyle?: string;
+      referenceImages?: Array<Partial<DouyinMediaReference>>;
     }>,
     scope: DouyinScope,
   ): Promise<Array<Omit<DouyinTopicEntity, '_id'>>> {
@@ -190,6 +239,13 @@ export class DouyinWorkbenchRepositoryService {
         storyboardPreference: normalizeStoryboardPreference(
           candidate?.storyboardPreference,
         ),
+        personaId:
+          Number.isInteger(Number(candidate?.personaId)) &&
+          Number(candidate?.personaId) > 0
+            ? Number(candidate?.personaId)
+            : undefined,
+        scriptStyle: normalizeScriptStyle(candidate?.scriptStyle),
+        referenceImages: normalizeReferenceImages(candidate?.referenceImages),
       }))
       .filter((candidate) => candidate.title.length > 0);
     if (!normalized.length) {
@@ -200,6 +256,10 @@ export class DouyinWorkbenchRepositoryService {
     );
     if (uniqueTitles.size !== normalized.length) {
       throw new BadRequestException('DOUYIN_CHILD_TOPICS_DUPLICATED');
+    }
+
+    for (const candidate of normalized) {
+      await this.validateMediaReferences(candidate.referenceImages, scope);
     }
 
     const now = new Date();
@@ -216,6 +276,11 @@ export class DouyinWorkbenchRepositoryService {
         script: candidate.script || undefined,
         topicType: '短视频',
         storyboardPreference: candidate.storyboardPreference,
+        personaId: candidate.personaId,
+        scriptStyle: candidate.scriptStyle,
+        ...(candidate.referenceImages.length
+          ? { referenceImages: candidate.referenceImages }
+          : {}),
         platform: 'douyin',
         storyboard: [],
         status: 'draft',
@@ -248,6 +313,9 @@ export class DouyinWorkbenchRepositoryService {
       script?: string;
       topicType?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
+      personaId?: number;
+      scriptStyle?: string;
+      referenceImages?: Array<Partial<DouyinMediaReference>>;
       videoAudio?: Partial<DouyinVideoAudioSetting>;
       fullVideoDuration?: number;
       storyboard?: DouyinStoryboardShot[];
@@ -275,6 +343,23 @@ export class DouyinWorkbenchRepositoryService {
       updates.videoAudio = normalizeVideoAudio(input.videoAudio);
     // 0 表示改回自动，清掉字段
     const unset: Record<string, ''> = {};
+    // personaId 传 0 表示取消选用人物；scriptStyle 传空串表示取消风格
+    if (input.personaId !== undefined) {
+      const personaId = Math.round(Number(input.personaId) || 0);
+      if (personaId > 0) updates.personaId = personaId;
+      else unset.personaId = '';
+    }
+    if (input.scriptStyle !== undefined) {
+      const style = normalizeScriptStyle(input.scriptStyle);
+      if (style) updates.scriptStyle = style;
+      else unset.scriptStyle = '';
+    }
+    if (input.referenceImages !== undefined) {
+      const references = normalizeReferenceImages(input.referenceImages);
+      await this.validateMediaReferences(references, scope);
+      if (references.length) updates.referenceImages = references;
+      else unset.referenceImages = '';
+    }
     if (input.fullVideoDuration !== undefined) {
       const seconds = Math.round(Number(input.fullVideoDuration) || 0);
       if (seconds > 0) updates.fullVideoDuration = Math.min(120, seconds);
@@ -406,6 +491,29 @@ export class DouyinWorkbenchRepositoryService {
       });
       if (!row)
         throw new BadRequestException('DOUYIN_STORYBOARD_MEDIA_NOT_FOUND');
+    }
+  }
+
+  /**
+   * @description 校验一组素材引用确实是本租户图库或视频库里的真实记录，阻止前端伪造 ID 借用他人素材。
+   * @keyword-cn 校验素材引用, 防伪造引用
+   * @keyword-en validate-media-references, prevent-forged-reference
+   * @param references 待校验的素材引用。
+   * @param scope 租户用户作用域。
+   * @throws {BadRequestException} 任意一条引用不存在或不属于本租户时抛出。
+   */
+  private async validateMediaReferences(
+    references: DouyinMediaReference[],
+    scope: DouyinScope,
+  ): Promise<void> {
+    for (const media of references) {
+      const collection = media.type === 'video' ? this.videos : this.gallery;
+      const row = await collection.findOne({
+        id: media.id,
+        ...this.tenantFilter(scope.tenantId),
+      });
+      if (!row)
+        throw new BadRequestException('DOUYIN_REFERENCE_MEDIA_NOT_FOUND');
     }
   }
 

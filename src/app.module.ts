@@ -40,6 +40,7 @@ import { HotTopicModule } from './modules/hot-topic/hot-topic.module.js';
 import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
 import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js';
 import { AiBillingModule } from './modules/ai-billing/ai-billing.module.js';
+import { DouyinPersonaModule } from './modules/douyin-persona/douyin-persona.module.js';
 import { DouyinWorkbenchModule } from './modules/douyin-workbench/douyin-workbench.module.js';
 import { WorkflowModelModule } from './modules/workflow-model/workflow-model.module.js';
 import { SmsVerificationModule } from './modules/sms-verification/sms-verification.module.js';
@@ -89,6 +90,7 @@ import { SmsVerificationModule } from './modules/sms-verification/sms-verificati
     BrowserAuthModule,
     SmsVerificationModule,
     AiBillingModule,
+    DouyinPersonaModule,
     DouyinWorkbenchModule,
     WorkflowModelModule,
   ],

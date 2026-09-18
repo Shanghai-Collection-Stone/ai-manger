@@ -13,6 +13,8 @@ import type {
   DouyinGenerationJobKind,
   DouyinGenerationJobProgress,
   DouyinGenerationJobView,
+  DouyinMediaReference,
+  DouyinScriptStyle,
   DouyinStoryboardPreference,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
@@ -102,6 +104,7 @@ export class DouyinGenerationJobService {
    * @param topicId 分镜任务传子选题 ID，子选题任务传母选题 ID。
    * @param prompt 可选补充要求。
    * @param scope 当前租户用户作用域。
+   * @param options 候选脚本任务可指定本轮统一的出镜人物与风格。
    * @returns {Promise<DouyinGenerationJobView>} 运行中的任务。
    * @throws {NotFoundException} 选题不存在或类型不对。
    * @throws {ConflictException} DOUYIN_GENERATION_ALREADY_RUNNING。
@@ -111,6 +114,7 @@ export class DouyinGenerationJobService {
     topicId: number,
     prompt: string | undefined,
     scope: DouyinScope,
+    options?: { personaId?: number; scriptStyle?: DouyinScriptStyle },
   ): Promise<DouyinGenerationJobView> {
     const topic = await this.repository.get(topicId, scope);
     if (kind === 'storyboard' && topic?.kind !== 'child') {
@@ -141,6 +145,8 @@ export class DouyinGenerationJobService {
         String(prompt ?? '')
           .trim()
           .slice(0, 1000) || undefined,
+      personaId: options?.personaId,
+      scriptStyle: options?.scriptStyle,
       status: 'running',
       progress: { stage: 'preparing', current: 0 },
       startedAt: now,
@@ -229,7 +235,11 @@ export class DouyinGenerationJobService {
       } else {
         const output = await this.childTopics.generate(
           job.topicId,
-          { prompt: job.prompt },
+          {
+            prompt: job.prompt,
+            personaId: job.personaId,
+            scriptStyle: job.scriptStyle,
+          },
           scope,
           report,
         );
@@ -290,7 +300,8 @@ export class DouyinGenerationJobService {
    * @keyword-cn 保存挑选脚本, 启动分镜任务
    * @keyword-en confirm-script-drafts, start-storyboard-jobs
    * @param jobId 子选题生成任务 ID。
-   * @param items 挑中的候选：`key` 对应任务里的候选，标题 / 正文留空则沿用候选原文。
+   * @param items 挑中的候选：`key` 对应任务里的候选，标题 / 正文留空则沿用候选原文；
+   *   人物、风格与参考图留空时沿用本轮任务的统一设置。
    * @param scope 当前租户用户作用域。
    * @returns 新脚本与为它们启动的分镜任务。
    * @throws {NotFoundException} DOUYIN_SCRIPT_DRAFTS_NOT_FOUND：任务不存在、未完成或候选已处理。
@@ -303,6 +314,9 @@ export class DouyinGenerationJobService {
       title?: string;
       script?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
+      personaId?: number;
+      scriptStyle?: string;
+      referenceImages?: Array<Partial<DouyinMediaReference>>;
     }>,
     scope: DouyinScope,
   ): Promise<{
@@ -322,6 +336,9 @@ export class DouyinGenerationJobService {
         title: String(item.title ?? '').trim() || draft.title,
         script: String(item.script ?? '').trim() || draft.script,
         storyboardPreference: item.storyboardPreference,
+        personaId: item.personaId ?? job.personaId,
+        scriptStyle: item.scriptStyle ?? job.scriptStyle,
+        referenceImages: item.referenceImages,
       };
     });
     // 先占住这批候选，防止连点重复入库

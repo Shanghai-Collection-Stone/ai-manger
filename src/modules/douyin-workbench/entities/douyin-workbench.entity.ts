@@ -43,6 +43,56 @@ export interface DouyinStoryboardPreference {
 }
 
 /**
+ * @description 脚本的画面与叙事风格。风格同时约束口播稿的说法和每一镜的出图质感，是分镜之间保持
+ *   统一观感的第二道保险（第一道是预设人物的形象参考图）。
+ * @keyword-cn 脚本风格, 画面质感风格
+ * @keyword-en script-style, visual-style
+ */
+export const DOUYIN_SCRIPT_STYLES = {
+  casual: {
+    label: '生活随拍',
+    tone: '像随手拍给朋友看，口语、不端着，允许有点碎碎念',
+    visual:
+      '手持随拍质感，自然光，轻微颗粒，生活化场景，不刻意打光，色调朴素真实',
+  },
+  cinematic: {
+    label: '电影质感',
+    tone: '克制、有画面感的叙述，句子短，留白多',
+    visual:
+      '电影感构图，浅景深，柔和侧逆光，低饱和冷暖对比，宽银幕式层次，质感细腻',
+  },
+  clean: {
+    label: '干净商业',
+    tone: '条理清楚、信息密度高，像专业主播介绍',
+    visual:
+      '干净商业摄影质感，均匀柔光，背景简洁不杂乱，高清晰度，色彩准确通透',
+  },
+  documentary: {
+    label: '纪实街头',
+    tone: '在场感强，边走边说，有现场细节',
+    visual:
+      '纪实抓拍质感，真实环境光，街头或店内实景，人物自然不摆拍，轻微动态感',
+  },
+  vibrant: {
+    label: '高饱和潮流',
+    tone: '节奏快、情绪足，短句连打，有网感',
+    visual: '高饱和潮流色调，强对比，明快人造光，撞色场景，画面鲜亮吸睛',
+  },
+  warm: {
+    label: '温暖治愈',
+    tone: '语气放慢、贴近，像朋友坐下来聊',
+    visual: '暖黄柔光，低对比，木质与布艺材质，午后氛围，画面温润舒缓',
+  },
+} as const;
+
+/**
+ * @description 脚本风格键名。
+ * @keyword-cn 脚本风格键, 风格枚举
+ * @keyword-en script-style-key, style-enum
+ */
+export type DouyinScriptStyle = keyof typeof DOUYIN_SCRIPT_STYLES;
+
+/**
  * @description 生成视频的声音设置（结构化，按脚本保存，整片与分镜共用）：
  *   `voiceover` 按口播稿配音，`music` 只要背景音乐与环境音，`mute` 无声；`language` 为配音语言。
  * @keyword-cn 视频声音设置, 配音语言
@@ -82,6 +132,12 @@ export interface DouyinTopicEntity {
   topicType?: string;
   /** @description 子选题（脚本）拆分镜时的配图偏向，缺省按图库自找、不限标签 */
   storyboardPreference?: DouyinStoryboardPreference;
+  /** @description 子选题（脚本）选用的预设人物 ID，为空表示不指定出镜人物 */
+  personaId?: number;
+  /** @description 子选题（脚本）的画面与叙事风格，为空表示不指定风格 */
+  scriptStyle?: DouyinScriptStyle;
+  /** @description 子选题（脚本）的参考图，出图时作为底图候选，让画面更贴近用户自己的真实场景 */
+  referenceImages?: DouyinMediaReference[];
   /** @description 生成视频的声音设置，缺省为普通话配音 */
   videoAudio?: DouyinVideoAudioSetting;
   /** @description 整片模式的目标时长（秒），为空表示按分镜总时长自动决定 */
@@ -163,6 +219,10 @@ export interface DouyinGenerationJobEntity extends DouyinGenerationJobView {
   tenantId?: string;
   userId: string;
   prompt?: string;
+  /** @description 候选脚本任务专用：本轮统一的出镜人物，写进脚本生成提示词 */
+  personaId?: number;
+  /** @description 候选脚本任务专用：本轮统一的叙事与画面风格 */
+  scriptStyle?: DouyinScriptStyle;
 }
 
 /**
