@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { AdminModule } from '../admin/admin.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
+import { WorkflowModelModule } from '../workflow-model/workflow-model.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { SassModule } from '../sass/sass.module.js';
 import { CanvasController } from './controller/canvas.controller.js';
@@ -15,6 +16,7 @@ import { CanvasImageGroupService } from './services/canvas-image-group.service.j
     GalleryModule,
     SassModule,
     forwardRef(() => AiAgentModule),
+    WorkflowModelModule,
   ],
   controllers: [CanvasController],
   providers: [CanvasService, CanvasImageGroupService],

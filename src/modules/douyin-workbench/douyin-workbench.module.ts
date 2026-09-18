@@ -4,10 +4,15 @@ import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
+import { WorkflowModelModule } from '../workflow-model/workflow-model.module.js';
+import { PixmaxModule } from '../pixmax/pixmax.module.js';
+import { VideoLibraryModule } from '../video-library/video-library.module.js';
 import { DouyinWorkbenchController } from './controller/douyin-workbench.controller.js';
 import { DouyinOperationService } from './services/douyin-operation.service.js';
+import { DouyinPixmaxVideoService } from './services/douyin-pixmax-video.service.js';
 import { DouyinChildTopicGenerationService } from './services/douyin-child-topic-generation.service.js';
 import { DouyinGenerationJobService } from './services/douyin-generation-job.service.js';
+import { DouyinShotImageService } from './services/douyin-shot-image.service.js';
 import { DouyinStoryboardGenerationService } from './services/douyin-storyboard-generation.service.js';
 import { DouyinStoryboardImageService } from './services/douyin-storyboard-image.service.js';
 import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-repository.service.js';
@@ -24,12 +29,17 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     AiBillingModule,
     DataSourceModule,
     GalleryModule,
+    WorkflowModelModule,
+    PixmaxModule,
+    VideoLibraryModule,
   ],
   controllers: [DouyinWorkbenchController],
   providers: [
     DouyinChildTopicGenerationService,
     DouyinGenerationJobService,
     DouyinOperationService,
+    DouyinPixmaxVideoService,
+    DouyinShotImageService,
     DouyinStoryboardGenerationService,
     DouyinStoryboardImageService,
     DouyinWorkbenchRepositoryService,

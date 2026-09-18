@@ -1,5 +1,7 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsIn,
   IsInt,
@@ -80,6 +82,17 @@ export class DouyinStoryboardShotDto {
   @ValidateNested()
   @Type(() => DouyinMediaReferenceDto)
   media?: DouyinMediaReferenceDto | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  imagePrompt?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  videoId?: number;
 }
 
 /**
@@ -110,6 +123,75 @@ export class GenerateDouyinChildrenDto {
 }
 
 /**
+ * @description 校验脚本的分镜配图偏向：AI 生成或图库自找，图库自找可限定最多 20 个标签。
+ * @keyword-cn 配图偏向参数, 图库标签限定
+ * @keyword-en storyboard-preference-dto, gallery-tag-filter
+ */
+export class DouyinStoryboardPreferenceDto {
+  @IsIn(['generate', 'gallery'])
+  imageSource!: 'generate' | 'gallery';
+
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(50, { each: true })
+  galleryTags!: string[];
+}
+
+/**
+ * @description 校验视频声音设置：配音 / 仅音乐 / 静音，与配音语言。
+ * @keyword-cn 声音设置参数, 配音语言
+ * @keyword-en video-audio-dto, voiceover-language
+ */
+export class DouyinVideoAudioDto {
+  @IsIn(['voiceover', 'music', 'mute'])
+  mode!: 'voiceover' | 'music' | 'mute';
+
+  @IsIn(['zh-CN', 'yue', 'en'])
+  language!: 'zh-CN' | 'yue' | 'en';
+}
+
+/**
+ * @description 校验一条被挑中的候选脚本：`key` 指向任务里的候选，标题 / 正文可在挑选时改写。
+ * @keyword-cn 挑选脚本参数, 候选改写
+ * @keyword-en script-draft-pick-dto, draft-edit
+ */
+export class DouyinScriptDraftPickDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  key!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(8000)
+  script?: string;
+
+  @ValidateNested()
+  @Type(() => DouyinStoryboardPreferenceDto)
+  storyboardPreference!: DouyinStoryboardPreferenceDto;
+}
+
+/**
+ * @description 校验保存挑中候选脚本的请求，一次 1 至 12 条。
+ * @keyword-cn 保存挑选脚本, 批量入库
+ * @keyword-en confirm-script-drafts-dto, batch-persist
+ */
+export class ConfirmDouyinScriptDraftsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(12)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinScriptDraftPickDto)
+  items!: DouyinScriptDraftPickDto[];
+}
+
+/**
  * @description 校验抖音选题及完整分镜更新参数。
  * @keyword-cn 更新抖音选题, 保存分镜
  * @keyword-en update-douyin-topic, save-storyboard
@@ -123,8 +205,30 @@ export class UpdateDouyinTopicDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(8000)
+  script?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(50)
   topicType?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinStoryboardPreferenceDto)
+  storyboardPreference?: DouyinStoryboardPreferenceDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinVideoAudioDto)
+  videoAudio?: DouyinVideoAudioDto;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(120)
+  fullVideoDuration?: number;
 
   @IsOptional()
   @IsArray()
@@ -157,6 +261,30 @@ export class GenerateDouyinStoryboardDto {
  * @keyword-en generate-video-dto, storyboard-rendering
  */
 export class GenerateDouyinVideoDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  prompt?: string;
+}
+
+/**
+ * @description 校验重新生成一段分镜画面的补充描述，为空时按分镜已有的画面与配图提示词出图。
+ * @keyword-cn 分镜配图参数, 重新生成画面
+ * @keyword-en generate-shot-image-dto, regenerate-shot-frame
+ */
+export class GenerateDouyinShotImageDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  prompt?: string;
+}
+
+/**
+ * @description 校验单段分镜视频生成的补充提示。
+ * @keyword-cn 分镜视频参数, 单镜头生成
+ * @keyword-en generate-shot-video-dto, single-shot-render
+ */
+export class GenerateDouyinShotVideoDto {
   @IsOptional()
   @IsString()
   @MaxLength(1000)

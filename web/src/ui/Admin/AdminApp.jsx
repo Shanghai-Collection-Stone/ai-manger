@@ -8,6 +8,7 @@ import {
 } from './adminApi';
 import HotTopicPanel from './HotTopicPanel';
 import SmsSettingPanel from './SmsSettingPanel';
+import WorkflowModelPanel from './WorkflowModelPanel';
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
 const LazyMDMarkdown = React.lazy(() =>
@@ -175,6 +176,7 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'minimax', label: 'MiniMax' },
   { value: 'glm', label: '智谱 GLM (z.ai 国际端)' },
   { value: 'kimi', label: 'Kimi (Moonshot)' },
+  { value: 'pixmax', label: 'PixMax（生视频 / 多模型中转）' },
 ];
 
 /**
@@ -293,6 +295,7 @@ const FINANCE_KINDS = [
 const ALL_TABS = [
   { id: 'users', label: '用户管理' },
   { id: 'providers', label: 'Ai提供商设置', platformOnly: true },
+  { id: 'workflow_models', label: '工作流节点模型', platformOnly: true },
   { id: 'ai_services', label: '服务管理', platformOnly: true },
   { id: 'tenants', label: '租户管理', platformOnly: true },
   { id: 'keys', label: 'key管理' },
@@ -2811,9 +2814,16 @@ const AdminApp = () => {
               <select
                 className="w-full border rounded px-3 py-2 text-sm"
                 value={forms.provider.providerCode}
-                onChange={(e) =>
-                  updateForm('provider', 'providerCode', e.target.value)
-                }
+                onChange={(e) => {
+                  updateForm('provider', 'providerCode', e.target.value);
+                  // PixMax 只用于生图 / 生视频，选中时把默认的文本 / 向量类别切到生视频，避免存成文本类别
+                  if (
+                    e.target.value === 'pixmax' &&
+                    !['image', 'video'].includes(forms.provider.modelCategory)
+                  ) {
+                    updateForm('provider', 'modelCategory', 'video');
+                  }
+                }}
               >
                 <option value="">请选择提供商编码</option>
                 {PROVIDER_CODE_OPTIONS.map((opt) => (
@@ -2822,6 +2832,18 @@ const AdminApp = () => {
                   </option>
                 ))}
               </select>
+              {forms.provider.providerCode === 'pixmax' ? (
+                <p className="rounded bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
+                  PixMax 按类别分别添加：生视频、生图各建一条（类别选「生视频模型」/「生图模型」），API Key 可以相同；服务地址留空默认
+                  https://app.pixmax.cn；模型可留空，到「工作流节点模型」里为每个节点从账号可用模型中选择。目前业务侧只接入了 PixMax 生视频。
+                </p>
+              ) : null}
+              {forms.provider.providerCode === 'pixmax' &&
+              !['image', 'video'].includes(forms.provider.modelCategory) ? (
+                <p className="rounded bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">
+                  PixMax 请选择「生视频模型」或「生图模型」类别；选文本 / 向量类别时，工作流节点里不会出现这条提供商。
+                </p>
+              ) : null}
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
                 placeholder="请输入提供商名称"
@@ -2846,6 +2868,7 @@ const AdminApp = () => {
                 <option value="llm">类别: 非EM模型（LLM/关键词/任务）</option>
                 <option value="em">类别: EM模型（向量计算）</option>
                 <option value="image">类别: 生图模型（Image）</option>
+                <option value="video">类别: 生视频模型（Video）</option>
               </select>
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
@@ -2854,7 +2877,9 @@ const AdminApp = () => {
                     ? '请输入EM模型（向量模型）'
                     : forms.provider.modelCategory === 'image'
                       ? '请输入生图模型（Image模型）'
-                      : '请输入非EM模型（LLM模型）'
+                      : forms.provider.modelCategory === 'video'
+                        ? '请输入默认生视频模型（PixMax 填模型编码，如 SEEDANCE_2_0）'
+                        : '请输入非EM模型（LLM模型）'
                 }
                 value={forms.provider.model}
                 onChange={(e) =>
@@ -2957,7 +2982,9 @@ const AdminApp = () => {
                           ? 'EM模型'
                           : item.modelCategory === 'image'
                             ? '生图模型'
-                            : '非EM模型'}
+                            : item.modelCategory === 'video'
+                              ? '生视频模型'
+                              : '非EM模型'}
                       </div>
                       <div className="text-xs text-slate-500">
                         模型：{item.model || '-'}
@@ -2974,7 +3001,7 @@ const AdminApp = () => {
                       </div>
                       <div className="text-xs text-slate-500">
                         {item.isDefault
-                          ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : '非EM'}默认`
+                          ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : item.modelCategory === 'video' ? '生视频' : '非EM'}默认`
                           : '候选提供商'}
                       </div>
                     </div>
@@ -5228,6 +5255,11 @@ const AdminApp = () => {
         {/* 热点采集榜（采集规则管理 + 是否可用自检 + 采集 + AI 归类标签 + 母选题推荐） | @keyword-en hot topic board tab */}
         {activeTab === 'hot_topic' ? (
           <HotTopicPanel onNotice={setNotice} onError={setError} />
+        ) : null}
+
+        {/* 工作流节点模型（为预设工作流的每个节点指定提供商与模型，仅超管） | @keyword-en workflow node model tab */}
+        {activeTab === 'workflow_models' ? (
+          <WorkflowModelPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
         {/* 短信验证码（阿里云 AccessKey / 签名 / 模板 + 测试发送，仅超管） | @keyword-en sms verification setting tab */}

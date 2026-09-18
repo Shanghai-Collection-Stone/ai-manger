@@ -1,0 +1,5355 @@
+{
+  "source": "PixMax 工具平台 OpenAPI 接口文档 · PixMax 模型配置",
+  "models": [
+    {
+      "category": "GENERATE_TEXT",
+      "name": "Gen 3.1 Pro",
+      "code": "GEN_3_1_PRO",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "totalMaxSize": 102760448,
+            "formats": [
+              "PNG",
+              "JPEG",
+              "JPG",
+              "WEBP",
+              "HEIC",
+              "HEIF"
+            ]
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "formats": [
+              "FLV",
+              "MOV",
+              "MPEG",
+              "MPG",
+              "MP4",
+              "WEBM",
+              "WMV",
+              "3GPP"
+            ],
+            "maxDuration": 2700
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "AUDIO",
+            "singleMaxSize": 15728640,
+            "formats": [
+              "AAC",
+              "FLAC",
+              "MP3",
+              "M4A",
+              "MPEG",
+              "MPGA",
+              "MP4",
+              "OGG",
+              "WAV",
+              "WEBM"
+            ],
+            "maxDuration": 30240
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "Doubao Seed 2.1 Pro",
+      "code": "DOUBAO_SEED_2_1_PRO",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "Doubao Seed 2.1 Turbo",
+      "code": "DOUBAO_SEED_2_1_TURBO",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "Doubao Seed 2.0 Pro",
+      "code": "DOUBAO_SEED_2_PRO",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "Doubao Seed 2.0 lite",
+      "code": "DOUBAO_SEED_2_LITE",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "DeepSeek V4 Pro",
+      "code": "DEEPSEEK_V4_PRO",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "DeepSeek V4 Flash",
+      "code": "DEEPSEEK_V4_FLASH",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "MiniMax M3",
+      "code": "MINIMAX_M3",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 10485760,
+            "totalMaxSize": 67108864,
+            "formats": [
+              "JPEG",
+              "JPG",
+              "PNG",
+              "GIF",
+              "WEBP"
+            ]
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "singleMaxSize": 52428800,
+            "totalMaxSize": 67108864,
+            "formats": [
+              "MP4",
+              "AVI",
+              "MOV",
+              "MKV"
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_TEXT",
+      "name": "GLM 5.2",
+      "code": "GLM_52",
+      "nodeType": "GENERATE_TEXT",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "PixImage 2.5 Flare",
+      "code": "PixImage_2.5_Flare",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            16
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "quality",
+          "label": "质量档位",
+          "type": "string",
+          "required": true,
+          "defaultValue": "medium",
+          "range": "low、medium、high、xhigh、max",
+          "control": "select",
+          "display": "Low、Medium、High、XHigh、Max"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1K",
+          "range": "1K、2K、4K",
+          "control": "select",
+          "display": "1K、2K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、1:3、3:1、3:2、2:3、4:3、3:4、4:5、5:4、16:9、9:16、21:9、9:21",
+          "control": "select",
+          "display": "1:1、1:3、3:1、3:2、2:3、4:3、3:4、4:5、5:4、16:9、9:16、21:9、9:21"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "PixImage 2.5 Sunburst",
+      "code": "PixImage_2.5_Sunburst",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            16
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "quality",
+          "label": "质量档位",
+          "type": "string",
+          "required": true,
+          "defaultValue": "medium",
+          "range": "low、medium、high、xhigh、max",
+          "control": "select",
+          "display": "Low、Medium、High、XHigh、Max"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1K",
+          "range": "1K、2K、4K",
+          "control": "select",
+          "display": "1K、2K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、1:3、3:1、3:2、2:3、4:3、3:4、4:5、5:4、16:9、9:16、21:9、9:21",
+          "control": "select",
+          "display": "1:1、1:3、3:1、3:2、2:3、4:3、3:4、4:5、5:4、16:9、9:16、21:9、9:21"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "Doubao Seedream 5.0 Pro",
+      "code": "DOUBAO_SEEDREAM_5_PRO",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 31457280,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "BMP",
+              "TIFF",
+              "GIF",
+              "HEIC",
+              "HEIF"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "1:16",
+              "max": "16:1"
+            },
+            "resolution": {
+              "min": {
+                "width": 15,
+                "height": 15
+              },
+              "area": {
+                "maxPixels": 36000000
+              }
+            }
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "2K",
+          "range": "1K、2K",
+          "control": "select",
+          "display": "1K、2K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "PIX Image 2",
+      "code": "PIX_IMAGE_2",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            16
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "quality",
+          "label": "质量档位",
+          "type": "string",
+          "required": true,
+          "defaultValue": "medium",
+          "range": "low、medium、high",
+          "control": "select",
+          "display": "Low、Medium、High"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1K",
+          "range": "1K、2K、4K",
+          "control": "select",
+          "display": "1K、2K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "auto",
+          "range": "1:1、2:3、3:2、3:4、4:3、4:5、5:4、9:16、16:9、9:21、21:9",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、4:5、5:4、9:16、16:9、9:21、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "PixNano Pro",
+      "code": "PIX_NANO_PRO",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 52428800,
+            "totalMaxSize": 102760448,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "HEIC",
+              "HEIF"
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "2K",
+          "range": "1K、2K、4K",
+          "control": "select",
+          "display": "1K、2K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、1:1、2:3、3:2、3:4、4:3、4:5、5:4、9:16、16:9、21:9",
+          "control": "select",
+          "display": "Auto、1:1、2:3、3:2、3:4、4:3、4:5、5:4、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "PixNano 2",
+      "code": "PIX_NANO_2",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 52428800,
+            "totalMaxSize": 102760448,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "HEIC",
+              "HEIF"
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "2K",
+          "range": "1K、2K、4K",
+          "control": "select",
+          "display": "1K、2K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、1:1、1:4、1:8、2:3、3:2、3:4、4:1、4:3、4:5、5:4、8:1、9:16、16:9、21:9",
+          "control": "select",
+          "display": "Auto、1:1、1:4、1:8、2:3、3:2、3:4、4:1、4:3、4:5、5:4、8:1、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "悠船 V8.2",
+      "code": "MIDJOURNEY_V8_2",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "4",
+          "range": "4",
+          "control": "select",
+          "display": "4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "悠船 V8.1",
+      "code": "MIDJOURNEY_V8_1",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "悠船 V7",
+      "code": "MIDJOURNEY",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "悠船 Niji V7",
+      "code": "MIDJOURNEY_NIJI_7",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、16:9、9:16、21:9、9:21"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "Doubao Seedream 5.0 Lite",
+      "code": "JIMENG_5_LITE",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 31457280,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "BMP",
+              "TIFF",
+              "GIF",
+              "HEIC",
+              "HEIF"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "1:16",
+              "max": "16:1"
+            },
+            "resolution": {
+              "min": {
+                "width": 15,
+                "height": 15
+              },
+              "area": {
+                "maxPixels": 36000000
+              }
+            }
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "2K",
+          "range": "2K、3K、4K",
+          "control": "select",
+          "display": "2K、3K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "Doubao Seedream 4.5",
+      "code": "DOUBAO_SEEDREAM_4_5",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "2K",
+          "range": "2K、4K",
+          "control": "select",
+          "display": "2K、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9",
+          "control": "select",
+          "display": "1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "Qwen Image Edit Max",
+      "code": "QWEN_IMAGE_EDIT_MAX",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            1,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1K",
+          "range": "1K、2K",
+          "control": "select",
+          "display": "1K、2K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9",
+          "control": "select",
+          "display": "Auto、1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、3、4",
+          "control": "select",
+          "display": "1x、2x、3x、4x"
+        },
+        {
+          "name": "promptExtend",
+          "label": "提示词扩展",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "switch（advanced=true）",
+          "display": "Open Prompt Extend、Close Prompt Extend"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "MiniMax Image 01",
+      "code": "MINIMAX_IMAGE_01",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、16:9、4:3、3:2、2:3、3:4、9:16、21:9",
+          "control": "select",
+          "display": "1:1、16:9、4:3、3:2、2:3、3:4、9:16、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4、9",
+          "control": "select",
+          "display": "1x、2x、4x、9x"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "Qwen Image Edit Plus",
+      "code": "QWEN_IMAGE_EDIT_PLUS",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            1,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1K",
+          "range": "1K、2K",
+          "control": "select",
+          "display": "1K、2K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9",
+          "control": "select",
+          "display": "Auto、1:1、2:3、3:2、3:4、4:3、9:16、16:9、21:9"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、3、4",
+          "control": "select",
+          "display": "1x、2x、3x、4x"
+        },
+        {
+          "name": "promptExtend",
+          "label": "提示词扩展",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "switch（advanced=true）",
+          "display": "Open Prompt Extend、Close Prompt Extend"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "MiniMax Image 01 Live",
+      "code": "MINIMAX_IMAGE_01_LIVE",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1:1",
+          "range": "1:1、16:9、4:3、3:2、2:3、3:4、9:16",
+          "control": "select",
+          "display": "1:1、16:9、4:3、3:2、2:3、3:4、9:16"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4、9",
+          "control": "select",
+          "display": "1x、2x、4x、9x"
+        },
+        {
+          "name": "styleType",
+          "label": "风格类型",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、漫画、元气、中世纪、水彩",
+          "control": "select",
+          "display": "None、Comic、Energetic、Medieval、Watercolor"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_IMAGE",
+      "name": "Image Upscale",
+      "code": "IMAGE_UPSCALE",
+      "nodeType": "GENERATE_IMAGE",
+      "inputs": [
+        {
+          "kind": "图片数量",
+          "count": [
+            1,
+            1
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "formats": [
+              "PNG",
+              "JPEG",
+              "JPG",
+              "BMP",
+              "WebP"
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "superResolutionType",
+          "label": "超分类型",
+          "type": "string",
+          "required": true,
+          "defaultValue": "ultra",
+          "range": "super、ultra",
+          "control": "select",
+          "display": "super、ultra"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1080P",
+          "range": "1080P、2K、4K",
+          "control": "select",
+          "display": "1080P、2K、4K"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Seedance 2.5",
+      "code": "SEEDANCE_2_5",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            30
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 31457280,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "BMP",
+              "TIFF",
+              "GIF"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              }
+            }
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "singleMaxSize": 209715200,
+            "formats": [
+              "MP4",
+              "MOV"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              },
+              "area": {
+                "minPixels": 409600,
+                "maxPixels": 8295044
+              }
+            },
+            "maxDuration": 31,
+            "minDuration": 1,
+            "maxFrameRate": 60
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "AUDIO",
+            "singleMaxSize": 15728640,
+            "formats": [
+              "MP3",
+              "WAV"
+            ],
+            "maxDuration": 30,
+            "minDuration": 2
+          }
+        },
+        {
+          "kind": "图片、视频、音频合计数量",
+          "count": [
+            0,
+            50
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "保持无字幕，避免生成任何文字或字幕，不要生成 logo，不要生成水印。",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "480P、720P、1080P",
+          "control": "select",
+          "display": "480P、720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "adaptive",
+          "range": "adaptive、21:9、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "Auto、21:9、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "最小值 4；最大值 30；步长 1",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、videoEdit、videoExtend",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstLastFrame、videoEdit、videoExtend"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "outputFormat",
+          "label": "输出格式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "mp4",
+          "range": "mp4、mov",
+          "control": "select",
+          "display": "MP4、MOV"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片、视频、音频合计必须为 1～50 个（30张图+10段视频+10段音频）"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片有且仅有 1 个（需要将aspectRatio 置为 adaptive ）"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个 （需要将aspectRatio 置为 adaptive ）"
+        },
+        {
+          "value": "videoEdit",
+          "label": "视频编辑",
+          "requirement": "视频必须为 1 个 （需要将duration 置为 -1 ，aspectRatio 置为 adaptive ）"
+        },
+        {
+          "value": "videoExtend",
+          "label": "视频延长",
+          "requirement": "视频必须为 1 个 （需要将aspectRatio 置为 adaptive ）"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Seedance 2.0",
+      "code": "SEEDANCE_2_0",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            9
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 31457280,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "BMP",
+              "TIFF",
+              "GIF"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              }
+            }
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            3
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "singleMaxSize": 209715200,
+            "formats": [
+              "MP4",
+              "MOV"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              },
+              "area": {
+                "minPixels": 409600,
+                "maxPixels": 8295044
+              }
+            },
+            "maxDuration": 16,
+            "minDuration": 1,
+            "totalDuration": 16,
+            "maxFrameRate": 120
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            3
+          ],
+          "constraints": {
+            "type": "AUDIO",
+            "singleMaxSize": 15728640,
+            "formats": [
+              "MP3",
+              "WAV"
+            ],
+            "maxDuration": 16,
+            "minDuration": 1,
+            "totalDuration": 16
+          }
+        },
+        {
+          "kind": "图片、视频、音频合计数量",
+          "count": [
+            0,
+            15
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "保持无字幕，避免生成任何文字或字幕，不要生成 logo，不要生成水印。",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "480P、720P、1080P、4K、SUPER_720P、SUPER_1080P、SUPER_4K",
+          "control": "select",
+          "display": "480P、720P、1080P、4K、超分 720p、超分 1080p、超分 4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "21:9、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "21:9、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "4、5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "bitrateMode",
+          "label": "码率模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "standard",
+          "range": "standard、high",
+          "control": "select",
+          "display": "Standard、High"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片、视频、音频合计必须为 1～15 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Seedance 2.0 Fast",
+      "code": "SEEDANCE_2_0_FAST",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            9
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 31457280,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "BMP",
+              "TIFF",
+              "GIF"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              }
+            }
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            3
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "singleMaxSize": 52428800,
+            "formats": [
+              "MP4",
+              "MOV"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              },
+              "area": {
+                "minPixels": 409600,
+                "maxPixels": 2086876
+              }
+            },
+            "maxDuration": 16,
+            "minDuration": 1,
+            "totalDuration": 16,
+            "maxFrameRate": 120
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            3
+          ],
+          "constraints": {
+            "type": "AUDIO",
+            "singleMaxSize": 15728640,
+            "formats": [
+              "MP3",
+              "WAV"
+            ],
+            "maxDuration": 16,
+            "minDuration": 1,
+            "totalDuration": 16
+          }
+        },
+        {
+          "kind": "图片、视频、音频合计数量",
+          "count": [
+            0,
+            15
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "保持无字幕，避免生成任何文字或字幕，不要生成 logo，不要生成水印。",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "480P、720P、SUPER_720P、SUPER_1080P、SUPER_4K",
+          "control": "select",
+          "display": "480P、720P、超分 720p、超分 1080p、超分 4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "21:9、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "21:9、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "4、5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "bitrateMode",
+          "label": "码率模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "standard",
+          "range": "standard、high",
+          "control": "select",
+          "display": "Standard、High"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片、视频、音频合计必须为 1～15 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Seedance 2.0 Mini",
+      "code": "SEEDANCE_2_0_MINI",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            9
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 31457280,
+            "totalMaxSize": 67108864,
+            "formats": [
+              "JPEG",
+              "PNG",
+              "WEBP",
+              "BMP",
+              "TIFF",
+              "GIF"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              }
+            }
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            3
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "singleMaxSize": 52428800,
+            "formats": [
+              "MP4",
+              "MOV"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "2:5",
+              "max": "5:2"
+            },
+            "resolution": {
+              "min": {
+                "width": 300,
+                "height": 300
+              },
+              "max": {
+                "width": 6000,
+                "height": 6000
+              },
+              "area": {
+                "minPixels": 409600,
+                "maxPixels": 927408
+              }
+            },
+            "maxDuration": 16,
+            "minDuration": 1,
+            "totalDuration": 16
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            3
+          ]
+        },
+        {
+          "kind": "图片、视频、音频合计数量",
+          "count": [
+            0,
+            15
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "保持无字幕，避免生成任何文字或字幕，不要生成 logo，不要生成水印。",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "480P、720P、SUPER_720P、SUPER_1080P、SUPER_4K",
+          "control": "select",
+          "display": "480P、720P、超分 720p、超分 1080p、超分 4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "21:9、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "21:9、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "4、5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "bitrateMode",
+          "label": "码率模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "standard",
+          "range": "standard、high",
+          "control": "select",
+          "display": "Standard、High"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片、视频、音频合计必须为 1～15 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Wan 3.0",
+      "code": "WAN3_0",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "singleMaxSize": 20971520,
+            "formats": [
+              "JPEG",
+              "JPG",
+              "PNG",
+              "BMP",
+              "WEBP"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "1:8",
+              "max": "8:1"
+            },
+            "resolution": {
+              "min": {
+                "width": 240,
+                "height": 240
+              },
+              "max": {
+                "width": 8000,
+                "height": 8000
+              }
+            }
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            5
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "singleMaxSize": 104857600,
+            "formats": [
+              "MP4",
+              "MOV"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "1:8",
+              "max": "8:1"
+            },
+            "maxDuration": 15,
+            "minDuration": 1,
+            "totalDuration": 15
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            5
+          ],
+          "constraints": {
+            "type": "AUDIO",
+            "singleMaxSize": 15728640,
+            "formats": [
+              "WAV",
+              "MP3"
+            ],
+            "maxDuration": 15,
+            "minDuration": 1,
+            "totalDuration": 15
+          }
+        },
+        {
+          "kind": "图片、视频、音频合计数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "1080P、720P、480P",
+          "control": "select",
+          "display": "1080P、720P、480P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "adaptive",
+          "range": "adaptive、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "Adaptive、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "2、3、4、5、6、7、8、9、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、26、27、28、29、30",
+          "control": "stops",
+          "display": "2s、3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s、16s、17s、18s、19s、20s、21s、22s、23s、24s、25s、26s、27s、28s、29s、30s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "promptExtend",
+          "label": "提示词扩展",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "switch（advanced=true）",
+          "display": "Open Prompt Extend、Close Prompt Extend"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Wan 3.0 Prime",
+      "code": "WAN3_0_PRIME",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            10
+          ],
+          "constraints": {
+            "type": "IMAGE",
+            "formats": [
+              "JPEG",
+              "JPG",
+              "PNG",
+              "BMP",
+              "WEBP"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "1:8",
+              "max": "8:1"
+            },
+            "resolution": {
+              "min": {
+                "width": 240,
+                "height": 240
+              },
+              "max": {
+                "width": 8000,
+                "height": 8000
+              }
+            }
+          }
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            5
+          ],
+          "constraints": {
+            "type": "VIDEO",
+            "formats": [
+              "MP4",
+              "MOV"
+            ],
+            "aspectRatio": {
+              "mode": "range",
+              "min": "1:8",
+              "max": "8:1"
+            },
+            "maxDuration": 15,
+            "minDuration": 1,
+            "totalDuration": 15
+          }
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            5
+          ],
+          "constraints": {
+            "type": "AUDIO",
+            "formats": [
+              "WAV",
+              "MP3"
+            ],
+            "maxDuration": 15,
+            "minDuration": 1,
+            "totalDuration": 15
+          }
+        },
+        {
+          "kind": "图片、视频、音频合计数量",
+          "count": [
+            0,
+            20
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "1080P、720P、480P",
+          "control": "select",
+          "display": "1080P、720P、480P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "adaptive",
+          "range": "adaptive、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "Adaptive、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "2、3、4、5、6、7、8、9、10、11、12、13、14、15、16、17、18、19、20、21、22、23、24、25、26、27、28、29、30",
+          "control": "stops",
+          "display": "2s、3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s、16s、17s、18s、19s、20s、21s、22s、23s、24s、25s、26s、27s、28s、29s、30s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "promptExtend",
+          "label": "提示词扩展",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "switch（advanced=true）",
+          "display": "Open Prompt Extend、Close Prompt Extend"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "MiniMax H3",
+      "code": "MINIMAX_H3",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            9
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            3
+          ]
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "2K",
+          "range": "768P、2K",
+          "control": "select",
+          "display": "768P、2K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "adaptive",
+          "range": "adaptive、21:9、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "Adaptive、21:9、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、lastFrameToVideo",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、lastFrameToVideo"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true",
+          "control": "select",
+          "display": "Audio On"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片、视频必须为 1～12 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "lastFrameToVideo",
+          "label": "尾帧生视频",
+          "requirement": "图片必须为 1 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "MiniMax H3 Max",
+      "code": "MINIMAX_H3_MAX",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            2
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "768P",
+          "range": "480P、768P",
+          "control": "select",
+          "display": "480P、768P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "21:9、16:9、4:3、1:1、3:4、9:16",
+          "control": "select",
+          "display": "21:9、16:9、4:3、1:1、3:4、9:16"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstAndLastFrame"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Vidu Q3 Pro",
+      "code": "VIDU_Q3_PRO",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            7
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、4:3、3:4、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、4:3、3:4、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "1、2、3、4、5、6、7、8、9、10、11、12、13、14、15、16",
+          "control": "select",
+          "display": "1s、2s、3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s、16s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame、imageRefer",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstAndLastFrame、imageRefer"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "imageRefer",
+          "label": "图片参考生成",
+          "requirement": "图片必须为 1～3 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Vidu Q3 Mix",
+      "code": "VIDU_Q3_MIX",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            1,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、4:3、3:4、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、4:3、3:4、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "1、2、3、4、5、6、7、8、9、10、11、12、13、14、15、16",
+          "control": "stops",
+          "display": "1s、2s、3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s、16s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "imageRefer",
+          "range": "imageRefer",
+          "control": "radio",
+          "display": "imageRefer"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "imageRefer",
+          "label": "图片参考生成",
+          "requirement": "图片必须为 1～3 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Vidu Q2 Pro",
+      "code": "VIDU_Q2_PRO",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            7
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            2
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、4:3、3:4、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、4:3、3:4、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "1、2、3、4、5、6、7、8、9、10、0",
+          "control": "select",
+          "display": "1s、2s、3s、4s、5s、6s、7s、8s、9s、10s、Auto"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "referToVideo、imageToVideo、firstAndLastFrame、imageRefer",
+          "control": "radio",
+          "display": "referToVideo、imageToVideo、firstAndLastFrame、imageRefer"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On(Only BGM)、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "视频必须为 1～2 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "imageRefer",
+          "label": "图片参考生成",
+          "requirement": "图片必须为 1～7 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "HappyHorse 1.1",
+      "code": "HAPPYHORSE_11",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            9
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1080P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、16:9、9:16、1:1、4:3、3:4、4:5、5:4、9:21、21:9",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1、4:3、3:4、4:5、5:4、9:21、21:9"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "3、5、10、15",
+          "control": "stops",
+          "display": "3s、5s、10s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、referToVideo",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、referToVideo"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "1x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片必须为 1～9 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Seedance 1.5 Pro",
+      "code": "SEEDANCE_1_5",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            2
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "480P、720P、1080P",
+          "control": "select",
+          "display": "480P、720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、4:3、3:4、1:1、21:9",
+          "control": "select",
+          "display": "Auto、16:9、9:16、4:3、3:4、1:1、21:9"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "4、5、6、7、8、9、10、11、12",
+          "control": "stops",
+          "display": "4s、5s、6s、7s、8s、9s、10s、11s、12s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "HappyHorse 1.0",
+      "code": "HAPPYHORSE_10",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            9
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            1
+          ]
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            1
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "\"\"、16:9、9:16、1:1、4:3、3:4",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1、4:3、3:4"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "3、5、10、15",
+          "control": "stops",
+          "display": "3s、5s、10s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、referToVideo、videoEdit",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、referToVideo、videoEdit"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "1x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片必须为 1～9 个"
+        },
+        {
+          "value": "videoEdit",
+          "label": "视频编辑",
+          "requirement": "视频必须为 1 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Kling V3 Omni",
+      "code": "KLING_V3_OMNI",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            14
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            10
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P、4K",
+          "control": "select",
+          "display": "720P、1080P、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "3、4、5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、imageRefer",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、imageRefer"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "视频必须为 1 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "imageRefer",
+          "label": "图片参考生成",
+          "requirement": "图片必须为 1～7 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Kling V3",
+      "code": "KLING_V3",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            2
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P、4K",
+          "control": "select",
+          "display": "720P、1080P、4K"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "3、4、5、6、7、8、9、10、11、12、13、14、15",
+          "control": "stops",
+          "display": "3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstAndLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "false",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Kling O1",
+      "code": "KLING_O1",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            7
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            1
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、10",
+          "control": "stops",
+          "display": "5s、10s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、imageRefer、videoEdit",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo、firstAndLastFrame、imageRefer、videoEdit"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "视频必须为 1 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "imageRefer",
+          "label": "图片参考生成",
+          "requirement": "图片必须为 1～7 个"
+        },
+        {
+          "value": "videoEdit",
+          "label": "视频编辑",
+          "requirement": "视频必须为 1 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Kling 2.6",
+      "code": "KLING_2_6",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            2
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1080P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、1:1",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、10",
+          "control": "stops",
+          "display": "5s、10s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstAndLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "PixVerse V6",
+      "code": "PIXVERSE_V6",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            2
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            1
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "360P、540P、720P、1080P",
+          "control": "select",
+          "display": "360P、540P、720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "16:9、4:3、1:1、3:4、9:16、2:3、3:2、21:9",
+          "control": "select",
+          "display": "16:9、4:3、1:1、3:4、9:16、2:3、3:2、21:9"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、8、10、15",
+          "control": "select",
+          "display": "5s、8s、10s、15s"
+        },
+        {
+          "name": "extendDuration",
+          "label": "扩展时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、8、10、15",
+          "control": "select",
+          "display": "5s、8s、10s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame、videoExtend",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstAndLastFrame、videoExtend"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "videoExtend",
+          "label": "视频延长",
+          "requirement": "视频必须为 1 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "PixVerse C1",
+      "code": "PIXVERSE_C1",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "720P",
+          "range": "360P、540P、720P、1080P",
+          "control": "select",
+          "display": "360P、540P、720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "16:9、4:3、1:1、3:4、9:16、2:3、3:2、21:9",
+          "control": "select",
+          "display": "16:9、4:3、1:1、3:4、9:16、2:3、3:2、21:9"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "5、8、10、15",
+          "control": "stops",
+          "display": "5s、8s、10s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、firstAndLastFrame、referToVideo",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、firstAndLastFrame、referToVideo (@ref1/@ref2)"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "select",
+          "display": "Audio On、Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片必须为 1～3 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Hailuo 2.3",
+      "code": "HAILUO_23",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "768P",
+          "range": "768P、1080P",
+          "control": "select",
+          "display": "768P、1080P"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "6",
+          "range": "6、10",
+          "control": "select",
+          "display": "6s、10s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "false",
+          "range": "false",
+          "control": "select",
+          "display": "Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Hailuo 02",
+      "code": "HAILUO_02",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "768P",
+          "range": "768P、1080P",
+          "control": "select",
+          "display": "768P、1080P"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "6",
+          "range": "6、10",
+          "control": "select",
+          "display": "6s、10s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textToVideo",
+          "range": "textToVideo、imageToVideo、lastFrameToVideo、firstAndLastFrame",
+          "control": "radio",
+          "display": "textToVideo、imageToVideo、lastFrameToVideo、firstAndLastFrame"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "false",
+          "range": "false",
+          "control": "select",
+          "display": "Audio Off"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "lastFrameToVideo",
+          "label": "尾帧生视频",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "firstAndLastFrame",
+          "label": "首尾帧生成",
+          "requirement": "图片必须为 2 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Wan 2.6",
+      "code": "WAN2_6",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "音频数量",
+          "count": [
+            0,
+            1
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            5
+          ]
+        },
+        {
+          "kind": "视频数量",
+          "count": [
+            0,
+            3
+          ]
+        },
+        {
+          "kind": "图片、视频合计数量",
+          "count": [
+            0,
+            5
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1080P",
+          "range": "720P、1080P",
+          "control": "select",
+          "display": "720P、1080P"
+        },
+        {
+          "name": "aspectRatio",
+          "label": "宽高比",
+          "type": "string",
+          "required": true,
+          "defaultValue": "16:9",
+          "range": "\"\"、16:9、9:16、1:1、4:3、3:4",
+          "control": "select",
+          "display": "Auto、16:9、9:16、1:1、4:3、3:4"
+        },
+        {
+          "name": "duration",
+          "label": "生成时长",
+          "type": "string",
+          "required": true,
+          "defaultValue": "5",
+          "range": "2、3、4、5、6、7、8、9、10、11、12、13、14、15",
+          "control": "select",
+          "display": "2s、3s、4s、5s、6s、7s、8s、9s、10s、11s、12s、13s、14s、15s"
+        },
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "referToVideo",
+          "range": "textToVideo、referToVideo、imageToVideo",
+          "control": "radio",
+          "display": "textToVideo、referToVideo、imageToVideo"
+        },
+        {
+          "name": "includeAudio",
+          "label": "是否包含音频",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true",
+          "control": "select",
+          "display": "Audio On"
+        },
+        {
+          "name": "promptExtend",
+          "label": "提示词扩展",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "true",
+          "range": "true、false",
+          "control": "switch（advanced=true）",
+          "display": "Open Prompt Extend、Close Prompt Extend"
+        },
+        {
+          "name": "multiShot",
+          "label": "多镜头",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "false",
+          "range": "false、true",
+          "control": "switch（advanced=true）",
+          "display": "single、multi"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1、2、4",
+          "control": "select",
+          "display": "1x、2x、4x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textToVideo",
+          "label": "文生视频",
+          "requirement": "无需输入素材"
+        },
+        {
+          "value": "referToVideo",
+          "label": "参考素材生成",
+          "requirement": "图片、视频必须为 1～5 个"
+        },
+        {
+          "value": "imageToVideo",
+          "label": "图生视频",
+          "requirement": "图片必须为 1 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_VIDEO",
+      "name": "Video Upscale",
+      "code": "VIDEO_UPSCALE",
+      "nodeType": "GENERATE_VIDEO",
+      "inputs": [
+        {
+          "kind": "视频数量",
+          "count": [
+            1,
+            1
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "resolution",
+          "label": "分辨率",
+          "type": "string",
+          "required": true,
+          "defaultValue": "1080P",
+          "range": "1080P、2K、4K",
+          "control": "—",
+          "display": "—"
+        },
+        {
+          "name": "frameRate",
+          "label": "帧率",
+          "type": "string",
+          "required": false,
+          "defaultValue": "\"\"",
+          "range": "\"\"、30FPS、60FPS",
+          "control": "—",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_AUDIO",
+      "name": "MiniMax Speech 2.8 HD",
+      "code": "MINIMAX_SPEECH_28_HD",
+      "nodeType": "GENERATE_AUDIO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "文本总长度",
+          "count": [
+            0,
+            10000
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "timbreId",
+          "label": "音色 ID",
+          "type": "string",
+          "required": true,
+          "defaultValue": "male-qn-qingse",
+          "range": "—",
+          "control": "input",
+          "display": "—"
+        },
+        {
+          "name": "speed",
+          "label": "语速",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1.0",
+          "range": "最小值 0.5；最大值 2；步长 0.01",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "vol",
+          "label": "音量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "最小值 0；最大值 10；步长 0.01",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "pitch",
+          "label": "音调",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -12；最大值 12；步长 1",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifyPitch",
+          "label": "声音修改音调",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -100；最大值 100；步长 1",
+          "control": "range（advanced=true）",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifyIntensity",
+          "label": "声音修改强度",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -100；最大值 100；步长 1",
+          "control": "range（advanced=true）",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifyTimbre",
+          "label": "声音修改音色",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -100；最大值 100；步长 1",
+          "control": "range（advanced=true）",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifySoundEffects",
+          "label": "声音修改音效",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "spacious_echo、auditorium_echo、lofi_telephone、robotic",
+          "control": "radio-switch（advanced=true）",
+          "display": "Spacious Echo、Auditorium Echo、Lofi Telephone、Robotic"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_AUDIO",
+      "name": "MiniMax Speech 2.8 Turbo",
+      "code": "MINIMAX_SPEECH_28_TURBO",
+      "nodeType": "GENERATE_AUDIO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "文本总长度",
+          "count": [
+            0,
+            10000
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "timbreId",
+          "label": "音色 ID",
+          "type": "string",
+          "required": true,
+          "defaultValue": "male-qn-qingse",
+          "range": "—",
+          "control": "input",
+          "display": "—"
+        },
+        {
+          "name": "speed",
+          "label": "语速",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1.0",
+          "range": "最小值 0.5；最大值 2；步长 0.01",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "vol",
+          "label": "音量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "最小值 0；最大值 10；步长 0.01",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "pitch",
+          "label": "音调",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -12；最大值 12；步长 1",
+          "control": "range",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifyPitch",
+          "label": "声音修改音调",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -100；最大值 100；步长 1",
+          "control": "range（advanced=true）",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifyIntensity",
+          "label": "声音修改强度",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -100；最大值 100；步长 1",
+          "control": "range（advanced=true）",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifyTimbre",
+          "label": "声音修改音色",
+          "type": "int",
+          "required": true,
+          "defaultValue": "0",
+          "range": "最小值 -100；最大值 100；步长 1",
+          "control": "range（advanced=true）",
+          "display": "—"
+        },
+        {
+          "name": "voiceModifySoundEffects",
+          "label": "声音修改音效",
+          "type": "string",
+          "required": true,
+          "defaultValue": "\"\"",
+          "range": "spacious_echo、auditorium_echo、lofi_telephone、robotic",
+          "control": "radio-switch（advanced=true）",
+          "display": "Spacious Echo、Auditorium Echo、Lofi Telephone、Robotic"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_AUDIO",
+      "name": "MiniMax Music 2.6",
+      "code": "MINIMAX_MUSIC_26",
+      "nodeType": "GENERATE_AUDIO",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "文本总长度",
+          "count": [
+            0,
+            2000
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "musicMode",
+          "label": "音乐模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "CUSTOM",
+          "range": "CUSTOM、ADAPTIVE、INSTRUMENTAL",
+          "control": "select",
+          "display": "自定义、自适应、纯音乐"
+        },
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "lyrics",
+          "label": "歌词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "长度 [0,3500]",
+          "control": "text",
+          "display": "—"
+        }
+      ],
+      "referModes": []
+    },
+    {
+      "category": "GENERATE_3D",
+      "name": "Hunyuan 3D Pro 3.0",
+      "code": "HUNYUAN_3D_PRO_30",
+      "nodeType": "GENERATE_3D",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            3
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textTo3D",
+          "range": "textTo3D、imageTo3D、multiTo3D",
+          "control": "radio",
+          "display": "textTo3D、imageTo3D、multiTo3D"
+        },
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "generateType",
+          "label": "生成类型",
+          "type": "string",
+          "required": true,
+          "defaultValue": "Normal",
+          "range": "Normal、LowPoly、Geometry、Sketch",
+          "control": "select",
+          "display": "Normal、LowPoly、Geometry、Sketch"
+        },
+        {
+          "name": "enablePBR",
+          "label": "是否启用 PBR",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "false",
+          "range": "false、true",
+          "control": "select",
+          "display": "Off、On"
+        },
+        {
+          "name": "faceCount",
+          "label": "面数",
+          "type": "string",
+          "required": true,
+          "defaultValue": "300000",
+          "range": "300000、500000、0",
+          "control": "select",
+          "display": "300000、500000、default"
+        },
+        {
+          "name": "polygonType",
+          "label": "多边形类型",
+          "type": "string",
+          "required": true,
+          "defaultValue": "triangle",
+          "range": "triangle、quadrilateral",
+          "control": "select",
+          "display": "Triangle、Quadrilateral"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "1x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textTo3D",
+          "label": "文生 3D",
+          "requirement": "文本节点必须为 1～20 个"
+        },
+        {
+          "value": "imageTo3D",
+          "label": "图生 3D",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "multiTo3D",
+          "label": "多图生 3D",
+          "requirement": "图片必须为 1～3 个"
+        }
+      ]
+    },
+    {
+      "category": "GENERATE_3D",
+      "name": "Hunyuan 3D Pro 3.1",
+      "code": "HUNYUAN_3D_PRO_31",
+      "nodeType": "GENERATE_3D",
+      "inputs": [
+        {
+          "kind": "文本节点数量",
+          "count": [
+            0,
+            20
+          ]
+        },
+        {
+          "kind": "图片数量",
+          "count": [
+            0,
+            7
+          ]
+        }
+      ],
+      "params": [
+        {
+          "name": "referModel",
+          "label": "参考/生成模式",
+          "type": "string",
+          "required": true,
+          "defaultValue": "textTo3D",
+          "range": "textTo3D、imageTo3D、multiTo3D",
+          "control": "radio",
+          "display": "textTo3D、imageTo3D、multiTo3D"
+        },
+        {
+          "name": "prompt",
+          "label": "提示词",
+          "type": "string",
+          "required": true,
+          "defaultValue": "null",
+          "range": "不限制",
+          "control": "text",
+          "display": "—"
+        },
+        {
+          "name": "generateType",
+          "label": "生成类型",
+          "type": "string",
+          "required": true,
+          "defaultValue": "Normal",
+          "range": "Normal、Geometry",
+          "control": "select",
+          "display": "Normal、Geometry"
+        },
+        {
+          "name": "enablePBR",
+          "label": "是否启用 PBR",
+          "type": "boolean",
+          "required": true,
+          "defaultValue": "false",
+          "range": "false、true",
+          "control": "select",
+          "display": "Off、On"
+        },
+        {
+          "name": "faceCount",
+          "label": "面数",
+          "type": "string",
+          "required": true,
+          "defaultValue": "300000",
+          "range": "300000、500000、0",
+          "control": "select",
+          "display": "300000、500000、default"
+        },
+        {
+          "name": "count",
+          "label": "生成数量",
+          "type": "int",
+          "required": true,
+          "defaultValue": "1",
+          "range": "1",
+          "control": "select",
+          "display": "1x"
+        }
+      ],
+      "referModes": [
+        {
+          "value": "textTo3D",
+          "label": "文生 3D",
+          "requirement": "文本节点必须为 1～20 个"
+        },
+        {
+          "value": "imageTo3D",
+          "label": "图生 3D",
+          "requirement": "图片必须为 1 个"
+        },
+        {
+          "value": "multiTo3D",
+          "label": "多图生 3D",
+          "requirement": "图片必须为 1～7 个"
+        }
+      ]
+    }
+  ]
+}

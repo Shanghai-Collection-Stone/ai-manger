@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -12,6 +13,8 @@ import type {
   DouyinGenerationJobKind,
   DouyinGenerationJobProgress,
   DouyinGenerationJobView,
+  DouyinStoryboardPreference,
+  DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import { DouyinChildTopicGenerationService } from './douyin-child-topic-generation.service.js';
 import { DouyinStoryboardGenerationService } from './douyin-storyboard-generation.service.js';
@@ -28,6 +31,13 @@ type DouyinScope = { tenantId?: string; userId: string };
 export const DOUYIN_GENERATION_STALE_MS = 10 * 60 * 1000;
 
 /**
+ * @description 当前进程同时执行的分镜任务上限；一次挑中多条脚本时其余任务在 `queued` 阶段排队。
+ * @keyword-cn 分镜任务并发, 排队生成
+ * @keyword-en storyboard-job-concurrency, queued-generation
+ */
+export const DOUYIN_STORYBOARD_JOB_CONCURRENCY = 3;
+
+/**
  * @description 后台生成失败码与界面可读中文原因的对照表，未知码回退为原始码。
  * @keyword-cn 生成失败原因, 错误码翻译
  * @keyword-en generation-failure-reason, error-code-translate
@@ -40,6 +50,8 @@ export const DOUYIN_GENERATION_ERROR_MESSAGES: Record<string, string> = {
   DOUYIN_PARENT_NOT_FOUND: '母选题不存在或已被删除。',
   DOUYIN_CHILD_TOPICS_DUPLICATED: 'AI 生成的子选题有重复，请重试。',
   DOUYIN_GENERATION_INTERRUPTED: '服务端生成任务已中断，请重新生成。',
+  DOUYIN_SHOT_IMAGES_ALL_FAILED:
+    '文字分镜已保存，但 AI 画面全部生成失败，可在分镜上逐镜重新生成画面。',
   CREDIT_EXHAUSTED: 'Credit 点数不足，请充值后再生成。',
 };
 
@@ -55,6 +67,9 @@ export class DouyinGenerationJobService {
   private readonly jobs: Collection<DouyinGenerationJobEntity>;
   /** 当前进程正在执行的任务 ID，用于识别服务重启遗留的僵尸任务 */
   private readonly activeJobIds = new Set<string>();
+  /** 正在执行的分镜任务数与排队等待名额的任务 */
+  private storyboardRunning = 0;
+  private readonly storyboardWaiters: Array<() => void> = [];
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
@@ -138,7 +153,7 @@ export class DouyinGenerationJobService {
   }
 
   /**
-   * @description 读取当前用户运行中与最近 24 小时结束的生成任务，读取前先收敛服务中断遗留的运行态。
+   * @description 读取当前用户运行中、最近 24 小时结束，以及候选脚本还没处理的生成任务，读取前先收敛服务中断遗留的运行态。
    * @keyword-cn 查询生成任务, 进度轮询
    * @keyword-en list-generation-jobs, progress-polling
    * @param scope 当前租户用户作用域。
@@ -150,7 +165,16 @@ export class DouyinGenerationJobService {
     const rows = await this.jobs
       .find({
         ...this.scopeFilter(scope),
-        $or: [{ status: 'running' }, { updatedAt: { $gte: since } }],
+        $or: [
+          { status: 'running' },
+          { updatedAt: { $gte: since } },
+          {
+            kind: 'children',
+            status: 'done',
+            'result.drafts.0': { $exists: true },
+            'result.draftsSettledAt': { $exists: false },
+          },
+        ],
       })
       .sort({ startedAt: -1 })
       .limit(100)
@@ -179,17 +203,28 @@ export class DouyinGenerationJobService {
           ),
         );
     };
+    let holdsSlot = false;
     try {
       let result: DouyinGenerationJobView['result'];
       let progress: DouyinGenerationJobProgress;
       if (job.kind === 'storyboard') {
+        await this.acquireStoryboardSlot(report);
+        holdsSlot = true;
+        report({ stage: 'preparing', current: 0 });
         const output = await this.storyboard.generate(
           job.topicId,
           job.prompt,
           scope,
           report,
         );
-        result = { shotCount: output.storyboard.length };
+        if (output.imageFailedCount > 0 && output.imageCount === 0) {
+          throw new Error('DOUYIN_SHOT_IMAGES_ALL_FAILED');
+        }
+        result = {
+          shotCount: output.storyboard.length,
+          imageCount: output.imageCount,
+          imageFailedCount: output.imageFailedCount,
+        };
         progress = { stage: 'saving', current: output.storyboard.length };
       } else {
         const output = await this.childTopics.generate(
@@ -200,11 +235,11 @@ export class DouyinGenerationJobService {
         );
         result = {
           decidedCount: output.decidedCount,
-          createdTopicIds: output.topics.map((topic) => topic.id),
+          drafts: output.drafts,
         };
         progress = {
           stage: 'saving',
-          current: output.topics.length,
+          current: output.drafts.length,
           total: output.decidedCount,
         };
       }
@@ -244,8 +279,145 @@ export class DouyinGenerationJobService {
         )
         .catch(() => undefined);
     } finally {
+      if (holdsSlot) this.releaseStoryboardSlot();
       this.activeJobIds.delete(job.id);
     }
+  }
+
+  /**
+   * @description 保存用户从某次子选题任务里挑中的候选脚本（可改标题 / 正文，带各自配图偏向），
+   *   标记这批候选已处理，然后为每条新脚本启动后台分镜任务。
+   * @keyword-cn 保存挑选脚本, 启动分镜任务
+   * @keyword-en confirm-script-drafts, start-storyboard-jobs
+   * @param jobId 子选题生成任务 ID。
+   * @param items 挑中的候选：`key` 对应任务里的候选，标题 / 正文留空则沿用候选原文。
+   * @param scope 当前租户用户作用域。
+   * @returns 新脚本与为它们启动的分镜任务。
+   * @throws {NotFoundException} DOUYIN_SCRIPT_DRAFTS_NOT_FOUND：任务不存在、未完成或候选已处理。
+   * @throws {BadRequestException} DOUYIN_SCRIPT_DRAFT_KEY_INVALID：提交了任务里没有的候选。
+   */
+  async confirmDrafts(
+    jobId: string,
+    items: Array<{
+      key: string;
+      title?: string;
+      script?: string;
+      storyboardPreference?: Partial<DouyinStoryboardPreference>;
+    }>,
+    scope: DouyinScope,
+  ): Promise<{
+    topics: Array<Omit<DouyinTopicEntity, '_id'>>;
+    jobs: DouyinGenerationJobView[];
+  }> {
+    const job = await this.requirePendingDrafts(jobId, scope);
+    const drafts = new Map(
+      (job.result?.drafts ?? []).map((draft) => [draft.key, draft]),
+    );
+    const picked = items.map((item) => {
+      const draft = drafts.get(item.key);
+      if (!draft) {
+        throw new BadRequestException('DOUYIN_SCRIPT_DRAFT_KEY_INVALID');
+      }
+      return {
+        title: String(item.title ?? '').trim() || draft.title,
+        script: String(item.script ?? '').trim() || draft.script,
+        storyboardPreference: item.storyboardPreference,
+      };
+    });
+    // 先占住这批候选，防止连点重复入库
+    const claimed = await this.jobs.updateOne(
+      {
+        id: job.id,
+        'result.draftsSettledAt': { $exists: false },
+      },
+      { $set: { 'result.draftsSettledAt': new Date(), updatedAt: new Date() } },
+    );
+    if (!claimed.modifiedCount) {
+      throw new NotFoundException('DOUYIN_SCRIPT_DRAFTS_NOT_FOUND');
+    }
+    let topics: Array<Omit<DouyinTopicEntity, '_id'>>;
+    try {
+      topics = await this.repository.createChildren(job.topicId, picked, scope);
+    } catch (error) {
+      await this.jobs.updateOne(
+        { id: job.id },
+        { $unset: { 'result.draftsSettledAt': '' } },
+      );
+      throw error;
+    }
+    await this.jobs.updateOne(
+      { id: job.id },
+      { $set: { 'result.createdTopicIds': topics.map((topic) => topic.id) } },
+    );
+    const started: DouyinGenerationJobView[] = [];
+    for (const topic of topics) {
+      started.push(await this.start('storyboard', topic.id, undefined, scope));
+    }
+    return { topics, jobs: started };
+  }
+
+  /**
+   * @description 放弃某次子选题任务生成的全部候选脚本，之后不再提示挑选。
+   * @keyword-cn 放弃候选脚本, 候选已处理
+   * @keyword-en discard-script-drafts, drafts-settled
+   * @param jobId 子选题生成任务 ID。
+   * @param scope 当前租户用户作用域。
+   * @throws {NotFoundException} DOUYIN_SCRIPT_DRAFTS_NOT_FOUND。
+   */
+  async discardDrafts(jobId: string, scope: DouyinScope): Promise<void> {
+    const job = await this.requirePendingDrafts(jobId, scope);
+    await this.jobs.updateOne(
+      { id: job.id },
+      { $set: { 'result.draftsSettledAt': new Date(), updatedAt: new Date() } },
+    );
+  }
+
+  /**
+   * @description 读取当前用户已完成、带候选脚本且还没处理过的子选题任务。
+   * @keyword-cn 读取待选脚本, 候选归属校验
+   * @keyword-en require-pending-drafts, draft-ownership-check
+   */
+  private async requirePendingDrafts(
+    jobId: string,
+    scope: DouyinScope,
+  ): Promise<DouyinGenerationJobEntity> {
+    const job = await this.jobs.findOne({
+      ...this.scopeFilter(scope),
+      id: jobId,
+      kind: 'children',
+      status: 'done',
+    });
+    if (!job?.result?.drafts?.length || job.result.draftsSettledAt) {
+      throw new NotFoundException('DOUYIN_SCRIPT_DRAFTS_NOT_FOUND');
+    }
+    return job;
+  }
+
+  /**
+   * @description 占一个分镜执行名额，名额满时回报 `queued` 并等待前面的任务结束。
+   * @keyword-cn 占用分镜名额, 排队生成
+   * @keyword-en acquire-storyboard-slot, queued-generation
+   */
+  private async acquireStoryboardSlot(
+    report: (progress: DouyinGenerationJobProgress) => void,
+  ): Promise<void> {
+    if (this.storyboardRunning >= DOUYIN_STORYBOARD_JOB_CONCURRENCY) {
+      report({ stage: 'queued', current: 0 });
+      await new Promise<void>((resolve) =>
+        this.storyboardWaiters.push(resolve),
+      );
+    }
+    this.storyboardRunning += 1;
+  }
+
+  /**
+   * @description 释放分镜执行名额并唤醒下一个排队任务。
+   * @keyword-cn 释放分镜名额, 唤醒排队
+   * @keyword-en release-storyboard-slot, wake-queued-job
+   */
+  private releaseStoryboardSlot(): void {
+    this.storyboardRunning -= 1;
+    this.storyboardWaiters.shift()?.();
   }
 
   /**

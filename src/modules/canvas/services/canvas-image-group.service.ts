@@ -16,6 +16,11 @@ import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { SassService } from '../../sass/services/sass.service.js';
 import { MaterialStyleService } from '../../gallery/material-styles/services/material-style.service.js';
 import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
+import {
+  toWorkflowLlmConfig,
+  WorkflowModelService,
+} from '../../workflow-model/services/workflow-model.service.js';
+import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
 import type {
   CanvasImageGroup,
   CanvasGroupImage,
@@ -214,6 +219,7 @@ export class CanvasImageGroupService {
     private readonly agentService: AgentService,
     private readonly sassService: SassService,
     private readonly materialStyles: MaterialStyleService,
+    private readonly workflowModels: WorkflowModelService,
   ) {}
 
   private coercePlainText(value: unknown): string {
@@ -380,6 +386,11 @@ export class CanvasImageGroupService {
       baseImageCandidates,
       kind: 'cover',
       includeSystemPrompt,
+      runtimeOverride:
+        (await this.workflowModels.resolveNodeRuntime(
+          WORKFLOW_NODES.xhsArticle.key,
+          WORKFLOW_NODES.xhsArticle.coverImage,
+        )) ?? undefined,
       billingContext: {
         tenantId: input.tenantId,
         userId: input.userId,
@@ -500,6 +511,11 @@ export class CanvasImageGroupService {
       baseImageCandidates,
       kind: 'inner',
       includeSystemPrompt,
+      runtimeOverride:
+        (await this.workflowModels.resolveNodeRuntime(
+          WORKFLOW_NODES.xhsArticle.key,
+          WORKFLOW_NODES.xhsArticle.innerImage,
+        )) ?? undefined,
       billingContext: {
         tenantId: input.tenantId,
         userId: input.userId,
@@ -1719,6 +1735,11 @@ export class CanvasImageGroupService {
         size: '640x853',
         baseImageCandidates,
         kind: 'cover',
+        runtimeOverride:
+          (await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.xhsArticle.key,
+            WORKFLOW_NODES.xhsArticle.coverImage,
+          )) ?? undefined,
         billingContext: {
           tenantId: input.tenantId,
           userId: input.userId,
@@ -1814,6 +1835,11 @@ export class CanvasImageGroupService {
         size: `${COLLAGE_WIDTH}x${COLLAGE_HEIGHT}`,
         kind: 'cover',
         includeSystemPrompt: false,
+        runtimeOverride:
+          (await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.xhsArticle.key,
+            WORKFLOW_NODES.xhsArticle.coverOverlay,
+          )) ?? undefined,
         billingContext: {
           tenantId: input.tenantId,
           userId: input.userId,
@@ -2389,6 +2415,12 @@ export class CanvasImageGroupService {
         nonStreaming: true,
         temperature: 0.8,
         tenantId,
+        ...toWorkflowLlmConfig(
+          await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.xhsArticle.key,
+            WORKFLOW_NODES.xhsArticle.coverCopy,
+          ),
+        ),
         billingContext: {
           tenantId,
           source: 'canvas.cover-text-generation',

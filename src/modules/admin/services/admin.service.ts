@@ -218,6 +218,7 @@ export class AdminService {
       'llm',
       'em',
       'image',
+      'video',
     ];
     for (const modelCategory of categories) {
       const defaults = await this.aiProviders
@@ -948,7 +949,7 @@ export class AdminService {
       name: string;
       baseUrl?: string;
       model?: string;
-      modelCategory: 'llm' | 'em' | 'image';
+      modelCategory: 'llm' | 'em' | 'image' | 'video';
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
@@ -959,7 +960,9 @@ export class AdminService {
     this.assertSuperAdmin(currentUser);
     const now = new Date();
     const modelCategory: AdminAiProviderEntity['modelCategory'] =
-      input.modelCategory === 'em' || input.modelCategory === 'image'
+      input.modelCategory === 'em' ||
+      input.modelCategory === 'image' ||
+      input.modelCategory === 'video'
         ? input.modelCategory
         : 'llm';
     const filter: Record<string, unknown> = {
@@ -1017,7 +1020,7 @@ export class AdminService {
       name?: string;
       baseUrl?: string;
       model?: string;
-      modelCategory?: 'llm' | 'em' | 'image';
+      modelCategory?: 'llm' | 'em' | 'image' | 'video';
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
@@ -1045,7 +1048,8 @@ export class AdminService {
     if (
       input.modelCategory === 'llm' ||
       input.modelCategory === 'em' ||
-      input.modelCategory === 'image'
+      input.modelCategory === 'image' ||
+      input.modelCategory === 'video'
     ) {
       updates.modelCategory = input.modelCategory;
     }
@@ -1156,8 +1160,15 @@ export class AdminService {
     }
 
     let endpoint = '';
+    let method: 'GET' | 'POST' = 'GET';
     const headers: Record<string, string> = {};
-    if (code === 'gemini' || code === 'google-genai') {
+    if (code === 'pixmax') {
+      // PixMax 没有 /models，用「可用模型」接口探活，同样不消耗积分
+      endpoint = `${baseUrl.replace(/\/$/, '')}/openapi/model/available`;
+      method = 'POST';
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['Content-Type'] = 'application/json';
+    } else if (code === 'gemini' || code === 'google-genai') {
       endpoint = `${baseUrl.replace(/\/$/, '')}/models?key=${encodeURIComponent(apiKey)}`;
     } else if (code === 'anthropic' || code === 'claude') {
       endpoint = `${baseUrl.replace(/\/$/, '')}/v1/models`;
@@ -1171,8 +1182,9 @@ export class AdminService {
     const startedAt = Date.now();
     try {
       const response = await fetch(endpoint, {
-        method: 'GET',
+        method,
         headers,
+        body: method === 'POST' ? '{}' : undefined,
         signal: AbortSignal.timeout(15 * 1000),
       });
       const latencyMs = Date.now() - startedAt;
@@ -1202,7 +1214,9 @@ export class AdminService {
             .map((m) => {
               if (m && typeof m === 'object') {
                 const r = m as Record<string, unknown>;
-                return String(r['id'] ?? r['name'] ?? '').trim();
+                return String(
+                  r['id'] ?? r['modelCode'] ?? r['name'] ?? '',
+                ).trim();
               }
               return '';
             })
@@ -1260,6 +1274,8 @@ export class AdminService {
         return 'https://ark.cn-beijing.volces.com/api/v3';
       case 'kimi':
         return 'https://api.moonshot.cn/v1';
+      case 'pixmax':
+        return 'https://app.pixmax.cn';
       case 'moonshot':
       case 'moonshotai':
         return 'https://api.moonshot.ai/v1';
@@ -1298,7 +1314,7 @@ export class AdminService {
    * @keyword-en get default ai provider
    */
   async getDefaultAiProvider(
-    modelCategory: 'llm' | 'em' | 'image' = 'llm',
+    modelCategory: 'llm' | 'em' | 'image' | 'video' = 'llm',
   ): Promise<AdminAiProviderEntity | null> {
     const row = await this.aiProviders.findOne(
       { enabled: true, isDefault: true, modelCategory },
@@ -1385,6 +1401,51 @@ export class AdminService {
       providerCode: row.providerCode,
       model: row.model,
       baseUrl: row.baseUrl,
+      apiKey: row.apiKey,
+      tokensPerCredit: row.tokensPerCredit,
+      fixedTokensPerCall: row.fixedTokensPerCall,
+    };
+  }
+
+  /**
+   * @description 按 ID 读取一个已启用提供商的运行配置，供工作流节点指定模型时使用；
+   *   不存在、已停用或 ID 非法都返回 null，由调用方回退默认提供商。
+   * @keyword-cn 按ID读取提供商, 节点运行配置
+   * @keyword-en get-provider-runtime-by-id, node-runtime-config
+   * @param {string} id 提供商 `_id`。
+   * @returns 运行配置（含类型与 Key）或 null。
+   */
+  async getAiProviderRuntimeById(id: string): Promise<{
+    providerId: string;
+    providerCode: string;
+    name: string;
+    modelCategory: AdminAiProviderEntity['modelCategory'];
+    model?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    tokensPerCredit?: number;
+    fixedTokensPerCall?: number;
+  } | null> {
+    if (!ObjectId.isValid(id)) return null;
+    const row = await this.aiProviders.findOne({
+      _id: new ObjectId(id),
+      enabled: true,
+    });
+    if (!row) return null;
+    return {
+      providerId: String(row._id),
+      providerCode: row.providerCode,
+      name: row.name,
+      modelCategory: row.modelCategory,
+      model: row.model,
+      baseUrl:
+        String(row.baseUrl ?? '').trim() ||
+        this.resolveDefaultProviderBaseUrl(
+          String(row.providerCode ?? '')
+            .trim()
+            .toLowerCase(),
+        ) ||
+        undefined,
       apiKey: row.apiKey,
       tokensPerCredit: row.tokensPerCredit,
       fixedTokensPerCall: row.fixedTokensPerCall,

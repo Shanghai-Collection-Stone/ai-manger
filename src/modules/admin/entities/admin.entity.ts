@@ -93,7 +93,8 @@ export interface AdminAiProviderEntity {
   providerCode: string;
   name: string;
   baseUrl?: string;
-  modelCategory: 'llm' | 'em' | 'image';
+  /** llm 文本 / em 向量 / image 生图 / video 生视频 */
+  modelCategory: 'llm' | 'em' | 'image' | 'video';
   model?: string;
   apiKey?: string;
   enabled: boolean;

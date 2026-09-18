@@ -8,7 +8,7 @@
 
 ## 文件清单 (File List)
 
-- `xhs-topic.module.ts` — NestJS 模块入口，装配后台鉴权、Agent、MCP、Todo、Canvas 生文配图、图库与选题服务。
+- `xhs-topic.module.ts` — NestJS 模块入口，装配后台鉴权、Agent、MCP、Todo、Canvas 生文配图、图库、工作流节点模型与选题服务。
 - `controller/xhs-topic.controller.ts` — 小红书选题生成 HTTP 接口与权限声明。
 - `controller/xhs-topic.dto.ts` — 生成层级、提示词、母选题、文章生成风格、母题配图标签与配图规则、数量与检索开关校验。
 - `entities/xhs-topic.entity.ts` — 选题候选、数据库实体、文章生成风格、母题配图标签、母题配图规则及合法取值、母子列表、生成输入、Todo 结果与接口响应类型。
@@ -36,12 +36,12 @@
 - `XHS_TOPIC_COMPLIANCE_PROMPT()` — 定义候选生成的法律、平台、真实性与高风险内容边界 | keywords: 合规提示词, 选题安全, compliance-prompt, topic-safety
 - `resolveRequestedTopicCount(prompt, explicitCount, kind)` — 优先使用显式数量，否则从提示词解析并限制候选数 | keywords: 解析选题数量, 提示词数量, resolve-topic-count, prompt-quantity
 - `XhsTopicService({ agentService, mcpAdapters, todoService })` — 编排工具写入内存候选并持久化 Todo | keywords: 选题生成服务, 内存候选, topic-generation-service, in-memory-candidates
-- `XhsTopicService.recommendPrompt(parentTopicInput, scope)` — 根据母题生成可编辑的子选题提示词并提供稳定回退模板 | keywords: 推荐子选题提示词, 母题上下文, recommend-child-topic-prompt, parent-topic-context
+- `XhsTopicService.recommendPrompt(parentTopicInput, scope)` — 根据母题生成可编辑的子选题提示词并提供稳定回退模板，模型取节点 `xhs-article/topic` | keywords: 推荐子选题提示词, 母题上下文, recommend-child-topic-prompt, parent-topic-context
 - `XhsTopicService.generate(input, scope)` — 创建 Todo、按文章风格执行 Agent 并返回写入 taskResult 的候选 | keywords: 生成选题候选, 待办结果, 文章生成风格, generate-topic-candidates, todo-result, article-writing-style
 - `XhsTopicService.createCandidateTool(candidates, requestedCount, articleStyle?)` — 创建标题、题目类型和本轮文章风格的逐项内存追加工具 | keywords: 追加候选工具, 内存写入, 文章生成风格, candidate-append-tool, memory-write, article-writing-style
 - `XhsTopicService.getDuckSearchTools()` — 按 `ddg-search` 服务名隔离读取 DuckDuckGo MCP 工具 | keywords: Duck搜索工具, 搜索筛选, duck-search-tools, tool-filter
 - `XhsTopicService.buildSystemPrompt(input)` — 构造文章风格、合规、检索与工具交付约束 | keywords: 构造选题提示词, 工具交付约束, 文章生成风格, build-topic-prompt, tool-delivery-contract, article-writing-style
-- `XhsTopicService.runAgent(system, tools, remainingCount, scope)` — 执行 Agent、按租户计费并忽略其最终文本 | keywords: 执行选题Agent, 忽略最终文本, run-topic-agent, ignore-final-text
+- `XhsTopicService.runAgent(system, tools, remainingCount, scope)` — 执行 Agent（模型取节点 `xhs-article/topic`）、按租户计费并忽略其最终文本 | keywords: 执行选题Agent, 忽略最终文本, run-topic-agent, ignore-final-text
 - `XhsTopicRepositoryService({ db })` — 管理租户用户隔离的 MongoDB 选题集合 | keywords: 选题数据库服务, 租户隔离, topic-repository, tenant-isolation
 - `XhsTopicRepositoryService.ensureIndexes()` — 创建业务 ID、作用域及父子关系索引 | keywords: 选题索引, 父子关系, topic-indexes, parent-child-relation
 - `XhsTopicRepositoryService.listStoredArticleTopicIds(scope, topicIds)` — 在给定子选题里挑出已存入文章库的那些 ID，按选题 ID 反查而不按 userId 关联 | keywords: 已入库子选题, 文章库来源, stored-topic-ids, article-library-source
@@ -90,7 +90,7 @@
 - `XhsArticleGenerationService.resolveMotherImageTags(configuredTags,availableTags)` — 校验母题固定标签仍存在于当前真实图库并保留规范写法 | keywords: 母题配图标签, 真实图库校验, mother-image-tags, validate-gallery-tags
 - `XhsArticleGenerationService.createArticleMemoryTool(draft, availableImageTags)` — 创建标题、正文、文章标签和真实图库标签的内存调整工具 | keywords: 文章调整工具, 内存写入, article-memory-tool, memory-write
 - `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章风格、合规、搜索、母题固定配图和工具交付提示词 | keywords: 构造文章提示词, 工具交付约束, 母题配图约束, 文章生成风格, build-article-prompt, tool-delivery-contract, mother-image-constraint, article-writing-style
-- `XhsArticleGenerationService.runAgent(system, tools, draft, scope)` — 执行文章 Agent、按租户计费并忽略最终文本 | keywords: 执行文章Agent, 忽略最终文本, run-article-agent, ignore-final-text
+- `XhsArticleGenerationService.runAgent(system, tools, draft, scope)` — 执行文章 Agent（模型取节点 `xhs-article/article`）、按租户计费并忽略最终文本 | keywords: 执行文章Agent, 忽略最终文本, run-article-agent, ignore-final-text
 - `XhsArticleGenerationService.isArticleComplete(draft, requireImageTags)` — 校验标题、正文、文章标签，并仅在首次配图时要求图库标签 | keywords: 校验文章完整性, 内存文章, validate-article-completeness, in-memory-article
 - `XhsArticleGenerationService.buildArticleImageInput(input, scope)` — 构造生文图片阶段 Canvas 入参，版式固定取规则对应版式，允许重复时放开本篇内源图复用 | keywords: 生文配图入参, 母题配图规则, article-image-input, mother-image-rule
 - `XhsArticleGenerationService.assertImageSourcesSufficient(preparation, imageTags)` — 源图分配失败时按缺口抛回横图太少 / 竖图太少 / 通用不足，附带需要与可用张数 | keywords: 横图太少, 竖图太少, 源图缺口统计, landscape-insufficient, portrait-insufficient, source-shortage-stats
@@ -154,7 +154,7 @@
 | 读取当前文章     | read-current-article              | `xhs_article_read_current` 工具与文章修改、重写前置协议                                     |
 | 文章落库         | persist-article                   | 完整性校验后统一持久化                                                                      |
 | 生文配图工作流   | article-image-workflow            | 相关图库标签取图、动态拼图、封面与可选 AI 生图                                              |
-| 封面优先拼图     | prefer-collage-cover              | 已由母题配图规则的候选版式链取代，小红书生文不再传 `preferCollageCover`                      |
+| 封面优先拼图     | prefer-collage-cover              | 已由母题配图规则的候选版式链取代，小红书生文不再传 `preferCollageCover`                     |
 | 可编辑封面       | editable-cover                    | 无字封面底图与灵感画布主副标题图层元数据                                                    |
 | 装饰素材叠加     | decoration-overlay                | 小红书封面走 `ai-overlay`：AI 输出文字与装饰融合的绿幕海报素材，真实照片主体不被重绘        |
 | 可编辑装饰素材   | editable-decoration-material      | 合成预览保留用于发布，画板另外保存原照片、透明素材、绿幕原图与特效参数                      |
@@ -211,3 +211,5 @@
 `GET /api/xhs-topic` 从 `xhs_topics` 返回当前租户用户的母子选题工作台，并在每个母题分组原样返回 `imageTags` 与 `imageRule`（历史数据缺省为 `default`）、在每个子题原样返回 `articleStyle`；同时通过 `articles.source=xhs-topic` 与 `meta.xhsTopicId` 过滤已经存入选题文章库的子题，历史已入库文章同样生效，库内文章删除后对应子题会重新出现。无租户账号同时兼容历史缺失字段与 MongoDB 序列化的 `null`；`POST /api/xhs-topic` 将用户确认的候选、母题 `imageTags` 及子题 `articleStyle` 批量入库并返回最新工作台；`PATCH /api/xhs-topic/:id` 更新标题、类型、状态、母题 `imageTags` / `imageRule` 或子题 `articleStyle`，空值可恢复对应默认链路；`POST` 创建母题时同样可带 `imageRule`；`DELETE /api/xhs-topic` 删除当前用户指定选题，母题命中时级联删除所有子题。入口分别声明 `read/create/update/delete XhsTopic` 权限。
 
 `PATCH /api/xhs-topic/:id/article` 同时接受生成阶段的 `cover/inner` 画板和灵感画布保存的 `edited` 画板。编辑态使用版本化 `editorState` 保存模板、120~1600 像素画板尺寸及最多 200 个有序图层，重新进入灵感画布时可恢复上次编辑结果；原有封面素材、拼图与文章图片结构继续兼容。
+
+**后台可按节点指定模型**：选题生成与子选题提示词推荐使用 [workflow-model](../workflow-model/module.md) 的 `xhs-article/topic` 节点，文章 Agent 使用 `xhs-article/article` 节点；节点未指定时沿用后台默认文本提供商。

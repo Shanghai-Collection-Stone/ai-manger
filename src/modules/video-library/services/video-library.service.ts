@@ -83,6 +83,46 @@ export class VideoLibraryService {
   }
 
   /**
+   * @description 服务端登记一条站外地址的视频（OSS 未配置时保存 AI 平台返回的成片地址）。只供后端内部调用，
+   *   不暴露给前端接口；对象键为空，删除记录时不会去清 OSS。
+   * @keyword-cn 登记外部视频, 生成成片兜底
+   * @keyword-en register-external-video, generated-video-fallback
+   * @param {Omit<VideoCreateInput, 'key' | 'coverKey'> & {url: string}} input - 记录字段与外部地址。
+   * @returns {Promise<Omit<VideoEntity, '_id'>>} 入库后的记录。
+   */
+  async registerExternal(
+    input: Omit<VideoCreateInput, 'key' | 'coverKey'> & { url: string },
+  ): Promise<Omit<VideoEntity, '_id'>> {
+    const now = new Date();
+    const doc: VideoEntity = {
+      _id: new ObjectId(),
+      id: await this.nextId(),
+      userId: input.userId,
+      ...(input.tenantId ? { tenantId: input.tenantId } : {}),
+      name: input.name,
+      key: '',
+      url: input.url,
+      ...(input.coverUrl ? { coverUrl: input.coverUrl } : {}),
+      contentType: input.contentType,
+      sizeBytes: Number(input.sizeBytes) || 0,
+      durationMs: this.toNullableNumber(input.durationMs),
+      width: this.toNullableNumber(input.width),
+      height: this.toNullableNumber(input.height),
+      tags: Array.isArray(input.tags) ? input.tags : [],
+      groupId:
+        typeof input.groupId === 'number' && Number.isFinite(input.groupId)
+          ? input.groupId
+          : null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.videos.insertOne(doc);
+    const { _id, ...clean } = doc;
+    void _id;
+    return clean;
+  }
+
+  /**
    * @description 直传完成后登记一条视频记录。`url` 由服务端按对象键重算，不信前端传来的地址——
    *   否则任何人都能往库里写一条指向站外的"视频"。
    * @keyword-cn 登记视频, 直传回执

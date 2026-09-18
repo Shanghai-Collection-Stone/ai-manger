@@ -7,6 +7,7 @@ import { McpFunctionCallModule } from '../function-call/mcp/mcp.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
 import { TodoModule } from '../todo/todo.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
+import { WorkflowModelModule } from '../workflow-model/workflow-model.module.js';
 import { XhsTopicController } from './controller/xhs-topic.controller.js';
 import { XhsTopicService } from './services/xhs-topic.service.js';
 import { XhsTopicRepositoryService } from './services/xhs-topic-repository.service.js';
@@ -27,6 +28,7 @@ import { XhsArticleGenerationService } from './services/xhs-article-generation.s
     GalleryModule,
     McpFunctionCallModule,
     TodoModule,
+    WorkflowModelModule,
   ],
   controllers: [XhsTopicController],
   providers: [

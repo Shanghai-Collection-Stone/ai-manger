@@ -22,7 +22,7 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 - `controller/video-library.controller.ts` — `api/video-library` 下的全部入口。
 - `services/video-library.service.ts` — 视频记录的登记、游标分页查询、标签、更新与删除。
 - `services/video-group.service.ts` — 分组 CRUD 与分组内视频计数。
-- `services/oss-storage.service.ts` — OSS 直传票据签发、对象键生成、可访问地址与对象删除。
+- `services/oss-storage.service.ts` — OSS 直传票据签发、对象键生成、可访问地址、服务端上传与对象删除。
 - `services/oss-storage.service.spec.ts` — 签名与对象键的回归测试。
 - `controller/video-library.controller.spec.ts` — HTTP 契约测试：路由、鉴权、入参归一与响应形状（两个测试跑法：`npx jest src/modules/video-library`）。
 - `entities/video.entity.ts` — 视频记录实体与出入参类型。
@@ -54,6 +54,7 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 - `nextId()` — 取视频自增 ID | keywords: 视频自增ID, next-video-id
 - `buildTenantFilter(tenantId?)` — 租户可见性过滤，与图库同口径 | keywords: 租户过滤, build-tenant-filter
 - `register(input)` — 登记记录，`url` 按对象键重算不采信前端 | keywords: 登记视频, 直传回执, register-video, upload-receipt
+- `registerExternal(input)` — 仅供后端内部：登记站外地址的视频（对象键为空，删除时不清 OSS），用于 OSS 未配置时保存 AI 生成的成片 | keywords: 登记外部视频, 生成成片兜底, register-external-video, generated-video-fallback
 - `toNullableNumber(value)` — 数值字段收敛为 number 或 null | keywords: 数值归一, nullable-number
 - `list(options?)` — 游标分页查询，`cursorId` 与 `/gallery` 同语义 | keywords: 视频列表, 游标分页, list-videos, cursor-pagination
 - `listTags(options?)` — 租户内标签 distinct | keywords: 视频标签, list-video-tags
@@ -83,6 +84,7 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 - `readExpireSeconds()` — 读票据有效期 | keywords: 票据有效期, ticket-expire-seconds
 - `normalizeContentType(value?)` — 归一化 Content-Type，非法值不进策略 | keywords: 内容类型归一化, normalize-content-type
 - `deleteObjects(keys)` — 批量删对象，返回失败的键 | keywords: 删除对象, 清理OSS, delete-objects, cleanup-oss
+- `putObject(key, body, contentType)` — 服务端 V1 签名 PUT 上传对象并返回可访问地址，用于 AI 生成视频转存 | keywords: 服务端上传对象, 生成视频转存, server-put-object, generated-video-transfer
 - `deleteObject(key)` — V1 头签名的单对象 DELETE | keywords: 删除对象, 请求签名, delete-object, request-signature
 
 ## 关键词索引 (Keyword Index)

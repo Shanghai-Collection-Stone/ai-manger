@@ -196,23 +196,30 @@ export class DouyinStoryboardImageService {
 
   /**
    * @description 按「向量检索 → 标签命中 → 随机补足」的顺序收集去重候选图，任一路失败只记日志不影响分镜生成。
-   * @keyword-cn 收集候选图片, 相关度排序
-   * @keyword-en load-image-candidates, relevance-order
+   *   传了 `limitTags` 时只收带其中任一标签的图：向量结果按标签过滤，随机补足也只在这些标签里取，不会混入其他图。
+   * @keyword-cn 收集候选图片, 相关度排序, 图库标签限定
+   * @keyword-en load-image-candidates, relevance-order, gallery-tag-filter
    * @param query 母题、子题与补充要求拼成的检索文本。
    * @param scope 当前租户用户作用域。
+   * @param limitTags 用户为脚本限定的图库标签，空数组表示不限。
    * @returns {Promise<StoryboardImageCandidate[]>} 按相关度排好的候选图，最多 40 张。
    */
   async loadCandidates(
     query: string,
     scope: DouyinScope,
+    limitTags: string[] = [],
   ): Promise<StoryboardImageCandidate[]> {
     const excluded = new Set(STORYBOARD_EXCLUDED_IMAGE_TAGS);
+    const allowed = new Set(limitTags.filter((tag) => !excluded.has(tag)));
+    const limited = limitTags.length > 0;
     const picked = new Map<number, StoryboardImageCandidate>();
     const add = (images: GalleryImageEntity[]) => {
       for (const image of images) {
         if (picked.size >= STORYBOARD_IMAGE_CANDIDATE_LIMIT) return;
         if (image?.isCollage === true) continue;
         if ((image?.tags ?? []).some((tag) => excluded.has(tag))) continue;
+        if (limited && !(image?.tags ?? []).some((tag) => allowed.has(tag)))
+          continue;
         const candidate = toCandidate(image);
         if (candidate && !picked.has(candidate.id)) {
           picked.set(candidate.id, candidate);
@@ -225,7 +232,8 @@ export class DouyinStoryboardImageService {
         query,
         undefined,
         scope.tenantId,
-        24,
+        // 限定标签时向量结果还要再过滤一轮，多取一些才留得下足够的相关图
+        limited ? 60 : 24,
         0.35,
         'regular',
       );
@@ -237,6 +245,21 @@ export class DouyinStoryboardImageService {
     }
 
     try {
+      if (limited) {
+        if (allowed.size && picked.size < STORYBOARD_IMAGE_CANDIDATE_LIMIT) {
+          add(
+            await this.gallery.sampleRandom({
+              tenantId: scope.tenantId,
+              tags: [...allowed],
+              imageType: 'regular',
+              excludedTags: STORYBOARD_EXCLUDED_IMAGE_TAGS,
+              includeUsed: true,
+              limit: STORYBOARD_IMAGE_CANDIDATE_LIMIT,
+            }),
+          );
+        }
+        return [...picked.values()];
+      }
       if (picked.size < STORYBOARD_IMAGE_CANDIDATE_LIMIT) {
         const tags = await this.gallery.listDistinctTagsWithTenant(
           undefined,

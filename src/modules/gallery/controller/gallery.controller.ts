@@ -16,9 +16,9 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import multer from 'multer';
 import { extname, join } from 'path';
 import { mkdirSync } from 'fs';
-import { promises as fs } from 'fs';
 import { randomUUID } from 'crypto';
 import { GalleryService } from '../services/gallery.service.js';
+import { GalleryAiImageService } from '../services/gallery-ai-image.service.js';
 import { GalleryGroupService } from '../services/gallery-group.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
@@ -421,6 +421,7 @@ export class GalleryController {
     private readonly adminService: AdminService,
     private readonly agent: AgentService,
     private readonly materialStyles: MaterialStyleService,
+    private readonly aiImages: GalleryAiImageService,
   ) {}
 
   /**
@@ -696,37 +697,6 @@ export class GalleryController {
   }
 
   /**
-   * @description 把生图返回的本地路径解析成 public/uploads 下的文件信息，拒绝外链和穿越路径。
-   * @param {string} url - 生图返回的 imagePath。
-   * @returns {{ fileName: string; absPath: string; url: string } | null} 文件信息，非法时返回 null。
-   * @keyword-cn 素材落盘
-   * @keyword-en resolve generated material file
-   */
-  private resolveGeneratedMaterialFile(
-    url: string,
-  ): { fileName: string; absPath: string; url: string } | null {
-    const raw = String(url ?? '')
-      .trim()
-      .replace(/\\/g, '/');
-    if (!raw || /^https?:\/\//i.test(raw)) return null;
-    let rel = raw.replace(/^\/+/, '');
-    if (rel.startsWith('static/uploads/'))
-      rel = rel.slice('static/uploads/'.length);
-    if (rel.startsWith('uploads/')) rel = rel.slice('uploads/'.length);
-    const safeRel = rel
-      .split('/')
-      .map((seg) => seg.trim())
-      .filter((seg) => seg.length > 0 && seg !== '.' && seg !== '..')
-      .join('/');
-    if (!safeRel) return null;
-    return {
-      fileName: safeRel,
-      absPath: join(process.cwd(), 'public', 'uploads', safeRel),
-      url: `/static/uploads/${safeRel}`,
-    };
-  }
-
-  /**
    * @description 判断用户的素材描述里是否明确要求画面出现文字。默认走无字贴纸分支，只有
    * 命中正向词、且没被否定词否掉时才放开文字。加这一步是因为硬规格里的「严禁文字」写在
    * 提示词最后又标了「必须严格遵守」，会把「生成以上文字标题图片」这类描述整条抹掉，
@@ -884,55 +854,14 @@ export class GalleryController {
         source: 'gallery-ai-material',
       },
     });
-    const file = this.resolveGeneratedMaterialFile(
-      String(generated?.imagePath ?? ''),
-    );
-    if (!file) throw new BadRequestException('AI_MATERIAL_IMAGE_EMPTY');
-
-    let byteSize: number | undefined;
-    try {
-      const st = await fs.stat(file.absPath);
-      byteSize = Number.isFinite(st.size) && st.size > 0 ? st.size : undefined;
-    } catch {
-      throw new BadRequestException('AI_MATERIAL_IMAGE_MISSING');
-    }
-
-    const dim = await getImageDimensionsFromFile(file.absPath);
-    const thumb = await this.gallery.generateThumbnail(
-      file.absPath,
-      file.fileName,
-    );
-    const tags = Array.from(
-      new Set(
-        [
-          AI_MATERIAL_TAG,
-          ...String(body?.tags ?? '')
-            .split(/[,\t\n\r\s]+/g)
-            .map((t) => t.trim()),
-        ].filter((t) => t.length > 0),
-      ),
-    );
-
-    const [doc] = await this.gallery.createMany([
-      {
-        userId,
-        tenantId,
-        originalName: rawPrompt.slice(0, 60),
-        fileName: file.fileName,
-        absPath: file.absPath,
-        url: file.url,
-        ...(thumb ?? {}),
-        mimeType:
-          extname(file.fileName).toLowerCase() === '.png'
-            ? 'image/png'
-            : 'image/jpeg',
-        size: byteSize,
-        width: dim?.width,
-        height: dim?.height,
-        tags,
-        description: `AI素材:${rawPrompt.slice(0, 120)}`,
-      },
-    ]);
+    const doc = await this.aiImages.persistGeneratedImage({
+      imagePath: String(generated?.imagePath ?? ''),
+      userId,
+      tenantId,
+      originalName: rawPrompt,
+      description: `AI素材:${rawPrompt.slice(0, 120)}`,
+      tags: String(body?.tags ?? '').split(/[,\t\n\r\s]+/g),
+    });
     return {
       image: { ...doc, _id: undefined } as Omit<GalleryImageEntity, '_id'>,
     };

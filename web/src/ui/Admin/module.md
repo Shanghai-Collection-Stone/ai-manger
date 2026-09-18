@@ -3,7 +3,7 @@
 ## 模块描述
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
-支持 AI 提供商按模型类型管理(llm/em/image)，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
+支持 AI 提供商按模型类型管理(llm/em/image/video，video 为生视频；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含 PixMax(`pixmax`)，选中时表单提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
@@ -124,6 +124,23 @@
   - `onTest()` — 向测试手机号真实发送验证码 | keywords: 测试发送短信, test-send-sms
   - `setField(key, value)` — 更新单个表单字段 | keywords: 更新表单字段, update-form-field
 
+### WorkflowModelPanel.jsx
+
+后台「工作流节点模型」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'workflow_models'` 时挂载。左侧是工作流子菜单（小红书图文、抖音视频制作，显示节点数与已指定数，本地记住上次选择），右侧列出选中工作流的全部模型节点（小红书：选题生成 / 文章生成 / 封面文案 / 封面底图 / 封面文字海报 / 内页重绘；抖音：脚本生成 / 分镜拆解 / 分镜画面 / 分镜视频），每个节点可选「使用默认提供商」或某个同类型的已启用提供商；选 PixMax 时实时拉取该账号可用模型只能从列表选，其他提供商可手填模型（留空用提供商默认模型）。未指定时显示当前生效的默认提供商；运行时暂不支持的组合、已失效的提供商会给出提示。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md)。
+
+- **关键词**: workflow model panel, per node model, pixmax model list, default provider fallback
+- **函数**:
+  - `WorkflowModelPanel({ onNotice, onError })` — 工作流节点模型面板主体 | keywords: 工作流节点模型面板, 节点指定模型, workflow-model-panel, per-node-model
+  - `CATEGORY_LABELS` — 节点类型中文名 | keywords: 节点类型文案, node-category-labels
+  - `ACTIVE_WORKFLOW_STORAGE_KEY` — 记住上次选中工作流的本地存储 key | keywords: 工作流菜单记忆, active-workflow-storage-key
+  - `selectWorkflow(key)` — 切换左侧工作流子菜单并记住选择 | keywords: 切换工作流菜单, 记住选择, select-workflow-tab, remember-selection
+  - `describeFallback(node)` — 未指定时的默认提供商说明 | keywords: 默认回退文案, 未设置说明, fallback-label, unset-hint
+  - `NodeModelRow(props)` — 单个节点的提供商 / 模型选择与保存、恢复默认 | keywords: 节点模型编辑行, 选择模型, node-model-row, pick-model
+  - `onChangeProvider(nextId)` — 切换提供商并预填其默认模型 | keywords: 切换提供商, 预填模型, change-provider, prefill-model
+  - `apply(res)` — 回填工作流与提供商 | keywords: 回填节点设置, apply-workflow-models
+  - `onSave(workflowKey, node, payload)` — 保存节点模型 | keywords: 保存节点模型, save-node-model
+  - `onReset(workflowKey, node)` — 恢复节点默认 | keywords: 恢复节点默认, reset-node-model
+
 ### AdminLoginApp.jsx
 
 后台登录页:选择租户并登录,写入 token 并跳转。
@@ -167,10 +184,14 @@
   - `adminApi.chatFinanceAgentStream(payload, callbacks)`: 财务 Agent SSE 流式聊天封装(fetch + ReadableStream + TextDecoder,逐帧分发 token/tool/end/error)/finance agent chat stream | keywords: finance-agent-chat-stream, sse-chat
   - `adminApi.upsertPlatformInfo(aiPromptSupplement,enableAiCover,globalLimit,salesContact?)` — 更新平台信息，salesContact 映射为业务员二维码与提示语 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
   - `adminApi.register(payload)` — 公开自助注册 POST /admin/auth/register，payload 需展开 `SmsCodeInput` 的 `{ smsPhone, smsCode }` | keywords: 自助注册, 业务员二维码, self-register, sales-wechat-qrcode
+  - `adminApi.listWorkflowModels()` — 读取预设工作流、节点设置与可选提供商 | keywords: 工作流节点模型列表, 可选提供商, list-workflow-models, provider-options
+  - `adminApi.listWorkflowProviderModels(providerId, category)` — 查询提供商可选模型(PixMax 实时拉取) | keywords: 提供商可选模型, PixMax模型列表, list-provider-models, pixmax-model-list
+  - `adminApi.saveWorkflowNodeModel(workflowKey, nodeKey, payload)` — 为节点保存提供商与模型 | keywords: 保存节点模型, 指定模型, save-node-model, assign-model
+  - `adminApi.resetWorkflowNodeModel(workflowKey, nodeKey)` — 清除节点设置回到默认 | keywords: 重置节点模型, 回退默认, reset-node-model, fallback-default
   - `adminApi.getSmsSettings()` — 读取平台短信配置(Secret 掩码) | keywords: 读取短信配置, get-sms-settings
   - `adminApi.saveSmsSettings(payload)` — 保存平台短信配置 | keywords: 保存短信配置, save-sms-settings
   - `adminApi.testSmsSettings(phone)` — 真实测试发送验证码 | keywords: 测试发送短信, test-sms-settings
-  - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活, 15s 超时, 不消耗配额)/test ai provider
+  - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活;PixMax 改用可用模型接口, 15s 超时, 不消耗配额)/test ai provider
   - `adminApi.listAiServices()` — 读取固定服务目录与生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
   - `adminApi.updateAiServiceCredit(code,creditCost)` — 修改固定服务消耗点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code
   - `adminApi.getTenantCreditAccount(id,query)` — 查询余额与流水 | keywords: Credit账户查询, 流水查询, credit-account-query, transaction-list

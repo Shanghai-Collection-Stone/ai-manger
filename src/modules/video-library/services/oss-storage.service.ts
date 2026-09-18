@@ -305,6 +305,51 @@ export class OssStorageService {
   }
 
   /**
+   * @description 服务端直接上传一个对象（用于 AI 生成的视频转存），V1 头签名，与删除同一套签名写法。
+   * @keyword-cn 服务端上传对象, 生成视频转存
+   * @keyword-en server-put-object, generated-video-transfer
+   * @param {string} key - 对象键。
+   * @param {Buffer} body - 文件内容。
+   * @param {string} contentType - MIME 类型。
+   * @returns {Promise<string>} 可访问地址。
+   * @throws {ServiceUnavailableException} OSS 未配置时抛出。
+   * @throws {Error} 非 2xx 响应时抛出 `OSS_PUT_FAILED_<status>`。
+   */
+  async putObject(
+    key: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<string> {
+    const config = this.requireConfig();
+    const objectKey = String(key ?? '').replace(/^\/+/, '');
+    const date = new Date().toUTCString();
+    const signature = createHmac('sha1', config.accessKeySecret)
+      .update(
+        `PUT\n\n${contentType}\n${date}\n/${config.bucket}/${objectKey}`,
+        'utf8',
+      )
+      .digest('base64');
+    const url = `https://${config.bucket}.${config.endpoint}/${objectKey
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Date: date,
+        'Content-Type': contentType,
+        Authorization: `OSS ${config.accessKeyId}:${signature}`,
+      },
+      body: new Uint8Array(body),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    });
+    if (!response.ok) {
+      throw new Error(`OSS_PUT_FAILED_${response.status}`);
+    }
+    return this.publicUrl(objectKey);
+  }
+
+  /**
    * @description 删除单个对象：V1 头签名（`VERB\nContent-MD5\nContent-Type\nDate\n/bucket/key`）
    *   + `Authorization: OSS <ak>:<sig>`。OSS 对不存在的对象也返回 204，所以重复删除是幂等的。
    * @keyword-cn 删除对象, 请求签名

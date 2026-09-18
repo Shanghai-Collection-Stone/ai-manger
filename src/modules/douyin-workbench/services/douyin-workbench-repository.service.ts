@@ -6,12 +6,60 @@ import {
 } from '@nestjs/common';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import type {
+  DouyinMediaReference,
+  DouyinStoryboardPreference,
   DouyinStoryboardShot,
   DouyinTopicEntity,
+  DouyinVideoAudioSetting,
   DouyinWorkspaceGroup,
 } from '../entities/douyin-workbench.entity.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
+
+/**
+ * @description 规整脚本的配图偏向：非法来源回退为图库自找，标签去空去重、单个最长 50 字、最多 20 个。
+ * @keyword-cn 规整配图偏向, 图库标签限定
+ * @keyword-en normalize-storyboard-preference, gallery-tag-filter
+ * @param input 前端或旧数据里的偏向，可为空。
+ * @returns {DouyinStoryboardPreference} 规整后的偏向。
+ */
+export function normalizeStoryboardPreference(
+  input?: Partial<DouyinStoryboardPreference> | null,
+): DouyinStoryboardPreference {
+  const galleryTags = [
+    ...new Set(
+      (Array.isArray(input?.galleryTags) ? input.galleryTags : [])
+        .map((tag) =>
+          String(tag ?? '')
+            .trim()
+            .slice(0, 50),
+        )
+        .filter(Boolean),
+    ),
+  ].slice(0, 20);
+  return {
+    imageSource: input?.imageSource === 'generate' ? 'generate' : 'gallery',
+    galleryTags,
+  };
+}
+
+/**
+ * @description 规整视频声音设置：非法方式回退为配音，非法语言回退为普通话。
+ * @keyword-cn 规整声音设置, 默认普通话配音
+ * @keyword-en normalize-video-audio, default-mandarin-voiceover
+ * @param input 前端或旧数据里的声音设置，可为空。
+ * @returns {DouyinVideoAudioSetting} 规整后的设置。
+ */
+export function normalizeVideoAudio(
+  input?: Partial<DouyinVideoAudioSetting> | null,
+): DouyinVideoAudioSetting {
+  const mode = input?.mode;
+  const language = input?.language;
+  return {
+    mode: mode === 'music' || mode === 'mute' ? mode : 'voiceover',
+    language: language === 'yue' || language === 'en' ? language : 'zh-CN',
+  };
+}
 
 /**
  * @description 持久化抖音母子选题、分镜与真实素材引用，并强制租户用户隔离。
@@ -110,13 +158,17 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
-   * @description 校验母选题归属后批量保存 LLM 生成的子选题，并把内容类型固定为短视频。
-   * @keyword-cn 保存AI子选题, 固定短视频
-   * @keyword-en persist-ai-child-topics, fixed-short-video
+   * @description 校验母选题归属后批量保存用户挑中的脚本（子选题），标题、口播正文与配图偏向一并入库，内容类型固定为短视频。
+   * @keyword-cn 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向
+   * @keyword-en persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference
    */
   async createChildren(
     parentId: number,
-    titles: string[],
+    candidates: Array<{
+      title: string;
+      script?: string;
+      storyboardPreference?: Partial<DouyinStoryboardPreference>;
+    }>,
     scope: DouyinScope,
   ): Promise<Array<Omit<DouyinTopicEntity, '_id'>>> {
     const parent = await this.topics.findOne({
@@ -126,27 +178,33 @@ export class DouyinWorkbenchRepositoryService {
     });
     if (!parent) throw new NotFoundException('DOUYIN_PARENT_NOT_FOUND');
 
-    const normalizedTitles = titles
-      .map((title) =>
-        String(title ?? '')
+    const normalized = candidates
+      .map((candidate) => ({
+        title: String(candidate?.title ?? '')
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 100),
-      )
-      .filter(Boolean);
-    if (!normalizedTitles.length) {
+        script: String(candidate?.script ?? '')
+          .trim()
+          .slice(0, 8000),
+        storyboardPreference: normalizeStoryboardPreference(
+          candidate?.storyboardPreference,
+        ),
+      }))
+      .filter((candidate) => candidate.title.length > 0);
+    if (!normalized.length) {
       throw new BadRequestException('DOUYIN_CHILD_TOPICS_REQUIRED');
     }
     const uniqueTitles = new Set(
-      normalizedTitles.map((title) => title.toLocaleLowerCase()),
+      normalized.map((candidate) => candidate.title.toLocaleLowerCase()),
     );
-    if (uniqueTitles.size !== normalizedTitles.length) {
+    if (uniqueTitles.size !== normalized.length) {
       throw new BadRequestException('DOUYIN_CHILD_TOPICS_DUPLICATED');
     }
 
     const now = new Date();
     const docs: DouyinTopicEntity[] = [];
-    for (const title of normalizedTitles) {
+    for (const candidate of normalized) {
       docs.push({
         _id: new ObjectId(),
         id: await this.nextId(),
@@ -154,8 +212,10 @@ export class DouyinWorkbenchRepositoryService {
         userId: scope.userId,
         kind: 'child',
         parentId,
-        title,
+        title: candidate.title,
+        script: candidate.script || undefined,
         topicType: '短视频',
+        storyboardPreference: candidate.storyboardPreference,
         platform: 'douyin',
         storyboard: [],
         status: 'draft',
@@ -177,15 +237,19 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
-   * @description 保存标题、类型、完整分镜或最终视频素材绑定。
-   * @keyword-cn 更新抖音选题, 持久化分镜
-   * @keyword-en update-douyin-topic, persist-storyboard
+   * @description 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长（0 表示改回自动）、完整分镜或最终视频素材绑定。
+   * @keyword-cn 更新抖音选题, 保存脚本正文, 持久化分镜
+   * @keyword-en update-douyin-topic, persist-script-body, persist-storyboard
    */
   async update(
     id: number,
     input: {
       title?: string;
+      script?: string;
       topicType?: string;
+      storyboardPreference?: Partial<DouyinStoryboardPreference>;
+      videoAudio?: Partial<DouyinVideoAudioSetting>;
+      fullVideoDuration?: number;
       storyboard?: DouyinStoryboardShot[];
       generatedVideoId?: number;
     },
@@ -199,8 +263,23 @@ export class DouyinWorkbenchRepositoryService {
       await this.requireVideo(input.generatedVideoId, scope);
     const updates: Partial<DouyinTopicEntity> = { updatedAt: new Date() };
     if (input.title !== undefined) updates.title = input.title.trim();
+    if (input.script !== undefined)
+      updates.script = input.script.trim() || undefined;
     if (input.topicType !== undefined)
       updates.topicType = input.topicType.trim() || undefined;
+    if (input.storyboardPreference !== undefined)
+      updates.storyboardPreference = normalizeStoryboardPreference(
+        input.storyboardPreference,
+      );
+    if (input.videoAudio !== undefined)
+      updates.videoAudio = normalizeVideoAudio(input.videoAudio);
+    // 0 表示改回自动，清掉字段
+    const unset: Record<string, ''> = {};
+    if (input.fullVideoDuration !== undefined) {
+      const seconds = Math.round(Number(input.fullVideoDuration) || 0);
+      if (seconds > 0) updates.fullVideoDuration = Math.min(120, seconds);
+      else unset.fullVideoDuration = '';
+    }
     if (input.storyboard !== undefined) {
       updates.storyboard = input.storyboard;
       updates.status = input.storyboard.length ? 'storyboard_ready' : 'draft';
@@ -211,9 +290,59 @@ export class DouyinWorkbenchRepositoryService {
     }
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id },
-      { $set: updates },
+      Object.keys(unset).length
+        ? { $set: updates, $unset: unset }
+        : { $set: updates },
       { returnDocument: 'after' },
     );
+  }
+
+  /**
+   * @description 只更新已保存分镜里的某一段，用于重新生成画面或绑定分镜视频，不覆盖同选题其他镜头的编辑。
+   *   `media` 传 null 表示清空配图；`videoId` 会先校验视频库归属。
+   * @keyword-cn 更新单段分镜, 分镜局部写入
+   * @keyword-en update-single-shot, partial-storyboard-write
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string} shotId 分镜段落 ID。
+   * @param {{media?: DouyinMediaReference|null, imagePrompt?: string, videoId?: number}} patch 要写入的字段。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity>} 更新后的选题。
+   * @throws {NotFoundException} 选题或分镜不存在时抛出。
+   */
+  async updateShot(
+    topicId: number,
+    shotId: string,
+    patch: {
+      media?: DouyinMediaReference | null;
+      imagePrompt?: string;
+      videoId?: number;
+    },
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity> {
+    if (patch.videoId) await this.requireVideo(patch.videoId, scope);
+    if (patch.media) {
+      await this.validateStoryboardMedia(
+        [{ media: patch.media } as DouyinStoryboardShot],
+        scope,
+      );
+    }
+    /* 按段落 ID 定位写入，多段同时重生成画面时互不覆盖 */
+    const $set: Record<string, unknown> = { updatedAt: new Date() };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) $set[`storyboard.$[shot].${key}`] = value;
+    }
+    const updated = await this.topics.findOneAndUpdate(
+      { ...this.scopeFilter(scope), id: topicId, 'storyboard.id': shotId },
+      { $set },
+      { returnDocument: 'after', arrayFilters: [{ 'shot.id': shotId }] },
+    );
+    if (!updated) {
+      const exists = await this.get(topicId, scope);
+      throw new NotFoundException(
+        exists ? 'DOUYIN_STORYBOARD_SHOT_NOT_FOUND' : 'DOUYIN_TOPIC_NOT_FOUND',
+      );
+    }
+    return updated;
   }
 
   /**

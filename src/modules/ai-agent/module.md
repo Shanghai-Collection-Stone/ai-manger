@@ -29,7 +29,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `resolveDefaultRuntime`: 解析默认运行时/resolve runtime
   - `resolveDefaultImageRuntime`: 解析默认生图运行时/resolve default image runtime
   - `resolveAvailableDefaultImageRuntime`: 解析可用默认生图运行时（无完整配置返回null）/resolve available default image runtime
-  - `runAiCoverGenerateTool`: AI封面生成工具入口（默认模型与meitu复用同一最终prompt；请求底图编辑时优先走runtime编辑；runtime 返回 IMAGE_*_EDIT/GENERATE_FAILED 或 IMAGE_PROVIDER_NOT_SUPPORTED 时自动降级 meitu-cli）/ai cover generate tool
+  - `runAiCoverGenerateTool`: AI封面生成工具入口（传 `runtimeOverride` 时用工作流节点指定的提供商与模型，缺 Key 抛 `IMAGE_API_KEY_NOT_CONFIGURED:<provider>`，失败直接抛错不降级 meitu；否则默认模型与meitu复用同一最终prompt；请求底图编辑时优先走runtime编辑；runtime 返回 IMAGE_*_EDIT/GENERATE_FAILED 或 IMAGE_PROVIDER_NOT_SUPPORTED 时自动降级 meitu-cli）/ai cover generate tool
   - **`imageGenDispatcher`**: 生图专用 undici dispatcher(实例字段)。headersTimeout/bodyTimeout=15 分钟覆盖 undici 默认 5 分钟。**代理**: 生图 fetch 显式传 dispatcher 会覆盖 `enableProxyFromEnv` 设的全局 dispatcher,故本 dispatcher 自行叠加代理 —— 复用 `shared/network/proxy.ts` 的 `resolveProxyUriFromEnv()` 读 .env 统一代理配置(DEV_PROXY_ENABLED/DEV_HTTPS_PROXY 或 PROXY_ENABLED/HTTPS_PROXY),**不另开独立环境变量**。有代理→ProxyAgent(长超时),无代理→Agent(长超时直连)。constructor 启动 log 只记录代理状态并隐藏代理地址/image gen dispatcher reusing unified env proxy
   - `generateImageByRuntime`: 按默认提供商执行生图/图片编辑并返回图片。已对接 gemini / doubao(ark) / openai。doubao/ark 文生图与图生图共用 /images/generations（无 /images/edits），图生图通过 body 的 image 字段传单字符串（URL 或 data:<mime>;base64,<b64>）；provider size 固定为 3:4 官方推荐像素 `1728x2304`。openai gpt-image-1/2：文生图 POST /images/generations、图生图 POST /images/edits（multipart, image=底图二进制，n=1）；provider size 不再跟随调用方输入，gpt-image-2 使用精确 3:4 `1536x2048`，gpt-image-1 使用其支持的竖版 `1024x1536`。**fetch 双层超时机制**: AbortSignal.timeout(10 分钟) + 实例级 `imageGenDispatcher` (undici Agent, headersTimeout/bodyTimeout=15 分钟) 覆盖 Node fetch 默认 undici 5 分钟 headersTimeout(否则 gpt-image 生图常在 5min 抛 `HeadersTimeoutError: UND_ERR_HEADERS_TIMEOUT`)；捕获 undici "fetch failed" 时把 error.cause 序列化(ConnectTimeoutError/SocketError/ENOTFOUND/CertificateError 等)落日志并抛 IMAGE_OPENAI_EDIT_NETWORK/IMAGE_OPENAI_GENERATE_NETWORK/generate image by configured runtime
   - `formatFetchCause`: 递归序列化 fetch error.cause 为可读字符串，定位 DNS/TLS/socket/连接超时类失败/format fetch error cause
@@ -39,7 +39,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `resolveMeituEditableBaseImage`: 匹配可编辑底图（优先调用方传入候选）/resolve meitu editable base image
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底（stdout 非 JSON 时走 parseMeituKeyValueText 扁平 key-value 兜底；result 字段取 http(s) URL 作为最终图片地址）/generate image by meitu image-edit fallback
   - `parseMeituKeyValueText`: 解析 meitu-cli "code: 0 message: success result: https://... progress: 1" 这类扁平键值空格串（即使加 --json CLI 仍可能如此输出）/parse meitu cli flat key value text
-  - `sendPrompt`: 调用 AI 生图并强制携带 billingContext；有限额度租户在网络调用前按 Provider 固定 Token 预扣/send prompt for billed image generation
+  - `sendPrompt`: 调用 AI 生图并强制携带 billingContext；有限额度租户在网络调用前按 Provider 固定 Token 预扣；可选 `runtimeOverride` 按工作流节点指定提供商与模型出图/send prompt for billed image generation
   - `executeBilledImageCall(provider,billingContext,execute)` — 包装一次生图物理调用的预扣、成功结算与失败流水；关闭同一流水中的隐式网络重试，降级调用另开流水 | keywords: 生图调用计费, 固定Token预扣, billed-image-call, fixed-token-precharge
   - `generateBilledMeituImage(billingContext,input)` — 对 meitu 降级调用独立计费，避免主 Provider 失败后免费重试 | keywords: 美图降级计费, 降级防漏扣, meitu-fallback-billing, fallback-charge-guard
   - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection

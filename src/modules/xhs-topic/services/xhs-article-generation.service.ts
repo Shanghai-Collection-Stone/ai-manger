@@ -31,6 +31,11 @@ import type {
 } from '../entities/xhs-topic.entity.js';
 import { XHS_TOPIC_COMPLIANCE_PROMPT } from './xhs-topic.service.js';
 import { XhsTopicRepositoryService } from './xhs-topic-repository.service.js';
+import {
+  toWorkflowLlmConfig,
+  WorkflowModelService,
+} from '../../workflow-model/services/workflow-model.service.js';
+import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
 
 type XhsArticleGenerationJob = {
   todo: TodoEntity;
@@ -180,6 +185,7 @@ export class XhsArticleGenerationService {
     private readonly repository: XhsTopicRepositoryService,
     private readonly galleryService: GalleryService,
     private readonly canvasService: CanvasService,
+    private readonly workflowModels: WorkflowModelService,
   ) {}
 
   /**
@@ -989,6 +995,12 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
   ): Promise<void> {
     await this.agentService.runWithMessages({
       config: {
+        ...toWorkflowLlmConfig(
+          await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.xhsArticle.key,
+            WORKFLOW_NODES.xhsArticle.article,
+          ),
+        ),
         system,
         tools,
         temperature: 0.45,

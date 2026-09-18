@@ -124,8 +124,8 @@ Canvas服务。
 图片组生成服务。
 
 - `generateImageGroups` — 有文章 tag 时从全部已选 tag 的并集随机取图库配图，无 tag 时从完整可见图池随机取图；随后在 Canvas 级统一分配所有图组所需竖图/横图源图并严格全局去重。图片不足时返回 failed 图组，让上游提示用户补充图片。**完成后调用 `gallery.markUsedBatch` 标记本批次实际消耗源图为 isUsed=true,全局不再被默认查询命中**(由 [media-agent xhs 工具](../media-agent/module.md) 的 precheck 兜底拦截基础不足量场景)
-- `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库；`includeSystemPrompt=false` 时只用用户提示词(必填)并向下游传 kind=cover | keywords: cover-regenerate, selected-source-images, system-prompt-toggle
-- `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
+- `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库；`includeSystemPrompt=false` 时只用用户提示词(必填)并向下游传 kind=cover ；生图模型取工作流节点 `xhs-article/cover-image` | keywords: cover-regenerate, selected-source-images, system-prompt-toggle
+- `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) ；生图模型取工作流节点 `xhs-article/inner-image` | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
 - `prepareImageGroupSources(input)` — 从已选标签并集或完整图库随机取图，再按 `input.layoutCandidates` / `preferCollageCover` 统一分配竖图/横图，不生成成品文件；`dedup='prefer'` 时保留池子「未用在前」的顺序不整体洗牌 | keywords: 图组源图准备, 标签随机取图, image-group-source-preparation, tag-random-selection
 - `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用；严格去重与 `'prefer'` 都会 markUsed | keywords: render, prepared, image-group, concurrency, dedup
 - `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
@@ -138,15 +138,15 @@ Canvas服务。
 - `buildInsufficientImageGroups(articles)` — 构造图片不足时的 failed 空图组，供文章/Canvas 进入 requires_human 补图流程 | keywords: insufficient, requires-human, image-group
 - `collectPlanSourceImages(plan)` — 收集图组分配计划中的全部源图，用于文章正文和封面文案共享图片语义 | keywords: collect, allocation, image-context
 - `persistPlannedCollage(input)` — 将统一分配好的两张横图合成为动态拼图并入库，同时返回拼图画布格式 | keywords: collage, allocation, gallery, collage-canvas-format
-- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流；内容优先级为「文章标题 > 配图语义」，主标题只能提炼文章标题，配图标签/描述降级为方向参考（标签上限 8 条）且冲突时丢弃 | keywords: 封面文案, 工具内部非流, 标题优先, cover-text, internal-llm-nostream, title-first
+- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流；内容优先级为「文章标题 > 配图语义」，主标题只能提炼文章标题，配图标签/描述降级为方向参考（标签上限 8 条）且冲突时丢弃；模型取工作流节点 `xhs-article/cover-copy` | keywords: 封面文案, 工具内部非流, 标题优先, cover-text, internal-llm-nostream, title-first
 - `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
 - `sanitizeCopyrightRiskText(raw)` — 将封面文案/生图提示中的高风险 IP、商标和角色专名替换为版权安全泛化表达 | keywords: sanitize, copyright-safe, image-prompt
 - `sanitizeCopyrightRiskList(items?)` — 清洗列表型封面上下文，去重后返回版权安全表达 | keywords: sanitize, copyright-safe, list
 - `sanitizeCoverText(coverText)` — 清洗封面主副标题，避免可见文案携带 IP/商标专名 | keywords: sanitize, cover-copy, copyright-safe
 - `buildAiCoverPrompt` — 构建封面元信息骨架与实景照片优先的无字底图视觉指令，文案仅用于理解主题和预留构图空间，明确禁止生成任何文字；通用图生图硬约束由 AgentService.buildMeituEditPrompt 在下游补齐
-- `tryGenerateAiCoverToGallery` — `ai-direct` 策略:调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit）
+- `tryGenerateAiCoverToGallery` — `ai-direct` 策略:调用封面生图工具生成封面并写入图库（透传prompt与底图候选，meitu兜底走image-edit；指定了工作流节点 `xhs-article/cover-image` 时按节点模型出图且不兜底）
 - `buildAiCoverOverlayPrompt({ topic?, articleTitle?, coverText, coverStyle? })` — 按素材风格预设或旧版默认视觉构建纯绿实底文字海报素材提示词 | keywords: 文字海报素材, 绿色素材层, typography-poster-material, green-screen-material
-- `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和默认占画布 70% 的居中可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库 | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
+- `tryComposeAiOverlayCoverToGallery(input)` — 生成装饰素材，同时返回合成预览、原照片底图和默认占画布 70% 的居中可回改素材层，并把透明文字海报以 `ai素材` 标签同步入图库；生图模型取工作流节点 `xhs-article/cover-overlay` | keywords: 装饰素材叠加, 图层分离, 可编辑装饰素材, decoration-overlay-cover, separated-layers, editable-decoration-material
 - `buildGeneratedAssetTags(generatedKind, sourceImages?)` — 为封面、拼图、内页或 AI 文字海报素材生成隔离的图库标签 | keywords: AI素材标签, 生成素材标签, ai-material-tag, generated-asset-tags
 - `composeCoverWithOverlay(basePath, overlayPath)` — sharp 对纯绿素材做软边色键，将透明 PNG 缩至画布 70% 并居中叠加，同时输出素材与 640x853 合成预览 | keywords: 装饰素材叠加, 绿幕色键, 可编辑装饰素材, composite-overlay-on-photo, green-screen-keying, editable-decoration-material
 - `fetchImagePool(input, tags, wantCountOrType, imageType?, excludedGroupIds?)` — 在完整候选集合上随机采样；有标签时匹配任一已选标签，无标签时使用全部可见图片，并排除动态生成分组与历史封面素材；`input.dedup='prefer'` 时先采未用图、不够再补已用图，返回「未用在前、已用在后」 | keywords: 标签随机取图, 全图池随机取图, 优先不重复, tag-random-selection, full-pool-random-selection, prefer-unused

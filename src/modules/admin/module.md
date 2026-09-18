@@ -29,7 +29,7 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
-  - `testAiProvider`: 测试提供商连通性(POST /admin/ai-providers/:id/test, GET /models 探活, 15s 超时, 不消耗配额)/test ai provider
+  - `testAiProvider`: 测试提供商连通性(POST /admin/ai-providers/:id/test, GET /models 探活, PixMax 用 POST /openapi/model/available, 15s 超时, 不消耗配额)/test ai provider
   - `listAiServices()` — 列出固定服务目录与当前生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
   - `updateAiServiceCredit(code,body)` — 修改固定服务的 Credit 点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code
   - `getTenantCreditAccount(id,limit?,before?)` — 查询当前余额与倒序追加式流水 | keywords: Credit账户查询, 流水查询, credit-account-query, transaction-list
@@ -53,7 +53,7 @@
 - **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot
 - **函数**:
   - `ensureIndexes()` — 后台索引初始化，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
-  - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重，每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
+  - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login({username,password,tenantId?})` — 旧版单步登录，关联了账号的成员以账号密码校验 | keywords: 兼容登录, 用户名登录, legacy-login, username-login
   - `identifyLogin({account,password})` — 两步登录第一步：手机号账号关联成员 ∪ 同名历史用户名成员中密码通过且启用的，按租户去重，签发 5 分钟登录票据；全部停用抛 ACCOUNT_DISABLED | keywords: 两步登录, 手机号登录, 可选租户, two-step-login, phone-login, login-tenant-options
   - `selectLoginTenant({loginTicket,tenantId?})` — 两步登录第二步：票据失效抛 LOGIN_TICKET_EXPIRED，租户不在候选抛 TENANT_NOT_BOUND | keywords: 选择登录租户, 签发会话, select-login-tenant, issue-session
@@ -77,7 +77,8 @@
   - `deleteTenant(currentUser, id)`: 删除没有用户且未分配 SuperClaw 的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
   - `getXhsArticleConcurrencyLimits(tenantId?)` — 读取文章生成的全平台与租户并发上限并应用安全默认值 | keywords: 文章生成并发配置, 租户并发上限, article-generation-concurrency, tenant-concurrency-limit
   - `getTenantPlatformAiPromptSupplement(tenantId?)` — 读取租户平台 AI 提示词，母平台作用域回退全局配置 | keywords: 平台AI提示词, 母平台回退, platform-ai-prompt, platform-scope-fallback
-  - `getDefaultAiProvider`: 读取默认提供商（llm/em 未设 default 时 fallback 任一 enabled 记录）/get default provider
+  - `getDefaultAiProvider`: 读取默认提供商（llm/em/video 未设 default 时 fallback 任一 enabled 记录）/get default provider
+  - `getAiProviderRuntimeById(id)` — 按 ID 读取已启用提供商的运行配置（类型、模型、baseUrl 兜底、Key、计费换算），不存在/停用/ID 非法返回 null，供工作流节点指定模型 | keywords: 按ID读取提供商, 节点运行配置, get-provider-runtime-by-id, node-runtime-config
   - `getDefaultAiProviderRuntime`: 读取默认提供商运行配置/get default provider runtime
   - `getAiProviderBillingConfig(providerCode, modelCategory, model?)` — 读取调用时 Token/Credit 换算与固定 Token 配置 | keywords: 提供商计费配置, Token兑换率, provider-billing-config, token-credit-rate
   - `getDefaultEmbeddingRuntime`: 读取默认向量配置/get default embedding runtime
@@ -95,8 +96,8 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
-  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key, 15s 超时)/test ai provider
-  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi, 与 AgentService 对齐)/resolve default provider base url
+  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode, 15s 超时)/test ai provider
+  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi/pixmax, 与 AgentService 对齐)/resolve default provider base url
   - `formatFetchCauseShort`: 简短序列化 fetch error.cause 给测试连接返回 message/format fetch cause short
   - `listClawConfigs`: Claw配置列表/list claw configs
   - `getClawConfigById`: 按ID获取Claw配置/get claw config by id

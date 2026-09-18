@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
   UsePipes,
@@ -18,10 +19,14 @@ import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard.js';
 import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
 import type { AdminRequest } from '../../admin/types/admin-request.types.js';
+import type { Response } from 'express';
 import {
+  ConfirmDouyinScriptDraftsDto,
   CrawlDouyinDataDto,
   CreateDouyinMotherTopicDto,
   GenerateDouyinChildrenDto,
+  GenerateDouyinShotImageDto,
+  GenerateDouyinShotVideoDto,
   GenerateDouyinStoryboardDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
@@ -30,6 +35,7 @@ import {
 import { DouyinOperationService } from '../services/douyin-operation.service.js';
 import { DouyinChildTopicGenerationService } from '../services/douyin-child-topic-generation.service.js';
 import { DouyinGenerationJobService } from '../services/douyin-generation-job.service.js';
+import { DouyinShotImageService } from '../services/douyin-shot-image.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
 
 /**
@@ -52,6 +58,7 @@ export class DouyinWorkbenchController {
     private readonly childTopics: DouyinChildTopicGenerationService,
     private readonly generationJobs: DouyinGenerationJobService,
     private readonly operations: DouyinOperationService,
+    private readonly shotImages: DouyinShotImageService,
   ) {}
 
   /**
@@ -87,7 +94,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 在后台综合母选题、平台 AI 补充提示和用户要求生成并保存短视频子选题，立即返回运行中任务，进度走任务轮询。
+   * @description 在后台综合母选题、平台 AI 补充提示和用户要求生成候选脚本，立即返回运行中任务；候选在任务结果里，挑选后经 drafts/confirm 入库。
    * @keyword-cn AI生成抖音子题接口, 平台提示词
    * @keyword-en generate-douyin-children-api, platform-ai-prompt
    */
@@ -119,6 +126,48 @@ export class DouyinWorkbenchController {
     return {
       jobs: await this.generationJobs.list(this.scopeOf(this.requireUser(req))),
     };
+  }
+
+  /**
+   * @description 保存用户从子选题任务里挑中的候选脚本及各自配图偏向，并为每条新脚本启动后台分镜任务。
+   * @keyword-cn 保存挑选脚本接口, 启动分镜任务
+   * @keyword-en confirm-script-drafts-api, start-storyboard-jobs
+   */
+  @Post('generation-jobs/:jobId/drafts/confirm')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async confirmScriptDrafts(
+    @Req() req: AdminRequest,
+    @Param('jobId') jobId: string,
+    @Body() dto: ConfirmDouyinScriptDraftsDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.generationJobs.confirmDrafts(
+      this.readJobId(jobId),
+      dto.items,
+      scope,
+    );
+    return {
+      ...result,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 放弃子选题任务生成的全部候选脚本。
+   * @keyword-cn 放弃候选脚本接口, 候选已处理
+   * @keyword-en discard-script-drafts-api, drafts-settled
+   */
+  @Post('generation-jobs/:jobId/drafts/discard')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async discardScriptDrafts(
+    @Req() req: AdminRequest,
+    @Param('jobId') jobId: string,
+  ) {
+    await this.generationJobs.discardDrafts(
+      this.readJobId(jobId),
+      this.scopeOf(this.requireUser(req)),
+    );
+    return { success: true };
   }
 
   /**
@@ -216,6 +265,92 @@ export class DouyinWorkbenchController {
   }
 
   /**
+   * @description 按分镜的画面描述重新生成这一镜的竖屏配图，新图入图库后直接绑定到该段分镜。
+   * @keyword-cn 重新生成分镜画面接口, 文生图配图
+   * @keyword-en regenerate-shot-image-api, text-to-image-shot
+   */
+  @Post('topics/:id/storyboard/:shotId/image/generate')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateShotImage(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('shotId') shotId: string,
+    @Body() dto: GenerateDouyinShotImageDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.shotImages.regenerate(
+      this.readId(id),
+      this.readShotId(shotId),
+      dto.prompt,
+      scope,
+    );
+    return {
+      topic: { ...result.topic, _id: undefined },
+      shotId: result.shotId,
+      imageId: result.imageId,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 只为一段分镜创建视频生成任务，调用记录带 shotId 供前端按镜头展示生成历史。
+   * @keyword-cn 单镜头视频生成接口, 分镜视频历史
+   * @keyword-en generate-shot-video-api, shot-video-history
+   */
+  @Post('topics/:id/storyboard/:shotId/video/generate')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateShotVideo(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('shotId') shotId: string,
+    @Body() dto: GenerateDouyinShotVideoDto,
+  ) {
+    return await this.operations.createShotGeneration(
+      this.readId(id),
+      this.readShotId(shotId),
+      dto.prompt,
+      this.requireUser(req),
+    );
+  }
+
+  /**
+   * @description 读取整片 / 分镜视频节点的通道、模型与可选时长。
+   * @keyword-cn 视频生成选项接口, 可选时长
+   * @keyword-en video-generation-options-api, duration-choices
+   */
+  @Get('video/options')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async videoOptions() {
+    return this.operations.getVideoOptions();
+  }
+
+  /**
+   * @description 代理下载一条视频库视频（整片或分镜成片），以附件形式返回，前端不受视频域名跨域限制。
+   * @keyword-cn 下载视频接口, 代理下载
+   * @keyword-en download-video-api, proxy-download
+   */
+  @Get('videos/:videoId/download')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async downloadVideo(
+    @Req() req: AdminRequest,
+    @Param('videoId') videoId: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.operations.openVideoDownload(
+      this.readId(videoId),
+      this.requireUser(req),
+    );
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="video.mp4"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+    );
+    if (file.size) res.setHeader('Content-Length', String(file.size));
+    file.stream.on('error', () => res.destroy());
+    file.stream.pipe(res);
+  }
+
+  /**
    * @description 用真实视频库素材创建抖音发布任务。
    * @keyword-cn 发布抖音视频接口, 真实视频素材
    * @keyword-en publish-douyin-video-api, real-video-asset
@@ -289,6 +424,30 @@ export class DouyinWorkbenchController {
     if (!Number.isInteger(id) || id < 1)
       throw new BadRequestException('DOUYIN_TOPIC_ID_INVALID');
     return id;
+  }
+
+  /**
+   * @description 解析并校验路由中的分镜段落 ID。
+   * @keyword-cn 解析分镜ID, 路由校验
+   * @keyword-en parse-shot-id, route-validation
+   */
+  private readShotId(value: string): string {
+    const shotId = String(value ?? '').trim();
+    if (!shotId || shotId.length > 80)
+      throw new BadRequestException('DOUYIN_STORYBOARD_SHOT_ID_INVALID');
+    return shotId;
+  }
+
+  /**
+   * @description 解析并校验路由中的生成任务 ID（UUID）。
+   * @keyword-cn 解析生成任务ID, 路由校验
+   * @keyword-en parse-generation-job-id, route-validation
+   */
+  private readJobId(value: string): string {
+    const jobId = String(value ?? '').trim();
+    if (!/^[0-9a-f-]{8,64}$/i.test(jobId))
+      throw new BadRequestException('DOUYIN_GENERATION_JOB_ID_INVALID');
+    return jobId;
   }
 
   /**

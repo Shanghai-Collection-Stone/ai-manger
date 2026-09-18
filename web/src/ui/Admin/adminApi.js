@@ -724,6 +724,52 @@ export const adminApi = {
     });
   },
 
+  // ─── 工作流节点模型 ─────────────────────────────────────────────────────────
+
+  /**
+   * @description 读取预设工作流、各节点的模型设置与可选提供商
+   * @keyword-cn 工作流节点模型列表, 可选提供商
+   * @keyword-en list-workflow-models, provider-options
+   */
+  async listWorkflowModels() {
+    return request('/workflow-models');
+  },
+
+  /**
+   * @description 查询某提供商在指定节点类型下可选的模型（PixMax 实时拉取）
+   * @keyword-cn 提供商可选模型, PixMax模型列表
+   * @keyword-en list-provider-models, pixmax-model-list
+   */
+  async listWorkflowProviderModels(providerId, category) {
+    return request(
+      `/workflow-models/providers/${encodeURIComponent(providerId)}/models?category=${encodeURIComponent(category)}`,
+    );
+  },
+
+  /**
+   * @description 为工作流节点保存提供商与模型
+   * @keyword-cn 保存节点模型, 指定模型
+   * @keyword-en save-node-model, assign-model
+   */
+  async saveWorkflowNodeModel(workflowKey, nodeKey, payload) {
+    return request(
+      `/workflow-models/${encodeURIComponent(workflowKey)}/nodes/${encodeURIComponent(nodeKey)}`,
+      { method: 'PUT', body: JSON.stringify(payload) },
+    );
+  },
+
+  /**
+   * @description 清除工作流节点的模型设置，回到默认提供商
+   * @keyword-cn 重置节点模型, 回退默认
+   * @keyword-en reset-node-model, fallback-default
+   */
+  async resetWorkflowNodeModel(workflowKey, nodeKey) {
+    return request(
+      `/workflow-models/${encodeURIComponent(workflowKey)}/nodes/${encodeURIComponent(nodeKey)}`,
+      { method: 'DELETE' },
+    );
+  },
+
   // ─── 热点采集榜 ─────────────────────────────────────────────────────────────
 
   /**

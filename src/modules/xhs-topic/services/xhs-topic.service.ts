@@ -5,6 +5,11 @@ import { z } from 'zod';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { McpAdaptersService } from '../../function-call/mcp/services/mcp-adapter.service.js';
 import { TodoService } from '../../todo/services/todo.service.js';
+import {
+  toWorkflowLlmConfig,
+  WorkflowModelService,
+} from '../../workflow-model/services/workflow-model.service.js';
+import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
 import type {
   XhsTopicCandidate,
   XhsTopicGenerateInput,
@@ -102,6 +107,7 @@ export class XhsTopicService {
     private readonly agentService: AgentService,
     private readonly mcpAdapters: McpAdaptersService,
     private readonly todoService: TodoService,
+    private readonly workflowModels: WorkflowModelService,
   ) {}
 
   /**
@@ -121,6 +127,12 @@ export class XhsTopicService {
     try {
       const ai = await this.agentService.runWithMessages({
         config: {
+          ...toWorkflowLlmConfig(
+            await this.workflowModels.resolveNodeRuntime(
+              WORKFLOW_NODES.xhsArticle.key,
+              WORKFLOW_NODES.xhsArticle.topic,
+            ),
+          ),
           tenantId: scope.tenantId,
           billingContext: {
             tenantId: scope.tenantId,
@@ -431,6 +443,12 @@ ${searchInstruction}
   ): Promise<void> {
     await this.agentService.runWithMessages({
       config: {
+        ...toWorkflowLlmConfig(
+          await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.xhsArticle.key,
+            WORKFLOW_NODES.xhsArticle.topic,
+          ),
+        ),
         system,
         tools,
         temperature: 0.4,

@@ -2260,6 +2260,16 @@ export class AgentService {
     kind?: 'cover' | 'inner';
     includeSystemPrompt?: boolean;
     billingContext: AiBillingContext;
+    /** 工作流节点指定的生图配置；传入时不用默认提供商，失败也不降级美图 */
+    runtimeOverride?: {
+      providerId?: string;
+      providerCode: string;
+      model: string;
+      apiKey?: string;
+      baseUrl?: string;
+      tokensPerCredit?: number;
+      fixedTokensPerCall?: number;
+    };
   }): Promise<{
     providerCode: string;
     model: string;
@@ -2272,7 +2282,13 @@ export class AgentService {
       includeSystemPrompt: input.includeSystemPrompt,
     });
 
-    const runtime = await this.resolveAvailableDefaultImageRuntime();
+    const override = input.runtimeOverride;
+    if (override && !String(override.apiKey ?? '').trim()) {
+      throw new Error(`IMAGE_API_KEY_NOT_CONFIGURED:${override.providerCode}`);
+    }
+    const runtime = override
+      ? { ...override, apiKey: String(override.apiKey).trim() }
+      : await this.resolveAvailableDefaultImageRuntime();
     const hasEditBaseImage =
       String(input.baseImagePath ?? '').trim().length > 0 ||
       (Array.isArray(input.baseImageCandidates) &&
@@ -2306,6 +2322,8 @@ export class AgentService {
             }),
         );
       } catch (error) {
+        // 节点明确指定了模型：失败就如实报错，不悄悄换成美图
+        if (override) throw error;
         const msg =
           error instanceof Error ? error.message : String(error ?? '');
         if (msg.includes('IMAGE_PROVIDER_NOT_SUPPORTED')) {
@@ -2416,6 +2434,7 @@ export class AgentService {
   /**
    * @description 使用 AI 封面生成工具发送提示词并返回本地图片路径。kind 决定下游补齐
    * 封面规格还是内页规格(少文字重内容)；includeSystemPrompt=false 时只用用户提示词。
+   * 传 runtimeOverride 时按工作流节点指定的提供商与模型出图。
    * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[]; kind?: 'cover' | 'inner'; includeSystemPrompt?: boolean }} input - 生图请求。
    * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
    * @keyword-cn 发送提示词生图, 封面规格, 内页规格, 系统自带提示词
@@ -2431,6 +2450,16 @@ export class AgentService {
     kind?: 'cover' | 'inner';
     includeSystemPrompt?: boolean;
     billingContext: AiBillingContext;
+    /** 工作流节点指定的生图配置；传入时不用默认提供商，失败也不降级美图 */
+    runtimeOverride?: {
+      providerId?: string;
+      providerCode: string;
+      model: string;
+      apiKey?: string;
+      baseUrl?: string;
+      tokensPerCredit?: number;
+      fixedTokensPerCall?: number;
+    };
   }): Promise<{
     providerCode: string;
     model: string;
@@ -2446,6 +2475,7 @@ export class AgentService {
       kind: input.kind,
       includeSystemPrompt: input.includeSystemPrompt,
       billingContext: input.billingContext,
+      runtimeOverride: input.runtimeOverride,
     });
   }
 

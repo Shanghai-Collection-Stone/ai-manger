@@ -29,7 +29,7 @@
   - `listMaterialStyles`: `GET material-styles` 列出 AI 素材可选的风格预设与分组，只下发 id/展示名/分组/气质概括，提示词留服务端，缩略图由安装包按同名 id 自带 | keywords: 素材风格列表, list-material-styles
   - `detectMaterialTextIntent(prompt)` — 判断用户描述是否明确要求或排除画面文字，未明确要求时回落到无字贴纸 | keywords: 文字意图识别, 素材文字需求, material-text-intent, detect-text-intent
   - `buildAiMaterialPrompt({ rawPrompt, stylePreset, referenceImageUrl, wantsText })` — 以用户原始描述为最高内容优先级拼装素材提示词，风格与默认贴纸规格只补足未说明部分 | keywords: 素材提示词, 描述优先, build-ai-material-prompt, prompt-first
-  - `generateAiMaterial`: `POST ai-material` AI 生成素材并入图库；输入提示词具有最高内容优先级，明确要求文字时必须逐字生成指定文案，未要求文字时默认单主体 + 纯色背景 + 无字贴纸；可选 `referenceImageUrl` 与 `stylePreset`（预设 id 或 `random`）只控制配色、笔触、描边与构成语言，不改变主体 | keywords: AI素材生成, 描述优先, ai-material-generate, prompt-first
+  - `generateAiMaterial`: `POST ai-material` AI 生成素材并入图库（落盘入库委托 `GalleryAiImageService.persistGeneratedImage`）；输入提示词具有最高内容优先级，明确要求文字时必须逐字生成指定文案，未要求文字时默认单主体 + 纯色背景 + 无字贴纸；可选 `referenceImageUrl` 与 `stylePreset`（预设 id 或 `random`）只控制配色、笔触、描边与构成语言，不改变主体 | keywords: AI素材生成, 描述优先, ai-material-generate, prompt-first
   - `readUploadPreprocessManifest`: 读取并校验普通上传的 `clientPreprocess` 声明,返回按 multer filename 索引的可信尺寸 | keywords: 客户端预处理清单, client-preprocess-manifest
   - `resolveGeneratedMaterialFile`: 把生图返回的本地路径解析成 `public/uploads` 下的文件信息,拒绝外链与 `..` 穿越 | keywords: resolve generated material file, 素材落盘
 
@@ -49,6 +49,19 @@
 - **函数**:
   - `catch`: 捕获并返回统一错误响应/catch and normalize upload exception response
   - `resolveMulterError`: 映射 Multer 错误码到业务文案/map multer codes to user-friendly message
+
+### gallery-ai-image.service.ts
+
+AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共用，把生图落盘结果登记为图库素材。
+
+- **关键词**: ai-image, persist, gallery-intake, thumbnail, dimensions
+- **函数**:
+  - `AI_GENERATED_IMAGE_TAG` — AI 生成图片固定标签「ai素材」 | keywords: AI素材标签, ai-material-tag
+  - `resolveGeneratedImageFile(imagePath)` — 生图相对地址转落盘文件信息，拒绝外链与穿越路径 | keywords: 解析生图落盘路径, 防目录穿越, resolve-generated-image-file, path-traversal-guard
+  - `GalleryAiImageService()` — 生图入库服务 | keywords: 生图入库服务, 统一落盘通道, gallery-ai-image-service, unified-persist-pipeline
+  - `persistGeneratedImage(input)` — 校验文件、补尺寸与缩略图、合并标签后写入图库 | keywords: 登记生成图片, 图库素材入库, persist-generated-image, gallery-image-intake
+  - `readDimensions(absPath)` — jimp 读取像素尺寸，失败返回 null | keywords: 读取图片尺寸, 竖图判定, read-image-dimensions, portrait-detection
+  - `isJimpLike(value)` — 判断动态导入的 jimp 可读图 | keywords: 判断jimp可用, 动态导入, detect-jimp-like, dynamic-import
 
 ### gallery.service.ts
 

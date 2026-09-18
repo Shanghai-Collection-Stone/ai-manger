@@ -112,6 +112,7 @@ describe('CanvasImageGroupService', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     service = instance as unknown as ServiceInternals;
     jest.spyOn(service, 'isLocalImageReadable').mockReturnValue(true);

@@ -3,9 +3,12 @@ jest.mock('../../gallery/services/gallery.service', () => ({
 }));
 
 import type { DouyinStoryboardShot } from '../entities/douyin-workbench.entity';
+import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity';
+import type { GalleryService } from '../../gallery/services/gallery.service';
 import {
   autoAssignShotImages,
   buildImageCandidatePrompt,
+  DouyinStoryboardImageService,
   scoreImageForShot,
   type StoryboardImageCandidate,
 } from './douyin-storyboard-image.service';
@@ -111,5 +114,45 @@ describe('douyin storyboard image matching', () => {
     expect(prompt).toContain(
       '#7｜竖图｜标签：生日、派对｜一群人在包厢里围着蛋糕庆祝',
     );
+  });
+});
+
+/**
+ * @description 构造一条图库记录，供候选收集测试使用。
+ * @keyword-cn 测试图库记录, 候选收集
+ * @keyword-en test-gallery-image, candidate-loading
+ */
+function galleryImage(id: number, tags: string[]): GalleryImageEntity {
+  return {
+    id,
+    url: `/static/uploads/${id}.jpg`,
+    tags,
+  } as unknown as GalleryImageEntity;
+}
+
+describe('douyin storyboard candidate loading', () => {
+  it('限定标签时只收带这些标签的图，且不做无标签随机补足', async () => {
+    const gallery = {
+      searchSimilar: jest.fn().mockResolvedValue([
+        { image: galleryImage(1, ['咖啡']), score: 0.9 },
+        { image: galleryImage(2, ['街景']), score: 0.8 },
+      ]),
+      sampleRandom: jest
+        .fn()
+        .mockResolvedValue([galleryImage(3, ['咖啡', '门店'])]),
+      listDistinctTagsWithTenant: jest.fn(),
+    };
+    const service = new DouyinStoryboardImageService(
+      gallery as unknown as GalleryService,
+    );
+    const result = await service.loadCandidates(
+      '咖啡 门店',
+      { tenantId: 't1', userId: 'u1' },
+      ['咖啡', '封面'],
+    );
+    expect(result.map((item) => item.id)).toEqual([1, 3]);
+    expect(gallery.sampleRandom).toHaveBeenCalledTimes(1);
+    expect(gallery.sampleRandom.mock.calls[0][0].tags).toEqual(['咖啡']);
+    expect(gallery.listDistinctTagsWithTenant).not.toHaveBeenCalled();
   });
 });
