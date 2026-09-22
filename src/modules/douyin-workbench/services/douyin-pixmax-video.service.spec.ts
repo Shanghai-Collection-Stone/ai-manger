@@ -153,7 +153,7 @@ describe('douyin pixmax video prompts', () => {
     expect(prompt).toContain('标准普通话（中文）');
   });
 
-  it('读取生成方案：生成方式、参考图、时长、声音与口播稿', () => {
+  it('读取生成方案：生成方式、参考图、时长、清晰度、声音与口播稿', () => {
     expect(
       readDouyinVideoPlan({
         referModel: 'firstAndLastFrame',
@@ -161,6 +161,8 @@ describe('douyin pixmax video prompts', () => {
         duration: 15,
         plannedSeconds: 43,
         durationClamped: true,
+        resolution: '720P',
+        resolutionClamped: true,
         audio: MANDARIN,
         scriptIncluded: true,
       }),
@@ -170,6 +172,8 @@ describe('douyin pixmax video prompts', () => {
       duration: 15,
       plannedSeconds: 43,
       durationClamped: true,
+      resolution: '720P',
+      resolutionClamped: true,
       audioMode: 'voiceover',
       audioLanguage: 'zh-CN',
       scriptIncluded: true,

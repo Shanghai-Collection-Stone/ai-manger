@@ -26,11 +26,15 @@ import {
   DouyinShuyanVideoService,
   isShuyanSeedanceModel,
   listShuyanVideoDurationChoices,
+  listShuyanVideoResolutionChoices,
 } from './douyin-shuyan-video.service.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
 import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
 import { isShuyanProvider } from '../../workflow-model/services/shuyan-model-catalog.js';
-import { listPixmaxDurationChoices } from '../../pixmax/services/pixmax-video-params.js';
+import {
+  listPixmaxDurationChoices,
+  listPixmaxResolutionChoices,
+} from '../../pixmax/services/pixmax-video-params.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
 
 type DouyinOperation = 'generate' | 'publish' | 'crawl';
@@ -135,6 +139,7 @@ export class DouyinOperationService {
       script: topic.script,
       storyboard: topic.storyboard,
       duration: topic.fullVideoDuration || undefined,
+      resolution: String(topic.fullVideoResolution ?? '').trim() || undefined,
       prompt: String(prompt ?? '').trim() || undefined,
     };
     const operationId = randomUUID();
@@ -293,10 +298,18 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 读取整片与分镜两个视频节点当前走的通道、模型与可选时长，供视频栏展示「生成时长」选项。
-   *   未指定模型时走直连服务（时长不限，按分镜决定）；节点配置不可用时返回中文原因。
-   * @keyword-cn 视频生成选项, 可选时长
-   * @keyword-en video-generation-options, duration-choices
+   * @description 未指定节点模型（走直连视频服务）时给前端的可选清晰度。直连服务由环境变量配置、能力未知，
+   *   只给最常用的两档，能不能生效取决于对端实现。
+   * @keyword-cn 直连可选清晰度, 整片清晰度
+   * @keyword-en direct-resolution-choices, full-video-resolution
+   */
+  private static readonly DIRECT_RESOLUTIONS = ['720P', '1080P'];
+
+  /**
+   * @description 读取整片与分镜两个视频节点当前走的通道、模型、可选时长与可选清晰度，供视频栏展示「生成时长」「清晰度」选项。
+   *   未指定模型时走直连服务（时长不限、清晰度由直连服务自己决定）；节点配置不可用时返回中文原因。
+   * @keyword-cn 视频生成选项, 可选时长, 可选清晰度
+   * @keyword-en video-generation-options, duration-choices, resolution-choices
    * @returns 整片与分镜两个节点的选项。
    */
   async getVideoOptions(): Promise<
@@ -307,6 +320,7 @@ export class DouyinOperationService {
         model?: string;
         providerName?: string;
         durations: number[];
+        resolutions: string[];
         error?: string;
       }
     >
@@ -317,7 +331,12 @@ export class DouyinOperationService {
           WORKFLOW_NODES.douyinWorkbench.key,
           nodeKey,
         );
-        if (!runtime) return { channel: 'direct' as const, durations: [] };
+        if (!runtime)
+          return {
+            channel: 'direct' as const,
+            durations: [],
+            resolutions: [...DouyinOperationService.DIRECT_RESOLUTIONS],
+          };
         if (isShuyanProvider(runtime.providerCode)) {
           if (!isShuyanSeedanceModel(runtime.model)) {
             throw new BadRequestException(
@@ -329,6 +348,7 @@ export class DouyinOperationService {
             model: runtime.model,
             providerName: runtime.providerName,
             durations: listShuyanVideoDurationChoices(runtime.model),
+            resolutions: listShuyanVideoResolutionChoices(runtime.model),
           };
         }
         return {
@@ -336,11 +356,13 @@ export class DouyinOperationService {
           model: runtime.model,
           providerName: runtime.providerName,
           durations: listPixmaxDurationChoices(runtime.model),
+          resolutions: listPixmaxResolutionChoices(runtime.model),
         };
       } catch (error) {
         return {
           channel: 'unavailable' as const,
           durations: [],
+          resolutions: [],
           error: describePixmaxError(error),
         };
       }

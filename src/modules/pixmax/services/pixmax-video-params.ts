@@ -25,6 +25,10 @@ export interface PixmaxVideoParamsResult {
   duration?: number;
   /** 目标时长超过模型上限时为 true */
   durationClamped: boolean;
+  /** 本次实际提交的清晰度档位（模型的原始取值，如 `720P` / `SUPER_1080P`） */
+  resolution?: string;
+  /** 指定的清晰度模型不支持，已换成最接近的一档时为 true */
+  resolutionClamped: boolean;
   /** 模型有「是否包含音频」参数，本次已按声音设置写入 */
   audioSwitchApplied: boolean;
 }
@@ -128,6 +132,83 @@ export function listPixmaxDurationChoices(modelCode: string): number[] {
 }
 
 /**
+ * @description 清晰度档位的排序权重：`720P` 这种按纵向像素，`2K` 这种按 K 数换算成千，`SUPER_` 前缀是同一档的增强版，
+ *   排在原档之后半级。权重只用于排序与就近取档，不代表真实分辨率。
+ * @keyword-cn 清晰度权重, 档位排序
+ * @keyword-en resolution-weight, resolution-order
+ * @param option 模型声明的清晰度取值。
+ * @returns {number} 排序权重，认不出的取值为 0。
+ */
+export function readResolutionWeight(option: string): number {
+  const value = String(option ?? '')
+    .trim()
+    .toUpperCase();
+  const enhanced = value.startsWith('SUPER_') ? 0.5 : 0;
+  const body = value.replace(/^SUPER_/, '');
+  const pixels = /^(\d+)P$/.exec(body);
+  if (pixels) return Number(pixels[1]) + enhanced;
+  const kilo = /^(\d+)K$/.exec(body);
+  if (kilo) return Number(kilo[1]) * 1000 + enhanced;
+  return 0;
+}
+
+/**
+ * @description 列出模型可选的清晰度档位（按清晰度升序）；模型没有清晰度参数或目录里没有这个模型时返回空数组，
+ *   表示这个通道不让选清晰度。
+ * @keyword-cn 模型可选清晰度, 清晰度选项
+ * @keyword-en model-resolution-choices, resolution-options
+ * @param modelCode 模型编码。
+ * @returns {string[]} 可选档位（模型的原始取值）。
+ */
+export function listPixmaxResolutionChoices(modelCode: string): string[] {
+  const spec = findPixmaxModel(modelCode);
+  if (!spec) return [];
+  const param = spec.params.find((item) => item.name === 'resolution');
+  if (!param?.options?.length) return [];
+  return [
+    ...new Set(
+      param.options.map((item) => String(item ?? '').trim()).filter(Boolean),
+    ),
+  ].sort((a, b) => readResolutionWeight(a) - readResolutionWeight(b));
+}
+
+/**
+ * @description 在模型允许的清晰度里取最接近目标的一档：能对上就用原值，对不上按权重就近（平级取低的那档，省钱优先），
+ *   没指定目标时用模型默认值。
+ * @keyword-cn 选择清晰度, 清晰度就近取档
+ * @keyword-en pick-resolution, nearest-resolution
+ * @param spec 清晰度参数规格。
+ * @param target 目标档位，空串表示不指定。
+ * @returns 选中的档位；参数没有可选值时回落到默认值。
+ */
+export function pickPixmaxResolution(
+  spec: PixmaxParamSpec,
+  target: string,
+): string | undefined {
+  const options = (spec.options ?? [])
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean);
+  const fallback = String(spec.defaultValue ?? '').trim() || undefined;
+  const want = String(target ?? '').trim();
+  if (!want || !options.length) return fallback;
+  const exact = options.find(
+    (item) => item.toUpperCase() === want.toUpperCase(),
+  );
+  if (exact) return exact;
+  const wanted = readResolutionWeight(want);
+  if (!wanted) return fallback;
+  return options
+    .slice()
+    .sort((a, b) => readResolutionWeight(a) - readResolutionWeight(b))
+    .reduce((best, item) =>
+      Math.abs(readResolutionWeight(item) - wanted) <
+      Math.abs(readResolutionWeight(best) - wanted)
+        ? item
+        : best,
+    );
+}
+
+/**
  * @description 从生成模式的输入要求里读出可带的图片数量上限：要求不涉及图片时为 0，`无需输入素材` 时按模型图片上限。
  * @keyword-cn 解析参考图上限, 模式输入要求
  * @keyword-en parse-image-limit, mode-requirement
@@ -223,7 +304,8 @@ function toParamValue(spec: PixmaxParamSpec, value: string): unknown {
  *   已知模型按规格选值；未知模型（目录里没有）按通用参数兜底。
  * @keyword-cn 组装生视频参数, 竖屏比例
  * @keyword-en build-video-params, portrait-ratio
- * @param input 模型、提示词、目标时长、模式、可用参考图数量，以及是否需要音频（模型有 `includeAudio` 参数时按它写入）。
+ * @param input 模型、提示词、目标时长、模式、可用参考图数量、目标清晰度（模型有 `resolution` 参数时就近取档），
+ *   以及是否需要音频（模型有 `includeAudio` 参数时按它写入）。
  * @returns 参数与取舍结果。
  * @throws {BadRequestException} PIXMAX_MODEL_NOT_VIDEO_GENERATION / PIXMAX_MODEL_MODE_UNSUPPORTED。
  */
@@ -233,6 +315,7 @@ export function buildPixmaxVideoParams(input: {
   targetSeconds: number;
   mode: PixmaxVideoMode;
   availableImages: number;
+  targetResolution?: string;
   audioEnabled?: boolean;
 }): PixmaxVideoParamsResult {
   const spec = findPixmaxModel(input.modelCode);
@@ -265,6 +348,7 @@ export function buildPixmaxVideoParams(input: {
           : Math.min(9, input.availableImages),
       duration,
       durationClamped: duration < input.targetSeconds,
+      resolutionClamped: false,
       audioSwitchApplied: false,
     };
   }
@@ -287,12 +371,19 @@ export function buildPixmaxVideoParams(input: {
       ?.requirement ?? '';
 
   let duration: number | undefined;
+  let resolution: string | undefined;
   for (const param of spec.params) {
     if (param.name in params) continue;
     if (param.name === 'duration') {
       duration = pickPixmaxDuration(param, input.targetSeconds);
       if (duration !== undefined)
         params.duration = toParamValue(param, String(duration));
+      continue;
+    }
+    if (param.name === 'resolution') {
+      resolution = pickPixmaxResolution(param, input.targetResolution ?? '');
+      if (resolution !== undefined)
+        params.resolution = toParamValue(param, resolution);
       continue;
     }
     if (param.name === 'aspectRatio') {
@@ -325,6 +416,12 @@ export function buildPixmaxVideoParams(input: {
     duration,
     durationClamped:
       duration !== undefined && duration < Math.ceil(input.targetSeconds),
+    resolution,
+    resolutionClamped: Boolean(
+      input.targetResolution &&
+      resolution &&
+      resolution.toUpperCase() !== input.targetResolution.toUpperCase(),
+    ),
     audioSwitchApplied:
       input.audioEnabled !== undefined &&
       spec.params.some((p) => p.name === 'includeAudio'),

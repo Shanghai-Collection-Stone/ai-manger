@@ -74,6 +74,14 @@ export const DOUYIN_SHUYAN_POLL_MS = 15 * 1000;
  * @keyword-en shuyan-video-task-timeout, saving-stale
  */
 export const DOUYIN_SHUYAN_TASK_TIMEOUT_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * @description 数眼 Seedance 生视频默认分辨率；官方按 分辨率 x 时长 计费，480p 是最省的档位，
+ *   需要更清晰时改成 `720p` / `1080p`（1080p 仅 Seedance 2.x 支持）。
+ * @keyword-cn 数眼视频分辨率, 默认清晰度
+ * @keyword-en shuyan-video-resolution, default-quality
+ */
+export const DOUYIN_SHUYAN_VIDEO_RESOLUTION = '480p';
 const DOUYIN_SHUYAN_SAVING_STALE_MS = 10 * 60 * 1000;
 
 /**
@@ -151,6 +159,55 @@ export function clampShuyanVideoDuration(
   const max = choices[choices.length - 1];
   const rounded = Math.round(Number(seconds) || min);
   return Math.max(min, Math.min(max, rounded));
+}
+
+/**
+ * @description 返回当前 Seedance 型号可选的清晰度档位（按清晰度升序）：1080p 只有 Seedance 2.x 支持，其余型号到 720p。
+ *   官方按「分辨率 × 时长」计费，档位越高越贵。
+ * @keyword-cn Seedance可选清晰度, 型号清晰度范围
+ * @keyword-en seedance-resolution-choices, model-resolution-range
+ * @param model 模型编码。
+ * @returns {string[]} 可选档位。
+ */
+export function listShuyanVideoResolutionChoices(model: string): string[] {
+  const value = String(model ?? '')
+    .trim()
+    .toLowerCase();
+  return /seedance[-_.]?2/.test(value)
+    ? ['480p', '720p', '1080p']
+    : ['480p', '720p'];
+}
+
+/**
+ * @description 把设定的清晰度收敛到所选 Seedance 型号支持的档位：对不上就取最接近的一档，没设定时用默认档
+ *   `DOUYIN_SHUYAN_VIDEO_RESOLUTION`。
+ * @keyword-cn Seedance清晰度收敛, 视频清晰度
+ * @keyword-en clamp-seedance-resolution, video-resolution
+ * @param model 模型编码。
+ * @param resolution 设定的清晰度，空表示不指定。
+ * @returns {string} 可提交的档位。
+ */
+export function clampShuyanVideoResolution(
+  model: string,
+  resolution?: string,
+): string {
+  const choices = listShuyanVideoResolutionChoices(model);
+  const want = String(resolution ?? '')
+    .trim()
+    .toLowerCase();
+  const fallback = choices.includes(DOUYIN_SHUYAN_VIDEO_RESOLUTION)
+    ? DOUYIN_SHUYAN_VIDEO_RESOLUTION
+    : choices[0];
+  if (!want) return fallback;
+  if (choices.includes(want)) return want;
+  const wanted = Number(/^(\d+)p$/.exec(want)?.[1] ?? 0);
+  if (!wanted) return fallback;
+  return choices.reduce((best, item) =>
+    Math.abs(Number(/^(\d+)p$/.exec(item)?.[1] ?? 0) - wanted) <
+    Math.abs(Number(/^(\d+)p$/.exec(best)?.[1] ?? 0) - wanted)
+      ? item
+      : best,
+  );
 }
 
 /**
@@ -285,6 +342,13 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       runtime.model,
       chosenSeconds ?? plannedSeconds,
     );
+    // 清晰度只在整片栏设定，分镜仍走默认档
+    const chosenResolution =
+      mode === 'full' ? String(topic.fullVideoResolution ?? '').trim() : '';
+    const resolution = clampShuyanVideoResolution(
+      runtime.model,
+      chosenResolution,
+    );
     const audio = normalizeVideoAudio(topic.videoAudio);
     const persona = topic.personaId
       ? await this.personas.get(topic.personaId, scope)
@@ -328,7 +392,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
     const payload = {
       model: runtime.model,
       content: [{ type: 'text', text: prompt }, ...imageContents],
-      resolution: '720p',
+      resolution,
       ratio: '9:16',
       duration,
       generate_audio: audio.mode !== 'mute',
@@ -359,6 +423,11 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       scriptIncluded,
       prompt,
       resolution: payload.resolution,
+      targetResolution: chosenResolution || undefined,
+      resolutionClamped: Boolean(
+        chosenResolution &&
+        chosenResolution.toLowerCase() !== payload.resolution.toLowerCase(),
+      ),
       ratio: payload.ratio,
     };
     const base = {

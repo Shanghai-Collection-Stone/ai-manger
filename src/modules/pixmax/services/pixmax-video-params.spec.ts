@@ -2,6 +2,8 @@ import {
   buildPixmaxVideoParams,
   findPixmaxModel,
   listPixmaxDurationChoices,
+  listPixmaxResolutionChoices,
+  pickPixmaxResolution,
   mapPixmaxTaskStatus,
   pickPixmaxDuration,
   pickPixmaxReferMode,
@@ -30,6 +32,78 @@ describe('pixmax video params', () => {
     expect(pickPixmaxDuration(range, 2.2)).toBe(4);
     expect(pickPixmaxDuration(range, 18.4)).toBe(19);
     expect(pickPixmaxDuration(range, 60)).toBe(30);
+  });
+
+  it('清晰度档位按从低到高排序，增强档紧跟同名原档，模型不存在时不给选', () => {
+    expect(listPixmaxResolutionChoices('SEEDANCE_2_0')).toEqual([
+      '480P',
+      '720P',
+      'SUPER_720P',
+      '1080P',
+      'SUPER_1080P',
+      '4K',
+      'SUPER_4K',
+    ]);
+    expect(listPixmaxResolutionChoices('PIXVERSE_V6')).toEqual([
+      '360P',
+      '540P',
+      '720P',
+      '1080P',
+    ]);
+    expect(listPixmaxResolutionChoices('这个模型不存在')).toEqual([]);
+  });
+
+  it('清晰度对不上模型档位时就近取，没指定时用模型默认档', () => {
+    const spec = {
+      name: 'resolution',
+      type: 'string',
+      defaultValue: '720P',
+      options: ['480P', '720P', 'SUPER_720P', 'SUPER_1080P', 'SUPER_4K'],
+    };
+    expect(pickPixmaxResolution(spec, '480p')).toBe('480P');
+    expect(pickPixmaxResolution(spec, '1080P')).toBe('SUPER_1080P');
+    expect(pickPixmaxResolution(spec, '')).toBe('720P');
+    const narrow = {
+      name: 'resolution',
+      type: 'string',
+      defaultValue: '720P',
+      options: ['720P', '1080P'],
+    };
+    expect(pickPixmaxResolution(narrow, '4K')).toBe('1080P');
+    expect(pickPixmaxResolution(narrow, '360P')).toBe('720P');
+  });
+
+  it('组装参数时按设定的清晰度取档，对不上标记 resolutionClamped', () => {
+    const exact = buildPixmaxVideoParams({
+      modelCode: 'PIXVERSE_V6',
+      prompt: '',
+      targetSeconds: 5,
+      mode: 'full',
+      availableImages: 1,
+      targetResolution: '1080P',
+    });
+    expect(exact.params.resolution).toBe('1080P');
+    expect(exact.resolution).toBe('1080P');
+    expect(exact.resolutionClamped).toBe(false);
+    const clamped = buildPixmaxVideoParams({
+      modelCode: 'PIXVERSE_V6',
+      prompt: '',
+      targetSeconds: 5,
+      mode: 'full',
+      availableImages: 1,
+      targetResolution: '4K',
+    });
+    expect(clamped.params.resolution).toBe('1080P');
+    expect(clamped.resolutionClamped).toBe(true);
+    const auto = buildPixmaxVideoParams({
+      modelCode: 'PIXVERSE_V6',
+      prompt: '',
+      targetSeconds: 5,
+      mode: 'full',
+      availableImages: 1,
+    });
+    expect(auto.params.resolution).toBe('720P');
+    expect(auto.resolutionClamped).toBe(false);
   });
 
   it('分镜模式有图走图生视频，整片模式多图参考并受模型上限约束', () => {

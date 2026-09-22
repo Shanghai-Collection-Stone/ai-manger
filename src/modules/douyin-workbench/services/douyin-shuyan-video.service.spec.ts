@@ -5,9 +5,30 @@ import {
   listShuyanVideoDurationChoices,
   mapShuyanVideoStatus,
   resolveShuyanVideoGateway,
+  listShuyanVideoResolutionChoices,
+  clampShuyanVideoResolution,
 } from './douyin-shuyan-video.service';
 
 describe('数眼 Seedance 视频运行时', () => {
+  it('清晰度只有 Seedance 2.x 能到 1080p，设定对不上时就近取、没设定用默认档', () => {
+    expect(listShuyanVideoResolutionChoices('seedance-2-0-pro')).toEqual([
+      '480p',
+      '720p',
+      '1080p',
+    ]);
+    expect(listShuyanVideoResolutionChoices('seedance-1-0-pro')).toEqual([
+      '480p',
+      '720p',
+    ]);
+    expect(clampShuyanVideoResolution('seedance-2-0-pro', '1080P')).toBe(
+      '1080p',
+    );
+    expect(clampShuyanVideoResolution('seedance-1-0-pro', '1080p')).toBe(
+      '720p',
+    );
+    expect(clampShuyanVideoResolution('seedance-2-0-pro', '')).toBe('480p');
+  });
+
   it('只把 Seedance 型号交给当前原生路由', () => {
     expect(isShuyanSeedanceModel('doubao-seedance-2-5-oinone')).toBe(true);
     expect(isShuyanSeedanceModel('seedance-1.5-pro')).toBe(true);

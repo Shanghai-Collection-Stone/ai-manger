@@ -148,6 +148,9 @@ export function readDouyinVideoPlan(
       typeof request.targetSeconds === 'number'
         ? request.targetSeconds
         : undefined,
+    resolution:
+      typeof request.resolution === 'string' ? request.resolution : undefined,
+    resolutionClamped: request.resolutionClamped === true,
     audioMode: audio?.mode,
     audioLanguage: audio?.language,
     scriptIncluded: request.scriptIncluded === true,
@@ -394,6 +397,9 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
         ? Number(topic.fullVideoDuration)
         : undefined;
     const targetSeconds = chosenSeconds ?? plannedSeconds;
+    // 清晰度只在整片栏设定，分镜仍走模型默认档
+    const chosenResolution =
+      mode === 'full' ? String(topic.fullVideoResolution ?? '').trim() : '';
     const audio = normalizeVideoAudio(topic.videoAudio);
     const persona = topic.personaId
       ? await this.personas.get(topic.personaId, scope)
@@ -405,6 +411,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
       targetSeconds: targetSeconds || 5,
       mode,
       availableImages: images.length,
+      targetResolution: chosenResolution || undefined,
       audioEnabled: audio.mode !== 'mute',
     });
     const usedImages =
@@ -451,6 +458,9 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
       targetSeconds: chosenSeconds,
       durationClamped:
         plan.duration !== undefined && plan.duration < plannedSeconds,
+      resolution: plan.resolution,
+      targetResolution: chosenResolution || undefined,
+      resolutionClamped: plan.resolutionClamped,
       imageIds: usedImages.map((image) => image.imageId),
       audio,
       audioSwitchApplied: plan.audioSwitchApplied,

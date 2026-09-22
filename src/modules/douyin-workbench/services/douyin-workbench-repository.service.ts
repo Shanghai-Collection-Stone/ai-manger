@@ -302,7 +302,8 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
-   * @description 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长（0 表示改回自动）、完整分镜或最终视频素材绑定。
+   * @description 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长（0 表示改回自动）、整片清晰度
+   *   （空串表示改回模型默认档）、完整分镜或最终视频素材绑定。
    * @keyword-cn 更新抖音选题, 保存脚本正文, 持久化分镜
    * @keyword-en update-douyin-topic, persist-script-body, persist-storyboard
    */
@@ -318,6 +319,7 @@ export class DouyinWorkbenchRepositoryService {
       referenceImages?: Array<Partial<DouyinMediaReference>>;
       videoAudio?: Partial<DouyinVideoAudioSetting>;
       fullVideoDuration?: number;
+      fullVideoResolution?: string;
       storyboard?: DouyinStoryboardShot[];
       generatedVideoId?: number;
     },
@@ -364,6 +366,13 @@ export class DouyinWorkbenchRepositoryService {
       const seconds = Math.round(Number(input.fullVideoDuration) || 0);
       if (seconds > 0) updates.fullVideoDuration = Math.min(120, seconds);
       else unset.fullVideoDuration = '';
+    }
+    // 空串表示改回模型默认清晰度；只收模型档位那种短标识，挡掉乱填
+    if (input.fullVideoResolution !== undefined) {
+      const resolution = String(input.fullVideoResolution ?? '').trim();
+      if (/^[A-Za-z0-9_]{1,20}$/.test(resolution))
+        updates.fullVideoResolution = resolution;
+      else unset.fullVideoResolution = '';
     }
     if (input.storyboard !== undefined) {
       updates.storyboard = input.storyboard;

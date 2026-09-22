@@ -307,6 +307,11 @@ export class UpdateDouyinTopicDto {
   fullVideoDuration?: number;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  fullVideoResolution?: string;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => DouyinStoryboardShotDto)

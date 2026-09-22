@@ -142,6 +142,8 @@ export interface DouyinTopicEntity {
   videoAudio?: DouyinVideoAudioSetting;
   /** @description 整片模式的目标时长（秒），为空表示按分镜总时长自动决定 */
   fullVideoDuration?: number;
+  /** @description 整片模式的清晰度档位（模型自己的取值，如 `720P` / `1080p`），为空表示按模型默认档 */
+  fullVideoResolution?: string;
   platform: 'douyin';
   storyboard: DouyinStoryboardShot[];
   status: 'draft' | 'storyboard_ready' | 'video_ready' | 'published';
@@ -253,6 +255,10 @@ export interface DouyinOperationView {
     durationClamped: boolean;
     /** 用户设定的目标时长（秒），自动时为空 */
     targetSeconds?: number;
+    /** 本次实际提交的清晰度档位 */
+    resolution?: string;
+    /** 设定的清晰度当前模型不支持、已换成最接近一档时为 true */
+    resolutionClamped: boolean;
     /** 本次采用的声音设置 */
     audioMode?: DouyinVideoAudioSetting['mode'];
     audioLanguage?: DouyinVideoAudioSetting['language'];
