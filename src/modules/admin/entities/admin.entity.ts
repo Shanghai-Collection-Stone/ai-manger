@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb';
  */
 export type AdminUserRole = 'super_admin' | 'tenant_admin' | 'operator';
 
+
 /**
  * @description 后台用户实体
  * @keyword-en admin user entity
@@ -22,6 +23,15 @@ export interface AdminUserEntity {
   /** 关联的手机号账号 `admin_accounts._id`；有值时登录密码以账号为准，本行 passwordHash 不再参与校验 */
   accountId?: string;
   enabled: boolean;
+  /**
+   * 用户自助注销的时间。置位时同时把 `enabled` 落为 false——登录路径本来就拦 `enabled`
+   * （`ACCOUNT_DISABLED`），因此注销后无法再登录。
+   *
+   * 注意当前只做到软删：**没有**任何定时任务会按本字段清理数据，注销后个人信息与业务内容
+   * 仍留在库里。隐私政策第四节据此写的是「立即停用并保留，用户另行申请后 15 个工作日内彻底删除」，
+   * 而不是承诺自动删除。将来补上清理任务时，隐私政策要同步改回自动删除的表述。
+   */
+  deletedAt?: Date;
   lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -38,6 +48,8 @@ export interface AdminAccountEntity {
   phone: string;
   passwordHash: string;
   displayName: string;
+  /** 自助注销时间。与名下全部 `admin_users` 一同置位，保留期内不释放手机号。 */
+  deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

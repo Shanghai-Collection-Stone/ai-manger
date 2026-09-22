@@ -21,6 +21,19 @@ import type {
 import type { AdminUserRole } from '../entities/admin.entity.js';
 
 /**
+ * @description 自助注销账号请求体。只要密码——注销不可逆，必须二次确认身份；
+ *   不用短信验证码是因为用户名账号可能没绑手机号，应用商店审核员的演示账号也收不到短信。
+ * @keyword-cn 自助注销请求, 密码二次确认
+ * @keyword-en self-delete-account-dto, password-reconfirm
+ */
+export class DeleteOwnAccountDto {
+  @IsString()
+  @MinLength(6)
+  @MaxLength(120)
+  password!: string;
+}
+
+/**
  * @description 登录请求体
  * @keyword-en admin login dto
  */

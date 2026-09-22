@@ -22,8 +22,14 @@ import {
   presentDouyinVideoError,
   readDouyinVideoPlan,
 } from './douyin-pixmax-video.service.js';
+import {
+  DouyinShuyanVideoService,
+  isShuyanSeedanceModel,
+  listShuyanVideoDurationChoices,
+} from './douyin-shuyan-video.service.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
 import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
+import { isShuyanProvider } from '../../workflow-model/services/shuyan-model-catalog.js';
 import { listPixmaxDurationChoices } from '../../pixmax/services/pixmax-video-params.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
 
@@ -50,6 +56,7 @@ export class DouyinOperationService {
     private readonly billing: AiBillingService,
     private readonly workflowModels: WorkflowModelService,
     private readonly pixmaxVideos: DouyinPixmaxVideoService,
+    private readonly shuyanVideos: DouyinShuyanVideoService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
     void this.ensureIndexes();
@@ -83,7 +90,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 整片模式：所有分镜一次生成一条完整视频。后台为节点 `douyin-workbench/full-video` 指定了模型时走 PixMax，
+   * @description 整片模式：所有分镜一次生成一条完整视频。后台为节点 `douyin-workbench/full-video` 指定了模型时走 PixMax 或数眼智能，
    *   否则把整条分镜提交给环境变量配置的视频生成服务；成功受理后记录响应并扣除生视频服务 Credit。
    * @keyword-cn 直连视频生成, 合成总片, 生视频扣费, 整片生成
    * @keyword-en direct-video-generation, composite-video, video-service-charge, full-video
@@ -102,6 +109,15 @@ export class DouyinOperationService {
       WORKFLOW_NODES.douyinWorkbench.fullVideo,
     );
     if (nodeRuntime) {
+      if (isShuyanProvider(nodeRuntime.providerCode)) {
+        return this.shuyanVideos.start({
+          topic,
+          mode: 'full',
+          prompt,
+          runtime: nodeRuntime,
+          scope,
+        });
+      }
       return this.pixmaxVideos.start({
         topic,
         mode: 'full',
@@ -141,7 +157,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 分镜模式：只把一段分镜提交生成，产出这一镜的分镜视频；节点 `douyin-workbench/shot-video` 指定了模型时走 PixMax，
+   * @description 分镜模式：只把一段分镜提交生成，产出这一镜的分镜视频；节点 `douyin-workbench/shot-video` 指定了模型时走 PixMax 或数眼智能，
    *   否则提交给环境变量配置的视频生成服务。调用记录带 `shotId`，
    *   前端据此按镜头展示生成历史。成功直接拿到视频时绑定到该段分镜的 `videoId`。
    * @keyword-cn 单镜头视频生成, 分镜视频历史
@@ -169,6 +185,16 @@ export class DouyinOperationService {
       WORKFLOW_NODES.douyinWorkbench.shotVideo,
     );
     if (nodeRuntime) {
+      if (isShuyanProvider(nodeRuntime.providerCode)) {
+        return this.shuyanVideos.start({
+          topic,
+          mode: 'shot',
+          shotId,
+          prompt,
+          runtime: nodeRuntime,
+          scope,
+        });
+      }
       return this.pixmaxVideos.start({
         topic,
         mode: 'shot',
@@ -277,7 +303,7 @@ export class DouyinOperationService {
     Record<
       'full' | 'shot',
       {
-        channel: 'pixmax' | 'direct' | 'unavailable';
+        channel: 'pixmax' | 'shuyan' | 'direct' | 'unavailable';
         model?: string;
         providerName?: string;
         durations: number[];
@@ -292,6 +318,19 @@ export class DouyinOperationService {
           nodeKey,
         );
         if (!runtime) return { channel: 'direct' as const, durations: [] };
+        if (isShuyanProvider(runtime.providerCode)) {
+          if (!isShuyanSeedanceModel(runtime.model)) {
+            throw new BadRequestException(
+              `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED:${runtime.model}`,
+            );
+          }
+          return {
+            channel: 'shuyan' as const,
+            model: runtime.model,
+            providerName: runtime.providerName,
+            durations: listShuyanVideoDurationChoices(runtime.model),
+          };
+        }
         return {
           channel: 'pixmax' as const,
           model: runtime.model,
@@ -398,7 +437,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 同步异步供应商任务：PixMax 通道直接查询任务并推进；直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
+   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进；直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
    * @keyword-cn 同步抖音调用状态, 异步任务查询
    * @keyword-en sync-douyin-operation, async-job-status
    */
@@ -411,6 +450,7 @@ export class DouyinOperationService {
     });
     if (!row) throw new BadRequestException('DOUYIN_OPERATION_NOT_FOUND');
     if (row.provider === 'pixmax') return this.pixmaxVideos.refresh(row.id);
+    if (row.provider === 'shuyan') return this.shuyanVideos.refresh(row.id);
     if (!row.externalId)
       throw new BadRequestException('DOUYIN_OPERATION_EXTERNAL_ID_MISSING');
     const config = this.readConfig(row.operation);
@@ -703,7 +743,7 @@ export class DouyinOperationService {
       model: row.model,
       progress: row.progress,
       plan:
-        row.provider === 'pixmax'
+        row.provider === 'pixmax' || row.provider === 'shuyan'
           ? readDouyinVideoPlan(row.request)
           : undefined,
       status: row.status,

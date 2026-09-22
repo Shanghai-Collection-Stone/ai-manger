@@ -177,6 +177,7 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'minimax', label: 'MiniMax' },
   { value: 'glm', label: '智谱 GLM (z.ai 国际端)' },
   { value: 'kimi', label: 'Kimi (Moonshot)' },
+  { value: 'shuyan', label: '数眼智能 ShuyanAI（OpenAI 兼容中转）' },
   { value: 'pixmax', label: 'PixMax（生视频 / 多模型中转）' },
 ];
 
@@ -2834,16 +2835,32 @@ const AdminApp = () => {
                   </option>
                 ))}
               </select>
+              {forms.provider.providerCode === 'shuyan' ? (
+                <p className="rounded bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-700">
+                  数眼智能是 OpenAI 兼容中转，一个 Key 下同时有文本 / 生图 /
+                  生视频 / 向量多类模型，按类别分别建一条（API Key
+                  可以相同）。服务地址留空默认
+                  https://platform.shuyanai.com/v1（备用节点
+                  https://cloud.shuyanai.com/v1）；API Key 填控制台生成的 sk-
+                  开头原始串，不要带 Bearer。这里的模型只作为该类别的默认值，
+                  到「工作流节点模型」里会按节点类型实时列出这个 Key
+                  可用的模型供挑选。
+                </p>
+              ) : null}
               {forms.provider.providerCode === 'pixmax' ? (
                 <p className="rounded bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-700">
-                  PixMax 按类别分别添加：生视频、生图各建一条（类别选「生视频模型」/「生图模型」），API Key 可以相同；服务地址留空默认
-                  https://app.pixmax.cn；模型可留空，到「工作流节点模型」里为每个节点从账号可用模型中选择。目前业务侧只接入了 PixMax 生视频。
+                  PixMax
+                  按类别分别添加：生视频、生图各建一条（类别选「生视频模型」/「生图模型」），API
+                  Key 可以相同；服务地址留空默认
+                  https://app.pixmax.cn；模型可留空，到「工作流节点模型」里为每个节点从账号可用模型中选择。目前业务侧接入了
+                  PixMax 生视频。
                 </p>
               ) : null}
               {forms.provider.providerCode === 'pixmax' &&
               !['image', 'video'].includes(forms.provider.modelCategory) ? (
                 <p className="rounded bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">
-                  PixMax 请选择「生视频模型」或「生图模型」类别；选文本 / 向量类别时，工作流节点里不会出现这条提供商。
+                  PixMax 请选择「生视频模型」或「生图模型」类别；选文本 /
+                  向量类别时，工作流节点里不会出现这条提供商。
                 </p>
               ) : null}
               <input
@@ -2880,7 +2897,7 @@ const AdminApp = () => {
                     : forms.provider.modelCategory === 'image'
                       ? '请输入生图模型（Image模型）'
                       : forms.provider.modelCategory === 'video'
-                        ? '请输入默认生视频模型（PixMax 填模型编码，如 SEEDANCE_2_0）'
+                        ? '请输入默认生视频模型（如 SEEDANCE_2_0 或 doubao-seedance-2-5-oinone）'
                         : '请输入非EM模型（LLM模型）'
                 }
                 value={forms.provider.model}
@@ -6384,7 +6401,11 @@ const AdminApp = () => {
                           type="button"
                           className="text-xs text-red-600"
                           onClick={() =>
-                            updateForm('platformInfo', 'salesWechatQrCodeUrl', '')
+                            updateForm(
+                              'platformInfo',
+                              'salesWechatQrCodeUrl',
+                              '',
+                            )
                           }
                         >
                           清除二维码

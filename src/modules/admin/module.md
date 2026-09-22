@@ -20,6 +20,7 @@
   - `me`: 当前用户/me
   - `getCurrentCreditAccount(limit?,before?)` — 查询当前登录租户自己的余额与倒序流水 | keywords: 当前Credit账户, 自身流水, current-credit-account, own-transaction-list
   - `logout`: 退出/logout
+  - `deleteOwnAccount(req,body)` — DELETE /admin/auth/account 自助注销，只挂 AdminAuthGuard 不挂 delete User 权限，密码二次确认 | keywords: 自助注销入口, 应用内可达, self-delete-account-endpoint, in-app-reachable
   - `listUsers`: 用户列表/list users
   - `createUser`: 创建用户/create user
   - `updateUser`: 更新用户/update user
@@ -50,7 +51,7 @@
 
 ### services/admin.service.ts
 后台管理服务。
-- **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot
+- **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot, shuyan, shuyanai, 数眼智能
 - **函数**:
   - `ensureIndexes()` — 后台索引初始化，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
@@ -73,6 +74,7 @@
   - `getUserByToken`: token解析用户/get user by token
   - `listRoles`: 角色列表(静态RBAC角色目录及权限矩阵，只读)/list admin roles | keywords: list-admin-roles
   - `logout`: 注销会话/logout
+  - `deleteOwnAccount(currentUser,password)` — 软删名下全部租户身份与手机号账号并吊销所有会话，保留期满后硬删 | keywords: 自助注销账号, 软删保留期, self-service-account-deletion, soft-delete-retention
   - `listLoginTenants`: 登录租户列表/list login tenants
   - `deleteTenant(currentUser, id)`: 删除没有用户且未分配 SuperClaw 的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
   - `getXhsArticleConcurrencyLimits(tenantId?)` — 读取文章生成的全平台与租户并发上限并应用安全默认值 | keywords: 文章生成并发配置, 租户并发上限, article-generation-concurrency, tenant-concurrency-limit
@@ -96,8 +98,8 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
-  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode, 15s 超时)/test ai provider
-  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi/pixmax, 与 AgentService 对齐)/resolve default provider base url
+  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot/shuyan 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode, 15s 超时)/test ai provider
+  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi/shuyan/pixmax, 与 AgentService 对齐; shuyan=数眼智能 https://platform.shuyanai.com/v1)/resolve default provider base url
   - `formatFetchCauseShort`: 简短序列化 fetch error.cause 给测试连接返回 message/format fetch cause short
   - `listClawConfigs`: Claw配置列表/list claw configs
   - `getClawConfigById`: 按ID获取Claw配置/get claw config by id
@@ -113,7 +115,7 @@
   - `getLlmSetting`: 获取LLM设置/get llm setting
   - `upsertLlmSetting`: 创建或更新LLM设置/upsert llm setting
   - `updateLlmSetting`: 更新LLM设置/update llm setting
-  - `ensureProvidersFromEnv`: 环境迁移提供商（含 GLM 国际端 z.ai 与 Kimi/Moonshot LLM 候选；仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
+  - `ensureProvidersFromEnv`: 环境迁移提供商（含 GLM 国际端 z.ai、Kimi/Moonshot、数眼智能 ShuyanAI 的 LLM 候选；仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
 
 ### guards/admin-auth.guard.ts
 后台鉴权守卫。

@@ -179,12 +179,15 @@ describe('workflow model service', () => {
     ).rejects.toThrow('WORKFLOW_NODE_NOT_FOUND');
   });
 
-  it('运行时支持矩阵：文本排除 PixMax，生图只放行已接入的提供商，视频只接入 PixMax', () => {
+  it('运行时支持矩阵：文本排除 PixMax，生图与生视频放行数眼智能', () => {
     expect(isWorkflowRuntimeSupported('llm', 'deepseek')).toBe(true);
     expect(isWorkflowRuntimeSupported('llm', 'PixMax')).toBe(false);
     expect(isWorkflowRuntimeSupported('image', 'openai')).toBe(true);
+    expect(isWorkflowRuntimeSupported('image', 'shuyan')).toBe(true);
+    expect(isWorkflowRuntimeSupported('image', 'ShuyanAI')).toBe(true);
     expect(isWorkflowRuntimeSupported('image', 'pixmax')).toBe(false);
     expect(isWorkflowRuntimeSupported('video', 'pixmax')).toBe(true);
+    expect(isWorkflowRuntimeSupported('video', 'shuyan')).toBe(true);
     expect(isWorkflowRuntimeSupported('video', 'openai')).toBe(false);
   });
 

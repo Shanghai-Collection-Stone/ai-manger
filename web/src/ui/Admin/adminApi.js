@@ -736,9 +736,9 @@ export const adminApi = {
   },
 
   /**
-   * @description 查询某提供商在指定节点类型下可选的模型（PixMax 实时拉取）
-   * @keyword-cn 提供商可选模型, PixMax模型列表
-   * @keyword-en list-provider-models, pixmax-model-list
+   * @description 查询某提供商在指定节点类型下可选的模型（PixMax / 数眼智能实时拉取）。
+   * @keyword-cn 提供商可选模型, PixMax模型列表, 数眼可选模型
+   * @keyword-en list-provider-models, pixmax-model-list, shuyan-model-list
    */
   async listWorkflowProviderModels(providerId, category) {
     return request(
