@@ -87,6 +87,12 @@ export class DouyinStoryboardShotDto {
   @Type(() => DouyinMediaReferenceDto)
   media?: DouyinMediaReferenceDto | null;
 
+  // 卡通换头前的原画面，由服务端写入；前端保存分镜时会原样回传，必须在白名单里
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinMediaReferenceDto)
+  originalMedia?: DouyinMediaReferenceDto | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)
