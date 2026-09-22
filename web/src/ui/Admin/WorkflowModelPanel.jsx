@@ -27,7 +27,8 @@ function describeFallback(node) {
     return `${node.fallback.providerName}${node.fallback.model ? ` · ${node.fallback.model}` : ''}`;
   }
   if (node.category === 'image') return '未配置默认生图提供商，走美图兜底';
-  if (node.category === 'video') return '未指定时走环境变量配置的视频生成直连服务';
+  if (node.category === 'video')
+    return '未指定时走环境变量配置的视频生成直连服务';
   return '未配置默认文本提供商';
 }
 
@@ -37,8 +38,18 @@ function describeFallback(node) {
  * @keyword-en node-model-row, pick-model
  * @param {{ workflowKey: string, node: object, providers: object[], busy: boolean, onSave: Function, onReset: Function, onError: Function }} props
  */
-function NodeModelRow({ workflowKey, node, providers, busy, onSave, onReset, onError }) {
-  const candidates = providers.filter((item) => item.category === node.category);
+function NodeModelRow({
+  workflowKey,
+  node,
+  providers,
+  busy,
+  onSave,
+  onReset,
+  onError,
+}) {
+  const candidates = providers.filter(
+    (item) => item.category === node.category,
+  );
   const [providerId, setProviderId] = useState(node.binding?.providerId || '');
   const [model, setModel] = useState(node.binding?.model || '');
   const [models, setModels] = useState([]);
@@ -110,7 +121,9 @@ function NodeModelRow({ workflowKey, node, providers, busy, onSave, onReset, onE
         </div>
         <p className="mt-1 text-xs text-slate-500">{node.description}</p>
         <p className="mt-1 text-xs text-slate-400">
-          {node.binding ? '已指定' : `未指定，使用默认：${describeFallback(node)}`}
+          {node.binding
+            ? '已指定'
+            : `未指定，使用默认：${describeFallback(node)}`}
         </p>
       </div>
 
@@ -139,10 +152,14 @@ function NodeModelRow({ workflowKey, node, providers, busy, onSave, onReset, onE
                 disabled={busy || loadingModels}
                 onChange={(e) => setModel(e.target.value)}
               >
-                <option value="">{loadingModels ? '读取模型中…' : '选择模型'}</option>
+                <option value="">
+                  {loadingModels ? '读取模型中…' : '选择模型'}
+                </option>
                 {models.map((item) => (
                   <option key={item.code} value={item.code}>
-                    {item.name === item.code ? item.code : `${item.name}（${item.code}）`}
+                    {item.name === item.code
+                      ? item.code
+                      : `${item.name}（${item.code}）`}
                   </option>
                 ))}
               </select>
@@ -157,15 +174,18 @@ function NodeModelRow({ workflowKey, node, providers, busy, onSave, onReset, onE
               />
             ) : null}
             {!loadingModels && !allowCustom && !models.length ? (
-              <p className="text-xs text-amber-600">该账号在 PixMax 没有可用的{CATEGORY_LABELS[node.category]}模型。</p>
+              <p className="text-xs text-amber-600">
+                该账号在「
+                {provider?.name || provider?.providerCode || '当前提供商'}
+                」没有可用的
+                {CATEGORY_LABELS[node.category]}模型。
+              </p>
             ) : null}
           </>
         ) : null}
         {provider && !provider.runtimeSupported ? (
           <p className="text-xs text-amber-600">
-            {node.category === 'video'
-              ? `业务侧的生视频目前只接入了 PixMax，「${provider.providerCode}」保存后调用这个节点会直接报错；请改选 PixMax。`
-              : `可以先保存，但业务侧暂未接入「${provider.providerCode}」的${CATEGORY_LABELS[node.category]}调用，调用这个节点时会直接报错，不会悄悄换成其他模型。`}
+            {`可以先保存，但业务侧暂未接入「${provider.providerCode}」的${CATEGORY_LABELS[node.category]}调用，调用这个节点时会直接报错，不会悄悄换成其他模型。`}
           </p>
         ) : null}
         {node.binding && !node.binding.providerAvailable ? (
@@ -178,7 +198,9 @@ function NodeModelRow({ workflowKey, node, providers, busy, onSave, onReset, onE
       <div className="flex gap-2 lg:flex-col">
         <button
           disabled={busy || !providerId || !dirty || (!allowCustom && !model)}
-          onClick={() => onSave(node, { providerId, model: model.trim() || undefined })}
+          onClick={() =>
+            onSave(node, { providerId, model: model.trim() || undefined })
+          }
           className="rounded bg-slate-900 px-4 py-2 text-sm text-white disabled:bg-slate-300"
         >
           保存
@@ -261,7 +283,9 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
   const onSave = async (workflowKey, node, payload) => {
     setBusyNode(`${workflowKey}/${node.key}`);
     try {
-      apply(await adminApi.saveWorkflowNodeModel(workflowKey, node.key, payload));
+      apply(
+        await adminApi.saveWorkflowNodeModel(workflowKey, node.key, payload),
+      );
       onNotice(`「${node.label}」已改用指定模型`);
     } catch (err) {
       onError(`保存「${node.label}」失败：${err.message}`);
@@ -290,13 +314,21 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
   };
 
   if (loading) {
-    return <div className="py-10 text-center text-sm text-slate-400">加载中…</div>;
+    return (
+      <div className="py-10 text-center text-sm text-slate-400">加载中…</div>
+    );
   }
-  const active = workflows.find((item) => item.key === activeKey) || workflows[0];
+  const active =
+    workflows.find((item) => item.key === activeKey) || workflows[0];
   return (
     <div className="grid gap-4 pb-8 md:grid-cols-[13rem_1fr]">
-      <nav data-workflow-menu className="h-fit rounded-xl border border-slate-200 bg-white p-2">
-        <div className="px-2 pb-2 pt-1 text-xs font-medium text-slate-400">工作流</div>
+      <nav
+        data-workflow-menu
+        className="h-fit rounded-xl border border-slate-200 bg-white p-2"
+      >
+        <div className="px-2 pb-2 pt-1 text-xs font-medium text-slate-400">
+          工作流
+        </div>
         {workflows.map((workflow) => {
           const assigned = workflow.nodes.filter((node) => node.binding).length;
           const selected = workflow.key === active?.key;
@@ -309,7 +341,9 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
               className={`mb-1 w-full rounded-lg px-3 py-2 text-left text-sm ${selected ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
             >
               <span className="block font-medium">{workflow.label}</span>
-              <span className={`mt-0.5 block text-xs ${selected ? 'text-slate-300' : 'text-slate-400'}`}>
+              <span
+                className={`mt-0.5 block text-xs ${selected ? 'text-slate-300' : 'text-slate-400'}`}
+              >
                 {workflow.nodes.length} 个节点 · 已指定 {assigned}
               </span>
             </button>
@@ -322,7 +356,8 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
           <h2 className="font-semibold text-slate-900">{active.label}</h2>
           <p className="mt-1 text-xs text-slate-500">{active.description}</p>
           <p className="mt-2 text-xs leading-5 text-slate-400">
-            不指定的节点使用「Ai提供商设置」里该类型的默认提供商。可选提供商来自已启用、类别一致的记录；PixMax 需按类别分别添加（生图、生视频各一条，providerCode 填 <code>pixmax</code>），选中后实时读取该账号可用的模型。
+            不指定的节点使用「Ai提供商设置」里该类型的默认提供商。可选提供商来自已启用、类别一致的记录；PixMax
+            与数眼智能需按类别分别添加，选中后实时读取该账号在当前类别下可用的模型。
           </p>
           <div className="mt-3">
             {active.nodes.map((node) => (
@@ -332,7 +367,9 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
                 node={node}
                 providers={providers}
                 busy={busyNode === `${active.key}/${node.key}`}
-                onSave={(target, payload) => onSave(active.key, target, payload)}
+                onSave={(target, payload) =>
+                  onSave(active.key, target, payload)
+                }
                 onReset={(target) => onReset(active.key, target)}
                 onError={onError}
               />
@@ -340,7 +377,9 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
           </div>
         </section>
       ) : (
-        <div className="py-10 text-center text-sm text-slate-400">暂无预设工作流</div>
+        <div className="py-10 text-center text-sm text-slate-400">
+          暂无预设工作流
+        </div>
       )}
     </div>
   );

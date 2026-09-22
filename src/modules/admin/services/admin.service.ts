@@ -1341,6 +1341,10 @@ export class AdminService {
       case 'moonshot':
       case 'moonshotai':
         return 'https://api.moonshot.ai/v1';
+      // 数眼智能开放平台：OpenAI 兼容中转（备用节点 https://cloud.shuyanai.com/v1）
+      case 'shuyan':
+      case 'shuyanai':
+        return 'https://platform.shuyanai.com/v1';
       default:
         return '';
     }
@@ -2383,6 +2387,15 @@ export class AdminService {
         name: 'Kimi (Moonshot)',
         baseUrl: 'https://api.moonshot.cn/v1',
         model: 'kimi-k2.6',
+        modelCategory: 'llm' as const,
+      },
+      {
+        // 数眼智能开放平台：OpenAI 兼容中转，一个 Key 覆盖 deepseek / kimi / glm 等模型。
+        // 模型名必须与控制台模型广场里的标识逐字一致；备用节点 https://cloud.shuyanai.com/v1。
+        providerCode: 'shuyan',
+        name: '数眼智能 (ShuyanAI)',
+        baseUrl: 'https://platform.shuyanai.com/v1',
+        model: 'deepseek-v3.2-exp',
         modelCategory: 'llm' as const,
       },
       {

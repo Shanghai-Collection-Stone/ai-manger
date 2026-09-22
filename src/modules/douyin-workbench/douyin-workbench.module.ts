@@ -11,6 +11,7 @@ import { VideoLibraryModule } from '../video-library/video-library.module.js';
 import { DouyinWorkbenchController } from './controller/douyin-workbench.controller.js';
 import { DouyinOperationService } from './services/douyin-operation.service.js';
 import { DouyinPixmaxVideoService } from './services/douyin-pixmax-video.service.js';
+import { DouyinShuyanVideoService } from './services/douyin-shuyan-video.service.js';
 import { DouyinChildTopicGenerationService } from './services/douyin-child-topic-generation.service.js';
 import { DouyinGenerationJobService } from './services/douyin-generation-job.service.js';
 import { DouyinShotImageService } from './services/douyin-shot-image.service.js';
@@ -41,6 +42,7 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     DouyinGenerationJobService,
     DouyinOperationService,
     DouyinPixmaxVideoService,
+    DouyinShuyanVideoService,
     DouyinShotImageService,
     DouyinStoryboardGenerationService,
     DouyinStoryboardImageService,

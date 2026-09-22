@@ -10,7 +10,8 @@
 
 - `workflow-model.module.ts` — NestJS 模块入口，导出 `WorkflowModelService`。
 - `entities/workflow-model.entity.ts` — 预设工作流目录、运行时支持矩阵、节点设置实体与后台视图类型。
-- `services/workflow-model.service.ts` — 节点设置读写、PixMax 可选模型查询、节点运行配置解析与 LLM 覆盖参数转换。
+- `services/workflow-model.service.ts` — 节点设置读写、PixMax / 数眼智能可选模型查询、节点运行配置解析与 LLM 覆盖参数转换。
+- `services/shuyan-model-catalog.ts` — 数眼智能（New API 中转）模型目录：实时拉 `GET /v1/models`、把模型判成文本 / 生图 / 生视频 / 向量 / 其他，并按节点类型出可选列表。
 - `controller/workflow-model-admin.controller.ts` — 平台后台 `admin/workflow-models` 接口。
 - `controller/workflow-model.dto.ts` — 保存节点模型、查询可选模型的参数校验。
 
@@ -22,7 +23,7 @@
 - `WorkflowDefinition` — 代码固定的工作流定义 | keywords: 预设工作流, 工作流定义, preset-workflow, workflow-definition
 - `WORKFLOW_NODES` — 工作流与节点 key 常量，业务调用处统一从这里取 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
 - `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / shot-image / shot-video / full-video） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
-- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax，生图 gemini/doubao/ark/openai，视频仅 pixmax） | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
+- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax 与 shuyan/shuyanai） | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
 - `WorkflowNodeModelEntity` — 节点设置持久化实体（`workflow_node_models`） | keywords: 节点模型设置, 平台级配置, node-model-binding, platform-setting
 - `WorkflowNodeRuntime` — 节点调用时的提供商运行配置 | keywords: 节点运行配置, 提供商密钥, node-runtime, provider-credential
 - `WorkflowProviderOption` — 不含密钥的提供商选项 | keywords: 提供商选项, 隐藏密钥, provider-option, hide-api-key
@@ -36,7 +37,15 @@
 - `WorkflowModelService.list(currentUser)` — 列出工作流、节点设置、默认回退与已启用提供商 | keywords: 工作流设置列表, 提供商选项, list-workflow-settings, provider-options
 - `WorkflowModelService.saveNode(currentUser,workflowKey,nodeKey,input)` — 校验提供商已启用且类型一致后保存，模型留空用提供商默认模型 | keywords: 保存节点模型, 类型校验, save-node-model, category-check
 - `WorkflowModelService.resetNode(currentUser,workflowKey,nodeKey)` — 清除设置回到默认提供商 | keywords: 重置节点模型, 回退默认, reset-node-model, fallback-default
-- `WorkflowModelService.listProviderModels(providerId,category)` — PixMax 实时读取可用模型并按类型过滤，其他提供商返回自身模型并允许手填 | keywords: 提供商可选模型, PixMax模型列表, list-provider-models, pixmax-model-list
+- `WorkflowModelService.listProviderModels(providerId,category)` — PixMax 实时读取可用模型并按类型过滤（只能选），数眼智能实时读取 `/v1/models` 并按分类过滤（可选可填），其他提供商返回自身模型并允许手填 | keywords: 提供商可选模型, PixMax模型列表, 数眼可选模型, list-provider-models, pixmax-model-list, shuyan-model-list
+- `SHUYAN_PROVIDER_CODES` — 数眼智能可用的提供商代码 `shuyan` / `shuyanai` | keywords: 数眼智能提供商代码, 中转站, shuyan-provider-codes, openai-compatible-relay
+- `SHUYAN_DEFAULT_BASE_URL` — 数眼智能主节点地址，baseUrl 留空时兜底 | keywords: 数眼智能默认地址, 主节点, shuyan-default-base-url, primary-endpoint
+- `ShuyanModelCategory` — 节点三类之外另出 em / other，按分类过滤时自然排除 | keywords: 数眼模型分类, 向量与其他, shuyan-model-category, embedding-and-other
+- `ShuyanModelItem` — `/v1/models` 返回的单条模型 | keywords: 数眼模型条目, 端点类型, shuyan-model-item, endpoint-types
+- `isShuyanProvider(providerCode)` — 判断提供商代码是否数眼智能 | keywords: 数眼智能识别, 提供商代码, is-shuyan-provider, provider-code
+- `classifyShuyanModel(item)` — 优先按 New API `supported_endpoint_types` 判分类，没有该字段时按模型名兜底，都不命中当文本模型 | keywords: 数眼模型分类, 按名兜底, classify-shuyan-model, name-fallback
+- `fetchShuyanModels(input)` — 用 Key 实时拉账号可调模型，失败抛 `SHUYAN_MODEL_LIST_FAILED:<原因>` | keywords: 拉取数眼模型, 账号可用模型, fetch-shuyan-models, available-models
+- `listShuyanModelsByCategory(input)` — 拉取后按节点类型过滤并排序 | keywords: 数眼可选模型, 按分类过滤, list-shuyan-models-by-category, filter-by-category
 - `WorkflowModelService.resolveNodeRuntime(workflowKey,nodeKey)` — 取节点运行配置：未设置或提供商已删除/停用返回 null 回退默认，类型不符或运行时不支持直接报错 | keywords: 解析节点运行配置, 回退默认提供商, resolve-node-runtime, fallback-default-provider
 - `WorkflowModelService.readFallback(category)` — 读取未设置时生效的默认提供商（视频未指定时走直连服务，返回 null） | keywords: 读取默认提供商, 回退说明, read-fallback-provider, fallback-label
 - `WorkflowModelService.requireNode(workflowKey,nodeKey)` — 查找目录里的节点定义 | keywords: 查找节点定义, 目录校验, require-node-definition, catalog-check
@@ -44,7 +53,7 @@
 - `WorkflowModelService.toProviderOption(row)` — 提供商实体转无密钥选项 | keywords: 提供商选项视图, 隐藏密钥, provider-option-view, hide-api-key
 - `WorkflowModelAdminController()` — 平台后台节点模型接口 | keywords: 节点模型后台接口, 平台配置, workflow-model-admin-controller, platform-setting
 - `WorkflowModelAdminController.list(req)` — `GET admin/workflow-models` | keywords: 节点模型列表接口, 工作流目录, list-workflow-models-api, workflow-catalog
-- `WorkflowModelAdminController.listProviderModels(providerId,query)` — `GET admin/workflow-models/providers/:providerId/models?category=` | keywords: 可选模型接口, PixMax模型列表, list-provider-models-api, pixmax-model-list
+- `WorkflowModelAdminController.listProviderModels(providerId,query)` — `GET admin/workflow-models/providers/:providerId/models?category=` | keywords: 可选模型接口, PixMax模型列表, 数眼可选模型, list-provider-models-api, pixmax-model-list, shuyan-model-list
 - `WorkflowModelAdminController.save(req,workflowKey,nodeKey,body)` — `PUT admin/workflow-models/:workflowKey/nodes/:nodeKey` | keywords: 保存节点模型接口, 指定模型, save-node-model-api, assign-model
 - `WorkflowModelAdminController.reset(req,workflowKey,nodeKey)` — `DELETE admin/workflow-models/:workflowKey/nodes/:nodeKey` | keywords: 重置节点模型接口, 回退默认, reset-node-model-api, fallback-default
 - `WorkflowModelAdminController.requireUser(req)` — 读取后台用户 | keywords: 读取后台用户, 鉴权上下文, read-admin-user, auth-context
@@ -65,11 +74,16 @@
 | PixMax模型列表   | pixmax-model-list         |
 | 节点LLM覆盖参数  | node-llm-config-override  |
 | 节点key常量      | node-key-constants        |
+| 数眼可选模型     | shuyan-model-list         |
+| 数眼模型分类     | classify-shuyan-model     |
+| 拉取数眼模型     | fetch-shuyan-models       |
+| 按名兜底         | name-fallback             |
 
 ## 类型导出 (Type Exports)
 
 - `WorkflowNodeCategory` / `WorkflowNodeDefinition` / `WorkflowDefinition` / `WorkflowNodeModelEntity` / `WorkflowNodeRuntime` / `WorkflowProviderOption` / `WorkflowNodeView` / `WorkflowView`。
 - `SaveWorkflowNodeModelDto` / `ListWorkflowProviderModelsDto`。
+- `ShuyanModelCategory` / `ShuyanModelItem`。
 
 ## 模块功能描述 (Module Feature Description)
 
@@ -77,9 +91,11 @@
 
 **保存规则**：`PUT admin/workflow-models/:workflowKey/nodes/:nodeKey` 只接受已启用、且 `modelCategory` 与节点类型一致的提供商；模型留空时用该提供商记录里的默认模型，两者都没有则拒绝。同一提供商代码在不同类型下是不同记录（例如 PixMax 生图、PixMax 生视频各一条），与「Ai提供商设置」现有的 `providerCode + modelCategory` 唯一规则一致。`DELETE` 清除设置。四个接口都挂 `AiProvider` 权限（平台 AI 配置，仅超管）。
 
-**可选模型**：提供商代码为 `pixmax` 时，`GET .../providers/:providerId/models?category=` 用它的 Key 实时调 `POST /openapi/model/available`，按 `GENERATE_TEXT / GENERATE_IMAGE / GENERATE_VIDEO` 过滤后返回，页面只能从列表里选；其他提供商返回其默认模型并允许手填。
+**可选模型（数眼智能）**：提供商代码为 `shuyan` 时，`GET .../providers/:providerId/models?category=` 用它的 Key 实时调 OpenAI 兼容的 `GET /v1/models`（New API 按 Key 所在分组返回，不消耗额度），再把每个模型判成文本 / 生图 / 生视频 / 向量 / 其他后按节点类型过滤。分类优先读 New API 的 `supported_endpoint_types`，老版本没有这个字段时按模型名兜底（`-video` / `-image` 优先于族名，所以 `jimeng-video-*` 与 `jimeng-image-*` 能分开；`minimax-h*` 归生视频、`minimax-m*` 归文本），都不命中按文本模型处理。**新模型族上线后可能漏判**，所以返回 `allowCustom: true`，页面在下拉之外保留手填框可以纠正；规则在 `shuyan-model-catalog.ts` 的 `*_PATTERNS` 里补。向量与音频模型不对应任何节点类型，三份列表都不会出现。
 
-**运行时解析**：`resolveNodeRuntime` 没有设置时返回 `null`，业务照旧用默认提供商；设置的提供商被删除或停用时记警告并回退默认；类型不符或 `WORKFLOW_RUNTIME_SUPPORT` 判定运行时不支持（例如为生图节点选了 PixMax）时抛 `WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:<类型>:<提供商>`，不静默换模型。后台允许先保存这类组合并标注「运行时暂不支持」，等对应调用接入后再把提供商加入支持矩阵。
+**可选模型（PixMax）**：提供商代码为 `pixmax` 时，`GET .../providers/:providerId/models?category=` 用它的 Key 实时调 `POST /openapi/model/available`，按 `GENERATE_TEXT / GENERATE_IMAGE / GENERATE_VIDEO` 过滤后返回，页面只能从列表里选；其他提供商返回其默认模型并允许手填。
+
+**运行时解析**：`resolveNodeRuntime` 没有设置时返回 `null`，业务照旧用默认提供商；设置的提供商被删除或停用时记警告并回退默认；类型不符或 `WORKFLOW_RUNTIME_SUPPORT` 判定运行时不支持（例如为生图节点选了 PixMax）时抛 `WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:<类型>:<提供商>`，不静默换模型。后台允许先保存这类组合并标注「运行时暂不支持」，等对应调用接入后再把提供商加入支持矩阵。数眼智能（`shuyan` / `shuyanai`）已接入文本、生图与 Seedance 生视频：生图由 `AgentService.generateImageByRuntime` 调 `/v1/images/generations`；生视频由抖音工作台的 `DouyinShuyanVideoService` 调 `/seedance/api/v3/contents/generations/tasks`。数眼里的 Kling / Vidu / Hailuo / 即梦等视频族仍需各自原生路由，当前选择这些型号会明确报 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED`。
 
 **当前接入情况（小红书图文）**：`topic` 覆盖选题候选生成与子选题提示词推荐（`xhs-topic.service`），`article` 覆盖文章 Agent 的首次生文与重写（`xhs-article-generation.service`），`cover-copy` 覆盖图组封面主副标题生成，`cover-image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘，`cover-overlay` 覆盖 `ai-overlay` 文字海报素材层，`inner-image` 覆盖灵感画布内页重绘（后四者在 `canvas-image-group.service`）。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
 

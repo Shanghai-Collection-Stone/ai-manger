@@ -236,15 +236,15 @@ export interface DouyinOperationView {
   topicId: number;
   /** @description 分镜级视频生成才有：对应 `DouyinStoryboardShot.id`；为空表示整条成片 */
   shotId?: string;
-  /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` 为后台节点指定的 PixMax */
-  provider?: 'direct' | 'pixmax';
+  /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` / `shuyan` 为后台节点指定的供应商 */
+  provider?: 'direct' | 'pixmax' | 'shuyan';
   /** @description 视频生成模式：`shot` 单镜，`full` 所有分镜一次生成整片 */
   mode?: 'shot' | 'full';
-  /** @description 实际使用的模型编码（PixMax 通道） */
+  /** @description 实际使用的模型编码（节点供应商通道） */
   model?: string;
   /** @description 供应商回报的生成进度百分比 */
   progress?: number;
-  /** @description PixMax 通道本次实际采用的生成方案（生成方式、参考图张数、实际 / 计划时长、是否压缩） */
+  /** @description 节点供应商通道本次实际采用的生成方案（生成方式、参考图张数、实际 / 计划时长、是否压缩） */
   plan?: {
     referModel?: string;
     imageCount: number;
@@ -280,6 +280,6 @@ export interface DouyinOperationEntity extends DouyinOperationView {
   tenantId?: string;
   userId: string;
   request: Record<string, unknown>;
-  /** @description PixMax 通道使用的提供商记录 ID，轮询时据此取 Key */
+  /** @description 节点供应商通道使用的提供商记录 ID，轮询时据此取 Key */
   providerId?: string;
 }

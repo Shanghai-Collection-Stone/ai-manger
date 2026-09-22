@@ -47,6 +47,10 @@ import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AntiDetectionService } from '../../image-anti-detection/services/anti-detection.service.js';
 import { AiBillingService } from '../../ai-billing/services/ai-billing.service.js';
+import {
+  isShuyanProvider,
+  SHUYAN_DEFAULT_BASE_URL,
+} from '../../workflow-model/services/shuyan-model-catalog.js';
 import type {
   AiBillingContext,
   AiProviderBillingSnapshot,
@@ -274,7 +278,7 @@ export class AgentService {
         callbacks: [billingCallback],
       });
     }
-    if (this.isKimiProvider(provider)) {
+    if (this.isKimiProvider(provider) || this.isKimiRelayModel(modelName)) {
       return this.buildKimiChatModel({
         modelName,
         apiKey: runtime.apiKey,
@@ -303,6 +307,20 @@ export class AgentService {
   private isKimiProvider(provider: string): boolean {
     return ['kimi', 'moonshot', 'moonshotai'].includes(
       String(provider ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  }
+
+  /**
+   * @description Detect Kimi models served through an OpenAI-compatible relay (数眼智能 / NewAPI 类中转)，
+   *   这类中转的 providerCode 不是 kimi，但上游仍是 Moonshot，同样需要关 thinking 才能跑多轮 tool call。
+   * @keyword-cn 中转Kimi识别, 关闭思考
+   * @keyword-en kimi-relay-model, disable-thinking
+   */
+  private isKimiRelayModel(modelName: string): boolean {
+    return /^(kimi|moonshot)/.test(
+      String(modelName ?? '')
         .trim()
         .toLowerCase(),
     );
@@ -692,6 +710,11 @@ export class AgentService {
       case 'moonshot':
       case 'moonshotai':
         return 'https://api.moonshot.ai/v1';
+      // 数眼智能开放平台：OpenAI 兼容中转，一个 Key 下可调 deepseek / kimi / glm 等模型；
+      // 备用节点为 https://cloud.shuyanai.com/v1，换节点时在后台手填 baseUrl 覆盖。
+      case 'shuyan':
+      case 'shuyanai':
+        return 'https://platform.shuyanai.com/v1';
       default:
         return undefined;
     }
@@ -1396,6 +1419,75 @@ export class AgentService {
         };
       }
       throw new Error('IMAGE_OPENAI_GENERATE_RESULT_EMPTY');
+    }
+
+    if (isShuyanProvider(provider)) {
+      // 数眼智能生图走 OpenAI 兼容的同步接口 POST /v1/images/generations，
+      // 请求体只认 model/prompt/size/n/response_format，返回 data[0].url（24h 有效）或 b64_json。
+      // 注意：这个接口**只有文生图**，官方没有 /images/edits，所以带底图的重绘请求
+      // 在这里直接抛 IMAGE_PROVIDER_NOT_SUPPORTED，由上层按既有策略处理（带底图时硬报错，
+      // 不悄悄退化成"忽略底图的文生图"）。
+      if (runtimeEditImage) {
+        throw new Error(`IMAGE_PROVIDER_NOT_SUPPORTED:${runtime.providerCode}`);
+      }
+      const endpointBase = runtime.baseUrl?.trim() || SHUYAN_DEFAULT_BASE_URL;
+      const endpoint = `${endpointBase.replace(/\/$/, '')}/images/generations`;
+      // 对端要求像素总量落在 3,686,400 ~ 16,777,216 之间；沿用项目里的 3:4 竖版
+      // 1728x2304 = 3,981,312，既满足下限又与 doubao 分支保持同一构图比例。
+      const normalizedSize = '1728x2304';
+      this.logger.log(
+        `[ai-cover][shuyan] request endpoint=${endpoint} model=${runtime.model} size=${normalizedSize} promptLen=${prompt.length} authLen=${String(runtime.apiKey ?? '').length}`,
+      );
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${runtime.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: runtime.model,
+          prompt,
+          size: normalizedSize,
+          n: 1,
+          response_format: 'url',
+        }),
+        signal: AbortSignal.timeout(10 * 60 * 1000),
+        dispatcher: this.imageGenDispatcher,
+      } as RequestInit);
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(
+          `IMAGE_SHUYAN_GENERATE_FAILED:${response.status}:${errorText.slice(0, 1000)}`,
+        );
+      }
+      const json = (await response.json()) as Record<string, unknown>;
+      const dataArr = Array.isArray(json['data'])
+        ? (json['data'] as unknown[])
+        : [];
+      const first =
+        dataArr.length > 0 && dataArr[0] && typeof dataArr[0] === 'object'
+          ? (dataArr[0] as Record<string, unknown>)
+          : undefined;
+      if (typeof first?.['b64_json'] === 'string') {
+        const imagePath = await this.saveGeneratedImageBase64(
+          first['b64_json'],
+          'image/png',
+        );
+        return {
+          providerCode: runtime.providerCode,
+          model: runtime.model,
+          imagePath,
+        };
+      }
+      if (typeof first?.['url'] === 'string') {
+        const imagePath = await this.downloadGeneratedImage(first['url']);
+        return {
+          providerCode: runtime.providerCode,
+          model: runtime.model,
+          imagePath,
+        };
+      }
+      throw new Error('IMAGE_SHUYAN_GENERATE_RESULT_EMPTY');
     }
 
     throw new Error(`IMAGE_PROVIDER_NOT_SUPPORTED:${runtime.providerCode}`);
@@ -2819,8 +2911,7 @@ export class AgentService {
 
           // tool_call_chunks — 工具调用流
           const tcChunks = message['tool_call_chunks'] as
-            | Array<Record<string, unknown>>
-            | undefined;
+            Array<Record<string, unknown>> | undefined;
           if (isAIChunk && Array.isArray(tcChunks) && tcChunks.length > 0) {
             for (const tc of tcChunks) {
               const name = tc['name'] as string | undefined;
@@ -2928,13 +3019,11 @@ export class AgentService {
               for (const msg of nd?.messages ?? []) {
                 const m = msg as Record<string, unknown>;
                 const tcs = m['tool_calls'] as
-                  | Array<Record<string, unknown>>
-                  | undefined;
+                  Array<Record<string, unknown>> | undefined;
                 for (const tc of tcs ?? []) {
                   if (tc['name'] === 'task') {
                     const args = tc['args'] as
-                      | Record<string, unknown>
-                      | undefined;
+                      Record<string, unknown> | undefined;
                     toolCalls.push(tc);
                     yield {
                       type: 'tool_start',

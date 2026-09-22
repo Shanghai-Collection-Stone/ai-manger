@@ -55,8 +55,8 @@ export class WorkflowModelAdminController {
 
   /**
    * @description 查询某提供商在指定节点类型下可选的模型。
-   * @keyword-cn 可选模型接口, PixMax模型列表
-   * @keyword-en list-provider-models-api, pixmax-model-list
+   * @keyword-cn 可选模型接口, PixMax模型列表, 数眼可选模型
+   * @keyword-en list-provider-models-api, pixmax-model-list, shuyan-model-list
    */
   @RequirePermission('read', ADMIN_SUBJECTS.AiProvider)
   @Get('providers/:providerId/models')

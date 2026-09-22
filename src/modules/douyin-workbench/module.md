@@ -22,6 +22,8 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-operation.service.ts` — 整片 / 单镜头视频生成入口（按节点设置分流到 PixMax 或直连服务）、发布、抓取直连请求与调用审计。
 - `services/douyin-pixmax-video.service.ts` — PixMax 生视频通道：分镜 / 整片提示词、提交任务、后台轮询、成片转存视频库并回填。
 - `services/douyin-pixmax-video.service.spec.ts` — 分镜与整片提示词单测。
+- `services/douyin-shuyan-video.service.ts` — 数眼智能 Seedance 生视频通道：原生任务提交 / 查询、后台续轮询、24 小时临时成片转存视频库并回填。
+- `services/douyin-shuyan-video.service.spec.ts` — 数眼视频网关、型号时长、状态与错误映射单测。
 - `config.example.env` — 三类直连接口地址、密钥与状态查询模板示例。
 
 ## 函数清单 (Function List)
@@ -123,9 +125,9 @@ AI 抖音工作台（douyin-workbench）
 - `createPublish(topicId,input,user)` — 直连发布真实视频库素材 | keywords: 直连抖音发布, 真实视频素材, direct-douyin-publish, real-video-asset
 - `createCrawl(topicId,platformVideoId,user)` — 直连抓取真实作品指标 | keywords: 直连抖音抓取, 真实作品数据, direct-douyin-crawl, real-published-metrics
 - `list(scope)` — 查询真实直连调用结果 | keywords: 查询抖音调用, 真实接口结果, list-douyin-operations, real-api-result
-- `getVideoOptions()` — 读取整片 / 分镜视频节点当前通道（pixmax / direct / unavailable）、模型与可选时长 | keywords: 视频生成选项, 可选时长, video-generation-options, duration-choices
+- `getVideoOptions()` — 读取整片 / 分镜视频节点当前通道（pixmax / shuyan / direct / unavailable）、模型与可选时长 | keywords: 视频生成选项, 可选时长, video-generation-options, duration-choices
 - `openVideoDownload(videoId,user)` — 校验视频归属后由服务端拉取视频地址（站内地址读本地文件），返回可读流、类型、大小与文件名 | keywords: 代理下载视频, 跨域下载, proxy-video-download, cross-origin-download
-- `sync(id,user)` — 同步异步供应商状态，PixMax 通道的记录交给 `DouyinPixmaxVideoService.refresh` | keywords: 同步抖音调用状态, 异步任务查询, sync-douyin-operation, async-job-status
+- `sync(id,user)` — 同步异步供应商状态，PixMax / 数眼记录交给各自服务刷新 | keywords: 同步抖音调用状态, 异步任务查询, sync-douyin-operation, async-job-status
 - `invoke(operation,topicId,request,config,scope,operationId?)` — 调用外部接口并写审计 | keywords: 调用抖音外部接口, 保存调用审计, invoke-douyin-external-api, persist-call-audit
 - `fetchJson(url,init,apiKey?)` — 发起超时受控 JSON 请求 | keywords: 抖音HTTP请求, 超时控制, douyin-http-request, timeout-control
 - `readConfig(operation)` — 读取显式直连配置 | keywords: 读取抖音直连配置, 缺配置拒绝, read-douyin-direct-config, reject-unconfigured
@@ -162,6 +164,30 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinPixmaxVideoService.fail(id,error,detail?)` — 标记调用失败，`error` 为中文说明、`detail` 为原始信息 | keywords: 标记调用失败, 失败原因, mark-operation-failed, failure-reason
 - `DouyinPixmaxVideoService.toPixmaxRuntime(runtime)` — 转 PixMax 连接信息 | keywords: 转换PixMax连接, 节点配置, to-pixmax-runtime, node-runtime
 - `DouyinPixmaxVideoService.toView(row)` — 调用记录视图 | keywords: PixMax调用视图, 隐藏请求, pixmax-operation-view, hide-request
+- `DOUYIN_SHUYAN_POLL_MS` — 数眼 Seedance 后台轮询间隔（15 秒） | keywords: 数眼视频轮询间隔, 后台轮询, shuyan-video-poll-interval, background-polling
+- `DOUYIN_SHUYAN_TASK_TIMEOUT_MS` — 数眼任务默认 48 小时过期，保存中超过 10 分钟可重新认领 | keywords: 数眼视频任务超时, 保存中断, shuyan-video-task-timeout, saving-stale
+- `ShuyanVideoTask` — 数眼 Seedance 创建 / 查询任务的内部响应结构 | keywords: 数眼视频任务, Seedance任务, shuyan-video-task, seedance-task
+- `isShuyanSeedanceModel(model)` — 只把 Seedance 型号交给当前已接入的数眼视频路由 | keywords: 数眼Seedance识别, 视频模型支持, shuyan-seedance-model, video-model-support
+- `resolveShuyanVideoGateway(baseUrl?)` — 从 OpenAI `/v1` baseUrl 还原数眼原生视频网关 | keywords: 数眼视频网关, 移除V1路径, shuyan-video-gateway, strip-v1-path
+- `listShuyanVideoDurationChoices(model)` — 按 Seedance 版本返回整数秒可选范围 | keywords: Seedance可选时长, 型号时长范围, seedance-duration-choices, model-duration-range
+- `clampShuyanVideoDuration(model,seconds)` — 收敛到 Seedance 型号允许的整数秒 | keywords: Seedance时长收敛, 视频时长, clamp-seedance-duration, video-duration
+- `mapShuyanVideoStatus(status?)` — 把 queued / running / succeeded / failed 等状态映射成工作台状态，初建无状态视为 queued | keywords: 数眼视频状态映射, 初建无状态, map-shuyan-video-status, missing-status-queued
+- `describeShuyanVideoError(task)` — 保留错误码与消息生成中文失败说明 | keywords: 数眼视频错误, 上游错误码, describe-shuyan-video-error, upstream-error-code
+- `DouyinShuyanVideoService()` — 数眼 Seedance 生视频、轮询与成片转存通道 | keywords: 数眼Seedance生视频, 成片转存, 分镜视频, shuyan-seedance-video, persist-generated-video, shot-video
+- `DouyinShuyanVideoService.onModuleInit()` — 启动后台轮询并在重启后续跟 | keywords: 启动数眼视频轮询, 重启续跟, start-shuyan-video-polling, resume-after-restart
+- `DouyinShuyanVideoService.onModuleDestroy()` — 停止数眼后台轮询 | keywords: 停止数眼视频轮询, 模块销毁, stop-shuyan-video-polling, module-destroy
+- `DouyinShuyanVideoService.start(input)` — 组装 Seedance 多模态 content、扣费、提交任务并写调用记录 | keywords: 提交数眼视频, Seedance多模态, submit-shuyan-video, seedance-multimodal
+- `DouyinShuyanVideoService.refresh(id)` — 手动同步一条数眼调用 | keywords: 同步数眼视频调用, 手动刷新, sync-shuyan-video-operation, manual-refresh
+- `DouyinShuyanVideoService.pollOnce()` — 跟进一轮未结束数眼调用，不重入 | keywords: 轮询数眼视频调用, 防重入, poll-shuyan-video-operations, reentry-guard
+- `DouyinShuyanVideoService.refreshRow(row)` — 查询并推进任务，成功后认领、转存与回填；手动同步可重试曾经失败的成片转存 | keywords: 推进数眼视频调用, 完成转存, advance-shuyan-video-operation, save-on-complete
+- `DouyinShuyanVideoService.saveVideo(url,input)` — OSS 已配置时立即转存 24 小时临时成片，否则登记临时外链 | keywords: 转存数眼成片, 视频库登记, save-shuyan-video, register-video
+- `DouyinShuyanVideoService.collectImages(shots,offset)` — 收集去重分镜参考图 | keywords: 收集数眼参考图, 分镜图片去重, collect-shuyan-reference-images, dedupe-shot-images
+- `DouyinShuyanVideoService.toSeedanceImageUrl(url)` — 公网图原样提交，站内图转 data URL | keywords: 数眼图片输入, 本地图片Base64, seedance-image-input, local-image-data-url
+- `DouyinShuyanVideoService.imageContentTypeOf(url)` — 按扩展名判断图片媒体类型 | keywords: 图片媒体类型, 扩展名推断, image-content-type, extension-detection
+- `DouyinShuyanVideoService.fetchJson(url,init)` — 发起数眼 JSON 请求并保留错误体 | keywords: 数眼视频HTTP请求, 错误体保留, shuyan-video-http, preserve-error-body
+- `DouyinShuyanVideoService.download(url)` — 下载临时成片供 OSS 转存 | keywords: 下载数眼成片, 临时地址, download-shuyan-video, temporary-url
+- `DouyinShuyanVideoService.fail(id,message,detail?)` — 收敛失败状态并保存原始错误 | keywords: 数眼视频失败收敛, 原始错误, fail-shuyan-video-operation, raw-error-detail
+- `DouyinShuyanVideoService.toView(row)` — 返回隐藏请求正文的数眼视频调用视图 | keywords: 数眼视频调用视图, 隐藏请求, shuyan-video-operation-view, hide-request
 - `DouyinWorkbenchController()` — 暴露带同址权限声明的 REST 接口 | keywords: 抖音工作台接口, 真实业务接口, douyin-workbench-controller, real-business-api
 - `list(req)` — 查询真实选题分镜 | keywords: 查询抖音工作台, 分镜列表, get-douyin-workspace, storyboard-list
 - `create(req,dto)` — 人工创建真实母选题 | keywords: 新建抖音母题接口, 返回工作台, create-douyin-mother-api, return-workspace
@@ -238,6 +264,10 @@ AI 抖音工作台（douyin-workbench）
 | 视频声音设置   | video-audio-setting          |
 | 结构化提示词   | structured-prompt            |
 | PixMax生视频   | pixmax-video-generation      |
+| 数眼生视频     | shuyan-seedance-video        |
+| 数眼网关       | shuyan-video-gateway         |
+| Seedance时长   | seedance-duration-choices    |
+| 数眼状态       | map-shuyan-video-status      |
 | 整片视频提示词 | full-video-prompt            |
 | 预设人物       | douyin-persona               |
 | 脚本风格       | script-style                 |
@@ -274,9 +304,9 @@ AI 抖音工作台（douyin-workbench）
 
 **配图偏向与先文字后配图**：子选题新增 `storyboardPreference: { imageSource: 'generate' | 'gallery', galleryTags }`，可经 `PATCH topics/:id` 修改，旧数据缺省视为图库自找、不限标签。分镜生成读取偏向：`gallery` 时 `loadCandidates` 带上限定标签（向量检索多取 60 张再按标签过滤，随机补足只在标签内取，不再按选题文字匹配标签或无标签补图），其余流程不变，文字和画面一起保存；`generate` 时不给 LLM 图库清单，只要求写好 `image_prompt`，文字分镜先落库并把进度切到 `imaging`（`current/total` = 已出图 / 镜头数），再用 `DouyinShotImageService.regenerate` 按并发 2 逐镜出图，每张图经 `updateShot` 单独写回，单镜失败只计数；全部失败时任务以 `DOUYIN_SHOT_IMAGES_ALL_FAILED` 结束（文字分镜仍保留），部分失败写进 `result.imageFailedCount`。出图计费沿用 `douyin-workbench.shot-image-generation`，按张记账。一次确认多条脚本时，进程内最多同时执行 3 个分镜任务，其余停在 `queued` 阶段等待；排队任务仍在当前进程的执行集合里，不会被当成中断任务收掉。
 
-**按节点使用后台指定的模型**：候选脚本生成与生成要求推荐读取节点 `script`，分镜拆解读取 `storyboard`，节点 key 统一取自 `WORKFLOW_NODES.douyinWorkbench`；二者把 [workflow-model](../workflow-model/module.md) 返回的提供商、模型、Key 与 baseUrl 覆盖进 `runWithMessages` 的 config；分镜画面（自动出图与单镜重生成）读取 `shot-image`，作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图。节点没有设置时一律沿用后台默认提供商，行为与之前一致。`shot-video` 节点暂未接入，生视频仍走 `DOUYIN_VIDEO_GENERATION_*`。
+**按节点使用后台指定的模型**：候选脚本生成与生成要求推荐读取节点 `script`，分镜拆解读取 `storyboard`，节点 key 统一取自 `WORKFLOW_NODES.douyinWorkbench`；二者把 [workflow-model](../workflow-model/module.md) 返回的提供商、模型、Key 与 baseUrl 覆盖进 `runWithMessages` 的 config；分镜画面（自动出图与单镜重生成）读取 `shot-image`，作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图。节点没有设置时一律沿用后台默认提供商，行为与之前一致。`shot-video` / `full-video` 指定 PixMax 或数眼 Seedance 时走对应任务服务，未指定仍走 `DOUYIN_VIDEO_GENERATION_*`。
 
-**两种生视频模式**：分镜模式（`POST topics/:id/storyboard/:shotId/video/generate`，节点 `shot-video`）每镜单独出一段，有画面时以画面为首帧；整片模式（`POST topics/:id/video/generate`，节点 `full-video`）把全部分镜按时间轴写进一条提示词，带上各镜画面作为参考图（按模型上限截取），一次生成一条完整视频，模型单次时长不够时按比例压缩每镜并在调用记录里标 `durationClamped`。两个节点在后台「工作流节点模型」指定了 PixMax 模型时走 `DouyinPixmaxVideoService`，否则仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。PixMax 通道提交前按 `video-generation` 服务扣费，调用记录带 `provider=pixmax`、`mode`、`model`、`providerId`、`progress`，状态为 `queued → running → saving → completed / failed`；进程内每 15 秒跟进未结束的任务（重启后自动续跟），完成时用原子认领避免重复保存，成片在 OSS 已配置时下载转存（含封面），未配置时直接登记 PixMax 地址（`VideoLibraryService.registerExternal`），再回填到分镜 `videoId` 或脚本 `generatedVideoId`；积分不足、中止、2 小时未完成或保存失败都会写中文原因。前端「同步状态」对 PixMax 记录会立即查询一次。
+**两种生视频模式**：分镜模式（`POST topics/:id/storyboard/:shotId/video/generate`，节点 `shot-video`）每镜单独出一段，有画面时以画面为首帧；整片模式（`POST topics/:id/video/generate`，节点 `full-video`）把全部分镜按时间轴写进一条提示词，带上各镜画面作为参考图（按模型上限截取），一次生成一条完整视频，模型单次时长不够时按比例压缩每镜并在调用记录里标 `durationClamped`。指定 PixMax 时走 `DouyinPixmaxVideoService`；指定数眼智能的 Seedance 型号时走 `DouyinShuyanVideoService`，把 `/v1` baseUrl 还原成网关根地址后调用 `POST /seedance/api/v3/contents/generations/tasks`，单镜画面作为 `first_frame`，Seedance 2.x 整片最多带 9 张 `reference_image`，比例固定 9:16、分辨率 720p、时长按版本收敛。数眼任务初建无 status 时保持 queued，每 15 秒用 `GET .../tasks/{id}` 续轮询，成功后在 `content.video_url` 的 24 小时有效期内转存 OSS；未配置 OSS 时仅登记临时外链并写警告。两条通道都在提交前按 `video-generation` 扣费、用原子 saving 状态防重复保存，并回填分镜 `videoId` 或脚本 `generatedVideoId`；未指定节点模型时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。数眼的 Kling / Vidu / Hailuo / 即梦等型号使用不同原生路由，当前会以 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED` 明确拒绝。
 
 **声音是结构化设置、脚本随整片提交**：子选题新增 `videoAudio: { mode: voiceover | music | mute, language: zh-CN | yue | en }`（经 `PATCH topics/:id` 保存，缺省普通话配音），整片与分镜共用。生成时：模型有 `includeAudio` 参数就按「静音 = false，其余 = true」写入；提示词【声音】段由 `buildVideoAudioSection` 按设置生成（配音限定语言、禁止其他语言人声；仅音乐禁止人声；静音要求无声）。提示词统一分区：整片为【视频】【分镜时间轴】（逐镜画面、参考图编号、口播、转场）【口播稿】（完整脚本正文，没有正文时拼接各镜口播；非配音模式标注「不要朗读」）【声音】【参考图】【时长】【限制】【补充要求】；单镜的【口播稿】是本镜口播。调用请求记录 `audio`、`audioSwitchApplied`、`scriptIncluded`，视图 `plan` 带出声音与是否带口播稿。分镜画面在模型支持任意带图方式时一定带上（多图参考 → 图片参考 → 首尾帧 → 首帧），只有模型完全不支持带图才纯文生视频。
 

@@ -51,7 +51,7 @@
 
 ### services/admin.service.ts
 后台管理服务。
-- **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot
+- **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot, shuyan, shuyanai, 数眼智能
 - **函数**:
   - `ensureIndexes()` — 后台索引初始化，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
@@ -98,8 +98,8 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
-  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode, 15s 超时)/test ai provider
-  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi/pixmax, 与 AgentService 对齐)/resolve default provider base url
+  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot/shuyan 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode, 15s 超时)/test ai provider
+  - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi/shuyan/pixmax, 与 AgentService 对齐; shuyan=数眼智能 https://platform.shuyanai.com/v1)/resolve default provider base url
   - `formatFetchCauseShort`: 简短序列化 fetch error.cause 给测试连接返回 message/format fetch cause short
   - `listClawConfigs`: Claw配置列表/list claw configs
   - `getClawConfigById`: 按ID获取Claw配置/get claw config by id
@@ -115,7 +115,7 @@
   - `getLlmSetting`: 获取LLM设置/get llm setting
   - `upsertLlmSetting`: 创建或更新LLM设置/upsert llm setting
   - `updateLlmSetting`: 更新LLM设置/update llm setting
-  - `ensureProvidersFromEnv`: 环境迁移提供商（含 GLM 国际端 z.ai 与 Kimi/Moonshot LLM 候选；仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
+  - `ensureProvidersFromEnv`: 环境迁移提供商（含 GLM 国际端 z.ai、Kimi/Moonshot、数眼智能 ShuyanAI 的 LLM 候选；仅对 llm/em 兜底设 default；image 不回种，未设 default 由运行时降级 meitu-cli）/migrate providers from env
 
 ### guards/admin-auth.guard.ts
 后台鉴权守卫。

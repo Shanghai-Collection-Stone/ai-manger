@@ -22,6 +22,10 @@ import {
   type WorkflowProviderOption,
   type WorkflowView,
 } from '../entities/workflow-model.entity.js';
+import {
+  isShuyanProvider,
+  listShuyanModelsByCategory,
+} from './shuyan-model-catalog.js';
 
 /**
  * @description PixMax 模型类型与节点类型的对照。
@@ -239,14 +243,15 @@ export class WorkflowModelService {
   }
 
   /**
-   * @description 列出某提供商在指定类型下可选的模型：PixMax 实时读取「可用模型」接口并按节点类型过滤；
+   * @description 列出某提供商在指定类型下可选的模型：PixMax 实时读取「可用模型」接口并按节点类型过滤（只能选）；
+   *   数眼智能实时读取 OpenAI 兼容 `GET /v1/models` 并按分类过滤（可选可填）；
    *   其他提供商只返回它自己配置的模型，页面允许手填。
-   * @keyword-cn 提供商可选模型, PixMax模型列表
-   * @keyword-en list-provider-models, pixmax-model-list
+   * @keyword-cn 提供商可选模型, PixMax模型列表, 数眼可选模型
+   * @keyword-en list-provider-models, pixmax-model-list, shuyan-model-list
    * @param providerId 提供商 ID。
    * @param category 节点模型类型。
    * @returns 模型选项与是否允许手填。
-   * @throws {BadRequestException} WORKFLOW_PROVIDER_UNAVAILABLE / PIXMAX_MODEL_LIST_FAILED。
+   * @throws {BadRequestException} WORKFLOW_PROVIDER_UNAVAILABLE / PIXMAX_MODEL_LIST_FAILED / SHUYAN_MODEL_LIST_FAILED。
    */
   async listProviderModels(
     providerId: string,
@@ -260,7 +265,19 @@ export class WorkflowModelService {
     if (!provider) {
       throw new BadRequestException('WORKFLOW_PROVIDER_UNAVAILABLE');
     }
-    if (provider.providerCode.trim().toLowerCase() !== 'pixmax') {
+    const providerCode = provider.providerCode.trim().toLowerCase();
+    if (isShuyanProvider(providerCode)) {
+      // 数眼智能是中转站，一个 Key 下同时有文本 / 生图 / 生视频等多类模型，
+      // 这里实时拉全量目录再按节点类型过滤；分类靠 New API 的端点类型 + 模型名兜底，
+      // 新模型族可能漏判，所以仍然 allowCustom，页面在下拉之外保留手填框。
+      const models = await listShuyanModelsByCategory({
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        category,
+      });
+      return { models, allowCustom: true };
+    }
+    if (providerCode !== 'pixmax') {
       return {
         models: provider.model
           ? [{ code: provider.model, name: provider.model }]

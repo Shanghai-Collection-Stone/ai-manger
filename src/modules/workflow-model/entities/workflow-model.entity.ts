@@ -167,8 +167,11 @@ export const WORKFLOW_RUNTIME_SUPPORT: Record<
   { allowed: string[] | null; excluded: string[] }
 > = {
   llm: { allowed: null, excluded: ['pixmax'] },
-  image: { allowed: ['gemini', 'doubao', 'ark', 'openai'], excluded: [] },
-  video: { allowed: ['pixmax'], excluded: [] },
+  image: {
+    allowed: ['gemini', 'doubao', 'ark', 'openai', 'shuyan', 'shuyanai'],
+    excluded: [],
+  },
+  video: { allowed: ['pixmax', 'shuyan', 'shuyanai'], excluded: [] },
 };
 
 /**

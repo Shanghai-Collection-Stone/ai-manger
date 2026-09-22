@@ -3,7 +3,7 @@
 ## 模块描述
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
-支持 AI 提供商按模型类型管理(llm/em/image/video，video 为生视频；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含 PixMax(`pixmax`)，选中时表单提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
+支持 AI 提供商按模型类型管理(llm/em/image/video，video 为生视频；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)与 PixMax(`pixmax`)，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
@@ -148,9 +148,9 @@
 
 ### WorkflowModelPanel.jsx
 
-后台「工作流节点模型」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'workflow_models'` 时挂载。左侧是工作流子菜单（小红书图文、抖音视频制作，显示节点数与已指定数，本地记住上次选择），右侧列出选中工作流的全部模型节点（小红书：选题生成 / 文章生成 / 封面文案 / 封面底图 / 封面文字海报 / 内页重绘；抖音：脚本生成 / 分镜拆解 / 分镜画面 / 分镜视频），每个节点可选「使用默认提供商」或某个同类型的已启用提供商；选 PixMax 时实时拉取该账号可用模型只能从列表选，其他提供商可手填模型（留空用提供商默认模型）。未指定时显示当前生效的默认提供商；运行时暂不支持的组合、已失效的提供商会给出提示。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md)。
+后台「工作流节点模型」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'workflow_models'` 时挂载。左侧是工作流子菜单（小红书图文、抖音视频制作，显示节点数与已指定数，本地记住上次选择），右侧列出选中工作流的全部模型节点（小红书：选题生成 / 文章生成 / 封面文案 / 封面底图 / 封面文字海报 / 内页重绘；抖音：脚本生成 / 分镜拆解 / 分镜画面 / 分镜视频），每个节点可选「使用默认提供商」或某个同类型的已启用提供商；选 PixMax 时实时拉取该账号可用模型只能从列表选，选数眼智能时实时拉取该 Key 下该类型的模型给下拉、同时保留手填框（分类是启发式的，漏判可手填纠正），其他提供商可手填模型（留空用提供商默认模型）。未指定时显示当前生效的默认提供商；运行时暂不支持的组合、已失效的提供商会给出提示。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md)。
 
-- **关键词**: workflow model panel, per node model, pixmax model list, default provider fallback
+- **关键词**: workflow model panel, per node model, pixmax model list, shuyan model list, default provider fallback
 - **函数**:
   - `WorkflowModelPanel({ onNotice, onError })` — 工作流节点模型面板主体 | keywords: 工作流节点模型面板, 节点指定模型, workflow-model-panel, per-node-model
   - `CATEGORY_LABELS` — 节点类型中文名 | keywords: 节点类型文案, node-category-labels
@@ -210,7 +210,7 @@
   - `adminApi.upsertPlatformInfo(aiPromptSupplement,enableAiCover,globalLimit,salesContact?)` — 更新平台信息，salesContact 映射为业务员二维码与提示语 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
   - `adminApi.register(payload)` — 公开自助注册 POST /admin/auth/register，payload 需展开 `SmsCodeInput` 的 `{ smsPhone, smsCode }` | keywords: 自助注册, 业务员二维码, self-register, sales-wechat-qrcode
   - `adminApi.listWorkflowModels()` — 读取预设工作流、节点设置与可选提供商 | keywords: 工作流节点模型列表, 可选提供商, list-workflow-models, provider-options
-  - `adminApi.listWorkflowProviderModels(providerId, category)` — 查询提供商可选模型(PixMax 实时拉取) | keywords: 提供商可选模型, PixMax模型列表, list-provider-models, pixmax-model-list
+  - `adminApi.listWorkflowProviderModels(providerId, category)` — 查询提供商可选模型（PixMax / 数眼智能实时拉取） | keywords: 提供商可选模型, PixMax模型列表, 数眼可选模型, list-provider-models, pixmax-model-list, shuyan-model-list
   - `adminApi.saveWorkflowNodeModel(workflowKey, nodeKey, payload)` — 为节点保存提供商与模型 | keywords: 保存节点模型, 指定模型, save-node-model, assign-model
   - `adminApi.resetWorkflowNodeModel(workflowKey, nodeKey)` — 清除节点设置回到默认 | keywords: 重置节点模型, 回退默认, reset-node-model, fallback-default
   - `adminApi.getSmsSettings()` — 读取平台短信配置(Secret 掩码) | keywords: 读取短信配置, get-sms-settings
