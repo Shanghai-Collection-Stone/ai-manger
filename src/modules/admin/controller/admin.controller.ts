@@ -36,6 +36,7 @@ import {
   CreateDataSourceByAdminDto,
   CreateTenantByAdminDto,
   CreateXhsAccountDto,
+  DeleteOwnAccountDto,
   RechargeTenantCreditDto,
   UpdateAgentConfigDto,
   UpdateAiProviderDto,
@@ -184,6 +185,32 @@ export class AdminController {
     }
     await this.adminService.logout(token);
     return { ok: true };
+  }
+
+  /**
+   * @description 用户自助注销自己的账号。软删：停用名下全部租户身份并吊销所有会话，
+   *   业务数据在保留期满后由清理任务硬删。
+   *
+   *   只挂 `AdminAuthGuard`，不挂 `@RequirePermission('delete','User')`——那条权限是
+   *   「管理他人」的能力，普通成员注销自己不应该需要它，挂上反而会把普通用户挡在门外。
+   *   与 `DELETE users/:id` 是两条路径：那条是管理员硬删他人且禁止自删。
+   *
+   *   这个入口是 Mac App Store Guideline 5.1.1(v) 的硬性要求：应用内有注册就必须有
+   *   应用内注销，且不得藏在外链网页里。
+   * @keyword-cn 自助注销入口, 应用内可达
+   * @keyword-en self-delete-account-endpoint, in-app-reachable
+   */
+  @UseGuards(AdminAuthGuard)
+  @Delete('auth/account')
+  async deleteOwnAccount(
+    @Req() req: Request,
+    @Body() body: DeleteOwnAccountDto,
+  ) {
+    const result = await this.adminService.deleteOwnAccount(
+      this.requireUser(req),
+      body.password,
+    );
+    return { ok: true, ...result };
   }
 
   /**

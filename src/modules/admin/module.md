@@ -20,6 +20,7 @@
   - `me`: 当前用户/me
   - `getCurrentCreditAccount(limit?,before?)` — 查询当前登录租户自己的余额与倒序流水 | keywords: 当前Credit账户, 自身流水, current-credit-account, own-transaction-list
   - `logout`: 退出/logout
+  - `deleteOwnAccount(req,body)` — DELETE /admin/auth/account 自助注销，只挂 AdminAuthGuard 不挂 delete User 权限，密码二次确认 | keywords: 自助注销入口, 应用内可达, self-delete-account-endpoint, in-app-reachable
   - `listUsers`: 用户列表/list users
   - `createUser`: 创建用户/create user
   - `updateUser`: 更新用户/update user
@@ -73,6 +74,7 @@
   - `getUserByToken`: token解析用户/get user by token
   - `listRoles`: 角色列表(静态RBAC角色目录及权限矩阵，只读)/list admin roles | keywords: list-admin-roles
   - `logout`: 注销会话/logout
+  - `deleteOwnAccount(currentUser,password)` — 软删名下全部租户身份与手机号账号并吊销所有会话，保留期满后硬删 | keywords: 自助注销账号, 软删保留期, self-service-account-deletion, soft-delete-retention
   - `listLoginTenants`: 登录租户列表/list login tenants
   - `deleteTenant(currentUser, id)`: 删除没有用户且未分配 SuperClaw 的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
   - `getXhsArticleConcurrencyLimits(tenantId?)` — 读取文章生成的全平台与租户并发上限并应用安全默认值 | keywords: 文章生成并发配置, 租户并发上限, article-generation-concurrency, tenant-concurrency-limit

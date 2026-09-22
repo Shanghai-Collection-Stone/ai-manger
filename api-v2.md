@@ -51,6 +51,7 @@ Authorization: Bearer <token>
 | POST | `/admin/auth/login`  | 登录,返回 `{ token, user }`        |
 | GET  | `/admin/auth/me`     | 当前登录用户(含 `tenantName`)      |
 | POST | `/admin/auth/logout` | 注销当前会话                       |
+| DELETE | `/admin/auth/account` | 自助注销账号，体 `{password}`，软删并吊销全部会话 |
 
 令牌缺失 / 无效 / 过期 → `401 UNAUTHORIZED`。
 

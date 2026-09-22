@@ -645,6 +645,68 @@ export class AdminService {
   }
 
   /**
+   * @description 用户自助注销账号。软删：名下全部租户成员身份与手机号账号一并停用并记下注销时点，
+   *   同时吊销全部在途会话。
+   *
+   *   **只做到软删**：没有定时任务会清理数据，注销后个人信息与业务内容仍留在库里，
+   *   只是账号再也登不进来。隐私政策第四节据此写的是「立即停用并保留，用户另行申请后
+   *   15 个工作日内彻底删除」。补上清理任务时，隐私政策要同步改回自动删除的表述，
+   *   否则政策与实际不符——这在 Mac App Store（Guideline 5.1.1、5.1.2）是严重问题。
+   *
+   *   与后台的 `deleteUser` 是两条互不相干的路径——那条是管理员硬删他人，且明确禁止自删
+   *   （`SELF_DELETE_FORBIDDEN`），因此自助注销必须单独实现。
+   *
+   *   停用即失效的依据：登录路径本就校验 `enabled` 并抛 `ACCOUNT_DISABLED`，租户列表也按
+   *   `enabled` 过滤。但 `AdminAuthGuard` 不校验 `enabled`，已签发的会话不会自动失效，
+   *   所以必须在这里显式清掉会话，否则用户注销后当前设备仍能继续用到令牌过期。
+   * @keyword-cn 自助注销账号, 软删保留期
+   * @keyword-en self-service-account-deletion, soft-delete-retention
+   * @param currentUser 当前登录用户。
+   * @param password 当前密码，用于二次确认身份。
+   * @returns 注销时间、硬删时间与被吊销的会话数。
+   */
+  async deleteOwnAccount(
+    currentUser: AdminUserEntity,
+    password: string,
+  ): Promise<{ deletedAt: Date; revokedSessions: number }> {
+    // 不可逆操作必须二次确认。用密码而不是短信验证码：用户名账号可能没绑手机号，
+    // 且应用商店审核员使用的演示账号收不到短信，那样会导致「无法验证删除功能」被退回。
+    const ok = await this.verifyUserPassword(currentUser, password);
+    if (!ok) throw new UnauthorizedException('PASSWORD_INCORRECT');
+
+    const now = new Date();
+
+    // 一个人可能在多个租户下各有一条成员身份，注销要连坐，否则换个租户还能登进来。
+    const accountId =
+      currentUser.accountId && ObjectId.isValid(currentUser.accountId)
+        ? new ObjectId(currentUser.accountId)
+        : null;
+    const userFilter = accountId
+      ? { accountId: accountId.toHexString() }
+      : { _id: currentUser._id };
+
+    const victims = await this.users.find(userFilter).toArray();
+    const victimIds = victims.map((row) => String(row._id));
+
+    await this.users.updateMany(userFilter, {
+      $set: { enabled: false, deletedAt: now, updatedAt: now },
+    });
+    if (accountId) {
+      await this.accounts.updateOne(
+        { _id: accountId },
+        { $set: { deletedAt: now, updatedAt: now } },
+      );
+    }
+
+    // 会话按 userId 存，逐个清掉名下全部身份的会话，所有设备立即掉线。
+    const revoked = await this.sessions.deleteMany({
+      userId: { $in: victimIds },
+    });
+
+    return { deletedAt: now, revokedSessions: revoked.deletedCount ?? 0 };
+  }
+
+  /**
    * @description 按登录态中的租户边界查询当前用户自己的 Credit 余额与倒序流水。
    * @keyword-cn 当前Credit账户, 自身流水
    * @keyword-en current-credit-account, own-transaction-list
