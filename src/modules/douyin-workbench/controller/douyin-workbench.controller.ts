@@ -335,6 +335,58 @@ export class DouyinWorkbenchController {
   }
 
   /**
+   * @description 把这一镜画面里的真人换成 3D 卡通大头（以当前画面为底图做图像编辑），处理前的原图留在分镜上可一键恢复。
+   *   火山系视频模型不收带真人的参考图，实拍镜头喂进去之前先过这一道。
+   * @keyword-cn 分镜卡通换头接口, 遮挡真人
+   * @keyword-en shot-face-mask-api, cover-real-person
+   */
+  @Post('topics/:id/storyboard/:shotId/image/mask-faces')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async maskShotFaces(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('shotId') shotId: string,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.shotImages.maskFaces(
+      this.readId(id),
+      this.readShotId(shotId),
+      scope,
+    );
+    return {
+      topic: { ...result.topic, _id: undefined },
+      shotId: result.shotId,
+      imageId: result.imageId,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 把这一镜的画面换回卡通换头前的原图。
+   * @keyword-cn 恢复分镜原图接口, 撤销换头
+   * @keyword-en restore-shot-image-api, undo-face-mask
+   */
+  @Post('topics/:id/storyboard/:shotId/image/restore')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async restoreShotImage(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('shotId') shotId: string,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.shotImages.restoreOriginalImage(
+      this.readId(id),
+      this.readShotId(shotId),
+      scope,
+    );
+    return {
+      topic: { ...result.topic, _id: undefined },
+      shotId: result.shotId,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
    * @description 只为一段分镜创建视频生成任务，调用记录带 shotId 供前端按镜头展示生成历史。
    * @keyword-cn 单镜头视频生成接口, 分镜视频历史
    * @keyword-en generate-shot-video-api, shot-video-history

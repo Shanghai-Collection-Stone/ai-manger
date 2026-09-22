@@ -20,6 +20,11 @@ export const PIXMAX_ERROR_RULES: readonly PixmaxErrorRule[] = [
       '{subject}可能涉及版权内容（如知名 IP、动漫或影视形象、品牌标识等），没有通过平台审核。请换成原创或没有版权风险的图片后重试。',
   },
   {
+    pattern: /PrivacyInformation|may contain real person|real person/i,
+    message:
+      '{subject}里有真人，火山系模型（Seedance / 豆包）不接受带真人的参考图，这是模型平台的硬性限制，改提示词绕不过去。可以把这几张换成没有出镜人物的空镜（门店、菜品、环境），或把脚本的「配图偏向」改成「AI 生成画面」让模型自己画人。',
+  },
+  {
     pattern:
       /InputImage\w*Sensitive|sensitive.*input image|input image.*sensitive/i,
     message:

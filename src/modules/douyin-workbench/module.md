@@ -167,7 +167,18 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinPixmaxVideoService.toView(row)` — 调用记录视图 | keywords: PixMax调用视图, 隐藏请求, pixmax-operation-view, hide-request
 - `DOUYIN_SHUYAN_POLL_MS` — 数眼 Seedance 后台轮询间隔（15 秒） | keywords: 数眼视频轮询间隔, 后台轮询, shuyan-video-poll-interval, background-polling
 - `DOUYIN_SHUYAN_TASK_TIMEOUT_MS` — 数眼任务默认 48 小时过期，保存中超过 10 分钟可重新认领 | keywords: 数眼视频任务超时, 保存中断, shuyan-video-task-timeout, saving-stale
+- `DOUYIN_SHOT_FACE_MASK_STYLE` — 卡通换头固定的 3D 皮克斯风描述 | keywords: 卡通大头风格, 皮克斯风, cartoon-head-style, pixar-style
+- `buildShotFaceMaskPrompt()` — 「只换头、其余像素不动」的图像编辑提示词 | keywords: 卡通换头提示词, 定点编辑, face-mask-prompt, targeted-edit
+- `DouyinShotImageService.maskFaces(topicId,shotId,scope)` — 以当前画面为底图把真人换成卡通大头，记 `originalMedia` 供恢复 | keywords: 分镜卡通换头, 遮挡真人, shot-face-mask, cover-real-person
+- `DouyinShotImageService.restoreOriginalImage(topicId,shotId,scope)` — 换回换头前的原图并清掉 `originalMedia` | keywords: 恢复分镜原图, 撤销换头, restore-shot-image, undo-face-mask
+- `DouyinShotImageService.requireTopic(topicId,scope)` — 读取子选题，不是子选题时报错 | keywords: 读取脚本选题, 子选题校验, require-child-topic, child-topic-check
+- `DouyinShotImageService.requireShot(topicId,shotId,scope)` — 读取选题与分镜段落 | keywords: 读取分镜段落, 段落校验, require-storyboard-shot, shot-check
+- `maskShotFaces()` — `POST topics/:id/storyboard/:shotId/image/mask-faces`（`create DouyinWorkbench`） | keywords: 分镜卡通换头接口, 遮挡真人, shot-face-mask-api, cover-real-person
+- `restoreShotImage()` — `POST topics/:id/storyboard/:shotId/image/restore`（`update DouyinWorkbench`） | keywords: 恢复分镜原图接口, 撤销换头, restore-shot-image-api, undo-face-mask
 - `DOUYIN_SHUYAN_VIDEO_RESOLUTION` — 数眼 Seedance 生视频默认分辨率（480p，最省档位） | keywords: 数眼视频分辨率, 默认清晰度, shuyan-video-resolution, default-quality
+- `SHUYAN_VIDEO_ERROR_RULES` — 数眼通道自己的错误对照（网络 / 密钥 / 限流 / 型号未接入），不套用写着 PixMax 的文案 | keywords: 数眼错误对照, 通道错误, shuyan-error-rules, channel-error
+- `describeRejectedShuyanImages(raw)` — 从报错里的 `content[N]` 认出被拒的是第几张参考图 | keywords: 定位被拒参考图, 报错图片序号, locate-rejected-image, error-image-index
+- `describeShuyanVideoFailure(raw)` — 数眼报错翻译成中文：先查通道规则，再复用 PixMax 的上游模型规则，并点名被拒的参考图 | keywords: 翻译数眼报错, 友好错误提示, describe-shuyan-error, friendly-error-message
 - `listShuyanVideoResolutionChoices(model)` — 数眼型号可选清晰度（1080p 仅 Seedance 2.x） | keywords: Seedance可选清晰度, 型号清晰度范围, seedance-resolution-choices, model-resolution-range
 - `clampShuyanVideoResolution(model,resolution?)` — 设定的清晰度收敛到型号档位，对不上就近取、没设定用默认档 | keywords: Seedance清晰度收敛, 视频清晰度, clamp-seedance-resolution, video-resolution
 - `ShuyanVideoTask` — 数眼 Seedance 创建 / 查询任务的内部响应结构 | keywords: 数眼视频任务, Seedance任务, shuyan-video-task, seedance-task
@@ -252,6 +263,8 @@ AI 抖音工作台（douyin-workbench）
 | 分镜画面重生成 | shot-image-regeneration      |
 | 更新单段分镜   | update-single-shot           |
 | 合成总片       | composite-video              |
+| 分镜卡通换头   | shot-face-mask               |
+| 恢复分镜原图   | restore-shot-image           |
 | 整片清晰度     | full-video-resolution        |
 | 可选清晰度     | resolution-choices           |
 | 单镜头视频生成 | single-shot-video-generation |
@@ -315,6 +328,10 @@ AI 抖音工作台（douyin-workbench）
 **两种生视频模式**：分镜模式（`POST topics/:id/storyboard/:shotId/video/generate`，节点 `shot-video`）每镜单独出一段，有画面时以画面为首帧；整片模式（`POST topics/:id/video/generate`，节点 `full-video`）把全部分镜按时间轴写进一条提示词，带上各镜画面作为参考图（按模型上限截取），一次生成一条完整视频，模型单次时长不够时按比例压缩每镜并在调用记录里标 `durationClamped`。指定 PixMax 时走 `DouyinPixmaxVideoService`；指定数眼智能的 Seedance 型号时走 `DouyinShuyanVideoService`，把 `/v1` baseUrl 还原成网关根地址后调用 `POST /seedance/api/v3/contents/generations/tasks`，单镜画面作为 `first_frame`，Seedance 2.x 整片最多带 9 张 `reference_image`，比例固定 9:16、分辨率默认 480p（`DOUYIN_SHUYAN_VIDEO_RESOLUTION`）、时长按版本收敛。数眼任务初建无 status 时保持 queued，每 15 秒用 `GET .../tasks/{id}` 续轮询，成功后在 `content.video_url` 的 24 小时有效期内转存 OSS；未配置 OSS 时仅登记临时外链并写警告。两条通道都在提交前按 `video-generation` 扣费、用原子 saving 状态防重复保存，并回填分镜 `videoId` 或脚本 `generatedVideoId`；未指定节点模型时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。数眼的 Kling / Vidu / Hailuo / 即梦等型号使用不同原生路由，当前会以 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED` 明确拒绝。
 
 **声音是结构化设置、脚本随整片提交**：子选题新增 `videoAudio: { mode: voiceover | music | mute, language: zh-CN | yue | en }`（经 `PATCH topics/:id` 保存，缺省普通话配音），整片与分镜共用。生成时：模型有 `includeAudio` 参数就按「静音 = false，其余 = true」写入；提示词【声音】段由 `buildVideoAudioSection` 按设置生成（配音限定语言、禁止其他语言人声；仅音乐禁止人声；静音要求无声）。提示词统一分区：整片为【视频】【分镜时间轴】（逐镜画面、参考图编号、口播、转场）【口播稿】（完整脚本正文，没有正文时拼接各镜口播；非配音模式标注「不要朗读」）【声音】【参考图】【时长】【限制】【补充要求】；单镜的【口播稿】是本镜口播。调用请求记录 `audio`、`audioSwitchApplied`、`scriptIncluded`，视图 `plan` 带出声音与是否带口播稿。分镜画面在模型支持任意带图方式时一定带上（多图参考 → 图片参考 → 首尾帧 → 首帧），只有模型完全不支持带图才纯文生视频。
+
+**真人画面换成卡通大头**：火山系视频模型（Seedance / 豆包）不收带真人的参考图，会以 `InputImageSensitiveContentDetected.PrivacyInformation` 在提交时直接打回。`POST .../image/mask-faces` 以这一镜当前画面为底图走图像编辑（`sendPrompt` 带 `baseImageCandidates` 时走的就是 image-edit 路径，不是重新文生图），按 `buildShotFaceMaskPrompt` 只把每个真人的头替换成 3D 皮克斯风卡通大头，构图、衣着、光线、人数与位置都要求保持原样。新图入图库（带 `抖音分镜` 标签）并绑定到这一段，处理前的画面记进分镜的 `originalMedia`；反复换头不会覆盖最早那张原图，`POST .../image/restore` 一键换回来。效果取决于 `shot-image` 节点配的模型——纯文生图模型给了底图也可能整张重画，这活要配图像编辑能力强的模型。注意这是「不再使用真人肖像」，不是给人脸打码去骗过检测；画面里仍有真人身体与场景时，仍可能被判 `may contain real person`。
+
+**数眼通道的失败也翻译成中文**：提交期（`POST .../tasks` 直接 4xx）和轮询期（任务 `error`）的报错都走 `describeShuyanVideoFailure`：网络、密钥、限流、型号未接入这类通道自身的错走 `SHUYAN_VIDEO_ERROR_RULES`（不能套用 `PIXMAX_ERROR_RULES` 里写着「PixMax」的文案），模型内容审核类的错误码两家通用，交给 `PIXMAX_ERROR_RULES`；报错里带 `content[N]` 时按「`content[0]` 是提示词、往后依次是参考图」换算成「第 N 张参考图」点名。火山系模型不接受带真人的参考图（`InputImageSensitiveContentDetected.PrivacyInformation`），这条单独给了能照着做的说明（换空镜，或把配图偏向改成「AI 生成画面」）。原始报错仍写进 `errorDetail`，前端折叠在「查看原始信息」里；`presentDouyinVideoError` 对 pixmax 与 shuyan 两条通道的旧记录都做同样翻译。提交期失败不再一律说「请检查模型、密钥与参数」——真人素材被拒时那句是误导。
 
 **视频生成错误友好化**：PixMax 通道的失败统一经 `pixmax-error` 翻译：提交阶段上传或审核某张分镜画面失败时，错误里会指明「第 N 镜的画面」（同一张图被多镜使用时列出全部镜号）；提交失败的 HTTP 响应、调用记录 `error` 都是中文说明，原始报错写进 `errorDetail`（视图带出，前端折叠显示）并记警告日志；任务失败、成片转存失败同样处理。旧记录没有 `errorDetail` 时由 `presentDouyinVideoError` 在输出时翻译。
 

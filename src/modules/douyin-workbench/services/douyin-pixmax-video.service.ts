@@ -158,7 +158,7 @@ export function readDouyinVideoPlan(
 }
 
 /**
- * @description 输出调用记录的失败信息：PixMax 通道里还保存着原始报错的旧记录（英文或错误码开头），展示时翻译成中文并把原文放进 `errorDetail`。
+ * @description 输出调用记录的失败信息：PixMax / 数眼通道里还保存着原始报错的旧记录（英文或错误码开头），展示时翻译成中文并把原文放进 `errorDetail`。
  * @keyword-cn 展示视频错误, 旧记录翻译
  * @keyword-en present-video-error, legacy-error-translate
  * @param row 调用记录。
@@ -169,7 +169,11 @@ export function presentDouyinVideoError(row: {
   error?: string;
   errorDetail?: string;
 }): { error?: string; errorDetail?: string } {
-  if (!row.error || row.provider !== 'pixmax' || row.errorDetail) {
+  if (
+    !row.error ||
+    !['pixmax', 'shuyan'].includes(String(row.provider)) ||
+    row.errorDetail
+  ) {
     return { error: row.error, errorDetail: row.errorDetail };
   }
   const looksRaw =

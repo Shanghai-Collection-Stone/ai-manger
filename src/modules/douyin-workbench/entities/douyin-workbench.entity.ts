@@ -27,6 +27,8 @@ export interface DouyinStoryboardShot {
   narration: string;
   transition: string;
   media?: DouyinMediaReference | null;
+  /** @description 被卡通换头等处理覆盖前的原画面，用于一键恢复；没处理过时为空 */
+  originalMedia?: DouyinMediaReference | null;
   imagePrompt?: string;
   videoId?: number;
 }

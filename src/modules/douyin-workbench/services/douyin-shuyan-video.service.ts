@@ -34,9 +34,85 @@ import {
   buildShotVideoPrompt,
   readDouyinVideoPlan,
 } from './douyin-pixmax-video.service.js';
+import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 type ShuyanVideoMode = 'shot' | 'full';
+
+/**
+ * @description 从上游报错里认出被拒的是第几张参考图：数眼把图片放在 `content` 数组里，`content[0]` 是提示词，
+ *   往后依次是参考图，所以 `content[3]` 就是第 3 张参考图。认不出时返回空串。
+ * @keyword-cn 定位被拒参考图, 报错图片序号
+ * @keyword-en locate-rejected-image, error-image-index
+ * @param raw 原始报错文本。
+ * @returns {string} 如「第 1、4、5 张参考图」，认不出为空串。
+ */
+export function describeRejectedShuyanImages(raw: string): string {
+  const indexes = [
+    ...new Set(
+      [...String(raw ?? '').matchAll(/content\[(\d+)\]/g)]
+        .map((match) => Number(match[1]))
+        .filter((value) => value > 0),
+    ),
+  ].sort((a, b) => a - b);
+  return indexes.length ? `第 ${indexes.join('、')} 张参考图` : '';
+}
+
+/**
+ * @description 数眼通道自己的错误说明：网络、密钥、限流这类跟通道有关的错，不能套用 PixMax 那几条（文案里会写错家）。
+ *   模型内容审核类的错误码两家通用，交给 `PIXMAX_ERROR_RULES` 处理。
+ * @keyword-cn 数眼错误对照, 通道错误
+ * @keyword-en shuyan-error-rules, channel-error
+ */
+export const SHUYAN_VIDEO_ERROR_RULES: ReadonlyArray<{
+  pattern: RegExp;
+  message: string;
+}> = [
+  {
+    pattern: /SHUYAN_VIDEO_API_KEY_NOT_CONFIGURED/,
+    message: '数眼智能的 API Key 还没有配置，请到后台「Ai提供商设置」里填写。',
+  },
+  {
+    pattern:
+      /SHUYAN_VIDEO_HTTP_401|SHUYAN_VIDEO_HTTP_403|unauthori[sz]ed|invalid (api )?key/i,
+    message:
+      '数眼智能的 API Key 无效或没有权限，请到后台「Ai提供商设置」里检查。',
+  },
+  {
+    pattern: /SHUYAN_VIDEO_HTTP_429|RateLimit|too many requests/i,
+    message: '请求数眼智能太频繁，请稍等片刻再试。',
+  },
+  {
+    pattern:
+      /SHUYAN_VIDEO_NETWORK_ERROR|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
+    message: '连接数眼智能失败，请检查网络后重试。',
+  },
+  {
+    pattern: /SHUYAN_VIDEO_MODEL_NOT_SUPPORTED/,
+    message:
+      '所选数眼模型还没有接入对应的原生路由，请到后台「工作流节点模型」换一个 Seedance 型号。',
+  },
+  {
+    pattern: /SHUYAN_VIDEO_TASK_ID_MISSING/,
+    message: '数眼智能没有返回任务 ID，请稍后重试。',
+  },
+];
+
+/**
+ * @description 把数眼通道的原始报错翻译成中文说明：先看通道自己的规则，再复用 PixMax 那套上游模型错误规则
+ *   （火山系内容审核错误码两条通道通用），并在认得出的时候点名是哪几张参考图被拒。
+ * @keyword-cn 翻译数眼报错, 友好错误提示
+ * @keyword-en describe-shuyan-error, friendly-error-message
+ * @param raw 原始报错文本。
+ * @returns {string} 中文说明。
+ */
+export function describeShuyanVideoFailure(raw: string): string {
+  const text = String(raw ?? '');
+  const own = SHUYAN_VIDEO_ERROR_RULES.find((rule) => rule.pattern.test(text));
+  if (own) return own.message;
+  const subject = describeRejectedShuyanImages(text) || '参考图';
+  return describePixmaxError(text, subject);
+}
 
 /**
  * @description 数眼 Seedance 创建 / 查询接口返回的任务结构。
@@ -241,9 +317,9 @@ export function describeShuyanVideoError(task: ShuyanVideoTask): string {
   const message = String(task.error?.message ?? '').trim();
   const detail = [code, message].filter(Boolean).join('：');
   const status = String(task.status ?? '').trim();
-  return detail
-    ? `数眼智能视频生成失败：${detail}`
-    : `数眼智能视频任务未完成${status ? `（${status}）` : ''}。`;
+  if (!detail)
+    return `数眼智能视频任务未完成${status ? `（${status}）` : ''}。`;
+  return describeShuyanVideoFailure(detail);
 }
 
 /**
@@ -482,17 +558,18 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       return this.toView(doc);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      const friendly = describeShuyanVideoFailure(detail);
       await this.operations.insertOne({
         _id: new ObjectId(),
         id: operationId,
         ...base,
         status: 'failed',
-        error: '数眼智能视频任务提交失败，请检查模型、密钥与参数。',
+        error: friendly,
         errorDetail: detail,
         createdAt: now,
         updatedAt: now,
       });
-      throw new BadGatewayException(`SHUYAN_VIDEO_SUBMIT_FAILED:${detail}`);
+      throw new BadGatewayException(friendly);
     }
   }
 

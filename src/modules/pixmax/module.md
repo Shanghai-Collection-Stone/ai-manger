@@ -57,7 +57,7 @@ PixMax（https://app.pixmax.cn）OpenAPI 的服务端客户端与参数组装工
 - `toParamValue(spec,value)` — 默认值转接口类型 | keywords: 参数类型转换, 默认值, convert-param-value, default-value
 - `buildPixmaxVideoParams(input)` — 组装生视频 params，`targetResolution` 就近写入模型的 `resolution` 参数，`audioEnabled` 写入模型的 `includeAudio` 参数（有该参数时） | keywords: 组装生视频参数, 竖屏比例, build-video-params, portrait-ratio
 - `PixmaxErrorRule` — 一条错误翻译规则（匹配式 + 中文说明，`{subject}` 替换为出问题的对象） | keywords: PixMax错误规则, 友好错误, pixmax-error-rule, friendly-error
-- `PIXMAX_ERROR_RULES` — 错误到中文说明的对照，越具体越靠前 | keywords: PixMax错误对照, 版权审核, pixmax-error-rules, copyright-review
+- `PIXMAX_ERROR_RULES` — 错误到中文说明的对照，越具体越靠前（含真人素材被拒、版权审核、敏感内容等） | keywords: PixMax错误对照, 版权审核, pixmax-error-rules, copyright-review
 - `extractPixmaxErrorCode(raw)` — 取出原始报错里的上游错误码 | keywords: 提取上游错误码, 错误解析, extract-upstream-error-code, error-parse
 - `describePixmaxError(raw,subject?)` — 原始报错翻译成中文说明，中文原文直接用，未知错误给通用说明并附错误码 | keywords: 翻译PixMax错误, 友好错误提示, describe-pixmax-error, friendly-error-message
 - `PixmaxFriendlyError` — 已翻译的异常，`message` 给用户、`detail` 留原文 | keywords: 友好PixMax异常, 原始错误保留, friendly-pixmax-error, raw-error-detail

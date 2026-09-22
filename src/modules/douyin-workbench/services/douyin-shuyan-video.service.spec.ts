@@ -7,6 +7,8 @@ import {
   resolveShuyanVideoGateway,
   listShuyanVideoResolutionChoices,
   clampShuyanVideoResolution,
+  describeShuyanVideoFailure,
+  describeRejectedShuyanImages,
 } from './douyin-shuyan-video.service';
 
 describe('数眼 Seedance 视频运行时', () => {
@@ -77,12 +79,33 @@ describe('数眼 Seedance 视频运行时', () => {
     expect(mapShuyanVideoStatus(status)).toBe(expected);
   });
 
-  it('错误说明同时保留错误码与消息', () => {
+  it('认不出的上游错误给通用中文说明，原文留在 errorDetail 里', () => {
     expect(
       describeShuyanVideoError({
         status: 'failed',
         error: { code: 'ContentFilteredError', message: 'content rejected' },
       }),
-    ).toBe('数眼智能视频生成失败：ContentFilteredError：content rejected');
+    ).toBe('视频生成失败，请稍后重试。');
+    expect(describeShuyanVideoError({ status: 'running' })).toBe(
+      '数眼智能视频任务未完成（running）。',
+    );
+  });
+
+  it('参考图里有真人被拒时点名是哪几张，并说清楚该怎么改', () => {
+    const raw =
+      'SHUYAN_VIDEO_HTTP_400:{"code":"fail_to_fetch_task","message":"{\\"error\\":{\\"code\\":\\"InputImageSensitiveContentDetected.PrivacyInformation\\",\\"message\\":\\"The request failed because the input image \'content[1]\' \'content[4]\' \'content[9]\' may contain real person.\\"}}"}';
+    expect(describeRejectedShuyanImages(raw)).toBe('第 1、4、9 张参考图');
+    const message = describeShuyanVideoFailure(raw);
+    expect(message).toContain('第 1、4、9 张参考图里有真人');
+    expect(message).toContain('AI 生成画面');
+  });
+
+  it('通道自己的错不套用 PixMax 文案', () => {
+    expect(
+      describeShuyanVideoFailure('SHUYAN_VIDEO_NETWORK_ERROR:fetch failed'),
+    ).toBe('连接数眼智能失败，请检查网络后重试。');
+    expect(describeShuyanVideoFailure('SHUYAN_VIDEO_HTTP_429:{}')).toBe(
+      '请求数眼智能太频繁，请稍等片刻再试。',
+    );
   });
 });

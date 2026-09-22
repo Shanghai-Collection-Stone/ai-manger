@@ -408,6 +408,7 @@ export class DouyinWorkbenchRepositoryService {
     shotId: string,
     patch: {
       media?: DouyinMediaReference | null;
+      originalMedia?: DouyinMediaReference | null;
       imagePrompt?: string;
       videoId?: number;
     },
