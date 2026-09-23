@@ -12,6 +12,8 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
 - **函数**:
   - `getHandle`: 函数句柄/handle
   - `buildChatModel`: 构建模型（GLM国际端z.ai、Kimi/Moonshot、数眼智能ShuyanAI都走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）/build model
+  - `ensureCheckpointIndexes()` — 为 LangGraph checkpoint 集合补建 MongoDBSaver 自身从不创建的索引。saver 只声明集合名不建索引，导致 getTuple/put/putWrites 每次 upsert 都 COLLSCAN 全表(线上出现单次 docsExamined 2.9w、bytesRead 265MB、durationMillis 2719 的慢查询，磁盘 IO 打满并拖慢同库所有查询)。索引键顺序对齐 saver 查询形状；unique 建失败(存量重复键)时降级为普通索引，只告警不阻断启动 | keywords: checkpoint索引, 全表扫描, 慢查询, checkpoint-index, collscan-fix, slow-query
+  - `hasExplicitThreadId(callOption)` — 判断调用方是否显式传入 thread_id，决定本次运行要不要落 checkpoint。显式 thread_id(chat 会话 sid / context sessionId / frontend hash)必须持久化；未传则用随机一次性 thread_id，快照写完永不读取，不应落库 | keywords: 显式线程判定, 一次性会话, explicit-thread-id, ephemeral-run
   - `getCheckpointer`: 🆕 公开 MongoDBSaver 实例,供 chat.service supervisor graph 复用同一个 checkpointer + 同一个 thread_id,实现 multi-agent graph 多轮对话 state 持久化(否则 supervisor 每次只看一条用户消息会导致路由误判)/expose checkpointer for supervisor graph
   - `buildLLM`: 构建 BaseChatModel；强制接收 billingContext，并把每次物理模型调用接入 Token 流水与 Credit 扣费。配置来源: config 显式传入 provider+model 时优先用 config，否则回退 admin 默认 runtime/build llm with config override and billing
   - `isKimiProvider(provider)` — 识别 Kimi/Moonshot OpenAI 兼容厂商,决定是否走专用适配 | keywords: kimi-adapter, openai-compatible
@@ -60,7 +62,21 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
 
 ### agent.types.ts
 类型定义。
-- **关键词**: types
+- **关键词**: types, ephemeral-run
+- **字段**:
+  - `AgentConfig.ephemeral`: 一次性调用不挂 MongoDB checkpointer。runWithMessages / stream 在调用方未给 thread_id 时会生成随机一次性 thread_id，其快照写完永不再读，却每次往 checkpoints / checkpoint_writes upsert 数十 KB，是 checkpoint 集合膨胀与磁盘 IO 打满的主因；由 AgentService 自动置 true/ephemeral run skips checkpointer
+
+### scripts/purge-ephemeral-checkpoints.mjs
+回收一次性 checkpoint 存量垃圾（`npm run purge:ephemeral-checkpoints`，默认只报告，`--apply` 才删）。
+- **关键词**: purge-ephemeral-checkpoints, checkpoint-bloat, slow-query-cleanup, 回收一次性快照, checkpoint膨胀, 慢查询治理
+- **函数**:
+  - `loadEnvFiles()` — 按 migrate-mongo-config 顺序载入 .env 与开发态覆盖 | keywords: 载入环境变量, 开发环境覆盖, load-env-files, dev-env-override
+  - `resolveMongoConnection()` — 复刻 shared/mongo 解析优先级得到连接串与库名 | keywords: 解析数据库连接, 复用连接优先级, resolve-mongo-connection, shared-uri-priority
+  - `parseArgs(argv)` — 解析 --apply / --db= / --before-days= | keywords: 解析命令行参数, 脚本选项, parse-cli-args, script-options
+  - `buildPurgeFilter(beforeDays)` — 构造 thread_id 前缀条件，可选按 ObjectId 时间戳限定更早数据 | keywords: 构造清理条件, ObjectId时间戳, build-purge-filter, objectid-timestamp
+  - `reportPurgeScope(db, filter)` — 统计两集合待清理量与占用字节 | keywords: 统计清理规模, 集合占用, report-purge-scope, collection-size
+  - `purgeInBatches(db, name, filter, batchSize)` — 分批删除避免长时间持锁 | keywords: 分批删除, 避免长事务, batched-delete, avoid-long-lock
+  - `main()` — 报告规模，--apply 时清理并提示 compact 回收磁盘 | keywords: 脚本入口, 清理流程, script-entry, purge-flow
 
 ### agent.enums.ts
 枚举定义。

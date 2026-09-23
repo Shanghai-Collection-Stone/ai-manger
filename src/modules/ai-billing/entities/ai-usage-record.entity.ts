@@ -60,6 +60,8 @@ export interface AiUsageRecordEntity {
   chargedUnits: number;
   theoreticalUnits: number;
   unlimited: boolean;
+  /** 免费提供商调用：provider 未配置 tokensPerCredit，不扣费只记用量 */
+  free?: boolean;
   errorCode?: string;
   createdAt: Date;
   updatedAt: Date;

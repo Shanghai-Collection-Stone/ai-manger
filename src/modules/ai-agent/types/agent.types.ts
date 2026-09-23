@@ -47,6 +47,15 @@ export interface AgentConfig {
   subagents?: DeepAgentSubAgent[];
   streamMode?: 'updates' | 'messages';
   streamSubgraphs?: boolean;
+  /**
+   * @description 一次性调用：不挂 MongoDB checkpointer。
+   *   runWithMessages / stream 在调用方未显式给 thread_id 时会生成随机一次性
+   *   thread_id，其 checkpoint 写完再也不会被读，却每次要往 checkpoints /
+   *   checkpoint_writes upsert 数十 KB，是 checkpoint 集合无限膨胀与磁盘 IO
+   *   被打满的主因。这类运行由 AgentService 自动置 true；调用方显式传入
+   *   thread_id（chat 会话 / context / frontend hash 复用）时保持 false。
+   */
+  ephemeral?: boolean;
 }
 
 /**

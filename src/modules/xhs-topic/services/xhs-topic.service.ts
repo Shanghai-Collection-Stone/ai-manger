@@ -142,7 +142,10 @@ export class XhsTopicService {
           },
           temperature: 0.35,
           noPostHook: true,
-          nonStreaming: true,
+          // 走流式：计费侧靠 handleLLMNewToken 按真实 token 追加预扣，
+          // 付费 provider 无需再配 fixedTokensPerCall。本链路无外层 SSE 主流，
+          // 解除 nostream 隔离不会污染前端 token 流。
+          nonStreaming: false,
           system: `${XHS_TOPIC_COMPLIANCE_PROMPT}\n你负责为“生成子选题”输入框推荐一条中文提示词。提示词必须紧扣给定母题，包含建议数量、差异化角度、目标读者、内容价值与标题风格要求；只输出一段可直接粘贴使用的提示词，不输出解释、引号、列表或 Markdown。`,
         },
         messages: [
@@ -453,7 +456,8 @@ ${searchInstruction}
         tools,
         temperature: 0.4,
         noPostHook: true,
-        nonStreaming: true,
+        // 同上：流式计费，避免付费 provider 缺 fixedTokensPerCall 被挡死。
+        nonStreaming: false,
         tenantId: scope.tenantId,
         billingContext: {
           tenantId: scope.tenantId,

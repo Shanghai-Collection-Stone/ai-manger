@@ -37,6 +37,10 @@ interface ActiveCallState {
   callId: string;
   tenantObjectId?: ObjectId;
   unlimited: boolean;
+  /** 免费提供商：未配置 tokensPerCredit 视为免费服务，不预扣不拦截，只记流水 */
+  free: boolean;
+  /** 需要真实扣费：有限额度租户 + 付费提供商，两者同时成立才预扣 */
+  chargeable: boolean;
   provider: AiProviderBillingSnapshot;
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
@@ -420,6 +424,7 @@ export class AiBillingService {
 
   /**
    * @description 消费流式文本块并按 16 Token 小块继续预扣，余额不足时抛 CREDIT_EXHAUSTED。
+   *   免费提供商与无限额度租户直接返回，不进入追加预扣循环。
    * @keyword-cn 消费流式文本, 余额耗尽
    * @keyword-en consume-stream-text, balance-exhausted
    */
@@ -428,6 +433,9 @@ export class AiBillingService {
     if (!state || this.positiveInteger(state.provider.fixedTokensPerCall)) {
       return;
     }
+    // 免费提供商或无限额度租户无需追加预扣。reserveMore 在缺 tokensPerCredit 时
+    // 恒返回 0，不短路会让流式调用在第二个 token 误抛 CREDIT_EXHAUSTED。
+    if (!state.chargeable) return;
     state.estimatedOutputTokens += this.estimateTokens(token);
     const consumed = state.estimatedInputTokens + state.estimatedOutputTokens;
     while (consumed > state.reservedTokens) {
@@ -529,7 +537,8 @@ export class AiBillingService {
   }
 
   /**
-   * @description 创建调用流水与内存状态，并对有限租户执行第一次原子预扣。
+   * @description 创建调用流水与内存状态，并对有限租户的付费提供商执行第一次原子预扣。
+   *   provider 未配置 tokensPerCredit 视为免费服务：不校验额度、不预扣，只落用量流水。
    * @keyword-cn 创建调用状态, 首次原子预扣
    * @keyword-en create-call-state, initial-atomic-reserve
    */
@@ -551,22 +560,23 @@ export class AiBillingService {
       input.provider.tokensPerCredit,
     );
     const fixed = this.positiveInteger(input.provider.fixedTokensPerCall);
-    if (!unlimited && !tokensPerCredit) {
-      throw this.billingError('AI_BILLING_PROVIDER_NOT_CONFIGURED');
-    }
+    // 免费提供商：管理员未填 tokensPerCredit 即表示该模型不计费。此时不做任何
+    // 额度校验与预扣，只落用量流水，避免免费服务被计费配置缺失挡成 fail-closed。
+    const free = !tokensPerCredit;
+    const chargeable = !unlimited && !free;
     if (
-      !unlimited &&
+      chargeable &&
       input.modality === 'chat' &&
       input.provider.streaming === false &&
       !fixed
     ) {
       throw this.billingError('TEXT_FIXED_TOKEN_NOT_CONFIGURED');
     }
-    if (!unlimited && input.requireFixedForFiniteTenant && !fixed) {
+    if (chargeable && input.requireFixedForFiniteTenant && !fixed) {
       throw this.billingError('IMAGE_FIXED_TOKEN_NOT_CONFIGURED');
     }
     const reservedUnits =
-      !unlimited && tokensPerCredit
+      chargeable && tokensPerCredit
         ? this.tokensToUnits(input.initialTokens, tokensPerCredit)
         : 0;
     const inserted = await this.usages.updateOne(
@@ -599,6 +609,7 @@ export class AiBillingService {
             ? this.tokensToUnits(input.initialTokens, tokensPerCredit)
             : 0,
           unlimited,
+          free,
           createdAt: now,
           updatedAt: now,
         },
@@ -606,7 +617,7 @@ export class AiBillingService {
       { upsert: true },
     );
     if (inserted.upsertedCount === 0) return null;
-    if (tenant && !unlimited && reservedUnits > 0) {
+    if (tenant && chargeable && reservedUnits > 0) {
       try {
         await this.reserveTenantUnits(tenant._id, reservedUnits, {
           referenceId: input.callId,
@@ -633,6 +644,8 @@ export class AiBillingService {
       callId: input.callId,
       tenantObjectId: tenant?._id,
       unlimited,
+      free,
+      chargeable,
       provider: input.provider,
       estimatedInputTokens: input.estimatedInputTokens,
       estimatedOutputTokens: 0,
@@ -654,7 +667,7 @@ export class AiBillingService {
     if (!ratio) return 0;
     const units = this.tokensToUnits(tokens, ratio);
     let reservedUnits = units;
-    if (!state.unlimited && state.tenantObjectId) {
+    if (state.chargeable && state.tenantObjectId) {
       try {
         await this.reserveTenantUnits(state.tenantObjectId, units, {
           referenceId: state.callId,
@@ -673,14 +686,14 @@ export class AiBillingService {
       { callId: state.callId, status: 'started' },
       {
         $inc: {
-          reservedUnits: state.unlimited ? 0 : reservedUnits,
-          chargedUnits: state.unlimited ? 0 : reservedUnits,
+          reservedUnits: state.chargeable ? reservedUnits : 0,
+          chargedUnits: state.chargeable ? reservedUnits : 0,
           theoreticalUnits: reservedUnits,
         },
         $set: { updatedAt: new Date() },
       },
     );
-    if (state.unlimited) return tokens;
+    if (!state.chargeable) return tokens;
     return Math.floor((reservedUnits * ratio) / CREDIT_UNIT_SCALE);
   }
 
@@ -809,8 +822,8 @@ export class AiBillingService {
     const billedTokens = fixed ?? usage?.totalTokens ?? estimatedTotal;
     const ratio = this.positiveInteger(state.provider.tokensPerCredit);
     const desiredUnits = ratio ? this.tokensToUnits(billedTokens, ratio) : 0;
-    let chargedUnits = state.unlimited ? 0 : state.reservedUnits;
-    if (!state.unlimited && state.tenantObjectId && ratio) {
+    let chargedUnits = state.chargeable ? state.reservedUnits : 0;
+    if (state.chargeable && state.tenantObjectId && ratio) {
       if (desiredUnits > state.reservedUnits) {
         const extra = desiredUnits - state.reservedUnits;
         try {

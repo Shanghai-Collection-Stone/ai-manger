@@ -42,7 +42,7 @@ import type * as z4Classic from 'zod/v4';
 import { createDeepAgent } from 'deepagents';
 import { AgentStreamEvent, type AgentStreamOption } from '../types/agent.types';
 import { ConfigService } from '@nestjs/config';
-import { MongoClient } from 'mongodb';
+import { MongoClient, type Db } from 'mongodb';
 import { MongoDBSaver } from '@langchain/langgraph-checkpoint-mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AntiDetectionService } from '../../image-anti-detection/services/anti-detection.service.js';
@@ -75,8 +75,72 @@ export class AgentService {
    *   外部(如 chat.service supervisor graph)需要复用同一 checkpointer 才能让多轮对话
    *   看到完整历史 messages,通过 getCheckpointer() 公开访问。 */
   private readonly checkpointer: MongoDBSaver;
+  /** @description checkpoint 集合所在库，仅用于补建 MongoDBSaver 自身不创建的索引。 */
+  private readonly checkpointDb: Db;
   getCheckpointer(): MongoDBSaver {
     return this.checkpointer;
+  }
+
+  /**
+   * @description 为 LangGraph checkpoint 集合补建索引。
+   *   `@langchain/langgraph-checkpoint-mongodb` 的 MongoDBSaver 只声明集合名，
+   *   从不建索引，导致 getTuple/put/putWrites 的每次 upsert 都 COLLSCAN 全表
+   *   (线上 checkpoints 1.3w 文档约 330MB、checkpoint_writes 3w 文档，单次写入
+   *   docsExamined 上万、bytesRead 数百 MB，把磁盘 IO 打满并拖慢同库所有查询)。
+   *   索引键顺序对齐 saver 的查询形状:
+   *   - checkpoints: getTuple/list 按 {thread_id, checkpoint_ns} 过滤 + checkpoint_id 倒序取最新;
+   *     put 按 {thread_id, checkpoint_ns, checkpoint_id} upsert; deleteThread 按 thread_id 前缀。
+   *   - checkpoint_writes: getTuple 按 {thread_id, checkpoint_ns, checkpoint_id} 读 pendingWrites;
+   *     putWrites 按追加 {task_id, idx} 的全键 upsert。
+   *   unique 建失败(存量并发 upsert 可能已产生重复键)时降级为普通索引，只告警不阻断启动。
+   * @keyword-cn checkpoint索引, 全表扫描, 慢查询
+   * @keyword-en checkpoint-index, collscan-fix, slow-query
+   */
+  async ensureCheckpointIndexes(): Promise<void> {
+    const specs: {
+      collection: string;
+      keys: Record<string, 1 | -1>;
+      name: string;
+    }[] = [
+      {
+        collection: 'checkpoints',
+        keys: { thread_id: 1, checkpoint_ns: 1, checkpoint_id: -1 },
+        name: 'thread_ns_checkpoint',
+      },
+      {
+        collection: 'checkpoint_writes',
+        keys: {
+          thread_id: 1,
+          checkpoint_ns: 1,
+          checkpoint_id: 1,
+          task_id: 1,
+          idx: 1,
+        },
+        name: 'thread_ns_checkpoint_task_idx',
+      },
+    ];
+    for (const spec of specs) {
+      const collection = this.checkpointDb.collection(spec.collection);
+      try {
+        await collection.createIndex(spec.keys, {
+          name: spec.name,
+          unique: true,
+        });
+      } catch {
+        try {
+          await collection.createIndex(spec.keys, {
+            name: `${spec.name}_nonunique`,
+          });
+          this.logger.warn(
+            `[checkpoint-index] ${spec.collection} 存在重复键，已降级为非唯一索引`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `[checkpoint-index] ${spec.collection} 索引创建失败: ${String(error)}`,
+          );
+        }
+      }
+    }
   }
   /**
    * @description 生图专用 undici dispatcher: gpt-image-* / dall-e-* / seedream 这类
@@ -114,6 +178,8 @@ export class AgentService {
     let dbName = config.get<string>('MONGODB_DB') ?? 'ai_system';
     if (isDev) dbName = config.get<string>('DEV_MONGODB_DB') ?? dbName;
     this.checkpointer = new MongoDBSaver({ client, dbName });
+    this.checkpointDb = client.db(dbName);
+    void this.ensureCheckpointIndexes();
 
     // Monkey-patch to fix empty bulkWrite error in langgraph-checkpoint-mongodb
     const originalPutWrites = this.checkpointer.putWrites.bind(
@@ -160,7 +226,9 @@ export class AgentService {
       tools: this.normalizeTools(config.tools),
       contextSchema: this.normalizeContextSchema(config.contextSchema),
       responseFormat: config.responseFormat,
-      checkpointer: this.checkpointer,
+      // 一次性运行(随机 thread_id,写完不再读)不挂 checkpointer,
+      // 否则每次调用都往 checkpoints/checkpoint_writes 写数十 KB 永不复用的快照。
+      ...(config.ephemeral ? {} : { checkpointer: this.checkpointer }),
       subagents: this.normalizeSubagents(config.subagents),
       ...(middleware.length > 0 ? { middleware } : {}),
     };
@@ -2647,6 +2715,23 @@ export class AgentService {
   }
 
   /**
+   * @description 判断调用方是否显式传入了 thread_id，用于决定本次运行要不要落 checkpoint。
+   *   显式 thread_id 代表跨调用复用同一会话状态(chat 会话 sid / context sessionId /
+   *   frontend hash)，必须持久化；未传则 AgentService 会生成随机一次性 thread_id，
+   *   其快照写完永不读取，不应落库。
+   * @keyword-cn 显式线程判定, 一次性会话
+   * @keyword-en explicit-thread-id, ephemeral-run
+   */
+  private hasExplicitThreadId(callOption: unknown): boolean {
+    if (!callOption || typeof callOption !== 'object') return false;
+    const configurable = (callOption as { configurable?: unknown })
+      .configurable;
+    if (!configurable || typeof configurable !== 'object') return false;
+    const threadId = (configurable as { thread_id?: unknown }).thread_id;
+    return typeof threadId === 'string' && threadId.trim().length > 0;
+  }
+
+  /**
    * @title 运行Agent（消息） Run Agent With Messages
    * @description 使用消息列表执行Agent并返回最后一条AI消息，默认不绑定主流 token handler。
    * @keyword-cn 运行, 消息, 调用, 工具内部非流
@@ -2654,6 +2739,10 @@ export class AgentService {
    */
   async runWithMessages(input: AgentRunMessagesInput): Promise<AIMessage> {
     const useNoStream = input.config.nonStreaming !== false;
+    // 调用方显式给了 thread_id 才需要持久化 state(多轮复用);否则本次用的是下面
+    // 生成的随机一次性 thread_id,落 checkpoint 纯属写放大。
+    const ephemeral =
+      input.config.ephemeral ?? !this.hasExplicitThreadId(input.callOption);
     const callback: Callbacks = [
       {
         handleLLMNewToken() {},
@@ -2703,6 +2792,7 @@ export class AgentService {
     const agent = await this.buildChatModel({
       ...input.config,
       nonStreaming: useNoStream,
+      ephemeral,
       system: mergedSystem.length > 0 ? mergedSystem : undefined,
     });
     const state: unknown = await agent.invoke(
@@ -2774,6 +2864,8 @@ export class AgentService {
     const agent = (input.preBuiltAgent ??
       (await this.buildChatModel({
         ...input.config,
+        ephemeral:
+          input.config.ephemeral ?? !this.hasExplicitThreadId(input.callOption),
         system: mergedSystem.length > 0 ? mergedSystem : undefined,
       }))) as ReturnType<AgentService['buildChatModel']> extends Promise<
       infer R

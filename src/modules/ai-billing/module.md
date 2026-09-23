@@ -12,7 +12,7 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 ## 文件清单 (File List)
 
 - `ai-billing.module.ts` — NestJS 模块入口。
-- `entities/ai-usage-record.entity.ts` — 计费上下文、Provider 计费快照与用量流水实体。
+- `entities/ai-usage-record.entity.ts` — 计费上下文、Provider 计费快照与用量流水实体（含免费调用标记 `free`）。
 - `entities/ai-service-credit.entity.ts` — 固定服务目录、点数配置、管理视图与服务扣费流水实体。
 - `entities/ai-credit-transaction.entity.ts` — 追加式 Credit 余额流水类型与变动前后余额实体。
 - `services/ai-billing.service.ts` — 服务固定扣费、Provider 重复扣费抑制、Token 计量、余额原子更新与充值/消费/退款流水。
@@ -47,14 +47,14 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 - `runWithServiceBilling(operation)` — 在服务调用链中抑制 Provider 重复扣费 | keywords: 抑制重复扣费, 服务调用链, suppress-provider-charge, service-call-chain
 - `createCallback(context,provider)` — 创建模型计费回调 | keywords: 创建计费回调, 子代理计量, create-billing-callback, subagent-metering
 - `beginTextCall(input)` — 登记并预扣文本调用 | keywords: 文本调用开始, 流式预扣, text-call-start, streaming-precharge
-- `consumeTextChunk(callId,token)` — 消费流式文本并追加预扣 | keywords: 消费流式文本, 余额耗尽, consume-stream-text, balance-exhausted
+- `consumeTextChunk(callId,token)` — 消费流式文本并追加预扣，免费提供商与无限额度租户直接返回 | keywords: 消费流式文本, 余额耗尽, consume-stream-text, balance-exhausted
 - `completeTextCall(callId,output)` — 完成真实 Token 结算 | keywords: 文本调用完成, Token结算, text-call-complete, token-settlement
 - `failTextCall(callId,error)` — 结算失败文本调用 | keywords: 文本调用失败, 额度耗尽状态, text-call-failure, credit-exhausted-status
 - `beginImageCall(input)` — 生图调用前执行固定 Token 预扣 | keywords: 生图预扣, 固定Token计费, image-precharge, fixed-token-billing
 - `completeImageCall(callId,usage?)` — 完成生图用量流水 | keywords: 生图完成, 生图用量, image-complete, image-usage
 - `failImageCall(callId,error)` — 记录失败生图费用 | keywords: 生图失败计费, 生图错误流水, image-failure-charge, image-error-ledger
 - `listUsage(input)` — 按租户与时间分页查询用量 | keywords: 用量流水查询, 租户过滤, usage-ledger-query, tenant-filter
-- `createCallState(input)` — 建立调用状态并首次原子预扣 | keywords: 创建调用状态, 首次原子预扣, create-call-state, initial-atomic-reserve
+- `createCallState(input)` — 建立调用状态并对付费提供商首次原子预扣；provider 缺 tokensPerCredit 视为免费服务，不校验额度只记流水 | keywords: 创建调用状态, 首次原子预扣, create-call-state, initial-atomic-reserve
 - `reserveMore(state,tokens)` — 为活跃调用追加预扣，完整块不足时取走可用尾款 | keywords: 追加预扣, 活跃调用, additional-reserve, active-call
 - `drainTenantUnits(tenantId,meta?)` — 原子耗尽不足一个预扣块的最后余额并记录消费流水 | keywords: 耗尽最后余额, Credit归零, drain-final-balance, zero-credit
 - `reserveTenantUnits(tenantId,units,meta?)` — 原子扣减租户余额并记录 Provider 消费流水 | keywords: 原子扣减余额, 额度耗尽, atomic-balance-debit, credit-exhausted
@@ -88,6 +88,7 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 | 后台改价   | admin-pricing         |
 | Credit流水 | credit-transaction    |
 | 余额审计   | balance-audit         |
+| 免费提供商 | free-provider         |
 
 ## 类型导出 (Type Exports)
 
@@ -99,3 +100,5 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 ## 模块功能描述 (Module Feature Description)
 
 `text-generation`（生文服务）与 `video-generation`（生视频服务）固定登记在 `AI_CREDIT_SERVICE_CATALOG`，默认均为 1 Credit；后台只允许按既有编码覆盖点数。有限租户在服务启动前完成一次原子扣费并写入 `ai_service_usage_records` 和统一 `ai_credit_transactions` 流水；Provider 预扣、尾款与退款也追加余额流水。流水保存有符号变动值、变动前后余额、原因、操作方、外部单号与服务信息，禁止修改或删除。服务工作流通过异步上下文关闭内部 LLM、生图 Provider 的重复扣费；尚未接入服务目录的旧调用仍使用原 Provider Token 预扣与结算链路。
+
+**免费提供商**: 后台 `ai_providers` 未填 `tokensPerCredit` 即表示该模型不计费。此时无论租户额度是否有限，都不做额度校验、不预扣、不在流式中拦截，只落一条 `free: true` 的用量流水。付费提供商（已填 `tokensPerCredit`）仍按原链路预扣与结算，其中非流式文本调用无法边收 token 边预扣，仍要求配置 `fixedTokensPerCall`，否则抛 `TEXT_FIXED_TOKEN_NOT_CONFIGURED`；改走流式即可按厂商真实 usage 结算。
