@@ -42,6 +42,7 @@ export const WORKFLOW_NODES = {
     key: 'douyin-workbench',
     script: 'script',
     storyboard: 'storyboard',
+    imageDecision: 'image-decision',
     shotImage: 'shot-image',
     personaImage: 'persona-image',
     shotVideo: 'shot-video',
@@ -51,6 +52,7 @@ export const WORKFLOW_NODES = {
     key: 'xhs-article',
     topic: 'topic',
     article: 'article',
+    imageDecision: 'image-decision',
     coverCopy: 'cover-copy',
     coverImage: 'cover-image',
     coverOverlay: 'cover-overlay',
@@ -80,13 +82,20 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         key: 'article',
         label: '文章生成',
         description:
-          '按子选题写标题、正文、文章标签并挑选图库标签（首次生文与重写）',
+          '按子选题写标题、正文与文章标签（首次生文与重写，可按需联网搜索）',
+        category: 'llm',
+      },
+      {
+        key: 'image-decision',
+        label: '配图决策',
+        description:
+          '从真实图库标签里挑出本篇配图标签，关闭思考并与写正文同时进行；建议指定响应快的模型',
         category: 'llm',
       },
       {
         key: 'cover-copy',
         label: '封面文案',
-        description: '为图组封面生成主标题与副标题',
+        description: '为图组封面生成主标题与副标题（关闭思考）',
         category: 'llm',
       },
       {
@@ -124,6 +133,13 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         key: 'storyboard',
         label: '分镜拆解',
         description: '把脚本正文拆成逐段分镜与配图提示词',
+        category: 'llm',
+      },
+      {
+        key: 'image-decision',
+        label: '分镜选图',
+        description:
+          '图库自找配图时为每段分镜挑选图库图片，关闭思考；建议指定响应快的模型',
         category: 'llm',
       },
       {

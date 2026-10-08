@@ -56,7 +56,7 @@ HTTP 控制器(挂载 `/gallery/zip-import`)。
 - **常量**: `MAX_ZIP_BYTES = 1GB`
 - **函数**:
   - `resolveAuthScope`: Bearer token → `{ tenantId, userId }` /resolve bearer token
-  - `upload`: `POST /upload` 接收单 zip(multer disk + 1GB 限制)→ enqueue → 立即返回 jobId /upload and enqueue
+  - `GalleryZipImportController.upload(file, body, req)` — `POST /upload` 接收单个 ZIP，修正 multipart 中文原文件名后入队并立即返回任务 | keywords: ZIP上传, 文件名修复, zip-upload, filename-repair
   - `list`: `GET /list?limit=` 列出最近任务 /list recent jobs
   - `getById`: `GET /:id` 单条详情(前端轮询)/get job by id
   - `cancel`: `POST /:id/cancel` 请求取消 /cancel job

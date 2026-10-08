@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto';
+import type { AliyunConfigService } from '../../aliyun-config/services/aliyun-config.service';
 import { OssStorageService } from './oss-storage.service';
 
 /**
@@ -159,5 +160,32 @@ describe('OssStorageService', () => {
     expect(() =>
       service.createUploadTicket({ scene: 'video', fileName: 'a.mp4' }),
     ).toThrow('OSS_NOT_CONFIGURED');
+  });
+
+  it('后台阿里云配置齐全时优先于环境变量，并注册 OSS 自检', () => {
+    const registerOssProbe = jest.fn();
+    const aliyun = {
+      registerOssProbe,
+      readOssConfig: () => ({
+        region: 'oss-cn-shanghai',
+        bucket: 'admin-bucket',
+        endpoint: 'oss-cn-shanghai.aliyuncs.com',
+        publicBaseUrl: '',
+        rootDir: 'videos',
+        accessKeyId: 'admin-ak',
+        accessKeySecret: 'admin-sk',
+      }),
+    } as unknown as AliyunConfigService;
+    const service = new OssStorageService(aliyun);
+    expect(registerOssProbe).toHaveBeenCalledTimes(1);
+    const ticket = service.createUploadTicket({
+      scene: 'video',
+      fileName: 'a.mp4',
+    });
+    expect(ticket.host).toBe(
+      'https://admin-bucket.oss-cn-shanghai.aliyuncs.com',
+    );
+    expect(ticket.formFields.OSSAccessKeyId).toBe('admin-ak');
+    expect(ticket.key.startsWith('videos/video/platform/')).toBe(true);
   });
 });

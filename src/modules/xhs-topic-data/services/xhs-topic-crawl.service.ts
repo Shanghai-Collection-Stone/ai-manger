@@ -11,6 +11,7 @@ import {
   RobotRegistryService,
   SUPER_CLAW_DATA_TRACKING_AGENT_MODULE,
 } from '../../auto-task-robot/services/robot-registry.service.js';
+import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js';
 import { TodoService } from '../../todo/services/todo.service.js';
 import { XhsPostStatService } from '../../todo/services/xhs-post-stat.service.js';
 import { XhsTopicRepositoryService } from '../../xhs-topic/services/xhs-topic-repository.service.js';
@@ -132,13 +133,13 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 启动抓取调度轮询，每分钟检查一次哪些子选题到了下一次抓取时间。
+   * @description 启动抓取调度轮询，每分钟检查一次哪些子选题到了下一次抓取时间；多进程时只在 leader 进程上跑，避免重复建抓取任务。
    * @keyword-cn 启动调度, 定时轮询
    * @keyword-en start-scheduler, interval-tick
    * @returns {void}
    */
   onModuleInit(): void {
-    if (this.schedulerTimer) return;
+    if (this.schedulerTimer || !isLeaderProcess()) return;
     this.schedulerTimer = setInterval(() => {
       void this.tickScheduler();
     }, SCHEDULER_TICK_MS);
@@ -165,7 +166,9 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
     await this.dropLegacyUniqueTodoIndex();
     await this.tasks.createIndex({ id: 1 }, { unique: true });
     await this.tasks.createIndex({ topicId: 1, startedAt: -1 });
+    await this.tasks.createIndex({ topicId: 1, startedAt: -1, id: -1 });
     await this.tasks.createIndex({ todoId: 1, runIndex: -1 });
+    await this.tasks.createIndex({ todoId: 1, runIndex: -1, id: -1 });
     await this.schedules.createIndex({ topicId: 1 }, { unique: true });
     await this.schedules.createIndex({ currentTodoId: 1 }, { sparse: true });
     await this.schedules.createIndex({
@@ -174,6 +177,7 @@ export class XhsTopicCrawlService implements OnModuleInit, OnModuleDestroy {
       endAt: 1,
       lockUntil: 1,
     });
+    await this.schedules.createIndex({ tenantId: 1, userId: 1, status: 1 });
     const migrationNow = new Date();
     await this.schedules.updateMany(
       { startAt: { $exists: false } },

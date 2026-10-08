@@ -15,7 +15,7 @@
 
 - **关键词**: workspace, member, crud, capacity, quota, audit, tenant-isolation, mongo
 - **函数**:
-  - `ensureIndexes`: 初始化工作区与成员索引/ensure workspace indexes | keywords: ensure-workspace-indexes
+  - `ensureIndexes()` — 建立工作区更新时间线与成员创建时间线索引 | keywords: 工作区索引, 成员时间线, workspace-indexes, member-timeline
   - `list`: 工作区列表(租户隔离)/list workspaces | keywords: list-workspaces
   - `get`: 获取工作区(校验租户边界)/get workspace by id | keywords: get-workspace-by-id
   - `create(currentUser, input)`: 租户使用绑定节点、平台选择空闲节点创建工作区并下发创建命令 | keywords: 创建工作区, 占用节点槽位, create-workspace, reserve-super-claw-slot

@@ -9,7 +9,7 @@
 ### batch-task.service.ts
 批量任务服务。
 - **关键词**: batch-task, parallel, pool, retry, backoff, callback, mcp, todo-linkage, publishing, mongo, service
-- ensureIndexes() — 建索引；队列认领走 graphJob_claim_queued 部分索引（仅收录 queued） | keywords: batch-task, mongo, index, partial-index
+- ensureIndexes() — 建立租户/用户更新时间线索引；队列认领走 graphJob_claim_queued 部分索引（仅收录 queued） | keywords: batch-task, mongo, index, partial-index
 - claimNextGraphJob(kind) — 原子认领队列任务，投影裁掉 posts[] 只回传 worker 必需字段 | keywords: claim-graph-job, atomic-claim, projection
 
 ### batch-task.controller.ts

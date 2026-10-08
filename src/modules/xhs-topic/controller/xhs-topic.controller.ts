@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   HttpException,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -24,6 +25,7 @@ import {
   DeleteXhsTopicsDto,
   GenerateXhsArticleDto,
   GenerateXhsTopicDto,
+  RecommendXhsArticleRequirementsDto,
   RecommendXhsTopicPromptDto,
   UpdateXhsArticleDto,
   UpdateXhsTopicDto,
@@ -35,6 +37,11 @@ import {
 } from '../services/xhs-article-generation.service.js';
 import { XhsTopicService } from '../services/xhs-topic.service.js';
 import { XhsTopicRepositoryService } from '../services/xhs-topic-repository.service.js';
+import {
+  addRetentionDays,
+  resolveRetentionDays,
+  XHS_DRAFT_RETENTION_DEFAULT_DAYS,
+} from '../xhs-topic-retention.constants.js';
 
 /**
  * @description 小红书 AI 选题接口，返回携带结构化 taskResult 的 Todo。
@@ -122,6 +129,8 @@ export class XhsTopicController {
           articleStyle: entity.articleStyle,
           imageTags: entity.imageTags ?? [],
           imageRule: entity.imageRule ?? 'default',
+          starred: entity.starred === true,
+          lastActiveAt: entity.lastActiveAt,
           status: entity.status,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt,
@@ -187,6 +196,8 @@ export class XhsTopicController {
         articleStyle: topic.articleStyle,
         imageTags: topic.imageTags ?? [],
         imageRule: topic.imageRule ?? 'default',
+        starred: topic.starred === true,
+        lastActiveAt: topic.lastActiveAt,
         status: topic.status,
         sourceTodoId: topic.sourceTodoId,
         createdAt: topic.createdAt,
@@ -211,6 +222,34 @@ export class XhsTopicController {
         userId: user._id.toHexString(),
       }),
     };
+  }
+
+  /**
+   * @description 根据当前作用域内的子选题、所属母题和已有文章风格推荐一组生成需求。
+   * @keyword-cn 生成需求推荐接口, 子题上下文
+   * @keyword-en requirement-recommendation-api, child-topic-context
+   */
+  @Post(':id/article/requirements/recommend')
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('create', 'XhsTopic')
+  async recommendArticleRequirements(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: RecommendXhsArticleRequirementsDto,
+  ) {
+    const topicId = Number(id);
+    if (!Number.isInteger(topicId) || topicId < 1) {
+      throw new BadRequestException('XHS_TOPIC_ID_INVALID');
+    }
+    const user = this.requireUser(req);
+    return await this.xhsTopicService.recommendArticleRequirements(
+      topicId,
+      dto.options,
+      {
+        tenantId: user.tenantId,
+        userId: user._id.toHexString(),
+      },
+    );
   }
 
   /**
@@ -272,6 +311,40 @@ export class XhsTopicController {
     const topic = await this.repository.updateArticle(topicId, dto, scope);
     if (!topic) throw new BadRequestException('XHS_ARTICLE_NOT_FOUND');
     return { groups: await this.repository.listWorkspace(scope) };
+  }
+
+  /**
+   * @description 文章从文章库回到草稿后重置保留时钟，避免刚恢复的草稿被自动清理。
+   * @keyword-cn 重置草稿接口, 草稿保留期限
+   * @keyword-en touch-draft-api, draft-retention
+   */
+  @Post(':id/article/touch-draft')
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'XhsTopic')
+  async touchDraft(@Req() req: AdminRequest, @Param('id') id: string) {
+    const topicId = Number(id);
+    if (!Number.isInteger(topicId) || topicId < 1) {
+      throw new BadRequestException('XHS_TOPIC_ID_INVALID');
+    }
+    const user = this.requireUser(req);
+    const topic = await this.repository.touchDraft(topicId, {
+      tenantId: user.tenantId,
+      userId: user._id.toHexString(),
+    });
+    if (!topic?.article?.draftAt) {
+      throw new NotFoundException('XHS_ARTICLE_NOT_FOUND');
+    }
+    const retentionDays = resolveRetentionDays(
+      process.env.XHS_DRAFT_RETENTION_DAYS,
+      XHS_DRAFT_RETENTION_DEFAULT_DAYS,
+    );
+    return {
+      ok: true,
+      draftCleanupAt: addRetentionDays(
+        topic.article.draftAt,
+        retentionDays,
+      ).toISOString(),
+    };
   }
 
   /**

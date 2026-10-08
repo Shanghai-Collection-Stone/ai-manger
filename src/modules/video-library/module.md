@@ -12,18 +12,19 @@
 路由前缀: `api/video-library`
 前端调用方: `xhs-manger/src/workbench/views/video-library/`（桌面工作台，票据字段与 `ossDirectUpload.js` 逐字对应）
 Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
+OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../aliyun-config/module.md)，OSS 专用 AccessKey + 地域 / Bucket / Endpoint / 访问域名 / 根目录；与短信的 AccessKey 互相独立），后台未填完整时回落下列环境变量。
 环境变量: `OSS_REGION`、`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`OSS_ENDPOINT`(可选，默认 `<region>.aliyuncs.com`)、`OSS_PUBLIC_BASE_URL`(可选 CDN / 自定义域名)、`OSS_VIDEO_LIBRARY_DIR`(默认 `video-library`)、`OSS_VIDEO_MAX_BYTES`(默认 2GB)、`OSS_POSTER_MAX_BYTES`(默认 10MB)、`OSS_SIGNATURE_EXPIRE_SECONDS`(默认 900，上限 3600)。
 
 已知限制：不支持分片续传（单次 PostObject，断了要重传）；OSS 对象的清理是尽力而为，失败的键在删除响应的 `orphanKeys` 里，没有自动重试的对账任务；没有向量检索（视频没有可嵌入的文本内容，建了就是每次写入白跑一次 embedding）。
 
 ## 文件清单 (File List)
 
-- `video-library.module.ts` — 模块定义，导入 `DataSourceModule`（`DS_MONGO_DB`）与 `AdminModule`（token 换用户）。
+- `video-library.module.ts` — 模块定义，导入 `DataSourceModule`（`DS_MONGO_DB`）、`AdminModule`（token 换用户）与 `AliyunConfigModule`（后台 OSS 配置）。
 - `controller/video-library.controller.ts` — `api/video-library` 下的全部入口。
 - `services/video-library.service.ts` — 视频记录的登记、游标分页查询、标签、更新与删除。
 - `services/video-group.service.ts` — 分组 CRUD 与分组内视频计数。
-- `services/oss-storage.service.ts` — OSS 直传票据签发、对象键生成、可访问地址、服务端上传与对象删除。
-- `services/oss-storage.service.spec.ts` — 签名与对象键的回归测试。
+- `services/oss-storage.service.ts` — OSS 配置解析（后台优先、环境变量兜底）、直传票据签发、对象键生成、可访问地址、服务端上传、对象删除与写入自检。
+- `services/oss-storage.service.spec.ts` — 签名、对象键与后台配置优先的回归测试。
 - `controller/video-library.controller.spec.ts` — HTTP 契约测试：路由、鉴权、入参归一与响应形状（两个测试跑法：`npx jest src/modules/video-library`）。
 - `entities/video.entity.ts` — 视频记录实体与出入参类型。
 - `entities/video-group.entity.ts` — 视频分组实体与出入参类型。
@@ -63,7 +64,7 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 
 ### services/video-group.service.ts
 
-- `ensureIndexes()` — 建分组索引与自增计数器 | keywords: 分组索引, ensure-video-group-indexes
+- `ensureIndexes()` — 建分组业务 ID、租户创建时间线索引与自增计数器 | keywords: 分组索引, ensure-video-group-indexes
 - `nextId()` — 取分组自增 ID | keywords: 分组自增ID, next-video-group-id
 - `buildTenantFilter(tenantId?)` — 租户可见性过滤 | keywords: 租户过滤, build-tenant-filter
 - `list(options?)` — 列分组并用一次聚合补上 `video_count` | keywords: 分组列表, 分组计数, list-video-groups, group-video-count
@@ -74,7 +75,8 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 
 ### services/oss-storage.service.ts
 
-- `readConfig()` — 读 OSS 环境变量 | keywords: OSS配置, oss-config
+- `constructor(aliyun?)` — 可选注入阿里云配置服务，并向它注册 OSS 自检 | keywords: 注入阿里云配置, 注册OSS自检, inject-aliyun-config, register-oss-probe
+- `readConfig()` — 先取后台阿里云配置，不完整时读 OSS 环境变量 | keywords: OSS配置, oss-config
 - `isConfigured()` — 判断配置是否齐全 | keywords: OSS已配置, oss-configured
 - `requireConfig()` — 配置缺失直接 503，不降级本地磁盘 | keywords: OSS配置校验, require-oss-config
 - `maxBytesOf(scene)` — 按场景取单文件上限 | keywords: 上传大小上限, max-upload-bytes
@@ -84,8 +86,9 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 - `readExpireSeconds()` — 读票据有效期 | keywords: 票据有效期, ticket-expire-seconds
 - `normalizeContentType(value?)` — 归一化 Content-Type，非法值不进策略 | keywords: 内容类型归一化, normalize-content-type
 - `deleteObjects(keys)` — 批量删对象，返回失败的键 | keywords: 删除对象, 清理OSS, delete-objects, cleanup-oss
-- `putObject(key, body, contentType)` — 服务端 V1 签名 PUT 上传对象并返回可访问地址，用于 AI 生成视频转存 | keywords: 服务端上传对象, 生成视频转存, server-put-object, generated-video-transfer
+- `putObject(key, body, contentType)` — 服务端 V1 签名 PUT 上传对象并返回可访问地址，用于 AI 生成视频转存；请求体用零拷贝视图，不再把整段视频复制一份 | keywords: 服务端上传对象, 生成视频转存, server-put-object, generated-video-transfer
 - `deleteObject(key)` — V1 头签名的单对象 DELETE | keywords: 删除对象, 请求签名, delete-object, request-signature
+- `probe()` — 在 `<rootDir>/.probe/` 写入再删除一个小文件，验证密钥、Bucket 与读写权限，供后台「测试 OSS」使用 | keywords: OSS自检, 写入测试, oss-probe, write-test
 
 ## 关键词索引 (Keyword Index)
 
@@ -96,6 +99,10 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 | 视频分组 | video-group |
 | 直传票据 | upload-ticket |
 | OSS签名 | oss-signature |
+| 注入阿里云配置 | inject-aliyun-config |
+| 注册OSS自检 | register-oss-probe |
+| OSS自检 | oss-probe |
+| 写入测试 | write-test |
 | 对象键生成 | build-object-key |
 | 清理OSS | cleanup-oss |
 | 残留对象 | orphan-objects |
@@ -136,4 +143,4 @@ Mongo 集合: `videos`、`video_groups`（自增 ID 共用 `counters`）
 
 **不引 ali-oss SDK**：这里只需要签一张 PostObject 策略（`base64(policyJSON)` + `HMAC-SHA1`）和发一个带签名头的 DELETE，加起来不到 60 行 `node:crypto`。要上分片续传时再换 SDK 也不迟，届时改的只有 `oss-storage.service.ts`。策略里逐条锁死 `key`、`content-length-range`、`success_action_status` 与 `Content-Type`：OSS 会拒收策略没覆盖的表单字段，而覆盖得越死，票据被拿去传别的东西的空间越小。
 
-**部署前提**：桌面端页面的 origin 是 `app://workbench`（自定义协议注册时开了 `corsEnabled`）。OSS 存储桶的跨域规则必须放行这个来源、允许 `POST` 与 `PUT` 并暴露 `ETag`，否则直传请求会在响应阶段被浏览器拦掉，表现为"没有任何报错的失败"。`OSS_*` 环境变量缺任意一项，`oss/signature` 返回 503 `OSS_NOT_CONFIGURED`——**故意不降级到本地磁盘**：静默落盘会让"视频已入库"在没有对象存储的环境里也成立，等真正配好 OSS 时数据已经散在两处，对不上账。
+**部署前提**：桌面端页面的 origin 是 `app://workbench`（自定义协议注册时开了 `corsEnabled`）。OSS 存储桶的跨域规则必须放行这个来源、允许 `POST` 与 `PUT` 并暴露 `ETag`，否则直传请求会在响应阶段被浏览器拦掉，表现为"没有任何报错的失败"。跨域规则再放行 `GET` / `HEAD` 时，桌面端下载成片可以直连 OSS，否则会退回后端代理下载（能用但占服务器带宽）。环境变量 `OSS_REGION` 要写带 `oss-` 前缀的形式（如 `oss-cn-shanghai`），因为默认 endpoint 是 `<region>.aliyuncs.com`；后台配置会自动补前缀。服务端转存（PixMax / 数眼成片 `putObject`）走全局代理 dispatcher，compose 的 `NO_PROXY` 默认已含 `.aliyuncs.com` 直连；配了 CDN 自定义域名时对 OSS 的写入仍走 `<bucket>.<endpoint>`，不受影响。`publicUrl` 拼的是不带签名的地址，所以存储桶需要公共读，或私有桶 + CDN 回源鉴权并把 CDN 域名配进 `OSS_PUBLIC_BASE_URL`；抖音发布小程序会下载这个地址，其域名还要加进小程序的 downloadFile 合法域名。后台配置与 `OSS_*` 环境变量都不齐全时，`oss/signature` 返回 503 `OSS_NOT_CONFIGURED`——**故意不降级到本地磁盘**：静默落盘会让"视频已入库"在没有对象存储的环境里也成立，等真正配好 OSS 时数据已经散在两处，对不上账。

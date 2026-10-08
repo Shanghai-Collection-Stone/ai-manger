@@ -14,6 +14,7 @@
 数据源服务。
 - **关键词**: service, tenant-scope, mongo-connection, external, local, main
 - **函数**:
+  - `ensureIndexes()` — 建立数据源唯一、状态、作用域与更新时间线索引 | keywords: 数据源索引, 更新时间线, data-source-indexes, updated-timeline
   - `registerSource`: 注册数据源/register source
   - `findAccessibleSource`: 按租户可见性查询/find accessible source
   - `listAccessibleSources`: 列出租户可见数据源/list accessible sources

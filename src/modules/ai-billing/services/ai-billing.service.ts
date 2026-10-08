@@ -349,6 +349,88 @@ export class AiBillingService {
   }
 
   /**
+   * @description 业务生成失败时按 operationId 原路退回服务扣费，幂等：同一笔只会退一次。
+   *   先把服务流水从 succeeded 原子翻成 refunded 抢占退款权，并发或重复调用只有一方能抢到；
+   *   再给租户加回余额并追加一条 refund 余额流水。没扣过、已退过、扣费时就额度不足的
+   *   流水都不会命中，直接返回 false。租户期间被改成无限额度时只翻状态不加余额。
+   * @keyword-cn 服务退款, 失败退点, 幂等退款
+   * @keyword-en service-refund, failure-refund, idempotent-refund
+   */
+  async refundService(input: {
+    operationId: string;
+    reason: string;
+  }): Promise<boolean> {
+    const operationId = String(input.operationId ?? '').trim();
+    if (!operationId) return false;
+    const now = new Date();
+    const claimed = await this.serviceUsages.findOneAndUpdate(
+      { operationId, status: 'succeeded' },
+      {
+        $set: {
+          status: 'refunded',
+          refundedAt: now,
+          refundReason: input.reason,
+        },
+      },
+      { returnDocument: 'before', includeResultMetadata: true },
+    );
+    const record = claimed.value;
+    if (!record) return false;
+    const units = record.chargedUnits;
+    const tenantId =
+      record.tenantId && ObjectId.isValid(record.tenantId)
+        ? new ObjectId(record.tenantId)
+        : undefined;
+    if (!tenantId || units <= 0) return true;
+    let credited;
+    try {
+      credited = await this.tenants.findOneAndUpdate(
+        { _id: tenantId, credit: { $ne: -1 } },
+        {
+          $inc: { creditUnits: units, credit: units / CREDIT_UNIT_SCALE },
+          $set: { updatedAt: now },
+        },
+        { returnDocument: 'after', includeResultMetadata: true },
+      );
+    } catch (error) {
+      // 余额没加上：把流水还原成 succeeded，让下一次失败回调能重新退
+      await this.serviceUsages.updateOne(
+        { chargeId: record.chargeId, status: 'refunded' },
+        {
+          $set: { status: 'succeeded' },
+          $unset: { refundedAt: '', refundReason: '' },
+        },
+      );
+      throw error;
+    }
+    if (!credited.value) return true;
+    // 余额已加回，余额流水写失败也不能再还原状态，否则会重复退款；只记错误供对账
+    try {
+      await this.creditTransactions.insertOne({
+        _id: new ObjectId(),
+        transactionId: randomUUID(),
+        tenantId: tenantId.toHexString(),
+        type: 'refund',
+        amount: units / CREDIT_UNIT_SCALE,
+        amountUnits: units,
+        balanceBefore: (credited.value.creditUnits - units) / CREDIT_UNIT_SCALE,
+        balanceAfter: credited.value.creditUnits / CREDIT_UNIT_SCALE,
+        reason: `${record.serviceName}失败退款`,
+        operatorType: 'system',
+        referenceId: operationId,
+        serviceCode: record.serviceCode,
+        serviceName: record.serviceName,
+        createdAt: now,
+      });
+    } catch (error) {
+      this.logger.error(
+        `[billing] service refund credited but ledger insert failed operationId=${operationId} units=${units}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return true;
+  }
+
+  /**
    * @description 判断 MongoDB 是否因单机部署而拒绝事务。
    * @keyword-cn 单机事务识别, 兼容降级
    * @keyword-en transaction-support-detect, compatibility-fallback

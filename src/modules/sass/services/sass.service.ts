@@ -130,7 +130,8 @@ export class SassService {
 
   /**
    * @description 初始化索引
-   * @keyword-en ensure indexes
+   * @keyword-cn SaaS索引, 租户时间线
+   * @keyword-en sass-indexes, tenant-timeline
    */
   async ensureIndexes(): Promise<void> {
     await this.dropLegacyIdIndex('sass_schema');
@@ -138,8 +139,13 @@ export class SassService {
     await this.dropLegacyIdIndex('sass_api_keys');
     await this.dropLegacyIdIndex('sass_database_log');
     await this.schemas.createIndex({ table: 1 }, { unique: true });
+    await this.schemas.createIndex({ updatedAt: -1 });
     await this.apiKeys.createIndex({ keyId: 1 }, { unique: true });
     await this.apiKeys.createIndex({ tenantId: 1 });
+    await this.apiKeys.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.apiKeys.createIndex({ updatedAt: -1 });
+    await this.tenants.createIndex({ name: 1 });
+    await this.tenants.createIndex({ updatedAt: -1 });
     await this.logs.createIndex({ tenantId: 1, schemaId: 1, createdAt: -1 });
     await this.logs.createIndex({ operation: 1, createdAt: -1 });
     await this.platformInfos.createIndex({ tenantId: 1 }, { unique: true });
@@ -398,6 +404,7 @@ export class SassService {
           ? input.description.trim()
           : undefined,
       xhsArticleConcurrencyLimit: input.xhsArticleConcurrencyLimit,
+      douyinGenerationConcurrencyLimit: input.douyinGenerationConcurrencyLimit,
       credit: input.credit ?? 0,
       creditUnits:
         input.credit === -1 ? -1 : Math.floor((input.credit ?? 0) * 1_000_000),
@@ -1280,6 +1287,7 @@ export class SassService {
    * @param {string} tenantId - 租户ID
    * @param {string} aiPromptSupplement - AI补充说明（markdown）
    * @param {boolean | undefined} enableAiCover - 是否开启 AI 封面生成
+   * @param {{ xhsArticleGlobal?: number; douyinGenerationGlobal?: number } | undefined} concurrencyLimits - 全平台小红书文章 / 抖音生成总并发上限（未传字段不改动）
    * @param {{ wechatQrCodeUrl?: string; tip?: string } | undefined} salesContact - 业务员联系方式（仅平台作用域使用，未传字段不改动）
    * @returns {Promise<PlatformInfoEntity>} 更新后的平台信息
    * @keyword-cn 更新平台信息, 业务员二维码
@@ -1289,7 +1297,10 @@ export class SassService {
     tenantId: string,
     aiPromptSupplement: string,
     enableAiCover?: boolean,
-    xhsArticleGlobalConcurrencyLimit?: number,
+    concurrencyLimits?: {
+      xhsArticleGlobal?: number;
+      douyinGenerationGlobal?: number;
+    },
     salesContact?: { wechatQrCodeUrl?: string; tip?: string },
   ): Promise<PlatformInfoEntity> {
     const normalized = (tenantId ?? '').trim();
@@ -1309,9 +1320,13 @@ export class SassService {
     } else {
       setOnInsertDoc.enableAiCover = false;
     }
-    if (typeof xhsArticleGlobalConcurrencyLimit === 'number') {
+    if (typeof concurrencyLimits?.xhsArticleGlobal === 'number') {
       setDoc.xhsArticleGlobalConcurrencyLimit =
-        xhsArticleGlobalConcurrencyLimit;
+        concurrencyLimits.xhsArticleGlobal;
+    }
+    if (typeof concurrencyLimits?.douyinGenerationGlobal === 'number') {
+      setDoc.douyinGenerationGlobalConcurrencyLimit =
+        concurrencyLimits.douyinGenerationGlobal;
     }
     if (typeof salesContact?.wechatQrCodeUrl === 'string') {
       setDoc.salesWechatQrCodeUrl = salesContact.wechatQrCodeUrl.trim();

@@ -19,6 +19,7 @@ import type {
 } from '../entities/canvas.entity.js';
 import {
   CanvasImageGroupService,
+  type ImageGroupRenderHooks,
   type ImageGroupSourcePreparation,
 } from './canvas-image-group.service.js';
 import { GalleryService } from '../../gallery/services/gallery.service.js';
@@ -58,7 +59,7 @@ export class CanvasService {
    * @description 创建 canvases 所需索引，并初始化自增计数器。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。
-   * @keyword canvas, mongo, index
+   * @keyword-en canvas, mongo, index, query-index
    * @since 2026-02-04
    */
   async ensureIndexes(): Promise<void> {
@@ -68,6 +69,13 @@ export class CanvasService {
     await this.canvases.createIndex({ createdAt: -1 });
     // 租户隔离索引
     await this.canvases.createIndex({ tenantId: 1, userId: 1 });
+    await this.canvases.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.canvases.createIndex({
+      tenantId: 1,
+      userId: 1,
+      updatedAt: -1,
+    });
+    await this.canvases.createIndex({ tenantId: 1, type: 1, updatedAt: -1 });
     await this.canvases.createIndex({
       tenantId: 1,
       userId: 1,
@@ -1266,6 +1274,7 @@ export class CanvasService {
    * @description 生文图片阶段第二步：按已完成的源图分配渲染封面、内页、拼图及可选 AI 生图，不创建独立 Canvas。
    * @param {CanvasImageGroupCreateInput} input - 与准备阶段相同的入参。
    * @param {Extract<ImageGroupSourcePreparation, { ok: true }>} preparation - 准备阶段的成功结果。
+   * @param {ImageGroupRenderHooks} [hooks] - 可选渐进渲染钩子：延后到达的文章标题与单张图就绪回调。
    * @returns {Promise<CanvasImageGroup[]>} 生文工作流渲染完成的文章图组。
    * @keyword-cn 生文配图工作流, 文章图组
    * @keyword-en article-image-workflow, generated-image-group
@@ -1273,10 +1282,12 @@ export class CanvasService {
   async renderArticleImageGroups(
     input: CanvasImageGroupCreateInput,
     preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
+    hooks?: ImageGroupRenderHooks,
   ): Promise<CanvasImageGroup[]> {
     return await this.imageGroupService.renderPreparedImageGroups(
       input,
       preparation,
+      hooks,
     );
   }
 

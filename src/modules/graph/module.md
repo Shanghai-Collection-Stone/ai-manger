@@ -54,6 +54,7 @@ Graph控制器。
 ### batch-task-graph.service.ts
 批量发布图服务。
 - **关键词**: batch-task, publishing, mcp, task-it, todo-summary, service
+- `onModuleInit()` — 启动批量发布队列 worker（每秒认领一次）；多进程时只在 leader 进程上跑，保持与单进程相同的执行并发 | keywords: 启动队列轮询, 批量发布, start-graph-job-worker, xhs-batch-publish
 - tickGraphJobWorker() — graph 队列单次轮询，空转时按 1/2/4/8s 退避 | keywords: graph-job-tick, idle-backoff, xhs-batch-publish
 - 发布封面渲染支持项目内自定义字体：默认读取 `public/fonts/cover-cjk.ttf`，并兼容 `dist/public/fonts/cover-cjk.ttf` 与 `web/public/fonts/cover-cjk.ttf`；也可通过环境变量 `COVER_FONT_PATH` 指定绝对/相对路径。若封面文案包含中文且字体文件不存在，则直接抛错（不再降级为豆腐块或随机回退）。
 - **拼图来源过滤**：动态拼图（发文/内容拼图）必须使用横图（isPortrait !== true），不允许竖图参与。

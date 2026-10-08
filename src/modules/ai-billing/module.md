@@ -13,9 +13,10 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 
 - `ai-billing.module.ts` — NestJS 模块入口。
 - `entities/ai-usage-record.entity.ts` — 计费上下文、Provider 计费快照与用量流水实体（含免费调用标记 `free`）。
-- `entities/ai-service-credit.entity.ts` — 固定服务目录、点数配置、管理视图与服务扣费流水实体。
+- `entities/ai-service-credit.entity.ts` — 固定服务目录、点数配置、管理视图与服务扣费流水实体（流水含 `refunded` 状态与退款时间、原因）。
 - `entities/ai-credit-transaction.entity.ts` — 追加式 Credit 余额流水类型与变动前后余额实体。
-- `services/ai-billing.service.ts` — 服务固定扣费、Provider 重复扣费抑制、Token 计量、余额原子更新与充值/消费/退款流水。
+- `services/ai-billing.service.ts` — 服务固定扣费与失败退款、Provider 重复扣费抑制、Token 计量、余额原子更新与充值/消费/退款流水。
+- `services/ai-billing.service.spec.ts` — 服务退款的幂等、余额加回、流水追加与失败还原单测。
 
 ## 函数清单 (Function List)
 
@@ -26,6 +27,11 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 ### entities/ai-service-credit.entity.ts
 
 - `AI_CREDIT_SERVICE_CATALOG` — 固定收费服务的英文编码、名称与默认点数目录 | keywords: 服务目录, 固定编码, service-catalog, fixed-code
+
+### services/ai-billing.service.spec.ts
+
+- `createFakeDb()` — 构造按集合名返回 jest mock 的假 Db | keywords: 假数据库, 集合模拟, fake-db, collection-mock
+- `chargedRecord(overrides?)` — 生成已扣 1 Credit 的服务流水样本 | keywords: 服务流水样本, 退款前文档, service-record-fixture, pre-refund-document
 
 ### services/ai-billing.service.ts
 
@@ -44,6 +50,7 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 - `chargeService(input)` — 按服务固定点数原子扣费并记录流水 | keywords: 服务固定扣费, 服务流水, fixed-service-charge, service-ledger
 - `commitServiceCharge(tenantId,definition,record,session?)` — 同步提交服务余额、流水和用量并兼容单机补偿 | keywords: 提交服务扣费, 单机补偿, commit-service-charge, standalone-compensation
 - `isMongoTransactionUnsupported(error)` — 识别单机 Mongo 的事务拒绝错误 | keywords: 单机事务识别, 兼容降级, transaction-support-detect, compatibility-fallback
+- `refundService(input)` — 业务生成失败时按 operationId 幂等退回服务扣费并追加 refund 余额流水 | keywords: 服务退款, 失败退点, 幂等退款, service-refund, failure-refund, idempotent-refund
 - `runWithServiceBilling(operation)` — 在服务调用链中抑制 Provider 重复扣费 | keywords: 抑制重复扣费, 服务调用链, suppress-provider-charge, service-call-chain
 - `createCallback(context,provider)` — 创建模型计费回调 | keywords: 创建计费回调, 子代理计量, create-billing-callback, subagent-metering
 - `beginTextCall(input)` — 登记并预扣文本调用 | keywords: 文本调用开始, 流式预扣, text-call-start, streaming-precharge
@@ -89,6 +96,8 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 | Credit流水 | credit-transaction    |
 | 余额审计   | balance-audit         |
 | 免费提供商 | free-provider         |
+| 失败退点   | failure-refund        |
+| 幂等退款   | idempotent-refund     |
 
 ## 类型导出 (Type Exports)
 
@@ -100,5 +109,7 @@ Mongo 集合: `ai_service_credit_configs`、`ai_service_usage_records`、`ai_cre
 ## 模块功能描述 (Module Feature Description)
 
 `text-generation`（生文服务）与 `video-generation`（生视频服务）固定登记在 `AI_CREDIT_SERVICE_CATALOG`，默认均为 1 Credit；后台只允许按既有编码覆盖点数。有限租户在服务启动前完成一次原子扣费并写入 `ai_service_usage_records` 和统一 `ai_credit_transactions` 流水；Provider 预扣、尾款与退款也追加余额流水。流水保存有符号变动值、变动前后余额、原因、操作方、外部单号与服务信息，禁止修改或删除。服务工作流通过异步上下文关闭内部 LLM、生图 Provider 的重复扣费；尚未接入服务目录的旧调用仍使用原 Provider Token 预扣与结算链路。
+
+**失败退点**: `refundService` 按 `operationId` 退回服务扣费。先把服务流水从 `succeeded` 原子翻成 `refunded` 抢占退款权，并发或重复调用只有一方能抢到；再给租户加回余额并追加一条 `refund` 余额流水（`referenceId` 为 operationId）。余额加回失败时把流水还原成 `succeeded` 以便重退；余额已加回但余额流水写失败时不还原，只记错误日志供对账，避免重复退款。没扣成功（`credit_exhausted`）或已退过的流水不会命中。当前只有小红书单篇文章生成接入。
 
 **免费提供商**: 后台 `ai_providers` 未填 `tokensPerCredit` 即表示该模型不计费。此时无论租户额度是否有限，都不做额度校验、不预扣、不在流式中拦截，只落一条 `free: true` 的用量流水。付费提供商（已填 `tokensPerCredit`）仍按原链路预扣与结算，其中非流式文本调用无法边收 token 边预扣，仍要求配置 `fixedTokensPerCall`，否则抛 `TEXT_FIXED_TOKEN_NOT_CONFIGURED`；改走流式即可按厂商真实 usage 结算。

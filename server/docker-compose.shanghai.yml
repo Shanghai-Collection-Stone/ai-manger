@@ -9,6 +9,8 @@ services:
     # MONGO_WT_CACHE_GB 建议设为 mem_limit 的一半左右。
     command: ["mongod", "--wiredTigerCacheSizeGB", "${MONGO_WT_CACHE_GB:-0.25}"]
     mem_limit: ${MONGO_MEM_LIMIT:-768m}
+    # 整机内存耗尽时内核优先杀其他进程，不先杀数据库（应用 worker 会主动调高自己的分值）
+    oom_score_adj: -500
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_USER:?set MONGODB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASS:?set MONGODB_PASS}
@@ -19,14 +21,13 @@ services:
     networks:
       - shanghai
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "mongosh --quiet -u \"$${MONGO_INITDB_ROOT_USERNAME}\" -p \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep 1",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      # mongosh 会额外启动 Node.js 运行时，在小内存主机上容易触发换页并拖垮健康检查。
+      # TCP 探测只验证 mongod 已监听；应用自身负责数据库鉴权与连接重试。
+      test: ["CMD-SHELL", "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/27017'"]
+      interval: 60s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   app:
     image: ${AI_MANGER_SHANGHAI_IMAGE:?set AI_MANGER_SHANGHAI_IMAGE}
@@ -40,6 +41,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3011
+      # Node 多进程：worker 数（1 关闭；auto 按 CPU 核数）。每个 worker 各占一份内存
+      CLUSTER_WORKERS: ${CLUSTER_WORKERS:-2}
+      # 多进程内存预算（MB）：不填时取容器内存上限（mem_limit），再没有就取整机内存一半；按它给每个 worker 定堆上限
+      CLUSTER_MEMORY_BUDGET_MB: ${CLUSTER_MEMORY_BUDGET_MB:-}
 
       MONGODB_HOST: mongodb
       MONGODB_PORT: 27017
@@ -64,11 +69,11 @@ services:
       HTTPS_PROXY: ${HTTPS_PROXY:-${HTTP_PROXY:-${ALL_PROXY:-${https_proxy:-${http_proxy:-${all_proxy:-${DEV_HTTPS_PROXY:-${DEV_HTTP_PROXY:-${DEV_ALL_PROXY:-}}}}}}}}}
       HTTP_PROXY: ${HTTP_PROXY:-${HTTPS_PROXY:-${ALL_PROXY:-${http_proxy:-${https_proxy:-${all_proxy:-${DEV_HTTP_PROXY:-${DEV_HTTPS_PROXY:-${DEV_ALL_PROXY:-}}}}}}}}}
       ALL_PROXY: ${ALL_PROXY:-${all_proxy:-${DEV_ALL_PROXY:-}}}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,mongodb,ai_manger_shanghai_mongodb}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,mongodb,ai_manger_shanghai_mongodb,.aliyuncs.com}
       https_proxy: ${https_proxy:-${HTTPS_PROXY:-${HTTP_PROXY:-${ALL_PROXY:-${DEV_HTTPS_PROXY:-${DEV_HTTP_PROXY:-${DEV_ALL_PROXY:-}}}}}}}
       http_proxy: ${http_proxy:-${HTTP_PROXY:-${HTTPS_PROXY:-${ALL_PROXY:-${DEV_HTTP_PROXY:-${DEV_HTTPS_PROXY:-${DEV_ALL_PROXY:-}}}}}}}
       all_proxy: ${all_proxy:-${ALL_PROXY:-${DEV_ALL_PROXY:-}}}
-      no_proxy: ${no_proxy:-${NO_PROXY:-localhost,127.0.0.1,::1,mongodb,ai_manger_shanghai_mongodb}}
+      no_proxy: ${no_proxy:-${NO_PROXY:-localhost,127.0.0.1,::1,mongodb,ai_manger_shanghai_mongodb,.aliyuncs.com}}
 
       SUPER_PARTY_MONGODB_HOST: ${SUPER_PARTY_MONGODB_HOST:-}
       SUPER_PARTY_MONGODB_PORT: ${SUPER_PARTY_MONGODB_PORT:-27017}

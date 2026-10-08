@@ -56,6 +56,17 @@ export interface AgentConfig {
    *   thread_id（chat 会话 / context / frontend hash 复用）时保持 false。
    */
   ephemeral?: boolean;
+  /**
+   * @description 关闭模型思考：用于配图决策、封面文案这类辅助调用，按提供商发送各自的关闭参数
+   *   （GLM / 豆包 `thinking.type=disabled`、Qwen `enable_thinking=false`、Gemini 2.5 Flash `thinkingBudget=0`）；
+   *   MiniMax-M3 与 Claude 不传参数时本来就不思考，Kimi 一律关闭，其余模型不支持时忽略。
+   */
+  disableThinking?: boolean;
+  /**
+   * @description 轻量 Agent：用 LangChain `createAgent` 代替 DeepAgent，不挂待办、文件系统、子代理等内置工具与提示词，
+   *   每轮请求更短；适合只调少量业务工具的一次性任务。
+   */
+  lightweight?: boolean;
 }
 
 /**
@@ -133,8 +144,9 @@ export interface AgentInstance {
  * @keywords-cn 调用配置, 运行, 流式
  * @keywords-en call option, invoke, stream
  */
-export interface AgentInvokeOption
-  extends RunnableConfig<Record<string, unknown>> {
+export interface AgentInvokeOption extends RunnableConfig<
+  Record<string, unknown>
+> {
   context?: Record<string, unknown>;
   [key: string]: unknown;
 }

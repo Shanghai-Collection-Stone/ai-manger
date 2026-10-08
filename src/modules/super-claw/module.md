@@ -38,9 +38,13 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 - `SuperClawGrpcController({ superClawService,gatewayService,taskChannelService })` — 暴露控制面与租户数据面 gRPC 入口 | keywords: gRPC控制器, 节点接入, grpc-controller, node-onboarding
 - `SuperClawGatewayService({ superClawService,contextService,chatService,todoService,xhsPostStatService,adminService,moduleRef,browserSessions,browserInteractions })` — 提供租户对话、工作区、任务、浏览器会话与人机交互能力 | keywords: SuperClaw数据面, gRPC任务服务, super-claw-data-plane, grpc-task-service
 - `SuperClawTaskChannelService({ gatewayService,superClawService })` — 维护节点双向任务流及服务端投递租约 | keywords: 主动任务通道, 服务端任务租约, active-task-channel, server-task-lease
-- `SuperClawTaskChannelService.notifyTenant(tenantId)` — 新任务入队时通知租户所属在线节点 | keywords: 通知租户新任务, 事件驱动推送, notify-tenant-task, event-driven-push
-- `SuperClawTaskChannelService.notifyWorkspace(workspaceId)` — 按平台工作区固定节点触发任务推送 | keywords: 通知工作区任务, 平台任务推送, notify-workspace-task, platform-task-push
-- `SuperClawTaskChannelService.notifyWorkspaceProvision(workspace)` — 工作区落库后通知绑定节点创建，离线时等待补发 | keywords: 通知创建工作区, 离线补发, notify-workspace-provision, offline-provision-replay
+- `SuperClawTaskChannelService.notifyTenant(tenantId)` — 新任务入队时通知租户所属在线节点；非 leader 进程转给 leader 执行 | keywords: 通知租户新任务, 事件驱动推送, notify-tenant-task, event-driven-push
+- `SuperClawTaskChannelService.notifyWorkspace(workspaceId)` — 按平台工作区固定节点触发任务推送；非 leader 进程转给 leader 执行 | keywords: 通知工作区任务, 平台任务推送, notify-workspace-task, platform-task-push
+- `SuperClawTaskChannelService.notifyWorkspaceProvision(workspace)` — 工作区落库后通知绑定节点创建，离线时等待补发；非 leader 进程把工作区实体经 JSON 转给 leader 执行 | keywords: 通知创建工作区, 离线补发, notify-workspace-provision, offline-provision-replay
+- `SUPER_CLAW_NOTIFY_MESSAGE` — 非 leader 进程转给 leader 的通道通知消息名 `super-claw.channel.notify` | keywords: 通道通知转发消息, 跨进程通知, channel-notify-message, cross-process-notify
+- `SuperClawTaskChannelService.shouldRelay()` — 多进程且本进程不是 leader（不持有 gRPC 通道）时需要转发通知 | keywords: 判断转发通知, 非主工作进程, should-relay-notify, follower-process
+- `SuperClawTaskChannelService.relayNotify(notify)` — 经主进程把通知转给 leader，返回是否已转出 | keywords: 转发通道通知, 跨进程通知, relay-channel-notify, cross-process-notify
+- `SuperClawTaskChannelService.handleRelayedNotify(notify)` — leader 执行其他进程转来的通知，失败交给空闲巡检兜底 | keywords: 执行转发通知, 跨进程通知, handle-relayed-notify, cross-process-notify
 - `SuperClawTaskChannelService.openTaskChannel(superClawId,call)` — 注册节点任务流并替换同节点旧连接 | keywords: 打开任务通道, 替换旧连接, open-task-channel, replace-stale-channel
 - `SuperClawTaskChannelService.handleMessage(state,message)` — 串行处理 Ready、ACK、NACK、租约与完成消息 | keywords: 处理通道消息, 串行协议状态, handle-channel-message, serialized-protocol-state
 - `SuperClawTaskChannelService.pushNext(state)` — 从平台所辖租户中预留并推送下一任务 | keywords: 推送下一任务, 平台租户路由, push-next-task, platform-tenant-routing
@@ -53,7 +57,7 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 - `SuperClawTaskChannelService.closeChannel(state,reason)` — 关闭流：未 ACK 投递立刻回收，已执行投递摘下保留 | keywords: 关闭任务通道, 断线保留租约, close-task-channel, keep-lease-on-disconnect
 - `SuperClawTaskChannelService.detachDelivery(superClawId,delivery)` — 摘下执行中投递并按租约安排兜底回收 | keywords: 摘下执行中投递, 保留租约回收, detach-running-delivery, retained-lease-reclaim
 - `SuperClawTaskChannelService.adoptDetachedDeliveries(state)` — 节点重连后把保留投递挂回新任务流并立即续约 | keywords: 挂回执行中投递, 重连续跑, adopt-detached-delivery, resume-after-reconnect
-- `SuperClawTaskChannelService.onModuleInit()` — 启动空闲通道巡检定时器 | keywords: 启动空闲巡检, 兜底唤醒, start-idle-sweep, fallback-wakeup
+- `SuperClawTaskChannelService.onModuleInit()` — 启动空闲通道巡检定时器，并订阅其他进程转来的通道通知 | keywords: 启动空闲巡检, 兜底唤醒, start-idle-sweep, fallback-wakeup
 - `SuperClawTaskChannelService.onModuleDestroy()` — 停止空闲通道巡检定时器 | keywords: 停止空闲巡检, 定时器清理, stop-idle-sweep, timer-cleanup
 - `SuperClawTaskChannelService.sweepIdleChannels()` — 周期性给空闲在线通道补一次推送机会 | keywords: 巡检空闲通道, 补发推送机会, sweep-idle-channels, retry-push-window
 - `SuperClawTaskChannelService.failChannel(state,error)` — 记录协议异常并安全关闭任务流 | keywords: 通道异常处理, 安全关闭, channel-error-handling, safe-close
@@ -108,7 +112,7 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 - `SuperClawService.getAssignedSuperClawId(tenantId)` — 查询租户归属节点用于定位在线通道 | keywords: 查询租户节点, 任务推送定位, resolve-tenant-node, task-push-location
 - `SuperClawService.getWorkspaceSuperClawId(workspaceId)` — 查询平台工作区固定承载节点 | keywords: 查询工作区节点, 平台任务定位, resolve-workspace-node, platform-task-routing
 - `SuperClawService.listTenantWorkspaces(superClawId,tenantId)` — 返回节点与租户双重过滤的工作区 | keywords: gRPC工作区列表, 节点租户过滤, grpc-workspace-list, node-tenant-filter
-- `SuperClawService.ensureIndexes()` — 建立节点名称、Token 和心跳索引 | keywords: 节点索引, 令牌唯一, node-indexes, unique-token
+- `SuperClawService.ensureIndexes()` — 建立节点名称、Token、在线心跳/创建时间线及工作区归属与同步状态索引 | keywords: 节点索引, 令牌唯一, node-indexes, unique-token
 - `SuperClawService.list()` — 返回不含 Token 哈希的节点列表与剩余容量 | keywords: 节点列表, 剩余容量, list-nodes, remaining-capacity
 - `SuperClawService.create({ name, description?, capacity })` — 创建节点并返回一次性明文 Token | keywords: 创建节点, 一次性令牌, create-node, one-time-token
 - `SuperClawService.update(id, { name?, description?, capacity? })` — 更新节点并保护已分配容量 | keywords: 更新节点, 缩容保护, update-node, capacity-shrink-guard
@@ -224,3 +228,5 @@ SuperClaw 容量采用工作区槽位数：`capacity` 是节点最多可承载�
 gRPC 监听地址由 `SUPER_CLAW_GRPC_URL` 配置，默认 `0.0.0.0:50051`；`SUPER_CLAW_GRPC_ENABLED=false` 可关闭。节点注册后打开 `OpenTaskChannel`。平台先把租户绑定节点下 `pending` 的工作区作为 `WorkspaceProvision` 下发，节点创建本地工作区并回复 ACK；只有状态为 `provisioned` 的工作区，其单次 Todo 才能携带 `workspaceId/sessionId/taskToken` 下发。工作区容量单位为字节，`0` 表示无上限。
 
 任务生命周期：ACK 超时、NACK 会立刻恢复 `pending` 并轮换 Token；**断线不会**立刻回收已执行投递，而是保留一个租约时长（`TASK_LEASE_SECONDS=120s`）等待同一节点重连挂回，真正超时才恢复 `pending` 并轮换 Token。节点重连时 `Ready.available_slots` 必须如实反映本地是否仍在执行，并对保留投递补发一次 `Lease`。服务端每 30 秒巡检一次空闲通道补推送机会。
+
+**多进程**：开启 [Node 多进程](../cluster-runtime/module.md) 后 gRPC 微服务只在 leader 进程监听（`main.ts` 用 `isLeaderProcess()` 判断），全部节点双向流都落在 leader，通道状态 `channels` 只在 leader 上有。follower 进程处理 HTTP 请求时调到 `notifyTenant` / `notifyWorkspace` / `notifyWorkspaceProvision`，改为发 `super-claw.channel.notify`（`target: leader`）由主进程转给 leader 执行，调用方立即拿到 `true`；转发或执行失败时仍由 30 秒一次的空闲巡检兜底推送。

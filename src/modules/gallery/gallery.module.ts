@@ -6,6 +6,7 @@ import { GalleryController } from './controller/gallery.controller.js';
 import { GalleryService } from './services/gallery.service.js';
 import { GalleryAiImageService } from './services/gallery-ai-image.service.js';
 import { GalleryGroupService } from './services/gallery-group.service.js';
+import { GalleryTagLibraryService } from './services/gallery-tag-library.service.js';
 import { MaterialStyleService } from './material-styles/services/material-style.service.js';
 
 @Module({
@@ -15,12 +16,14 @@ import { MaterialStyleService } from './material-styles/services/material-style.
     GalleryService,
     GalleryAiImageService,
     GalleryGroupService,
+    GalleryTagLibraryService,
     MaterialStyleService,
   ],
   exports: [
     GalleryService,
     GalleryAiImageService,
     GalleryGroupService,
+    GalleryTagLibraryService,
     MaterialStyleService,
   ],
 })

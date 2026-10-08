@@ -40,7 +40,8 @@ export class TodoService {
   /**
    * @description 确保索引与计数器存在
    * @returns {Promise<void>}
-   * @keyword todo, ensure, indexes
+   * @keyword-cn 待办索引, 任务领取
+   * @keyword-en todo-indexes, task-claim
    * @since 2026-01-27
    */
   async ensureIndexes(): Promise<void> {
@@ -52,11 +53,19 @@ export class TodoService {
     await this.todos.createIndex({ workspaceId: 1, status: 1, createdAt: 1 });
     await this.todos.createIndex({ category: 1 });
     await this.todos.createIndex({ assignee: 1 });
+    await this.todos.createIndex({ tenantId: 1, assignee: 1, updatedAt: -1 });
+    await this.todos.createIndex({ tenantId: 1, category: 1, updatedAt: -1 });
     await this.todos.createIndex({
       tenantId: 1,
       assignee: 1,
       status: 1,
       deadline: 1,
+      createdAt: 1,
+    });
+    await this.todos.createIndex({
+      workspaceId: 1,
+      assignee: 1,
+      status: 1,
       createdAt: 1,
     });
     await this.todos.createIndex({
@@ -84,6 +93,7 @@ export class TodoService {
     await this.todoItems.createIndex({ userId: 1 });
     await this.todoItems.createIndex({ status: 1 });
     await this.todoItems.createIndex({ plannedAt: 1 });
+    await this.todoItems.createIndex({ todoId: 1, plannedAt: 1, id: 1 });
     const exists = await this.counters.findOne({ _id: 'todos' });
     if (!exists) await this.counters.insertOne({ _id: 'todos', seq: 0 });
     const existsItems = await this.counters.findOne({ _id: 'todo_items' });
@@ -304,9 +314,9 @@ export class TodoService {
     const now = new Date();
     const leaseActive = Boolean(
       existing.taskDeliveryId &&
-        existing.taskDeliveryAcknowledgedAt &&
-        existing.taskDeliveryLeaseExpiresAt &&
-        existing.taskDeliveryLeaseExpiresAt.getTime() > now.getTime(),
+      existing.taskDeliveryAcknowledgedAt &&
+      existing.taskDeliveryLeaseExpiresAt &&
+      existing.taskDeliveryLeaseExpiresAt.getTime() > now.getTime(),
     );
     const result = await this.todos.findOneAndUpdate(
       {

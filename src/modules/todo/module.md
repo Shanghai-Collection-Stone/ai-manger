@@ -28,6 +28,7 @@ Todo服务。
 
 - **关键词**: service
 - **函数**:
+  - `ensureIndexes()` — 建立待办列表、领取、投递租约与清单计划时间线索引 | keywords: 待办索引, 任务领取, todo-indexes, task-claim
   - `create`: 创建待办/create
   - `update`: 更新待办/update
   - `listByScope`: 范围查询（支持 category 过滤）/list by scope
@@ -113,6 +114,7 @@ Todo实体。包含 `workspaceId`、`sessionKey`、`taskToken`、`deadline`、`c
 
 - **关键词**: xhs, post-stat, service, mongo, data-collection
 - **函数**:
+  - `ensureIndexes()` — 建立任务/选题抓取明细时间线与哈希去重索引 | keywords: 帖子统计索引, 抓取明细时间线, post-stat-indexes, crawl-detail-timeline
   - `create`: 创建帖子数据记录/create post stat
   - `bulkUpsert`: 批量创建或覆盖（按 todoId+postHash 去重）/bulk upsert by hash
   - `update`: 更新记录/update by id

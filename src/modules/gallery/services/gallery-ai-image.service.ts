@@ -3,18 +3,14 @@ import { promises as fs } from 'fs';
 import { extname, join } from 'path';
 import { GalleryService } from './gallery.service.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
+import { AI_GENERATED_IMAGE_TAG } from '../gallery.constants.js';
+
+export { AI_GENERATED_IMAGE_TAG } from '../gallery.constants.js';
 
 type JimpLike = { read: (path: string) => Promise<unknown> };
 type JimpImageLike = { bitmap?: { width?: number; height?: number } };
 
 let jimpModulePromise: Promise<unknown> | null = null;
-
-/**
- * @description AI 生成素材的固定标签，素材面板按此 tag 筛出「AI 生成」页签的内容。
- * @keyword-cn AI素材标签
- * @keyword-en ai-material-tag
- */
-export const AI_GENERATED_IMAGE_TAG = 'ai素材';
 
 /**
  * @description 判断动态导入的 jimp 是否具备读图能力，避免版本差异导致运行时崩溃。

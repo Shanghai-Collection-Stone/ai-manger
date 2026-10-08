@@ -1,4 +1,9 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { AliyunConfigService } from '../../aliyun-config/services/aliyun-config.service.js';
 import { createHmac, randomUUID } from 'crypto';
 import { extname } from 'path';
 
@@ -46,8 +51,18 @@ const DEFAULT_ROOT_DIR = 'video-library';
 @Injectable()
 export class OssStorageService {
   /**
-   * @description 读取 OSS 配置。每次读而不是构造时缓存，是为了让运维改完环境变量重启进程即可
-   *   生效，不必关心本服务的实例化时机。
+   * @description 注入后台阿里云配置（可选，单测直接 new 时没有），并把 OSS 自检注册给它。
+   * @keyword-cn 注入阿里云配置, 注册OSS自检
+   * @keyword-en inject-aliyun-config, register-oss-probe
+   * @param aliyun 阿里云配置服务。
+   */
+  constructor(@Optional() private readonly aliyun?: AliyunConfigService) {
+    this.aliyun?.registerOssProbe(() => this.probe());
+  }
+
+  /**
+   * @description 读取 OSS 配置：后台「阿里云配置」里 OSS 设置与 OSS 专用 AccessKey 齐全时用后台的，否则回落环境变量
+   *   （`OSS_*`，改完重启进程生效）。后台配置保存后各进程即时刷新，不用重启。
    * @keyword-cn OSS配置
    * @keyword-en oss-config
    * @returns {{region: string, bucket: string, accessKeyId: string, accessKeySecret: string, endpoint: string, publicBase: string, rootDir: string}} 配置项。
@@ -61,6 +76,18 @@ export class OssStorageService {
     publicBase: string;
     rootDir: string;
   } {
+    const admin = this.aliyun?.readOssConfig();
+    if (admin) {
+      return {
+        region: admin.region,
+        bucket: admin.bucket,
+        accessKeyId: admin.accessKeyId,
+        accessKeySecret: admin.accessKeySecret,
+        endpoint: admin.endpoint,
+        publicBase: admin.publicBaseUrl,
+        rootDir: admin.rootDir || DEFAULT_ROOT_DIR,
+      };
+    }
     const region = String(process.env.OSS_REGION ?? '').trim();
     const bucket = String(process.env.OSS_BUCKET ?? '').trim();
     const endpoint =
@@ -340,7 +367,13 @@ export class OssStorageService {
         'Content-Type': contentType,
         Authorization: `OSS ${config.accessKeyId}:${signature}`,
       },
-      body: new Uint8Array(body),
+      // 零拷贝视图：`new Uint8Array(body)` 会把整段视频再复制一份，转存时内存翻倍；
+      // 调用方的 Buffer 来自下载，底层一定是普通 ArrayBuffer
+      body: new Uint8Array(
+        body.buffer as ArrayBuffer,
+        body.byteOffset,
+        body.byteLength,
+      ),
       signal: AbortSignal.timeout(10 * 60 * 1000),
     });
     if (!response.ok) {
@@ -379,5 +412,34 @@ export class OssStorageService {
     if (!response.ok) {
       throw new Error(`OSS_DELETE_FAILED_${response.status}`);
     }
+  }
+
+  /**
+   * @description OSS 自检：用当前生效配置写入一个几字节的对象再删掉，检查密钥、bucket、地域与写 / 删权限（查不到跨域规则）。
+   *   注册给阿里云配置模块，后台「测试 OSS」按钮调用。
+   * @keyword-cn OSS自检, 写入测试
+   * @keyword-en oss-probe, write-test
+   * @returns {Promise<{ok: boolean, message?: string}>} 成功与否及失败原因。
+   */
+  async probe(): Promise<{ ok: boolean; message?: string }> {
+    const { rootDir } = this.readConfig();
+    const key = `${rootDir}/.probe/${randomUUID()}.txt`;
+    try {
+      await this.putObject(key, Buffer.from('ok', 'utf8'), 'text/plain');
+    } catch (error) {
+      return {
+        ok: false,
+        message: `写入失败：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    try {
+      await this.deleteObject(key);
+    } catch (error) {
+      return {
+        ok: false,
+        message: `写入成功但删除失败（检查删除权限）：${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    return { ok: true };
   }
 }

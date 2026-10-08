@@ -63,6 +63,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'XhsTopic' },
       { action: 'manage', subject: 'DouyinWorkbench' },
       { action: 'manage', subject: 'DouyinPersona' },
+      { action: 'manage', subject: 'Knowledge' },
       { action: 'manage', subject: 'PlatformSetting' },
       { action: 'manage', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },
@@ -74,6 +75,11 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'Notice' },
       { action: 'read', subject: 'AuditLog' },
       { action: 'manage', subject: 'NoticeRead' },
+      // 审批本租户入驻申请、生成与撤销邀请入驻链接
+      { action: 'manage', subject: 'TenantJoin' },
+      // 可提交运维上报，并查看本租户成员提交的上报；处理状态流转留给平台
+      { action: 'create', subject: 'OpsReport' },
+      { action: 'read', subject: 'OpsReport' },
     ],
   },
   {
@@ -87,6 +93,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'DouyinWorkbench' },
       // 操作员只能在工作台选用预设人物；人设的增删改留给租户管理员
       { action: 'read', subject: 'DouyinPersona' },
+      // 操作员建母选题时要能新建和维护引用知识
+      { action: 'manage', subject: 'Knowledge' },
       // 操作员只读热点榜与推荐；采集规则的增删改留给租户管理员
       { action: 'read', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },
@@ -97,6 +105,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'Netdisk' },
       { action: 'read', subject: 'Notice' },
       { action: 'manage', subject: 'NoticeRead' },
+      // 客户端右上角「上报」按钮提交问题与本地错误日志
+      { action: 'create', subject: 'OpsReport' },
     ],
   },
 ];

@@ -11,11 +11,12 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
 - **关键词**: agent, deepagent, service, run, build model, provider-runtime, glm, z.ai, zhipu, kimi, moonshot, shuyan, shuyanai, 数眼智能, kimi-relay-model, openai-compatible, kimi-adapter, disable-thinking, db-config, message convert, handle, stream, image generation, send prompt
 - **函数**:
   - `getHandle`: 函数句柄/handle
-  - `buildChatModel`: 构建模型（GLM国际端z.ai、Kimi/Moonshot、数眼智能ShuyanAI都走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）/build model
+  - `buildChatModel`: 构建模型（GLM国际端z.ai、Kimi/Moonshot、数眼智能ShuyanAI都走OpenAI兼容协议；baseUrl留空由resolveProviderDefaultBaseUrl兜底）。`config.lightweight=true` 时改用 LangChain `createAgent`，不挂 DeepAgent 的待办 / 文件系统 / 子代理工具与提示词，每轮请求只带业务工具（小红书文章 Agent 在用）/build model, lightweight agent
   - `ensureCheckpointIndexes()` — 为 LangGraph checkpoint 集合补建 MongoDBSaver 自身从不创建的索引。saver 只声明集合名不建索引，导致 getTuple/put/putWrites 每次 upsert 都 COLLSCAN 全表(线上出现单次 docsExamined 2.9w、bytesRead 265MB、durationMillis 2719 的慢查询，磁盘 IO 打满并拖慢同库所有查询)。索引键顺序对齐 saver 查询形状；unique 建失败(存量重复键)时降级为普通索引，只告警不阻断启动 | keywords: checkpoint索引, 全表扫描, 慢查询, checkpoint-index, collscan-fix, slow-query
   - `hasExplicitThreadId(callOption)` — 判断调用方是否显式传入 thread_id，决定本次运行要不要落 checkpoint。显式 thread_id(chat 会话 sid / context sessionId / frontend hash)必须持久化；未传则用随机一次性 thread_id，快照写完永不读取，不应落库 | keywords: 显式线程判定, 一次性会话, explicit-thread-id, ephemeral-run
   - `getCheckpointer`: 🆕 公开 MongoDBSaver 实例,供 chat.service supervisor graph 复用同一个 checkpointer + 同一个 thread_id,实现 multi-agent graph 多轮对话 state 持久化(否则 supervisor 每次只看一条用户消息会导致路由误判)/expose checkpointer for supervisor graph
-  - `buildLLM`: 构建 BaseChatModel；强制接收 billingContext，并把每次物理模型调用接入 Token 流水与 Credit 扣费。配置来源: config 显式传入 provider+model 时优先用 config，否则回退 admin 默认 runtime/build llm with config override and billing
+  - `buildLLM`: 构建 BaseChatModel；强制接收 billingContext，并把每次物理模型调用接入 Token 流水与 Credit 扣费。配置来源: config 显式传入 provider+model 时优先用 config，否则回退 admin 默认 runtime。`config.disableThinking=true` 时按型号关闭思考：OpenAI 兼容协议走 `resolveThinkingOffKwargs`，Gemini 2.5 Flash 设 `thinkingBudget=0`；MiniMax-M3 / Claude 不传 thinking 本来就不思考，不额外发参数/build llm with config override and billing, thinking off
+  - `resolveThinkingOffKwargs(modelName)` — 按型号给出关闭思考的请求参数：GLM-4.5+ 与豆包 Seed 用 `thinking.type=disabled`，Qwen3 用 `enable_thinking=false`，其他型号不改请求（避免老型号不认字段报错） | keywords: 关闭思考参数, 辅助调用提速, thinking-off-kwargs, auxiliary-call-speedup
   - `isKimiProvider(provider)` — 识别 Kimi/Moonshot OpenAI 兼容厂商,决定是否走专用适配 | keywords: kimi-adapter, openai-compatible
   - `isKimiRelayModel(modelName)` — 识别经中转(数眼智能等)调用的 Kimi 模型名,providerCode 非 kimi 时也走禁用 thinking 的专用适配 | keywords: 中转Kimi识别, 关闭思考, kimi-relay-model, disable-thinking
   - `buildKimiChatModel(input)` — 构建 Kimi 专用 ChatOpenAI,为 LangChain tool-call 兼容禁用 thinking | keywords: kimi-adapter, disable-thinking
@@ -64,6 +65,8 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
 类型定义。
 - **关键词**: types, ephemeral-run
 - **字段**:
+  - `AgentConfig.disableThinking`: 关闭模型思考，用于配图决策、封面文案、分镜选图等辅助调用；由 `buildLLM` 按型号发送关闭参数，不支持的型号忽略/disable thinking for auxiliary calls
+  - `AgentConfig.lightweight`: 用 LangChain `createAgent` 代替 DeepAgent 的轻量 Agent，适合只调少量业务工具的一次性任务/lightweight agent without deepagent built-ins
   - `AgentConfig.ephemeral`: 一次性调用不挂 MongoDB checkpointer。runWithMessages / stream 在调用方未给 thread_id 时会生成随机一次性 thread_id，其快照写完永不再读，却每次往 checkpoints / checkpoint_writes upsert 数十 KB，是 checkpoint 集合膨胀与磁盘 IO 打满的主因；由 AgentService 自动置 true/ephemeral run skips checkpointer
 
 ### scripts/purge-ephemeral-checkpoints.mjs

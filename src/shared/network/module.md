@@ -19,4 +19,4 @@
 飞书 SDK 专用 httpInstance。SelectiveProxyDispatcher 只作用于 undici fetch,对飞书 SDK 内部 axios 无效;axios 会读 OS 级 HTTP_PROXY/HTTPS_PROXY 把 open.feishu.cn 错误经本地代理明文 HTTP 发往 HTTPS 端口(400 → tenant_access_token 为空 → 崩溃),故强制飞书 axios 直连。
 - **关键词**: feishu, lark, axios, proxy, no-proxy, tenant-access-token, httpInstance, 直连
 - **函数**:
-  - `createFeishuHttpInstance()`: 复用 SDK 自带 defaultHttpInstance(保留响应解包 interceptor)并强制 proxy=false,返回直连 axios 实例供 lark.Client 的 httpInstance 使用/feishu lark sdk direct http instance no proxy
+  - `createFeishuHttpInstance()`: 复用 SDK 自带 defaultHttpInstance(保留响应解包 interceptor)并强制 proxy=false,返回直连实例供 lark.Client 的 httpInstance 使用;返回类型标为 SDK 的 `HttpInstance`(axios 1.19 起 AxiosInstance 与之结构不再兼容,运行时即 SDK 自身实例)/feishu lark sdk direct http instance no proxy

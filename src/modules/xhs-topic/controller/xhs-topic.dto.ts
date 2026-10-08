@@ -11,12 +11,16 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Matches,
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateIf,
   ValidateNested,
+  IsMongoId,
 } from 'class-validator';
+import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.entity.js';
 import {
   XHS_MOTHER_IMAGE_RULES,
   type XhsArticleCanvasBoard,
@@ -31,6 +35,7 @@ import {
 
 /**
  * @description 请求 Agent 生成母选题或子选题候选的参数，子题可指定文章生成风格。
+ *   prompt 上限 5000 字：前端会把用户要求、文章风格与社会热点说明拼成一条生成要求一起提交。
  * @keyword-cn 选题生成参数, 提示词数量, 文章生成风格
  * @keyword-en topic-generation-dto, prompt-quantity, article-writing-style
  */
@@ -40,13 +45,19 @@ export class GenerateXhsTopicDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(5000)
   prompt?: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(200)
   parentTopic?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(KNOWLEDGE_REFERENCE_LIMIT)
+  @IsMongoId({ each: true })
+  knowledgeIds?: string[];
 
   @IsOptional()
   @IsString()
@@ -78,6 +89,62 @@ export class RecommendXhsTopicPromptDto {
 }
 
 /**
+ * @description 校验生成需求推荐可选项，每组包含 1 至 50 个非空短文本。
+ * @keyword-cn 生成需求选项, 推荐范围
+ * @keyword-en requirement-options, recommendation-scope
+ */
+export class RecommendXhsArticleRequirementsOptionsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(20, { each: true })
+  @Matches(/\S/u, { each: true })
+  purposes!: string[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(20, { each: true })
+  @Matches(/\S/u, { each: true })
+  personas!: string[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(20, { each: true })
+  @Matches(/\S/u, { each: true })
+  styles!: string[];
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(20, { each: true })
+  @Matches(/\S/u, { each: true })
+  lengths!: string[];
+}
+
+/**
+ * @description 校验指定子选题的一键生成需求推荐请求。
+ * @keyword-cn 一键推荐需求, 生成需求参数
+ * @keyword-en requirement-recommendation, requirement-request
+ */
+export class RecommendXhsArticleRequirementsDto {
+  @IsDefined()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => RecommendXhsArticleRequirementsOptionsDto)
+  options!: RecommendXhsArticleRequirementsOptionsDto;
+}
+
+/**
  * @description 用户确认入库的单条选题标题、题目类型、母题配图标签与配图规则或子题文章生成风格。
  * @keyword-cn 保存选题候选, 题目类型, 母题配图标签, 母题配图规则, 文章生成风格
  * @keyword-en persist-topic-candidate, topic-type, mother-image-tags, mother-image-rule, article-writing-style
@@ -106,6 +173,12 @@ export class PersistXhsTopicCandidateDto {
   @IsOptional()
   @IsIn(XHS_MOTHER_IMAGE_RULES)
   imageRule?: XhsMotherImageRule;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(KNOWLEDGE_REFERENCE_LIMIT)
+  @IsMongoId({ each: true })
+  knowledgeIds?: string[];
 }
 
 /**
@@ -153,9 +226,9 @@ export class DeleteXhsTopicsDto {
 }
 
 /**
- * @description 修改真实选题标题、题目类型、业务状态、母题配图标签与配图规则或子题文章生成风格的请求参数。
- * @keyword-cn 更新真实选题, 选题状态, 母题配图标签, 母题配图规则, 文章生成风格
- * @keyword-en update-persisted-topic, topic-status, mother-image-tags, mother-image-rule, article-writing-style
+ * @description 修改真实选题标题、题目类型、业务状态、母题星标与配图规则或子题文章生成风格的请求参数。
+ * @keyword-cn 更新真实选题, 选题状态, 母题星标, 文章生成风格
+ * @keyword-en update-persisted-topic, topic-status, mother-topic-star, article-writing-style
  */
 export class UpdateXhsTopicDto {
   @IsOptional()
@@ -183,6 +256,16 @@ export class UpdateXhsTopicDto {
   @IsOptional()
   @IsIn(XHS_MOTHER_IMAGE_RULES)
   imageRule?: XhsMotherImageRule;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(KNOWLEDGE_REFERENCE_LIMIT)
+  @IsMongoId({ each: true })
+  knowledgeIds?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  starred?: boolean;
 
   @IsOptional()
   @IsIn(['pending', 'draft', 'generated', 'published'])
@@ -231,9 +314,9 @@ export class GenerateXhsArticleDto {
 }
 
 /**
- * @description 校验拼图画布格式里的单个源图格子。
- * @keyword-cn 拼图画布格式, 拼图格子
- * @keyword-en collage-canvas-format, collage-cell
+ * @description 校验拼图画布格式里的单个源图格子及其裁切焦点与缩放参数。
+ * @keyword-cn 拼图格子, 裁切参数
+ * @keyword-en collage-cell, crop-parameters
  */
 export class XhsArticleCanvasCollageCellDto implements XhsArticleCanvasCollageCell {
   @IsString()
@@ -269,6 +352,27 @@ export class XhsArticleCanvasCollageCellDto implements XhsArticleCanvasCollageCe
   @IsOptional()
   @IsIn(['cover', 'contain'])
   objectFit?: 'cover' | 'contain';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  focusX?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  focusY?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(3)
+  zoom?: number;
 }
 
 /**
@@ -293,6 +397,11 @@ export class XhsArticleCanvasCollageDto implements XhsArticleCanvasCollage {
   @ValidateNested({ each: true })
   @Type(() => XhsArticleCanvasCollageCellDto)
   cells!: XhsArticleCanvasCollageCellDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  renderedKey?: string;
 }
 
 /**

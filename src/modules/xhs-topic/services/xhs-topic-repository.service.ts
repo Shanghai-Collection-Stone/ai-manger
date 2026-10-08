@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Collection, Db, Document, Filter } from 'mongodb';
 import { ObjectId } from 'mongodb';
+import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
 import {
   XHS_MOTHER_IMAGE_RULES,
   type XhsArticleCanvasCollage,
@@ -14,6 +15,12 @@ import {
   type XhsTopicUpdateInput,
   type XhsTopicWorkspaceGroup,
 } from '../entities/xhs-topic.entity.js';
+import {
+  addRetentionDays,
+  resolveRetentionDays,
+  XHS_DRAFT_RETENTION_DEFAULT_DAYS,
+  XHS_TOPIC_IDLE_DEFAULT_DAYS,
+} from '../xhs-topic-retention.constants.js';
 
 /**
  * @description 手动添加笔记链接时独立子选题使用的题目类型，数据监控行副标题会展示它。
@@ -41,9 +48,9 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 创建选题业务 ID、租户用户列表和父子关系索引。
-   * @keyword-cn 选题索引, 父子关系
-   * @keyword-en topic-indexes, parent-child-relation
+   * @description 创建选题业务 ID、租户用户列表、父子关系与自动清理时钟索引。
+   * @keyword-cn 选题索引, 父子关系, 清理时钟
+   * @keyword-en topic-indexes, parent-child-relation, cleanup-clock
    */
   async ensureIndexes(): Promise<void> {
     await this.topics.createIndex({ id: 1 }, { unique: true });
@@ -51,6 +58,8 @@ export class XhsTopicRepositoryService {
     await this.topics.createIndex({ tenantId: 1, userId: 1, parentId: 1 });
     await this.topics.createIndex({ tenantId: 1, userId: 1, kind: 1 });
     await this.topics.createIndex({ kind: 1, 'crawl.status': 1 });
+    await this.topics.createIndex({ kind: 1, starred: 1, lastActiveAt: 1 });
+    await this.topics.createIndex({ kind: 1, 'article.draftAt': 1 });
     const latest = await this.topics
       .find({}, { projection: { id: 1 } })
       .sort({ id: -1 })
@@ -71,7 +80,7 @@ export class XhsTopicRepositoryService {
    * @param scope 当前租户与用户作用域。
    * @param topicIds 待判定的子选题业务 ID 列表。
    */
-  private async listStoredArticleTopicIds(
+  async listStoredArticleTopicIds(
     scope: { tenantId?: string; userId: string },
     topicIds: number[],
   ): Promise<Set<number>> {
@@ -117,34 +126,66 @@ export class XhsTopicRepositoryService {
   ): Promise<XhsTopicWorkspaceGroup[]> {
     const entities = await this.topics
       .find(this.buildScopeFilter(scope))
-      .sort({ createdAt: 1, id: 1 })
       .toArray();
-    const storedTopicIds = options.includeStoredArticles
-      ? new Set<number>()
-      : await this.listStoredArticleTopicIds(
-          scope,
-          entities
-            .filter((entity) => entity.kind === 'child')
-            .map((entity) => Number(entity.id)),
-        );
+    const childEntities = entities.filter((entity) => entity.kind === 'child');
+    const storedTopicIds = await this.listStoredArticleTopicIds(
+      scope,
+      childEntities.map((entity) => Number(entity.id)),
+    );
+    const protectedMotherIds = new Set(
+      childEntities
+        .filter((entity) => storedTopicIds.has(entity.id))
+        .map((entity) => entity.parentId)
+        .filter((parentId): parentId is number => Number.isInteger(parentId)),
+    );
+    const idleDays = resolveRetentionDays(
+      process.env.XHS_TOPIC_IDLE_DAYS,
+      XHS_TOPIC_IDLE_DEFAULT_DAYS,
+    );
+    const draftDays = resolveRetentionDays(
+      process.env.XHS_DRAFT_RETENTION_DAYS,
+      XHS_DRAFT_RETENTION_DEFAULT_DAYS,
+    );
     const childrenByParent = new Map<number, XhsChildTopicView[]>();
-    for (const entity of entities) {
+    for (const entity of childEntities) {
       if (entity.kind !== 'child' || !entity.parentId) continue;
-      if (storedTopicIds.has(entity.id)) continue;
+      if (!options.includeStoredArticles && storedTopicIds.has(entity.id)) continue;
       const children = childrenByParent.get(entity.parentId) ?? [];
-      children.push(this.toChildView(entity));
+      children.push(this.toChildView(entity, draftDays));
       childrenByParent.set(entity.parentId, children);
+    }
+    for (const children of childrenByParent.values()) {
+      children.sort(
+        (left, right) =>
+          Date.parse(right.createdAt) - Date.parse(left.createdAt) ||
+          right.id - left.id,
+      );
     }
     return entities
       .filter((entity) => entity.kind === 'mother')
+      .sort(
+        (left, right) =>
+          Number(Boolean(right.starred)) - Number(Boolean(left.starred)) ||
+          right.createdAt.getTime() - left.createdAt.getTime() ||
+          right.id - left.id,
+      )
       .map((entity) => {
         const children = childrenByParent.get(entity.id) ?? [];
+        const lastActiveAt = entity.lastActiveAt ?? entity.createdAt;
+        const protectedFromCleanup =
+          entity.starred === true || protectedMotherIds.has(entity.id);
         return {
           id: entity.id,
           title: entity.title,
           topicType: entity.topicType,
           imageTags: this.normalizeMotherImageTags(entity.imageTags),
           imageRule: this.normalizeMotherImageRule(entity.imageRule),
+          knowledgeIds: normalizeKnowledgeIds(entity.knowledgeIds),
+          starred: entity.starred === true,
+          lastActiveAt: lastActiveAt.toISOString(),
+          idleCleanupAt: protectedFromCleanup
+            ? null
+            : addRetentionDays(lastActiveAt, idleDays).toISOString(),
           topicCount: children.length,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt.toISOString(),
@@ -185,6 +226,10 @@ export class XhsTopicRepositoryService {
             ? this.normalizeMotherImageTags(candidate.imageTags)
             : [],
         imageRule: this.normalizeMotherImageRule(candidate.imageRule),
+        knowledgeIds:
+          input.kind === 'mother'
+            ? normalizeKnowledgeIds(candidate.knowledgeIds)
+            : [],
         articleStyle:
           input.kind === 'child'
             ? String(candidate.articleStyle ?? '')
@@ -237,15 +282,22 @@ export class XhsTopicRepositoryService {
         topicType: candidate.topicType.slice(0, 30),
         imageTags: input.kind === 'mother' ? candidate.imageTags : undefined,
         imageRule: input.kind === 'mother' ? candidate.imageRule : undefined,
+        knowledgeIds:
+          input.kind === 'mother' ? candidate.knowledgeIds : undefined,
         articleStyle:
           input.kind === 'child' ? candidate.articleStyle : undefined,
         status: 'pending',
+        starred: input.kind === 'mother' ? false : undefined,
+        lastActiveAt: input.kind === 'mother' ? now : undefined,
         sourceTodoId: input.sourceTodoId,
         createdAt: now,
         updatedAt: now,
       }),
     );
     await this.topics.insertMany(documents);
+    if (input.kind === 'child' && input.parentId) {
+      await this.touchParentLastActive(input.parentId, now, scope);
+    }
     return documents;
   }
 
@@ -272,17 +324,21 @@ export class XhsTopicRepositoryService {
     scope: { tenantId?: string; userId: string },
   ): Promise<XhsTopicEntity | null> {
     const now = new Date();
-    return await this.topics.findOneAndUpdate(
+    const saved = await this.topics.findOneAndUpdate(
       { ...this.buildScopeFilter(scope), id, kind: 'child' },
       {
         $set: {
-          article: { ...article, createdAt: now, updatedAt: now },
+          article: { ...article, draftAt: now, createdAt: now, updatedAt: now },
           status: 'generated',
           updatedAt: now,
         },
       },
       { returnDocument: 'after' },
     );
+    if (saved?.parentId) {
+      await this.touchParentLastActive(saved.parentId, now, scope);
+    }
+    return saved;
   }
 
   /**
@@ -377,17 +433,137 @@ export class XhsTopicRepositoryService {
     }
     if (input.contentType) article.contentType = input.contentType;
     article.updatedAt = new Date();
-    return await this.topics.findOneAndUpdate(
+    article.draftAt = article.updatedAt;
+    const updated = await this.topics.findOneAndUpdate(
       { ...this.buildScopeFilter(scope), id, kind: 'child' },
       { $set: { article, updatedAt: article.updatedAt } },
+      { returnDocument: 'after' },
+    );
+    if (updated?.parentId) {
+      await this.touchParentLastActive(updated.parentId, article.updatedAt, scope);
+    }
+    return updated;
+  }
+
+  /**
+   * @description 重置当前作用域内子题文章的草稿时钟，供文章从文章库回到草稿后延长保留期。
+   * @keyword-cn 重置草稿时钟, 草稿保留期限
+   * @keyword-en touch-draft-clock, draft-retention
+   */
+  async touchDraft(
+    id: number,
+    scope: { tenantId?: string; userId: string },
+  ): Promise<XhsTopicEntity | null> {
+    const now = new Date();
+    return await this.topics.findOneAndUpdate(
+      {
+        ...this.buildScopeFilter(scope),
+        id,
+        kind: 'child',
+        article: { $exists: true },
+      },
+      {
+        $set: {
+          'article.draftAt': now,
+          'article.updatedAt': now,
+          updatedAt: now,
+        },
+      },
       { returnDocument: 'after' },
     );
   }
 
   /**
-   * @description 归一化画板里的拼图画布格式，过滤空地址与非法尺寸格子，不足两格视为普通单图。
-   * @keyword-cn 拼图画布格式, 可换图拼图
-   * @keyword-en collage-canvas-format, swappable-collage
+   * @description 首次上线为缺少活动时间的母题和缺少草稿时间的文章补齐完整宽限期。
+   * @keyword-cn 首次上线回填, 清理宽限期
+   * @keyword-en cleanup-timestamp-backfill, retention-grace-period
+   */
+  async backfillCleanupTimestamps(
+    now: Date,
+  ): Promise<{ mothers: number; drafts: number }> {
+    const [mothers, drafts] = await Promise.all([
+      this.topics.updateMany(
+        {
+          kind: 'mother',
+          $or: [
+            { lastActiveAt: { $exists: false } },
+            { lastActiveAt: null },
+          ],
+        },
+        { $set: { lastActiveAt: now } },
+      ),
+      this.topics.updateMany(
+        {
+          kind: 'child',
+          article: { $exists: true },
+          $or: [
+            { 'article.draftAt': { $exists: false } },
+            { 'article.draftAt': null },
+          ],
+        },
+        { $set: { 'article.draftAt': now } },
+      ),
+    ]);
+    return { mothers: mothers.modifiedCount, drafts: drafts.modifiedCount };
+  }
+
+  /**
+   * @description 列出达到闲置期限且未星标的母题，文章库保护条件由清理服务按子题口径复核。
+   * @keyword-cn 过期闲置母题, 星标保护
+   * @keyword-en expired-idle-topics, starred-protection
+   */
+  async listExpiredMotherTopics(cutoff: Date): Promise<XhsTopicEntity[]> {
+    return await this.topics
+      .find({
+        kind: 'mother',
+        starred: { $ne: true },
+        lastActiveAt: { $lt: cutoff },
+      })
+      .toArray();
+  }
+
+  /**
+   * @description 列出草稿时钟早于截止时间且仍保留文章的子题，供清理服务进一步排除入库和运行中任务。
+   * @keyword-cn 过期文章草稿, 草稿时钟
+   * @keyword-en expired-article-drafts, draft-clock
+   */
+  async listExpiredDraftTopics(cutoff: Date): Promise<XhsTopicEntity[]> {
+    return await this.topics
+      .find({
+        kind: 'child',
+        article: { $exists: true },
+        'article.draftAt': { $lt: cutoff },
+      })
+      .toArray();
+  }
+
+  /**
+   * @description 原子清空仍处于过期状态的子题文章并恢复为未生成，重复执行不会产生额外副作用。
+   * @keyword-cn 清理过期草稿, 幂等更新
+   * @keyword-en clear-expired-draft, idempotent-update
+   */
+  async clearExpiredDraft(
+    id: number,
+    cutoff: Date,
+    now: Date,
+    scope: { tenantId?: string; userId: string },
+  ): Promise<boolean> {
+    const result = await this.topics.updateOne(
+      {
+        ...this.buildScopeFilter(scope),
+        id,
+        kind: 'child',
+        'article.draftAt': { $lt: cutoff },
+      },
+      { $unset: { article: '' }, $set: { status: 'pending', updatedAt: now } },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * @description 归一化画板里的拼图画布格式与裁切参数，过滤空地址与非法尺寸格子，不足两格视为普通单图；成品指纹原样保留、不在这里重算。
+   * @keyword-cn 拼图归一化, 裁切参数
+   * @keyword-en collage-normalization, crop-parameters
    */
   private normalizeCanvasCollage(collage?: XhsArticleCanvasCollage): {
     collage?: XhsArticleCanvasCollage;
@@ -409,12 +585,54 @@ export class XhsTopicRepositoryService {
         width: Number(cell?.width) || 0,
         height: Number(cell?.height) || 0,
         objectFit: cell?.objectFit === 'contain' ? 'contain' : 'cover',
+        ...(cell?.focusX !== undefined &&
+          cell.focusX !== null &&
+          Number.isFinite(Number(cell.focusX))
+          ? {
+              focusX:
+                Math.round(
+                  Math.min(100, Math.max(0, Number(cell.focusX))) * 100,
+                ) / 100,
+            }
+          : {}),
+        ...(cell?.focusY !== undefined &&
+          cell.focusY !== null &&
+          Number.isFinite(Number(cell.focusY))
+          ? {
+              focusY:
+                Math.round(
+                  Math.min(100, Math.max(0, Number(cell.focusY))) * 100,
+                ) / 100,
+            }
+          : {}),
+        ...(cell?.zoom !== undefined &&
+          cell.zoom !== null &&
+          Number.isFinite(Number(cell.zoom))
+          ? {
+              zoom:
+                Math.round(
+                  Math.min(3, Math.max(1, Number(cell.zoom))) * 100,
+                ) / 100,
+            }
+          : {}),
       }))
       .filter(
         (cell) => Boolean(cell.src) && cell.width > 0 && cell.height > 0,
       ) as XhsArticleCanvasCollage['cells'];
     if (cells.length < 2) return {};
-    return { collage: { width, height, cells } };
+    // 指纹只能由画出成品图的一方写（生成时的后端、入库前合成的前端），这里重算会把改过的格子误判为已合成
+    const renderedKey =
+      typeof collage?.renderedKey === 'string'
+        ? collage.renderedKey.trim().slice(0, 64)
+        : '';
+    return {
+      collage: {
+        width,
+        height,
+        cells,
+        ...(renderedKey ? { renderedKey } : {}),
+      },
+    };
   }
 
   /**
@@ -456,7 +674,13 @@ export class XhsTopicRepositoryService {
     input: XhsTopicUpdateInput,
     scope: { tenantId?: string; userId: string },
   ): Promise<XhsTopicEntity | null> {
-    const updates: Partial<XhsTopicEntity> = { updatedAt: new Date() };
+    const current = await this.topics.findOne({
+      ...this.buildScopeFilter(scope),
+      id,
+    });
+    if (!current) return null;
+    const now = new Date();
+    const updates: Partial<XhsTopicEntity> = { updatedAt: now };
     if (typeof input.title === 'string') {
       const title = input.title.replace(/\s+/g, ' ').trim();
       if (title) updates.title = title.slice(0, 100);
@@ -472,6 +696,10 @@ export class XhsTopicRepositoryService {
     if (updatesImageRule) {
       updates.imageRule = this.normalizeMotherImageRule(input.imageRule);
     }
+    const updatesKnowledge = Array.isArray(input.knowledgeIds);
+    if (updatesKnowledge) {
+      updates.knowledgeIds = normalizeKnowledgeIds(input.knowledgeIds);
+    }
     let clearArticleStyle = false;
     if (typeof input.articleStyle === 'string') {
       const articleStyle = input.articleStyle.trim().slice(0, 500);
@@ -479,20 +707,48 @@ export class XhsTopicRepositoryService {
       else clearArticleStyle = true;
     }
     if (input.status) updates.status = input.status;
+    if (current.kind === 'mother') {
+      updates.lastActiveAt = now;
+      if (typeof input.starred === 'boolean') updates.starred = input.starred;
+    }
     const filter: Filter<XhsTopicEntity> = {
       ...this.buildScopeFilter(scope),
       id,
     };
-    if (Array.isArray(input.imageTags) || updatesImageRule)
+    if (Array.isArray(input.imageTags) || updatesImageRule || updatesKnowledge)
       filter.kind = 'mother';
     if (typeof input.articleStyle === 'string') filter.kind = 'child';
-    return await this.topics.findOneAndUpdate(
+    const updated = await this.topics.findOneAndUpdate(
       filter,
       {
         $set: updates,
         ...(clearArticleStyle ? { $unset: { articleStyle: '' } } : {}),
       },
       { returnDocument: 'after' },
+    );
+    if (updated?.kind === 'child' && updated.parentId) {
+      await this.touchParentLastActive(updated.parentId, now, scope);
+    }
+    return updated;
+  }
+
+  /**
+   * @description 刷新当前作用域内母题的最近活动时间，子题创建、修改和文章变更共用。
+   * @keyword-cn 刷新母题活动, 子题联动
+   * @keyword-en refresh-mother-activity, child-activity-propagation
+   */
+  private async touchParentLastActive(
+    parentId: number,
+    now: Date,
+    scope: { tenantId?: string; userId: string },
+  ): Promise<void> {
+    await this.topics.updateOne(
+      {
+        ...this.buildScopeFilter(scope),
+        id: parentId,
+        kind: 'mother',
+      },
+      { $set: { lastActiveAt: now } },
     );
   }
 
@@ -757,7 +1013,14 @@ export class XhsTopicRepositoryService {
    * @keyword-cn 子选题转换, 接口视图, 文章生成风格
    * @keyword-en child-topic-view, api-view, article-writing-style
    */
-  private toChildView(entity: XhsTopicEntity): XhsChildTopicView {
+  private toChildView(
+    entity: XhsTopicEntity,
+    draftRetentionDays = resolveRetentionDays(
+      process.env.XHS_DRAFT_RETENTION_DAYS,
+      XHS_DRAFT_RETENTION_DEFAULT_DAYS,
+    ),
+  ): XhsChildTopicView {
+    const draftAt = entity.article?.draftAt;
     return {
       id: entity.id,
       parentId: entity.parentId as number,
@@ -767,10 +1030,19 @@ export class XhsTopicRepositoryService {
       status: entity.status,
       article: entity.article
         ? {
-            ...entity.article,
+            title: entity.article.title,
+            body: entity.article.body,
+            tags: entity.article.tags,
+            images: entity.article.images,
+            canvasBoards: entity.article.canvasBoards,
+            contentType: entity.article.contentType,
+            sourceTodoId: entity.article.sourceTodoId,
             createdAt: entity.article.createdAt.toISOString(),
             updatedAt: entity.article.updatedAt.toISOString(),
           }
+        : undefined,
+      draftCleanupAt: draftAt
+        ? addRetentionDays(draftAt, draftRetentionDays).toISOString()
         : undefined,
       crawlStatus: entity.crawl?.status ?? 'crawling',
       lastCrawledAt: entity.crawl?.lastCrawledAt?.toISOString(),

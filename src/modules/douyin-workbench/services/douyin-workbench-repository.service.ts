@@ -5,9 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
+import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
 import {
   DOUYIN_SCRIPT_STYLES,
+  type DouyinFaceMaskStyle,
   type DouyinMediaReference,
+  type DouyinPublishCopy,
   type DouyinScriptStyle,
   type DouyinStoryboardPreference,
   type DouyinStoryboardShot,
@@ -61,6 +64,41 @@ export function normalizeVideoAudio(
     mode: mode === 'music' || mode === 'mute' ? mode : 'voiceover',
     language: language === 'yue' || language === 'en' ? language : 'zh-CN',
   };
+}
+
+/**
+ * @description 规整脚本发布文案：标题压成单行最多 60 字、正文最多 1000 字，话题去井号去重、单个最多 20 字、最多 5 个；
+ *   三项都为空时返回 null，表示清掉发布文案。
+ * @keyword-cn 规整发布文案, 话题去井号
+ * @keyword-en normalize-publish-copy, strip-hashtag
+ * @param input 前端或 LLM 给出的发布文案，可为空。
+ * @returns {DouyinPublishCopy|null} 规整后的发布文案，全空时为 null。
+ */
+export function normalizePublishCopy(
+  input?: Partial<DouyinPublishCopy> | null,
+): DouyinPublishCopy | null {
+  const title = String(input?.title ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+  const description = String(input?.description ?? '')
+    .trim()
+    .slice(0, 1000);
+  const tags = [
+    ...new Set(
+      (Array.isArray(input?.tags) ? input.tags : [])
+        .map((tag) =>
+          String(tag ?? '')
+            .replace(/^#+/, '')
+            .replace(/\s+/g, '')
+            .slice(0, 20),
+        )
+        .filter(Boolean),
+    ),
+  ].slice(0, 5);
+  return title || description || tags.length
+    ? { title, description, tags }
+    : null;
 }
 
 /**
@@ -146,6 +184,11 @@ export class DouyinWorkbenchRepositoryService {
       parentId: 1,
       updatedAt: -1,
     });
+    await this.topics.createIndex({
+      tenantId: 1,
+      userId: 1,
+      createdAt: 1,
+    });
   }
 
   /**
@@ -182,6 +225,7 @@ export class DouyinWorkbenchRepositoryService {
     input: {
       kind: 'mother';
       title: string;
+      knowledgeIds?: string[];
     },
     scope: DouyinScope,
   ): Promise<DouyinTopicEntity> {
@@ -193,6 +237,7 @@ export class DouyinWorkbenchRepositoryService {
       userId: scope.userId,
       kind: 'mother',
       title: input.title.trim(),
+      knowledgeIds: normalizeKnowledgeIds(input.knowledgeIds),
       platform: 'douyin',
       storyboard: [],
       status: 'draft',
@@ -303,7 +348,7 @@ export class DouyinWorkbenchRepositoryService {
 
   /**
    * @description 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长（0 表示改回自动）、整片清晰度
-   *   （空串表示改回模型默认档）、完整分镜或最终视频素材绑定。
+   *   （空串表示改回模型默认档）、发布文案（三项全空表示清掉）、完整分镜或最终视频素材绑定。
    * @keyword-cn 更新抖音选题, 保存脚本正文, 持久化分镜
    * @keyword-en update-douyin-topic, persist-script-body, persist-storyboard
    */
@@ -311,6 +356,7 @@ export class DouyinWorkbenchRepositoryService {
     id: number,
     input: {
       title?: string;
+      knowledgeIds?: string[];
       script?: string;
       topicType?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
@@ -320,6 +366,7 @@ export class DouyinWorkbenchRepositoryService {
       videoAudio?: Partial<DouyinVideoAudioSetting>;
       fullVideoDuration?: number;
       fullVideoResolution?: string;
+      publishCopy?: Partial<DouyinPublishCopy>;
       storyboard?: DouyinStoryboardShot[];
       generatedVideoId?: number;
     },
@@ -333,6 +380,8 @@ export class DouyinWorkbenchRepositoryService {
       await this.requireVideo(input.generatedVideoId, scope);
     const updates: Partial<DouyinTopicEntity> = { updatedAt: new Date() };
     if (input.title !== undefined) updates.title = input.title.trim();
+    if (input.knowledgeIds !== undefined && current.kind === 'mother')
+      updates.knowledgeIds = normalizeKnowledgeIds(input.knowledgeIds);
     if (input.script !== undefined)
       updates.script = input.script.trim() || undefined;
     if (input.topicType !== undefined)
@@ -374,6 +423,11 @@ export class DouyinWorkbenchRepositoryService {
         updates.fullVideoResolution = resolution;
       else unset.fullVideoResolution = '';
     }
+    if (input.publishCopy !== undefined) {
+      const publishCopy = normalizePublishCopy(input.publishCopy);
+      if (publishCopy) updates.publishCopy = publishCopy;
+      else unset.publishCopy = '';
+    }
     if (input.storyboard !== undefined) {
       updates.storyboard = input.storyboard;
       updates.status = input.storyboard.length ? 'storyboard_ready' : 'draft';
@@ -409,6 +463,7 @@ export class DouyinWorkbenchRepositoryService {
     patch: {
       media?: DouyinMediaReference | null;
       originalMedia?: DouyinMediaReference | null;
+      faceMaskStyle?: DouyinFaceMaskStyle | null;
       imagePrompt?: string;
       videoId?: number;
     },

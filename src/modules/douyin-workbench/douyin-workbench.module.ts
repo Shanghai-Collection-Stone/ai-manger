@@ -5,6 +5,8 @@ import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { DouyinPersonaModule } from '../douyin-persona/douyin-persona.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
+import { GenerationQueueModule } from '../generation-queue/generation-queue.module.js';
+import { KnowledgeModule } from '../knowledge/knowledge.module.js';
 import { WorkflowModelModule } from '../workflow-model/workflow-model.module.js';
 import { PixmaxModule } from '../pixmax/pixmax.module.js';
 import { VideoLibraryModule } from '../video-library/video-library.module.js';
@@ -32,6 +34,8 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     DataSourceModule,
     DouyinPersonaModule,
     GalleryModule,
+    GenerationQueueModule,
+    KnowledgeModule,
     WorkflowModelModule,
     PixmaxModule,
     VideoLibraryModule,

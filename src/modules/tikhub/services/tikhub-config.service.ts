@@ -46,6 +46,10 @@ export class TikhubConfigService {
       { tenantId: 1, userId: 1 },
       { unique: true, name: 'tikhub_config_scope_unique' },
     );
+    await this.configs.createIndex(
+      { tenantId: 1, updatedAt: -1 },
+      { name: 'tikhub_config_tenant_updated' },
+    );
   }
 
   /**

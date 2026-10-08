@@ -107,12 +107,13 @@ export class WorkspaceTaskService {
 
   /**
    * @description 初始化任务与跟进索引
-   * @keyword-en ensure workspace task indexes
-   * @keyword-cn 初始化任务索引
+   * @keyword-en workspace-task-indexes, status-timeline
+   * @keyword-cn 工作区任务索引, 状态时间线
    */
   async ensureIndexes(): Promise<void> {
     await this.tasks.createIndex({ workspaceId: 1, createdAt: -1 });
     await this.tasks.createIndex({ workspaceId: 1, status: 1 });
+    await this.tasks.createIndex({ workspaceId: 1, status: 1, createdAt: -1 });
     await this.tasks.createIndex({ tenantId: 1 });
     await this.followups.createIndex({ taskId: 1, createdAt: 1 });
   }

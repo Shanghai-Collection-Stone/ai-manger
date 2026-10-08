@@ -58,7 +58,7 @@ export class GalleryGroupService {
    * @description 创建 gallery_groups 所需索引，并初始化自增计数器。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。
-   * @keyword gallery, groups, mongo
+   * @keyword-en gallery, groups, mongo, group-timeline-index
    * @since 2026-02-04
    */
   async ensureIndexes(): Promise<void> {
@@ -68,6 +68,13 @@ export class GalleryGroupService {
     await this.groups.createIndex({ createdAt: -1 });
     // 租户隔离索引
     await this.groups.createIndex({ scope: 1, tenantId: 1, userId: 1 });
+    await this.groups.createIndex({ userId: 1, createdAt: -1, id: -1 });
+    await this.groups.createIndex({
+      tenantId: 1,
+      userId: 1,
+      createdAt: -1,
+      id: -1,
+    });
     const exists = await this.counters.findOne({ _id: 'gallery_groups' });
     if (!exists)
       await this.counters.insertOne({ _id: 'gallery_groups', seq: 0 });
@@ -457,6 +464,18 @@ export class GalleryGroupService {
       .sort({ createdAt: -1, id: -1 })
       .limit(lim)
       .toArray();
+  }
+
+  /**
+   * @description 按现有分组列表的租户和用户口径精确统计图库组数量。
+   * @keyword-cn 图库组精确统计, 分组可见范围
+   * @keyword-en exact-group-count, group-visibility
+   */
+  async countAccessibleGroups(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<number> {
+    return this.groups.countDocuments(this.buildTenantFilter(userId, tenantId));
   }
 
   /**

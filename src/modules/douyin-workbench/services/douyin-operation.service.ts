@@ -24,9 +24,9 @@ import {
 } from './douyin-pixmax-video.service.js';
 import {
   DouyinShuyanVideoService,
-  isShuyanSeedanceModel,
   listShuyanVideoDurationChoices,
   listShuyanVideoResolutionChoices,
+  resolveShuyanVideoRoute,
 } from './douyin-shuyan-video.service.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
 import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
@@ -67,7 +67,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 创建租户用户、选题和更新时间查询索引。
+   * @description 创建租户用户时间线、选题与供应商状态轮询索引。
    * @keyword-cn 抖音调用索引, 操作查询
    * @keyword-en douyin-operation-indexes, operation-query
    */
@@ -77,6 +77,11 @@ export class DouyinOperationService {
       tenantId: 1,
       userId: 1,
       updatedAt: -1,
+    });
+    await this.operations.createIndex({
+      provider: 1,
+      status: 1,
+      updatedAt: 1,
     });
     await this.operations.createIndex({
       tenantId: 1,
@@ -338,7 +343,7 @@ export class DouyinOperationService {
             resolutions: [...DouyinOperationService.DIRECT_RESOLUTIONS],
           };
         if (isShuyanProvider(runtime.providerCode)) {
-          if (!isShuyanSeedanceModel(runtime.model)) {
+          if (!resolveShuyanVideoRoute(runtime.model)) {
             throw new BadRequestException(
               `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED:${runtime.model}`,
             );

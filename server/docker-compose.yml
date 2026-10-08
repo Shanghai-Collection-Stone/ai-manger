@@ -10,6 +10,10 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3011}
+      # Node 多进程：worker 数（1 关闭；auto 按 CPU 核数）。每个 worker 各占一份内存
+      CLUSTER_WORKERS: ${CLUSTER_WORKERS:-2}
+      # 多进程内存预算（MB）：不填时取容器内存上限（mem_limit），再没有就取整机内存一半；按它给每个 worker 定堆上限
+      CLUSTER_MEMORY_BUDGET_MB: ${CLUSTER_MEMORY_BUDGET_MB:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

@@ -22,7 +22,7 @@
 - `WorkflowNodeDefinition` — 代码固定的节点定义 | keywords: 预设工作流节点, 节点定义, preset-workflow-node, node-definition
 - `WorkflowDefinition` — 代码固定的工作流定义 | keywords: 预设工作流, 工作流定义, preset-workflow, workflow-definition
 - `WORKFLOW_NODES` — 工作流与节点 key 常量，业务调用处统一从这里取 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
-- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / shot-image / shot-video / full-video） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
+- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
 - `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax 与 shuyan/shuyanai） | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
 - `WorkflowNodeModelEntity` — 节点设置持久化实体（`workflow_node_models`） | keywords: 节点模型设置, 平台级配置, node-model-binding, platform-setting
 - `WorkflowNodeRuntime` — 节点调用时的提供商运行配置 | keywords: 节点运行配置, 提供商密钥, node-runtime, provider-credential
@@ -95,10 +95,10 @@
 
 **可选模型（PixMax）**：提供商代码为 `pixmax` 时，`GET .../providers/:providerId/models?category=` 用它的 Key 实时调 `POST /openapi/model/available`，按 `GENERATE_TEXT / GENERATE_IMAGE / GENERATE_VIDEO` 过滤后返回，页面只能从列表里选；其他提供商返回其默认模型并允许手填。
 
-**运行时解析**：`resolveNodeRuntime` 没有设置时返回 `null`，业务照旧用默认提供商；设置的提供商被删除或停用时记警告并回退默认；类型不符或 `WORKFLOW_RUNTIME_SUPPORT` 判定运行时不支持（例如为生图节点选了 PixMax）时抛 `WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:<类型>:<提供商>`，不静默换模型。后台允许先保存这类组合并标注「运行时暂不支持」，等对应调用接入后再把提供商加入支持矩阵。数眼智能（`shuyan` / `shuyanai`）已接入文本、生图与 Seedance 生视频：生图由 `AgentService.generateImageByRuntime` 调 `/v1/images/generations`；生视频由抖音工作台的 `DouyinShuyanVideoService` 调 `/seedance/api/v3/contents/generations/tasks`。数眼里的 Kling / Vidu / Hailuo / 即梦等视频族仍需各自原生路由，当前选择这些型号会明确报 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED`。
+**运行时解析**：`resolveNodeRuntime` 没有设置时返回 `null`，业务照旧用默认提供商；设置的提供商被删除或停用时记警告并回退默认；类型不符或 `WORKFLOW_RUNTIME_SUPPORT` 判定运行时不支持（例如为生图节点选了 PixMax）时抛 `WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:<类型>:<提供商>`，不静默换模型。后台允许先保存这类组合并标注「运行时暂不支持」，等对应调用接入后再把提供商加入支持矩阵。数眼智能（`shuyan` / `shuyanai`）已接入文本、生图与 Seedance / MiniMax-H3 生视频：生图由 `AgentService.generateImageByRuntime` 调 `/v1/images/generations`；生视频由抖音工作台的 `DouyinShuyanVideoService` 按型号调 `/seedance/api/v3/contents/generations/tasks` 或 `/hailuo/v2/video_generation`。数眼里的 Kling / Vidu / 旧版 Hailuo / 即梦等视频族仍需各自原生路由，当前选择这些型号会明确报 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED`。
 
-**当前接入情况（小红书图文）**：`topic` 覆盖选题候选生成与子选题提示词推荐（`xhs-topic.service`），`article` 覆盖文章 Agent 的首次生文与重写（`xhs-article-generation.service`），`cover-copy` 覆盖图组封面主副标题生成，`cover-image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘，`cover-overlay` 覆盖 `ai-overlay` 文字海报素材层，`inner-image` 覆盖灵感画布内页重绘（后四者在 `canvas-image-group.service`）。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
+**当前接入情况（小红书图文）**：`topic` 覆盖选题候选生成与子选题提示词推荐（`xhs-topic.service`），`article` 覆盖写文章的首次生文与重写，`image-decision` 覆盖与写正文并行、关闭思考的配图标签决策（二者在 `xhs-article-generation.service`），`cover-copy` 覆盖图组封面主副标题生成（关闭思考），`cover-image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘，`cover-overlay` 覆盖 `ai-overlay` 文字海报素材层，`inner-image` 覆盖灵感画布内页重绘（后四者在 `canvas-image-group.service`）。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
 
-**当前接入情况（抖音视频制作）**：`script`（候选脚本生成、生成要求推荐）与 `storyboard`（分镜拆解）经 `toWorkflowLlmConfig` 覆盖 LLM 的 provider/model/apiKey/baseUrl；`shot-image` 把节点配置作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图；`shot-video`（分镜模式）与 `full-video`（整片模式）指定 PixMax 模型后由 `DouyinPixmaxVideoService` 调用 PixMax，未指定时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。
+**当前接入情况（抖音视频制作）**：`script`（候选脚本生成、生成要求推荐、发布文案）、`storyboard`（分镜拆解）与 `image-decision`（图库自找时的分镜选图，关闭思考）经 `toWorkflowLlmConfig` 覆盖 LLM 的 provider/model/apiKey/baseUrl；`shot-image` 把节点配置作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图；`shot-video`（分镜模式）与 `full-video`（整片模式）指定 PixMax 模型后由 `DouyinPixmaxVideoService` 调用 PixMax，未指定时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。
 
 **后台页面**：「工作流节点模型」Tab 左侧是工作流子菜单（显示节点数与已指定数，记住上次选择），右侧是选中工作流的全部模型节点设置。单测 `workflow-model.service.spec.ts` 校验 `WORKFLOW_NODES` 与目录逐项一致。

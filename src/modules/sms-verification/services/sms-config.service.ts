@@ -2,8 +2,9 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import {
   SMS_DEFAULT_TEMPLATE_PARAM_NAME,
+  SMS_DYPNS_DEFAULT_TEMPLATE_PARAM,
   SMS_PLATFORM_SCOPE_ID,
-  type AliyunSmsRuntimeConfig,
+  type SmsRuntimeConfig,
   type SmsSettingEntity,
   type SmsSettingInput,
   type SmsSettingView,
@@ -11,7 +12,8 @@ import {
 import { SmsCryptoService } from './sms-crypto.service.js';
 
 /**
- * @description 平台短信配置服务：保存阿里云 AccessKey、签名与模板，接口层只拿得到 Secret 掩码。
+ * @description 平台短信配置服务：保存接口类型、短信专用 AccessKey、签名与模板，接口层只拿得到 Secret 掩码。
+ *   短信与 OSS 可能用不同的阿里云账号，所以 AccessKey 各自保存、不共用。
  * @keyword-cn 短信配置服务, 阿里云密钥
  * @keyword-en sms-config-service, aliyun-access-key
  */
@@ -42,7 +44,7 @@ export class SmsConfigService {
   }
 
   /**
-   * @description 读取配置页视图，Secret 只回尾 4 位掩码
+   * @description 读取配置页视图，短信专用 Secret 只回尾 4 位掩码
    * @keyword-cn 读取短信配置, 密钥掩码
    * @keyword-en read-sms-setting, masked-secret
    * @returns {Promise<SmsSettingView>} 配置页视图。
@@ -51,7 +53,8 @@ export class SmsConfigService {
     const doc = await this.findPlatform();
     const secret = this.crypto.decrypt(doc?.accessKeySecret);
     return {
-      provider: doc?.provider ?? 'aliyun',
+      provider:
+        doc?.provider === 'aliyun_dypns' ? 'aliyun_dypns' : 'aliyun_dysms',
       enabled: Boolean(doc?.enabled),
       accessKeyId: doc?.accessKeyId ?? '',
       hasAccessKeySecret: Boolean(secret),
@@ -60,6 +63,11 @@ export class SmsConfigService {
       templateCode: doc?.templateCode ?? '',
       templateParamName:
         doc?.templateParamName || SMS_DEFAULT_TEMPLATE_PARAM_NAME,
+      dypnsSignName: doc?.dypnsSignName ?? '',
+      dypnsTemplateCode: doc?.dypnsTemplateCode ?? '',
+      dypnsTemplateParam:
+        doc?.dypnsTemplateParam || SMS_DYPNS_DEFAULT_TEMPLATE_PARAM,
+      dypnsSchemeName: doc?.dypnsSchemeName ?? '',
       ready: Boolean(doc?.enabled && this.toRuntime(doc, secret)),
       mockMode: this.isMockMode(),
       updatedAt: doc?.updatedAt ? doc.updatedAt.toISOString() : undefined,
@@ -67,9 +75,9 @@ export class SmsConfigService {
   }
 
   /**
-   * @description 保存平台短信配置；Secret 空串清空、不传保持不变，配置页无需回填明文
-   * @keyword-cn 保存短信配置, 密钥更新
-   * @keyword-en save-sms-setting, update-secret
+   * @description 保存平台短信配置（接口类型、启用开关、短信专用 AccessKey、签名与模板）；Secret 空串清空、不传保持不变
+   * @keyword-cn 保存短信配置, 签名模板, 密钥更新
+   * @keyword-en save-sms-setting, sign-and-template, update-secret
    * @param input 待写入字段。
    * @param operatorId 操作人后台用户 ID。
    * @returns {Promise<SmsSettingView>} 保存后的配置页视图。
@@ -80,7 +88,6 @@ export class SmsConfigService {
   ): Promise<SmsSettingView> {
     const now = new Date();
     const set: Record<string, unknown> = {
-      provider: 'aliyun',
       updatedAt: now,
       updatedBy: operatorId,
     };
@@ -90,6 +97,9 @@ export class SmsConfigService {
       scopeId: SMS_PLATFORM_SCOPE_ID,
       createdAt: now,
     };
+    // 同一字段不能同时出现在 $set 与 $setOnInsert（Mongo 报 code 40），缺省值只在未传时放进 $setOnInsert
+    if (input.provider) set.provider = input.provider;
+    else setOnInsert.provider = 'aliyun_dysms';
     if (typeof input.enabled === 'boolean') set.enabled = input.enabled;
     else setOnInsert.enabled = false;
     for (const key of [
@@ -97,6 +107,10 @@ export class SmsConfigService {
       'signName',
       'templateCode',
       'templateParamName',
+      'dypnsSignName',
+      'dypnsTemplateCode',
+      'dypnsTemplateParam',
+      'dypnsSchemeName',
     ] as const) {
       const value = input[key];
       if (typeof value === 'string') set[key] = value.trim();
@@ -116,7 +130,7 @@ export class SmsConfigService {
       { upsert: true },
     );
     this.logger.log(
-      `[save] operator=${operatorId} secret=${
+      `[save] operator=${operatorId} provider=${input.provider ?? 'kept'} secret=${
         typeof input.accessKeySecret === 'string'
           ? input.accessKeySecret.trim()
             ? 'set'
@@ -132,11 +146,11 @@ export class SmsConfigService {
    * @keyword-cn 解析发送配置, 启用开关
    * @keyword-en resolve-sms-runtime, enabled-switch
    * @param options.requireEnabled 是否要求配置已启用，默认 true。
-   * @returns {Promise<AliyunSmsRuntimeConfig | null>} 配置不全或未启用时为 null。
+   * @returns {Promise<SmsRuntimeConfig | null>} 配置不全或未启用时为 null。
    */
   async resolveRuntime(
     options: { requireEnabled?: boolean } = {},
-  ): Promise<AliyunSmsRuntimeConfig | null> {
+  ): Promise<SmsRuntimeConfig | null> {
     const doc = await this.findPlatform();
     if (!doc) return null;
     if ((options.requireEnabled ?? true) && !doc.enabled) return null;
@@ -157,22 +171,41 @@ export class SmsConfigService {
   }
 
   /**
-   * @description 把配置文档与 Secret 明文组装成运行配置，必填项缺失返回 null
+   * @description 把配置文档与解密后的 Secret 组装成运行配置，必填项缺失返回 null
    * @keyword-cn 组装运行配置, 必填校验
    * @keyword-en build-runtime-config, required-fields
    * @param doc 配置文档。
-   * @param secret Secret 明文。
-   * @returns {AliyunSmsRuntimeConfig | null} 运行配置。
+   * @param secret 解密后的 AccessKey Secret。
+   * @returns {SmsRuntimeConfig | null} 运行配置。
    */
   private toRuntime(
     doc: SmsSettingEntity,
     secret: string,
-  ): AliyunSmsRuntimeConfig | null {
+  ): SmsRuntimeConfig | null {
     const accessKeyId = String(doc.accessKeyId ?? '').trim();
+    if (!accessKeyId || !secret) return null;
+    const provider = doc.provider ?? 'aliyun_dysms';
+    if (provider === 'aliyun_dypns') {
+      const signName = String(doc.dypnsSignName ?? '').trim();
+      const templateCode = String(doc.dypnsTemplateCode ?? '').trim();
+      if (!signName || !templateCode) return null;
+      return {
+        provider,
+        accessKeyId,
+        accessKeySecret: secret,
+        signName,
+        templateCode,
+        templateParam:
+          String(doc.dypnsTemplateParam ?? '').trim() ||
+          SMS_DYPNS_DEFAULT_TEMPLATE_PARAM,
+        schemeName: String(doc.dypnsSchemeName ?? '').trim() || undefined,
+      };
+    }
     const signName = String(doc.signName ?? '').trim();
     const templateCode = String(doc.templateCode ?? '').trim();
-    if (!accessKeyId || !secret || !signName || !templateCode) return null;
+    if (!signName || !templateCode) return null;
     return {
+      provider: 'aliyun_dysms',
       accessKeyId,
       accessKeySecret: secret,
       signName,
@@ -198,7 +231,7 @@ export class SmsConfigService {
    * @keyword-cn 密钥掩码, 尾号展示
    * @keyword-en mask-secret, tail-digits
    * @param secret Secret 明文。
-   * @returns {string} 掩码串；无 Secret 时为空串。
+   * @returns {string} 掩码结果，空 Secret 返回空串。
    */
   private mask(secret: string): string {
     if (!secret) return '';

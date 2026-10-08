@@ -1,7 +1,6 @@
 import {
   clampShuyanVideoDuration,
   describeShuyanVideoError,
-  isShuyanSeedanceModel,
   listShuyanVideoDurationChoices,
   mapShuyanVideoStatus,
   resolveShuyanVideoGateway,
@@ -9,9 +8,14 @@ import {
   clampShuyanVideoResolution,
   describeShuyanVideoFailure,
   describeRejectedShuyanImages,
+  normalizeShuyanVideoModel,
+  resolveShuyanVideoRoute,
+  resolveShuyanVideoTaskUrl,
+  shuyanResolutionHeightOf,
+  unwrapShuyanVideoTask,
 } from './douyin-shuyan-video.service';
 
-describe('数眼 Seedance 视频运行时', () => {
+describe('数眼视频运行时（Seedance / MiniMax-H3）', () => {
   it('清晰度只有 Seedance 2.x 能到 1080p，设定对不上时就近取、没设定用默认档', () => {
     expect(listShuyanVideoResolutionChoices('seedance-2-0-pro')).toEqual([
       '480p',
@@ -31,10 +35,79 @@ describe('数眼 Seedance 视频运行时', () => {
     expect(clampShuyanVideoResolution('seedance-2-0-pro', '')).toBe('480p');
   });
 
-  it('只把 Seedance 型号交给当前原生路由', () => {
-    expect(isShuyanSeedanceModel('doubao-seedance-2-5-oinone')).toBe(true);
-    expect(isShuyanSeedanceModel('seedance-1.5-pro')).toBe(true);
-    expect(isShuyanSeedanceModel('kling-v2.1')).toBe(false);
+  it('Seedance 与 MiniMax-H3 各走自己的原生路由，其余视频族未接入', () => {
+    expect(resolveShuyanVideoRoute('doubao-seedance-2-5-oinone')).toBe(
+      'seedance',
+    );
+    expect(resolveShuyanVideoRoute('seedance-1.5-pro')).toBe('seedance');
+    expect(resolveShuyanVideoRoute('MiniMax-H3')).toBe('hailuo-v2');
+    expect(resolveShuyanVideoRoute('minimax-h3')).toBe('hailuo-v2');
+    expect(resolveShuyanVideoRoute('kling-v2.1')).toBeNull();
+    expect(resolveShuyanVideoRoute('hailuo-2.3')).toBeNull();
+    expect(resolveShuyanVideoRoute('MiniMax-M3')).toBeNull();
+  });
+
+  it('MiniMax-H3 模型名对齐到接口枚举，其余原样', () => {
+    expect(normalizeShuyanVideoModel(' minimax-h3 ')).toBe('MiniMax-H3');
+    expect(normalizeShuyanVideoModel('seedance-2-0-pro')).toBe(
+      'seedance-2-0-pro',
+    );
+  });
+
+  it('按路由拼创建与查询地址', () => {
+    const gateway = 'https://platform.shuyanai.com';
+    expect(resolveShuyanVideoTaskUrl(gateway, 'hailuo-v2')).toBe(
+      'https://platform.shuyanai.com/hailuo/v2/video_generation',
+    );
+    expect(resolveShuyanVideoTaskUrl(gateway, 'hailuo-v2', '4240109')).toBe(
+      'https://platform.shuyanai.com/hailuo/v2/query/video_generation/4240109',
+    );
+    expect(resolveShuyanVideoTaskUrl(gateway, 'seedance')).toBe(
+      'https://platform.shuyanai.com/seedance/api/v3/contents/generations/tasks',
+    );
+    expect(resolveShuyanVideoTaskUrl(gateway, 'seedance', 'cgt-1')).toBe(
+      'https://platform.shuyanai.com/seedance/api/v3/contents/generations/tasks/cgt-1',
+    );
+  });
+
+  it('MiniMax-H3 查询结果拆掉 task 外壳，Seedance 平铺结果原样', () => {
+    expect(
+      unwrapShuyanVideoTask({
+        task: {
+          id: '4240109',
+          status: 'succeeded',
+          content: { url: 'https://cdn.example.com/a.mp4' },
+        },
+      }),
+    ).toEqual({
+      id: '4240109',
+      status: 'succeeded',
+      content: { url: 'https://cdn.example.com/a.mp4' },
+    });
+    const flat = { id: 'cgt-1', status: 'running' };
+    expect(unwrapShuyanVideoTask(flat)).toBe(flat);
+  });
+
+  it('MiniMax-H3 清晰度为 768P / 2K，没设定取 768P，按像素就近取档', () => {
+    expect(listShuyanVideoResolutionChoices('MiniMax-H3')).toEqual([
+      '768P',
+      '2K',
+    ]);
+    expect(clampShuyanVideoResolution('MiniMax-H3', '')).toBe('768P');
+    expect(clampShuyanVideoResolution('MiniMax-H3', '2k')).toBe('2K');
+    expect(clampShuyanVideoResolution('MiniMax-H3', '1080p')).toBe('768P');
+    expect(clampShuyanVideoResolution('MiniMax-H3', '1440p')).toBe('2K');
+    expect(clampShuyanVideoResolution('seedance-2-0-pro', '2K')).toBe('1080p');
+    expect(shuyanResolutionHeightOf('2K')).toBe(1440);
+    expect(shuyanResolutionHeightOf('768P')).toBe(768);
+    expect(shuyanResolutionHeightOf('高清')).toBe(0);
+  });
+
+  it('MiniMax-H3 可选 4~15 秒', () => {
+    expect(listShuyanVideoDurationChoices('MiniMax-H3')).toEqual([
+      4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    ]);
+    expect(clampShuyanVideoDuration('MiniMax-H3', 2)).toBe(4);
   });
 
   it('从 OpenAI baseUrl 还原视频网关根地址', () => {

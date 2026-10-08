@@ -36,6 +36,8 @@ export const ADMIN_SUBJECTS = {
   DouyinWorkbench: 'DouyinWorkbench',
   /** 抖音预设人物（人设、音色与形象三视图），租户内共享 */
   DouyinPersona: 'DouyinPersona',
+  /** 引用知识（母选题生成时引用的产品 / 门店 / 品牌知识），小红书与抖音共用，租户内共享 */
+  Knowledge: 'Knowledge',
   /** 平台与租户运行参数 */
   PlatformSetting: 'PlatformSetting',
   /** 热点采集榜（采集规则、榜单条目、归类标签与热点推荐） */
@@ -60,8 +62,16 @@ export const ADMIN_SUBJECTS = {
   NoticeRead: 'NoticeRead',
   /** 平台专属 SuperClaw 节点、Token 与租户容量分配 */
   SuperClaw: 'SuperClaw',
-  /** 平台短信验证码服务商配置(阿里云 AccessKey/签名/模板)，仅超管 */
+  /** 平台短信验证码服务商配置(接口类型/短信专用 AccessKey/签名/模板)，仅超管 */
   SmsSetting: 'SmsSetting',
+  /** 平台阿里云配置(OSS 对象存储与 OSS 专用 AccessKey)，仅超管 */
+  AliyunSetting: 'AliyunSetting',
+  /** 平台发信邮箱(SMTP)配置与测试发信，仅超管 */
+  MailSetting: 'MailSetting',
+  /** 租户入驻申请审批与邀请入驻链接 */
+  TenantJoin: 'TenantJoin',
+  /** 客户端运维上报(问题描述 + 本地错误日志) */
+  OpsReport: 'OpsReport',
   /** 通配全部主体 */
   All: 'all',
 } as const;

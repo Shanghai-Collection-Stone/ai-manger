@@ -3,11 +3,14 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Post,
   Query,
   Req,
   UnauthorizedException,
+  UsePipes,
+  ValidationPipe,
   UseFilters,
   UseInterceptors,
   UploadedFiles,
@@ -20,6 +23,8 @@ import { randomUUID } from 'crypto';
 import { GalleryService } from '../services/gallery.service.js';
 import { GalleryAiImageService } from '../services/gallery-ai-image.service.js';
 import { GalleryGroupService } from '../services/gallery-group.service.js';
+import { GalleryTagLibraryService } from '../services/gallery-tag-library.service.js';
+import type { GalleryTagLibraryView } from '../services/gallery-tag-library.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryUploadExceptionFilter } from '../filters/gallery-upload-exception.filter.js';
@@ -31,7 +36,15 @@ import type {
 } from '../material-styles/material-style.presets.js';
 import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
+import {
+  BatchUpdateGalleryImageMetaDto,
+  ConvertGalleryTagsToNoteDto,
+  ReplaceGalleryTagLibraryDto,
+  UpdateGalleryImageMetaDto,
+} from './gallery.dto.js';
 import type { Request } from 'express';
+import { AI_GENERATED_IMAGE_TAG } from '../gallery.constants.js';
+import { normalizeGalleryUploadFilename } from '../gallery-upload-filename.js';
 
 type JimpLike = { read: (path: string) => Promise<unknown> };
 type JimpImageLike = {
@@ -45,9 +58,9 @@ let jimpModulePromise: Promise<unknown> | null = null;
 /**
  * @description AI 生成素材的固定标签，素材面板按此 tag 筛出「AI 生成」页签的内容。
  * @keyword-cn AI素材标签
- * @keyword-en ai material tag
+ * @keyword-en ai-material-tag
  */
-export const AI_MATERIAL_TAG = 'ai素材';
+export const AI_MATERIAL_TAG = AI_GENERATED_IMAGE_TAG;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === 'object';
@@ -422,6 +435,7 @@ export class GalleryController {
     private readonly agent: AgentService,
     private readonly materialStyles: MaterialStyleService,
     private readonly aiImages: GalleryAiImageService,
+    private readonly tagLibrary: GalleryTagLibraryService,
   ) {}
 
   /**
@@ -501,10 +515,11 @@ export class GalleryController {
   /**
    * @description 上传图片文件并写入图库记录（含Embedding向量）。
    * @param {Express.Multer.File[]} files - 上传的文件数组（字段名：files）。
-   * @param {{ userId?: string; tenantId?: string; groupId?: string; tags?: string; description?: string }} body - 表单字段。
+   * @param {{ userId?: string; tenantId?: string; groupId?: string; tags?: string; description?: string; note?: string; aiFaceProtected?: string }} body - 表单字段。
    * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 新建图片记录列表。
    * @throws {BadRequestException} 当未上传文件或缺少 userId 时抛出。
-   * @keyword gallery, controller, upload
+   * @keyword-cn 图库上传, 图片元数据, 上传文件名
+   * @keyword-en gallery-upload, image-metadata, upload-filename
    * @since 2026-02-04
    */
   @Post('upload')
@@ -557,11 +572,16 @@ export class GalleryController {
       collageHeight?: string;
       collageDpi?: string;
       clientPreprocess?: string;
+      note?: string;
+      aiFaceProtected?: string;
     },
     @Req() req?: Request,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('No image files uploaded');
+    }
+    for (const file of files) {
+      file.originalname = normalizeGalleryUploadFilename(file.originalname);
     }
     if (files.length > 24) {
       throw new BadRequestException(
@@ -585,6 +605,17 @@ export class GalleryController {
       body.description.trim().length > 0
         ? body.description.trim()
         : undefined;
+    const note = typeof body?.note === 'string' ? body.note : '';
+    if (note.length > 500) {
+      throw new BadRequestException('备注不能超过500字');
+    }
+    const aiFaceProtected = parseBooleanFlag(body?.aiFaceProtected);
+    if (
+      body?.aiFaceProtected !== undefined &&
+      typeof aiFaceProtected !== 'boolean'
+    ) {
+      throw new BadRequestException('AI人脸保护状态只能是true或false');
+    }
     const explicitIsCollage = parseBooleanFlag(body?.isCollage) === true;
     const collageSourceImageIds = String(body?.collageSourceImageIds ?? '')
       .split(/[,\s]+/g)
@@ -678,6 +709,8 @@ export class GalleryController {
         isPortrait: dim?.isPortrait,
         tags,
         description,
+        note,
+        aiFaceProtected: aiFaceProtected === true,
         isCollage: markAsGenerated,
         collageSourceImageIds: explicitIsCollage
           ? collageSourceImageIds
@@ -693,7 +726,7 @@ export class GalleryController {
     });
 
     const docs = await this.gallery.createMany(inputs);
-    return { images: docs.map((d) => ({ ...d, _id: undefined })) };
+    return { images: docs.map((d) => this.gallery.toPublicImage(d)) };
   }
 
   /**
@@ -863,12 +896,12 @@ export class GalleryController {
       tags: String(body?.tags ?? '').split(/[,\t\n\r\s]+/g),
     });
     return {
-      image: { ...doc, _id: undefined } as Omit<GalleryImageEntity, '_id'>,
+      image: this.gallery.toPublicImage(doc),
     };
   }
 
   /**
-   * @description 列出图库图片，支持过滤、游标分页和按创建时间升降序排列。
+   * @description 列出图库图片，支持游标兼容、多标签、收藏、随机和收藏优先排序。
    * @param {string} [userId] - 查询参数：用户ID。
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [groupId] - 查询参数：图库组ID。
@@ -878,8 +911,8 @@ export class GalleryController {
    * @param {Request} [req] - 当前 HTTP 请求。
    * @param {'asc'|'desc'} [sortOrder] - 查询参数：创建时间排序方向，默认 desc。
    * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 图片列表。
-   * @keyword-cn 图库时间排序
-   * @keyword-en gallery-time-sort
+   * @keyword-cn 图库多条件排序, 多标签筛选
+   * @keyword-en gallery-multi-sort, multi-tag-filter
    * @since 2026-02-04
    */
   @Get()
@@ -894,6 +927,10 @@ export class GalleryController {
     @Query('limit') limit?: string,
     @Req() req?: Request,
     @Query('sortOrder') sortOrder?: string,
+    @Query('sort') sort?: string,
+    @Query('tags') tags?: string,
+    @Query('favoriteOnly') favoriteOnly?: string,
+    @Query('offset') offset?: string,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     // 优先从请求token解析tenantId，其次使用query参数
     const authScope = req ? await this.resolveAuthScope(req) : {};
@@ -901,6 +938,27 @@ export class GalleryController {
     const lim = limit ? Number(limit) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
     const includeCollageFlag = parseBooleanFlag(includeCollage);
+    const supportedSorts = ['newest', 'oldest', 'random', 'favorite'] as const;
+    if (
+      sort &&
+      !supportedSorts.includes(sort as (typeof supportedSorts)[number])
+    ) {
+      throw new BadRequestException('sort只能是newest、oldest、random或favorite');
+    }
+    const resolvedSort = sort as
+      | 'newest'
+      | 'oldest'
+      | 'random'
+      | 'favorite'
+      | undefined;
+    const resolvedTags = String(tags ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const resolvedOffset = offset === undefined ? 0 : Number(offset);
+    if (!Number.isInteger(resolvedOffset) || resolvedOffset < 0) {
+      throw new BadRequestException('offset必须是非负整数');
+    }
     const resolvedImageType =
       imageType === 'regular' || imageType === 'collage' || imageType === 'all'
         ? imageType
@@ -923,9 +981,173 @@ export class GalleryController {
           typeof cid === 'number' && Number.isFinite(cid) ? cid : undefined,
         limit: lim ?? 50,
         sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
+        sort: resolvedSort,
+        tags: resolvedTags,
+        favoriteOnly: favoriteOnly === '1',
+        offset: resolvedOffset,
       },
     );
-    return { images: rows as Array<Omit<GalleryImageEntity, '_id'>> };
+    return { images: rows.map((row) => this.gallery.toPublicImage(row)) };
+  }
+
+  /**
+   * @description 精确统计当前图库可见范围内的图片、收藏、分组和标签数量。
+   * @keyword-cn 图库精确统计, 租户可见范围
+   * @keyword-en gallery-exact-stats, tenant-visibility
+   */
+  @Get('stats')
+  async stats(
+    @Req() req: Request,
+  ): Promise<{ images: number; favorites: number; groups: number; tags: number }> {
+    const authScope = await this.resolveAuthScope(req);
+    const userId = authScope.userId || 'default';
+    await this.groups.ensureDefaultDynamicGroups(userId, authScope.tenantId);
+    const [imageStats, groups] = await Promise.all([
+      this.gallery.getAccessibleStats(userId, authScope.tenantId),
+      this.groups.countAccessibleGroups(userId, authScope.tenantId),
+    ]);
+    return { ...imageStats, groups };
+  }
+
+  /**
+   * @description 批量更新当前作用域内图片的备注、收藏、人脸保护和标签。
+   * @keyword-cn 批量图片元数据, 作用域鉴权
+   * @keyword-en batch-image-metadata, scope-authorization
+   */
+  @Post('images/meta/batch')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async updateImagesMetaBatch(
+    @Body() body: BatchUpdateGalleryImageMetaDto,
+    @Req() req: Request,
+  ): Promise<{ updated: number }> {
+    if (
+      body.ids.some((id) => {
+        const value = Number(id);
+        return !Number.isInteger(value) || value <= 0;
+      })
+    ) {
+      throw new BadRequestException('图片ID必须是正整数或正整数字符串');
+    }
+    const authScope = await this.resolveAuthScope(req);
+    return this.gallery.updateImagesMetaBatch({
+      ...body,
+      userId: authScope.userId,
+      tenantId: authScope.tenantId,
+    });
+  }
+
+  /**
+   * @description 更新当前作用域内单张图片的备注、收藏、人脸保护和标签。
+   * @keyword-cn 单图图片元数据, 作用域鉴权
+   * @keyword-en single-image-metadata, scope-authorization
+   */
+  @Post('images/:id/meta')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async updateImageMeta(
+    @Param('id') id: string,
+    @Body() body: UpdateGalleryImageMetaDto,
+    @Req() req: Request,
+  ): Promise<{ image: Omit<GalleryImageEntity, '_id'> }> {
+    const imageId = Number(id);
+    if (!Number.isInteger(imageId) || imageId <= 0) {
+      throw new BadRequestException('图片ID无效');
+    }
+    const authScope = await this.resolveAuthScope(req);
+    const image = await this.gallery.updateImageMeta({
+      ...body,
+      id: imageId,
+      userId: authScope.userId,
+      tenantId: authScope.tenantId,
+    });
+    if (!image) throw new NotFoundException('图片不存在或当前账号不可见');
+    return { image };
+  }
+
+  /**
+   * @description 返回与指定图片向量相近的图片，向量不可用时按共同标签兜底。
+   * @keyword-cn 相似图片, 标签相似兜底
+   * @keyword-en similar-images, tag-similarity-fallback
+   */
+  @Get('images/:id/similar')
+  async similarImages(
+    @Param('id') id: string,
+    @Query('limit') limit: string | undefined,
+    @Req() req: Request,
+  ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
+    const imageId = Number(id);
+    const resolvedLimit = limit === undefined ? 12 : Number(limit);
+    if (!Number.isInteger(imageId) || imageId <= 0) {
+      throw new BadRequestException('图片ID无效');
+    }
+    if (
+      !Number.isInteger(resolvedLimit) ||
+      resolvedLimit < 1 ||
+      resolvedLimit > 30
+    ) {
+      throw new BadRequestException('limit必须是1到30之间的整数');
+    }
+    const authScope = await this.resolveAuthScope(req);
+    const images = await this.gallery.findSimilarImages({
+      id: imageId,
+      limit: resolvedLimit,
+      userId: authScope.userId,
+      tenantId: authScope.tenantId,
+    });
+    return { images };
+  }
+
+  /**
+   * @description 读取当前图库作用域的标签库及未分类标签统计。
+   * @keyword-cn 读取标签库, 未分类标签
+   * @keyword-en read-tag-library, uncategorized-tags
+   */
+  @Get('tag-library')
+  async getTagLibrary(@Req() req: Request): Promise<GalleryTagLibraryView> {
+    const authScope = await this.resolveAuthScope(req);
+    return this.tagLibrary.get(authScope.tenantId, [
+      AI_MATERIAL_TAG,
+      ...this.gallery.getSystemTags(),
+    ]);
+  }
+
+  /**
+   * @description 校验并整体替换当前图库作用域的标签分类。
+   * @keyword-cn 替换标签库, 分类唯一性
+   * @keyword-en replace-tag-library, category-uniqueness
+   */
+  @Post('tag-library')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async replaceTagLibrary(
+    @Body() body: ReplaceGalleryTagLibraryDto,
+    @Req() req: Request,
+  ): Promise<GalleryTagLibraryView> {
+    const authScope = await this.resolveAuthScope(req);
+    return this.tagLibrary.replace(authScope.tenantId, body.categories, [
+      AI_MATERIAL_TAG,
+      ...this.gallery.getSystemTags(),
+    ]);
+  }
+
+  /**
+   * @description 从当前作用域所有图片移除指定标签并把文字去重追加到备注。
+   * @keyword-cn 标签转备注, 批量迁移
+   * @keyword-en tags-to-note, batch-migration
+   */
+  @Post('tags/convert-to-note')
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
+  async convertTagsToNote(
+    @Body() body: ConvertGalleryTagsToNoteDto,
+    @Req() req: Request,
+  ): Promise<{ updated: number }> {
+    if (body.tags.some((tag) => !String(tag).trim().replace(/^#+/, ''))) {
+      throw new BadRequestException('标签不能为空');
+    }
+    const authScope = await this.resolveAuthScope(req);
+    return this.gallery.convertTagsToNote({
+      tags: body.tags,
+      userId: authScope.userId,
+      tenantId: authScope.tenantId,
+    });
   }
 
   /**
@@ -1277,7 +1499,7 @@ export class GalleryController {
     );
     return {
       results: results.map((r) => ({
-        image: { ...r.image, _id: undefined },
+        image: this.gallery.toPublicImage(r.image),
         score: r.score,
       })),
     };

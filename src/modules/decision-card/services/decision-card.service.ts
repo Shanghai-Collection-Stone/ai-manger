@@ -673,12 +673,19 @@ export class DecisionCardService {
 
   /**
    * @description 初始化索引
-   * @keyword-en ensure decision card indexes
+   * @keyword-cn 决策卡索引, 重复决策查询
+   * @keyword-en decision-card-indexes, duplicate-decision-query
    */
   private async ensureIndexes(): Promise<void> {
     await this.cards.createIndex({ sessionId: 1, updatedAt: -1 });
+    await this.cards.createIndex({
+      sessionId: 1,
+      status: 1,
+      createdAt: -1,
+    });
     await this.cards.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     await this.cards.createIndex({ status: 1, updatedAt: -1 });
+    await this.cards.createIndex({ updatedAt: -1 });
   }
 
   /**

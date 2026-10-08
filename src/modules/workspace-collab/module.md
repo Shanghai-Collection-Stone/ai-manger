@@ -26,7 +26,7 @@
 Agent 通讯录服务，租户级目录，首次读取写入默认 Agent 种子。
 - **关键词**: agent, contacts, seed, tenant, crud
 - **函数**:
-  - `ensureIndexes`: 初始化 Agent 索引/ensure workspace agent indexes | keywords: ensure-workspace-agent-indexes
+  - `ensureIndexes()` — 建立租户 Agent 唯一键与稳定排序索引 | keywords: 工作区Agent索引, Agent排序, workspace-agent-indexes, agent-sort-order
   - `list`: Agent 通讯录/list workspace agents | keywords: list-workspace-agents
   - `getByKey`: 按键读取 Agent/get workspace agent by key | keywords: get-workspace-agent-by-key
   - `create`: 新增 Agent/create workspace agent | keywords: create-workspace-agent
@@ -52,7 +52,7 @@ Agent 通讯录服务，租户级目录，首次读取写入默认 Agent 种子�
 任务服务，任务 CRUD、状态计数与跟进记录，承接方限本工作区成员或租户 Agent。
 - **关键词**: task, followup, status-count, assignee, attachment
 - **函数**:
-  - `ensureIndexes`: 初始化任务索引/ensure workspace task indexes | keywords: ensure-workspace-task-indexes
+  - `ensureIndexes()` — 建立工作区任务状态时间线与跟进时间线索引 | keywords: 工作区任务索引, 状态时间线, workspace-task-indexes, status-timeline
   - `list`: 任务列表与状态计数/list workspace tasks | keywords: list-workspace-tasks
   - `create`: 创建任务/create workspace task | keywords: create-workspace-task
   - `update`: 更新任务/update workspace task | keywords: update-workspace-task

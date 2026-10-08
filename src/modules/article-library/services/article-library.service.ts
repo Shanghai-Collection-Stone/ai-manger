@@ -66,6 +66,17 @@ export class ArticleLibraryService {
     await this.libraries.createIndex({ id: 1 }, { unique: true });
     await this.libraries.createIndex({ scope: 1, tenantId: 1, userId: 1 });
     await this.libraries.createIndex({ scope: 1, tenantId: 1, type: 1 });
+    await this.libraries.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.libraries.createIndex({
+      tenantId: 1,
+      userId: 1,
+      updatedAt: -1,
+    });
+    await this.libraries.createIndex({
+      tenantId: 1,
+      type: 1,
+      updatedAt: -1,
+    });
     await this.ensureQrTokenIndex();
     await this.libraries.createIndex({ createdAt: -1 });
     await this.libraries.createIndex(

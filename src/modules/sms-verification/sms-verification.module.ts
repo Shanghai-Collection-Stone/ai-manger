@@ -4,6 +4,7 @@ import { DataSourceModule } from '../data-source/data-source.module.js';
 import { SmsVerificationController } from './controller/sms-verification.controller.js';
 import { SmsCodeGuard } from './guards/sms-code.guard.js';
 import { SmsCodeConsumeInterceptor } from './interceptors/sms-code-consume.interceptor.js';
+import { AliyunDypnsService } from './services/aliyun-dypns.service.js';
 import { AliyunSmsService } from './services/aliyun-sms.service.js';
 import { SmsConfigService } from './services/sms-config.service.js';
 import { SmsCryptoService } from './services/sms-crypto.service.js';
@@ -22,6 +23,7 @@ import { SmsVerificationService } from './services/sms-verification.service.js';
     SmsCryptoService,
     SmsConfigService,
     AliyunSmsService,
+    AliyunDypnsService,
     SmsVerificationService,
     SmsCodeGuard,
     SmsCodeConsumeInterceptor,

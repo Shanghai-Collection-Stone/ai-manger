@@ -7,6 +7,9 @@
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
+新增“入驻审批”Tab：超管与租户管理员可审批入驻申请、查看邮件通知结果，并生成、复制、撤销不限人数的限时邀请链接；新增“运维上报”Tab：查看客户端问题与完整日志，超管可更新处理状态和备注；新增平台级“发信邮箱”Tab：维护 SMTP 配置并真实测试发信。
+新增平台级「阿里云配置」Tab(原「短信验证码」Tab 并入)：对象存储 OSS 与短信验证码集中维护，两边各填各的 AccessKey(可以是不同阿里云账号)，由 `AliyunSettingPanel.jsx` 承载。
+用户管理按平台账号与租户成员关系分权：超管保留完整用户资料管理能力；租户管理员只能按手机号添加已注册账号，并维护本租户成员的角色、启用状态与移除，不能修改昵称和密码；列表展示成员邮箱。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
 
 文件路径: `web/src/ui/Admin`
@@ -81,8 +84,14 @@
 - `onDeleteSuperClaw(id)` — 删除空闲 SuperClaw | keywords: 删除节点, 占用保护, delete-super-claw, allocation-guard
 - `onRotateSuperClawToken(id)` — 轮换并展示一次性 Token | keywords: 轮换密钥, 一次性令牌, rotate-super-claw-token, one-time-token
 - `onCopySuperClawToken()` — 复制一次性 Token | keywords: 复制密钥, 一次性展示, copy-super-claw-token, one-time-display
-- `onSubmitTenant()` — 保存租户文章并发上限并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
+- `onSubmitTenant()` — 保存租户文章 / 抖音生成并发上限并同步工作区节点归属 | keywords: 提交租户, 工作区归属, submit-tenant, workspace-node-assignment
 - `onDeleteTenant(id)` — 删除未分配节点的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
+- `ALL_TABS` — 定义后台标签及 `platformOnly`、`tenantOnly`、`adminOnly` 角色过滤标记 | keywords: 后台标签, 角色过滤, admin-tabs, role-filter
+- `formatUserMutationError(message)` — 把成员关系接口错误码转换为可执行的中文提示 | keywords: 成员错误提示, 租户只读资料, member-error-message, tenant-profile-readonly
+- `onSubmitUser()` — 超管维护完整用户资料，租户管理员仅新增或更新成员关系 | keywords: 用户成员关系, 租户资料只读, user-membership, tenant-profile-readonly
+- `onDeleteUser(id)` — 超管删除用户，租户管理员仅从本租户移除成员关系 | keywords: 移除租户成员, 删除平台用户, remove-tenant-member, delete-platform-user
+
+用户管理 Tab 对租户管理员隐藏昵称、密码与租户归属输入；新增时仅提交 `{ phone, role }`，编辑时仅提交 `{ role, enabled }`。`ACCOUNT_NOT_FOUND`、`PHONE_ALREADY_IN_TENANT`、`MEMBER_PROFILE_READONLY` 均显示简体中文指引。`adminOnly` Tab 仅 `super_admin` 与 `tenant_admin` 可见，操作员隐藏。
 
 ### DouyinPersonaPanel.jsx
 
@@ -131,18 +140,96 @@
   - `onRecommend()` — 按母选题调用推荐接口并展示结构化推荐结果;结果头部回显 `matchedTags`(候选被哪几个标签圈出来的)或「未命中相关标签,已在全量榜单里判定」 | keywords: 热点推荐, 母选题匹配, 粗筛标签回显, recommend-hot-topics, parent-topic-match, matched-tags-echo
   - `onApplyFilter(patch)` — 应用榜单过滤条件并回到第一页 | keywords: 应用过滤, 重置分页, apply-filter, reset-page
 
+### TenantJoinPanel.jsx
+
+后台“入驻审批”Tab 的独立面板，超管可跨租户筛选申请与邀请，租户管理员固定当前租户。申请区支持状态筛选、待审批数量、分页、通过确认、拒绝原因和邮件通知结果；邀请区支持选择有效期、生成、同源链接复制与撤销。
+
+- **关键词**: tenant join panel, application approval, invite link management, mail notification status
+- **常量**:
+  - `PAGE_SIZE` — 入驻申请列表每页条数 | keywords: 入驻分页大小, tenant-join-page-size
+  - `STATUS_OPTIONS` — 入驻申请状态筛选选项 | keywords: 入驻状态选项, join-status-options
+  - `INVITE_DAYS` — 邀请链接可选有效期天数 | keywords: 邀请有效期选项, invite-duration-options
+- **函数**:
+  - `formatTime(value)` — 格式化入驻模块时间，空值显示占位符 | keywords: 入驻时间格式化, tenant-join-time
+  - `formatRemaining(expiresAt)` — 计算有效邀请链接距离过期的剩余天数与小时数 | keywords: 邀请剩余时间, invite-time-remaining
+  - `copyTextWithFallback(text, inputId)` — 优先用剪贴板复制，失败时选中链接文本 | keywords: 复制邀请链接, 选中文本, copy-invite-link, select-text-fallback
+  - `TenantJoinPanel({ currentRole, tenants, onNotice, onError })` — 承载入驻审批与邀请链接管理 | keywords: 入驻审批面板, 邀请链接管理, tenant-join-panel, invite-link-management
+  - `run(key, action, successText)` — 统一包装入驻审批异步动作并上报错误 | keywords: 入驻异步动作, tenant-join-action
+  - `loadApplications(next)` — 按状态、租户与页码加载入驻申请 | keywords: 加载入驻申请, load-join-applications
+  - `loadInvites(tenantId)` — 加载当前管理范围或所选租户的邀请链接 | keywords: 加载邀请链接, load-tenant-invites
+  - `onApprove(row)` — 二次确认后通过申请并刷新列表 | keywords: 通过入驻申请, approve-join-application
+  - `onReject()` — 提交可选拒绝原因并刷新列表 | keywords: 拒绝入驻申请, reject-join-application
+  - `onCreateInvite()` — 为当前租户生成指定有效期的邀请链接 | keywords: 生成邀请链接, generate-invite-link
+  - `onRevokeInvite(row)` — 二次确认后撤销邀请链接 | keywords: 撤销邀请链接, revoke-invite-link
+  - `onCopyInvite(row)` — 复制邀请码对应的同源网页地址 | keywords: 复制邀请地址, copy-invite-address
+
+### OpsReportPanel.jsx
+
+后台“运维上报”Tab 的独立面板，支持状态、关键词和超管租户筛选、分页摘要列表与详情抽屉；详情展示完整描述、联系方式、客户端信息及日志条目，并可复制全部日志。超管可更新状态和处理备注，租户管理员只读。
+
+- **关键词**: ops report panel, report filters, log detail, handler status
+- **常量**:
+  - `PAGE_SIZE` — 运维上报列表每页条数 | keywords: 上报分页大小, ops-report-page-size
+  - `STATUS_OPTIONS` — 运维上报状态筛选选项 | keywords: 上报状态选项, ops-report-status-options
+- **函数**:
+  - `formatTime(value)` — 格式化运维上报时间，空值显示占位符 | keywords: 上报时间格式化, ops-report-time
+  - `formatClient(client)` — 把客户端信息对象整理为键值文本 | keywords: 客户端信息文本, client-info-text
+  - `formatLogs(report)` — 把运维日志条目格式化为可复制纯文本 | keywords: 复制日志文本, copyable-log-text
+  - `OpsReportPanel({ currentRole, tenants, onNotice, onError })` — 承载运维上报列表与详情，按角色控制处理权限 | keywords: 运维上报面板, 日志详情, ops-report-panel, log-detail
+  - `loadReports(next)` — 按筛选条件分页加载运维上报摘要 | keywords: 加载运维上报, load-ops-reports
+  - `openDetail(id)` — 读取完整上报并打开详情弹窗 | keywords: 打开上报详情, open-report-detail
+  - `onUpdateReport()` — 超管保存上报状态和处理备注 | keywords: 处理运维上报, handle-ops-report
+  - `onCopyLogs()` — 将当前详情中的问题与全部日志复制到剪贴板 | keywords: 复制全部日志, copy-all-logs
+  - `applyFilter(patch)` — 应用筛选条件并回到第一页 | keywords: 筛选运维上报, filter-ops-reports
+
+### MailSettingPanel.jsx
+
+后台“发信邮箱”Tab（`platformOnly`，仅超管）的独立面板，维护 SMTP 服务器、端口、SSL、用户名、密码、发件地址、发件人名称和启用状态，展示就绪/模拟模式，支持清空密码与真实测试发信。
+
+- **关键词**: mail setting panel, smtp settings, password mask, test mail
+- **常量**:
+  - `EMPTY_MAIL_FORM` — SMTP 发信配置表单初始值 | keywords: 发信配置初值, empty-mail-setting-form
+- **函数**:
+  - `MailSettingPanel({ onNotice, onError })` — 维护 SMTP 配置并向指定邮箱真实测试发信 | keywords: 发信邮箱面板, SMTP配置, mail-setting-panel, smtp-settings
+  - `applySetting(next)` — 用接口视图回填 SMTP 表单并清空密码输入 | keywords: 回填发信配置, apply-mail-setting
+  - `run(key, action)` — 统一包装发信配置异步动作 | keywords: 发信异步动作, mail-async-action
+  - `setField(key, value)` — 更新 SMTP 表单的单个字段 | keywords: 更新发信字段, update-mail-field
+  - `onSave()` — 保存 SMTP 配置且密码留空时保持原值 | keywords: 保存发信配置, submit-mail-setting
+  - `onClearPassword()` — 显式清空已保存的 SMTP 密码 | keywords: 清空邮箱密码, clear-mail-password
+  - `onTest()` — 使用已保存配置真实发送测试邮件 | keywords: 测试发送邮件, send-test-mail
+
+### AliyunSettingPanel.jsx
+
+后台「阿里云配置」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'aliyun_settings'` 时挂载，取代原「短信验证码」Tab。分两块：对象存储 OSS(OSS 专用 AccessKey ID / Secret + 地域 / Bucket / Endpoint / 访问域名 / 根目录，Secret 留空不改、可单独清空、只显示掩码；显示生效来源 admin / env / none 与访问地址前缀，「测试 OSS」用已保存配置写入再删除探测文件，旁边列 OSS 的 RAM 权限、CORS 与公共读要点)、短信验证码(嵌入 `SmsSettingPanel`，短信用自己的 AccessKey)。OSS 与短信的 AccessKey 互相独立，可以属于不同阿里云账号。后端校验错误码在本地翻成中文。后端见 [aliyun-config 模块](../../../../src/modules/aliyun-config/module.md)。
+
+- **关键词**: aliyun setting panel, oss access key, oss setting, oss probe, sms setting
+- **常量**:
+  - `EMPTY_OSS_FORM` — OSS 设置表单初始值 | keywords: OSS表单初值, empty-oss-form
+  - `ALIYUN_ERROR_TEXT` — 后端校验错误码对应的中文提示 | keywords: 阿里云配置错误码, aliyun-error-codes
+  - `OSS_SOURCE_LABEL` — OSS 生效来源的展示文案与颜色 | keywords: OSS来源文案, oss-source-label
+  - `OSS_FIELDS` — OSS 表单里除 AccessKey 外的普通字段 | keywords: OSS表单字段, oss-form-fields
+- **函数**:
+  - `AliyunSettingPanel({ onNotice, onError })` — 集中维护 OSS(含 OSS 专用 AccessKey)与短信验证码 | keywords: 阿里云配置面板, OSS访问密钥, 对象存储配置, aliyun-setting-panel, oss-access-key, oss-setting
+  - `describeAliyunError(message)` — 把后端错误码换成中文，未知内容原样返回 | keywords: 翻译错误码, describe-aliyun-error
+  - `applySetting(next)` — 用接口视图回填 OSS 表单，Secret 输入框始终留空 | keywords: 回填阿里云配置, apply-aliyun-setting
+  - `run(key, fn)` — 统一包装异步动作并翻译错误码 | keywords: 异步动作包装, async-action-wrapper
+  - `onSaveOss()` — 保存 OSS 设置与 OSS 专用 AccessKey，空字段表示清空，Secret 留空不改动 | keywords: 保存OSS设置, submit-oss-setting
+  - `onClearSecret()` — 确认后清空已保存的 OSS Secret(不影响短信) | keywords: 清空OSS密钥, clear-oss-secret
+  - `onTestOss()` — 用生效配置写入再删除探测文件 | keywords: 测试OSS连通, OSS自检, test-oss-connection, oss-probe
+  - `setOssField(key, value)` — 更新单个 OSS 表单字段 | keywords: 更新OSS字段, update-oss-field
+
 ### SmsSettingPanel.jsx
 
-后台「短信验证码」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'sms_settings'` 时挂载。维护阿里云 AccessKey ID / Secret(留空不改、可清空，只显示掩码)、签名、模板编码、模板变量名与启用开关，显示就绪/模拟模式状态，并可向指定手机号真实测试发送。后端见 [sms-verification 模块](../../../../src/modules/sms-verification/module.md)。
+「阿里云配置」Tab 里的短信验证码区块，由 `AliyunSettingPanel.jsx` 嵌入。顶部「接口类型」单选阿里云短信服务(Dysms，需自有签名与模板)或号码认证 · 短信认证(Dypns，可用系统赠送签名与模板)，维护短信专用 AccessKey ID / Secret(与 OSS 的互相独立，可以是不同阿里云账号；Secret 留空不改、可单独清空、只显示掩码，缺失时红字提示)，下方只显示所选类型的签名 / 模板字段，两套字段各自保存、切换不丢；提示框按所选接口列出 RAM 权限(`AliyunDysmsFullAccess` / `AliyunDypnsFullAccess`)；显示就绪/模拟模式状态，并可向指定手机号真实测试发送。后端见 [sms-verification 模块](../../../../src/modules/sms-verification/module.md)。
 
-- **关键词**: sms setting panel, aliyun sms, access key secret mask, test send
+- **关键词**: sms setting panel, aliyun sms, aliyun dypns, sms provider switch, sms access key, test send
 - **函数**:
-  - `SmsSettingPanel({ onNotice, onError })` — 短信配置面板主体 | keywords: 短信配置面板, 阿里云短信, sms-setting-panel, aliyun-sms
-  - `EMPTY_SMS_FORM` — 表单初始值，字段与后端 `SaveSmsSettingDto` 一一对应 | keywords: 短信配置表单初值, empty-sms-setting-form
-  - `applySetting(next)` — 用接口视图回填表单，Secret 输入框留空 | keywords: 回填短信配置, apply-sms-setting
+  - `SmsSettingPanel({ onNotice, onError })` — 维护短信专用 AccessKey，选择 Dysms 或 Dypns 接口并维护各自签名与模板 | keywords: 短信配置面板, 短信接口类型, sms-setting-panel, sms-provider
+  - `EMPTY_SMS_FORM` — 短信配置表单初始值，包含短信专用 AccessKey 与 Dysms / Dypns 两套独立字段 | keywords: 短信配置表单初值, empty-sms-setting-form
+  - `applySetting(next)` — 用接口视图回填 AccessKey 与两套服务商配置，Secret 输入框始终留空 | keywords: 回填短信配置, apply-sms-setting
   - `run(key, fn)` — 统一包装异步动作 | keywords: 异步动作包装, async-action-wrapper
-  - `onSave()` — 保存配置，Secret 留空不改动 | keywords: 保存短信配置, submit-sms-setting
-  - `onClearSecret()` — 清空已保存 Secret | keywords: 清空短信密钥, clear-sms-secret
+  - `onSave()` — 保存接口类型、启用开关、短信专用 AccessKey、签名与模板，Secret 留空不改动 | keywords: 保存短信配置, submit-sms-setting
+  - `onClearSecret()` — 确认后清空已保存的短信 Secret(不影响 OSS) | keywords: 清空短信密钥, clear-sms-secret
   - `onTest()` — 向测试手机号真实发送验证码 | keywords: 测试发送短信, test-send-sms
   - `setField(key, value)` — 更新单个表单字段 | keywords: 更新表单字段, update-form-field
 
@@ -207,15 +294,31 @@
   - `adminApi.listFinanceTransforms` / `upsertFinanceTransform` / `deleteFinanceTransform`: 财务 transform DSL CRUD(按 name)
   - `adminApi.chatFinanceAgent`: 财务 Agent 同步聊天(传 `{ name, messages }`)
   - `adminApi.chatFinanceAgentStream(payload, callbacks)`: 财务 Agent SSE 流式聊天封装(fetch + ReadableStream + TextDecoder,逐帧分发 token/tool/end/error)/finance agent chat stream | keywords: finance-agent-chat-stream, sse-chat
-  - `adminApi.upsertPlatformInfo(aiPromptSupplement,enableAiCover,globalLimit,salesContact?)` — 更新平台信息，salesContact 映射为业务员二维码与提示语 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
+  - `adminApi.upsertPlatformInfo(aiPromptSupplement,enableAiCover,globalLimit,douyinGlobalLimit,salesContact?)` — 更新平台信息（含全平台文章 / 抖音生成总并发上限），salesContact 映射为业务员二维码与提示语 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
   - `adminApi.register(payload)` — 公开自助注册 POST /admin/auth/register，payload 需展开 `SmsCodeInput` 的 `{ smsPhone, smsCode }` | keywords: 自助注册, 业务员二维码, self-register, sales-wechat-qrcode
   - `adminApi.listWorkflowModels()` — 读取预设工作流、节点设置与可选提供商 | keywords: 工作流节点模型列表, 可选提供商, list-workflow-models, provider-options
   - `adminApi.listWorkflowProviderModels(providerId, category)` — 查询提供商可选模型（PixMax / 数眼智能实时拉取） | keywords: 提供商可选模型, PixMax模型列表, 数眼可选模型, list-provider-models, pixmax-model-list, shuyan-model-list
   - `adminApi.saveWorkflowNodeModel(workflowKey, nodeKey, payload)` — 为节点保存提供商与模型 | keywords: 保存节点模型, 指定模型, save-node-model, assign-model
   - `adminApi.resetWorkflowNodeModel(workflowKey, nodeKey)` — 清除节点设置回到默认 | keywords: 重置节点模型, 回退默认, reset-node-model, fallback-default
-  - `adminApi.getSmsSettings()` — 读取平台短信配置(Secret 掩码) | keywords: 读取短信配置, get-sms-settings
-  - `adminApi.saveSmsSettings(payload)` — 保存平台短信配置 | keywords: 保存短信配置, save-sms-settings
+  - `adminApi.getSmsSettings()` — 读取平台短信配置(短信专用 Secret 仅掩码) | keywords: 读取短信配置, get-sms-settings
+  - `adminApi.saveSmsSettings(payload)` — 保存平台短信接口类型、短信专用 AccessKey、签名与模板 | keywords: 保存短信配置, save-sms-settings
   - `adminApi.testSmsSettings(phone)` — 真实测试发送验证码 | keywords: 测试发送短信, test-sms-settings
+  - `adminApi.getAliyunSettings()` — 读取平台阿里云配置(OSS 设置、OSS 专用 Secret 掩码与生效来源) | keywords: 读取阿里云配置, get-aliyun-settings
+  - `adminApi.saveAliyunSettings(payload)` — 保存 OSS 设置与 OSS 专用 AccessKey | keywords: 保存阿里云配置, save-aliyun-settings
+  - `adminApi.testAliyunOss()` — 用生效 OSS 配置写入并删除探测对象 | keywords: 测试OSS, test-aliyun-oss
+  - `buildTenantInviteUrl(code)` — 生成与当前后台同源的网页邀请地址 | keywords: 邀请链接, 同源地址, tenant-invite-url, same-origin-link
+  - `adminApi.getMailSettings()` — 读取平台 SMTP 发信配置 | keywords: 读取发信配置, get-mail-settings
+  - `adminApi.saveMailSettings(payload)` — 保存平台 SMTP 发信配置 | keywords: 保存发信配置, save-mail-settings
+  - `adminApi.testMailSettings(to)` — 向指定邮箱真实发送测试邮件 | keywords: 测试发送邮件, test-mail-settings
+  - `adminApi.listTenantJoinApplications(query)` — 分页查询租户入驻申请 | keywords: 入驻申请列表, tenant-join-applications
+  - `adminApi.approveTenantJoinApplication(id)` — 通过一条待审批入驻申请 | keywords: 通过入驻申请, approve-tenant-join
+  - `adminApi.rejectTenantJoinApplication(id, reason)` — 拒绝入驻申请并提交可选原因 | keywords: 拒绝入驻申请, reject-tenant-join
+  - `adminApi.listTenantInvites(query)` — 查询当前管理范围内的邀请链接 | keywords: 邀请链接列表, tenant-invite-list
+  - `adminApi.createTenantInvite(payload)` — 生成一条有时效且不限人数的邀请链接 | keywords: 生成邀请链接, create-tenant-invite
+  - `adminApi.revokeTenantInvite(id)` — 撤销邀请链接使其立即失效 | keywords: 撤销邀请链接, revoke-tenant-invite
+  - `adminApi.listOpsReports(query)` — 分页查询运维上报摘要 | keywords: 运维上报列表, ops-report-list
+  - `adminApi.getOpsReport(id)` — 读取单条运维上报及完整日志 | keywords: 运维上报详情, ops-report-detail
+  - `adminApi.updateOpsReport(id, payload)` — 更新运维上报状态与处理备注 | keywords: 更新上报状态, update-ops-report
   - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活;PixMax 改用可用模型接口, 15s 超时, 不消耗配额)/test ai provider
   - `adminApi.listAiServices()` — 读取固定服务目录与生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
   - `adminApi.updateAiServiceCredit(code,creditCost)` — 修改固定服务消耗点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code

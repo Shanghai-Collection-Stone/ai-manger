@@ -65,8 +65,8 @@ export class WorkspaceService {
 
   /**
    * @description 初始化工作区与成员索引
-   * @keyword-en ensure workspace indexes
-   * @keyword-cn 初始化工作区索引
+   * @keyword-en workspace-indexes, member-timeline
+   * @keyword-cn 工作区索引, 成员时间线
    */
   async ensureIndexes(): Promise<void> {
     await this.workspaces.createIndex(
@@ -74,12 +74,14 @@ export class WorkspaceService {
       { unique: true },
     );
     await this.workspaces.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.workspaces.createIndex({ updatedAt: -1 });
     await this.workspaces.createIndex({ superClawId: 1 });
     await this.members.createIndex(
       { workspaceId: 1, userId: 1 },
       { unique: true },
     );
     await this.members.createIndex({ tenantId: 1 });
+    await this.members.createIndex({ workspaceId: 1, createdAt: 1 });
   }
 
   /**

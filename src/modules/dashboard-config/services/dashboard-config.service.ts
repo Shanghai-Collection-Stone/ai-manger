@@ -67,7 +67,7 @@ export class DashboardConfigService {
 
   /**
    * @description 初始化索引
-   * @keyword-en ensure indexes
+   * @keyword-en dashboard-config-indexes, tenant-timeline-index
    */
   private async ensureIndexes(): Promise<void> {
     await this.mappings.createIndexes([
@@ -77,6 +77,10 @@ export class DashboardConfigService {
         name: 'uniq_dashboard_tenant',
       },
       { key: { updatedAt: -1 }, name: 'idx_updated_at' },
+      {
+        key: { tenantId: 1, updatedAt: -1 },
+        name: 'idx_tenant_updated_at',
+      },
       { key: { enabled: 1 }, name: 'idx_enabled' },
     ]);
   }

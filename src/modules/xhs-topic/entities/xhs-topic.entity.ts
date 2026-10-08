@@ -37,6 +37,8 @@ export interface XhsTopicCandidate {
   topicType: string;
   imageTags?: string[];
   imageRule?: XhsMotherImageRule;
+  /** 母题引用的知识 ID，生成子题与文章时注入提示词 */
+  knowledgeIds?: string[];
   articleStyle?: string;
 }
 
@@ -48,9 +50,9 @@ export interface XhsTopicCandidate {
 export type XhsTopicStatus = 'pending' | 'draft' | 'generated' | 'published';
 
 /**
- * @description 拼图内单张源图在拼图画布上的格子，进入灵感画布后还原成一个可单独换图的图层。
- * @keyword-cn 拼图画布格式, 拼图格子
- * @keyword-en collage-canvas-format, collage-cell
+ * @description 拼图内单张源图在拼图画布上的格子，包含可选裁切焦点与缩放参数，进入灵感画布后还原成一个可单独换图的图层。
+ * @keyword-cn 拼图格子, 裁切参数
+ * @keyword-en collage-cell, crop-parameters
  */
 export interface XhsArticleCanvasCollageCell {
   src: string;
@@ -60,6 +62,12 @@ export interface XhsArticleCanvasCollageCell {
   width: number;
   height: number;
   objectFit?: 'cover' | 'contain';
+  /** CSS object-position 横向百分比，缺省为 50 */
+  focusX?: number;
+  /** CSS object-position 纵向百分比，缺省为 50 */
+  focusY?: number;
+  /** 图片缩放倍数，缺省为 1 */
+  zoom?: number;
 }
 
 /**
@@ -71,6 +79,8 @@ export interface XhsArticleCanvasCollage {
   width: number;
   height: number;
   cells: XhsArticleCanvasCollageCell[];
+  /** 当前成品图（images[imageIndex]）由哪组格子画出的指纹；与格子现算指纹一致时保存入库不再重合成 */
+  renderedKey?: string;
 }
 
 /**
@@ -144,6 +154,8 @@ export interface XhsTopicArticle {
   canvasBoards?: XhsArticleCanvasBoard[];
   contentType: '图文' | '视频' | '直播';
   sourceTodoId?: number;
+  /** 草稿文章最近一次生成、编辑或回到草稿的时间 */
+  draftAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -188,8 +200,14 @@ export interface XhsTopicEntity {
   imageTags?: string[];
   /** 母选题专用的配图规则，缺省视为 default */
   imageRule?: XhsMotherImageRule;
+  /** 母选题专用的引用知识 ID，生成子题与文章时把知识内容注入提示词 */
+  knowledgeIds?: string[];
   /** 子选题专用的文章生成风格，首次生文与重写都会注入 Agent 提示词 */
   articleStyle?: string;
+  /** 母选题是否星标置顶；历史数据缺省视为 false */
+  starred?: boolean;
+  /** 母选题最近一次自身或下属子题发生业务活动的时间 */
+  lastActiveAt?: Date | null;
   status: XhsTopicStatus;
   article?: XhsTopicArticle;
   /** 子选题专用的数据抓取开关状态，母选题不写该字段 */
@@ -223,10 +241,12 @@ export interface XhsChildTopicView {
   topicType: string;
   articleStyle?: string;
   status: XhsTopicStatus;
-  article?: Omit<XhsTopicArticle, 'createdAt' | 'updatedAt'> & {
+  article?: Omit<XhsTopicArticle, 'createdAt' | 'updatedAt' | 'draftAt'> & {
     createdAt: string;
     updatedAt: string;
   };
+  /** 未入文章库草稿的自动清理时间；无文章时不返回 */
+  draftCleanupAt?: string;
   /** 数据抓取开关状态，历史数据缺省视为 crawling */
   crawlStatus: XhsTopicCrawlStatus;
   /** 最近一次成功抓取时间，ISO 字符串 */
@@ -247,6 +267,11 @@ export interface XhsTopicWorkspaceGroup {
   topicType: string;
   imageTags: string[];
   imageRule: XhsMotherImageRule;
+  knowledgeIds: string[];
+  starred: boolean;
+  lastActiveAt: string;
+  /** 星标或名下存在已入库子题时为 null */
+  idleCleanupAt: string | null;
   topicCount: number;
   sourceTodoId?: number;
   createdAt: string;
@@ -264,7 +289,11 @@ export interface XhsTopicUpdateInput {
   topicType?: string;
   imageTags?: string[];
   imageRule?: XhsMotherImageRule;
+  /** 仅母选题生效：引用知识 ID，传空数组表示不再引用 */
+  knowledgeIds?: string[];
   articleStyle?: string;
+  /** 仅母选题生效，子选题传入时忽略 */
+  starred?: boolean;
   status?: XhsTopicStatus;
 }
 
@@ -348,7 +377,35 @@ export interface XhsArticleGenerationState {
   error?: string;
   /** 前端可直接展示的中文失败原因，仅 status=failed 时存在 */
   errorMessage?: string;
+  /** 本次真正开始执行的时间；阶段产出写入会刷新 updatedAt，前端进度以它为起点。首次阶段写入前缺省 */
+  startedAt?: string;
+  /** 生成中的阶段产出（先写好的正文、逐张就绪的配图），仅 status=running 时存在 */
+  progress?: XhsArticleGenerationProgress;
   updatedAt: string;
+}
+
+/**
+ * @description 生成中的阶段产出：正文写好先交付文字，配图逐张就绪逐张交付，前端据此先显示先完成的部分。
+ * @keyword-cn 生文阶段产出, 渐进显示
+ * @keyword-en generation-partial-output, progressive-reveal
+ */
+export interface XhsArticleGenerationProgress {
+  /** 出队开始执行的时间 */
+  startedAt: string;
+  text: {
+    status: 'running' | 'done';
+    title?: string;
+    body?: string;
+    tags?: string[];
+  };
+  images: {
+    /** pending=正在选标签与分配源图；running=渲染中；done=整组就绪；skipped=改写保留原图，不出新图 */
+    status: 'pending' | 'running' | 'done' | 'skipped';
+    /** 本篇计划出图张数（封面 + 内页），源图分配完成前为 0 */
+    total: number;
+    /** 已就绪的图：slot 0 为封面、n 为第 n 张内页；封面先报底图 final=false，成品就绪后同槽位再报 final=true */
+    items: Array<{ slot: number; url: string; final: boolean }>;
+  };
 }
 
 /**
@@ -360,6 +417,8 @@ export interface XhsTopicGenerateInput {
   kind: XhsTopicKind;
   prompt?: string;
   parentTopic?: string;
+  /** 当前母题引用的知识 ID，服务端按租户读取后注入提示词 */
+  knowledgeIds?: string[];
   articleStyle?: string;
   count?: number;
   useSearch?: boolean;

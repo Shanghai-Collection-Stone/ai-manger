@@ -68,12 +68,12 @@ export class WorkspaceAgentService {
 
   /**
    * @description 初始化 Agent 索引
-   * @keyword-en ensure workspace agent indexes
-   * @keyword-cn 初始化Agent索引
+   * @keyword-en workspace-agent-indexes, agent-sort-order
+   * @keyword-cn 工作区Agent索引, Agent排序
    */
   async ensureIndexes(): Promise<void> {
     await this.agents.createIndex({ tenantId: 1, key: 1 }, { unique: true });
-    await this.agents.createIndex({ tenantId: 1, sortOrder: 1 });
+    await this.agents.createIndex({ tenantId: 1, sortOrder: 1, createdAt: 1 });
   }
 
   /**

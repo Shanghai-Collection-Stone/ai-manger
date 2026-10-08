@@ -11,6 +11,19 @@ import type {
   GalleryImageEntity,
   GallerySearchResult,
 } from '../entities/gallery-image.entity.js';
+import { AI_GENERATED_IMAGE_TAG } from '../gallery.constants.js';
+
+/**
+ * @description 图库中由系统写入的封面类标签。
+ * @keyword-cn 系统封面标签, 图库标签
+ * @keyword-en system-cover-tags, gallery-tags
+ */
+export const GALLERY_COVER_TAGS = [
+  '封面',
+  '拼图封面',
+  '自动封面',
+  'canvas封面',
+] as const;
 
 @Injectable()
 export class GalleryService {
@@ -18,13 +31,8 @@ export class GalleryService {
   private readonly counters: Collection<{ _id: string; seq: number }>;
   private readonly VECTOR_INDEX_NAME = 'gallery_image_embedding_index';
   /** 精确封面标签枚举（系统写入的类型标记，非用户描述关键词） */
-  private readonly COVER_TAGS = ['封面', '拼图封面', '自动封面', 'canvas封面'];
-  private readonly coverTagSet = new Set([
-    '封面',
-    '拼图封面',
-    '自动封面',
-    'canvas封面',
-  ]);
+  private readonly COVER_TAGS = [...GALLERY_COVER_TAGS];
+  private readonly coverTagSet = new Set<string>(GALLERY_COVER_TAGS);
   private isAtlasAvailable: boolean | null = null;
   private jimpModulePromise: Promise<unknown> | null = null;
 
@@ -76,14 +84,16 @@ export class GalleryService {
     const byId = new Map(rows.map((row) => [Number(row.id), row]));
     return orderedIds
       .map((id) => byId.get(id))
-      .filter((img): img is GalleryImageEntity => !!img);
+      .filter((img): img is GalleryImageEntity => !!img)
+      .map((img) => this.toPublicImage(img) as GalleryImageEntity);
   }
 
   /**
-   * @description 创建 gallery_images 所需索引，并初始化自增计数器。
+   * @description 创建图库租户、标签、时间线与完整收藏排序索引，并删除较短的收藏前缀索引。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。
-   * @keyword gallery, mongo, index
+   * @keyword-cn 图库索引, 收藏排序
+   * @keyword-en gallery-indexes, favorite-sorting
    * @since 2026-02-04
    */
   async ensureIndexes(): Promise<void> {
@@ -96,6 +106,18 @@ export class GalleryService {
     // 租户隔离索引
     await this.images.createIndex({ scope: 1, tenantId: 1, userId: 1 });
     await this.images.createIndex({ scope: 1, tenantId: 1, tags: 1 });
+    await this.images.createIndex({ tenantId: 1, tags: 1 });
+    await this.images.createIndex({ tenantId: 1, createdAt: -1, id: -1 });
+    await this.images.createIndex({
+      tenantId: 1,
+      favorite: -1,
+      favoritedAt: -1,
+      createdAt: -1,
+      id: -1,
+    });
+    await this.images
+      .dropIndex('tenantId_1_favorite_-1_favoritedAt_-1')
+      .catch(() => undefined);
     const exists = await this.counters.findOne({ _id: 'gallery_images' });
     if (!exists)
       await this.counters.insertOne({ _id: 'gallery_images', seq: 0 });
@@ -167,7 +189,8 @@ export class GalleryService {
    * @description 将输入的标签集合（string 或 string[]）标准化为去重后的字符串数组。
    * @param {unknown} tags - 原始标签输入。
    * @returns {string[]} 规范化后的标签数组。
-   * @keyword gallery, tag, normalize
+   * @keyword-cn 标签规整, 标签去重
+   * @keyword-en tag-normalization, tag-deduplication
    * @since 2026-02-04
    */
   private normalizeTags(tags: unknown): string[] {
@@ -179,13 +202,42 @@ export class GalleryService {
     const out: string[] = [];
     const seen = new Set<string>();
     for (const raw of list) {
-      const t = String(raw ?? '').trim();
+      const t = String(raw ?? '')
+        .trim()
+        .replace(/^#+/, '');
       if (!t) continue;
       if (seen.has(t)) continue;
       seen.add(t);
       out.push(t);
     }
     return out;
+  }
+
+  /**
+   * @description 把数据库图片归一化为对外图片，补齐历史数据缺失的图库重构字段并移除Mongo主键。
+   * @keyword-cn 图片公开归一化, 历史默认值
+   * @keyword-en public-image-normalization, legacy-defaults
+   */
+  toPublicImage(
+    image: GalleryImageEntity | Omit<GalleryImageEntity, '_id'>,
+  ): Omit<GalleryImageEntity, '_id'> {
+    const raw = image as GalleryImageEntity & { _id?: ObjectId };
+    const { _id: _ignored, ...clean } = raw;
+    return {
+      ...clean,
+      favorite: raw.favorite === true,
+      note: typeof raw.note === 'string' ? raw.note : '',
+      aiFaceProtected: raw.aiFaceProtected === true,
+    };
+  }
+
+  /**
+   * @description 返回标签库统计应排除的系统封面标签。
+   * @keyword-cn 系统标签列表, 标签库排除
+   * @keyword-en system-tag-list, tag-library-exclusion
+   */
+  getSystemTags(): string[] {
+    return [...this.COVER_TAGS];
   }
 
   /**
@@ -229,7 +281,8 @@ export class GalleryService {
    * @param {GalleryImageCreateInput[]} inputs - 批量创建输入。
    * @returns {Promise<GalleryImageEntity[]>} 新建图片实体数组。
    * @throws {Error} 当数据库写入失败或Embedding服务异常且未能回退时抛出。
-   * @keyword gallery, create, upload
+   * @keyword-cn 图片批量创建, 元数据默认值
+   * @keyword-en batch-image-create, metadata-defaults
    * @since 2026-02-04
    */
   async createMany(
@@ -282,6 +335,11 @@ export class GalleryService {
         isPortrait,
         tags: Array.isArray(input.tags) ? input.tags : [],
         description: input.description,
+        favorite: input.favorite === true,
+        favoritedAt:
+          input.favorite === true ? (input.favoritedAt ?? now) : undefined,
+        note: typeof input.note === 'string' ? input.note.slice(0, 500) : '',
+        aiFaceProtected: input.aiFaceProtected === true,
         isCollage: input.isCollage === true,
         collageSourceImageIds: Array.isArray(input.collageSourceImageIds)
           ? input.collageSourceImageIds
@@ -313,11 +371,14 @@ export class GalleryService {
     });
 
     await this.images.insertMany(docs);
-    return docs;
+    return docs.map((doc) => ({
+      ...this.toPublicImage(doc),
+      _id: doc._id,
+    }));
   }
 
   /**
-   * @description 按租户可见性查找图片，支持过滤、游标分页和按创建时间升降序排列。
+   * @description 按租户可见性查找图片，兼容旧游标分页并支持多标签、收藏、随机与收藏优先排序。
    * @param {string} userId - 用户ID
    * @param {string} [tenantId] - 租户ID
    * @param {Object} [options] - 查询选项
@@ -325,10 +386,10 @@ export class GalleryService {
    * @param {string} [options.tag] - 标签
    * @param {number} [options.cursorId] - 游标
    * @param {number} [options.limit=50] - 返回条数
-   * @param {'asc'|'desc'} [options.sortOrder='desc'] - 创建时间排序方向
+   * @param {'asc'|'desc'} [options.sortOrder='desc'] - 旧创建时间排序方向
    * @returns {Promise<GalleryImageEntity[]>} 图片列表
-   * @keyword-cn 租户图片查询, 图库时间排序
-   * @keyword-en tenant-image-query, gallery-time-sort
+   * @keyword-cn 租户图片查询, 图库多条件排序
+   * @keyword-en tenant-image-query, gallery-multi-sort
    * @since 2026-03-23
    */
   async findAccessibleImages(
@@ -342,6 +403,10 @@ export class GalleryService {
       includeCollage?: boolean;
       imageType?: 'all' | 'regular' | 'collage';
       sortOrder?: 'asc' | 'desc';
+      sort?: 'newest' | 'oldest' | 'random' | 'favorite';
+      tags?: string[];
+      favoriteOnly?: boolean;
+      offset?: number;
     },
   ): Promise<GalleryImageEntity[]> {
     const {
@@ -352,8 +417,13 @@ export class GalleryService {
       includeCollage = true,
       imageType,
       sortOrder = 'desc',
+      sort,
+      tags,
+      favoriteOnly = false,
+      offset = 0,
     } = options ?? {};
-    const sortDirection = sortOrder === 'asc' ? 1 : -1;
+    const resolvedSort = sort ?? (sortOrder === 'asc' ? 'oldest' : 'newest');
+    const sortDirection = resolvedSort === 'oldest' ? 1 : -1;
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(userId, tenantId),
     ];
@@ -363,25 +433,320 @@ export class GalleryService {
       clauses.push({ isCollage: { $ne: true } });
     }
     if (groupId !== undefined) clauses.push({ groupId });
+    const normalizedTags = this.normalizeTags(tags);
+    if (normalizedTags.length > 0) {
+      clauses.push({ tags: { $all: normalizedTags } });
+    }
     if (tag) clauses.push({ tags: tag });
-    if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
+    if (favoriteOnly) clauses.push({ favorite: true });
+    if (
+      (resolvedSort === 'newest' || resolvedSort === 'oldest') &&
+      typeof cursorId === 'number' &&
+      Number.isFinite(cursorId)
+    ) {
       clauses.push({
         id: sortDirection === 1 ? { $gt: cursorId } : { $lt: cursorId },
       });
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
-    console.log(
-      'findAccessibleImages filter:',
-      JSON.stringify(filter),
-      'limit:',
-      lim,
-    );
-    return this.images
-      .find(filter, { projection: { _id: 0 } })
-      .sort({ createdAt: sortDirection, id: sortDirection })
-      .limit(lim)
+    if (resolvedSort === 'random') {
+      const rows = await this.images
+        .aggregate<GalleryImageEntity>([
+          { $match: filter },
+          { $sample: { size: lim } },
+          { $project: { _id: 0 } },
+        ])
+        .toArray();
+      return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+    }
+    const query = this.images.find(filter, { projection: { _id: 0 } });
+    if (resolvedSort === 'favorite') {
+      query
+        .sort({ favorite: -1, favoritedAt: -1, createdAt: -1, id: -1 })
+        .skip(Math.max(0, Math.floor(offset)));
+    } else {
+      query.sort({ createdAt: sortDirection, id: sortDirection });
+    }
+    const rows = await query.limit(lim).toArray();
+    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+  }
+
+  /**
+   * @description 精确统计当前图片可见范围内的图片、收藏和去重标签数量。
+   * @keyword-cn 图库精确统计, 可见范围计数
+   * @keyword-en gallery-exact-stats, visibility-count
+   */
+  async getAccessibleStats(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<{ images: number; favorites: number; tags: number }> {
+    const filter = this.buildTenantFilter(userId, tenantId);
+    const [images, favorites, tags] = await Promise.all([
+      this.images.countDocuments(filter),
+      this.images.countDocuments({ $and: [filter, { favorite: true }] }),
+      this.images.distinct('tags', filter),
+    ]);
+    return {
+      images,
+      favorites,
+      tags: new Set(tags.map((tag) => String(tag ?? '').trim()).filter(Boolean))
+        .size,
+    };
+  }
+
+  /**
+   * @description 更新当前可见范围内的一张图片备注、收藏、人脸保护和标签。
+   * @keyword-cn 单图元数据更新, 图片可见范围
+   * @keyword-en single-image-metadata, image-visibility
+   */
+  async updateImageMeta(input: {
+    userId?: string;
+    tenantId?: string;
+    id: number;
+    note?: string;
+    favorite?: boolean;
+    aiFaceProtected?: boolean;
+    addTags?: string[];
+    removeTags?: string[];
+  }): Promise<Omit<GalleryImageEntity, '_id'> | null> {
+    const filter = {
+      $and: [
+        this.buildTenantFilter(input.userId, input.tenantId),
+        { id: input.id },
+      ],
+    };
+    const current = await this.images.findOne(filter);
+    if (!current) return null;
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    const unset: Record<string, ''> = {};
+    if (typeof input.note === 'string') set.note = input.note.slice(0, 500);
+    if (typeof input.aiFaceProtected === 'boolean') {
+      set.aiFaceProtected = input.aiFaceProtected;
+    }
+    if (typeof input.favorite === 'boolean') {
+      set.favorite = input.favorite;
+      if (input.favorite) set.favoritedAt = new Date();
+      else unset.favoritedAt = '';
+    }
+    const add = this.normalizeTags(input.addTags);
+    const remove = new Set(this.normalizeTags(input.removeTags));
+    if (add.length > 0 || remove.size > 0) {
+      set.tags = Array.from(
+        new Set([
+          ...this.normalizeTags(current.tags).filter((tag) => !remove.has(tag)),
+          ...add,
+        ]),
+      );
+    }
+    const update: Record<string, unknown> = { $set: set };
+    if (Object.keys(unset).length > 0) update.$unset = unset;
+    const result = await this.images.findOneAndUpdate(filter, update, {
+      returnDocument: 'after',
+      includeResultMetadata: true,
+    });
+    return result.value ? this.toPublicImage(result.value) : null;
+  }
+
+  /**
+   * @description 批量更新当前可见图片元数据，追加备注时按行去重并限制总长度。
+   * @keyword-cn 批量元数据更新, 备注按行去重
+   * @keyword-en batch-image-metadata, deduplicate-note-lines
+   */
+  async updateImagesMetaBatch(input: {
+    userId?: string;
+    tenantId?: string;
+    ids: Array<string | number>;
+    note?: string;
+    noteMode?: 'replace' | 'append';
+    favorite?: boolean;
+    aiFaceProtected?: boolean;
+    addTags?: string[];
+    removeTags?: string[];
+  }): Promise<{ updated: number }> {
+    const ids = Array.from(
+      new Set(
+        input.ids
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0)
+          .map((id) => Math.floor(id)),
+      ),
+    ).slice(0, 500);
+    if (ids.length === 0) return { updated: 0 };
+    const rows = await this.images
+      .find({
+        $and: [
+          this.buildTenantFilter(input.userId, input.tenantId),
+          { id: { $in: ids } },
+        ],
+      })
       .toArray();
+    const add = this.normalizeTags(input.addTags);
+    const remove = new Set(this.normalizeTags(input.removeTags));
+    const now = new Date();
+    const operations = rows.map((row) => {
+      const set: Record<string, unknown> = { updatedAt: now };
+      const unset: Record<string, ''> = {};
+      if (typeof input.note === 'string') {
+        set.note =
+          input.noteMode === 'append'
+            ? this.appendNoteLines(row.note, input.note)
+            : input.note.slice(0, 500);
+      }
+      if (typeof input.aiFaceProtected === 'boolean') {
+        set.aiFaceProtected = input.aiFaceProtected;
+      }
+      if (typeof input.favorite === 'boolean') {
+        set.favorite = input.favorite;
+        if (input.favorite) set.favoritedAt = now;
+        else unset.favoritedAt = '';
+      }
+      if (add.length > 0 || remove.size > 0) {
+        set.tags = Array.from(
+          new Set([
+            ...this.normalizeTags(row.tags).filter((tag) => !remove.has(tag)),
+            ...add,
+          ]),
+        );
+      }
+      const update: Record<string, unknown> = { $set: set };
+      if (Object.keys(unset).length > 0) update.$unset = unset;
+      return { updateOne: { filter: { _id: row._id }, update } };
+    });
+    if (operations.length === 0) return { updated: 0 };
+    await this.images.bulkWrite(operations, { ordered: false });
+    return { updated: operations.length };
+  }
+
+  /**
+   * @description 将新备注按非空行追加到旧备注，忽略已有同文并限制为500字。
+   * @keyword-cn 备注追加, 文本去重
+   * @keyword-en append-note, text-deduplication
+   */
+  private appendNoteLines(current: unknown, incoming: unknown): string {
+    const lines = String(current ?? '')
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const seen = new Set(lines);
+    for (const line of String(incoming ?? '').split(/\r?\n/g)) {
+      const text = line.trim();
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        lines.push(text);
+      }
+    }
+    return lines.join('\n').slice(0, 500);
+  }
+
+  /**
+   * @description 用图片已有向量查找相似图，无有效向量或计算失败时按共同标签和时间兜底。
+   * @keyword-cn 相似图片, 标签相似兜底
+   * @keyword-en similar-images, tag-similarity-fallback
+   */
+  async findSimilarImages(input: {
+    userId?: string;
+    tenantId?: string;
+    id: number;
+    limit: number;
+  }): Promise<Array<Omit<GalleryImageEntity, '_id'>>> {
+    const scope = this.buildTenantFilter(input.userId, input.tenantId);
+    const source = await this.images.findOne({
+      $and: [scope, { id: input.id }],
+    });
+    if (!source) return [];
+    const candidates = await this.images
+      .find({ $and: [scope, { id: { $ne: input.id } }] })
+      .toArray();
+    const limit = Math.max(1, Math.min(30, Math.floor(input.limit || 12)));
+    const sourceEmbedding = Array.isArray(source.embedding)
+      ? source.embedding
+      : [];
+    const hasVector = sourceEmbedding.some(
+      (value) => Number.isFinite(value) && value !== 0,
+    );
+    if (hasVector) {
+      try {
+        const vectorRows = candidates
+          .filter(
+            (row) =>
+              Array.isArray(row.embedding) &&
+              row.embedding.length === sourceEmbedding.length,
+          )
+          .map((image) => ({
+            image,
+            score: this.embedding.cosineSimilarity(
+              sourceEmbedding,
+              image.embedding,
+            ),
+          }))
+          .filter((entry) => Number.isFinite(entry.score))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limit);
+        if (vectorRows.length > 0) {
+          return vectorRows.map(({ image }) => this.toPublicImage(image));
+        }
+      } catch {
+        // 向量不可用时继续走共同标签兜底。
+      }
+    }
+    const sourceTags = new Set(Array.isArray(source.tags) ? source.tags : []);
+    return candidates
+      .map((image) => ({
+        image,
+        commonTags: (Array.isArray(image.tags) ? image.tags : []).filter(
+          (tag) => sourceTags.has(tag),
+        ).length,
+      }))
+      .sort(
+        (a, b) =>
+          b.commonTags - a.commonTags ||
+          new Date(b.image.createdAt).getTime() -
+            new Date(a.image.createdAt).getTime(),
+      )
+      .slice(0, limit)
+      .map(({ image }) => this.toPublicImage(image));
+  }
+
+  /**
+   * @description 从可见图片移除指定标签，并把标签文字按行去重追加到备注。
+   * @keyword-cn 标签转备注, 图片批量迁移
+   * @keyword-en tags-to-note, image-batch-migration
+   */
+  async convertTagsToNote(input: {
+    userId?: string;
+    tenantId?: string;
+    tags: string[];
+  }): Promise<{ updated: number }> {
+    const tags = this.normalizeTags(input.tags).slice(0, 50);
+    if (tags.length === 0) return { updated: 0 };
+    const rows = await this.images
+      .find({
+        $and: [
+          this.buildTenantFilter(input.userId, input.tenantId),
+          { tags: { $in: tags } },
+        ],
+      })
+      .toArray();
+    const now = new Date();
+    const operations = rows.map((row) => {
+      const matched = tags.filter((tag) => row.tags?.includes(tag));
+      return {
+        updateOne: {
+          filter: { _id: row._id },
+          update: {
+            $set: {
+              note: this.appendNoteLines(row.note, matched.join('\n')),
+              updatedAt: now,
+            },
+            $pull: { tags: { $in: matched } },
+          },
+        },
+      };
+    });
+    if (operations.length === 0) return { updated: 0 };
+    await this.images.bulkWrite(operations, { ordered: false });
+    return { updated: operations.length };
   }
 
   /**
@@ -418,19 +783,20 @@ export class GalleryService {
   }
 
   /**
-   * @description 构建图片类型 DB 过滤条件，使用精确枚举封面标签做 $in/$nin 匹配。
+   * @description 构建图片类型 DB 过滤条件；普通图排除拼图、封面标签与 AI 生成素材，拼图口径保持不变。
    * @param {'regular' | 'collage'} imageType - 目标图片类型。
    * @returns {Record<string, unknown>} MongoDB filter 对象。
-   * @keyword-en build image type filter for mongodb query
+   * @keyword-cn 普通图筛选, AI素材排除
+   * @keyword-en regular-image-filter, exclude-ai-material
    */
   private buildImageTypeFilter(
     imageType: 'regular' | 'collage',
   ): Record<string, unknown> {
     if (imageType === 'regular') {
-      // Exclude: isCollage=true (actual collage images) AND cover-tagged images
+      // Exclude collages, system cover images, and AI-generated materials.
       return {
         isCollage: { $ne: true },
-        tags: { $nin: this.COVER_TAGS },
+        tags: { $nin: [...this.COVER_TAGS, AI_GENERATED_IMAGE_TAG] },
       };
     }
     return {
@@ -439,11 +805,12 @@ export class GalleryService {
   }
 
   /**
-   * @description 内存层图片类型匹配（Atlas 向量搜索结果后处理用）。
+   * @description 内存层图片类型匹配；普通图排除拼图、封面标签与 AI 生成素材，用于 Atlas 向量搜索结果后处理。
    * @param {GalleryImageEntity} image - 图片对象。
    * @param {'all' | 'regular' | 'collage'} imageType - 目标类型。
    * @returns {boolean}
-   * @keyword-en in-memory image type match
+   * @keyword-cn 普通图内存筛选, AI素材排除
+   * @keyword-en in-memory-image-filter, exclude-ai-material
    */
   private matchesImageType(
     image: GalleryImageEntity,
@@ -454,7 +821,9 @@ export class GalleryService {
     const isCover =
       image.isCollage === true ||
       tags.some((t) => this.coverTagSet.has(String(t ?? '').trim()));
-    if (imageType === 'regular') return !isCover;
+    if (imageType === 'regular') {
+      return !isCover && !tags.includes(AI_GENERATED_IMAGE_TAG);
+    }
     return isCover;
   }
 
@@ -523,11 +892,12 @@ export class GalleryService {
       filter.id = { $lt: cursorId };
     }
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
-    return this.images
+    const rows = await this.images
       .find(filter, { projection: { _id: 0 } })
       .sort({ id: -1 })
       .limit(lim)
       .toArray();
+    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
   }
 
   /**
@@ -630,11 +1000,12 @@ export class GalleryService {
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
-    return this.images
+    const rows = await this.images
       .find(filter, { projection: { _id: 0 } })
       .sort({ id: -1 })
       .limit(lim)
       .toArray();
+    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
   }
 
   /**
@@ -805,7 +1176,10 @@ export class GalleryService {
     const pipe: Record<string, unknown>[] = [{ $match: filter }];
     pipe.push({ $sample: { size: lim } });
     pipe.push({ $project: { _id: 0 } });
-    return this.images.aggregate<GalleryImageEntity>(pipe).toArray();
+    const rows = await this.images
+      .aggregate<GalleryImageEntity>(pipe)
+      .toArray();
+    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
   }
 
   /**
@@ -1060,7 +1434,10 @@ export class GalleryService {
         .filter((r) => r.score >= minScore)
         .filter((r) => !imageType || this.matchesImageType(r, imageType))
         .slice(0, limit)
-        .map((r) => ({ image: r, score: r.score }));
+        .map((r) => ({
+          image: this.toPublicImage(r) as GalleryImageEntity,
+          score: r.score,
+        }));
     } catch {
       if (this.isAtlasAvailable === null) this.isAtlasAvailable = false;
       return this.searchSimilarLocal(
@@ -1115,11 +1492,8 @@ export class GalleryService {
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map((x) => {
-        const anyImg = x.image as unknown as Record<string, unknown>;
-        const clean = { ...anyImg };
-        delete (clean as { _id?: unknown })._id;
         return {
-          image: clean as unknown as GalleryImageEntity,
+          image: this.toPublicImage(x.image) as GalleryImageEntity,
           score: x.score,
         };
       });

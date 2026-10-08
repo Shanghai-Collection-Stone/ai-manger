@@ -42,8 +42,16 @@ import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js
 import { AiBillingModule } from './modules/ai-billing/ai-billing.module.js';
 import { DouyinPersonaModule } from './modules/douyin-persona/douyin-persona.module.js';
 import { DouyinWorkbenchModule } from './modules/douyin-workbench/douyin-workbench.module.js';
+import { DouyinPublishModule } from './modules/douyin-publish/douyin-publish.module.js';
+import { DouyinDataModule } from './modules/douyin-data/douyin-data.module.js';
+import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { WorkflowModelModule } from './modules/workflow-model/workflow-model.module.js';
 import { SmsVerificationModule } from './modules/sms-verification/sms-verification.module.js';
+import { AliyunConfigModule } from './modules/aliyun-config/aliyun-config.module.js';
+import { MailModule } from './modules/mail/mail.module.js';
+import { EmailVerificationModule } from './modules/email-verification/email-verification.module.js';
+import { TenantJoinModule } from './modules/tenant-join/tenant-join.module.js';
+import { OpsReportModule } from './modules/ops-report/ops-report.module.js';
 
 @Module({
   imports: [
@@ -89,9 +97,17 @@ import { SmsVerificationModule } from './modules/sms-verification/sms-verificati
     SuperClawModule,
     BrowserAuthModule,
     SmsVerificationModule,
+    AliyunConfigModule,
+    MailModule,
+    EmailVerificationModule,
+    TenantJoinModule,
+    OpsReportModule,
     AiBillingModule,
     DouyinPersonaModule,
     DouyinWorkbenchModule,
+    DouyinPublishModule,
+    DouyinDataModule,
+    KnowledgeModule,
     WorkflowModelModule,
   ],
   controllers: [AppController],

@@ -311,6 +311,8 @@ export class DataSourceService {
   /**
    * @title 确保索引 Ensure Indexes
    * @description 创建必要的数据库索引。
+   * @keyword-cn 数据源索引, 更新时间线
+   * @keyword-en data-source-indexes, updated-timeline
    */
   private async ensureIndexes(): Promise<void> {
     try {
@@ -319,6 +321,7 @@ export class DataSourceService {
       await this.collection.createIndex({ scope: 1, tenantId: 1, status: 1 });
       await this.collection.createIndex({ sourceType: 1, status: 1 });
       await this.collection.createIndex({ moduleRef: 1 });
+      await this.collection.createIndex({ updatedAt: -1 });
     } catch {
       // ignore
     }

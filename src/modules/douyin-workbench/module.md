@@ -14,16 +14,16 @@ AI 抖音工作台（douyin-workbench）
 - `controller/douyin-workbench.dto.ts` — 选题、分镜、生成、发布和抓取输入校验。
 - `entities/douyin-workbench.entity.ts` — 选题、分镜、素材引用和直连调用实体。
 - `services/douyin-workbench-repository.service.ts` — MongoDB 母子选题、分镜和素材归属持久化。
-- `services/douyin-child-topic-generation.service.ts` — 综合母题和平台 AI 提示词的 LLM 候选脚本生成（不入库）。
-- `services/douyin-storyboard-generation.service.ts` — LLM 工具调用式分镜生成，按脚本配图偏向走图库选图或先文字后逐镜出图。
-- `services/douyin-generation-job.service.ts` — 分镜 / 子选题后台生成任务：立即返回、后台执行、分镜并发排队、进度写库、候选脚本保存 / 放弃、失败原因翻译与中断收敛。
+- `services/douyin-child-topic-generation.service.ts` — 综合母题和平台 AI 提示词的 LLM 候选脚本生成（不入库）：一次结构化输出规划标题与角度，再并发写口播正文。
+- `services/douyin-storyboard-generation.service.ts` — 一次结构化输出写完整条分镜，图库自找时再做一次关思考的分镜选图，AI 出图时先文字后逐镜串行出图；同时并行写好发布文案。
+- `services/douyin-generation-job.service.ts` — 分镜 / 子选题后台生成任务：立即返回、经 AI 生成排队服务 `douyin-generation` 通道排队（全平台与租户两级上限）、进度写库、候选脚本保存 / 放弃、失败原因翻译与中断收敛。
 - `services/douyin-storyboard-image.service.ts` — 分镜自动配图：从租户图库挑选相关候选图、生成选图清单、按镜头文字相关度自动补图。
 - `services/douyin-shot-image.service.ts` — 按分镜描述文生图重新生成单镜画面，入图库后绑定到该镜。
 - `services/douyin-operation.service.ts` — 整片 / 单镜头视频生成入口（按节点设置分流到 PixMax 或直连服务）、发布、抓取直连请求与调用审计。
 - `services/douyin-pixmax-video.service.ts` — PixMax 生视频通道：分镜 / 整片提示词、提交任务、后台轮询、成片转存视频库并回填。
 - `services/douyin-pixmax-video.service.spec.ts` — 分镜与整片提示词单测。
-- `services/douyin-shuyan-video.service.ts` — 数眼智能 Seedance 生视频通道：原生任务提交 / 查询、后台续轮询、24 小时临时成片转存视频库并回填。
-- `services/douyin-shuyan-video.service.spec.ts` — 数眼视频网关、型号时长、状态与错误映射单测。
+- `services/douyin-shuyan-video.service.ts` — 数眼智能生视频通道（Seedance 与 MiniMax-H3 两条原生路由）：任务提交 / 查询、后台续轮询、临时成片转存视频库并回填。
+- `services/douyin-shuyan-video.service.spec.ts` — 数眼视频路由、网关与任务地址、型号时长与清晰度、状态与错误映射单测。
 - `config.example.env` — 三类直连接口地址、密钥与状态查询模板示例。
 
 ## 函数清单 (Function List)
@@ -36,9 +36,9 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinReferenceImageDto()` — 校验脚本参考图，只接受真实图库图片，最多 4 张 | keywords: 脚本参考图参数, 底图候选, reference-image-dto, base-image-candidate
 - `RefineDouyinScriptDto()` — 校验脚本 AI 微调请求（原正文 + 一句话修改指令 + 可选人物风格） | keywords: 脚本微调参数, 修改指令, refine-script-dto, revision-instruction
 - `ConfirmDouyinScriptDraftsDto()` — 校验一次保存 1 至 12 条挑中候选 | keywords: 保存挑选脚本, 批量入库, confirm-script-drafts-dto, batch-persist
-- `CreateDouyinMotherTopicDto()` — 校验人工母选题创建参数 | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
+- `CreateDouyinMotherTopicDto()` — 校验人工母选题创建参数（标题与可选引用知识 `knowledgeIds`，最多 10 条） | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
 - `GenerateDouyinChildrenDto()` — 校验 AI 子选题的可选生成要求、本轮统一的出镜人物与风格 | keywords: 生成抖音子题, 平台提示词, generate-douyin-children, platform-ai-prompt
-- `UpdateDouyinTopicDto()` — 校验选题、出镜人物（0 表示取消）、风格（空串表示取消）、参考图及完整分镜更新 | keywords: 更新抖音选题, 保存分镜, update-douyin-topic, save-storyboard
+- `UpdateDouyinTopicDto()` — 校验选题、母题引用知识（空数组清空）、出镜人物（0 表示取消）、风格（空串表示取消）、参考图及完整分镜更新 | keywords: 更新抖音选题, 保存分镜, update-douyin-topic, save-storyboard
 - `DOUYIN_SCRIPT_STYLES` — 脚本风格登记表：生活随拍 / 电影质感 / 干净商业 / 纪实街头 / 高饱和潮流 / 温暖治愈，每项含口播调性 `tone` 与画面质感 `visual` | keywords: 脚本风格, 画面质感风格, script-style, visual-style
 - `normalizeScriptStyle(input?)` — 规整脚本风格，未登记回退为不指定 | keywords: 规整脚本风格, 默认不指定风格, normalize-script-style, default-no-style
 - `normalizeReferenceImages(input?)` — 规整脚本参考图：只留图片、去重、最多 4 张 | keywords: 规整脚本参考图, 参考图去重, normalize-reference-images, reference-dedupe
@@ -49,13 +49,15 @@ AI 抖音工作台（douyin-workbench）
 - `normalizeStoryboardPreference(input?)` — 规整配图偏向，非法来源回退图库自找，标签去重限长限量 | keywords: 规整配图偏向, 图库标签限定, normalize-storyboard-preference, gallery-tag-filter
 - `normalizeVideoAudio(input?)` — 规整视频声音设置，缺省普通话配音 | keywords: 规整声音设置, 默认普通话配音, normalize-video-audio, default-mandarin-voiceover
 - `DouyinVideoAudioDto()` — 校验声音方式（配音 / 仅音乐 / 静音）与配音语言 | keywords: 声音设置参数, 配音语言, video-audio-dto, voiceover-language
+- `DouyinPublishCopyDto()` — 校验脚本发布文案：标题 ≤60 字、正文 ≤1000 字、话题 ≤5 个（单个 ≤20 字，可带井号） | keywords: 发布文案参数, 话题数量限制, publish-copy-dto, tag-count-limit
+- `normalizePublishCopy(input?)` — 规整发布文案：标题压单行、话题去井号去重限量，三项全空返回 null 表示清掉 | keywords: 规整发布文案, 话题去井号, normalize-publish-copy, strip-hashtag
 - `DouyinWorkbenchRepositoryService()` — 管理抖音选题和分镜持久化 | keywords: 抖音工作台仓储, 租户隔离, douyin-workbench-repository, tenant-isolation
-- `ensureIndexes()` — 创建抖音选题或调用记录索引 | keywords: 抖音选题索引, 父子查询, douyin-topic-indexes, parent-child-query
+- `ensureIndexes()` — 创建抖音选题父子查询与用户创建时间线索引 | keywords: 抖音选题索引, 父子查询, douyin-topic-indexes, parent-child-query
 - `listWorkspace(scope)` — 返回真实母子选题聚合 | keywords: 查询抖音工作台, 母子聚合, list-douyin-workspace, parent-child-aggregation
-- `create(input,scope)` — 人工新建母选题 | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
+- `create(input,scope)` — 人工新建母选题，可带引用知识 ID | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
 - `createChildren(parentId,candidates,scope)` — 批量保存用户挑中的脚本（标题 + 口播正文 + 配图偏向 + 出镜人物 + 风格 + 参考图）并固定短视频类型 | keywords: 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向, persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference
 - `get(id,scope)` — 按作用域读取选题 | keywords: 读取抖音选题, 所有权校验, get-douyin-topic, ownership-check
-- `update(id,input,scope)` — 保存标题、脚本正文、配图偏向、出镜人物（0 取消）、风格（空串取消）、参考图（空数组取消）、视频声音设置、整片目标时长（0 改回自动）、分镜或成片绑定 | keywords: 更新抖音选题, 保存脚本正文, 持久化分镜, update-douyin-topic, persist-script-body, persist-storyboard
+- `update(id,input,scope)` — 保存标题、脚本正文、配图偏向、出镜人物（0 取消）、风格（空串取消）、参考图（空数组取消）、视频声音设置、整片目标时长（0 改回自动）、发布文案（全空清掉）、分镜或成片绑定 | keywords: 更新抖音选题, 保存脚本正文, 持久化分镜, update-douyin-topic, persist-script-body, persist-storyboard
 - `updateShot(topicId,shotId,patch,scope)` — 用 arrayFilters 只写一镜的画面 / 配图提示词 / 分镜视频，并发互不覆盖 | keywords: 更新单段分镜, 分镜局部写入, update-single-shot, partial-storyboard-write
 - `remove(id,scope)` — 删除选题并级联子题 | keywords: 删除抖音选题, 级联删除, delete-douyin-topic, cascade-delete
 - `requireVideo(id,scope)` — 校验真实视频库记录 | keywords: 校验视频素材, 视频库归属, require-video-asset, video-library-ownership
@@ -66,39 +68,47 @@ AI 抖音工作台（douyin-workbench）
 - `tenantFilter(tenantId?)` — 构造租户或母平台数据边界 | keywords: 母平台数据边界, 租户过滤, platform-data-boundary, tenant-filter
 - `toView(row)` — 移除数据库 ID | keywords: 抖音选题视图, 隐藏数据库ID, douyin-topic-view, hide-database-id
 - `DouyinChildTopicGenerationService()` — 综合创作上下文生成抖音子选题 | keywords: 抖音子题生成, 平台AI提示词, douyin-child-generation, platform-ai-prompt
-- `generate(parentId,input,scope,onProgress?)` — 由 LLM 自主规划数量并生成差异化候选脚本（带 `key`，不入库），按 `personaId` / `scriptStyle` 统一人称视角与调性，`onProgress` 回报规划数量与已写入条数 | keywords: 生成AI子选题, LLM自主数量, 候选脚本, generate-ai-child-topics, llm-decided-count, script-draft
+- `generate(parentId,input,scope,onProgress?)` — 先一次结构化输出规划 3-12 条标题与角度，再并发写口播正文（带 `key`，不入库），按 `personaId` / `scriptStyle` 统一人称视角与调性；单条失败重试一次、仍失败丢掉，至少写出一条即成功；`onProgress` 回报规划数量与已写好条数 | keywords: 生成AI子选题, LLM自主数量, 候选脚本, 并发写脚本, generate-ai-child-topics, llm-decided-count, script-draft, parallel-script-writing
+- `DOUYIN_SCRIPT_WRITE_CONCURRENCY` — 候选脚本正文同时在写的条数上限（6），其余排队 | keywords: 并发写脚本, 写稿并发上限, script-write-concurrency, parallel-script-writing
+- `ZDouyinScriptPlan` — 规划候选脚本的结构化输出（标题 + 切入角度，3-12 条） | keywords: 脚本规划结构, LLM自主数量, script-plan-schema, llm-decided-count
+- `ZDouyinScriptBody` — 单条口播正文的结构化输出 | keywords: 口播正文结构, 结构化输出, script-body-schema, structured-output
+- `buildScriptLlm(scope)` — 按节点 `script` 构造带计费回调的模型，规划与各条写稿共用 | keywords: 构造脚本模型, 节点指定模型, build-script-llm, per-node-model
+- `planScripts(llm,brief,takenTitles)` — 一次结构化输出规划全部标题与角度，去掉与已有题目或本轮重复的标题 | keywords: 规划候选脚本, 标题去重, plan-script-drafts, title-deduplication
+- `writeScript(llm,brief,item,siblings)` — 按标题与角度写一条口播正文，太短或报错重试一次；两次太短返回 null，第二次仍报错则抛出 | keywords: 写候选脚本正文, 失败重试, write-script-draft, retry-once
+- `runWithConcurrency(list,limit,worker)` — 以固定并发数跑完一组异步任务 | keywords: 限流并发执行, 并发写脚本, bounded-concurrency, parallel-script-writing
 - `recommendPrompt(parentId,scope)` — 根据完整上下文推荐可编辑的生成要求 | keywords: 推荐抖音子题提示, 母题上下文, recommend-douyin-child-prompt, mother-topic-context
-- `loadGenerationContext(parentId,scope)` — 读取母题、平台提示和已有子题 | keywords: 读取子题生成上下文, 已有子题, load-child-generation-context, existing-child-topics
-- `createPlanTool(plan,onProgress?)` — 让 LLM 在安全范围内自主规划子题数量，规划后回报总数 | keywords: 子题数量规划, LLM自主数量, child-topic-count-plan, llm-decided-count
-- `createCandidateTool(candidates,existingTitles,plan,onProgress?)` — 创建脚本写入工具（标题 + 不少于 60 字的口播正文）并去重标题，每写入一条回报进度 | keywords: 子题追加工具, 标题去重, child-topic-append-tool, title-deduplication
-- `buildSystemPrompt(input)` — 合并创作上下文（含出镜人物人设段与风格调性）并要求 LLM 自主规划数量 | keywords: 构造子题提示词, 固定短视频, build-child-topic-prompt, fixed-short-video
+- `loadGenerationContext(parentId,scope)` — 读取母题（含引用知识 ID）、平台提示和已有子题 | keywords: 读取子题生成上下文, 已有子题, load-child-generation-context, existing-child-topics
+- `buildSystemPrompt(input)` — 构造规划与写稿共用的创作背景（母题、要求、已有题目、人设段、风格调性、母题引用知识、平台业务说明与安全约束） | keywords: 构造子题提示词, 固定短视频, build-child-topic-prompt, fixed-short-video
 - `refineScript(input,scope)` — 按一句话指令微调口播正文，只改点名处、保留原意与人称，不落库 | keywords: 脚本AI微调, 按指令改写, refine-script, instruction-rewrite
-- `runAgent(system,tools,expectedCount?,platformPrompt,scope)` — 执行数量规划与子题工具调用 Agent | keywords: 执行子题Agent, 工具结果, run-child-topic-agent, tool-result-only
 - `readAgentText(result)` — 从 Agent 响应读取推荐提示文本 | keywords: 读取Agent文本, 推荐提示, read-agent-text, prompt-recommendation
-- `DouyinStoryboardGenerationService()` — 使用 LLM 生成结构化分镜 | keywords: 抖音分镜生成, 结构化工具调用, douyin-storyboard-generation, structured-tool-call
-- `generate(topicId,prompt,scope,onProgress?)` — 按脚本配图偏向生成四至十二段分镜：图库自找时先按标签挑候选图、LLM 选图并自动补图后保存；AI 生成时先保存文字分镜再逐镜出图，返回段数与出图成败数 | keywords: 生成真实分镜, 保存镜头脚本, 分镜自动配图, 先文字后配图, generate-real-storyboard, persist-shot-script, storyboard-auto-image, text-first-imaging
+- `DouyinStoryboardGenerationService()` — 使用 LLM 一次结构化输出生成抖音分镜，图库配图另做一次关思考的选图 | keywords: 抖音分镜生成, 结构化工具调用, douyin-storyboard-generation, structured-tool-call
+- `generate(topicId,prompt,scope,onProgress?)` — 按脚本配图偏向生成四至十二段分镜：一次写完整条分镜（不足 4 段重试一次）；图库自找时再由关思考的 `pickShotImages` 选图、保存前自动补图；AI 生成时先保存文字分镜再逐镜出图；拆分镜同时并行写发布文案并随分镜保存，返回段数、出图成败数与是否写好文案 | keywords: 生成真实分镜, 保存镜头脚本, 分镜自动配图, 先文字后配图, 同步写发布文案, generate-real-storyboard, persist-shot-script, storyboard-auto-image, text-first-imaging, publish-copy-with-storyboard
+- `ZDouyinPublishCopy` — 发布文案的结构化输出（标题、正文、话题） | keywords: 发布文案结构, 结构化输出, publish-copy-schema, structured-output
+- `generatePublishCopy(topicId,input,scope)` — 一次结构化输出按脚本写好发布标题、正文与 3-5 个话题，失败返回 null、保留原文案 | keywords: 生成发布文案, 分镜同步文案, generate-publish-copy, publish-copy-with-storyboard
 - `generateShotImages(topicId,shots,scope,onProgress?)` — 文字分镜落库后线性串行逐镜文生图：第 N 镜以第 N-1 镜刚生成的画面为底图保证连贯，每张回报 `imaging` 进度，单镜失败只计数并断开这一处的连贯链 | keywords: 逐镜出图, 线性连贯出图, 先文字后配图, generate-shot-images, linear-shot-imaging, text-first-imaging
 - `STORYBOARD_IMAGE_GENERATION_LINEAR` — 逐镜出图为线性串行（不并发），换取镜头之间的场景与色调延续 | keywords: 线性连贯出图, 串行出图, linear-shot-imaging, serial-image-generation
 - `GENERATE_IMAGE_INSTRUCTION` — AI 出图偏向下给 LLM 的配图说明（不给图库清单、写好 image_prompt） | keywords: AI出图说明, 配图提示词, ai-image-instruction, image-prompt-guide
-- `createShotTool(shots,candidates,onProgress?)` — 创建逐段分镜写入工具，`image_id` 只接受候选清单内的图片，重复用图时提示换图，`image_prompt` 存为该镜配图提示词，每写入一段回报进度 | keywords: 分镜追加工具, 内存写入, 分镜选图, storyboard-append-tool, memory-write, storyboard-image-pick
+- `ZDouyinStoryboard` — 一次写完整条分镜的结构化输出（4-12 段，含时长、景别、画面、旁白、转场与配图提示词） | keywords: 分镜结构, 一次写完分镜, storyboard-schema, single-shot-storyboard
+- `ZDouyinShotImagePicks` — 分镜选图的结构化输出（第几段配哪张候选图） | keywords: 分镜选图结构, 候选图编号, shot-image-pick-schema, candidate-image-id
+- `pickShotImages(shots,candidates,scope)` — 分镜选图（节点 `image-decision`，关闭思考）：一次为每段挑候选图，只认清单内编号、同图不重复，失败只记警告 | keywords: 分镜选图, 关闭思考, storyboard-image-pick, thinking-off
 - `DOUYIN_GENERATION_STALE_MS` — 运行中任务无进度写入且不在当前进程超过 10 分钟即判定中断 | keywords: 任务中断判定, 静默超时, job-interrupted-threshold, silent-timeout
-- `DOUYIN_STORYBOARD_JOB_CONCURRENCY` — 当前进程同时执行的分镜任务上限（3），其余排队 | keywords: 分镜任务并发, 排队生成, storyboard-job-concurrency, queued-generation
+- `DOUYIN_GENERATION_QUEUE_LANE` — 抖音生成在 AI 生成排队服务里的通道名 `douyin-generation`，候选脚本与分镜任务共用 | keywords: 抖音生成排队通道, 排队生成, douyin-generation-lane, queued-generation
+- `DOUYIN_QUEUED_REPORT_DELAY_MS` — 申请名额超过 500ms 还没拿到才回报 `queued`，避免有空位时界面闪「排队中」 | keywords: 排队提示延迟, 防闪烁, queued-report-delay, anti-flicker
 - `DOUYIN_GENERATION_ERROR_MESSAGES` — 后台生成失败码与中文原因对照表（含 AI 画面全部失败） | keywords: 生成失败原因, 错误码翻译, generation-failure-reason, error-code-translate
 - `DouyinGenerationJobService()` — 分镜与子选题的后台生成任务服务 | keywords: 后台生成任务, 异步生成, background-generation-job, async-generation
-- `DouyinGenerationJobService.ensureIndexes()` — 创建任务 ID、作用域时间线与同选题运行态索引 | keywords: 生成任务索引, 运行态查询, generation-job-indexes, running-state-query
+- `DouyinGenerationJobService.ensureIndexes()` — 创建任务 ID、作用域更新时间线/开始时间线与同选题运行态索引 | keywords: 生成任务索引, 运行态查询, generation-job-indexes, running-state-query
 - `DouyinGenerationJobService.start(kind,topicId,prompt,scope,options?)` — 校验选题类型、拦截同选题重复任务，写入运行中任务（候选脚本任务可带本轮统一的 `personaId` / `scriptStyle`）后立即返回 | keywords: 启动后台生成, 重复任务拦截, start-background-generation, duplicate-job-guard
-- `DouyinGenerationJobService.list(scope)` — 读取运行中、最近 24 小时以及候选未处理的任务，先收敛中断任务 | keywords: 查询生成任务, 进度轮询, list-generation-jobs, progress-polling
-- `DouyinGenerationJobService.run(job,scope)` — 后台执行生成（分镜先占并发名额）、进度写库，成功写结果（分镜段数与出图数，或候选脚本），失败写失败码与中文原因 | keywords: 执行后台生成, 进度写库, run-background-generation, persist-progress
+- `DouyinGenerationJobService.list(scope)` — 触发一次排队补位后，读取运行中、最近 24 小时以及候选未处理的任务，先收敛中断任务 | keywords: 查询生成任务, 进度轮询, list-generation-jobs, progress-polling
+- `DouyinGenerationJobService.run(job,scope)` — 后台执行生成（先在抖音生成通道排队占名额）、进度写库，成功写结果（分镜段数与出图数，或候选脚本），失败写失败码与中文原因 | keywords: 执行后台生成, 进度写库, run-background-generation, persist-progress
 - `DouyinGenerationJobService.confirmDrafts(jobId,items,scope)` — 占住候选后按序入库挑中的脚本与偏向（人物 / 风格留空时沿用本轮任务设置），再逐条启动分镜任务 | keywords: 保存挑选脚本, 启动分镜任务, confirm-script-drafts, start-storyboard-jobs
 - `DouyinGenerationJobService.discardDrafts(jobId,scope)` — 放弃整批候选脚本 | keywords: 放弃候选脚本, 候选已处理, discard-script-drafts, drafts-settled
 - `DouyinGenerationJobService.requirePendingDrafts(jobId,scope)` — 读取本人已完成且候选未处理的子选题任务 | keywords: 读取待选脚本, 候选归属校验, require-pending-drafts, draft-ownership-check
-- `DouyinGenerationJobService.acquireStoryboardSlot(report)` — 占分镜名额，满额时回报 `queued` 并等待 | keywords: 占用分镜名额, 排队生成, acquire-storyboard-slot, queued-generation
-- `DouyinGenerationJobService.releaseStoryboardSlot()` — 释放名额并唤醒下一个排队任务 | keywords: 释放分镜名额, 唤醒排队, release-storyboard-slot, wake-queued-job
-- `DouyinGenerationJobService.settleStaleJobs(scope)` — 把服务中断遗留的运行中任务收进失败终态 | keywords: 收敛中断任务, 僵尸任务, settle-stale-jobs, zombie-job
+- `DouyinGenerationJobService.acquireSlot(jobId,scope,report)` — 在抖音生成通道排队申请名额（任务 ID 作业务键登记），一时拿不到时回报 `queued`，返回释放函数 | keywords: 申请抖音生成名额, 排队生成, acquire-douyin-generation-slot, queued-generation
+- `DouyinGenerationJobService.settleStaleJobs(scope)` — 把已不在任何进程（本进程集合与排队登记簿都查不到）且 10 分钟无进度的运行中任务收进失败终态 | keywords: 收敛中断任务, 僵尸任务, settle-stale-jobs, zombie-job
 - `DouyinGenerationJobService.describeError(code)` — 翻译失败码，含子选题数量不足的动态码 | keywords: 生成失败原因, 错误码翻译, generation-failure-reason, error-code-translate
 - `DouyinGenerationJobService.scopeFilter(scope)` — 构造任务的租户用户过滤 | keywords: 任务作用域过滤, 用户隔离, job-scope-filter, user-isolation
 - `DouyinGenerationJobService.toView(row)` — 去掉数据库字段与原始提示词 | keywords: 生成任务视图, 隐藏内部字段, generation-job-view, hide-internal-fields
-- `runAgent(title,topicType,requirement,imagePrompt,shots,addShot,scope)` — 调用默认 LLM 完成抖音分镜，并附上候选图片清单逐段选图 | keywords: 执行分镜Agent, 抖音创作约束, run-storyboard-agent, douyin-creative-constraints
+- `writeStoryboard(brief,scope)` — 一次结构化输出写完整条分镜（节点 `storyboard`，平台说明拼进系统提示），画面描述不看候选图，返回规整后的最多 12 段 | keywords: 执行分镜Agent, 抖音创作约束, 一次写完分镜, run-storyboard-agent, douyin-creative-constraints, single-shot-storyboard
 - `STORYBOARD_IMAGE_CANDIDATE_LIMIT` — 一次分镜生成最多给 LLM 的候选图数量（40） | keywords: 候选图片上限, 上下文预算, image-candidate-limit, context-budget
 - `STORYBOARD_EXCLUDED_IMAGE_TAGS` — 不参与分镜配图的封面与 AI 素材系统标签 | keywords: 排除系统标签, 封面素材, excluded-system-tags, cover-material
 - `toCandidate(image)` — 把图库实体转成候选图，缺地址返回 null | keywords: 图库转候选, 候选图片, gallery-to-candidate, storyboard-image-candidate
@@ -109,7 +119,7 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoryboardImageService({ gallery })` — 分镜候选图服务 | keywords: 分镜候选图片, 自动配图, storyboard-image-candidate, auto-image-attach
 - `DouyinStoryboardImageService.loadCandidates(query,scope,limitTags?)` — 按向量检索 → 标签命中 → 随机补足收集最多 40 张去重候选，排除拼图、封面与 AI 素材；传了限定标签时只收带这些标签的图、随机补足也只在标签内取；任一路失败不影响分镜 | keywords: 收集候选图片, 相关度排序, 图库标签限定, load-image-candidates, relevance-order, gallery-tag-filter
 - `DouyinOperationService()` — 管理三类直连操作及持久化审计 | keywords: 抖音直连接口, 禁止隐式节点, douyin-direct-api, no-implicit-super-claw
-- `ensureIndexes()` — 创建直连调用记录索引 | keywords: 抖音调用索引, 操作查询, douyin-operation-indexes, operation-query
+- `ensureIndexes()` — 创建直连调用记录、用户时间线与供应商状态轮询索引 | keywords: 抖音调用索引, 操作查询, douyin-operation-indexes, operation-query
 - `createGeneration(topicId,prompt,user)` — 整片模式：节点 `full-video` 指定了模型时交给 PixMax 通道，否则用整条分镜直连生成合成总片并写服务扣费流水 | keywords: 直连视频生成, 合成总片, 生视频扣费, 整片生成, direct-video-generation, composite-video, video-service-charge, full-video
 - `createShotGeneration(topicId,shotId,prompt,user)` — 分镜模式：只提交一段分镜生成分镜视频（节点 `shot-video` 指定了模型时走 PixMax），记录带 shotId，成功时绑定该镜 videoId | keywords: 单镜头视频生成, 分镜视频历史, single-shot-video-generation, shot-video-history
 - `DOUYIN_SHOT_IMAGE_SIZE` — 分镜画面出图尺寸（竖屏 1024x1792） | keywords: 分镜出图尺寸, 竖屏比例, shot-image-size, portrait-ratio
@@ -150,7 +160,7 @@ AI 抖音工作台（douyin-workbench）
 - `buildFullVideoPrompt(input)` — 整片结构化提示词：【视频】【分镜时间轴】【口播稿】（完整脚本正文，没有正文时拼分镜口播）【声音】【参考图】【时长】【限制】【补充要求】 | keywords: 整片视频提示词, 多镜头时间轴, 结构化提示词, full-video-prompt, multi-shot-timeline, structured-prompt
 - `readDouyinVideoPlan(request)` — 从调用请求取出生成方式、参考图张数、实际 / 计划时长、是否压缩、声音设置与是否带口播稿，供前端展示 | keywords: 读取生成方案, 参考图张数, read-video-plan, reference-image-count
 - `DouyinPixmaxVideoService()` — PixMax 生视频通道 | keywords: PixMax生视频, 整片生成, 分镜视频, pixmax-video-generation, full-video, shot-video
-- `DouyinPixmaxVideoService.onModuleInit()` — 启动后台轮询，重启后续跟未结束任务 | keywords: 启动PixMax轮询, 重启续跟, start-pixmax-polling, resume-after-restart
+- `DouyinPixmaxVideoService.onModuleInit()` — 启动后台轮询，重启后续跟未结束任务；多进程时只在 leader 进程上轮询 | keywords: 启动PixMax轮询, 重启续跟, start-pixmax-polling, resume-after-restart
 - `DouyinPixmaxVideoService.onModuleDestroy()` — 停止轮询 | keywords: 停止PixMax轮询, 模块销毁, stop-pixmax-polling, module-destroy
 - `DouyinPixmaxVideoService.start(input)` — 组装提示词与参数、扣费、上传分镜画面、提交任务并写调用记录 | keywords: 提交PixMax视频, 整片或单镜, submit-pixmax-video, full-or-shot
 - `DouyinPixmaxVideoService.refresh(id)` — 手动同步一条调用 | keywords: 同步PixMax调用, 手动刷新, sync-pixmax-operation, manual-refresh
@@ -167,35 +177,43 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinPixmaxVideoService.toView(row)` — 调用记录视图 | keywords: PixMax调用视图, 隐藏请求, pixmax-operation-view, hide-request
 - `DOUYIN_SHUYAN_POLL_MS` — 数眼 Seedance 后台轮询间隔（15 秒） | keywords: 数眼视频轮询间隔, 后台轮询, shuyan-video-poll-interval, background-polling
 - `DOUYIN_SHUYAN_TASK_TIMEOUT_MS` — 数眼任务默认 48 小时过期，保存中超过 10 分钟可重新认领 | keywords: 数眼视频任务超时, 保存中断, shuyan-video-task-timeout, saving-stale
-- `DOUYIN_SHOT_FACE_MASK_STYLE` — 卡通换头固定的 3D 皮克斯风描述 | keywords: 卡通大头风格, 皮克斯风, cartoon-head-style, pixar-style
-- `buildShotFaceMaskPrompt()` — 「只换头、其余像素不动」的图像编辑提示词 | keywords: 卡通换头提示词, 定点编辑, face-mask-prompt, targeted-edit
-- `DouyinShotImageService.maskFaces(topicId,shotId,scope)` — 以当前画面为底图把真人换成卡通大头，记 `originalMedia` 供恢复 | keywords: 分镜卡通换头, 遮挡真人, shot-face-mask, cover-real-person
-- `DouyinShotImageService.restoreOriginalImage(topicId,shotId,scope)` — 换回换头前的原图并清掉 `originalMedia` | keywords: 恢复分镜原图, 撤销换头, restore-shot-image, undo-face-mask
+- `DOUYIN_FACE_MASK_STYLES` — 人像处理风格 `cartoon-3d` / `anime-bighead` / `anthropomorphic` / `deidentify`，与前端风格弹窗一致 | keywords: 人像处理风格, 分镜换头风格, face-mask-styles, shot-portrait-style
+- `MaskDouyinShotFacesDto()` — 校验人像处理风格参数，缺省 3D 卡通大头 | keywords: 人像处理风格参数, mask-shot-faces-dto
+- `DOUYIN_SHOT_FACE_MASK_STYLE` — 3D 卡通大头的皮克斯风头像描述 | keywords: 卡通大头风格, 皮克斯风, cartoon-head-style, pixar-style
+- `DOUYIN_FACE_MASK_STYLE_LABELS` — 人像处理风格中文名（3D 卡通大头 / 动画大头 / 拟人风格 / AI 去除真人特征），用于图库命名 | keywords: 人像处理风格名称, face-mask-style-labels
+- `buildShotFaceMaskPrompt(style?)` — 按风格拼「只改人物、其余像素不动」的图像编辑提示词：3D 大头、二维动画 Q 版大头、拟人动物角色、写实去识别化 | keywords: 人像处理提示词, 定点编辑, face-mask-prompt, targeted-edit
+- `DouyinShotImageService.maskFaces(topicId,shotId,scope,style?)` — 以当前画面为底图按所选风格处理真人，记 `faceMaskStyle` 与 `originalMedia` 供恢复 | keywords: 分镜卡通换头, 遮挡真人, shot-face-mask, cover-real-person
+- `DouyinShotImageService.restoreOriginalImage(topicId,shotId,scope)` — 换回处理前的原图并清掉 `originalMedia` 与 `faceMaskStyle` | keywords: 恢复分镜原图, 撤销换头, restore-shot-image, undo-face-mask
 - `DouyinShotImageService.requireTopic(topicId,scope)` — 读取子选题，不是子选题时报错 | keywords: 读取脚本选题, 子选题校验, require-child-topic, child-topic-check
 - `DouyinShotImageService.requireShot(topicId,shotId,scope)` — 读取选题与分镜段落 | keywords: 读取分镜段落, 段落校验, require-storyboard-shot, shot-check
-- `maskShotFaces()` — `POST topics/:id/storyboard/:shotId/image/mask-faces`（`create DouyinWorkbench`） | keywords: 分镜卡通换头接口, 遮挡真人, shot-face-mask-api, cover-real-person
+- `maskShotFaces()` — `POST topics/:id/storyboard/:shotId/image/mask-faces`（`create DouyinWorkbench`），body `{ style? }` | keywords: 分镜卡通换头接口, 遮挡真人, shot-face-mask-api, cover-real-person
 - `restoreShotImage()` — `POST topics/:id/storyboard/:shotId/image/restore`（`update DouyinWorkbench`） | keywords: 恢复分镜原图接口, 撤销换头, restore-shot-image-api, undo-face-mask
 - `DOUYIN_SHUYAN_VIDEO_RESOLUTION` — 数眼 Seedance 生视频默认分辨率（480p，最省档位） | keywords: 数眼视频分辨率, 默认清晰度, shuyan-video-resolution, default-quality
 - `SHUYAN_VIDEO_ERROR_RULES` — 数眼通道自己的错误对照（网络 / 密钥 / 限流 / 型号未接入），不套用写着 PixMax 的文案 | keywords: 数眼错误对照, 通道错误, shuyan-error-rules, channel-error
 - `describeRejectedShuyanImages(raw)` — 从报错里的 `content[N]` 认出被拒的是第几张参考图 | keywords: 定位被拒参考图, 报错图片序号, locate-rejected-image, error-image-index
 - `describeShuyanVideoFailure(raw)` — 数眼报错翻译成中文：先查通道规则，再复用 PixMax 的上游模型规则，并点名被拒的参考图 | keywords: 翻译数眼报错, 友好错误提示, describe-shuyan-error, friendly-error-message
-- `listShuyanVideoResolutionChoices(model)` — 数眼型号可选清晰度（1080p 仅 Seedance 2.x） | keywords: Seedance可选清晰度, 型号清晰度范围, seedance-resolution-choices, model-resolution-range
-- `clampShuyanVideoResolution(model,resolution?)` — 设定的清晰度收敛到型号档位，对不上就近取、没设定用默认档 | keywords: Seedance清晰度收敛, 视频清晰度, clamp-seedance-resolution, video-resolution
-- `ShuyanVideoTask` — 数眼 Seedance 创建 / 查询任务的内部响应结构 | keywords: 数眼视频任务, Seedance任务, shuyan-video-task, seedance-task
-- `isShuyanSeedanceModel(model)` — 只把 Seedance 型号交给当前已接入的数眼视频路由 | keywords: 数眼Seedance识别, 视频模型支持, shuyan-seedance-model, video-model-support
+- `listShuyanVideoResolutionChoices(model)` — 数眼型号可选清晰度，写法与接口逐字一致（MiniMax-H3 为 `768P` / `2K`；1080p 仅 Seedance 2.x） | keywords: Seedance可选清晰度, 型号清晰度范围, seedance-resolution-choices, model-resolution-range
+- `shuyanResolutionHeightOf(label)` — 清晰度档位换算短边像素（`720p` → 720、`2K` → 1440、`4K` → 2160），供就近取档 | keywords: 清晰度短边像素, 档位换算, resolution-short-edge, resolution-to-pixels
+- `clampShuyanVideoResolution(model,resolution?)` — 设定的清晰度（大小写不限）收敛到型号档位，对不上按像素就近取；没设定用默认档，型号没有默认档时取最低档 | keywords: Seedance清晰度收敛, 视频清晰度, clamp-seedance-resolution, video-resolution
+- `ShuyanVideoTask` — 数眼创建 / 查询任务的内部响应结构（Seedance 平铺、`id`、`content.video_url`；MiniMax-H3 创建返回 `task_id`、查询包在 `task` 里、`content.url`） | keywords: 数眼视频任务, Seedance任务, H3任务, shuyan-video-task, seedance-task, minimax-h3-task
+- `ShuyanVideoRoute` — 数眼已接入的视频原生路由 `seedance` / `hailuo-v2` | keywords: 数眼视频路由, 原生端点, shuyan-video-route, native-endpoint
+- `resolveShuyanVideoRoute(model)` — 按模型名判路由：含 seedance → `seedance`，MiniMax-H3 → `hailuo-v2`，其余视频族返回 null | keywords: 数眼视频路由, 视频模型支持, resolve-shuyan-video-route, video-model-support
+- `normalizeShuyanVideoModel(model)` — MiniMax-H3 不分大小写对齐到接口枚举 `MiniMax-H3`，其余原样 | keywords: 数眼模型名规整, H3模型枚举, normalize-shuyan-video-model, minimax-h3-model-enum
+- `resolveShuyanVideoTaskUrl(gateway,route,taskId?)` — 拼创建 / 查询地址（Seedance `/seedance/api/v3/contents/generations/tasks[/{id}]`；H3 `/hailuo/v2/video_generation`、`/hailuo/v2/query/video_generation/{id}`） | keywords: 数眼视频任务地址, 创建与查询, shuyan-video-task-url, create-and-query
+- `unwrapShuyanVideoTask(raw)` — 拆掉 MiniMax-H3 查询结果的 `task` 外壳，平铺结果原样 | keywords: 拆包数眼任务, H3查询结果, unwrap-shuyan-video-task, minimax-h3-query-result
 - `resolveShuyanVideoGateway(baseUrl?)` — 从 OpenAI `/v1` baseUrl 还原数眼原生视频网关 | keywords: 数眼视频网关, 移除V1路径, shuyan-video-gateway, strip-v1-path
-- `listShuyanVideoDurationChoices(model)` — 按 Seedance 版本返回整数秒可选范围 | keywords: Seedance可选时长, 型号时长范围, seedance-duration-choices, model-duration-range
-- `clampShuyanVideoDuration(model,seconds)` — 收敛到 Seedance 型号允许的整数秒 | keywords: Seedance时长收敛, 视频时长, clamp-seedance-duration, video-duration
+- `listShuyanVideoDurationChoices(model)` — 返回整数秒可选范围（MiniMax-H3 4~15 秒，Seedance 按版本） | keywords: Seedance可选时长, 型号时长范围, seedance-duration-choices, model-duration-range
+- `clampShuyanVideoDuration(model,seconds)` — 收敛到数眼型号允许的整数秒 | keywords: Seedance时长收敛, 视频时长, clamp-seedance-duration, video-duration
 - `mapShuyanVideoStatus(status?)` — 把 queued / running / succeeded / failed 等状态映射成工作台状态，初建无状态视为 queued | keywords: 数眼视频状态映射, 初建无状态, map-shuyan-video-status, missing-status-queued
 - `describeShuyanVideoError(task)` — 保留错误码与消息生成中文失败说明 | keywords: 数眼视频错误, 上游错误码, describe-shuyan-video-error, upstream-error-code
-- `DouyinShuyanVideoService()` — 数眼 Seedance 生视频、轮询与成片转存通道 | keywords: 数眼Seedance生视频, 成片转存, 分镜视频, shuyan-seedance-video, persist-generated-video, shot-video
-- `DouyinShuyanVideoService.onModuleInit()` — 启动后台轮询并在重启后续跟 | keywords: 启动数眼视频轮询, 重启续跟, start-shuyan-video-polling, resume-after-restart
+- `DouyinShuyanVideoService()` — 数眼 Seedance / MiniMax-H3 生视频、轮询与成片转存通道 | keywords: 数眼Seedance生视频, 数眼H3生视频, 成片转存, 分镜视频, shuyan-seedance-video, shuyan-minimax-h3-video, persist-generated-video, shot-video
+- `DouyinShuyanVideoService.onModuleInit()` — 启动后台轮询并在重启后续跟；多进程时只在 leader 进程上轮询 | keywords: 启动数眼视频轮询, 重启续跟, start-shuyan-video-polling, resume-after-restart
 - `DouyinShuyanVideoService.onModuleDestroy()` — 停止数眼后台轮询 | keywords: 停止数眼视频轮询, 模块销毁, stop-shuyan-video-polling, module-destroy
-- `DouyinShuyanVideoService.start(input)` — 组装 Seedance 多模态 content、扣费、提交任务并写调用记录 | keywords: 提交数眼视频, Seedance多模态, submit-shuyan-video, seedance-multimodal
+- `DouyinShuyanVideoService.start(input)` — 按型号选 Seedance / MiniMax-H3 路由，组装多模态 content、扣费、提交任务并写调用记录 | keywords: 提交数眼视频, Seedance多模态, submit-shuyan-video, seedance-multimodal
 - `DouyinShuyanVideoService.refresh(id)` — 手动同步一条数眼调用 | keywords: 同步数眼视频调用, 手动刷新, sync-shuyan-video-operation, manual-refresh
 - `DouyinShuyanVideoService.pollOnce()` — 跟进一轮未结束数眼调用，不重入 | keywords: 轮询数眼视频调用, 防重入, poll-shuyan-video-operations, reentry-guard
-- `DouyinShuyanVideoService.refreshRow(row)` — 查询并推进任务，成功后认领、转存与回填；手动同步可重试曾经失败的成片转存 | keywords: 推进数眼视频调用, 完成转存, advance-shuyan-video-operation, save-on-complete
-- `DouyinShuyanVideoService.saveVideo(url,input)` — OSS 已配置时立即转存 24 小时临时成片，否则登记临时外链 | keywords: 转存数眼成片, 视频库登记, save-shuyan-video, register-video
+- `DouyinShuyanVideoService.refreshRow(row)` — 按记录型号选路由查询并推进任务，成功后认领、转存与回填；手动同步可重试曾经失败的成片转存 | keywords: 推进数眼视频调用, 完成转存, advance-shuyan-video-operation, save-on-complete
+- `DouyinShuyanVideoService.saveVideo(url,input)` — OSS 已配置时立即转存临时成片（Seedance 24 小时、MiniMax-H3 约 7 天），否则登记临时外链 | keywords: 转存数眼成片, 视频库登记, save-shuyan-video, register-video
 - `DouyinShuyanVideoService.collectImages(shots,offset)` — 收集去重分镜参考图 | keywords: 收集数眼参考图, 分镜图片去重, collect-shuyan-reference-images, dedupe-shot-images
 - `DouyinShuyanVideoService.toSeedanceImageUrl(url)` — 公网图原样提交，站内图转 data URL | keywords: 数眼图片输入, 本地图片Base64, seedance-image-input, local-image-data-url
 - `DouyinShuyanVideoService.imageContentTypeOf(url)` — 按扩展名判断图片媒体类型 | keywords: 图片媒体类型, 扩展名推断, image-content-type, extension-detection
@@ -264,6 +282,7 @@ AI 抖音工作台（douyin-workbench）
 | 更新单段分镜   | update-single-shot           |
 | 合成总片       | composite-video              |
 | 分镜卡通换头   | shot-face-mask               |
+| 人像处理风格   | face-mask-styles             |
 | 恢复分镜原图   | restore-shot-image           |
 | 整片清晰度     | full-video-resolution        |
 | 可选清晰度     | resolution-choices           |
@@ -284,6 +303,9 @@ AI 抖音工作台（douyin-workbench）
 | 结构化提示词   | structured-prompt            |
 | PixMax生视频   | pixmax-video-generation      |
 | 数眼生视频     | shuyan-seedance-video        |
+| 数眼H3生视频   | shuyan-minimax-h3-video      |
+| 数眼视频路由   | resolve-shuyan-video-route   |
+| 数眼视频任务地址 | shuyan-video-task-url      |
 | 数眼网关       | shuyan-video-gateway         |
 | Seedance时长   | seedance-duration-choices    |
 | 数眼状态       | map-shuyan-video-status      |
@@ -298,44 +320,61 @@ AI 抖音工作台（douyin-workbench）
 | 脚本AI微调     | refine-script                |
 | 按指令改写     | instruction-rewrite          |
 | 配音音色约束   | voiceover-timbre-rule        |
+| 脚本发布文案   | script-publish-copy          |
+| 生成发布文案   | generate-publish-copy        |
+| 同步写发布文案 | publish-copy-with-storyboard |
+| 规整发布文案   | normalize-publish-copy       |
+| 并发写脚本     | parallel-script-writing      |
+| 规划候选脚本   | plan-script-drafts           |
+| 结构化输出     | structured-output            |
+| 一次写完分镜   | single-shot-storyboard       |
+| 分镜选图       | storyboard-image-pick        |
+| 关闭思考       | thinking-off                 |
+| 抖音生成排队通道 | douyin-generation-lane     |
 
 ## 类型导出 (Type Exports)
 
+- `DouyinPublishCopy` — 脚本发布文案（标题、正文、话题），子选题的 `publishCopy` 字段。
 - `DouyinMediaReference` / `DouyinStoryboardShot` / `DouyinStoryboardPreference` / `DouyinVideoAudioSetting` / `DouyinScriptDraft` / `DouyinTopicEntity` / `DouyinWorkspaceGroup` / `DouyinOperationView` / `DouyinOperationEntity`。
 - `DouyinScriptStyle` — 脚本风格键名联合类型，取值来自 `DOUYIN_SCRIPT_STYLES`。
 - `DouyinGenerationJobKind` / `DouyinGenerationJobProgress` / `DouyinGenerationJobView` / `DouyinGenerationJobEntity` — 后台生成任务类型、真实进度（阶段含 `queued` / `imaging` + 已写入数或已出图数 + 总数）、前端视图（结果含候选脚本与处理时间）与持久化实体。
+- `ShuyanVideoRoute` — 数眼视频原生路由 `seedance` / `hailuo-v2`（MiniMax-H3）。
 - `StoryboardImageCandidate` — 分镜自动配图的候选图（编号、名称、原图与缩略图地址、标签、描述、是否竖图）。
-- `DouyinMediaReferenceDto` / `DouyinStoryboardShotDto` / `DouyinStoryboardPreferenceDto` / `DouyinVideoAudioDto` / `DouyinScriptDraftPickDto` / `ConfirmDouyinScriptDraftsDto` / `CreateDouyinMotherTopicDto` / `GenerateDouyinChildrenDto` / `UpdateDouyinTopicDto` / `GenerateDouyinStoryboardDto` / `GenerateDouyinVideoDto` / `GenerateDouyinShotImageDto` / `GenerateDouyinShotVideoDto` / `PublishDouyinVideoDto` / `CrawlDouyinDataDto` / `DouyinReferenceImageDto` / `RefineDouyinScriptDto`。
+- `DouyinMediaReferenceDto` / `DouyinStoryboardShotDto` / `DouyinStoryboardPreferenceDto` / `DouyinVideoAudioDto` / `DouyinScriptDraftPickDto` / `ConfirmDouyinScriptDraftsDto` / `CreateDouyinMotherTopicDto` / `GenerateDouyinChildrenDto` / `UpdateDouyinTopicDto` / `GenerateDouyinStoryboardDto` / `GenerateDouyinVideoDto` / `GenerateDouyinShotImageDto` / `GenerateDouyinShotVideoDto` / `PublishDouyinVideoDto` / `CrawlDouyinDataDto` / `DouyinReferenceImageDto` / `RefineDouyinScriptDto` / `DouyinPublishCopyDto`。
 
 ## 模块功能描述 (Module Feature Description)
 
-接口前缀为 `/api/douyin-workbench`，全部使用 `AdminAuthGuard`、`AdminPoliciesGuard` 并在路由注册处声明 `DouyinWorkbench` 权限。`POST topics` 只接受人工母选题；`POST topics/:id/children/prompt/recommend` 根据母题、平台提示和已有子题返回一条可编辑的 AI 推荐要求。`POST topics/:id/children/generate` 调用默认 LLM，综合母选题、租户平台 AI 提示词（母平台作用域读取全局配置）与可选用户要求，先通过 `douyin_workbench_plan_child_topics` 自主决定三至十二项的合理数量，再通过 `douyin_workbench_add_child_topic` 逐条生成并保存。子选题不接收数量或内容类型，仓储统一写入 `短视频`。`douyin_topics` 保存母子选题和完整分镜，素材引用保存前会按当前租户检查 `gallery_images` 或 `videos` 真实记录。
+接口前缀为 `/api/douyin-workbench`，全部使用 `AdminAuthGuard`、`AdminPoliciesGuard` 并在路由注册处声明 `DouyinWorkbench` 权限。`POST topics` 只接受人工母选题；`POST topics/:id/children/prompt/recommend` 根据母题、平台提示和已有子题返回一条可编辑的 AI 推荐要求。`POST topics/:id/children/generate` 调用节点 `script` 的 LLM，综合母选题、租户平台 AI 提示词（母平台作用域读取全局配置）与可选用户要求，先一次结构化输出自主规划三至十二条标题与角度，再并发写各条口播正文（见下文「脚本生成提速」）。子选题不接收数量或内容类型，仓储统一写入 `短视频`。`douyin_topics` 保存母子选题和完整分镜，素材引用保存前会按当前租户检查 `gallery_images` 或 `videos` 真实记录。
 
-分镜接口 `POST topics/:id/storyboard/generate` 先按 `text-generation` 当前后台定价扣一次 Credit，再复用默认 LLM，并在该调用链内关闭 Provider 重复扣费；母平台作用域不扣点。分镜通过 `douyin_workbench_add_storyboard_shot` 工具逐段收集四至十二段结构化结果。视频生成、发布和抓取分别读取 `DOUYIN_VIDEO_GENERATION_*`、`DOUYIN_PUBLISH_*`、`DOUYIN_DATA_*` 配置；未设置 `*_URL` 时返回 `*_NOT_CONFIGURED`。可选 `*_STATUS_URL_TEMPLATE` 用 `{id}` 占位同步异步状态；视频生成响应返回已登记到 `video-library` 的 `videoId` 后，子选题自动绑定该成片。模块没有 SuperClaw、Todo 或 Workspace 依赖。
+分镜接口 `POST topics/:id/storyboard/generate` 先按 `text-generation` 当前后台定价扣一次 Credit，再复用默认 LLM，并在该调用链内关闭 Provider 重复扣费；母平台作用域不扣点。分镜由 `writeStoryboard` 一次结构化输出（`withStructuredOutput`，functionCalling）写出四至十二段，不足 4 段重试一次；原来逐段调 `douyin_workbench_add_storyboard_shot` 工具、每段一轮请求的方式已移除。视频生成、发布和抓取分别读取 `DOUYIN_VIDEO_GENERATION_*`、`DOUYIN_PUBLISH_*`、`DOUYIN_DATA_*` 配置；未设置 `*_URL` 时返回 `*_NOT_CONFIGURED`。可选 `*_STATUS_URL_TEMPLATE` 用 `{id}` 占位同步异步状态；视频生成响应返回已登记到 `video-library` 的 `videoId` 后，子选题自动绑定该成片。模块没有 SuperClaw、Todo 或 Workspace 依赖。
 
 **分镜与子选题改为后台异步生成**：`POST topics/:id/storyboard/generate` 与 `POST topics/:id/children/generate` 不再等 LLM 跑完，`DouyinGenerationJobService.start` 校验选题类型（分镜要子选题、子选题要母选题）、拦截同一选题正在运行的同类任务（409 `DOUYIN_GENERATION_ALREADY_RUNNING`），在 `douyin_generation_jobs` 写入运行中任务后立即返回 `{ job }`，生成在后台继续。两个生成服务通过 `onProgress` 回报真实进度：分镜每写入一段报一次段数，子选题规划后报总数、每写入一条报已写数，最后进入 `saving`。完成写 `result`（分镜段数，或规划数量与新子选题 ID），失败写失败码和 `DOUYIN_GENERATION_ERROR_MESSAGES` 翻译的中文原因（扣费不足等错误也以失败任务的形式出现，而不是接口直接报错）。`GET generation-jobs`（`read DouyinWorkbench`）返回运行中与最近 24 小时的任务供前端轮询；读取与启动前会把「运行中但不在当前进程、且 10 分钟没有进度写入」的任务收成 `DOUYIN_GENERATION_INTERRUPTED`，避免服务重启后永远显示生成中。
 
-**分镜自动配图（目前只配图片）**：分镜生成前，`DouyinStoryboardImageService.loadCandidates` 用「母题 + 子题 + 补充要求」在当前租户图库挑候选图：先走 `GalleryService.searchSimilar` 向量检索（相似度 ≥0.35 的普通图），再按命中这段文字的图库标签随机取图，不够再随机补普通图，去重后最多 40 张；拼图、各类封面与 `ai素材` 一律排除。候选以 `#ID｜竖/横｜标签｜描述` 的清单写进系统提示词，分镜工具新增可选参数 `image_id`，只接受清单内的编号（清单外的编号直接忽略、该段留空），同一张图重复使用时工具回话提示换图。LLM 交付完成后，`autoAssignShotImages` 给仍然没有素材的镜头补图：使用次数少的优先，其次比镜头文字与标签/描述的重合得分，再按候选相关度顺序，候选全部用过一轮后才会重复。写入的素材结构与前端手动「引用素材」一致（`type=image`、`url`、缩略图 `coverUrl`），保存时照常经过 `validateStoryboardMedia` 的租户归属校验；图库为空或读取失败时分镜照常生成，只是不配图。模块因此新增依赖 `GalleryModule`。
+**分镜自动配图（目前只配图片）**：分镜生成前，`DouyinStoryboardImageService.loadCandidates` 用「母题 + 子题 + 补充要求」在当前租户图库挑候选图：先走 `GalleryService.searchSimilar` 向量检索（相似度 ≥0.35 的普通图），再按命中这段文字的图库标签随机取图，不够再随机补普通图，去重后最多 40 张；拼图、各类封面与 `ai素材` 一律排除。候选清单（`#ID｜竖/横｜标签｜描述`）不再塞进拆分镜的提示词：分镜写完后由 `pickShotImages` 单独一次关闭思考的调用（节点 `image-decision`，未指定时用默认文本模型）按每段画面挑图，只接受清单内的编号、同一张图不重复用，调用失败只记警告。选图完成后，`autoAssignShotImages` 给仍然没有素材的镜头补图：使用次数少的优先，其次比镜头文字与标签/描述的重合得分，再按候选相关度顺序，候选全部用过一轮后才会重复。写入的素材结构与前端手动「引用素材」一致（`type=image`、`url`、缩略图 `coverUrl`），保存时照常经过 `validateStoryboardMedia` 的租户归属校验；图库为空或读取失败时分镜照常生成，只是不配图。模块因此新增依赖 `GalleryModule`。
 
 **脚本正文、分镜画面重生成与分镜视频**：子选题在前端显示为「脚本」，AI 生成时每条同时写入标题和口播正文（`script`，可经 `PATCH topics/:id` 修改）；分镜生成把正文交给 LLM 逐段拆解，旁白取自正文，并为每镜写 `imagePrompt`。`POST topics/:id/storyboard/:shotId/image/generate` 调 `AgentService.sendPrompt` 按竖屏 9:16 出图（计费由生图运行时按 `douyin-workbench.shot-image-generation` 记账），经 `GalleryAiImageService` 入图库并打「ai素材」「抖音分镜」标签，再用 `updateShot` 只写这一镜。`POST topics/:id/storyboard/:shotId/video/generate` 只提交这一镜给视频生成服务（请求带 `scope: 'shot'`、`shotId`、`shotIndex`，按 `video-generation` 扣费），调用记录带 `shotId`；直接拿到或同步到 `videoId` 时写到该镜的 `videoId`。整条 `video/generate` 请求带 `scope: 'composite'` 与正文，成片仍写到选题的 `generatedVideoId`。两类新接口都挂 `create DouyinWorkbench` 权限。
 
 **候选脚本先挑选、再入库**：`POST topics/:id/children/generate` 的后台任务不再直接写 `douyin_topics`，而是把 LLM 写出的脚本连同随机 `key` 存进任务的 `result.drafts`。前端挑选后调用 `POST generation-jobs/:jobId/drafts/confirm`（`create DouyinWorkbench`）：服务端只接受这次任务里存在的 `key`，标题 / 正文留空则沿用候选原文；先原子地写入 `result.draftsSettledAt` 占住这批候选（重复提交返回 404 `DOUYIN_SCRIPT_DRAFTS_NOT_FOUND`，入库失败会撤销占用），再按顺序 `createChildren`（每条带规整后的 `storyboardPreference`），把新 ID 写回 `result.createdTopicIds`，最后逐条 `start('storyboard')`，响应返回 `{ topics, jobs, groups }`。`POST generation-jobs/:jobId/drafts/discard`（`update DouyinWorkbench`）只标记已处理。`GET generation-jobs` 额外返回候选还没处理的子选题任务，不受 24 小时窗口限制。
 
-**配图偏向与先文字后配图**：子选题新增 `storyboardPreference: { imageSource: 'generate' | 'gallery', galleryTags }`，可经 `PATCH topics/:id` 修改，旧数据缺省视为图库自找、不限标签。分镜生成读取偏向：`gallery` 时 `loadCandidates` 带上限定标签（向量检索多取 60 张再按标签过滤，随机补足只在标签内取，不再按选题文字匹配标签或无标签补图），其余流程不变，文字和画面一起保存；`generate` 时不给 LLM 图库清单，只要求写好 `image_prompt`，文字分镜先落库并把进度切到 `imaging`（`current/total` = 已出图 / 镜头数），再用 `DouyinShotImageService.regenerate` 按并发 2 逐镜出图，每张图经 `updateShot` 单独写回，单镜失败只计数；全部失败时任务以 `DOUYIN_SHOT_IMAGES_ALL_FAILED` 结束（文字分镜仍保留），部分失败写进 `result.imageFailedCount`。出图计费沿用 `douyin-workbench.shot-image-generation`，按张记账。一次确认多条脚本时，进程内最多同时执行 3 个分镜任务，其余停在 `queued` 阶段等待；排队任务仍在当前进程的执行集合里，不会被当成中断任务收掉。
+**配图偏向与先文字后配图**：子选题新增 `storyboardPreference: { imageSource: 'generate' | 'gallery', galleryTags }`，可经 `PATCH topics/:id` 修改，旧数据缺省视为图库自找、不限标签。分镜生成读取偏向：`gallery` 时 `loadCandidates` 带上限定标签（向量检索多取 60 张再按标签过滤，随机补足只在标签内取，不再按选题文字匹配标签或无标签补图），其余流程不变，文字和画面一起保存；`generate` 时不给 LLM 图库清单，只要求写好 `image_prompt`，文字分镜先落库并把进度切到 `imaging`（`current/total` = 已出图 / 镜头数），再用 `DouyinShotImageService.regenerate` 按并发 2 逐镜出图，每张图经 `updateShot` 单独写回，单镜失败只计数；全部失败时任务以 `DOUYIN_SHOT_IMAGES_ALL_FAILED` 结束（文字分镜仍保留），部分失败写进 `result.imageFailedCount`。出图计费沿用 `douyin-workbench.shot-image-generation`，按张记账。候选脚本与分镜任务都经 [AI 生成排队](../generation-queue/module.md) 的 `douyin-generation` 通道排队：全平台上限读平台信息 `douyinGenerationGlobalConcurrencyLimit`（默认 6），租户上限读租户 `douyinGenerationConcurrencyLimit`（默认 3），与小红书文章各算各的；申请名额 500ms 内没拿到就把进度切到 `queued`。一次确认多条脚本时超出上限的分镜任务在 `queued` 阶段等待；排队任务仍在本进程执行集合与排队登记簿里（多进程时登记簿覆盖全部 worker），不会被当成中断任务收掉。`GET generation-jobs` 每次轮询都会触发补位，后台调高上限后立即生效。
 
-**按节点使用后台指定的模型**：候选脚本生成与生成要求推荐读取节点 `script`，分镜拆解读取 `storyboard`，节点 key 统一取自 `WORKFLOW_NODES.douyinWorkbench`；二者把 [workflow-model](../workflow-model/module.md) 返回的提供商、模型、Key 与 baseUrl 覆盖进 `runWithMessages` 的 config；分镜画面（自动出图与单镜重生成）读取 `shot-image`，作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图。节点没有设置时一律沿用后台默认提供商，行为与之前一致。`shot-video` / `full-video` 指定 PixMax 或数眼 Seedance 时走对应任务服务，未指定仍走 `DOUYIN_VIDEO_GENERATION_*`。
+**按节点使用后台指定的模型**：候选脚本生成与生成要求推荐读取节点 `script`，分镜拆解读取 `storyboard`，图库自找时的分镜选图读取 `image-decision`（以 `disableThinking` 关闭思考），节点 key 统一取自 `WORKFLOW_NODES.douyinWorkbench`；二者把 [workflow-model](../workflow-model/module.md) 返回的提供商、模型、Key 与 baseUrl 覆盖进 `runWithMessages` 的 config；分镜画面（自动出图与单镜重生成）读取 `shot-image`，作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图。节点没有设置时一律沿用后台默认提供商，行为与之前一致。`shot-video` / `full-video` 指定 PixMax 或数眼 Seedance 时走对应任务服务，未指定仍走 `DOUYIN_VIDEO_GENERATION_*`。
 
-**两种生视频模式**：分镜模式（`POST topics/:id/storyboard/:shotId/video/generate`，节点 `shot-video`）每镜单独出一段，有画面时以画面为首帧；整片模式（`POST topics/:id/video/generate`，节点 `full-video`）把全部分镜按时间轴写进一条提示词，带上各镜画面作为参考图（按模型上限截取），一次生成一条完整视频，模型单次时长不够时按比例压缩每镜并在调用记录里标 `durationClamped`。指定 PixMax 时走 `DouyinPixmaxVideoService`；指定数眼智能的 Seedance 型号时走 `DouyinShuyanVideoService`，把 `/v1` baseUrl 还原成网关根地址后调用 `POST /seedance/api/v3/contents/generations/tasks`，单镜画面作为 `first_frame`，Seedance 2.x 整片最多带 9 张 `reference_image`，比例固定 9:16、分辨率默认 480p（`DOUYIN_SHUYAN_VIDEO_RESOLUTION`）、时长按版本收敛。数眼任务初建无 status 时保持 queued，每 15 秒用 `GET .../tasks/{id}` 续轮询，成功后在 `content.video_url` 的 24 小时有效期内转存 OSS；未配置 OSS 时仅登记临时外链并写警告。两条通道都在提交前按 `video-generation` 扣费、用原子 saving 状态防重复保存，并回填分镜 `videoId` 或脚本 `generatedVideoId`；未指定节点模型时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。数眼的 Kling / Vidu / Hailuo / 即梦等型号使用不同原生路由，当前会以 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED` 明确拒绝。
+**两种生视频模式**：分镜模式（`POST topics/:id/storyboard/:shotId/video/generate`，节点 `shot-video`）每镜单独出一段，有画面时以画面为首帧；整片模式（`POST topics/:id/video/generate`，节点 `full-video`）把全部分镜按时间轴写进一条提示词，带上各镜画面作为参考图（按模型上限截取），一次生成一条完整视频，模型单次时长不够时按比例压缩每镜并在调用记录里标 `durationClamped`。指定 PixMax 时走 `DouyinPixmaxVideoService`；指定数眼智能的 Seedance 型号时走 `DouyinShuyanVideoService`，把 `/v1` baseUrl 还原成网关根地址后调用 `POST /seedance/api/v3/contents/generations/tasks`，单镜画面作为 `first_frame`，Seedance 2.x 整片最多带 9 张 `reference_image`，比例固定 9:16、分辨率默认 480p（`DOUYIN_SHUYAN_VIDEO_RESOLUTION`）、时长按版本收敛。数眼任务初建无 status 时保持 queued，每 15 秒用 `GET .../tasks/{id}` 续轮询，成功后在 `content.video_url` 的 24 小时有效期内转存 OSS；未配置 OSS 时仅登记临时外链并写警告。两条通道都在提交前按 `video-generation` 扣费、用原子 saving 状态防重复保存，并回填分镜 `videoId` 或脚本 `generatedVideoId`；未指定节点模型时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。指定数眼的 MiniMax-H3 时同样走 `DouyinShuyanVideoService`，但用另一套端点：`POST /hailuo/v2/video_generation`（返回 `task_id`）提交，`GET /hailuo/v2/query/video_generation/{id}` 查询（结果包在 `task` 里，成片在 `content.url`，约 7 天有效）；`resolution` / `duration` / `ratio` 都是顶层必填字段，不写在提示词里。模型名提交前对齐成枚举 `MiniMax-H3`；清晰度 `768P` / `2K`（默认 768P），时长 4～15 秒；单镜画面作首帧时 `ratio` 按接口要求传 `adaptive`（成片比例跟着图片走），整片最多带 9 张 `reference_image`、比例 9:16，纯文生视频也是 9:16；H3 没有声音开关，静音只靠提示词【声音】段约束。轮询按调用记录的型号选路由，接入 H3 前的旧记录一律按 Seedance 查。数眼的 Kling / Vidu / 旧版 Hailuo / 即梦等型号使用不同原生路由，当前会以 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED` 明确拒绝。
 
 **声音是结构化设置、脚本随整片提交**：子选题新增 `videoAudio: { mode: voiceover | music | mute, language: zh-CN | yue | en }`（经 `PATCH topics/:id` 保存，缺省普通话配音），整片与分镜共用。生成时：模型有 `includeAudio` 参数就按「静音 = false，其余 = true」写入；提示词【声音】段由 `buildVideoAudioSection` 按设置生成（配音限定语言、禁止其他语言人声；仅音乐禁止人声；静音要求无声）。提示词统一分区：整片为【视频】【分镜时间轴】（逐镜画面、参考图编号、口播、转场）【口播稿】（完整脚本正文，没有正文时拼接各镜口播；非配音模式标注「不要朗读」）【声音】【参考图】【时长】【限制】【补充要求】；单镜的【口播稿】是本镜口播。调用请求记录 `audio`、`audioSwitchApplied`、`scriptIncluded`，视图 `plan` 带出声音与是否带口播稿。分镜画面在模型支持任意带图方式时一定带上（多图参考 → 图片参考 → 首尾帧 → 首帧），只有模型完全不支持带图才纯文生视频。
 
 **真人画面换成卡通大头**：火山系视频模型（Seedance / 豆包）不收带真人的参考图，会以 `InputImageSensitiveContentDetected.PrivacyInformation` 在提交时直接打回。`POST .../image/mask-faces` 以这一镜当前画面为底图走图像编辑（`sendPrompt` 带 `baseImageCandidates` 时走的就是 image-edit 路径，不是重新文生图），按 `buildShotFaceMaskPrompt` 只把每个真人的头替换成 3D 皮克斯风卡通大头，构图、衣着、光线、人数与位置都要求保持原样。新图入图库（带 `抖音分镜` 标签）并绑定到这一段，处理前的画面记进分镜的 `originalMedia`；反复换头不会覆盖最早那张原图，`POST .../image/restore` 一键换回来。效果取决于 `shot-image` 节点配的模型——纯文生图模型给了底图也可能整张重画，这活要配图像编辑能力强的模型。注意这是「不再使用真人肖像」，不是给人脸打码去骗过检测；画面里仍有真人身体与场景时，仍可能被判 `may contain real person`。
 
+**引用知识**：母选题新增 `knowledgeIds`（[knowledge](../knowledge/module.md) 模块的知识，最多 10 条，创建时 `CreateDouyinMotherTopicDto` 可带，`PATCH topics/:id` 可改，只对母题生效），工作台列表随母题原样返回。AI 生成脚本时 `DouyinChildTopicGenerationService` 读取母题引用，经 `KnowledgeService.buildPromptSection` 拼成 `<reference_knowledge>` 段放进创作背景，脚本涉及门店、产品、价格等具体信息以知识为准；已删除的知识自动跳过。
+
+**人像处理风格**：`mask-faces` 接收可选 `style`（`MaskDouyinShotFacesDto`，缺省 `cartoon-3d`），`buildShotFaceMaskPrompt(style)` 按风格换一段核心要求，「场景、姿态、光线、人数与位置不变、不出文字水印」的收尾要求四种风格共用：`cartoon-3d` 头部换 3D 皮克斯风大头；`anime-bighead` 头部换二维动画 Q 版大头（描边 + 赛璐珞平涂，明暗贴合实拍光线）；`anthropomorphic` 整个人换成穿原衣服、保持原动作的拟人化卡通动物（不同的人用不同动物）；`deidentify` 保持写实照片，把面孔重绘成不存在的陌生面孔并去掉胸牌、纹身等身份细节，不打码不模糊。所用风格写进分镜的 `faceMaskStyle`（DTO 白名单放行，前端保存分镜原样回传），图库命名为「…分镜画面（风格名）」；恢复原图时同时清空 `faceMaskStyle`。
+
 **数眼通道的失败也翻译成中文**：提交期（`POST .../tasks` 直接 4xx）和轮询期（任务 `error`）的报错都走 `describeShuyanVideoFailure`：网络、密钥、限流、型号未接入这类通道自身的错走 `SHUYAN_VIDEO_ERROR_RULES`（不能套用 `PIXMAX_ERROR_RULES` 里写着「PixMax」的文案），模型内容审核类的错误码两家通用，交给 `PIXMAX_ERROR_RULES`；报错里带 `content[N]` 时按「`content[0]` 是提示词、往后依次是参考图」换算成「第 N 张参考图」点名。火山系模型不接受带真人的参考图（`InputImageSensitiveContentDetected.PrivacyInformation`），这条单独给了能照着做的说明（换空镜，或把配图偏向改成「AI 生成画面」）。原始报错仍写进 `errorDetail`，前端折叠在「查看原始信息」里；`presentDouyinVideoError` 对 pixmax 与 shuyan 两条通道的旧记录都做同样翻译。提交期失败不再一律说「请检查模型、密钥与参数」——真人素材被拒时那句是误导。
 
 **视频生成错误友好化**：PixMax 通道的失败统一经 `pixmax-error` 翻译：提交阶段上传或审核某张分镜画面失败时，错误里会指明「第 N 镜的画面」（同一张图被多镜使用时列出全部镜号）；提交失败的 HTTP 响应、调用记录 `error` 都是中文说明，原始报错写进 `errorDetail`（视图带出，前端折叠显示）并记警告日志；任务失败、成片转存失败同样处理。旧记录没有 `errorDetail` 时由 `presentDouyinVideoError` 在输出时翻译。
 
-**整片清晰度**：子选题新增 `fullVideoResolution`（模型自己的档位取值，如 `720P` / `1080p`；`PATCH topics/:id` 传空串清除，表示用模型默认档），只作用于整片模式，分镜仍走模型默认档。PixMax 通道把它交给 `buildPixmaxVideoParams` 的 `targetResolution`，在模型 `resolution` 参数的档位里就近取；数眼通道按 `clampShuyanVideoResolution` 收敛到型号支持的档（1080p 仅 Seedance 2.x），没设定时用 `DOUYIN_SHUYAN_VIDEO_RESOLUTION`；直连通道把 `resolution` 一并放进请求体。调用请求记录 `resolution`（实际提交档位）、`targetResolution`（设定值）与 `resolutionClamped`（设定档位模型不支持、已换档），视图 `plan` 带出前两者与是否换档。`GET video/options` 的 `resolutions` 告诉前端当前模型有哪些档位可选（直连通道给 `DIRECT_RESOLUTIONS`），为空表示这个通道不让选；前端只渲染这里报上来的档位，所以老客户端连上新后端、或新客户端连上老后端都不会设出存不进去的值。清晰度直接影响计费（供应商按「分辨率 × 时长」计价），档位越高越贵。
+**整片清晰度**：子选题新增 `fullVideoResolution`（模型自己的档位取值，如 `720P` / `1080p`；`PATCH topics/:id` 传空串清除，表示用模型默认档），只作用于整片模式，分镜仍走模型默认档。PixMax 通道把它交给 `buildPixmaxVideoParams` 的 `targetResolution`，在模型 `resolution` 参数的档位里就近取；数眼通道按 `clampShuyanVideoResolution` 收敛到型号支持的档（1080p 仅 Seedance 2.x；MiniMax-H3 只有 `768P` / `2K`，按短边像素就近取），没设定时用 `DOUYIN_SHUYAN_VIDEO_RESOLUTION`，型号没有这一档时取最低档；直连通道把 `resolution` 一并放进请求体。调用请求记录 `resolution`（实际提交档位）、`targetResolution`（设定值）与 `resolutionClamped`（设定档位模型不支持、已换档），视图 `plan` 带出前两者与是否换档。`GET video/options` 的 `resolutions` 告诉前端当前模型有哪些档位可选（直连通道给 `DIRECT_RESOLUTIONS`），为空表示这个通道不让选；前端只渲染这里报上来的档位，所以老客户端连上新后端、或新客户端连上老后端都不会设出存不进去的值。清晰度直接影响计费（供应商按「分辨率 × 时长」计价），档位越高越贵。
 
 **整片生成时长**：子选题新增 `fullVideoDuration`（1～120 秒，`PATCH topics/:id` 传 0 清除，表示自动）。整片生成时目标时长取它，未设定则取分镜总时长，再按模型可选时长取不小于目标的最短一档（没有则最长一档）；时间轴每镜按「实际时长 / 分镜总时长」等比缩放，短于分镜总时长时压缩并在【时长】段要求所有镜头都出现，长于时放缓节奏。调用请求记录 `plannedSeconds`（分镜总时长）、`targetSeconds`（设定值）与 `durationClamped`（实际短于分镜总时长），直连通道请求也带 `duration`。`GET video/options` 告诉前端整片 / 分镜节点当前模型可生成哪些时长；分镜模式仍按每镜自己的时长就近取档。
 
@@ -343,4 +382,10 @@ AI 抖音工作台（douyin-workbench）
 
 **线性连贯出图**：AI 出图偏向下 `generateShotImages` 由并发改为串行，第 N 镜调用 `regenerate` 时传入第 N-1 镜刚生成的 `imageUrl` 作为 `previousImageUrl`，提示词里要求延续上一镜的场景、光线方向、色调与人物状态。单镜失败只计数并把 `previousImageUrl` 清空（下一镜改从人物形象图与参考图起头），已成功的画面不回滚。代价是一条分镜的出图时间约等于镜头数乘单张耗时，进度条的 `imaging` 阶段因此走得比以前慢。
 
+**脚本生成提速（规划一次 + 并发写稿）**：原来候选脚本走 `createDeepAgent` 的工具循环——先调一次数量规划工具，再每条脚本调一次写入工具，每次工具调用都是一整轮 LLM 往返，而且每轮都带着 DeepAgent 自带的待办 / 文件系统 / 子代理提示词和越来越长的对话历史重发，12 条脚本就是十几轮串行请求。现在改为两步、都不走工具循环：`planScripts` 用 `withStructuredOutput(..., { method: 'functionCalling' })` 一次拿到全部标题与切入角度（去掉与已有题目或本轮重复的，少于 3 条再补规划一次），`writeScript` 按条并发写口播正文（`DOUYIN_SCRIPT_WRITE_CONCURRENCY` = 6，超出排队），总耗时约为「规划一次 + 写最慢的一条」。平台业务说明由 `buildSystemPrompt` 直接拼进系统提示（不再经过 Agent 自动合并）。单条太短或报错重试一次，仍失败的丢掉，至少写出一条就算成功（`decidedCount` 为规划数，`drafts` 可能少于它）；一条都没写出时优先抛真实错误（如额度不足），否则报 `DOUYIN_CHILD_TOPIC_GENERATION_INCOMPLETE_0_OF_N`。计费仍按 `douyin-workbench.child-topic-generation` 逐次记账，总调用数与原来持平，但每次的输入短得多。`recommendPrompt` 与 `refineScript` 仍走 `runWithMessages`。
+
+**发布文案随分镜写好**：子选题新增 `publishCopy: { title, description, tags }`（上限与视频发布库一致：标题 60 字、正文 1000 字、话题 5 个且每个 20 字），经 `PATCH topics/:id` 修改，三项全空表示清掉（`normalizePublishCopy` 返回 null → `$unset`）。分镜任务在拆分镜的同时并行调用 `generatePublishCopy`（节点 `script` 的模型，一次结构化输出，不增加任务耗时），与分镜在同一次 `repository.update` 里保存，任务结果带 `publishCopyWritten`；两者同在分镜那一次 `text-generation` 扣费内（`runWithServiceBilling`）。重新生成分镜会按当前脚本重写文案；文案生成失败只记警告，分镜照常保存、原文案保留。前端保存到视频发布库时以它为默认值。
+
 **脚本 AI 微调**：`POST script/refine`（`update DouyinWorkbench`）接收原正文与一句话修改指令，LLM 只改被点名的部分、保留原意与分段，选了人物或风格时一并作为约束（保持第一人称与调性）。结果不落库，由前端决定替换与保存，因此候选脚本挑选弹窗和已保存脚本都能用同一个接口。
+
+**抓取数据改走数据监控**：工作台「抓取数据」区已改为与小红书同款的数据监控，后端在独立模块 `douyin-data`（`/api/douyin-data`，经 TikHub 按作品 ID 定时 / 手动抓取发布库里的已发布作品）。本模块的 `POST topics/:id/crawl` 直连抓取接口保留，但界面不再调用。

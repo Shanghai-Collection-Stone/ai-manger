@@ -29,9 +29,30 @@ export interface DouyinStoryboardShot {
   media?: DouyinMediaReference | null;
   /** @description 被卡通换头等处理覆盖前的原画面，用于一键恢复；没处理过时为空 */
   originalMedia?: DouyinMediaReference | null;
+  /** @description 最近一次人像处理用的风格，恢复原图时清空 */
+  faceMaskStyle?: DouyinFaceMaskStyle | null;
   imagePrompt?: string;
   videoId?: number;
 }
+
+/**
+ * @description 分镜人像处理风格：3D 卡通大头、动画大头、拟人风格、AI 去除真人特征，取值与前端风格弹窗逐字一致。
+ * @keyword-cn 人像处理风格, 分镜换头风格
+ * @keyword-en face-mask-styles, shot-portrait-style
+ */
+export const DOUYIN_FACE_MASK_STYLES = [
+  'cartoon-3d',
+  'anime-bighead',
+  'anthropomorphic',
+  'deidentify',
+] as const;
+
+/**
+ * @description 分镜人像处理风格取值。
+ * @keyword-cn 人像处理风格取值
+ * @keyword-en face-mask-style
+ */
+export type DouyinFaceMaskStyle = (typeof DOUYIN_FACE_MASK_STYLES)[number];
 
 /**
  * @description 脚本拆分镜时的配图偏向：`generate` 先写文字分镜再逐镜文生图，`gallery` 从租户图库挑图，
@@ -106,6 +127,18 @@ export interface DouyinVideoAudioSetting {
 }
 
 /**
+ * @description 脚本的发布文案（按脚本保存）：发布标题、正文与话题，生成分镜时由 AI 同步写好，用户可随时修改；
+ *   保存到视频发布库时作为默认值带入。上限与视频发布库一致：标题 60 字、正文 1000 字、话题 5 个且每个 20 字。
+ * @keyword-cn 脚本发布文案, 发布标题话题
+ * @keyword-en script-publish-copy, publish-title-tags
+ */
+export interface DouyinPublishCopy {
+  title: string;
+  description: string;
+  tags: string[];
+}
+
+/**
  * @description AI 生成、还没被用户挑选入库的候选脚本，暂存在子选题生成任务的结果里。
  * @keyword-cn 候选脚本, 待选择脚本
  * @keyword-en script-draft, pending-script-selection
@@ -129,6 +162,8 @@ export interface DouyinTopicEntity {
   kind: 'mother' | 'child';
   parentId?: number;
   title: string;
+  /** @description 母选题引用的知识 ID，AI 生成脚本时把知识内容注入提示词；子选题不写 */
+  knowledgeIds?: string[];
   /** @description 子选题（脚本）的口播正文，母选题为空；分镜按它逐段拆解 */
   script?: string;
   topicType?: string;
@@ -146,6 +181,8 @@ export interface DouyinTopicEntity {
   fullVideoDuration?: number;
   /** @description 整片模式的清晰度档位（模型自己的取值，如 `720P` / `1080p`），为空表示按模型默认档 */
   fullVideoResolution?: string;
+  /** @description 脚本的发布文案，生成分镜时由 AI 同步写好，保存到发布库时作为默认值；为空表示还没写 */
+  publishCopy?: DouyinPublishCopy;
   platform: 'douyin';
   storyboard: DouyinStoryboardShot[];
   status: 'draft' | 'storyboard_ready' | 'video_ready' | 'published';
@@ -201,6 +238,8 @@ export interface DouyinGenerationJobView {
     /** 分镜任务 AI 出图成功 / 失败的镜头数 */
     imageCount?: number;
     imageFailedCount?: number;
+    /** 分镜任务是否同步写好了发布文案（失败时保留原文案，为 false） */
+    publishCopyWritten?: boolean;
     decidedCount?: number;
     /** 子选题任务生成的候选脚本，用户挑选后才入库 */
     drafts?: DouyinScriptDraft[];

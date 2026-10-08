@@ -8,7 +8,10 @@ import {
 } from './adminApi';
 import DouyinPersonaPanel from './DouyinPersonaPanel';
 import HotTopicPanel from './HotTopicPanel';
-import SmsSettingPanel from './SmsSettingPanel';
+import MailSettingPanel from './MailSettingPanel';
+import OpsReportPanel from './OpsReportPanel';
+import AliyunSettingPanel from './AliyunSettingPanel';
+import TenantJoinPanel from './TenantJoinPanel';
 import WorkflowModelPanel from './WorkflowModelPanel';
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
@@ -236,6 +239,24 @@ const renderPager = (pageInfo, onPrev, onNext) => (
  */
 const isSuperAdmin = (role) => role === 'super_admin';
 
+/**
+ * @description 将成员关系接口错误码转换为租户管理员可执行的中文提示
+ * @keyword-cn 成员错误提示, 租户只读资料
+ * @keyword-en member-error-message, tenant-profile-readonly
+ */
+const formatUserMutationError = (message) => {
+  if (String(message).includes('ACCOUNT_NOT_FOUND')) {
+    return '该手机号尚未注册，请让对方先注册，或到「入驻审批」生成邀请链接发送给对方';
+  }
+  if (String(message).includes('PHONE_ALREADY_IN_TENANT')) {
+    return '该手机号已在本租户';
+  }
+  if (String(message).includes('MEMBER_PROFILE_READONLY')) {
+    return '租户不能修改成员的昵称和密码';
+  }
+  return message;
+};
+
 const PUSH_STATUS_COLOR = {
   ok: 'bg-emerald-100 text-emerald-700',
   auth: 'bg-red-100 text-red-700',
@@ -291,8 +312,9 @@ const FINANCE_KINDS = [
 ];
 
 /**
- * @description 全量 Tab 定义(platformOnly:仅 super_admin 可见;tenantOnly:仅租户级用户可见)
- * @keyword-en all admin tabs definition
+ * @description 全量 Tab 定义(platformOnly:仅 super_admin 可见;tenantOnly:仅租户级用户可见;adminOnly:仅 super_admin 与 tenant_admin 可见)
+ * @keyword-cn 后台标签, 角色过滤
+ * @keyword-en admin-tabs, role-filter
  */
 const ALL_TABS = [
   { id: 'users', label: '用户管理' },
@@ -312,7 +334,10 @@ const ALL_TABS = [
   { id: 'xhs_crawl', label: '小红书采集' },
   { id: 'hot_topic', label: '热点采集榜' },
   { id: 'douyin_personas', label: '抖音预设人物' },
-  { id: 'sms_settings', label: '短信验证码', platformOnly: true },
+  { id: 'tenant_join', label: '入驻审批', adminOnly: true },
+  { id: 'ops_reports', label: '运维上报', adminOnly: true },
+  { id: 'aliyun_settings', label: '阿里云配置', platformOnly: true },
+  { id: 'mail_settings', label: '发信邮箱', platformOnly: true },
   { id: 'finance', label: '财务' },
 ];
 
@@ -365,7 +390,8 @@ const AdminApp = () => {
       ALL_TABS.filter(
         (t) =>
           (!t.platformOnly || isSuperAdmin(currentRole)) &&
-          (!t.tenantOnly || !isSuperAdmin(currentRole)),
+          (!t.tenantOnly || !isSuperAdmin(currentRole)) &&
+          (!t.adminOnly || ['super_admin', 'tenant_admin'].includes(currentRole)),
       ),
     [currentRole],
   );
@@ -504,6 +530,7 @@ const AdminApp = () => {
   const [forms, setForms] = useState({
     user: {
       username: '',
+      phone: '',
       displayName: '',
       password: '',
       role: 'operator',
@@ -527,6 +554,7 @@ const AdminApp = () => {
       description: '',
       superClawId: '',
       xhsArticleConcurrencyLimit: 2,
+      douyinGenerationConcurrencyLimit: 3,
       initialCredit: 0,
     },
     key: {
@@ -553,6 +581,7 @@ const AdminApp = () => {
       aiPromptSupplement: '',
       enableAiCover: false,
       xhsArticleGlobalConcurrencyLimit: 4,
+      douyinGenerationGlobalConcurrencyLimit: 6,
       salesWechatQrCodeUrl: '',
       salesContactTip: '',
     },
@@ -669,6 +698,8 @@ const AdminApp = () => {
             enableAiCover: Boolean(pi.platformInfo?.enableAiCover),
             xhsArticleGlobalConcurrencyLimit:
               pi.platformInfo?.xhsArticleGlobalConcurrencyLimit || 4,
+            douyinGenerationGlobalConcurrencyLimit:
+              pi.platformInfo?.douyinGenerationGlobalConcurrencyLimit || 6,
             salesWechatQrCodeUrl: pi.platformInfo?.salesWechatQrCodeUrl || '',
             salesContactTip: pi.platformInfo?.salesContactTip || '',
           },
@@ -932,6 +963,7 @@ const AdminApp = () => {
       forms.platformInfo.aiPromptSupplement,
       forms.platformInfo.enableAiCover,
       Number(forms.platformInfo.xhsArticleGlobalConcurrencyLimit) || 4,
+      Number(forms.platformInfo.douyinGenerationGlobalConcurrencyLimit) || 6,
       isSuperAdmin(currentRole)
         ? {
             wechatQrCodeUrl: forms.platformInfo.salesWechatQrCodeUrl,
@@ -947,6 +979,8 @@ const AdminApp = () => {
         enableAiCover: Boolean(res.platformInfo?.enableAiCover),
         xhsArticleGlobalConcurrencyLimit:
           res.platformInfo?.xhsArticleGlobalConcurrencyLimit || 4,
+        douyinGenerationGlobalConcurrencyLimit:
+          res.platformInfo?.douyinGenerationGlobalConcurrencyLimit || 6,
         salesWechatQrCodeUrl: res.platformInfo?.salesWechatQrCodeUrl || '',
         salesContactTip: res.platformInfo?.salesContactTip || '',
       },
@@ -2074,7 +2108,34 @@ const AdminApp = () => {
     });
   };
 
+  /**
+   * @description 超管维护完整用户资料，租户管理员仅新增或更新本租户成员关系
+   * @keyword-cn 用户成员关系, 租户资料只读
+   * @keyword-en user-membership, tenant-profile-readonly
+   */
   const onSubmitUser = async () => {
+    if (!isSuperAdmin(currentRole)) {
+      const res = editingUserId
+        ? await adminApi.updateUser(editingUserId, {
+            role: forms.user.role,
+            enabled: forms.user.enabled,
+          })
+        : await adminApi.createUser({
+            phone: forms.user.phone.trim(),
+            role: forms.user.role,
+          });
+      if (editingUserId) {
+        setUsers((prev) =>
+          prev.map((item) => (item.id === editingUserId ? res.user : item)),
+        );
+        setEditingUserId('');
+        setNotice('成员关系已更新');
+      } else {
+        setUsers((prev) => [res.user, ...prev]);
+        setNotice('成员已添加');
+      }
+      return;
+    }
     const payload = {
       displayName: forms.user.displayName.trim(),
       role: forms.user.role,
@@ -2103,10 +2164,15 @@ const AdminApp = () => {
     setNotice('用户已创建');
   };
 
+  /**
+   * @description 超管删除用户，租户管理员仅从本租户移除成员关系
+   * @keyword-cn 移除租户成员, 删除平台用户
+   * @keyword-en remove-tenant-member, delete-platform-user
+   */
   const onDeleteUser = async (id) => {
     await adminApi.deleteUser(id);
     setUsers((prev) => prev.filter((item) => item.id !== id));
-    setNotice('用户已删除');
+    setNotice(isSuperAdmin(currentRole) ? '用户已删除' : '成员已从本租户移除');
   };
 
   const onSubmitProvider = async () => {
@@ -2221,6 +2287,8 @@ const AdminApp = () => {
       description: forms.tenant.description.trim() || undefined,
       xhsArticleConcurrencyLimit:
         Number(forms.tenant.xhsArticleConcurrencyLimit) || 2,
+      douyinGenerationConcurrencyLimit:
+        Number(forms.tenant.douyinGenerationConcurrencyLimit) || 3,
       ...(!editingTenantId
         ? { credit: Math.max(0, Number(forms.tenant.initialCredit) || 0) }
         : {}),
@@ -2443,6 +2511,8 @@ const AdminApp = () => {
     const hitKeyword =
       !keyword ||
       toLower(item.username).includes(keyword) ||
+      toLower(item.phone).includes(keyword) ||
+      toLower(item.email).includes(keyword) ||
       toLower(item.displayName).includes(keyword);
     const hitTenant =
       !filters.users.tenantId ||
@@ -2642,75 +2712,99 @@ const AdminApp = () => {
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
               <h2 className="font-semibold text-slate-900">
-                {editingUserId ? '编辑用户' : '新增用户'}
+                {editingUserId
+                  ? isSuperAdmin(currentRole)
+                    ? '编辑用户'
+                    : '编辑成员关系'
+                  : isSuperAdmin(currentRole)
+                    ? '新增用户'
+                    : '按手机号添加已注册用户'}
               </h2>
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="请输入用户账号（3-60字符）"
-                value={forms.user.username}
-                disabled={Boolean(editingUserId)}
-                onChange={(e) => updateForm('user', 'username', e.target.value)}
-              />
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder="请输入用户显示名称"
-                value={forms.user.displayName}
-                onChange={(e) =>
-                  updateForm('user', 'displayName', e.target.value)
-                }
-              />
-              <input
-                className="w-full border rounded px-3 py-2 text-sm"
-                placeholder={
-                  editingUserId
-                    ? '不修改密码可留空'
-                    : '请输入登录密码（至少6位）'
-                }
-                type="password"
-                value={forms.user.password}
-                onChange={(e) => updateForm('user', 'password', e.target.value)}
-              />
+              {!isSuperAdmin(currentRole) ? (
+                <p className="text-xs text-slate-500 rounded-lg bg-slate-50 p-3">
+                  用户资料（昵称、密码）归平台账号所有，租户只能管理成员的角色、启用状态与移除。
+                </p>
+              ) : null}
+              {isSuperAdmin(currentRole) ? (
+                <>
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入用户账号（3-60字符）"
+                    value={forms.user.username}
+                    disabled={Boolean(editingUserId)}
+                    onChange={(e) => updateForm('user', 'username', e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder="请输入用户显示名称"
+                    value={forms.user.displayName}
+                    onChange={(e) => updateForm('user', 'displayName', e.target.value)}
+                  />
+                  <input
+                    className="w-full border rounded px-3 py-2 text-sm"
+                    placeholder={editingUserId ? '不修改密码可留空' : '请输入登录密码（至少6位）'}
+                    type="password"
+                    value={forms.user.password}
+                    onChange={(e) => updateForm('user', 'password', e.target.value)}
+                  />
+                </>
+              ) : !editingUserId ? (
+                <input
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  type="tel"
+                  placeholder="请输入已注册用户手机号"
+                  value={forms.user.phone}
+                  onChange={(e) => updateForm('user', 'phone', e.target.value.replace(/\D/g, ''))}
+                />
+              ) : (
+                <div className="text-sm text-slate-600 border rounded px-3 py-2">
+                  {forms.user.displayName || forms.user.username} · {forms.user.phone || forms.user.username}
+                </div>
+              )}
               <select
                 className="w-full border rounded px-3 py-2 text-sm"
                 value={forms.user.role}
                 onChange={(e) => updateForm('user', 'role', e.target.value)}
               >
-                {ROLE_OPTIONS.map((roleItem) => (
+                {ROLE_OPTIONS.filter(
+                  (roleItem) =>
+                    isSuperAdmin(currentRole) || roleItem.value !== 'super_admin',
+                ).map((roleItem) => (
                   <option key={roleItem.value} value={roleItem.value}>
                     {roleItem.label}
                   </option>
                 ))}
               </select>
-              <select
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={forms.user.tenantId}
-                onChange={(e) => updateForm('user', 'tenantId', e.target.value)}
-              >
-                <option value="">不绑定租户（平台级）</option>
-                {tenants.map((tenant) => (
-                  <option key={tenant._id} value={tenant._id}>
-                    {tenant.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="w-full border rounded px-3 py-2 text-sm"
-                value={forms.user.enabled ? '1' : '0'}
-                onChange={(e) =>
-                  updateForm('user', 'enabled', e.target.value === '1')
-                }
-              >
-                <option value="1">启用</option>
-                <option value="0">禁用</option>
-              </select>
+              {isSuperAdmin(currentRole) ? (
+                <select
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  value={forms.user.tenantId}
+                  onChange={(e) => updateForm('user', 'tenantId', e.target.value)}
+                >
+                  <option value="">不绑定租户（平台级）</option>
+                  {tenants.map((tenant) => (
+                    <option key={tenant._id} value={tenant._id}>{tenant.name}</option>
+                  ))}
+                </select>
+              ) : null}
+              {isSuperAdmin(currentRole) || editingUserId ? (
+                <select
+                  className="w-full border rounded px-3 py-2 text-sm"
+                  value={forms.user.enabled ? '1' : '0'}
+                  onChange={(e) => updateForm('user', 'enabled', e.target.value === '1')}
+                >
+                  <option value="1">启用</option>
+                  <option value="0">禁用</option>
+                </select>
+              ) : null}
               <div className="flex gap-2">
                 <button
                   onClick={() =>
-                    onSubmitUser().catch((err) => setError(err.message))
+                    onSubmitUser().catch((err) => setError(formatUserMutationError(err.message)))
                   }
                   className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
                 >
-                  {editingUserId ? '保存用户' : '创建用户'}
+                  {editingUserId ? '保存' : isSuperAdmin(currentRole) ? '创建用户' : '添加成员'}
                 </button>
                 {editingUserId ? (
                   <button
@@ -2727,7 +2821,7 @@ const AdminApp = () => {
               <div className="grid grid-cols-2 gap-2 mb-3">
                 <input
                   className="border rounded px-3 py-2 text-sm"
-                  placeholder="按账号或名称搜索"
+                  placeholder="按账号、手机号、邮箱或名称搜索"
                   value={filters.users.keyword}
                   onChange={(e) =>
                     updateFilter('users', 'keyword', e.target.value)
@@ -2757,6 +2851,8 @@ const AdminApp = () => {
                     <div>
                       <div className="font-medium">{item.displayName}</div>
                       <div className="text-slate-500">{item.username}</div>
+                      <div className="text-xs text-slate-500">手机号：{item.phone || item.username || '—'}</div>
+                      <div className="text-xs text-slate-500">邮箱：{item.email || '—'}</div>
                       <div className="text-xs text-slate-500">
                         {getRoleLabel(item.role)}
                       </div>
@@ -2773,6 +2869,7 @@ const AdminApp = () => {
                             user: {
                               ...prev.user,
                               username: item.username || '',
+                              phone: item.phone || item.username || '',
                               displayName: item.displayName || '',
                               password: '',
                               role: item.role || 'operator',
@@ -2788,12 +2885,12 @@ const AdminApp = () => {
                       <button
                         onClick={() =>
                           onDeleteUser(item.id).catch((err) =>
-                            setError(err.message),
+                            setError(formatUserMutationError(err.message)),
                           )
                         }
                         className="text-xs px-2 py-1 h-fit rounded border border-rose-300 text-rose-600"
                       >
-                        删除
+                        {isSuperAdmin(currentRole) ? '删除' : '移除'}
                       </button>
                     </div>
                   </div>
@@ -3195,6 +3292,23 @@ const AdminApp = () => {
                   }
                 />
               </label>
+              <label className="block text-xs text-slate-600">
+                抖音生成并发上限（候选脚本与分镜）
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  className="mt-1 w-full border rounded px-3 py-2 text-sm"
+                  value={forms.tenant.douyinGenerationConcurrencyLimit}
+                  onChange={(e) =>
+                    updateForm(
+                      'tenant',
+                      'douyinGenerationConcurrencyLimit',
+                      e.target.value,
+                    )
+                  }
+                />
+              </label>
               {!editingTenantId ? (
                 <label className="block text-xs text-slate-600">
                   初始 Credit（创建后请通过充值或调账变更）
@@ -3252,6 +3366,7 @@ const AdminApp = () => {
                           description: '',
                           superClawId: '',
                           xhsArticleConcurrencyLimit: 2,
+                          douyinGenerationConcurrencyLimit: 3,
                           initialCredit: 0,
                         },
                       }));
@@ -3290,6 +3405,8 @@ const AdminApp = () => {
                       </div>
                       <div className="text-xs text-slate-500">
                         文章并发：{item.xhsArticleConcurrencyLimit || 2}
+                        {' · '}抖音并发：
+                        {item.douyinGenerationConcurrencyLimit || 3}
                       </div>
                       <div className="text-xs text-slate-500">
                         Credit：
@@ -3319,6 +3436,8 @@ const AdminApp = () => {
                               superClawId: item.superClawId || '',
                               xhsArticleConcurrencyLimit:
                                 item.xhsArticleConcurrencyLimit || 2,
+                              douyinGenerationConcurrencyLimit:
+                                item.douyinGenerationConcurrencyLimit || 3,
                               initialCredit: 0,
                             },
                           }));
@@ -5281,14 +5400,39 @@ const AdminApp = () => {
           <DouyinPersonaPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
+        {/* 入驻审批与邀请链接（仅超管和租户管理员） | @keyword-en tenant-join-admin-tab */}
+        {activeTab === 'tenant_join' ? (
+          <TenantJoinPanel
+            currentRole={currentRole}
+            tenants={tenants}
+            onNotice={setNotice}
+            onError={setError}
+          />
+        ) : null}
+
+        {/* 运维上报查询与处理（仅超管和租户管理员） | @keyword-en ops-report-admin-tab */}
+        {activeTab === 'ops_reports' ? (
+          <OpsReportPanel
+            currentRole={currentRole}
+            tenants={tenants}
+            onNotice={setNotice}
+            onError={setError}
+          />
+        ) : null}
+
         {/* 工作流节点模型（为预设工作流的每个节点指定提供商与模型，仅超管） | @keyword-en workflow node model tab */}
         {activeTab === 'workflow_models' ? (
           <WorkflowModelPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
         {/* 短信验证码（阿里云 AccessKey / 签名 / 模板 + 测试发送，仅超管） | @keyword-en sms verification setting tab */}
-        {activeTab === 'sms_settings' ? (
-          <SmsSettingPanel onNotice={setNotice} onError={setError} />
+        {activeTab === 'aliyun_settings' ? (
+          <AliyunSettingPanel onNotice={setNotice} onError={setError} />
+        ) : null}
+
+        {/* 发信邮箱（SMTP 配置与测试发信，仅超管） | @keyword-en mail-setting-tab */}
+        {activeTab === 'mail_settings' ? (
+          <MailSettingPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
         {/* 财务（内含 支出 / 应付 / 推送配置 三个子 Tab） | @keyword-en finance tab with category and push sub tabs */}
@@ -6350,6 +6494,31 @@ const AdminApp = () => {
                     />
                     <span className="mt-1 block text-xs text-slate-500">
                       所有租户正在执行的文章任务合计不会超过此值，超出的任务进入等待队列。
+                    </span>
+                  </label>
+                ) : null}
+                {isSuperAdmin(currentRole) ? (
+                  <label className="mb-3 block rounded-lg border border-slate-200 p-3 text-sm text-slate-800">
+                    全平台抖音生成总并发上限
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      className="mt-2 w-full border rounded px-3 py-2 text-sm"
+                      value={
+                        forms.platformInfo
+                          .douyinGenerationGlobalConcurrencyLimit
+                      }
+                      onChange={(e) =>
+                        updateForm(
+                          'platformInfo',
+                          'douyinGenerationGlobalConcurrencyLimit',
+                          e.target.value,
+                        )
+                      }
+                    />
+                    <span className="mt-1 block text-xs text-slate-500">
+                      所有租户正在执行的抖音候选脚本与分镜任务合计不会超过此值，超出的任务进入等待队列；与文章生成各算各的。
                     </span>
                   </label>
                 ) : null}

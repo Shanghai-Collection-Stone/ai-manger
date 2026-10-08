@@ -71,9 +71,9 @@
 - `XhsTopicDataController.testTikhubConnection(req)` — 用已保存的 Key 与域名做一次 TikHub 连通性自检 | keywords: 测试TikHub连接, 密钥自检, test-tikhub-connection, api-key-probe
 - `XhsTopicDataController.requireTopic(req, topicId)` — 校验子选题归属，越权按 404 处理 | keywords: 校验选题归属, 越权防护, require-owned-topic, ownership-guard
 - `XhsTopicDataController.requireUser(req)` — 取出当前后台用户 | keywords: 当前后台用户, 登录校验, require-admin-user, auth-check
-- `XhsTopicCrawlService.onModuleInit()` — 启动抓取调度轮询 | keywords: 启动调度, 定时轮询, start-scheduler, interval-tick
+- `XhsTopicCrawlService.onModuleInit()` — 启动抓取调度轮询；多进程时只在 leader 进程上跑，避免重复建抓取任务 | keywords: 启动调度, 定时轮询, start-scheduler, interval-tick
 - `XhsTopicCrawlService.onModuleDestroy()` — 停止抓取调度轮询 | keywords: 停止调度, 释放定时器, stop-scheduler, clear-timer
-- `XhsTopicCrawlService.ensureIndexes()` — 建立抓取任务与专用调度表索引，按天归一采集频率并执行首次回填 | keywords: 抓取任务索引, 调度表初始化, crawl-task-indexes, schedule-table-init
+- `XhsTopicCrawlService.ensureIndexes()` — 建立抓取任务稳定分页、Todo 运行定位、作用域调度更新与到期领取索引，按天归一采集频率并执行首次回填 | keywords: 抓取任务索引, 调度表初始化, crawl-task-indexes, schedule-table-init
 - `XhsTopicCrawlService.dropLegacyUniqueTodoIndex()` — 启动时删掉运行表遗留的 `todoId` 单键唯一索引，否则 TikHub 直采（`todoId` 恒为 0）第二次就撞 E11000；失败只记日志 | keywords: 清理遗留唯一索引, 直采运行记录, drop-legacy-unique-index, direct-crawl-run-record
 - `XhsTopicCrawlService.migrateToDailySchedule()` — 给存量配置补每日时刻并把全部等待行改排到下一个定点 | keywords: 定点调度迁移, 存量调度重排, migrate-to-daily-schedule, reschedule-existing
 - `XhsTopicCrawlService.resolveFirstDailyRunAt(scope,from,startAt)` — 算调度行首次到达时刻，发布/恢复/改区间共用，自动链路不即时开抓 | keywords: 计算首次定点, 不即时开抓, resolve-first-daily-run, no-immediate-crawl

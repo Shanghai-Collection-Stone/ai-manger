@@ -30,7 +30,7 @@ import {
 } from '@langchain/core/messages';
 import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { CreateAgentParams, createMiddleware } from 'langchain';
+import { CreateAgentParams, createAgent, createMiddleware } from 'langchain';
 import type { Callbacks } from '@langchain/core/callbacks/manager';
 import type { SubAgent } from 'deepagents';
 import { ChatOpenAI } from '@langchain/openai';
@@ -220,6 +220,22 @@ export class AgentService {
       middleware.push(this.buildOpenAICompatSanitizeMiddleware());
     }
 
+    if (config.lightweight) {
+      // 轻量 Agent：不挂 DeepAgent 的待办 / 文件系统 / 子代理工具与提示词，每轮请求只带业务工具
+      return createAgent({
+        model: llm,
+        systemPrompt: mergedSystem,
+        tools: this.normalizeTools(config.tools),
+        ...(config.responseFormat
+          ? { responseFormat: config.responseFormat }
+          : {}),
+        ...(config.ephemeral ? {} : { checkpointer: this.checkpointer }),
+        ...(middleware.length > 0 ? { middleware } : {}),
+      } as unknown as Parameters<
+        typeof createAgent
+      >[0]) as unknown as DeepAgentReturn;
+    }
+
     const options = {
       model: llm,
       systemPrompt: mergedSystem,
@@ -334,6 +350,10 @@ export class AgentService {
         temperature,
         streaming: !config.nonStreaming,
         callbacks: [billingCallback],
+        // 只有 2.5 Flash 系列能把思考预算设为 0；给不支持思考的型号传会直接报错
+        ...(config.disableThinking && /gemini-2\.5-flash/i.test(modelName)
+          ? { thinkingConfig: { thinkingBudget: 0 } }
+          : {}),
       });
     }
     if (protocol === 'anthropic') {
@@ -356,6 +376,9 @@ export class AgentService {
         callbacks: [billingCallback],
       });
     }
+    const thinkingOffKwargs = config.disableThinking
+      ? this.resolveThinkingOffKwargs(modelName)
+      : undefined;
     return new ChatOpenAI({
       model: modelName,
       apiKey: runtime.apiKey,
@@ -363,8 +386,29 @@ export class AgentService {
       streaming: !config.nonStreaming,
       useResponsesApi: false,
       configuration: runtime.baseUrl ? { baseURL: runtime.baseUrl } : undefined,
+      ...(thinkingOffKwargs ? { modelKwargs: thinkingOffKwargs } : {}),
       callbacks: [billingCallback],
     });
+  }
+
+  /**
+   * @description 按模型名给出 OpenAI 兼容协议下关闭思考的请求参数，只认有已知开关的混合思考型号：
+   *   GLM-4.5 及以上、豆包 Seed 用 `thinking.type=disabled`，Qwen3 用 `enable_thinking=false`；
+   *   其他型号（含老 GLM / 豆包，可能不认这个字段）返回 undefined，不改请求，避免反而报错。
+   * @keyword-cn 关闭思考参数, 辅助调用提速
+   * @keyword-en thinking-off-kwargs, auxiliary-call-speedup
+   * @param modelName 模型名。
+   * @returns {Record<string, unknown>|undefined} 追加到请求体的参数。
+   */
+  private resolveThinkingOffKwargs(
+    modelName: string,
+  ): Record<string, unknown> | undefined {
+    const model = modelName.trim().toLowerCase();
+    if (/^(glm-(4\.[5-9]|[5-9])|doubao-seed)/.test(model)) {
+      return { thinking: { type: 'disabled' } };
+    }
+    if (/^qwen3/.test(model)) return { enable_thinking: false };
+    return undefined;
   }
 
   /**

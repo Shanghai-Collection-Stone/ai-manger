@@ -183,6 +183,29 @@ export type ImageGroupSourcePreparation =
       stats: ImageGroupAllocationStats;
     };
 
+/**
+ * @description 图组渲染过程中的单张图就绪事件：封面底图先以 `final=false` 报一次，成品封面与内页以 `final=true` 报。
+ * @keyword-cn 单图就绪事件, 渐进配图
+ * @keyword-en image-ready-event, progressive-images
+ */
+export interface ImageGroupImageReadyEvent {
+  articleIndex: number;
+  role: CanvasGroupImage['role'];
+  url: string;
+  final: boolean;
+}
+
+/**
+ * @description 渐进渲染钩子：`articlesReady` 让不依赖标题的封面底图与内页先渲染、封面文案等最终标题；
+ *   `onImageReady` 在每张图就绪时回调，回调抛错只记日志、不影响渲染。
+ * @keyword-cn 渐进渲染钩子, 延后文章标题
+ * @keyword-en progressive-render-hooks, deferred-article-title
+ */
+export interface ImageGroupRenderHooks {
+  articlesReady?: Promise<CanvasImageGroupCreateInput['articles']>;
+  onImageReady?: (event: ImageGroupImageReadyEvent) => void;
+}
+
 async function runConcurrent<T>(
   tasks: Array<() => Promise<T>>,
   concurrency: number,
@@ -669,12 +692,14 @@ export class CanvasImageGroupService {
    * 并发数由 IMAGE_GROUP_RENDER_CONCURRENCY 环境变量控制，默认 1（串行）。
    * @param {CanvasImageGroupCreateInput} input - 创建入参。
    * @param {Extract<ImageGroupSourcePreparation, {ok: true}>} preparation - 已完成的源图分配结果。
+   * @param {ImageGroupRenderHooks} [hooks] - 可选渐进渲染钩子：延后到达的文章标题与单张图就绪回调。
    * @returns {Promise<CanvasImageGroup[]>} 渲染后的图片组。
    * @keyword-en render, prepared, image-group, concurrency
    */
   async renderPreparedImageGroups(
     input: CanvasImageGroupCreateInput,
     preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
+    hooks?: ImageGroupRenderHooks,
   ): Promise<CanvasImageGroup[]> {
     const concurrency = Math.max(
       1,
@@ -684,7 +709,7 @@ export class CanvasImageGroupService {
       ) || 1,
     );
     const tasks = preparation.plans.map(
-      (plan) => () => this.renderOnePlan(plan, input, preparation),
+      (plan) => () => this.renderOnePlan(plan, input, preparation, hooks),
     );
     const results = await runConcurrent(tasks, concurrency);
 
@@ -713,141 +738,156 @@ export class CanvasImageGroupService {
 
   /**
    * @description 渲染单个图组计划（无字封面底图、内页和可编辑封面文案元数据）。供 renderPreparedImageGroups 并发调用。
-   * @keyword-en render, single-plan, image-group, cover-text
+   *   封面底图、各内页拼图的合成入库与封面文案同时进行，AI 封面在底图与文案都就绪后生成，内页不再逐张串行。
+   *   传入 `hooks.articlesReady` 时底图与内页不等文章标题先渲染，只有封面文案与 AI 封面等最终标题；每张图就绪经 `hooks.onImageReady` 报出。
+   * @keyword-cn 渐进渲染钩子, 单图就绪事件
+   * @keyword-en render, single-plan, cover-text, parallel-render, progressive-images
    */
   private async renderOnePlan(
     plan: ImageGroupAllocationPlan,
     input: CanvasImageGroupCreateInput,
     preparation: Extract<ImageGroupSourcePreparation, { ok: true }>,
+    hooks?: ImageGroupRenderHooks,
   ): Promise<{ group: CanvasImageGroup; usedIds: number[] }> {
     const articles = input.articles ?? [];
     const i = plan.articleIndex;
-    const art = articles[i];
     const layout = plan.layout;
+    const emitImageReady = (
+      role: CanvasGroupImage['role'],
+      url: string | undefined,
+      final: boolean,
+    ): void => {
+      if (!hooks?.onImageReady || !url) return;
+      try {
+        hooks.onImageReady({ articleIndex: i, role, url, final });
+      } catch (e) {
+        this.logger.warn(`[image-group] image_ready hook failed: ${String(e)}`);
+      }
+    };
+    // 标题没到时底图与内页照常先渲染，只有封面文案与 AI 封面要等它
+    const articlePromise = hooks?.articlesReady
+      ? hooks.articlesReady.then((list) => list?.[i] ?? articles[i])
+      : Promise.resolve(articles[i]);
     const coverSlot = plan.slots.find((slot) => slot.role === 'cover');
     const innerSlots = plan.slots.filter((slot) => slot.role !== 'cover');
-    const groupImages: CanvasGroupImage[] = [];
-    const contextImages: GalleryImageEntity[] = [];
-    const contextImageIds = new Set<number>();
     const localUsedIds: number[] = [];
-
-    const collectContextImage = (
-      img: GalleryImageEntity | null | undefined,
-    ): void => {
-      if (!img) return;
-      if (contextImageIds.has(img.id)) return;
-      contextImageIds.add(img.id);
-      contextImages.push(img);
-    };
     const addUsedIds = (ids: number[]): void => {
       for (const id of ids) {
         if (Number.isFinite(id) && id > 0) localUsedIds.push(id);
       }
     };
 
-    let ok = true;
-
-    // 封面
-    let coverPlan:
+    // 封面底图、各内页拼图与封面文案互不依赖，同时进行；AI 封面要等底图与文案都好了才出
+    const coverPromise: Promise<
       | {
           kind: 'collage';
           image: GalleryImageEntity;
           imgA: GalleryImageEntity;
           imgB: GalleryImageEntity;
-          collageUrl: string;
           collage?: CanvasCollageLayout;
+          sourceIds: number[];
         }
-      | {
-          kind: 'portrait';
-          image: GalleryImageEntity;
-        }
-      | null = null;
-    if (!coverSlot) {
-      ok = false;
-    } else if (coverSlot.kind === 'collage') {
-      const collageResult = await this.persistPlannedCollage({
-        userId: input.userId,
-        tenantId: input.tenantId,
-        imgA: coverSlot.imgA,
-        imgB: coverSlot.imgB,
-        targetGroupId: preparation.dynamicCoverGroupId,
-        generatedKind: 'cover',
-      });
-      if (collageResult) {
-        coverPlan = {
-          kind: 'collage',
-          image: collageResult.image,
-          imgA: collageResult.imgA,
-          imgB: collageResult.imgB,
-          collageUrl: collageResult.collageUrl,
-          collage: collageResult.collage,
-        };
-        collectContextImage(collageResult.imgA);
-        collectContextImage(collageResult.imgB);
-        addUsedIds(collageResult.sourceIds);
-      } else {
-        ok = false;
-      }
-    } else {
-      const coverImg = coverSlot.image;
-      coverPlan = {
-        kind: 'portrait',
-        image: coverImg,
-      };
-      collectContextImage(coverImg);
-      addUsedIds([coverImg.id]);
-    }
-    if (!coverPlan) ok = false;
-
-    // 内页
-    for (const slot of innerSlots) {
-      if (slot.kind === 'collage') {
-        const collageResult = await this.persistPlannedCollage({
-          userId: input.userId,
-          tenantId: input.tenantId,
-          imgA: slot.imgA,
-          imgB: slot.imgB,
-          targetGroupId: preparation.dynamicCollageGroupId,
-          generatedKind: 'collage',
-        });
-        if (collageResult) {
-          groupImages.push(
-            this.toGroupImage(
-              collageResult.image,
-              slot.role,
-              undefined,
-              collageResult.collage,
-            ),
-          );
-          collectContextImage(collageResult.imgA);
-          collectContextImage(collageResult.imgB);
-          addUsedIds(collageResult.sourceIds);
-        } else {
-          ok = false;
-        }
-      } else {
-        const portraitImg = slot.image;
-        groupImages.push(this.toGroupImage(portraitImg, slot.role));
-        collectContextImage(portraitImg);
-        addUsedIds([portraitImg.id]);
-      }
-    }
-
-    // 封面文案：按”本组最终配图”语义生成（tags + description 汇总）
-    if (coverPlan) {
-      const imageContext =
-        preparation.imageContexts[i] ??
-        this.summarizeImageContext(contextImages);
-      const rawCoverText =
-        (
-          await this.generateCoverTexts(
+      | { kind: 'portrait'; image: GalleryImageEntity }
+      | null
+    > = !coverSlot
+      ? Promise.resolve(null)
+      : coverSlot.kind === 'collage'
+        ? this.persistPlannedCollage({
+            userId: input.userId,
+            tenantId: input.tenantId,
+            imgA: coverSlot.imgA,
+            imgB: coverSlot.imgB,
+            targetGroupId: preparation.dynamicCoverGroupId,
+            generatedKind: 'cover',
+          }).then((result) =>
+            result
+              ? {
+                  kind: 'collage' as const,
+                  image: result.image,
+                  imgA: result.imgA,
+                  imgB: result.imgB,
+                  collage: result.collage,
+                  sourceIds: result.sourceIds,
+                }
+              : null,
+          )
+        : Promise.resolve({
+            kind: 'portrait' as const,
+            image: coverSlot.image,
+          });
+    // 失败分支留给下方 Promise.all 处理，这里只负责报出底图
+    coverPromise.then(
+      (coverBase) => emitImageReady('cover', coverBase?.image.url, false),
+      () => undefined,
+    );
+    const innerPromise = Promise.all(
+      innerSlots.map(
+        async (
+          slot,
+        ): Promise<{ image: CanvasGroupImage; usedIds: number[] } | null> => {
+          if (slot.kind !== 'collage') {
+            emitImageReady(slot.role, slot.image.url, true);
+            return {
+              image: this.toGroupImage(slot.image, slot.role),
+              usedIds: [slot.image.id],
+            };
+          }
+          const result = await this.persistPlannedCollage({
+            userId: input.userId,
+            tenantId: input.tenantId,
+            imgA: slot.imgA,
+            imgB: slot.imgB,
+            targetGroupId: preparation.dynamicCollageGroupId,
+            generatedKind: 'collage',
+          });
+          if (result) emitImageReady(slot.role, result.image.url, true);
+          return result
+            ? {
+                image: this.toGroupImage(
+                  result.image,
+                  slot.role,
+                  undefined,
+                  result.collage,
+                ),
+                usedIds: result.sourceIds,
+              }
+            : null;
+        },
+      ),
+    );
+    // 封面链（如等标题失败）先抛出时这里还没被 await，挂空处理避免未处理拒绝；下方 await 仍拿到原结果
+    innerPromise.catch(() => undefined);
+    // 封面文案：按「本组最终配图」语义生成（tags + description 汇总），源图在分配阶段就定了
+    const imageContext =
+      preparation.imageContexts[i] ??
+      this.summarizeImageContext(this.collectPlanSourceImages(plan));
+    const coverTextPromise = coverSlot
+      ? articlePromise.then((article) =>
+          this.generateCoverTexts(
             input.topic,
-            [art],
+            [article],
             [imageContext],
             input.tenantId,
-          )
-        )[0] ?? this.buildCoverText(art.title, i);
-      const coverText = this.sanitizeCoverText(rawCoverText);
+          ).then((texts) => texts[0] ?? this.buildCoverText(article.title, i)),
+        )
+      : Promise.resolve(null);
+
+    const [coverPlan, rawCoverText, art] = await Promise.all([
+      coverPromise,
+      coverTextPromise,
+      articlePromise,
+    ]);
+    let coverImage: CanvasGroupImage | null = null;
+    let coverKindLabel = '';
+    if (coverPlan) {
+      addUsedIds(
+        coverPlan.kind === 'collage'
+          ? coverPlan.sourceIds
+          : [coverPlan.image.id],
+      );
+      const coverText = this.sanitizeCoverText(
+        rawCoverText ?? this.buildCoverText(art.title, i),
+      );
 
       // ai-overlay: AI 生成文字与装饰融合的海报素材层，真实照片主体保持不动。
       // 列表/发布保留合成预览，同时把原照片和含字素材分别写入画板元数据供后续加特效。
@@ -886,7 +926,7 @@ export class CanvasImageGroupService {
 
       if (aiCover) {
         const isOverlayCover = 'preview' in aiCover;
-        const coverImage = this.toGroupImage(
+        coverImage = this.toGroupImage(
           isOverlayCover ? aiCover.preview : aiCover,
           'cover',
           coverText,
@@ -901,40 +941,34 @@ export class CanvasImageGroupService {
           coverImage.editableBase = aiCover.editableBase;
           coverImage.materials = aiCover.materials;
         }
-        groupImages.unshift(coverImage);
-        this.logger.debug(
-          `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'} cover=${useOverlayStrategy ? 'ai-overlay' : 'ai'}`,
-        );
-        return {
-          group: {
-            id: i + 1,
-            articleId: art.title ? undefined : undefined,
-            articleTitle: art.title,
-            layout,
-            images: groupImages,
-            status: ok ? 'done' : 'failed',
-          },
-          usedIds: localUsedIds,
-        };
-      }
-
-      groupImages.unshift(
-        this.toGroupImage(
+        coverKindLabel = useOverlayStrategy ? ' cover=ai-overlay' : ' cover=ai';
+      } else {
+        coverImage = this.toGroupImage(
           coverPlan.image,
           'cover',
           coverText,
           coverPlan.kind === 'collage' ? coverPlan.collage : undefined,
-        ),
-      );
+        );
+      }
+      emitImageReady('cover', coverImage.url, true);
     }
 
+    const innerResults = await innerPromise;
+    const groupImages: CanvasGroupImage[] = coverImage ? [coverImage] : [];
+    for (const result of innerResults) {
+      if (!result) continue;
+      groupImages.push(result.image);
+      addUsedIds(result.usedIds);
+    }
+    const ok = Boolean(coverPlan) && innerResults.every(Boolean);
+
     this.logger.debug(
-      `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}`,
+      `[image-group] group_assigned idx=${i} layout=${layout} imageCount=${groupImages.length} status=${ok ? 'done' : 'failed'}${coverKindLabel}`,
     );
     return {
       group: {
         id: i + 1,
-        articleId: art.title ? undefined : undefined,
+        articleId: undefined,
         articleTitle: art.title,
         layout,
         images: groupImages,
@@ -2414,6 +2448,8 @@ export class CanvasImageGroupService {
       const llm = await this.agentService.buildLLM({
         nonStreaming: true,
         temperature: 0.8,
+        // 封面文案是辅助小任务，关闭思考换响应速度
+        disableThinking: true,
         tenantId,
         ...toWorkflowLlmConfig(
           await this.workflowModels.resolveNodeRuntime(

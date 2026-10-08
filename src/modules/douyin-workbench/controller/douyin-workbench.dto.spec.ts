@@ -1,5 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { UpdateDouyinTopicDto } from './douyin-workbench.dto';
+import { normalizePublishCopy } from '../services/douyin-workbench-repository.service';
 
 /**
  * 控制器上挂的是 `forbidNonWhitelisted`，所以服务端自己写进分镜的字段
@@ -75,6 +76,42 @@ describe('抖音工作台 DTO', () => {
       fullVideoResolution: '1080P',
       fullVideoDuration: 15,
     });
+  });
+
+  it('发布文案按白名单收，话题超过 5 个打回', async () => {
+    const publishCopy = {
+      title: '巷子里的宝藏小店',
+      description: '藏在老街的一家店，去过的都说值。你最想打卡哪一家？',
+      tags: ['#探店', '宝藏小店'],
+    };
+    await expect(
+      pipe.transform({ publishCopy }, metadata),
+    ).resolves.toMatchObject({ publishCopy });
+    await expect(
+      pipe.transform(
+        {
+          publishCopy: { ...publishCopy, tags: ['1', '2', '3', '4', '5', '6'] },
+        },
+        metadata,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('发布文案去井号去重、全空时清掉', () => {
+    expect(
+      normalizePublishCopy({
+        title: '  标题\n换行 ',
+        description: '正文',
+        tags: ['#探店', '探店', '##美食', ' '],
+      }),
+    ).toEqual({
+      title: '标题 换行',
+      description: '正文',
+      tags: ['探店', '美食'],
+    });
+    expect(
+      normalizePublishCopy({ title: ' ', description: '', tags: [] }),
+    ).toBeNull();
   });
 
   it('真的不认识的字段仍然要打回，白名单不能形同虚设', async () => {

@@ -23,7 +23,7 @@ Article-Library
 
 - `ArticleLibraryModule()` — 注册文章库模块依赖、控制器和服务 | keywords: article-library, module
 - `ArticleLibraryService()` — 文章库容器服务 | keywords: article-library, service
-- `ensureIndexes()` — 建立文章库索引并校准 article_libraries counter | keywords: article-library-counter, 文章库计数器校准
+- `ensureIndexes()` — 建立文章库租户/用户/类型时间线索引并校准 article_libraries counter | keywords: article-library-counter, 文章库计数器校准
 - `ensureQrTokenIndex()` — 重建二维码 token partial unique 索引并清理历史 null token | keywords: article-library-qr-index, 二维码索引
 - `getMaxArticleLibraryId()` — 读取当前最大文章库业务 ID | keywords: article-library-counter, 文章库计数器校准
 - `ensureCounterAtLeast(seq)` — 将 article_libraries counter 至少推进到指定下限 | keywords: article-library-counter, 文章库计数器校准
@@ -49,7 +49,7 @@ Article-Library
 - `getStats(libraryId)` — 聚合文章库内发布状态和租约占用统计 | keywords: article-library, stats
 - `getThumbnailImages(libraryId,limit?)` — 读取文章库缩略图所需的最近文章首图 | keywords: article-library, thumbnail
 - `ArticleService()` — 文章服务 | keywords: article, service
-- `ensureIndexes()` — 建立文章及来源选题查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
+- `ensureIndexes()` — 建立文章队列、来源选题及 NoteId 关联查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
 - `getMaxArticleId()` — 读取当前最大文章业务 ID | keywords: article-id-counter, 文章入库, 计数器校准
 - `ensureCounterAtLeast(seq)` — 将 articles counter 至少推进到指定下限 | keywords: article-id-counter, 文章入库, 计数器校准
 - `nextId()` — 分配新文章业务 ID 前先校准 counter | keywords: article-id-counter, 文章入库, 计数器校准
@@ -170,7 +170,7 @@ Article-Library
 
 管理端接口挂载在 `/api/article-library` 下，提供文章库创建、列表、详情、更新、删除、二维码内容获取、文章入库、文章列表、发布状态更新、文章跨库移动、文章删除和队列领取测试。跨库移动走 `PATCH /:libraryId/articles/:articleId/library`，校验来源库、目标库与文章都属于当前租户用户，源库与目标库相同返回 400，文章仍持有未过期租约返回 409。task 专项接口挂载在 `/task-api` 下，支持 todo 绑定资源鉴权与扫码 token 鉴权两种方式。
 
-文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；`pushConfig.qrToken` 使用 partial unique 索引，只索引字符串 token，历史 null token 会在索引初始化时清理。文章使用 `articles` 集合并对 `id` 建唯一索引，同时按租户、用户、来源与 `meta.xhsTopicId` 建组合索引，供选题工作台识别已经入库的来源子选题。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
+文章库容器使用 `article_libraries` 集合并对 `id` 建唯一索引；列表按 `tenantId + updatedAt`、`tenantId + userId + updatedAt`、`tenantId + type + updatedAt` 覆盖过滤与倒序分页。`pushConfig.qrToken` 使用 partial unique 索引，只索引字符串 token，历史 null token 会在索引初始化时清理。文章使用 `articles` 集合并对 `id` 建唯一索引，同时按租户、用户、来源与 `meta.xhsTopicId` 建组合索引，并以 `libraryId + meta.NoteId` 支持手工关联查找。两个服务在索引初始化和 ID 分配前都会读取集合现有最大业务 ID，并把对应 `counters` 记录推进到不低于该值，防止 counter 被清空、回滚或落后时重复分配已存在 ID。
 
 队列领取只面向 `unpublished` 文章，按 `createdAt` FIFO 排序，并通过 `findOneAndUpdate` 原子写入 `lockExpireAt` 和 `lastLeaseToken`。发布状态回写成功或主动 release 会释放租约；自然过期后文章可再次领取。`published` 文章不再参与领取池。
 

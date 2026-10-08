@@ -28,6 +28,14 @@ export interface GalleryImageEntity {
   isPortrait?: boolean;
   tags: string[];
   description?: string;
+  /** @description 是否已收藏，历史数据缺省时按 false 返回 */
+  favorite: boolean;
+  /** @description 最近一次收藏时间，取消收藏后清除 */
+  favoritedAt?: Date;
+  /** @description 图片备注，最多500字，历史数据缺省时按空字符串返回 */
+  note: string;
+  /** @description 是否禁止 AI 人脸处理，历史数据缺省时按 false 返回 */
+  aiFaceProtected: boolean;
   /** @description 是否为两图拼图（640x853） */
   isCollage?: boolean;
   /** @description 拼图来源图片ID（固定2张） */
@@ -72,6 +80,10 @@ export interface GalleryImageCreateInput {
   height?: number;
   tags?: string[];
   description?: string;
+  favorite?: boolean;
+  favoritedAt?: Date;
+  note?: string;
+  aiFaceProtected?: boolean;
   isCollage?: boolean;
   collageSourceImageIds?: number[];
   collageMeta?: {

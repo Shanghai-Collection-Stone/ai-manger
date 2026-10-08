@@ -20,6 +20,7 @@ import {
   type SmsVerificationScene,
   type SmsVerifiedContext,
 } from '../entities/sms-verification.entity.js';
+import { AliyunDypnsService } from './aliyun-dypns.service.js';
 import { AliyunSmsError, AliyunSmsService } from './aliyun-sms.service.js';
 import { SmsConfigService } from './sms-config.service.js';
 import { SmsCryptoService } from './sms-crypto.service.js';
@@ -37,7 +38,8 @@ export class SmsVerificationService {
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly config: SmsConfigService,
-    private readonly aliyun: AliyunSmsService,
+    private readonly aliyunSms: AliyunSmsService,
+    private readonly aliyunDypns: AliyunDypnsService,
     private readonly crypto: SmsCryptoService,
   ) {
     this.codes = db.collection<SmsCodeEntity>('sms_verification_codes');
@@ -87,30 +89,53 @@ export class SmsVerificationService {
     await this.assertSendQuota(phone, scene, input.ip);
 
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const verifyVia = runtime?.provider === 'aliyun_dypns' ? 'provider' : 'local';
     const now = new Date();
     const doc: SmsCodeEntity = {
       _id: new ObjectId(),
       phone,
       scene,
-      codeHash: this.crypto.hashCode(phone, scene, code),
+      codeHash: this.crypto.hashCode(
+        phone,
+        scene,
+        verifyVia === 'local' ? code : '',
+      ),
       ip: input.ip,
       attempts: 0,
+      verifyVia,
       expiresAt: new Date(now.getTime() + SMS_CODE_TTL_SECONDS * 1000),
       createdAt: now,
     };
     await this.codes.insertOne(doc);
     try {
       if (runtime) {
-        const { bizId } = await this.aliyun.sendCode(runtime, phone, code);
-        if (bizId) {
-          await this.codes.updateOne(
-            { _id: doc._id },
-            { $set: { providerBizId: bizId } },
+        if (runtime.provider === 'aliyun_dypns') {
+          const { bizId, verifyCode } = await this.aliyunDypns.sendVerifyCode(
+            runtime,
+            phone,
+            { outId: doc._id.toHexString() },
           );
+          const update: Record<string, unknown> = {};
+          if (bizId) update.providerBizId = bizId;
+          if (verifyCode) {
+            update.codeHash = this.crypto.hashCode(phone, scene, verifyCode);
+            update.verifyVia = 'local';
+          }
+          if (Object.keys(update).length) {
+            await this.codes.updateOne({ _id: doc._id }, { $set: update });
+          }
+        } else {
+          const { bizId } = await this.aliyunSms.sendCode(runtime, phone, code);
+          if (bizId) {
+            await this.codes.updateOne(
+              { _id: doc._id },
+              { $set: { providerBizId: bizId } },
+            );
+          }
         }
       } else {
         this.logger.warn(
-          `[send] SMS_VERIFICATION_MOCK 模拟发送，未真实下发 phone=${phone} scene=${scene} code=${code}`,
+          `[send] SMS_VERIFICATION_MOCK 模拟发送，未真实下发 phone=${phone.slice(0, 3)}****${phone.slice(-4)} scene=${scene} code=${code}`,
         );
       }
     } catch (error) {
@@ -161,12 +186,29 @@ export class SmsVerificationService {
     if (!counted.value) {
       throw new BadRequestException('SMS_CODE_TOO_MANY_ATTEMPTS');
     }
-    const expected = Buffer.from(latest.codeHash, 'hex');
-    const actual = Buffer.from(
-      this.crypto.hashCode(phone, input.scene, code),
-      'hex',
-    );
-    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    let valid = false;
+    if (latest.verifyVia === 'provider') {
+      const runtime = await this.config.resolveRuntime();
+      if (!runtime || runtime.provider !== 'aliyun_dypns') {
+        throw new ServiceUnavailableException('SMS_NOT_CONFIGURED');
+      }
+      try {
+        valid = await this.aliyunDypns.checkVerifyCode(runtime, phone, code, {
+          outId: latest._id.toHexString(),
+        });
+      } catch {
+        throw new ServiceUnavailableException('SMS_SEND_FAILED');
+      }
+    } else {
+      const expected = Buffer.from(latest.codeHash, 'hex');
+      const actual = Buffer.from(
+        this.crypto.hashCode(phone, input.scene, code),
+        'hex',
+      );
+      valid =
+        expected.length === actual.length && timingSafeEqual(expected, actual);
+    }
+    if (!valid) {
       throw new BadRequestException('SMS_CODE_INVALID');
     }
     return { codeId: latest._id.toHexString(), phone, scene: input.scene };
@@ -199,17 +241,30 @@ export class SmsVerificationService {
     rawPhone: string,
   ): Promise<{ ok: boolean; bizId?: string; code?: string; message?: string }> {
     const phone = this.normalizePhone(rawPhone);
+    if (this.config.isMockMode()) {
+      const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+      this.logger.warn(
+        `[testSend] SMS_VERIFICATION_MOCK 模拟测试发送，未真实下发 phone=${phone.slice(0, 3)}****${phone.slice(-4)} code=${code}`,
+      );
+      return { ok: true, bizId: 'mock' };
+    }
     const runtime = await this.config.resolveRuntime({ requireEnabled: false });
     if (!runtime) {
       return {
         ok: false,
         code: 'SMS_NOT_CONFIGURED',
-        message: 'AccessKey ID / Secret / 签名 / 模板编码未填写完整',
+        message:
+          'AccessKey ID / Secret / 当前接口类型的签名 / 模板编码未填写完整',
       };
     }
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
     try {
-      const { bizId } = await this.aliyun.sendCode(runtime, phone, code);
+      const { bizId } =
+        runtime.provider === 'aliyun_dypns'
+          ? await this.aliyunDypns.sendVerifyCode(runtime, phone, {
+              outId: `test-${new ObjectId().toHexString()}`,
+            })
+          : await this.aliyunSms.sendCode(runtime, phone, code);
       return { ok: true, bizId };
     } catch (error) {
       if (error instanceof AliyunSmsError) {
@@ -286,7 +341,13 @@ export class SmsVerificationService {
   private toPublicSendError(error: unknown): HttpException {
     if (error instanceof HttpException) return error;
     if (error instanceof AliyunSmsError) {
-      if (error.code === 'isv.BUSINESS_LIMIT_CONTROL') {
+      const providerCode = error.code.toUpperCase();
+      if (
+        error.code === 'isv.BUSINESS_LIMIT_CONTROL' ||
+        providerCode.includes('FREQUENCY') ||
+        providerCode.includes('LIMIT_CONTROL') ||
+        providerCode.includes('DAY_LIMIT')
+      ) {
         return new HttpException(
           'SMS_PROVIDER_RATE_LIMITED',
           HttpStatus.TOO_MANY_REQUESTS,

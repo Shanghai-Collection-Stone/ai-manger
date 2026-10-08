@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  IsMongoId,
   IsArray,
   IsIn,
   IsInt,
@@ -14,7 +15,12 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { DOUYIN_SCRIPT_STYLES } from '../entities/douyin-workbench.entity.js';
+import {
+  DOUYIN_FACE_MASK_STYLES,
+  DOUYIN_SCRIPT_STYLES,
+  type DouyinFaceMaskStyle,
+} from '../entities/douyin-workbench.entity.js';
+import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.entity.js';
 
 /** @type {string[]} 允许的脚本风格键名，取自实体登记表，前后端同源。 */
 const SCRIPT_STYLE_KEYS = Object.keys(DOUYIN_SCRIPT_STYLES);
@@ -93,6 +99,11 @@ export class DouyinStoryboardShotDto {
   @Type(() => DouyinMediaReferenceDto)
   originalMedia?: DouyinMediaReferenceDto | null;
 
+  // 人像处理风格同样由服务端写入、前端原样回传
+  @IsOptional()
+  @IsIn(DOUYIN_FACE_MASK_STYLES)
+  faceMaskStyle?: DouyinFaceMaskStyle | null;
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)
@@ -103,6 +114,17 @@ export class DouyinStoryboardShotDto {
   @IsInt()
   @Min(1)
   videoId?: number;
+}
+
+/**
+ * @description 校验分镜人像处理的风格参数，缺省为 3D 卡通大头。
+ * @keyword-cn 人像处理风格参数
+ * @keyword-en mask-shot-faces-dto
+ */
+export class MaskDouyinShotFacesDto {
+  @IsOptional()
+  @IsIn(DOUYIN_FACE_MASK_STYLES)
+  style?: DouyinFaceMaskStyle;
 }
 
 /**
@@ -118,6 +140,12 @@ export class CreateDouyinMotherTopicDto {
   @MinLength(2)
   @MaxLength(100)
   title!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(KNOWLEDGE_REFERENCE_LIMIT)
+  @IsMongoId({ each: true })
+  knowledgeIds?: string[];
 }
 
 /**
@@ -200,6 +228,27 @@ export class DouyinVideoAudioDto {
 }
 
 /**
+ * @description 校验脚本发布文案：标题最多 60 字、正文最多 1000 字、话题最多 5 个（单个最多 20 字，允许带井号）。
+ * @keyword-cn 发布文案参数, 话题数量限制
+ * @keyword-en publish-copy-dto, tag-count-limit
+ */
+export class DouyinPublishCopyDto {
+  @IsString()
+  @MaxLength(60)
+  title!: string;
+
+  @IsString()
+  @MaxLength(1000)
+  description!: string;
+
+  @IsArray()
+  @ArrayMaxSize(5)
+  @IsString({ each: true })
+  @MaxLength(21, { each: true })
+  tags!: string[];
+}
+
+/**
  * @description 校验一条被挑中的候选脚本：`key` 指向任务里的候选，标题 / 正文可在挑选时改写。
  * @keyword-cn 挑选脚本参数, 候选改写
  * @keyword-en script-draft-pick-dto, draft-edit
@@ -268,6 +317,13 @@ export class UpdateDouyinTopicDto {
   @MaxLength(100)
   title?: string;
 
+  // 仅母选题生效：引用知识 ID，传空数组表示不再引用
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(KNOWLEDGE_REFERENCE_LIMIT)
+  @IsMongoId({ each: true })
+  knowledgeIds?: string[];
+
   @IsOptional()
   @IsString()
   @MaxLength(8000)
@@ -316,6 +372,11 @@ export class UpdateDouyinTopicDto {
   @IsString()
   @MaxLength(20)
   fullVideoResolution?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinPublishCopyDto)
+  publishCopy?: DouyinPublishCopyDto;
 
   @IsOptional()
   @IsArray()

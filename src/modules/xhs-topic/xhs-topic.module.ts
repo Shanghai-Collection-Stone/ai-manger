@@ -5,6 +5,8 @@ import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
 import { CanvasModule } from '../canvas/canvas.module.js';
 import { McpFunctionCallModule } from '../function-call/mcp/mcp.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
+import { GenerationQueueModule } from '../generation-queue/generation-queue.module.js';
+import { KnowledgeModule } from '../knowledge/knowledge.module.js';
 import { TodoModule } from '../todo/todo.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { WorkflowModelModule } from '../workflow-model/workflow-model.module.js';
@@ -12,6 +14,7 @@ import { XhsTopicController } from './controller/xhs-topic.controller.js';
 import { XhsTopicService } from './services/xhs-topic.service.js';
 import { XhsTopicRepositoryService } from './services/xhs-topic-repository.service.js';
 import { XhsArticleGenerationService } from './services/xhs-article-generation.service.js';
+import { XhsTopicCleanupService } from './services/xhs-topic-cleanup.service.js';
 
 /**
  * @description 小红书 AI 选题模块，编排 Agent 候选、MCP 搜索、Todo、真实图库与 MongoDB 真实选题。
@@ -26,6 +29,8 @@ import { XhsArticleGenerationService } from './services/xhs-article-generation.s
     CanvasModule,
     DataSourceModule,
     GalleryModule,
+    GenerationQueueModule,
+    KnowledgeModule,
     McpFunctionCallModule,
     TodoModule,
     WorkflowModelModule,
@@ -33,6 +38,7 @@ import { XhsArticleGenerationService } from './services/xhs-article-generation.s
   controllers: [XhsTopicController],
   providers: [
     XhsArticleGenerationService,
+    XhsTopicCleanupService,
     XhsTopicRepositoryService,
     XhsTopicService,
   ],

@@ -1,3 +1,4 @@
+import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js';
 import {
   BadRequestException,
   HttpException,
@@ -339,11 +340,12 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 启动后台轮询，服务重启后会接着跟进未结束的任务。
+   * @description 启动后台轮询，服务重启后会接着跟进未结束的任务；多进程时只在 leader 进程上轮询。
    * @keyword-cn 启动PixMax轮询, 重启续跟
    * @keyword-en start-pixmax-polling, resume-after-restart
    */
   onModuleInit(): void {
+    if (!isLeaderProcess()) return;
     this.timer = setInterval(() => void this.pollOnce(), DOUYIN_PIXMAX_POLL_MS);
     this.timer.unref?.();
   }

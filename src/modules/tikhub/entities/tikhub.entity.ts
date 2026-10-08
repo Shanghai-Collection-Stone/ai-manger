@@ -105,3 +105,22 @@ export interface TikhubXhsCollectResult {
   stats: TikhubXhsNoteStat[];
   failures: { noteId: string; reason: string }[];
 }
+
+/**
+ * @description TikHub 采集到并归一化后的一个抖音作品互动数据。
+ *   取不到的指标留 undefined 不填 0；抖音对非作者隐藏播放量（返回 0），此时 `playCount` 也留空。
+ * @keyword-cn 归一化抖音作品数据, 互动指标
+ * @keyword-en normalized-douyin-video-stat, interaction-metrics
+ */
+export interface TikhubDouyinVideoStat {
+  awemeId: string;
+  title: string;
+  coverUrl?: string;
+  shareUrl: string;
+  likeCount: number;
+  commentCount: number;
+  collectCount?: number;
+  shareCount?: number;
+  playCount?: number;
+  dataAt: Date;
+}

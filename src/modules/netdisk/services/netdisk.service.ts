@@ -53,11 +53,19 @@ export class NetdiskService {
 
   /**
    * @description 初始化网盘索引
-   * @keyword-en ensure netdisk indexes
-   * @keyword-cn 初始化网盘索引
+   * @keyword-en netdisk-indexes, node-tree-query
+   * @keyword-cn 网盘索引, 节点树查询
    */
   async ensureIndexes(): Promise<void> {
     await this.nodes.createIndex({ tenantId: 1, workspaceId: 1, parentId: 1 });
+    await this.nodes.createIndex({
+      tenantId: 1,
+      workspaceId: 1,
+      parentId: 1,
+      type: 1,
+      name: 1,
+    });
+    await this.nodes.createIndex({ parentId: 1 });
     await this.nodes.createIndex({ tenantId: 1, updatedAt: -1 });
     await this.roots.createIndex({ tenantId: 1 }, { unique: true });
   }

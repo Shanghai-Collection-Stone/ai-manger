@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, OnModuleInit } from '@nestjs/common';
 import { tool, CreateAgentParams } from 'langchain';
 import { StructuredTool, isStructuredTool } from '@langchain/core/tools';
 import * as z from 'zod';
@@ -17,12 +17,33 @@ import type { DeepAgentSubAgent } from '../../../ai-agent/types/agent.types.js';
  * @keyword-en frontend function-call service
  */
 @Injectable()
-export class FrontendFunctionCallService {
+export class FrontendFunctionCallService implements OnModuleInit {
   constructor(
     private readonly agent: AgentService,
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly schemaTools: SchemaFunctionCallService,
   ) {}
+
+  /**
+   * @description 模块启动时建立前端任务查询索引
+   * @keyword-cn 初始化前端任务索引
+   * @keyword-en initialize-frontend-job-indexes
+   */
+  async onModuleInit(): Promise<void> {
+    await this.ensureJobIndexes();
+  }
+
+  /**
+   * @description 建立任务哈希唯一查找、会话创建时间线与全局创建时间线索引
+   * @keyword-cn 前端任务索引, 会话时间线
+   * @keyword-en frontend-job-indexes, session-timeline
+   */
+  private async ensureJobIndexes(): Promise<void> {
+    const jobs = this.db.collection('frontend_jobs');
+    await jobs.createIndex({ hash: 1 }, { unique: true });
+    await jobs.createIndex({ sessionId: 1, created_at: -1 });
+    await jobs.createIndex({ created_at: -1 });
+  }
 
   private normalizeSubagentTools(
     tools: CreateAgentParams['tools'],
@@ -32,7 +53,7 @@ export class FrontendFunctionCallService {
   }
 
   /**
-   * @description 获取工具句柄集合
+   * @description 获取工具句柄集合；同一页面 hash 更新原任务记录，不另插一条
    * @keyword-en get handle
    */
   getHandle(scope?: {
@@ -185,22 +206,27 @@ export class FrontendFunctionCallService {
         );
         await fs.writeFile(file, tpl, 'utf8');
 
-        const record = {
-          hash,
-          url,
-          status: 'pending' as const,
-          input,
-          sessionId,
-          uiFramework: ui ?? null,
-          chartLibrary: lib ?? null,
-          contentType: ct ?? 'chart',
-          model: model ?? 'deepseek-chat',
-          targetUrl: targetUrl,
-          layout: ly ?? null,
-          created_at: now,
-          updated_at: now,
-        };
-        await col.insertOne(record);
+        await col.updateOne(
+          { hash },
+          {
+            $set: {
+              url,
+              status: 'pending',
+              input,
+              sessionId,
+              uiFramework: ui ?? null,
+              chartLibrary: lib ?? null,
+              contentType: ct ?? 'chart',
+              model: model ?? 'deepseek-chat',
+              targetUrl,
+              layout: ly ?? null,
+              updated_at: now,
+            },
+            $setOnInsert: { created_at: now },
+            $unset: { error: '' },
+          },
+          { upsert: true },
+        );
 
         // 异步生成最终HTML（脱离工具句柄执行，避免子Agent事件透传）
         setTimeout(() => {

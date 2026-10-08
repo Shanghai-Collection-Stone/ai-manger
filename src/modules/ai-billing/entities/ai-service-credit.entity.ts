@@ -70,7 +70,12 @@ export interface AiServiceUsageRecordEntity {
   creditCost: number;
   chargedUnits: number;
   unlimited: boolean;
-  status: 'succeeded' | 'credit_exhausted';
+  /** refunded：业务生成失败后已原路退回，状态只能由 succeeded 单向流转过来 */
+  status: 'succeeded' | 'credit_exhausted' | 'refunded';
   errorCode?: string;
+  /** 退款时间，仅 refunded 状态有值 */
+  refundedAt?: Date;
+  /** 退款原因（通常是业务失败码），仅 refunded 状态有值 */
+  refundReason?: string;
   createdAt: Date;
 }

@@ -10,7 +10,9 @@
 前端生成服务。
 - **关键词**: frontend, async, HITL, HTML, static, layout, service
 - **函数**:
-  - `getHandle(scope?)`: 创建继承租户与用户计费作用域的工具句柄/get billed handle
+  - `onModuleInit()` — 模块启动时建立前端任务查询索引 | keywords: 初始化前端任务索引, initialize-frontend-job-indexes
+  - `ensureJobIndexes()` — 建立任务哈希唯一查找、会话创建时间线与全局创建时间线索引 | keywords: 前端任务索引, 会话时间线, frontend-job-indexes, session-timeline
+  - `getHandle(scope?)`: 创建继承租户与用户计费作用域的工具句柄；同一页面 hash 更新原任务记录 | keywords: get handle
   - `generateHtmlAsync(params)`: 异步生成,附加 `nostream` tag 避免子Agent/内部 LLM 事件透传到顶层流 | keywords: 异步生成, HTML, 去耦合, 工具内部非流, async-generate, html, decouple, internal-llm-nostream
   - `sanitizeHtmlOutput`: 清理输出/sanitize html
   - `minimalHtml`: 最小占位/minimal html

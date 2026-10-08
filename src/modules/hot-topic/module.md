@@ -85,7 +85,7 @@
 - `HotTopicRuleService.normalizeHeaders(headers?)` — 归一化附加请求头，最多 10 条 | keywords: 归一请求头, 数量上限, normalize-headers, header-cap
 - `HotTopicRuleService.normalizeTags(tags?)` — 归一化兜底标签，去空去重最多 5 个 | keywords: 归一兜底标签, 去重, normalize-default-tags, dedupe
 - `HotTopicRuleService.normalizeLimit(value?)` — 保留条数收敛到 1-200，非法值回落 50 | keywords: 归一条数上限, 回落默认, normalize-limit, default-fallback
-- `HotTopicItemService.ensureIndexes()` — 建立条目唯一索引与作用域、批次、规则、分类、标签索引 | keywords: 条目索引, 批次索引, item-indexes, batch-index
+- `HotTopicItemService.ensureIndexes()` — 建立条目唯一索引与作用域、批次、规则、分类、标签、榜单排序和归类进度索引 | keywords: 条目索引, 批次索引, item-indexes, batch-index
 - `HotTopicItemService.insertMany(items)` — 批量写入采集条目并逐条分配业务自增 ID | keywords: 批量入库热点, 分配ID, bulk-insert-items, assign-id
 - `HotTopicItemService.clear(scope, ruleIds?)` — 清空作用域内历史条目，可只清指定规则 | keywords: 清除历史热点, 采集前清库, clear-previous-items, pre-collect-purge
 - `HotTopicItemService.list(scope, query)` — 分页查询榜单条目，支持分类/规则/标签/关键词过滤 | keywords: 分页查询榜单, 标签过滤, paged-item-list, tag-filter

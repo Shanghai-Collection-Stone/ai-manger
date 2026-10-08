@@ -129,7 +129,7 @@ export class AliyunSmsService {
    * @param value 原始字符串。
    * @returns {string} 编码后的字符串。
    */
-  private percentEncode(value: string): string {
+  percentEncode(value: string): string {
     return encodeURIComponent(value).replace(
       /[!'()*]/g,
       (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,

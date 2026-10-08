@@ -37,6 +37,7 @@ export class VideoGroupService {
     await this.groups.createIndex({ id: 1 }, { unique: true });
     await this.groups.createIndex({ tenantId: 1, userId: 1 });
     await this.groups.createIndex({ createdAt: -1 });
+    await this.groups.createIndex({ tenantId: 1, createdAt: -1, id: -1 });
     const exists = await this.counters.findOne({ _id: 'video_groups' });
     if (!exists) await this.counters.insertOne({ _id: 'video_groups', seq: 0 });
   }

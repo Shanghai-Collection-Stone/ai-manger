@@ -24,6 +24,7 @@ import {
   ConfirmDouyinScriptDraftsDto,
   CrawlDouyinDataDto,
   CreateDouyinMotherTopicDto,
+  MaskDouyinShotFacesDto,
   GenerateDouyinChildrenDto,
   GenerateDouyinShotImageDto,
   GenerateDouyinShotVideoDto,
@@ -335,7 +336,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 把这一镜画面里的真人换成 3D 卡通大头（以当前画面为底图做图像编辑），处理前的原图留在分镜上可一键恢复。
+   * @description 按所选风格处理这一镜画面里的真人（3D 卡通大头 / 动画大头 / 拟人风格 / AI 去除真人特征，以当前画面为底图做图像编辑），处理前的原图留在分镜上可一键恢复。
    *   火山系视频模型不收带真人的参考图，实拍镜头喂进去之前先过这一道。
    * @keyword-cn 分镜卡通换头接口, 遮挡真人
    * @keyword-en shot-face-mask-api, cover-real-person
@@ -346,12 +347,14 @@ export class DouyinWorkbenchController {
     @Req() req: AdminRequest,
     @Param('id') id: string,
     @Param('shotId') shotId: string,
+    @Body() dto: MaskDouyinShotFacesDto,
   ) {
     const scope = this.scopeOf(this.requireUser(req));
     const result = await this.shotImages.maskFaces(
       this.readId(id),
       this.readShotId(shotId),
       scope,
+      dto.style,
     );
     return {
       topic: { ...result.topic, _id: undefined },

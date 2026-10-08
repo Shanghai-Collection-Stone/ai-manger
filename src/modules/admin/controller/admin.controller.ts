@@ -23,6 +23,8 @@ import { AdminService } from '../services/admin.service.js';
 import type { AdminRequest } from '../types/admin-request.types.js';
 import { RequireSmsCode } from '../../sms-verification/decorators/require-sms-code.decorator.js';
 import type { SmsVerifiedRequest } from '../../sms-verification/entities/sms-verification.entity.js';
+import { RequireEmailCode } from '../../email-verification/decorators/require-email-code.decorator.js';
+import type { EmailVerifiedRequest } from '../../email-verification/entities/email-verification.entity.js';
 import {
   AdminLoginDto,
   AdminLoginIdentifyDto,
@@ -110,19 +112,22 @@ export class AdminController {
   }
 
   /**
-   * @description 自助注册（与登录同为公开免鉴权入口，需短信验证码）：以已验证手机号建账号，固定加入默认租户「其他」
+   * @description 自助注册（与登录同为公开免鉴权入口，需短信验证码 + 邮箱验证码）：以已验证手机号与邮箱建账号，固定加入默认租户「其他」，成功后发注册成功邮件
    * @keyword-cn 自助注册接口, 默认租户
    * @keyword-en self-register-endpoint, default-tenant
    */
   @Post('auth/register')
   @RequireSmsCode('register')
+  @RequireEmailCode('register')
   async register(
-    @Req() req: SmsVerifiedRequest,
+    @Req() req: SmsVerifiedRequest & EmailVerifiedRequest,
     @Body() body: AdminRegisterDto,
   ) {
     const phone = req.smsVerification?.phone;
     if (!phone) throw new BadRequestException('SMS_CODE_REQUIRED');
-    return this.adminService.register({ ...body, phone });
+    const email = req.emailVerification?.email;
+    if (!email) throw new BadRequestException('EMAIL_CODE_REQUIRED');
+    return this.adminService.register({ ...body, phone, email });
   }
 
   /**
@@ -214,8 +219,9 @@ export class AdminController {
   }
 
   /**
-   * @description 用户管理列表
-   * @keyword-en admin users list endpoint
+   * @description 用户管理列表，关联平台账号的成员展示账号级资料
+   * @keyword-cn 成员列表接口, 账号资料展示
+   * @keyword-en member-list-endpoint, account-profile-view
    */
   @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
   @RequirePermission('read', 'User')
@@ -226,8 +232,9 @@ export class AdminController {
   }
 
   /**
-   * @description 用户管理新增
-   * @keyword-en admin users create endpoint
+   * @description 用户管理新增，租户管理员只能添加已有平台账号
+   * @keyword-cn 创建成员接口, 租户成员管理
+   * @keyword-en member-create-endpoint, tenant-membership-management
    */
   @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
   @RequirePermission('create', 'User')
@@ -241,8 +248,9 @@ export class AdminController {
   }
 
   /**
-   * @description 用户管理更新
-   * @keyword-en admin users update endpoint
+   * @description 用户管理更新，租户管理员不可修改成员账号资料
+   * @keyword-cn 更新成员接口, 成员资料只读
+   * @keyword-en member-update-endpoint, readonly-member-profile
    */
   @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
   @RequirePermission('update', 'User')
@@ -671,7 +679,10 @@ export class AdminController {
       this.requireUser(req),
       body.aiPromptSupplement ?? '',
       body.enableAiCover,
-      body.xhsArticleGlobalConcurrencyLimit,
+      {
+        xhsArticleGlobal: body.xhsArticleGlobalConcurrencyLimit,
+        douyinGenerationGlobal: body.douyinGenerationGlobalConcurrencyLimit,
+      },
       {
         wechatQrCodeUrl: body.salesWechatQrCodeUrl,
         tip: body.salesContactTip,

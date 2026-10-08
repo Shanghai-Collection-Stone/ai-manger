@@ -10,6 +10,7 @@
 决策卡服务。
 - **关键词**: decision card, llm, strategy, recommendation, persist, session-scope, assignee-format, robots-agents-users, background-detail-fill
 - **函数**:
+  - `ensureIndexes()` — 建立会话/作用域时间线与短时间重复决策查询索引 | keywords: 决策卡索引, 重复决策查询, decision-card-indexes, duplicate-decision-query
   - `generateDecisionCard`: 生成并落库决策卡；prompt 内嵌可指派对象清单与 actions 三要素约束/generate and persist decision card
   - `buildCapabilityBrief`: 构建能力清单（含 robots/agents/users 三类可指派对象 + assignee 格式约定），供生成与执行两阶段共用/build capability brief with assignable robots agents users
   - `listAssignableUsers`: 按租户拉取可指派用户（user:<id> 格式）/list assignable users for decision assignee

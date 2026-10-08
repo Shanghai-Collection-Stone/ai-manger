@@ -37,6 +37,21 @@ export const SMS_PLATFORM_SCOPE_ID = '__platform__';
 export const SMS_DEFAULT_TEMPLATE_PARAM_NAME = 'code';
 
 /**
+ * @description 可选短信接口类型
+ * @keyword-cn 短信服务商, 接口类型
+ * @keyword-en sms-provider, api-type
+ */
+export const SMS_PROVIDERS = ['aliyun_dysms', 'aliyun_dypns'] as const;
+
+/**
+ * @description 号码认证短信模板参数缺省值，`##code##` 由阿里云替换为验证码
+ * @keyword-cn 号码认证模板参数, 验证码占位符
+ * @keyword-en dypns-template-param, code-placeholder
+ */
+export const SMS_DYPNS_DEFAULT_TEMPLATE_PARAM =
+  '{"code":"##code##","min":"5"}';
+
+/**
  * @description 验证码有效期（秒）
  * @keyword-cn 验证码有效期
  * @keyword-en sms-code-ttl
@@ -72,11 +87,11 @@ export const SMS_IP_HOURLY_LIMIT = 30;
 export const SMS_CODE_MAX_ATTEMPTS = 5;
 
 /**
- * @description 短信服务商，当前仅阿里云
+ * @description 短信接口类型：阿里云短信服务或号码认证短信认证
  * @keyword-cn 短信服务商
  * @keyword-en sms-provider
  */
-export type SmsProvider = 'aliyun';
+export type SmsProvider = (typeof SMS_PROVIDERS)[number];
 
 /**
  * @description AccessKey Secret 落库信封，`aes-256-gcm` 密文或无加密密钥时的 `plain` 明文
@@ -103,11 +118,16 @@ export interface SmsSettingEntity {
   scopeId: string;
   provider: SmsProvider;
   enabled: boolean;
+  /** 短信专用 AccessKey，可与 OSS 属于不同的阿里云账号 */
   accessKeyId?: string;
   accessKeySecret?: SmsSecretEnvelope;
   signName?: string;
   templateCode?: string;
   templateParamName?: string;
+  dypnsSignName?: string;
+  dypnsTemplateCode?: string;
+  dypnsTemplateParam?: string;
+  dypnsSchemeName?: string;
   updatedBy?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -119,16 +139,21 @@ export interface SmsSettingEntity {
  * @keyword-en sms-setting-input
  */
 export interface SmsSettingInput {
+  provider?: SmsProvider;
   enabled?: boolean;
   accessKeyId?: string;
   accessKeySecret?: string;
   signName?: string;
   templateCode?: string;
   templateParamName?: string;
+  dypnsSignName?: string;
+  dypnsTemplateCode?: string;
+  dypnsTemplateParam?: string;
+  dypnsSchemeName?: string;
 }
 
 /**
- * @description 配置页视图，Secret 只回掩码
+ * @description 配置页视图，短信专用 Secret 只回掩码
  * @keyword-cn 短信配置视图, 密钥掩码
  * @keyword-en sms-setting-view, masked-secret
  */
@@ -141,6 +166,10 @@ export interface SmsSettingView {
   signName: string;
   templateCode: string;
   templateParamName: string;
+  dypnsSignName: string;
+  dypnsTemplateCode: string;
+  dypnsTemplateParam: string;
+  dypnsSchemeName: string;
   /** 配置齐全且已启用，可真实发送 */
   ready: boolean;
   /** 是否处于 SMS_VERIFICATION_MOCK 本地模拟模式 */
@@ -154,12 +183,35 @@ export interface SmsSettingView {
  * @keyword-en aliyun-runtime-config
  */
 export interface AliyunSmsRuntimeConfig {
+  provider: 'aliyun_dysms';
   accessKeyId: string;
   accessKeySecret: string;
   signName: string;
   templateCode: string;
   templateParamName: string;
 }
+
+/**
+ * @description 调用阿里云号码认证短信认证所需的明文运行配置
+ * @keyword-cn 号码认证运行配置
+ * @keyword-en dypns-runtime-config
+ */
+export interface AliyunDypnsRuntimeConfig {
+  provider: 'aliyun_dypns';
+  accessKeyId: string;
+  accessKeySecret: string;
+  signName: string;
+  templateCode: string;
+  templateParam: string;
+  schemeName?: string;
+}
+
+/**
+ * @description 当前所选短信接口对应的明文运行配置
+ * @keyword-cn 短信运行配置
+ * @keyword-en sms-runtime-config
+ */
+export type SmsRuntimeConfig = AliyunSmsRuntimeConfig | AliyunDypnsRuntimeConfig;
 
 /**
  * @description 验证码记录，集合 `sms_verification_codes`，过期 24 小时后由 TTL 索引清理
@@ -173,6 +225,7 @@ export interface SmsCodeEntity {
   codeHash: string;
   ip: string;
   attempts: number;
+  verifyVia: 'local' | 'provider';
   providerBizId?: string;
   consumedAt?: Date;
   expiresAt: Date;

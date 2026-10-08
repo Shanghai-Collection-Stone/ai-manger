@@ -57,6 +57,16 @@ export class HotTopicItemService {
     await this.items.createIndex({ tenantId: 1, userId: 1, ruleId: 1 });
     await this.items.createIndex({ tenantId: 1, userId: 1, category: 1 });
     await this.items.createIndex({ tenantId: 1, userId: 1, tags: 1 });
+    await this.items.createIndex({ tenantId: 1, ruleId: 1, rank: 1 });
+    await this.items.createIndex({ tenantId: 1, rank: 1, ruleId: 1 });
+    await this.items.createIndex({
+      tenantId: 1,
+      category: 1,
+      ruleId: 1,
+      rank: 1,
+    });
+    await this.items.createIndex({ tenantId: 1, tagSource: 1, id: 1 });
+    await this.items.createIndex({ tenantId: 1, collectedAt: -1 });
   }
 
   /**

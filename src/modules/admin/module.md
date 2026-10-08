@@ -1,7 +1,7 @@
 # Admin Module
 
 ## 模块描述
- 后台管理模块，负责手机号账号(`admin_accounts`，一个手机号关联多个租户成员 `admin_users.accountId`)、两步登录(账号密码 → 选已绑定租户)、兼容旧版租户化登录、JWT鉴权、基于 CASL 的角色能力鉴权(RBAC 静态角色目录)、用户管理、角色管理(只读)、平台级AI提供商、固定收费服务 Credit 点数配置、租户 Credit 管理、Claw 接入配置管理、Agent 配置管理。
+ 后台管理模块，负责平台手机号账号(`admin_accounts`，一个人一条，可含邮箱)与租户成员身份(`admin_users.accountId`)的分离管理；账号资料归平台，租户只管理本租户成员关系、角色与启用状态。模块同时负责两步登录(账号密码 → 选已绑定租户)、兼容旧版租户化登录、JWT鉴权、基于 CASL 的角色能力鉴权(RBAC 静态角色目录)、角色管理(只读)、平台级AI提供商、固定收费服务 Credit 点数配置、租户 Credit 管理、Claw 接入配置管理、Agent 配置管理。
 文件路径: `src/modules/admin`
 鉴权分层: `AdminAuthGuard`(校验 JWT/注入用户) → `AdminPoliciesGuard`(校验 `@RequirePermission` 声明的 CASL 能力)。角色权限矩阵唯一定义源为 `casl/admin-ability.factory.ts` 的 `ROLE_CATALOG`。
 
@@ -15,15 +15,15 @@
   - `identifyLogin(body)` — POST /admin/auth/login/identify 两步登录第一步(公开免鉴权)，手机号或用户名+密码换登录票据与已绑定租户 | keywords: 登录识别接口, 手机号登录, login-identify-endpoint, phone-login
   - `selectLoginTenant(body)` — POST /admin/auth/login/select 两步登录第二步(公开免鉴权，凭票据)，选定租户签发会话 | keywords: 选择租户接口, 签发会话, login-select-endpoint, issue-session
   - `getSalesContact()` — GET /admin/auth/sales-contact 租户入驻页业务员二维码与提示语(公开免鉴权，只读平台配置) | keywords: 业务员二维码接口, 租户入驻, sales-contact-endpoint, tenant-onboarding
-  - `register(req,body)` — POST /admin/auth/register 公开自助注册，挂 `@RequireSmsCode('register')` 需 smsPhone/smsCode，以已验证手机号建账号并固定加入默认租户「其他」 | keywords: 自助注册接口, 默认租户, self-register-endpoint, default-tenant
+  - `register(req,body)` — POST /admin/auth/register 公开自助注册，挂 `@RequireSmsCode('register')` + `@RequireEmailCode('register')` 需 smsPhone/smsCode 与 email/emailCode，以已验证手机号和已验证邮箱建账号并固定加入默认租户「其他」 | keywords: 自助注册接口, 默认租户, self-register-endpoint, default-tenant
   - `listLoginTenants`: 登录租户选项/list login tenants
   - `me`: 当前用户/me
   - `getCurrentCreditAccount(limit?,before?)` — 查询当前登录租户自己的余额与倒序流水 | keywords: 当前Credit账户, 自身流水, current-credit-account, own-transaction-list
   - `logout`: 退出/logout
   - `deleteOwnAccount(req,body)` — DELETE /admin/auth/account 自助注销，只挂 AdminAuthGuard 不挂 delete User 权限，密码二次确认 | keywords: 自助注销入口, 应用内可达, self-delete-account-endpoint, in-app-reachable
-  - `listUsers`: 用户列表/list users
-  - `createUser`: 创建用户/create user
-  - `updateUser`: 更新用户/update user
+  - `listUsers(req)` — GET /admin/users，展示关联平台账号的昵称、手机号与邮箱 | keywords: 成员列表接口, 账号资料展示, member-list-endpoint, account-profile-view
+  - `createUser(req,body)` — POST /admin/users，租户管理员只能添加已有平台账号 | keywords: 创建成员接口, 租户成员管理, member-create-endpoint, tenant-membership-management
+  - `updateUser(req,id,body)` — PATCH /admin/users/:id，租户管理员不可修改成员账号资料 | keywords: 更新成员接口, 成员资料只读, member-update-endpoint, readonly-member-profile
   - `deleteUser`: 删除用户/delete user
   - `listRoles`: 角色管理列表(静态RBAC角色目录)/admin roles list | keywords: admin-roles-list-endpoint
   - `listAiProviders`: 提供商列表/list providers
@@ -52,8 +52,9 @@
 ### services/admin.service.ts
 后台管理服务。
 - **关键词**: admin service, jwt, session, tenant scope, provider category, llm, em, image, api-key, default, claw config, agent config, llm settings, kimi, moonshot, shuyan, shuyanai, 数眼智能
+- **类型**: `AdminUserPublic` — 对外成员视图，可包含平台账号邮箱 | keywords: 公开成员视图, 账号邮箱, public-member-view, account-email
 - **函数**:
-  - `ensureIndexes()` — 后台索引初始化，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
+  - `ensureIndexes()` — 后台索引初始化，覆盖成员/供应商类别回退/接入配置/自媒体账号时间线，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login({username,password,tenantId?})` — 旧版单步登录，关联了账号的成员以账号密码校验 | keywords: 兼容登录, 用户名登录, legacy-login, username-login
   - `identifyLogin({account,password})` — 两步登录第一步：手机号账号关联成员 ∪ 同名历史用户名成员中密码通过且启用的，按租户去重，签发 5 分钟登录票据；全部停用抛 ACCOUNT_DISABLED | keywords: 两步登录, 手机号登录, 可选租户, two-step-login, phone-login, login-tenant-options
@@ -62,15 +63,23 @@
   - `findPasswordMatchedUsers(account,password)` — 收集密码校验通过的成员行 | keywords: 密码匹配成员, 手机号账号, password-matched-members, phone-account
   - `verifyUserPassword(user,password)` — 已关联账号以账号密码为准，否则回退成员自身密码 | keywords: 成员密码校验, 账号密码, verify-member-password, account-password
   - `issueSession(user)` — 签发 JWT、落库会话、刷新最近登录 | keywords: 签发会话, 登录令牌, issue-session, login-token
-  - `register({username?,displayName?,password,phone})` — 手机号已有账号抛 PHONE_ALREADY_REGISTERED；新建账号 + 默认租户下启用的 operator(用户名缺省取手机号)，成员插入失败回滚账号 | keywords: 自助注册, 手机号账号, 默认租户, self-register, phone-account, default-tenant
-  - `ensureSelfRegisterTenant()` — 按名称(默认「其他」，`SELF_REGISTER_TENANT_NAME` 覆盖)查找默认租户，不存在则创建，重名抛 SELF_REGISTER_TENANT_AMBIGUOUS | keywords: 默认注册租户, 自动建租户, self-register-tenant, ensure-default-tenant
+  - `register({username?,displayName?,password,phone,email?})` — 复用平台账号创建能力并加入默认租户，成功后异步发注册成功邮件，返回 accountId 与默认 tenantId | keywords: 自助注册, 平台账号, self-register, platform-account
+  - `notifyRegistered(account,tenantName?)` — 注册成功后按 mail 统一版式给账号邮箱发「账号注册成功」邮件（脱敏登录账号、绑定邮箱、邀请团队、注册时间），后台异步发送、失败只记日志 | keywords: 注册成功邮件, 异步通知, registration-success-email, async-notification
+  - `createPlatformAccount({phone,password,displayName?,email?})` — 只建平台账号，邮箱小写去空格存储，手机号重复抛 PHONE_ALREADY_REGISTERED | keywords: 平台账号创建, 手机号唯一, platform-account-creation, unique-phone-account
+  - `addAccountToTenant({accountId,tenantId,role?})` — 把账号加入租户，已有启用成员幂等返回、停用成员恢复、用户名冲突最多尝试五个候选 | keywords: 租户成员加入, 账号成员关系, tenant-member-join, account-membership
+  - `verifyAccountCredentials({account,password})` — 规范手机号并校验平台账号密码，凭据失败统一抛 INVALID_CREDENTIALS，已注销抛 ACCOUNT_DELETED | keywords: 平台账号验密, 防账号枚举, platform-account-verification, credential-enumeration-guard
+  - `getAccountById(accountId)` — 按 Mongo 标识读取平台账号，非法标识返回 null | keywords: 账号标识查询, 非法标识容错, account-id-lookup, invalid-id-tolerance
+  - `ensureSelfRegisterTenant()` — 公开方法；按名称(默认「其他」，`SELF_REGISTER_TENANT_NAME` 覆盖)查找默认租户，不存在则创建，重名抛 SELF_REGISTER_TENANT_AMBIGUOUS | keywords: 默认注册租户, 自动建租户, self-register-tenant, ensure-default-tenant
   - `ensureAccountsFromLegacyPhones()` — 启动迁移：带 phone 未关联的历史成员按手机号建账号并关联，密码取该号最近登录成员 | keywords: 手机号账号迁移, 历史成员关联, migrate-phone-accounts, link-legacy-members
-  - `createUser(currentUser,input)` — 创建成员；带 phone 时已有账号直接加入本租户(同租户重复抛 PHONE_ALREADY_IN_TENANT)，没有则用本次密码新建账号 | keywords: 创建成员, 手机号关联, 多租户成员, create-admin-user, link-phone-account, multi-tenant-member
-  - `updateUser`: 更新用户；已关联账号的成员改密码写入账号且仅超管可改(否则 LINKED_ACCOUNT_PASSWORD_FORBIDDEN)/update user
+  - `getMe(currentUser)` — 返回当前成员及租户名，关联账号时包含账号邮箱 | keywords: 当前成员信息, 账号邮箱, current-member-profile, account-email
+  - `listUsers(currentUser)` — 一次 `$in` 批量查询账号，以账号昵称、手机号和邮箱覆盖成员快照 | keywords: 成员列表, 账号资料覆盖, member-list, account-profile-overlay
+  - `createUser(currentUser,input)` — 租户管理员只能把已有平台账号加入本租户；超管保留原有账号与独立成员创建能力 | keywords: 创建成员, 租户成员管理, create-admin-user, tenant-membership-management
+  - `updateUser(currentUser,id,input)` — 租户管理员只能改角色、启用和租户归属；超管改账号昵称时同步全部成员快照 | keywords: 更新成员, 成员资料只读, update-admin-user, readonly-member-profile
+  - `toPublicUser(user,account?)` — 转换公开成员视图并按需覆盖账号资料 | keywords: 公开成员转换, 账号资料覆盖, public-member-transform, account-profile-overlay
   - `signLoginTicket(payload)` — 签发登录票据，HMAC 输入带 `login_ticket:` 域前缀与访问 JWT 互不通用 | keywords: 签发登录票据, 签名域隔离, sign-login-ticket, signature-domain-separation
   - `verifyLoginTicket(ticket)` — 校验票据签名、类型与有效期 | keywords: 校验登录票据, 票据过期, verify-login-ticket, ticket-expiry
   - `normalizeLoginPhone(account)` — 登录账号规范成大陆手机号，不是手机号返回空串 | keywords: 登录手机号规范化, 大陆手机号, normalize-login-phone, mainland-mobile
-  - `upsertPlatformInfo(adminUser,aiPromptSupplement,enableAiCover?,globalLimit?,salesContact?)` — 更新平台信息，业务员二维码与提示语仅超管写入平台作用域 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
+  - `upsertPlatformInfo(adminUser,aiPromptSupplement,enableAiCover?,concurrencyLimits?,salesContact?)` — 更新平台信息；全平台文章 / 抖音生成总并发上限（`{ xhsArticleGlobal, douyinGenerationGlobal }`）与业务员二维码、提示语仅超管写入平台作用域 | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
   - `getUserByToken`: token解析用户/get user by token
   - `listRoles`: 角色列表(静态RBAC角色目录及权限矩阵，只读)/list admin roles | keywords: list-admin-roles
   - `logout`: 注销会话/logout
@@ -78,6 +87,7 @@
   - `listLoginTenants`: 登录租户列表/list login tenants
   - `deleteTenant(currentUser, id)`: 删除没有用户且未分配 SuperClaw 的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
   - `getXhsArticleConcurrencyLimits(tenantId?)` — 读取文章生成的全平台与租户并发上限并应用安全默认值 | keywords: 文章生成并发配置, 租户并发上限, article-generation-concurrency, tenant-concurrency-limit
+  - `getDouyinGenerationConcurrencyLimits(tenantId?)` — 读取抖音生成（候选脚本、分镜）的全平台与租户并发上限，未配置时 6 / 3 | keywords: 抖音生成并发配置, 租户并发上限, douyin-generation-concurrency, tenant-concurrency-limit
   - `getTenantPlatformAiPromptSupplement(tenantId?)` — 读取租户平台 AI 提示词，母平台作用域回退全局配置 | keywords: 平台AI提示词, 母平台回退, platform-ai-prompt, platform-scope-fallback
   - `getDefaultAiProvider`: 读取默认提供商（llm/em/video 未设 default 时 fallback 任一 enabled 记录）/get default provider
   - `getAiProviderRuntimeById(id)` — 按 ID 读取已启用提供商的运行配置（类型、模型、baseUrl 兜底、Key、计费换算），不存在/停用/ID 非法返回 null，供工作流节点指定模型 | keywords: 按ID读取提供商, 节点运行配置, get-provider-runtime-by-id, node-runtime-config
@@ -136,7 +146,7 @@
   - `createForUser`: 依据登录用户角色构建 CASL ability/create ability for admin user | keywords: create-ability-for-admin-user
 
 ### casl/admin-permission.constants.ts
-后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`、抖音真实工作台主体 `DouyinWorkbench`、运行参数主体 `PlatformSetting`、热点采集榜主体 `HotTopic`、平台节点主体 `SuperClaw` 与短信验证码配置主体 `SmsSetting`(不在任何非超管角色目录中，仅超管可用)。租户管理员与操作员均可管理各自租户用户边界内的抖音选题、分镜和直连调用；`HotTopic` 覆盖采集规则、榜单条目、归类标签与热点推荐：`tenant_admin` 授 `manage HotTopic`，`operator` 只授 `read HotTopic`(能看榜单、能调推荐，改不了采集规则)。
+后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`、抖音真实工作台主体 `DouyinWorkbench`、运行参数主体 `PlatformSetting`、热点采集榜主体 `HotTopic`、平台节点主体 `SuperClaw`、短信验证码配置主体 `SmsSetting`(接口类型 / 短信专用 AccessKey / 签名 / 模板)与阿里云配置主体 `AliyunSetting`(OSS 对象存储与 OSS 专用 AccessKey)，后两者不在任何非超管角色目录中，仅超管可用。租户管理员与操作员均可管理各自租户用户边界内的抖音选题、分镜和直连调用；`HotTopic` 覆盖采集规则、榜单条目、归类标签与热点推荐：`tenant_admin` 授 `manage HotTopic`，`operator` 只授 `read HotTopic`(能看榜单、能调推荐，改不了采集规则)。引用知识主体 `Knowledge`(小红书与抖音母选题引用的知识条目，租户内共享)：`tenant_admin` 与 `operator` 都授 `manage Knowledge`，操作员建母选题时要能新建和维护知识。
 - **关键词**: permission, subject, action, registry, root-key, casl
 - **类型导出**: `AdminAction`, `AdminSubject`; 常量 `ADMIN_ACTIONS`, `ADMIN_SUBJECTS`
 
@@ -150,7 +160,7 @@
 后台实体定义。
 - **关键词**: user entity, session entity, provider entity, claw config entity, agent config entity, llm setting entity, jwt payload, user phone (自助注册短信验证手机号), user accountId (关联手机号账号)
 - **类型**:
-  - `AdminAccountEntity` — 手机号账号(`admin_accounts`，phone 唯一) | keywords: 手机号账号, 多租户身份, phone-account-entity, multi-tenant-identity
+  - `AdminAccountEntity` — 平台手机号账号(`admin_accounts`，phone 唯一)，可选 email 以小写去空格形式存储 | keywords: 手机号账号, 多租户身份, phone-account-entity, multi-tenant-identity
   - `AdminLoginTicketPayload` — 两步登录票据载荷(typ/uids/exp/iat) | keywords: 登录票据, 候选租户, login-ticket-payload, tenant-candidates
   - `AdminLoginTenantOption` — 登录可选租户项(tenantId 空串为平台端) | keywords: 可选租户, 登录租户选择, login-tenant-option, tenant-selection
 
@@ -160,8 +170,8 @@
 - **函数**:
   - `AdminLoginIdentifyDto` — 两步登录第一步请求体(account/password) | keywords: 登录识别请求体, 手机号登录, login-identify-dto, phone-login
   - `AdminLoginSelectDto` — 两步登录第二步请求体(loginTicket/tenantId?) | keywords: 选择租户请求体, 登录票据, login-select-dto, login-ticket
-  - `AdminRegisterDto` — 自助注册请求体(displayName?/password；tenantName?、username? 仅兼容旧客户端) | keywords: 自助注册请求体, 默认租户, admin-register-dto, default-tenant
-  - `CreateAdminUserDto` — 新增可选 `phone`，用于把成员关联到手机号账号 | keywords: 创建成员请求体, 手机号关联, create-admin-user-dto, link-phone-account
+  - `AdminRegisterDto` — 自助注册请求体(displayName?/email/password；email 必填、须先通过邮箱验证码，校验格式且不超过 254 字符，tenantName?、username? 仅兼容旧客户端) | keywords: 自助注册请求体, 默认租户, admin-register-dto, default-tenant
+  - `CreateAdminUserDto` — username/displayName/password/phone 均为可选字段，由服务按操作者角色校验 | keywords: 创建成员请求体, 可选账号字段, create-admin-user-dto, optional-account-fields
   - `UpsertPlatformInfoDto` — 新增 `salesWechatQrCodeUrl`(http(s) 或 data:image base64，≤700000 字符) 与 `salesContactTip`(≤200) | keywords: 业务员二维码, 平台信息, sales-wechat-qrcode, platform-info
   - `UpdateAiServiceCreditDto` — 校验最多六位小数的非负服务点数 | keywords: 更新服务点数, 服务计费, update-service-credit, service-billing
   - `RechargeTenantCreditDto` — 校验正数充值、原因和外部单号 | keywords: 租户充值, 追加流水, tenant-recharge, append-ledger

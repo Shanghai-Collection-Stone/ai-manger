@@ -125,7 +125,18 @@ export class PixmaxClientService {
       const form = new FormData();
       form.append(
         'file',
-        new Blob([new Uint8Array(buffer)], { type: input.contentType }),
+        // 零拷贝视图交给 Blob，避免先整份复制一次再由 Blob 再复制；
+        // 这里的 Buffer 来自读文件 / 下载，底层一定是普通 ArrayBuffer
+        new Blob(
+          [
+            new Uint8Array(
+              buffer.buffer as ArrayBuffer,
+              buffer.byteOffset,
+              buffer.byteLength,
+            ),
+          ],
+          { type: input.contentType },
+        ),
         input.fileName,
       );
       const asset = await this.request<PixmaxAsset>(

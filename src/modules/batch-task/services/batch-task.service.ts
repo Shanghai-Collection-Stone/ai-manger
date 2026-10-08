@@ -153,7 +153,7 @@ export class BatchTaskService {
    * @description 创建 batch_tasks 所需索引，并初始化自增计数器。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。
-   * @keyword batch-task, mongo, index
+   * @keyword-en batch-task, mongo, index, partial-index
    * @since 2026-02-04
    */
   async ensureIndexes(): Promise<void> {
@@ -189,6 +189,8 @@ export class BatchTaskService {
     }
     // 租户隔离索引
     await this.tasks.createIndex({ tenantId: 1, userId: 1 });
+    await this.tasks.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.tasks.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
     const exists = await this.counters.findOne({ _id: 'batch_tasks' });
     if (!exists) await this.counters.insertOne({ _id: 'batch_tasks', seq: 0 });
   }

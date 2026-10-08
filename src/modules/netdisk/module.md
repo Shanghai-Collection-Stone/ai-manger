@@ -13,7 +13,7 @@
 网盘服务，文件树 CRUD、上传落库、容量配额校验与记账、审计埋点。
 - **关键词**: netdisk, file-tree, upload, download, quota, capacity, audit, tenant-isolation, mongo
 - **函数**:
-  - `ensureIndexes`: 初始化网盘索引/ensure netdisk indexes | keywords: ensure-netdisk-indexes
+  - `ensureIndexes()` — 建立节点树排序、父节点存在性与租户根唯一索引 | keywords: 网盘索引, 节点树查询, netdisk-indexes, node-tree-query
   - `ensureRoot`: 读取或初始化租户网盘根/ensure tenant disk root | keywords: ensure-tenant-disk-root
   - `getRoot`: 获取租户网盘根/get tenant disk root | keywords: get-tenant-disk-root
   - `updateRootCapacity`: 设置租户网盘总容量/update tenant disk capacity | keywords: update-tenant-disk-capacity

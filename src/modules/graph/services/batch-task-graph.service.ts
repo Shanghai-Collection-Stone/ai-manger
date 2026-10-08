@@ -1,3 +1,4 @@
+import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js';
 import {
   BadRequestException,
   Injectable,
@@ -121,8 +122,13 @@ export class BatchTaskGraphService implements OnModuleInit, OnModuleDestroy {
     private readonly format: TextFormatService,
   ) {}
 
+  /**
+   * @description 启动批量发布队列 worker（每秒认领一次）；多进程时只在 leader 进程上跑，保持与单进程相同的执行并发。
+   * @keyword-cn 启动队列轮询, 批量发布
+   * @keyword-en start-graph-job-worker, xhs-batch-publish
+   */
   onModuleInit() {
-    if (this.graphJobTimer) return;
+    if (this.graphJobTimer || !isLeaderProcess()) return;
     this.graphJobTimer = setInterval(() => {
       void this.tickGraphJobWorker();
     }, 1000);

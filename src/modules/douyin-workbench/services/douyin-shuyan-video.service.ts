@@ -1,3 +1,4 @@
+import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js';
 import {
   BadGatewayException,
   BadRequestException,
@@ -90,7 +91,7 @@ export const SHUYAN_VIDEO_ERROR_RULES: ReadonlyArray<{
   {
     pattern: /SHUYAN_VIDEO_MODEL_NOT_SUPPORTED/,
     message:
-      '所选数眼模型还没有接入对应的原生路由，请到后台「工作流节点模型」换一个 Seedance 型号。',
+      '所选数眼模型还没有接入对应的原生路由，请到后台「工作流节点模型」换成 Seedance 或 MiniMax-H3 型号。',
   },
   {
     pattern: /SHUYAN_VIDEO_TASK_ID_MISSING/,
@@ -115,16 +116,20 @@ export function describeShuyanVideoFailure(raw: string): string {
 }
 
 /**
- * @description 数眼 Seedance 创建 / 查询接口返回的任务结构。
- * @keyword-cn 数眼视频任务, Seedance任务
- * @keyword-en shuyan-video-task, seedance-task
+ * @description 数眼创建 / 查询视频任务返回的结构。Seedance 创建与查询都平铺返回、任务 ID 在 `id`、成片在
+ *   `content.video_url`；MiniMax-H3 创建只返回 `task_id`，查询把任务包在 `task` 里、成片在 `content.url`。
+ * @keyword-cn 数眼视频任务, Seedance任务, H3任务
+ * @keyword-en shuyan-video-task, seedance-task, minimax-h3-task
  */
 interface ShuyanVideoTask {
   id?: string;
+  task_id?: string;
+  task?: ShuyanVideoTask;
   model?: string;
   status?: string;
   content?: {
     video_url?: string;
+    url?: string;
     last_frame_url?: string;
   };
   error?: {
@@ -161,17 +166,85 @@ export const DOUYIN_SHUYAN_VIDEO_RESOLUTION = '480p';
 const DOUYIN_SHUYAN_SAVING_STALE_MS = 10 * 60 * 1000;
 
 /**
- * @description 判断数眼视频模型能否走当前已接入的 Seedance 原生路由。
- * @keyword-cn 数眼Seedance识别, 视频模型支持
- * @keyword-en shuyan-seedance-model, video-model-support
- * @param model 模型编码。
- * @returns {boolean} 是否为 Seedance 模型。
+ * @description 数眼已接入的视频原生路由：`seedance` 走 `/seedance/api/v3/contents/generations/tasks`，
+ *   `hailuo-v2`（MiniMax-H3）走 `/hailuo/v2/video_generation`。
+ * @keyword-cn 数眼视频路由, 原生端点
+ * @keyword-en shuyan-video-route, native-endpoint
  */
-export function isShuyanSeedanceModel(model: string): boolean {
-  return String(model ?? '')
+export type ShuyanVideoRoute = 'seedance' | 'hailuo-v2';
+
+/**
+ * @description MiniMax-H3 接口的 `model` 是枚举，大小写要和文档逐字一致。
+ */
+const SHUYAN_HAILUO_V2_MODELS = ['MiniMax-H3'];
+
+/**
+ * @description 按模型名判断数眼视频走哪条原生路由；Kling / Vidu / 旧版 Hailuo / 即梦等其他视频族还没接入，返回 null。
+ * @keyword-cn 数眼视频路由, 视频模型支持
+ * @keyword-en resolve-shuyan-video-route, video-model-support
+ * @param model 模型编码。
+ * @returns {ShuyanVideoRoute | null} 路由，未接入时为 null。
+ */
+export function resolveShuyanVideoRoute(
+  model: string,
+): ShuyanVideoRoute | null {
+  const value = String(model ?? '')
     .trim()
-    .toLowerCase()
-    .includes('seedance');
+    .toLowerCase();
+  if (value.includes('seedance')) return 'seedance';
+  if (/minimax[-_.]?h3/.test(value)) return 'hailuo-v2';
+  return null;
+}
+
+/**
+ * @description 提交前把模型名规整成数眼要求的写法：MiniMax-H3 不分大小写地对齐到枚举值，其余原样返回。
+ * @keyword-cn 数眼模型名规整, H3模型枚举
+ * @keyword-en normalize-shuyan-video-model, minimax-h3-model-enum
+ * @param model 后台填写的模型编码。
+ * @returns {string} 提交给数眼的模型名。
+ */
+export function normalizeShuyanVideoModel(model: string): string {
+  const value = String(model ?? '').trim();
+  return (
+    SHUYAN_HAILUO_V2_MODELS.find(
+      (name) => name.toLowerCase() === value.toLowerCase(),
+    ) ?? value
+  );
+}
+
+/**
+ * @description 拼出数眼视频任务的创建或查询地址：不传任务 ID 是创建地址，传了是查询地址。
+ * @keyword-cn 数眼视频任务地址, 创建与查询
+ * @keyword-en shuyan-video-task-url, create-and-query
+ * @param gateway 网关根地址（见 `resolveShuyanVideoGateway`）。
+ * @param route 原生路由。
+ * @param taskId 任务 ID，查询时传。
+ * @returns {string} 接口地址。
+ */
+export function resolveShuyanVideoTaskUrl(
+  gateway: string,
+  route: ShuyanVideoRoute,
+  taskId?: string,
+): string {
+  const id = taskId ? encodeURIComponent(taskId) : '';
+  if (route === 'hailuo-v2') {
+    return id
+      ? `${gateway}/hailuo/v2/query/video_generation/${id}`
+      : `${gateway}/hailuo/v2/video_generation`;
+  }
+  const base = `${gateway}/seedance/api/v3/contents/generations/tasks`;
+  return id ? `${base}/${id}` : base;
+}
+
+/**
+ * @description MiniMax-H3 查询结果包在 `task` 里，取出来后与 Seedance 平铺结构一致；本来就平铺的原样返回。
+ * @keyword-cn 拆包数眼任务, H3查询结果
+ * @keyword-en unwrap-shuyan-video-task, minimax-h3-query-result
+ * @param raw 接口原始响应。
+ * @returns {ShuyanVideoTask} 任务本体。
+ */
+export function unwrapShuyanVideoTask(raw: ShuyanVideoTask): ShuyanVideoTask {
+  return raw.task && typeof raw.task === 'object' ? raw.task : raw;
 }
 
 /**
@@ -197,7 +270,7 @@ export function resolveShuyanVideoGateway(baseUrl?: string): string {
 }
 
 /**
- * @description 返回当前 Seedance 型号可选的整数秒数；未知新版本按 4~15 秒能力处理。
+ * @description 返回当前数眼视频型号可选的整数秒数：MiniMax-H3 为 4~15 秒，Seedance 按版本区分，未知新版本按 4~15 秒能力处理。
  * @keyword-cn Seedance可选时长, 型号时长范围
  * @keyword-en seedance-duration-choices, model-duration-range
  * @param model 模型编码。
@@ -207,11 +280,14 @@ export function listShuyanVideoDurationChoices(model: string): number[] {
   const value = String(model ?? '')
     .trim()
     .toLowerCase();
-  const range = /seedance[-_.]?1[-_.]?0/.test(value)
-    ? [2, 12]
-    : /seedance[-_.]?1[-_.]?5/.test(value)
-      ? [4, 12]
-      : [4, 15];
+  const range =
+    resolveShuyanVideoRoute(value) === 'hailuo-v2'
+      ? [4, 15]
+      : /seedance[-_.]?1[-_.]?0/.test(value)
+        ? [2, 12]
+        : /seedance[-_.]?1[-_.]?5/.test(value)
+          ? [4, 12]
+          : [4, 15];
   return Array.from(
     { length: range[1] - range[0] + 1 },
     (_unused, index) => range[0] + index,
@@ -219,7 +295,7 @@ export function listShuyanVideoDurationChoices(model: string): number[] {
 }
 
 /**
- * @description 把分镜计划时长收敛到所选 Seedance 型号支持的整数秒范围。
+ * @description 把分镜计划时长收敛到所选数眼视频型号支持的整数秒范围。
  * @keyword-cn Seedance时长收敛, 视频时长
  * @keyword-en clamp-seedance-duration, video-duration
  * @param model 模型编码。
@@ -238,8 +314,8 @@ export function clampShuyanVideoDuration(
 }
 
 /**
- * @description 返回当前 Seedance 型号可选的清晰度档位（按清晰度升序）：1080p 只有 Seedance 2.x 支持，其余型号到 720p。
- *   官方按「分辨率 × 时长」计费，档位越高越贵。
+ * @description 返回当前数眼视频型号可选的清晰度档位（按清晰度升序，写法与接口要求逐字一致）：MiniMax-H3 为
+ *   `768P` / `2K`；Seedance 2.x 到 1080p，其余 Seedance 到 720p。官方按「分辨率 × 时长」计费，档位越高越贵。
  * @keyword-cn Seedance可选清晰度, 型号清晰度范围
  * @keyword-en seedance-resolution-choices, model-resolution-range
  * @param model 模型编码。
@@ -249,14 +325,33 @@ export function listShuyanVideoResolutionChoices(model: string): string[] {
   const value = String(model ?? '')
     .trim()
     .toLowerCase();
+  if (resolveShuyanVideoRoute(value) === 'hailuo-v2') return ['768P', '2K'];
   return /seedance[-_.]?2/.test(value)
     ? ['480p', '720p', '1080p']
     : ['480p', '720p'];
 }
 
 /**
- * @description 把设定的清晰度收敛到所选 Seedance 型号支持的档位：对不上就取最接近的一档，没设定时用默认档
- *   `DOUYIN_SHUYAN_VIDEO_RESOLUTION`。
+ * @description 把清晰度档位换算成短边像素，用来就近取档：`720p` → 720，`2K` → 1440，`4K` → 2160；认不出为 0。
+ * @keyword-cn 清晰度短边像素, 档位换算
+ * @keyword-en resolution-short-edge, resolution-to-pixels
+ * @param label 档位写法，大小写不限。
+ * @returns {number} 短边像素。
+ */
+export function shuyanResolutionHeightOf(label: string): number {
+  const value = String(label ?? '')
+    .trim()
+    .toLowerCase();
+  const progressive = /^(\d+)p$/.exec(value);
+  if (progressive) return Number(progressive[1]);
+  if (value === '2k') return 1440;
+  if (value === '4k') return 2160;
+  return 0;
+}
+
+/**
+ * @description 把设定的清晰度收敛到所选数眼视频型号支持的档位（大小写不限，返回型号自己的写法）：对不上就取最接近的一档；
+ *   没设定时用默认档 `DOUYIN_SHUYAN_VIDEO_RESOLUTION`，型号没有这一档（如 MiniMax-H3）时取最低档。
  * @keyword-cn Seedance清晰度收敛, 视频清晰度
  * @keyword-en clamp-seedance-resolution, video-resolution
  * @param model 模型编码。
@@ -271,16 +366,18 @@ export function clampShuyanVideoResolution(
   const want = String(resolution ?? '')
     .trim()
     .toLowerCase();
-  const fallback = choices.includes(DOUYIN_SHUYAN_VIDEO_RESOLUTION)
-    ? DOUYIN_SHUYAN_VIDEO_RESOLUTION
-    : choices[0];
+  const fallback =
+    choices.find(
+      (item) => item.toLowerCase() === DOUYIN_SHUYAN_VIDEO_RESOLUTION,
+    ) ?? choices[0];
   if (!want) return fallback;
-  if (choices.includes(want)) return want;
-  const wanted = Number(/^(\d+)p$/.exec(want)?.[1] ?? 0);
+  const exact = choices.find((item) => item.toLowerCase() === want);
+  if (exact) return exact;
+  const wanted = shuyanResolutionHeightOf(want);
   if (!wanted) return fallback;
   return choices.reduce((best, item) =>
-    Math.abs(Number(/^(\d+)p$/.exec(item)?.[1] ?? 0) - wanted) <
-    Math.abs(Number(/^(\d+)p$/.exec(best)?.[1] ?? 0) - wanted)
+    Math.abs(shuyanResolutionHeightOf(item) - wanted) <
+    Math.abs(shuyanResolutionHeightOf(best) - wanted)
       ? item
       : best,
   );
@@ -323,10 +420,10 @@ export function describeShuyanVideoError(task: ShuyanVideoTask): string {
 }
 
 /**
- * @description 抖音视频生成的数眼 Seedance 通道：提交文生 / 图生视频任务、持久化调用记录、
- *   后台轮询，成功后在 24 小时临时地址失效前转存视频库并回填分镜或整片。
- * @keyword-cn 数眼Seedance生视频, 成片转存, 分镜视频
- * @keyword-en shuyan-seedance-video, persist-generated-video, shot-video
+ * @description 抖音视频生成的数眼通道（Seedance 与 MiniMax-H3 两条原生路由）：提交文生 / 图生视频任务、持久化调用记录、
+ *   后台轮询，成功后在临时地址失效前转存视频库并回填分镜或整片。
+ * @keyword-cn 数眼Seedance生视频, 数眼H3生视频, 成片转存, 分镜视频
+ * @keyword-en shuyan-seedance-video, shuyan-minimax-h3-video, persist-generated-video, shot-video
  */
 @Injectable()
 export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
@@ -348,11 +445,12 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 启动数眼任务后台轮询，服务重启后继续跟进未结束记录。
+   * @description 启动数眼任务后台轮询，服务重启后继续跟进未结束记录；多进程时只在 leader 进程上轮询。
    * @keyword-cn 启动数眼视频轮询, 重启续跟
    * @keyword-en start-shuyan-video-polling, resume-after-restart
    */
   onModuleInit(): void {
+    if (!isLeaderProcess()) return;
     this.timer = setInterval(() => void this.pollOnce(), DOUYIN_SHUYAN_POLL_MS);
     this.timer.unref?.();
   }
@@ -367,7 +465,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 提交一次数眼 Seedance 视频生成；分镜带画面时以它为首帧，整片在 2.x 模型下最多带 9 张参考图。
+   * @description 提交一次数眼视频生成，按型号走 Seedance 或 MiniMax-H3 路由；分镜带画面时以它为首帧，
+   *   整片在 Seedance 2.x 与 MiniMax-H3 下最多带 9 张参考图。
    * @keyword-cn 提交数眼视频, Seedance多模态
    * @keyword-en submit-shuyan-video, seedance-multimodal
    * @param input 脚本、模式、单镜 ID、补充要求、节点运行配置与作用域。
@@ -382,7 +481,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
     scope: DouyinScope;
   }): Promise<DouyinOperationView> {
     const { topic, mode, runtime, scope } = input;
-    if (!isShuyanSeedanceModel(runtime.model)) {
+    const route = resolveShuyanVideoRoute(runtime.model);
+    if (!route) {
       throw new BadRequestException(
         `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED:${runtime.model}`,
       );
@@ -431,8 +531,11 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       : null;
     const personaVoice = buildPersonaVoiceSection(persona);
     const images = this.collectImages(shots, mode === 'shot' ? shotIndex : 0);
-    const isVersion2 = /seedance[-_.]?2/i.test(runtime.model);
-    const usedImages = images.slice(0, mode === 'full' && isVersion2 ? 9 : 1);
+    // 整片用多图参考：Seedance 2.x 与 MiniMax-H3 都收最多 9 张 reference_image，其余型号只带一张首帧
+    const multiReference =
+      mode === 'full' &&
+      (route === 'hailuo-v2' || /seedance[-_.]?2/i.test(runtime.model));
+    const usedImages = images.slice(0, multiReference ? 9 : 1);
     const prompt =
       mode === 'shot'
         ? buildShotVideoPrompt({
@@ -460,20 +563,33 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       usedImages.map(async (image) => ({
         type: 'image_url',
         image_url: { url: await this.toSeedanceImageUrl(image.url) },
-        role: mode === 'full' && isVersion2 ? 'reference_image' : 'first_frame',
+        role: multiReference ? 'reference_image' : 'first_frame',
       })),
     );
     const gateway = resolveShuyanVideoGateway(runtime.baseUrl);
-    const endpoint = `${gateway}/seedance/api/v3/contents/generations/tasks`;
-    const payload = {
-      model: runtime.model,
-      content: [{ type: 'text', text: prompt }, ...imageContents],
-      resolution,
-      ratio: '9:16',
-      duration,
-      generate_audio: audio.mode !== 'mute',
-      watermark: false,
-    };
+    const endpoint = resolveShuyanVideoTaskUrl(gateway, route);
+    const content = [{ type: 'text', text: prompt }, ...imageContents];
+    // MiniMax-H3 带首帧时宽高比由图片决定，接口要求恒为 adaptive；它没有声音开关，静音只靠提示词【声音】段约束
+    const payload =
+      route === 'hailuo-v2'
+        ? {
+            model: normalizeShuyanVideoModel(runtime.model),
+            content,
+            resolution,
+            duration,
+            ratio:
+              imageContents[0]?.role === 'first_frame' ? 'adaptive' : '9:16',
+            aigc_watermark: false,
+          }
+        : {
+            model: runtime.model,
+            content,
+            resolution,
+            ratio: '9:16',
+            duration,
+            generate_audio: audio.mode !== 'mute',
+            watermark: false,
+          };
     const operationId = randomUUID();
     const scriptIncluded =
       mode === 'shot'
@@ -532,15 +648,18 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
     });
     const now = new Date();
     try {
-      const task = await this.fetchJson(endpoint, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${runtime.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-      const externalId = String(task.id ?? '').trim();
+      const task = unwrapShuyanVideoTask(
+        await this.fetchJson(endpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${runtime.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        }),
+      );
+      // Seedance 返回 id，MiniMax-H3 返回 task_id
+      const externalId = String(task.id ?? task.task_id ?? '').trim();
       if (!externalId) throw new Error('SHUYAN_VIDEO_TASK_ID_MISSING');
       const doc: DouyinOperationEntity = {
         _id: new ObjectId(),
@@ -626,7 +745,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 查询并推进一条数眼任务；成功时认领保存权、转存视频并回填脚本。
+   * @description 按调用记录的型号选路由查询并推进一条数眼任务；成功时认领保存权、转存视频并回填脚本。
    * @keyword-cn 推进数眼视频调用, 完成转存
    * @keyword-en advance-shuyan-video-operation, save-on-complete
    * @param row 调用记录。
@@ -647,11 +766,15 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const gateway = resolveShuyanVideoGateway(runtime.baseUrl);
-    const endpoint = `${gateway}/seedance/api/v3/contents/generations/tasks/${encodeURIComponent(row.externalId)}`;
-    const task = await this.fetchJson(endpoint, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${runtime.apiKey ?? ''}` },
-    });
+    // 接入 H3 之前的记录都是 Seedance
+    const route = resolveShuyanVideoRoute(row.model ?? '') ?? 'seedance';
+    const endpoint = resolveShuyanVideoTaskUrl(gateway, route, row.externalId);
+    const task = unwrapShuyanVideoTask(
+      await this.fetchJson(endpoint, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${runtime.apiKey ?? ''}` },
+      }),
+    );
     const mapped = mapShuyanVideoStatus(task.status);
     if (mapped === 'failed') {
       await this.fail(
@@ -708,7 +831,9 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
     );
     if (!claimed) return;
     try {
-      const videoUrl = String(task.content?.video_url ?? '').trim();
+      const videoUrl = String(
+        task.content?.video_url ?? task.content?.url ?? '',
+      ).trim();
       if (!videoUrl) throw new Error('SHUYAN_VIDEO_RESULT_URL_MISSING');
       const scope = { tenantId: row.tenantId, userId: row.userId };
       const topic = await this.repository.get(row.topicId, scope);
@@ -768,7 +893,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 把数眼返回的临时视频地址转存到 OSS；未配置 OSS 时登记临时外链并明确记录警告。
+   * @description 把数眼返回的临时视频地址（Seedance 24 小时、MiniMax-H3 约 7 天有效）转存到 OSS；
+   *   未配置 OSS 时登记临时外链并明确记录警告。
    * @keyword-cn 转存数眼成片, 视频库登记
    * @keyword-en save-shuyan-video, register-video
    * @param url 数眼成片地址。
@@ -798,9 +924,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       tags: input.tags,
     };
     if (!this.oss.isConfigured()) {
-      this.logger.warn(
-        '[saveVideo] OSS 未配置，视频库登记数眼 24 小时临时地址',
-      );
+      this.logger.warn('[saveVideo] OSS 未配置，视频库登记数眼临时地址');
       const record = await this.videoLibrary.registerExternal({
         ...common,
         url,
@@ -870,7 +994,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 把公网图片原样交给 Seedance；站内 `/static` 图片读取后转成 data URL。
+   * @description 把公网图片原样交给数眼；站内 `/static` 图片读取后转成 data URL（Seedance 与 MiniMax-H3 都接受）。
    * @keyword-cn 数眼图片输入, 本地图片Base64
    * @keyword-en seedance-image-input, local-image-data-url
    * @param url 图库地址。

@@ -12,6 +12,8 @@ export interface SassTenantEntity {
   superClawId?: string;
   /** 小红书文章生成的租户级并发上限 */
   xhsArticleConcurrencyLimit?: number;
+  /** 抖音生成（候选脚本、分镜）的租户级并发上限 */
+  douyinGenerationConcurrencyLimit?: number;
   /** 可用 Credit；-1 表示无限额度 */
   credit: number;
   /** Credit 的整数最小计费单位；-1 表示无限额度 */
@@ -28,6 +30,7 @@ export interface SassTenantCreateInput {
   name: string;
   description?: string;
   xhsArticleConcurrencyLimit?: number;
+  douyinGenerationConcurrencyLimit?: number;
   /** 初始 Credit；新租户缺省为 0，-1 仅用于兼容历史无限额度 */
   credit?: number;
 }

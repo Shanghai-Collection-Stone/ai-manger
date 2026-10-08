@@ -1,4 +1,7 @@
-import { defaultHttpInstance } from '@larksuiteoapi/node-sdk';
+import {
+  defaultHttpInstance,
+  type HttpInstance,
+} from '@larksuiteoapi/node-sdk';
 
 /**
  * @title 飞书直连 HttpInstance Feishu Direct Http Instance
@@ -10,11 +13,15 @@ import { defaultHttpInstance } from '@larksuiteoapi/node-sdk';
  *   (127.0.0.1:10808)以明文 HTTP 发往 HTTPS 端口,feishu 返回 400 →
  *   tenant_access_token 为空 → SDK 解构 `tenant_access_token` 时崩溃。
  *   注意:这里禁用的是 SDK 共享单例的代理,所有 lark.Client 都会直连飞书(符合预期)。
- * @returns {typeof defaultHttpInstance} 已禁用代理的飞书 axios 实例。
+ *   返回类型标成 SDK 的 `HttpInstance`:SDK 把 defaultHttpInstance 声明成 AxiosInstance,
+ *   axios 1.19 起 `request()` 的返回类型改为 AxiosResponseResult,结构上不再匹配
+ *   `IClientParams.httpInstance`;运行时它正是 SDK 自己的实例(interceptor 已把响应解包成 data),
+ *   与 `HttpInstance` 的约定一致,因此在这一处做类型收窄,调用方不再各自断言。
+ * @returns {HttpInstance} 已禁用代理的飞书 SDK 请求实例。
  * @keyword-en feishu lark sdk direct http instance no proxy
  * @keyword-cn 飞书直连 httpInstance, 禁用代理
  */
-export function createFeishuHttpInstance(): typeof defaultHttpInstance {
+export function createFeishuHttpInstance(): HttpInstance {
   defaultHttpInstance.defaults.proxy = false;
-  return defaultHttpInstance;
+  return defaultHttpInstance as unknown as HttpInstance;
 }

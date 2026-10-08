@@ -262,8 +262,20 @@ export class SuperClawService implements OnModuleInit {
     await this.superClaws.createIndex({ name: 1 }, { unique: true });
     await this.superClaws.createIndex({ tokenHash: 1 }, { unique: true });
     await this.superClaws.createIndex({ lastHeartbeatAt: 1 });
+    await this.superClaws.createIndex({ status: 1, lastHeartbeatAt: 1 });
+    await this.superClaws.createIndex({ createdAt: -1 });
     await this.tenants.createIndex({ superClawId: 1 });
     await this.workspaces.createIndex({ superClawId: 1 });
+    await this.workspaces.createIndex({
+      tenantId: 1,
+      superClawId: 1,
+      updatedAt: -1,
+    });
+    await this.workspaces.createIndex({
+      superClawId: 1,
+      provisionStatus: 1,
+      createdAt: 1,
+    });
   }
 
   /**

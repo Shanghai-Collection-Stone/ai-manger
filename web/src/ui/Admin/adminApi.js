@@ -134,6 +134,18 @@ async function apiRequest(path, options = {}) {
 }
 
 /**
+ * @description 根据邀请码生成与当前后台同源的网页邀请地址
+ * @keyword-cn 邀请链接, 同源地址
+ * @keyword-en tenant-invite-url, same-origin-link
+ */
+export function buildTenantInviteUrl(code) {
+  if (typeof window === 'undefined') {
+    return `/pages/invite.html?code=${encodeURIComponent(code)}`;
+  }
+  return `${window.location.origin}/pages/invite.html?code=${encodeURIComponent(code)}`;
+}
+
+/**
  * @description 后台管理API封装
  * @keyword-en admin api service
  */
@@ -450,6 +462,7 @@ export const adminApi = {
     aiPromptSupplement,
     enableAiCover = false,
     xhsArticleGlobalConcurrencyLimit,
+    douyinGenerationGlobalConcurrencyLimit,
     salesContact,
   ) {
     return request('/platform-info', {
@@ -458,6 +471,7 @@ export const adminApi = {
         aiPromptSupplement,
         enableAiCover,
         xhsArticleGlobalConcurrencyLimit,
+        douyinGenerationGlobalConcurrencyLimit,
         ...(salesContact
           ? {
               salesWechatQrCodeUrl: salesContact.wechatQrCodeUrl,
@@ -481,7 +495,7 @@ export const adminApi = {
   },
 
   /**
-   * @description 读取平台短信验证码配置（Secret 仅掩码，仅超管）
+   * @description 读取平台短信验证码配置，短信专用 AccessKey Secret 仅掩码（仅超管）
    * @keyword-cn 读取短信配置
    * @keyword-en get-sms-settings
    */
@@ -490,7 +504,7 @@ export const adminApi = {
   },
 
   /**
-   * @description 保存平台短信验证码配置（accessKeySecret 空串清空、不传不改）
+   * @description 保存平台短信验证码配置（接口类型、短信专用 AccessKey、签名与模板；accessKeySecret 空串清空、不传不改）
    * @keyword-cn 保存短信配置
    * @keyword-en save-sms-settings
    */
@@ -510,6 +524,174 @@ export const adminApi = {
     return apiRequest('/api/sms-verification/settings/test', {
       method: 'POST',
       body: JSON.stringify({ phone }),
+    });
+  },
+
+  /**
+   * @description 读取平台阿里云配置：OSS 设置与 OSS 专用 AccessKey（Secret 仅掩码）、当前生效来源（仅超管）
+   * @keyword-cn 读取阿里云配置
+   * @keyword-en get-aliyun-settings
+   */
+  async getAliyunSettings() {
+    return apiRequest('/api/aliyun-config/settings');
+  },
+
+  /**
+   * @description 保存平台阿里云配置（oss 只更新传入字段；oss.accessKeySecret 空串清空、不传不改）
+   * @keyword-cn 保存阿里云配置
+   * @keyword-en save-aliyun-settings
+   */
+  async saveAliyunSettings(payload) {
+    return apiRequest('/api/aliyun-config/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 用当前生效的 OSS 配置写入并删除一个小对象，检查密钥、bucket 与地域
+   * @keyword-cn 测试OSS
+   * @keyword-en test-aliyun-oss
+   */
+  async testAliyunOss() {
+    return apiRequest('/api/aliyun-config/oss/test', { method: 'POST' });
+  },
+
+  /**
+   * @description 读取平台 SMTP 发信配置（密码仅返回掩码）
+   * @keyword-cn 读取发信配置
+   * @keyword-en get-mail-settings
+   */
+  async getMailSettings() {
+    return apiRequest('/api/mail/settings');
+  },
+
+  /**
+   * @description 保存平台 SMTP 发信配置，password 不传时保留原密码
+   * @keyword-cn 保存发信配置
+   * @keyword-en save-mail-settings
+   */
+  async saveMailSettings(payload) {
+    return apiRequest('/api/mail/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 使用已保存的 SMTP 配置向指定邮箱真实发送测试邮件
+   * @keyword-cn 测试发送邮件
+   * @keyword-en test-mail-settings
+   */
+  async testMailSettings(to) {
+    return apiRequest('/api/mail/settings/test', {
+      method: 'POST',
+      body: JSON.stringify({ to }),
+    });
+  },
+
+  /**
+   * @description 分页查询租户入驻申请
+   * @keyword-cn 入驻申请列表
+   * @keyword-en tenant-join-applications
+   */
+  async listTenantJoinApplications(query = {}) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) params.set(key, value);
+    });
+    const qs = params.toString();
+    return apiRequest(`/api/tenant-join/applications${qs ? `?${qs}` : ''}`);
+  },
+
+  /**
+   * @description 通过一条待审批入驻申请
+   * @keyword-cn 通过入驻申请
+   * @keyword-en approve-tenant-join
+   */
+  async approveTenantJoinApplication(id) {
+    return apiRequest(`/api/tenant-join/applications/${id}/approve`, { method: 'POST' });
+  },
+
+  /**
+   * @description 拒绝一条待审批入驻申请并提交可选原因
+   * @keyword-cn 拒绝入驻申请
+   * @keyword-en reject-tenant-join
+   */
+  async rejectTenantJoinApplication(id, reason) {
+    return apiRequest(`/api/tenant-join/applications/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || undefined }),
+    });
+  },
+
+  /**
+   * @description 查询当前管理范围内的租户邀请链接
+   * @keyword-cn 邀请链接列表
+   * @keyword-en tenant-invite-list
+   */
+  async listTenantInvites(query = {}) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) params.set(key, value);
+    });
+    const qs = params.toString();
+    return apiRequest(`/api/tenant-join/invites${qs ? `?${qs}` : ''}`);
+  },
+
+  /**
+   * @description 为指定租户生成一条有时效的不限人数邀请链接
+   * @keyword-cn 生成邀请链接
+   * @keyword-en create-tenant-invite
+   */
+  async createTenantInvite(payload) {
+    return apiRequest('/api/tenant-join/invites', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 撤销邀请链接使其立即失效
+   * @keyword-cn 撤销邀请链接
+   * @keyword-en revoke-tenant-invite
+   */
+  async revokeTenantInvite(id) {
+    return apiRequest(`/api/tenant-join/invites/${id}`, { method: 'DELETE' });
+  },
+
+  /**
+   * @description 分页查询运维上报摘要
+   * @keyword-cn 运维上报列表
+   * @keyword-en ops-report-list
+   */
+  async listOpsReports(query = {}) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== '' && value !== undefined && value !== null) params.set(key, value);
+    });
+    const qs = params.toString();
+    return apiRequest(`/api/ops-report/reports${qs ? `?${qs}` : ''}`);
+  },
+
+  /**
+   * @description 读取单条运维上报及完整日志
+   * @keyword-cn 运维上报详情
+   * @keyword-en ops-report-detail
+   */
+  async getOpsReport(id) {
+    return apiRequest(`/api/ops-report/reports/${id}`);
+  },
+
+  /**
+   * @description 更新运维上报处理状态与处理备注
+   * @keyword-cn 更新上报状态
+   * @keyword-en update-ops-report
+   */
+  async updateOpsReport(id, payload) {
+    return apiRequest(`/api/ops-report/reports/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
     });
   },
 

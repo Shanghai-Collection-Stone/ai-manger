@@ -18,6 +18,8 @@ import type {
   DouyinStoryboardPreference,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
+import { AdminService } from '../../admin/services/admin.service.js';
+import { GenerationQueueService } from '../../generation-queue/services/generation-queue.service.js';
 import { DouyinChildTopicGenerationService } from './douyin-child-topic-generation.service.js';
 import { DouyinStoryboardGenerationService } from './douyin-storyboard-generation.service.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
@@ -33,11 +35,19 @@ type DouyinScope = { tenantId?: string; userId: string };
 export const DOUYIN_GENERATION_STALE_MS = 10 * 60 * 1000;
 
 /**
- * @description 当前进程同时执行的分镜任务上限；一次挑中多条脚本时其余任务在 `queued` 阶段排队。
- * @keyword-cn 分镜任务并发, 排队生成
- * @keyword-en storyboard-job-concurrency, queued-generation
+ * @description 抖音生成在 AI 生成排队服务里的通道名：候选脚本与分镜任务都进这条通道，共用后台
+ *   「全平台抖音生成总并发上限」与租户「抖音生成并发」；拿不到名额的任务在 `queued` 阶段排队。
+ * @keyword-cn 抖音生成排队通道, 排队生成
+ * @keyword-en douyin-generation-lane, queued-generation
  */
-export const DOUYIN_STORYBOARD_JOB_CONCURRENCY = 3;
+export const DOUYIN_GENERATION_QUEUE_LANE = 'douyin-generation';
+
+/**
+ * @description 申请名额超过这么久还没拿到才把进度切到 `queued`，避免有空位时界面也闪一下「排队中」。
+ * @keyword-cn 排队提示延迟, 防闪烁
+ * @keyword-en queued-report-delay, anti-flicker
+ */
+const DOUYIN_QUEUED_REPORT_DELAY_MS = 500;
 
 /**
  * @description 后台生成失败码与界面可读中文原因的对照表，未知码回退为原始码。
@@ -67,20 +77,22 @@ export const DOUYIN_GENERATION_ERROR_MESSAGES: Record<string, string> = {
 export class DouyinGenerationJobService {
   private readonly logger = new Logger(DouyinGenerationJobService.name);
   private readonly jobs: Collection<DouyinGenerationJobEntity>;
-  /** 当前进程正在执行的任务 ID，用于识别服务重启遗留的僵尸任务 */
+  /** 当前进程正在执行或排队的任务 ID，用于识别服务重启遗留的僵尸任务 */
   private readonly activeJobIds = new Set<string>();
-  /** 正在执行的分镜任务数与排队等待名额的任务 */
-  private storyboardRunning = 0;
-  private readonly storyboardWaiters: Array<() => void> = [];
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly repository: DouyinWorkbenchRepositoryService,
     private readonly storyboard: DouyinStoryboardGenerationService,
     private readonly childTopics: DouyinChildTopicGenerationService,
+    private readonly queue: GenerationQueueService,
+    adminService: AdminService,
   ) {
     this.jobs = db.collection<DouyinGenerationJobEntity>(
       'douyin_generation_jobs',
+    );
+    this.queue.registerLane(DOUYIN_GENERATION_QUEUE_LANE, (tenantId) =>
+      adminService.getDouyinGenerationConcurrencyLimits(tenantId),
     );
     void this.ensureIndexes();
   }
@@ -93,6 +105,7 @@ export class DouyinGenerationJobService {
   async ensureIndexes(): Promise<void> {
     await this.jobs.createIndex({ id: 1 }, { unique: true });
     await this.jobs.createIndex({ tenantId: 1, userId: 1, updatedAt: -1 });
+    await this.jobs.createIndex({ tenantId: 1, userId: 1, startedAt: -1 });
     await this.jobs.createIndex({ kind: 1, topicId: 1, status: 1 });
   }
 
@@ -166,6 +179,8 @@ export class DouyinGenerationJobService {
    * @returns {Promise<DouyinGenerationJobView[]>} 按开始时间倒序的任务。
    */
   async list(scope: DouyinScope): Promise<DouyinGenerationJobView[]> {
+    // 后台调高并发上限后，下一次轮询就让排队任务补上空位，不必等正在执行的任务结束
+    this.queue.requestDrain(DOUYIN_GENERATION_QUEUE_LANE, scope.tenantId);
     await this.settleStaleJobs(scope);
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const rows = await this.jobs
@@ -209,14 +224,13 @@ export class DouyinGenerationJobService {
           ),
         );
     };
-    let holdsSlot = false;
+    let release: (() => void) | undefined;
     try {
+      release = await this.acquireSlot(job.id, scope, report);
+      report({ stage: 'preparing', current: 0 });
       let result: DouyinGenerationJobView['result'];
       let progress: DouyinGenerationJobProgress;
       if (job.kind === 'storyboard') {
-        await this.acquireStoryboardSlot(report);
-        holdsSlot = true;
-        report({ stage: 'preparing', current: 0 });
         const output = await this.storyboard.generate(
           job.topicId,
           job.prompt,
@@ -230,6 +244,7 @@ export class DouyinGenerationJobService {
           shotCount: output.storyboard.length,
           imageCount: output.imageCount,
           imageFailedCount: output.imageFailedCount,
+          publishCopyWritten: output.publishCopyWritten,
         };
         progress = { stage: 'saving', current: output.storyboard.length };
       } else {
@@ -289,7 +304,7 @@ export class DouyinGenerationJobService {
         )
         .catch(() => undefined);
     } finally {
-      if (holdsSlot) this.releaseStoryboardSlot();
+      release?.();
       this.activeJobIds.delete(job.id);
     }
   }
@@ -411,44 +426,52 @@ export class DouyinGenerationJobService {
   }
 
   /**
-   * @description 占一个分镜执行名额，名额满时回报 `queued` 并等待前面的任务结束。
-   * @keyword-cn 占用分镜名额, 排队生成
-   * @keyword-en acquire-storyboard-slot, queued-generation
+   * @description 在抖音生成通道排队申请执行名额（全平台与租户两级上限），一时拿不到时回报 `queued`；
+   *   任务 ID 作为业务键登记，其他进程收敛中断任务时据此跳过仍在排队 / 执行的任务。
+   * @keyword-cn 申请抖音生成名额, 排队生成
+   * @keyword-en acquire-douyin-generation-slot, queued-generation
+   * @param jobId 生成任务 ID。
+   * @param scope 当前租户用户作用域。
+   * @param report 进度回报。
+   * @returns {Promise<() => void>} 释放名额的函数。
    */
-  private async acquireStoryboardSlot(
+  private async acquireSlot(
+    jobId: string,
+    scope: DouyinScope,
     report: (progress: DouyinGenerationJobProgress) => void,
-  ): Promise<void> {
-    if (this.storyboardRunning >= DOUYIN_STORYBOARD_JOB_CONCURRENCY) {
-      report({ stage: 'queued', current: 0 });
-      await new Promise<void>((resolve) =>
-        this.storyboardWaiters.push(resolve),
+  ): Promise<() => void> {
+    const queuedTimer = setTimeout(
+      () => report({ stage: 'queued', current: 0 }),
+      DOUYIN_QUEUED_REPORT_DELAY_MS,
+    );
+    try {
+      return await this.queue.acquire(
+        DOUYIN_GENERATION_QUEUE_LANE,
+        scope.tenantId,
+        jobId,
       );
+    } finally {
+      clearTimeout(queuedTimer);
     }
-    this.storyboardRunning += 1;
   }
 
   /**
-   * @description 释放分镜执行名额并唤醒下一个排队任务。
-   * @keyword-cn 释放分镜名额, 唤醒排队
-   * @keyword-en release-storyboard-slot, wake-queued-job
-   */
-  private releaseStoryboardSlot(): void {
-    this.storyboardRunning -= 1;
-    this.storyboardWaiters.shift()?.();
-  }
-
-  /**
-   * @description 把运行中但不在当前进程、且长时间没有进度写入的任务收进失败终态，避免服务重启后永远显示生成中。
+   * @description 把运行中但已不在任何进程（本进程集合与排队登记簿都查不到）、且长时间没有进度写入的任务收进失败终态，
+   *   避免服务重启后永远显示生成中；多进程时别的 worker 上还在排队 / 执行的任务不会被误收。
    * @keyword-cn 收敛中断任务, 僵尸任务
    * @keyword-en settle-stale-jobs, zombie-job
    */
   private async settleStaleJobs(scope: DouyinScope): Promise<void> {
     const now = new Date();
+    const aliveJobIds = [
+      ...this.activeJobIds,
+      ...(await this.queue.activeKeys(DOUYIN_GENERATION_QUEUE_LANE)),
+    ];
     await this.jobs.updateMany(
       {
         ...this.scopeFilter(scope),
         status: 'running',
-        id: { $nin: [...this.activeJobIds] },
+        id: { $nin: aliveJobIds },
         updatedAt: {
           $lt: new Date(now.getTime() - DOUYIN_GENERATION_STALE_MS),
         },

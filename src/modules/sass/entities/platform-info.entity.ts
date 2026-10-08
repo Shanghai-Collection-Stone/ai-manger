@@ -13,6 +13,8 @@ export interface PlatformInfoEntity {
   enableAiCover?: boolean;
   /** 全平台小红书文章生成总并发上限 */
   xhsArticleGlobalConcurrencyLimit?: number;
+  /** 全平台抖音生成（候选脚本、分镜）总并发上限 */
+  douyinGenerationGlobalConcurrencyLimit?: number;
   /** 平台作用域：自助注册未入驻时返回的业务员微信二维码（http(s) 地址或 data:image base64） */
   salesWechatQrCodeUrl?: string;
   /** 平台作用域：业务员二维码旁的提示语 */

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -24,6 +25,11 @@ import type {
 import type { SassApiKeyEntity } from '../../sass/entities/sass-api-key.entity.js';
 import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
 import { SassService } from '../../sass/services/sass.service.js';
+import { MailService } from '../../mail/services/mail.service.js';
+import {
+  formatMailDateTime,
+  maskMailPhone,
+} from '../../mail/services/mail-template.service.js';
 import {
   AI_CREDIT_SERVICE_CATALOG,
   type AiCreditServiceView,
@@ -50,7 +56,15 @@ import type {
   XhsAccountEntity,
 } from '../entities/admin.entity.js';
 
-type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & { id: string };
+/**
+ * @description 对外返回的成员视图，可包含关联平台账号的邮箱
+ * @keyword-cn 公开成员视图, 账号邮箱
+ * @keyword-en public-member-view, account-email
+ */
+export type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & {
+  id: string;
+  email?: string;
+};
 
 /**
  * @description 后台管理服务，提供登录和后台各管理模块能力
@@ -58,6 +72,7 @@ type AdminUserPublic = Omit<AdminUserEntity, 'passwordHash'> & { id: string };
  */
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
   private readonly PLATFORM_INFO_SCOPE_TENANT_ID = '__platform__';
   private readonly users: Collection<AdminUserEntity>;
   private readonly accounts: Collection<AdminAccountEntity>;
@@ -80,6 +95,7 @@ export class AdminService {
     @Inject('DS_MONGO_DB') private readonly db: Db,
     private readonly sassService: SassService,
     private readonly dataSourceService: DataSourceService,
+    private readonly mail: MailService,
   ) {
     this.users = db.collection<AdminUserEntity>('admin_users');
     this.accounts = db.collection<AdminAccountEntity>('admin_accounts');
@@ -138,6 +154,8 @@ export class AdminService {
       { unique: true },
     );
     await this.users.createIndex({ tenantId: 1 });
+    await this.users.createIndex({ tenantId: 1, updatedAt: -1 });
+    await this.users.createIndex({ updatedAt: -1 });
     await this.users.createIndex({ accountId: 1 });
     await this.accounts.createIndex({ phone: 1 }, { unique: true });
     await this.sessions.createIndex({ tokenHash: 1 }, { unique: true });
@@ -165,6 +183,8 @@ export class AdminService {
       { unique: true },
     );
     await this.aiProviders.createIndex({ enabled: 1 });
+    await this.aiProviders.createIndex({ isDefault: -1, updatedAt: -1 });
+    await this.aiProviders.createIndex({ modelCategory: 1, updatedAt: -1 });
     await this.aiServiceConfigs.createIndex(
       { serviceCode: 1 },
       { unique: true },
@@ -202,6 +222,16 @@ export class AdminService {
         partialFilterExpression: { isDefault: true },
       },
     );
+    await this.clawConfigs.createIndex({ createdAt: -1 });
+    await this.agentConfigs.createIndex({ createdAt: -1 });
+    await this.xhsAccounts.createIndex({ createdAt: -1 });
+    await this.xhsAccounts.createIndex({ platform: 1, createdAt: -1 });
+    await this.xhsAccounts.createIndex({ tenantId: 1, createdAt: -1 });
+    await this.xhsAccounts.createIndex({
+      tenantId: 1,
+      platform: 1,
+      createdAt: -1,
+    });
   }
 
   /**
@@ -312,7 +342,8 @@ export class AdminService {
       if (!byTenant.has(key)) byTenant.set(key, user);
     }
     const candidates = [...byTenant.values()];
-    if (candidates.length === 0) throw new ForbiddenException('ACCOUNT_DISABLED');
+    if (candidates.length === 0)
+      throw new ForbiddenException('ACCOUNT_DISABLED');
     const tenantIds = candidates
       .map((user) => user.tenantId)
       .filter((id): id is string => Boolean(id) && ObjectId.isValid(id!));
@@ -321,7 +352,9 @@ export class AdminService {
           .find({ _id: { $in: tenantIds.map((id) => new ObjectId(id)) } })
           .toArray()
       : [];
-    const tenantNames = new Map(tenants.map((row) => [String(row._id), row.name]));
+    const tenantNames = new Map(
+      tenants.map((row) => [String(row._id), row.name]),
+    );
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + this.LOGIN_TICKET_EXPIRE_SECONDS;
     return {
@@ -335,7 +368,7 @@ export class AdminService {
       tenants: candidates.map((user) => ({
         tenantId: user.tenantId ?? '',
         tenantName: user.tenantId
-          ? tenantNames.get(user.tenantId) ?? '未知租户'
+          ? (tenantNames.get(user.tenantId) ?? '未知租户')
           : '平台端',
         role: user.role,
         displayName: user.displayName,
@@ -470,46 +503,37 @@ export class AdminService {
 
   /**
    * @description 自助注册：以已短信验证的手机号新建账号，固定加入默认租户（「其他」）并立即可登录；手机号已注册直接拒绝，不允许自行选择其他租户
-   * @keyword-cn 自助注册, 手机号账号, 默认租户
-   * @keyword-en self-register, phone-account, default-tenant
+   * @keyword-cn 自助注册, 平台账号
+   * @keyword-en self-register, platform-account
    */
   async register(input: {
     username?: string;
     displayName?: string;
     password: string;
     phone: string;
+    email?: string;
   }): Promise<{
     registered: true;
     pendingApproval: false;
+    accountId: string;
+    tenantId: string;
     tenantName: string;
     user: AdminUserPublic;
   }> {
-    const phone = input.phone;
-    if (await this.accounts.findOne({ phone })) {
-      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
-    }
     const tenant = await this.ensureSelfRegisterTenant();
+    const owner = await this.createPlatformAccount({
+      phone: input.phone,
+      password: input.password,
+      displayName: input.displayName,
+      email: input.email,
+    });
+    const phone = owner.phone;
     const now = new Date();
-    const displayName = input.displayName?.trim() || phone;
-    const passwordHash = this.hashPassword(input.password);
-    const owner: AdminAccountEntity = {
-      _id: new ObjectId(),
-      phone,
-      passwordHash,
-      displayName,
-      createdAt: now,
-      updatedAt: now,
-    };
-    try {
-      await this.accounts.insertOne(owner);
-    } catch {
-      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
-    }
     const doc: AdminUserEntity = {
       _id: new ObjectId(),
       username: input.username?.trim() || phone,
-      passwordHash,
-      displayName,
+      passwordHash: owner.passwordHash,
+      displayName: owner.displayName,
       role: 'operator',
       tenantId: String(tenant._id),
       phone,
@@ -524,12 +548,231 @@ export class AdminService {
       await this.accounts.deleteOne({ _id: owner._id });
       throw new BadRequestException('USERNAME_ALREADY_EXISTS');
     }
+    this.notifyRegistered(owner);
     return {
       registered: true,
       pendingApproval: false,
+      accountId: String(owner._id),
+      tenantId: String(tenant._id),
       tenantName: tenant.name,
-      user: this.toPublicUser(doc),
+      user: this.toPublicUser(doc, owner),
     };
+  }
+
+  /**
+   * @description 注册成功后给账号邮箱发送欢迎邮件；后台异步发送、失败只记日志，不影响注册结果也不拖慢注册响应
+   * @keyword-cn 注册成功邮件, 异步通知
+   * @keyword-en registration-success-email, async-notification
+   * @param account 新建的平台账号（邮箱已在注册时验证）。
+   * @param tenantName 通过邀请加入的团队名，默认租户注册不传。
+   */
+  notifyRegistered(account: AdminAccountEntity, tenantName?: string): void {
+    const email = account.email?.trim();
+    if (!email) return;
+    const named =
+      account.displayName && account.displayName !== account.phone
+        ? `${account.displayName}，您好：`
+        : undefined;
+    void this.mail
+      .sendTemplate(email, {
+        subject: '账号注册成功',
+        preheader: '您的 AI 营销官账号已注册成功，使用注册手机号即可登录。',
+        title: '欢迎加入 AI 营销官',
+        greeting: named,
+        paragraphs: [
+          `您的 AI 营销官账号已注册成功${
+            tenantName ? `，并已加入「${tenantName}」团队` : ''
+          }。以下是您的账号信息：`,
+        ],
+        details: [
+          { label: '登录账号', value: maskMailPhone(account.phone) },
+          { label: '绑定邮箱', value: email },
+          ...(tenantName ? [{ label: '所属团队', value: tenantName }] : []),
+          { label: '注册时间', value: formatMailDateTime(account.createdAt) },
+        ],
+        afterParagraphs: [
+          '请打开 AI 营销官客户端，使用注册手机号和密码登录，即可开始使用。',
+        ],
+        notice:
+          '如果这不是您本人的操作，请尽快联系平台管理员处理。为保障账号安全，请勿向任何人透露您的密码和验证码。',
+      })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `[notifyRegistered] 注册成功邮件发送失败 accountId=${String(account._id)}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  }
+
+  /**
+   * @description 只创建平台手机号账号，不创建任何租户成员身份
+   * @keyword-cn 平台账号创建, 手机号唯一
+   * @keyword-en platform-account-creation, unique-phone-account
+   */
+  async createPlatformAccount(input: {
+    phone: string;
+    password: string;
+    displayName?: string;
+    email?: string;
+  }): Promise<AdminAccountEntity> {
+    const phone = input.phone.trim();
+    const now = new Date();
+    const account: AdminAccountEntity = {
+      _id: new ObjectId(),
+      phone,
+      passwordHash: this.hashPassword(input.password),
+      displayName: input.displayName?.trim() || phone,
+      ...(input.email?.trim()
+        ? { email: input.email.trim().toLowerCase() }
+        : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await this.accounts.insertOne(account);
+    } catch {
+      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+    }
+    return account;
+  }
+
+  /**
+   * @description 把平台账号加入指定租户，复用或恢复已有成员身份并返回租户信息
+   * @keyword-cn 租户成员加入, 账号成员关系
+   * @keyword-en tenant-member-join, account-membership
+   */
+  async addAccountToTenant(input: {
+    accountId: string;
+    tenantId: string;
+    role?: 'operator' | 'tenant_admin';
+  }): Promise<{
+    user: AdminUserPublic;
+    tenantId: string;
+    tenantName: string;
+    alreadyMember: boolean;
+  }> {
+    const tenantObjectId = ObjectId.isValid(input.tenantId)
+      ? new ObjectId(input.tenantId)
+      : null;
+    const tenant = tenantObjectId
+      ? await this.sassTenants.findOne({ _id: tenantObjectId })
+      : null;
+    if (!tenant) throw new NotFoundException('TENANT_NOT_FOUND');
+
+    const account = await this.getAccountById(input.accountId);
+    if (!account) throw new NotFoundException('ACCOUNT_NOT_FOUND');
+    if (account.deletedAt) throw new BadRequestException('ACCOUNT_DELETED');
+
+    const tenantId = String(tenant._id);
+    const accountId = String(account._id);
+    const existing = await this.users.findOne({ accountId, tenantId });
+    if (existing?.enabled && !existing.deletedAt) {
+      return {
+        user: this.toPublicUser(existing, account),
+        tenantId,
+        tenantName: tenant.name,
+        alreadyMember: true,
+      };
+    }
+    if (existing) {
+      const now = new Date();
+      const restored = await this.users.findOneAndUpdate(
+        { _id: existing._id },
+        {
+          $set: {
+            enabled: true,
+            displayName: account.displayName,
+            phone: account.phone,
+            passwordHash: account.passwordHash,
+            updatedAt: now,
+          },
+          $unset: { deletedAt: '' },
+        },
+        { returnDocument: 'after', includeResultMetadata: true },
+      );
+      return {
+        user: this.toPublicUser(restored.value ?? existing, account),
+        tenantId,
+        tenantName: tenant.name,
+        alreadyMember: false,
+      };
+    }
+
+    const now = new Date();
+    const candidates = [
+      account.phone,
+      ...Array.from(
+        { length: 4 },
+        (_, index) => `${account.phone}-${index + 2}`,
+      ),
+    ];
+    for (const username of candidates) {
+      const doc: AdminUserEntity = {
+        _id: new ObjectId(),
+        username,
+        passwordHash: account.passwordHash,
+        displayName: account.displayName,
+        role: input.role ?? 'operator',
+        tenantId,
+        phone: account.phone,
+        accountId,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now,
+      };
+      try {
+        await this.users.insertOne(doc);
+        return {
+          user: this.toPublicUser(doc, account),
+          tenantId,
+          tenantName: tenant.name,
+          alreadyMember: false,
+        };
+      } catch (error) {
+        if (
+          !error ||
+          typeof error !== 'object' ||
+          !('code' in error) ||
+          (error as { code?: number }).code !== 11000
+        ) {
+          throw error;
+        }
+        // 用户名与该租户现有成员冲突时继续尝试下一个候选名。
+      }
+    }
+    throw new BadRequestException('USERNAME_ALREADY_EXISTS');
+  }
+
+  /**
+   * @description 按手机号账号统一校验密码，不以账号是否存在区分凭据错误
+   * @keyword-cn 平台账号验密, 防账号枚举
+   * @keyword-en platform-account-verification, credential-enumeration-guard
+   */
+  async verifyAccountCredentials(input: {
+    account: string;
+    password: string;
+  }): Promise<AdminAccountEntity> {
+    const phone = this.normalizeLoginPhone(input.account);
+    const account = phone ? await this.accounts.findOne({ phone }) : null;
+    if (!account) {
+      throw new UnauthorizedException('INVALID_CREDENTIALS');
+    }
+    if (account.deletedAt) throw new BadRequestException('ACCOUNT_DELETED');
+    if (!this.verifyPassword(input.password, account.passwordHash)) {
+      throw new UnauthorizedException('INVALID_CREDENTIALS');
+    }
+    return account;
+  }
+
+  /**
+   * @description 按 Mongo 标识读取平台账号，非法标识直接返回 null
+   * @keyword-cn 账号标识查询, 非法标识容错
+   * @keyword-en account-id-lookup, invalid-id-tolerance
+   */
+  async getAccountById(accountId: string): Promise<AdminAccountEntity | null> {
+    if (!ObjectId.isValid(accountId)) return null;
+    return this.accounts.findOne({ _id: new ObjectId(accountId) });
   }
 
   /**
@@ -537,7 +780,7 @@ export class AdminService {
    * @keyword-cn 默认注册租户, 自动建租户
    * @keyword-en self-register-tenant, ensure-default-tenant
    */
-  private async ensureSelfRegisterTenant(): Promise<SassTenantEntity> {
+  async ensureSelfRegisterTenant(): Promise<SassTenantEntity> {
     const name = process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
     const tenants = await this.sassTenants.find({ name }).limit(2).toArray();
     if (tenants.length > 1) {
@@ -631,12 +874,16 @@ export class AdminService {
 
   /**
    * @description 获取当前用户信息（含租户名）
-   * @keyword-en get current admin user with tenant name
+   * @keyword-cn 当前成员信息, 账号邮箱
+   * @keyword-en current-member-profile, account-email
    */
   async getMe(
     currentUser: AdminUserEntity,
   ): Promise<AdminUserPublic & { tenantName?: string }> {
-    const base = this.toPublicUser(currentUser);
+    const account = currentUser.accountId
+      ? await this.getAccountById(currentUser.accountId)
+      : null;
+    const base = this.toPublicUser(currentUser, account ?? undefined);
     if (currentUser.tenantId) {
       const tenant = await this.sassService.getTenant(currentUser.tenantId);
       return { ...base, tenantName: tenant?.name };
@@ -737,8 +984,9 @@ export class AdminService {
   }
 
   /**
-   * @description 用户列表
-   * @keyword-en list admin users
+   * @description 查询租户边界内的成员，并批量以平台账号的昵称、手机号和邮箱覆盖成员快照
+   * @keyword-cn 成员列表, 账号资料覆盖
+   * @keyword-en member-list, account-profile-overlay
    */
   async listUsers(currentUser: AdminUserEntity): Promise<AdminUserPublic[]> {
     const filter: Record<string, unknown> = {};
@@ -747,7 +995,28 @@ export class AdminService {
       .find(filter)
       .sort({ updatedAt: -1 })
       .toArray();
-    return rows.map((row) => this.toPublicUser(row));
+    const accountObjectIds = [
+      ...new Set(
+        rows
+          .map((row) => row.accountId)
+          .filter(
+            (id): id is string =>
+              typeof id === 'string' && ObjectId.isValid(id),
+          ),
+      ),
+    ].map((id) => new ObjectId(id));
+    const accounts = accountObjectIds.length
+      ? await this.accounts.find({ _id: { $in: accountObjectIds } }).toArray()
+      : [];
+    const accountById = new Map(
+      accounts.map((account) => [String(account._id), account]),
+    );
+    return rows.map((row) =>
+      this.toPublicUser(
+        row,
+        row.accountId ? accountById.get(row.accountId) : undefined,
+      ),
+    );
   }
 
   /**
@@ -763,30 +1032,52 @@ export class AdminService {
   }
 
   /**
-   * @description 创建用户（租户成员）；填写手机号时关联手机号账号：已有账号直接加入本租户并沿用其密码，没有则用本次密码新建账号
-   * @keyword-cn 创建成员, 手机号关联, 多租户成员
-   * @keyword-en create-admin-user, link-phone-account, multi-tenant-member
+   * @description 创建成员；租户管理员只能把已有平台账号加入本租户，超管保留创建账号或独立成员的能力
+   * @keyword-cn 创建成员, 租户成员管理
+   * @keyword-en create-admin-user, tenant-membership-management
    */
   async createUser(
     currentUser: AdminUserEntity,
     input: {
-      username: string;
-      displayName: string;
-      password: string;
+      username?: string;
+      displayName?: string;
+      password?: string;
       role: AdminUserRole;
       tenantId?: string;
       phone?: string;
     },
   ): Promise<AdminUserPublic> {
     const payloadTenantId = this.resolveNewUserTenant(currentUser, input);
-    const now = new Date();
     const phone = input.phone?.trim() || undefined;
+    if (currentUser.role !== 'super_admin') {
+      if (!phone) throw new BadRequestException('ACCOUNT_NOT_FOUND');
+      const account = await this.accounts.findOne({ phone });
+      if (!account) throw new BadRequestException('ACCOUNT_NOT_FOUND');
+      const existing = await this.users.findOne({
+        accountId: String(account._id),
+        tenantId: payloadTenantId,
+      });
+      if (existing) throw new BadRequestException('PHONE_ALREADY_IN_TENANT');
+      const joined = await this.addAccountToTenant({
+        accountId: String(account._id),
+        tenantId: payloadTenantId!,
+        role: input.role === 'tenant_admin' ? 'tenant_admin' : 'operator',
+      });
+      return joined.user;
+    }
+
+    if (!phone && (!input.username || !input.displayName || !input.password)) {
+      throw new BadRequestException('USER_FIELDS_REQUIRED');
+    }
+    const now = new Date();
     let accountId: string | undefined;
     let createdAccountId: ObjectId | undefined;
+    let account: AdminAccountEntity | null = null;
     if (phone) {
-      const owner = await this.accounts.findOne({ phone });
-      if (owner) {
-        accountId = String(owner._id);
+      account = await this.accounts.findOne({ phone });
+      if (account) {
+        if (account.deletedAt) throw new BadRequestException('ACCOUNT_DELETED');
+        accountId = String(account._id);
         const existing = await this.users.findOne(
           payloadTenantId
             ? { accountId, tenantId: payloadTenantId }
@@ -794,27 +1085,31 @@ export class AdminService {
         );
         if (existing) throw new BadRequestException('PHONE_ALREADY_IN_TENANT');
       } else {
-        createdAccountId = new ObjectId();
-        try {
-          await this.accounts.insertOne({
-            _id: createdAccountId,
-            phone,
-            passwordHash: this.hashPassword(input.password),
-            displayName: input.displayName.trim(),
-            createdAt: now,
-            updatedAt: now,
-          });
-        } catch {
-          throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+        if (!input.password) {
+          throw new BadRequestException('USER_FIELDS_REQUIRED');
         }
-        accountId = String(createdAccountId);
+        account = await this.createPlatformAccount({
+          phone,
+          password: input.password,
+          displayName: input.displayName,
+        });
+        createdAccountId = account._id;
+        accountId = String(account._id);
       }
+    }
+    const username = input.username?.trim() || account?.phone;
+    const displayName = input.displayName?.trim() || account?.displayName;
+    const passwordHash = input.password
+      ? this.hashPassword(input.password)
+      : account?.passwordHash;
+    if (!username || !displayName || !passwordHash) {
+      throw new BadRequestException('USER_FIELDS_REQUIRED');
     }
     const doc: AdminUserEntity = {
       _id: new ObjectId(),
-      username: input.username.trim(),
-      passwordHash: this.hashPassword(input.password),
-      displayName: input.displayName.trim(),
+      username,
+      passwordHash,
+      displayName,
       role: input.role,
       tenantId: payloadTenantId,
       ...(phone ? { phone, accountId } : {}),
@@ -830,12 +1125,13 @@ export class AdminService {
       }
       throw new BadRequestException('USERNAME_ALREADY_EXISTS');
     }
-    return this.toPublicUser(doc);
+    return this.toPublicUser(doc, account ?? undefined);
   }
 
   /**
-   * @description 更新用户
-   * @keyword-en update admin user
+   * @description 更新成员关系；租户管理员不可修改账号密码与昵称，超管修改昵称时同步账号下全部成员快照
+   * @keyword-cn 更新成员, 成员资料只读
+   * @keyword-en update-admin-user, readonly-member-profile
    */
   async updateUser(
     currentUser: AdminUserEntity,
@@ -862,18 +1158,46 @@ export class AdminService {
     if (currentUser.tenantId && target.tenantId !== currentUser.tenantId) {
       throw new ForbiddenException('CROSS_TENANT_FORBIDDEN');
     }
+    const account = target.accountId
+      ? await this.getAccountById(target.accountId)
+      : null;
+    if (currentUser.role !== 'super_admin') {
+      if (typeof input.password === 'string' && input.password.trim()) {
+        throw new ForbiddenException('MEMBER_PROFILE_READONLY');
+      }
+      if (
+        typeof input.displayName === 'string' &&
+        input.displayName.trim() !==
+          (account?.displayName ?? target.displayName)
+      ) {
+        throw new ForbiddenException('MEMBER_PROFILE_READONLY');
+      }
+    }
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (typeof input.displayName === 'string') {
-      updates.displayName = input.displayName.trim();
+    if (
+      currentUser.role === 'super_admin' &&
+      typeof input.displayName === 'string'
+    ) {
+      const displayName = input.displayName.trim();
+      updates.displayName = displayName;
+      if (account && target.accountId) {
+        const now = new Date();
+        await this.accounts.updateOne(
+          { _id: account._id },
+          { $set: { displayName, updatedAt: now } },
+        );
+        await this.users.updateMany(
+          { accountId: target.accountId },
+          { $set: { displayName, updatedAt: now } },
+        );
+        account.displayName = displayName;
+        account.updatedAt = now;
+      }
     }
     if (typeof input.password === 'string' && input.password.trim()) {
-      if (target.accountId && ObjectId.isValid(target.accountId)) {
-        // 账号密码跨租户共享，只允许超管重置，避免租户管理员借此接管该手机号在其他租户的登录
-        if (currentUser.role !== 'super_admin') {
-          throw new ForbiddenException('LINKED_ACCOUNT_PASSWORD_FORBIDDEN');
-        }
+      if (account) {
         await this.accounts.updateOne(
-          { _id: new ObjectId(target.accountId) },
+          { _id: account._id },
           {
             $set: {
               passwordHash: this.hashPassword(input.password),
@@ -899,7 +1223,9 @@ export class AdminService {
       { $set: updates },
       { returnDocument: 'after', includeResultMetadata: true },
     );
-    return res.value ? this.toPublicUser(res.value) : null;
+    return res.value
+      ? this.toPublicUser(res.value, account ?? undefined)
+      : null;
   }
 
   /**
@@ -1567,6 +1893,7 @@ export class AdminService {
       name: string;
       description?: string;
       xhsArticleConcurrencyLimit?: number;
+      douyinGenerationConcurrencyLimit?: number;
       credit?: number;
     },
   ) {
@@ -1613,6 +1940,7 @@ export class AdminService {
       name?: string;
       description?: string;
       xhsArticleConcurrencyLimit?: number;
+      douyinGenerationConcurrencyLimit?: number;
     },
   ): Promise<SassTenantEntity | null> {
     this.assertSuperAdmin(currentUser);
@@ -1626,6 +1954,10 @@ export class AdminService {
     }
     if (typeof input.xhsArticleConcurrencyLimit === 'number') {
       updates.xhsArticleConcurrencyLimit = input.xhsArticleConcurrencyLimit;
+    }
+    if (typeof input.douyinGenerationConcurrencyLimit === 'number') {
+      updates.douyinGenerationConcurrencyLimit =
+        input.douyinGenerationConcurrencyLimit;
     }
     const res = await this.sassTenants.findOneAndUpdate(
       { _id: tenantId },
@@ -2208,7 +2540,8 @@ export class AdminService {
         Buffer.from(body, 'base64url').toString('utf8'),
       ) as AdminLoginTicketPayload;
       if (payload?.typ !== 'login_ticket') return null;
-      if (!Array.isArray(payload.uids) || payload.uids.length === 0) return null;
+      if (!Array.isArray(payload.uids) || payload.uids.length === 0)
+        return null;
       if (typeof payload.exp !== 'number' || payload.exp * 1000 <= Date.now()) {
         return null;
       }
@@ -2252,14 +2585,25 @@ export class AdminService {
   }
 
   /**
-   * @description 转公开用户
-   * @keyword-en transform to public user
+   * @description 转换公开成员视图，并在提供账号时覆盖账号级资料
+   * @keyword-cn 公开成员转换, 账号资料覆盖
+   * @keyword-en public-member-transform, account-profile-overlay
    */
-  private toPublicUser(user: AdminUserEntity): AdminUserPublic {
+  private toPublicUser(
+    user: AdminUserEntity,
+    account?: AdminAccountEntity,
+  ): AdminUserPublic {
     const { passwordHash, ...rest } = user;
     void passwordHash;
     return {
       ...rest,
+      ...(account
+        ? {
+            displayName: account.displayName,
+            phone: account.phone,
+            ...(account.email ? { email: account.email } : {}),
+          }
+        : {}),
       id: String(user._id),
     };
   }
@@ -2796,6 +3140,7 @@ export class AdminService {
    * @param {AdminUserEntity} adminUser - 管理员用户
    * @param {string} aiPromptSupplement - AI补充说明
    * @param {boolean | undefined} enableAiCover - 是否开启 AI 封面
+   * @param {{ xhsArticleGlobal?: number; douyinGenerationGlobal?: number } | undefined} concurrencyLimits - 全平台小红书文章 / 抖音生成总并发上限，仅超管写入
    * @param {{ wechatQrCodeUrl?: string; tip?: string } | undefined} salesContact - 注册页业务员联系方式，仅超管写入平台作用域
    * @returns {Promise<object>} 更新后的平台信息
    * @keyword-cn 更新平台信息, 业务员二维码
@@ -2805,7 +3150,10 @@ export class AdminService {
     adminUser: AdminUserEntity,
     aiPromptSupplement: string,
     enableAiCover?: boolean,
-    xhsArticleGlobalConcurrencyLimit?: number,
+    concurrencyLimits?: {
+      xhsArticleGlobal?: number;
+      douyinGenerationGlobal?: number;
+    },
     salesContact?: { wechatQrCodeUrl?: string; tip?: string },
   ): Promise<object> {
     // 租户管理员只能管理自己的租户，平台管理员可以管理任何租户
@@ -2821,12 +3169,37 @@ export class AdminService {
       tenantId,
       aiPromptSupplement,
       enableAiCover,
-      adminUser.role === 'super_admin'
-        ? xhsArticleGlobalConcurrencyLimit
-        : undefined,
+      adminUser.role === 'super_admin' ? concurrencyLimits : undefined,
       adminUser.role === 'super_admin' ? salesContact : undefined,
     );
     return { platformInfo: info };
+  }
+
+  /**
+   * @description 读取抖音生成（候选脚本、分镜）的全平台与指定租户并发上限，未配置时全平台 6、租户 3。
+   * @keyword-cn 抖音生成并发配置, 租户并发上限
+   * @keyword-en douyin-generation-concurrency, tenant-concurrency-limit
+   * @param {string} [tenantId] - 租户 ID，平台作用域为空。
+   * @returns {Promise<{ globalLimit: number; tenantLimit: number }>} 两级上限。
+   */
+  async getDouyinGenerationConcurrencyLimits(tenantId?: string): Promise<{
+    globalLimit: number;
+    tenantLimit: number;
+  }> {
+    const normalized = String(tenantId ?? '').trim();
+    const [platformInfo, tenant] = await Promise.all([
+      this.sassService.getPlatformInfo(),
+      normalized
+        ? this.sassService.getTenant(normalized)
+        : Promise.resolve(null),
+    ]);
+    return {
+      globalLimit: Math.max(
+        1,
+        platformInfo?.douyinGenerationGlobalConcurrencyLimit ?? 6,
+      ),
+      tenantLimit: Math.max(1, tenant?.douyinGenerationConcurrencyLimit ?? 3),
+    };
   }
 
   /**

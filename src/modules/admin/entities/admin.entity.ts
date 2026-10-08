@@ -46,6 +46,8 @@ export interface AdminAccountEntity {
   _id: ObjectId;
   /** 已短信验证的大陆手机号，全局唯一 */
   phone: string;
+  /** 平台账号邮箱，统一以去首尾空格的小写形式存储 */
+  email?: string;
   passwordHash: string;
   displayName: string;
   /** 自助注销时间。与名下全部 `admin_users` 一同置位，保留期内不释放手机号。 */

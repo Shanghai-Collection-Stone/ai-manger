@@ -10,12 +10,7 @@ export interface SassDatabaseLogEntity {
   tenantId: string;
   keyId?: string;
   operation:
-    | 'insert'
-    | 'patch'
-    | 'list'
-    | 'find_one'
-    | 'update_one'
-    | 'delete_one';
+    'insert' | 'patch' | 'list' | 'find_one' | 'update_one' | 'delete_one';
   collectionName: string;
   dataIds?: string[];
   request: Record<string, unknown>;

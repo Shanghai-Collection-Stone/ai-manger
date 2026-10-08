@@ -9,6 +9,24 @@ import { existsSync } from 'fs';
 import { resolveMongoUri } from './shared/mongo/resolve-mongo-uri';
 import { MicroserviceOptions } from '@nestjs/microservices';
 import { createSuperClawGrpcOptions } from './modules/super-claw/super-claw-grpc.options.js';
+import cluster from 'node:cluster';
+import {
+  exitWhenPrimaryGone,
+  runClusterPrimary,
+} from './modules/cluster-runtime/services/cluster-primary.js';
+import {
+  isClusterWorker,
+  isLeaderProcess,
+  readClusterWorkerCount,
+} from './modules/cluster-runtime/services/cluster-role.js';
+import { createGenerationQueuePrimaryHandler } from './modules/generation-queue/services/generation-queue-primary.js';
+import {
+  applySharpMemoryLimits,
+  createMemoryWatchHandler,
+  raiseOwnOomScore,
+  resolveMemoryPlan,
+  startMemoryReporting,
+} from './modules/cluster-runtime/services/cluster-memory.js';
 
 /**
  * @description Run pending Mongo migrations before the Nest app starts.
@@ -56,19 +74,32 @@ async function runMigrations() {
 
 /**
  * @description Bootstrap the Nest app, 50 MB JSON/form parsing, static pages, redirects, CORS, and raw-body capture for webhooks.
+ *   多进程时每个 worker 各跑一份：迁移已由主进程跑过，SuperClaw gRPC 只在 leader 进程上监听；
+ *   worker 调高自身 OOM 分值并上报内存。两种模式都限制 sharp 的线程与缓存。
  * @keyword-en app-bootstrap, raw-body-webhooks
  * @keyword-cn 应用启动, webhook原始请求体
  */
 async function bootstrap() {
   enableProxyFromEnv();
 
-  // Run migrations before starting the app
-  await runMigrations();
+  if (isClusterWorker()) {
+    exitWhenPrimaryGone();
+    // 内存耗尽时让内核优先杀 worker（主进程会重拉），并定时向主进程上报内存
+    raiseOwnOomScore();
+    startMemoryReporting();
+  } else {
+    // Run migrations before starting the app
+    await runMigrations();
+  }
+  await applySharpMemoryLimits();
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
-  if (process.env.SUPER_CLAW_GRPC_ENABLED?.trim().toLowerCase() !== 'false') {
+  if (
+    isLeaderProcess() &&
+    process.env.SUPER_CLAW_GRPC_ENABLED?.trim().toLowerCase() !== 'false'
+  ) {
     app.connectMicroservice<MicroserviceOptions>(createSuperClawGrpcOptions(), {
       inheritAppConfig: true,
     });
@@ -121,4 +152,38 @@ async function bootstrap() {
   await app.listen(process.env.PORT ?? 3011);
   console.log(`Application is running on: ${await app.getUrl()}`);
 }
-void bootstrap();
+
+/**
+ * @description 进程入口：`CLUSTER_WORKERS` 大于 1 时作为主进程先跑一次迁移，再派生 worker（共享 HTTP 端口），
+ *   主进程持有生成排队登记簿；否则按单进程直接启动应用。
+ * @keyword-en cluster-entry, multi-process-bootstrap
+ * @keyword-cn 多进程入口, 进程启动分流
+ */
+function main() {
+  const workers = readClusterWorkerCount();
+  if (workers > 1 && cluster.isPrimary) {
+    enableProxyFromEnv();
+    // 按内存预算给每个 worker 定堆上限，预算不够时少开几个 worker
+    const plan = resolveMemoryPlan(workers);
+    console.log(
+      `[cluster-memory] 预算 ${plan.budgetMb}MB（来源 ${plan.source}），worker ${plan.workers}/${plan.requestedWorkers} 个，每个堆上限 ${plan.heapMbPerWorker}MB`,
+    );
+    if (plan.workers < plan.requestedWorkers) {
+      console.warn(
+        `[cluster-memory] 内存预算不够开 ${plan.requestedWorkers} 个 worker，已减到 ${plan.workers} 个；可调大 CLUSTER_MEMORY_BUDGET_MB 或给容器加内存`,
+      );
+    }
+    void runClusterPrimary({
+      workers: plan.workers,
+      workerExecArgv: [`--max-old-space-size=${plan.heapMbPerWorker}`],
+      beforeFork: runMigrations,
+      handlers: [
+        createGenerationQueuePrimaryHandler(),
+        createMemoryWatchHandler(plan),
+      ],
+    });
+    return;
+  }
+  void bootstrap();
+}
+main();

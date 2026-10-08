@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsEmail,
   IsIn,
   IsInt,
   IsMongoId,
@@ -87,7 +88,7 @@ export class AdminLoginSelectDto {
 }
 
 /**
- * @description 自助注册请求体：以已验证手机号为身份固定注册进默认租户；tenantName 仅为兼容旧客户端保留且被忽略
+ * @description 自助注册请求体：以已验证手机号为身份固定注册进默认租户，邮箱必填且须先通过邮箱验证码，存入平台账号；tenantName 仅为兼容旧客户端保留且被忽略
  * @keyword-cn 自助注册请求体, 默认租户
  * @keyword-en admin-register-dto, default-tenant
  */
@@ -111,6 +112,11 @@ export class AdminRegisterDto {
   @MaxLength(60)
   displayName?: string;
 
+  /** 需先通过邮箱验证码校验（@RequireEmailCode），注册成功邮件发到这里 */
+  @IsEmail({}, { message: 'EMAIL_INVALID' })
+  @MaxLength(254)
+  email!: string;
+
   @IsString()
   @MinLength(6)
   @MaxLength(120)
@@ -118,24 +124,28 @@ export class AdminRegisterDto {
 }
 
 /**
- * @description 创建后台用户请求体
- * @keyword-en create admin user dto
+ * @description 创建成员请求体，账号资料字段可选并由服务层按操作者角色校验
+ * @keyword-cn 创建成员请求体, 可选账号字段
+ * @keyword-en create-admin-user-dto, optional-account-fields
  */
 export class CreateAdminUserDto {
+  @IsOptional()
   @IsString()
   @MinLength(3)
   @MaxLength(60)
-  username!: string;
+  username?: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(2)
   @MaxLength(60)
-  displayName!: string;
+  displayName?: string;
 
+  @IsOptional()
   @IsString()
   @MinLength(6)
   @MaxLength(120)
-  password!: string;
+  password?: string;
 
   @IsIn(['super_admin', 'tenant_admin', 'operator'])
   role!: AdminUserRole;
@@ -369,6 +379,12 @@ export class CreateTenantByAdminDto {
   xhsArticleConcurrencyLimit?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  douyinGenerationConcurrencyLimit?: number;
+
+  @IsOptional()
   @IsNumber({ maxDecimalPlaces: 6 })
   @Min(0)
   @Max(1_000_000_000)
@@ -396,6 +412,12 @@ export class UpdateTenantByAdminDto {
   @Min(1)
   @Max(50)
   xhsArticleConcurrencyLimit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  douyinGenerationConcurrencyLimit?: number;
 }
 
 /**
@@ -672,6 +694,12 @@ export class UpsertPlatformInfoDto {
   @Min(1)
   @Max(100)
   xhsArticleGlobalConcurrencyLimit?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  douyinGenerationGlobalConcurrencyLimit?: number;
 
   /** 注册页业务员微信二维码：http(s) 地址或 data:image base64，空串表示清除 */
   @IsOptional()

@@ -41,6 +41,7 @@ export class ArticleService {
   async ensureIndexes(): Promise<void> {
     await this.articles.createIndex({ id: 1 }, { unique: true });
     await this.articles.createIndex({ libraryId: 1, createdAt: 1 });
+    await this.articles.createIndex({ libraryId: 1, 'meta.NoteId': 1 });
     await this.articles.createIndex({ source: 1, publishStatus: 1 });
     await this.articles.createIndex({
       tenantId: 1,

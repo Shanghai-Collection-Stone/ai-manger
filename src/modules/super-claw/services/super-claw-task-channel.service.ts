@@ -12,8 +12,29 @@ import type {
   SuperClawTaskDispatch,
 } from '../entities/super-claw-grpc.entity.js';
 import type { WorkspaceEntity } from '../../workspace/entities/workspace.entity.js';
+import {
+  onClusterMessage,
+  sendClusterMessage,
+} from '../../cluster-runtime/services/cluster-ipc.js';
+import {
+  isClusterWorker,
+  isLeaderProcess,
+} from '../../cluster-runtime/services/cluster-role.js';
 import { SuperClawGatewayService } from './super-claw-gateway.service.js';
 import { SuperClawService } from './super-claw.service.js';
+
+/**
+ * @description 非 leader 进程转给 leader 执行的通道通知消息名。
+ * @keyword-cn 通道通知转发消息, 跨进程通知
+ * @keyword-en channel-notify-message, cross-process-notify
+ */
+export const SUPER_CLAW_NOTIFY_MESSAGE = 'super-claw.channel.notify';
+
+/** 经主进程转发给 leader 的通道通知 */
+type SuperClawRelayedNotify =
+  | { method: 'notifyTenant'; tenantId: string }
+  | { method: 'notifyWorkspace'; workspaceId: string }
+  | { method: 'notifyWorkspaceProvision'; workspace: WorkspaceEntity };
 
 const ACK_TIMEOUT_SECONDS = 15;
 const TASK_LEASE_SECONDS = 120;
@@ -82,16 +103,66 @@ export class SuperClawTaskChannelService
   ) {}
 
   /**
-   * @description 启动空闲通道巡检，兜底断线保留租约到期、通知丢失等无人唤醒的推送时机。
+   * @description 启动空闲通道巡检，兜底断线保留租约到期、通知丢失等无人唤醒的推送时机；
+   *   多进程时同时订阅其他进程转来的通道通知（gRPC 通道只在 leader 进程上）。
    * @keyword-cn 启动空闲巡检, 兜底唤醒
    * @keyword-en start-idle-sweep, fallback-wakeup
    */
   onModuleInit(): void {
+    // gRPC 通道只开在 leader 进程；其他进程的通知经主进程转发过来
+    onClusterMessage(SUPER_CLAW_NOTIFY_MESSAGE, (payload) => {
+      void this.handleRelayedNotify(payload as SuperClawRelayedNotify);
+    });
     this.sweepTimer = setInterval(
       () => this.sweepIdleChannels(),
       IDLE_SWEEP_SECONDS * 1000,
     );
     this.sweepTimer.unref?.();
+  }
+
+  /**
+   * @description 多进程时本进程不持有 gRPC 通道（非 leader），需要把通知转给 leader。
+   * @keyword-cn 判断转发通知, 非主工作进程
+   * @keyword-en should-relay-notify, follower-process
+   */
+  private shouldRelay(): boolean {
+    return isClusterWorker() && !isLeaderProcess();
+  }
+
+  /**
+   * @description 把通知经主进程转给 leader 进程执行；返回 true 表示已转出（是否在线由 leader 判断）。
+   * @keyword-cn 转发通道通知, 跨进程通知
+   * @keyword-en relay-channel-notify, cross-process-notify
+   */
+  private relayNotify(notify: SuperClawRelayedNotify): boolean {
+    return sendClusterMessage({
+      type: SUPER_CLAW_NOTIFY_MESSAGE,
+      target: 'leader',
+      payload: notify,
+    });
+  }
+
+  /**
+   * @description leader 进程执行其他进程转来的通知；工作区实体经 JSON 传来，下发时只用到可序列化字段。
+   * @keyword-cn 执行转发通知, 跨进程通知
+   * @keyword-en handle-relayed-notify, cross-process-notify
+   */
+  private async handleRelayedNotify(
+    notify: SuperClawRelayedNotify,
+  ): Promise<void> {
+    try {
+      if (notify.method === 'notifyTenant') {
+        await this.notifyTenant(notify.tenantId);
+      } else if (notify.method === 'notifyWorkspace') {
+        await this.notifyWorkspace(notify.workspaceId);
+      } else {
+        await this.notifyWorkspaceProvision(notify.workspace);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[relay] ${notify.method} 失败，等待空闲巡检兜底: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -125,6 +196,12 @@ export class SuperClawTaskChannelService
    * @keyword-en notify-workspace-provision, offline-provision-replay
    */
   async notifyWorkspaceProvision(workspace: WorkspaceEntity): Promise<boolean> {
+    if (this.shouldRelay()) {
+      return this.relayNotify({
+        method: 'notifyWorkspaceProvision',
+        workspace,
+      });
+    }
     const state = this.channels.get(workspace.superClawId);
     if (!state || state.closed) return false;
     state.serial = state.serial
@@ -140,6 +217,9 @@ export class SuperClawTaskChannelService
    * @keyword-en notify-tenant-task, event-driven-push
    */
   async notifyTenant(tenantId: string): Promise<boolean> {
+    if (this.shouldRelay()) {
+      return this.relayNotify({ method: 'notifyTenant', tenantId });
+    }
     const superClawId =
       await this.superClawService.getAssignedSuperClawId(tenantId);
     const state = superClawId ? this.channels.get(superClawId) : undefined;
@@ -157,6 +237,9 @@ export class SuperClawTaskChannelService
    * @keyword-en notify-workspace-task, platform-task-push
    */
   async notifyWorkspace(workspaceId: string): Promise<boolean> {
+    if (this.shouldRelay()) {
+      return this.relayNotify({ method: 'notifyWorkspace', workspaceId });
+    }
     const superClawId =
       await this.superClawService.getWorkspaceSuperClawId(workspaceId);
     const state = superClawId ? this.channels.get(superClawId) : undefined;

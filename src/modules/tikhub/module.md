@@ -10,18 +10,21 @@ TikHub（`https://api.tikhub.io`，国内直连域名 `https://api.tikhub.dev`�
 
 采集侧当前只做小红书，且**只按 NoteId 取数**，与 SuperClaw 路径的抓取对象口径一致。每篇笔记两次调用：`app_v2/get_image_note_detail` 取互动数据（图文/视频通用，只需 note_id），`app_v2/get_note_comments` 按点赞排序取热门评论快照。相邻调用间隔 300ms 规避上游限频。单篇失败不中断整批，失败原因逐条带回，由调用方（`xhs-topic-data` 的抓取运行）判定这次是 `done` 还是 `failed`。评论拿不到只降级为空评论，不让整篇笔记的互动指标作废。
 
+抖音侧**只按作品 ID（aweme_id，纯数字）取数**，消费方是 `douyin-data` 的数据监控：每个作品先调 `douyin/app/v3/fetch_one_video`，失败或解析不到再调 `douyin/web/fetch_one_video`，两路都失败才抛出可读原因。互动数据取作品对象的 `statistics`（点赞 `digg_count`、评论、收藏、分享、播放），标题取 `desc`，封面取 `video.cover.url_list`。抖音对非作者隐藏播放量（返回 0），所以「播放为 0 而其它互动大于 0」时播放量留空。
+
 上游 JSON 的字段名在 App/Web/蒲公英几套接口之间并不一致（`liked_count` / `like_count` / `likeNum`、`collected_count` / `favNum` …），且官方 OpenAPI 只声明了通用 `ResponseModel`，没有逐字段 schema。所以归一化不写死路径，而是**深度遍历响应、按字段特征认节点**：命中最多计数字段组的那个对象即互动数据所在。计数值支持 `1234`、`"1,234"`、`"1.2万"`、`"10+"` 几种形态。**取不到的指标一律留 undefined 而不是填 0**，看板据此显示「待采集」，这样「真的是 0」和「还没采到」不会混成一个显示。
 
 本模块不出控制器：配置入口挂在小红书数据看板的采集设置里（`GET/PUT /api/xhs-topic-data/crawl-settings` 与 `POST /api/xhs-topic-data/crawl-settings/test-tikhub`），保持配置页「一个页面一组接口」。
 
 ## 文件清单 (File List)
 
-- `tikhub.module.ts` — NestJS 模块入口，装配配置、加解密、HTTP 客户端与小红书采集服务。
+- `tikhub.module.ts` — NestJS 模块入口，装配配置、加解密、HTTP 客户端与小红书、抖音采集服务。
 - `entities/tikhub.entity.ts` — 配置作用域、密钥信封、配置文档与视图、自检结果、归一化笔记数据类型定义。
 - `services/tikhub-crypto.service.ts` — API Key 的 AES-256-GCM 加解密与无密钥时的明文降级。
 - `services/tikhub-config.service.ts` — API Key 与 API 域名的读写、掩码视图、生效值解析与域名白名单。
 - `services/tikhub-client.service.ts` — TikHub HTTP 调用、统一判错与账户连通性自检。
 - `services/tikhub-xhs.service.ts` — 按 NoteId 批量采集小红书笔记并把上游字段归一化成看板指标。
+- `services/tikhub-douyin.service.ts` — 按作品 ID 采集抖音作品互动数据（App / Web 双通道回退）并归一化成看板指标。
 
 ## 函数清单 (Function List)
 
@@ -29,7 +32,7 @@ TikHub（`https://api.tikhub.io`，国内直连域名 `https://api.tikhub.dev`�
 - `TikhubCryptoService.encrypt(value)` — 把 API Key 明文封装成落库信封，无密钥时降级明文信封 | keywords: 加密密钥, 生成信封, encrypt-api-key, build-envelope
 - `TikhubCryptoService.decrypt(envelope?)` — 从信封还原 API Key，解不开时返回空串而不抛异常 | keywords: 解密密钥, 容错解包, decrypt-api-key, tolerant-unwrap
 - `TikhubCryptoService.resolveKey()` — 解析 32 字节密钥，优先 TIKHUB_ENCRYPTION_KEY 回落浏览器认证密钥 | keywords: 解析加密密钥, 环境变量, resolve-encryption-key, environment-key
-- `TikhubConfigService.ensureIndexes()` — 建立配置集合索引，一个作用域只保留一行 | keywords: 配置索引, 作用域唯一, config-indexes, unique-scope
+- `TikhubConfigService.ensureIndexes()` — 建立作用域唯一索引与同租户配置回落时间线索引 | keywords: 配置索引, 作用域唯一, config-indexes, unique-scope
 - `TikhubConfigService.getView(scope)` — 读取配置页视图，只回掩码后的 Key 尾号 | keywords: 读取配置视图, 密钥掩码, read-config-view, masked-api-key
 - `TikhubConfigService.save(scope,input)` — 保存 API Key 与域名，空串清空、不传保持不变 | keywords: 保存配置, 密钥更新, save-config, update-api-key
 - `TikhubConfigService.resolveApiKey(scope)` — 解析采集实际使用的 Key，按作用域到环境变量逐级回落 | keywords: 解析生效密钥, 租户回落, resolve-effective-key, tenant-fallback
@@ -41,6 +44,8 @@ TikHub（`https://api.tikhub.io`，国内直连域名 `https://api.tikhub.dev`�
 - `TikhubClientService.probe(options)` — 用账户信息接口自检 API Key 是否可用 | keywords: 连通性自检, 密钥校验, connectivity-probe, api-key-validation
 - `TikhubClientService.fetchNoteDetail(noteId,options)` — 拉取小红书笔记详情（图文/视频通用） | keywords: 笔记详情, 互动数据, note-detail, interaction-data
 - `TikhubClientService.fetchNoteComments(noteId,options)` — 按点赞排序拉取笔记评论首屏 | keywords: 笔记评论, 热门排序, note-comments, hot-sort
+- `TikhubClientService.fetchDouyinVideoDetail(awemeId,options)` — 按 aweme_id 拉取抖音作品详情（App V3） | keywords: 抖音作品详情, 互动数据, douyin-video-detail, interaction-data
+- `TikhubClientService.fetchDouyinWebVideoDetail(awemeId,options)` — 按 aweme_id 走 Web 接口拉取抖音作品详情，作备用通道 | keywords: 抖音作品详情备用, 网页接口, douyin-web-video-detail, web-endpoint
 - `TikhubClientService.request(path,query,options)` — 发起 GET 调用并统一判错，日志不带 API Key | keywords: 发起请求, 统一判错, send-request, unified-error
 - `TikhubClientService.readBalance(payload)` — 从账户信息响应里尽量读出余额 | keywords: 读取余额, 字段容错, read-balance, tolerant-field
 - `TikhubClientService.readErrorMessage(error)` — 把 fetch/超时异常压成一行可读文本 | keywords: 错误可读化, 失败原因, readable-error, failure-reason
@@ -59,6 +64,16 @@ TikHub（`https://api.tikhub.io`，国内直连域名 `https://api.tikhub.dev`�
 - `TikhubXhsService.parseCount(value)` — 解析 `1234`/`"1,234"`/`"1.2万"`/`"10+"` 几种计数形态 | keywords: 解析计数, 万亿单位, parse-count, chinese-unit
 - `TikhubXhsService.readString(node,keys)` — 在候选字段名里取第一个非空字符串 | keywords: 取字符串字段, 候选字段, pick-string-field, candidate-keys
 - `TikhubXhsService.delay(ms)` — 相邻两次上游调用之间的固定间隔 | keywords: 调用间隔, 限频规避, call-delay, rate-limit-guard
+- `TikhubDouyinService.isReady(scope)` — 当前作用域是否具备抖音直采条件（有可用 API Key） | keywords: 抖音采集可用性, 密钥就绪, douyin-collector-availability, api-key-ready
+- `TikhubDouyinService.collectVideo(awemeId,scope)` — 采集一个抖音作品，App 失败回退 Web，两路都失败抛出可读原因 | keywords: 采集抖音作品, 双通道回退, collect-douyin-video, dual-endpoint-fallback
+- `TikhubDouyinService.normalizeVideoDetail(payload,awemeId)` — 把作品详情归一化成看板指标，隐藏的播放量留空 | keywords: 归一化抖音作品详情, 指标提取, normalize-douyin-video-detail, metric-extraction
+- `TikhubDouyinService.findAwemeNode(payload,awemeId)` — 找出 aweme_id 一致且带 statistics 的作品对象 | keywords: 定位作品节点, 作品ID匹配, locate-aweme-node, aweme-id-match
+- `TikhubDouyinService.findStatisticsNode(payload)` — 没有作品对象时按计数字段特征定位互动数据 | keywords: 定位互动节点, 深度遍历, locate-interaction-node, deep-traverse
+- `TikhubDouyinService.readCoverUrl(aweme)` — 依次从 cover / origin_cover / dynamic_cover 读封面地址 | keywords: 读取作品封面, 封面地址, read-video-cover, cover-url
+- `TikhubDouyinService.walk(payload)` — 广度遍历响应里的全部对象节点 | keywords: 遍历对象节点, 广度优先, walk-object-nodes, breadth-first
+- `TikhubDouyinService.pickCount(node,keys)` — 在候选字段名里取第一个可解析的计数值 | keywords: 取计数字段, 候选字段, pick-count-field, candidate-keys
+- `TikhubDouyinService.parseCount(value)` — 解析数字与 `"1,234"`/`"1.2万"`/`"1.2w"` 计数形态 | keywords: 解析计数, 万亿单位, parse-count, chinese-unit
+- `TikhubDouyinService.readString(node,keys)` — 在候选字段名里取第一个非空字符串 | keywords: 取字符串字段, 候选字段, pick-string-field, candidate-keys
 
 ## 关键词索引 (Keyword Index)
 
@@ -95,6 +110,12 @@ TikHub（`https://api.tikhub.io`，国内直连域名 `https://api.tikhub.dev`�
 | 万亿单位         | chinese-unit                |
 | 采集可用性       | collector-availability      |
 | 限频规避         | rate-limit-guard            |
+| TikHub抖音采集   | tikhub-douyin-collect       |
+| 抖音作品详情     | douyin-video-detail         |
+| 采集抖音作品     | collect-douyin-video        |
+| 双通道回退       | dual-endpoint-fallback      |
+| 定位作品节点     | locate-aweme-node           |
+| 读取作品封面     | read-video-cover            |
 
 ## 类型导出 (Type Exports)
 
@@ -105,18 +126,19 @@ TikHub（`https://api.tikhub.io`，国内直连域名 `https://api.tikhub.dev`�
 - `TikhubProbeResult` — 连通性自检结果，含 `ok` / `message` / `balance`
 - `TikhubXhsNoteStat` — 归一化后的单篇笔记互动数据；`viewCount` / `shareCount` 取不到时省略
 - `TikhubXhsCollectResult` — 一批笔记的采集结果，成功项与逐条失败原因分开
+- `TikhubDouyinVideoStat` — 归一化后的单个抖音作品互动数据；`collectCount` / `shareCount` / `playCount` 取不到时省略
 - `TIKHUB_DEFAULT_BASE_URL` — 默认 API 域名（`https://api.tikhub.io`） | keywords: 默认域名, 接口地址, default-base-url, api-endpoint
 - `TIKHUB_ALLOWED_BASE_URLS` — 允许写入的 API 域名白名单 | keywords: 域名白名单, 防止外发, base-url-allowlist, exfiltration-guard
 
 ## 模块功能描述 (Module Description)
 
-本模块不注册任何 HTTP 路由与事件/Hook，因此没有入口鉴权声明；对外只导出 `TikhubConfigService` 与 `TikhubXhsService` 两个服务，消费方是 `xhs-topic-data`：
+本模块不注册任何 HTTP 路由与事件/Hook，因此没有入口鉴权声明；对外导出 `TikhubConfigService`、`TikhubXhsService` 与 `TikhubDouyinService`，消费方是 `xhs-topic-data` 与 `douyin-data`（抖音数据监控与小红书共用同一份 TikHub Key，不另设配置页）：
 
 - 配置页读写走 `GET/PUT /api/xhs-topic-data/crawl-settings`（权限 `read/update XhsTopic`），请求体字段 `channel` / `tikhubApiKey` / `tikhubBaseUrl`；`tikhubApiKey` 传空串表示清空，不传表示保持不变，所以配置页不必回填明文。
 - 连通性自检走 `POST /api/xhs-topic-data/crawl-settings/test-tikhub`（权限 `update XhsTopic`）。
 - 采集调度切到 `channel=tikhub` 后，`XhsTopicCrawlService.createCrawlTask` 直接调 `collectNotes`，不再创建 Todo、不再下发 SuperClaw 节点。
 
-新增集合：`tikhub_configs`（`tenantId + userId` 唯一索引）。
+新增集合：`tikhub_configs`（`tenantId + userId` 唯一索引；`tenantId + updatedAt` 支持同租户配置回落）。
 
 环境变量：
 

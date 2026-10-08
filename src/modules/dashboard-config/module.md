@@ -250,6 +250,10 @@ Authorization: Bearer <admin-token>
 
 ### 索引
 
+`DashboardConfigService.ensureIndexes()` — 建立看板作用域唯一索引、全局/租户更新时间线与启用状态索引 | keywords: dashboard-config-indexes, tenant-timeline-index
+
+租户管理列表额外使用 `{ tenantId: 1, updatedAt: -1 }`，使租户过滤与更新时间倒序由同一索引完成；全局列表继续使用 `{ updatedAt: -1 }`。
+
 ```javascript
 // 唯一索引：确保 (dashboardCode, tenantId) 组合唯一
 db.dashboard_config_mappings.createIndex(
@@ -346,7 +350,7 @@ async getScopedConfig(...) {
 
 ### 2. 索引优化
 
-确保 `(dashboardCode, tenantId)` 上有唯一索引，查询效率 O(1)。
+确保 `(dashboardCode, tenantId)` 上有唯一索引；租户列表使用 `(tenantId, updatedAt)` 组合索引。
 
 ### 3. 配置文件大小
 
@@ -630,4 +634,3 @@ async health() {
 **最后更新**: 2025-03-05  
 **维护者**: AI MVP Team  
 **状态**: ✅ 生产就绪
-

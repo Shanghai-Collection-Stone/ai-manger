@@ -19,6 +19,7 @@ import { randomUUID } from 'crypto';
 import type { Request } from 'express';
 import { GalleryZipImportService } from '../services/gallery-zip-import.service.js';
 import { AdminService } from '../../../admin/services/admin.service.js';
+import { normalizeGalleryUploadFilename } from '../../gallery-upload-filename.js';
 
 /** @description 1GB 单包上限 */
 const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
@@ -54,7 +55,8 @@ export class GalleryZipImportController {
 
   /**
    * @description 上传 zip 包并入队列(立即返回 jobId,实际解压在后台)
-   * @keyword-en upload zip and enqueue background import job
+   * @keyword-cn ZIP上传, 文件名修复
+   * @keyword-en zip-upload, filename-repair
    */
   @Post('upload')
   @UseInterceptors(
@@ -107,6 +109,7 @@ export class GalleryZipImportController {
     @Req() req: Request,
   ): Promise<{ job: Record<string, unknown> }> {
     if (!file) throw new BadRequestException('未上传 ZIP 文件');
+    file.originalname = normalizeGalleryUploadFilename(file.originalname);
     const scope = await this.resolveAuthScope(req);
     const userId = String(body?.userId ?? '').trim() || scope.userId;
     if (!userId) throw new BadRequestException('userId is required');

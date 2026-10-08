@@ -62,7 +62,7 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
 
 - **关键词**: service, mongo, schema, tenant, api-key, data isolation, dedupe, batch insert, log, objectid, index migration
 - **函数**:
-  - `ensureIndexes`: 初始化索引/ensure indexes
+  - `ensureIndexes()` — 建立 schema/租户更新时间线、API Key 时间线及日志查询索引 | keywords: SaaS索引, 租户时间线, sass-indexes, tenant-timeline
   - `dropLegacyIdIndex`: 清理历史id索引/drop legacy id index
   - `toObjectId`: 转换并校验ObjectId/convert and validate object id
   - `resolveTenantTarget`: 解析schema与集合目标/resolve target
@@ -93,7 +93,7 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `syncUsagesToSchema`: 同步订单使用入库/sync usages to schema
   - `syncRefundsToSchema`: 同步订单退单入库/sync refunds to schema
   - `getPlatformInfo`: 获取租户平台AI配置/get platform info
-  - `upsertPlatformInfo(tenantId,aiPromptSupplement,enableAiCover?,globalLimit?,salesContact?)` — 更新租户平台AI配置（含enableAiCover、平台文章总并发与注册页业务员二维码/提示语） | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
+  - `upsertPlatformInfo(tenantId,aiPromptSupplement,enableAiCover?,concurrencyLimits?,salesContact?)` — 更新租户平台AI配置（含enableAiCover、平台文章 / 抖音生成总并发 `{ xhsArticleGlobal, douyinGenerationGlobal }` 与注册页业务员二维码/提示语） | keywords: 更新平台信息, 业务员二维码, upsert platform info, sales-wechat-qrcode
 
 ### sass-tenant-auth.middleware.ts
 
@@ -125,7 +125,7 @@ Schema实体定义。
 
 ### sass-tenant.entity.ts
 
-租户实体定义；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，`xhsArticleConcurrencyLimit` 保存文章生成租户并发上限。
+租户实体定义；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，`xhsArticleConcurrencyLimit` 保存文章生成租户并发上限，`douyinGenerationConcurrencyLimit` 保存抖音生成（候选脚本、分镜）租户并发上限；平台信息的 `xhsArticleGlobalConcurrencyLimit` / `douyinGenerationGlobalConcurrencyLimit` 分别是两条生成通道的全平台上限。
 
 - **关键词**: entity, tenant, tenant-node-assignment, workspace-count
 

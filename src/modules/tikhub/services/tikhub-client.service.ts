@@ -7,6 +7,12 @@ const XHS_NOTE_DETAIL_PATH = '/api/v1/xiaohongshu/app_v2/get_image_note_detail';
 /** @type {string} 小红书 App V2 笔记评论列表。 */
 const XHS_NOTE_COMMENTS_PATH = '/api/v1/xiaohongshu/app_v2/get_note_comments';
 
+/** @type {string} 抖音 App V3 单个作品详情（按 aweme_id，含 statistics 互动数据）。 */
+const DOUYIN_APP_VIDEO_PATH = '/api/v1/douyin/app/v3/fetch_one_video';
+
+/** @type {string} 抖音 Web 单个作品详情，App 接口失败时的备用通道。 */
+const DOUYIN_WEB_VIDEO_PATH = '/api/v1/douyin/web/fetch_one_video';
+
 /** @type {string} TikHub 账户信息，用作 API Key 连通性自检（不产生业务计费）。 */
 const TIKHUB_USER_INFO_PATH = '/api/v1/tikhub/user/get_user_info';
 
@@ -88,6 +94,36 @@ export class TikhubClientService {
       { note_id: noteId, sort_strategy: 'like_count', index: '0' },
       options,
     );
+  }
+
+  /**
+   * @description 按 aweme_id 拉取一个抖音作品详情（App V3 接口），响应里带 `statistics` 互动数据。
+   * @keyword-cn 抖音作品详情, 互动数据
+   * @keyword-en douyin-video-detail, interaction-data
+   * @param awemeId 抖音作品 ID（纯数字）。
+   * @param options 凭证与域名。
+   * @returns {Promise<unknown>} TikHub 原始响应体。
+   */
+  async fetchDouyinVideoDetail(
+    awemeId: string,
+    options: TikhubCallOptions,
+  ): Promise<unknown> {
+    return this.request(DOUYIN_APP_VIDEO_PATH, { aweme_id: awemeId }, options);
+  }
+
+  /**
+   * @description 按 aweme_id 走 Web 接口拉取抖音作品详情，App 接口失败或拿不到数据时备用。
+   * @keyword-cn 抖音作品详情备用, 网页接口
+   * @keyword-en douyin-web-video-detail, web-endpoint
+   * @param awemeId 抖音作品 ID（纯数字）。
+   * @param options 凭证与域名。
+   * @returns {Promise<unknown>} TikHub 原始响应体。
+   */
+  async fetchDouyinWebVideoDetail(
+    awemeId: string,
+    options: TikhubCallOptions,
+  ): Promise<unknown> {
+    return this.request(DOUYIN_WEB_VIDEO_PATH, { aweme_id: awemeId }, options);
   }
 
   /**

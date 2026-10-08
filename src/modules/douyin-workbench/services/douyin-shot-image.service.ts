@@ -3,6 +3,7 @@ import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryAiImageService } from '../../gallery/services/gallery-ai-image.service.js';
 import {
   DOUYIN_SCRIPT_STYLES,
+  type DouyinFaceMaskStyle,
   type DouyinStoryboardShot,
   type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
@@ -32,7 +33,7 @@ export const DOUYIN_SHOT_IMAGE_SIZE = '1024x1792';
 export const DOUYIN_SHOT_IMAGE_TAG = '抖音分镜';
 
 /**
- * @description 卡通换头固定用 3D 皮克斯风：圆润的立体角色头跟实拍场景的光线质感最容易融，
+ * @description 3D 卡通大头的头像风格：圆润的立体角色头跟实拍场景的光线质感最容易融，
  *   不会像二次元平涂那样一眼看出是后期贴上去的。
  * @keyword-cn 卡通大头风格, 皮克斯风
  * @keyword-en cartoon-head-style, pixar-style
@@ -41,20 +42,61 @@ export const DOUYIN_SHOT_FACE_MASK_STYLE =
   '圆润讨喜的 3D 皮克斯 / 迪士尼动画电影角色头像，柔和的次表面散射皮肤质感，眼睛偏大，头部比例略大于真人（Q 版但不夸张）';
 
 /**
- * @description 拼出「把真人换成卡通大头」的图像编辑提示词：这是一次定点编辑，不是重画一张，
- *   所以反复强调除头部以外的像素都要保持原样——构图、衣着、光线一动，画面就跟同条视频的其他镜头对不上了。
- * @keyword-cn 卡通换头提示词, 定点编辑
+ * @description 人像处理风格的中文名，用于图库命名与接口说明，与前端风格弹窗一致。
+ * @keyword-cn 人像处理风格名称
+ * @keyword-en face-mask-style-labels
+ */
+export const DOUYIN_FACE_MASK_STYLE_LABELS: Record<
+  DouyinFaceMaskStyle,
+  string
+> = {
+  'cartoon-3d': '3D 卡通大头',
+  'anime-bighead': '动画大头',
+  anthropomorphic: '拟人风格',
+  deidentify: 'AI 去除真人特征',
+};
+
+/** @type {string[]} 所有风格共用的收尾要求：只改人，不改场景。 */
+const FACE_MASK_KEEP_SCENE = [
+  '其余部分必须原样保留：构图、背景、门店与陈设、身体姿态、手部动作、光线方向与色温都不要改动；不要增减人数，不要移动任何人的位置。',
+  '画面中不要出现任何文字、字幕、水印、logo 或拼贴边框。',
+];
+
+/**
+ * @description 拼出分镜人像处理的图像编辑提示词：这是一次定点编辑，不是重画一张，所以每种风格都强调除人物以外的像素保持原样——
+ *   构图、衣着、光线一动，画面就跟同条视频的其他镜头对不上了。
+ *   - `cartoon-3d`：头部换成 3D 皮克斯风卡通大头；
+ *   - `anime-bighead`：头部换成二维动画风 Q 版大头，线条与上色贴合实拍光影；
+ *   - `anthropomorphic`：人物整体换成穿着原衣服、保持原动作的拟人化动物角色；
+ *   - `deidentify`：保持写实摄影风格，把面孔重绘成不存在的陌生人，去掉能认出原人物的五官与身份细节。
+ * @keyword-cn 人像处理提示词, 定点编辑
  * @keyword-en face-mask-prompt, targeted-edit
+ * @param {DouyinFaceMaskStyle} [style] 处理风格，缺省 3D 卡通大头。
  * @returns {string} 提示词。
  */
-export function buildShotFaceMaskPrompt(): string {
-  return [
-    '以所给底图为准，这是一条抖音竖屏短视频里的一个镜头画面。',
-    `只做一件事：把画面中每一个真人的头部替换成${DOUYIN_SHOT_FACE_MASK_STYLE}，保持原来的朝向、视线方向、头部倾斜角度与位置。`,
-    '其余部分必须原样保留：构图、背景、门店与陈设、衣着、身体姿态、手部动作、光线方向与色温都不要改动；不要增减人数，不要移动任何人的位置。',
-    '卡通头与身体的衔接要自然：脖子、发际线、边缘阴影与地面投影都要对得上，不要做成贴纸拼贴、马赛克或生硬的圆形遮挡。',
-    '画面中不要出现任何文字、字幕、水印、logo 或拼贴边框。',
-  ].join('\n');
+export function buildShotFaceMaskPrompt(
+  style: DouyinFaceMaskStyle = 'cartoon-3d',
+): string {
+  const intro = '以所给底图为准，这是一条抖音竖屏短视频里的一个镜头画面。';
+  const byStyle: Record<DouyinFaceMaskStyle, string[]> = {
+    'cartoon-3d': [
+      `只做一件事：把画面中每一个真人的头部替换成${DOUYIN_SHOT_FACE_MASK_STYLE}，保持原来的朝向、视线方向、头部倾斜角度与位置。`,
+      '衣着保持不变。卡通头与身体的衔接要自然：脖子、发际线、边缘阴影与地面投影都要对得上，不要做成贴纸拼贴、马赛克或生硬的圆形遮挡。',
+    ],
+    'anime-bighead': [
+      '只做一件事：把画面中每一个真人的头部替换成二维动画风格的 Q 版大头——清晰干净的描边线条、赛璐珞平涂上色、大眼睛、表情生动，头部比例明显大于真人但不怪异；保持原来的朝向、视线方向、头部倾斜角度、发型轮廓与发色。',
+      '衣着保持不变。动画头的明暗要跟画面光线方向一致，脖子与发际线处要和实拍身体自然衔接，不要做成贴纸拼贴、马赛克或生硬的圆形遮挡。',
+    ],
+    anthropomorphic: [
+      '只做一件事：把画面中每一个真人替换成拟人化的卡通动物角色（例如猫、狗、熊、兔子、狐狸，不同的人用不同的动物），角色直立、穿着原来的衣服、保持原来的身体姿态、手部动作、朝向与视线方向。',
+      '头部、手部等露出的皮肤都变成动物特征（毛发、耳朵、口鼻），画风统一为精致的 3D 动画电影质感，毛发受光与画面光线方向一致，和场景自然融合，不要做成贴纸拼贴或面具。',
+    ],
+    deidentify: [
+      '只做一件事：对画面中每一个真人做去识别化重绘——保持写实摄影风格，把面孔重绘成一张不存在的、由 AI 生成的陌生面孔：改变五官形状、脸型比例、眉眼与唇形等特征，使其无法被认出是原来的人；保留原来的表情情绪、大致年龄段与性别观感、头部朝向与视线方向。',
+      '同时去掉能识别个人身份的细节，如胸牌姓名、纹身、证件；衣着款式与颜色保持不变。不要打码、模糊或加遮挡，皮肤质感与光影要和原照片一致，看起来仍是一张自然的实拍照片。',
+    ],
+  };
+  return [intro, ...byStyle[style], ...FACE_MASK_KEEP_SCENE].join('\n');
 }
 
 /**
@@ -174,14 +216,15 @@ export class DouyinShotImageService {
   }
 
   /**
-   * @description 把这一镜画面里的真人换成卡通大头：以当前画面为底图走图像编辑，新图入图库后绑定到这一段，
-   *   并把处理前的画面记进 `originalMedia` 供一键恢复。反复处理时不覆盖最早那张原图。
+   * @description 按所选风格处理这一镜画面里的真人（3D 卡通大头 / 动画大头 / 拟人风格 / AI 去除真人特征）：以当前画面为底图走图像编辑，
+   *   新图入图库后绑定到这一段，记下所用风格，并把处理前的画面记进 `originalMedia` 供一键恢复。反复处理时不覆盖最早那张原图。
    *   火山系模型（Seedance / 豆包）不收带真人的参考图，这是把实拍镜头喂进去之前的常规处理。
    * @keyword-cn 分镜卡通换头, 遮挡真人
    * @keyword-en shot-face-mask, cover-real-person
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string} shotId 分镜段落 ID。
    * @param {DouyinScope} scope 租户用户作用域。
+   * @param {DouyinFaceMaskStyle} [style] 处理风格，缺省 3D 卡通大头。
    * @returns {Promise<{topic: DouyinTopicEntity, shotId: string, imageId: number, imageUrl: string}>} 更新结果。
    * @throws {BadRequestException} DOUYIN_CHILD_TOPIC_NOT_FOUND / DOUYIN_STORYBOARD_SHOT_NOT_FOUND / DOUYIN_SHOT_IMAGE_REQUIRED。
    */
@@ -189,6 +232,7 @@ export class DouyinShotImageService {
     topicId: number,
     shotId: string,
     scope: DouyinScope,
+    style: DouyinFaceMaskStyle = 'cartoon-3d',
   ): Promise<{
     topic: DouyinTopicEntity;
     shotId: string;
@@ -204,8 +248,9 @@ export class DouyinShotImageService {
       WORKFLOW_NODES.douyinWorkbench.key,
       WORKFLOW_NODES.douyinWorkbench.shotImage,
     );
+    const styleLabel = DOUYIN_FACE_MASK_STYLE_LABELS[style];
     const generated = await this.agentService.sendPrompt({
-      prompt: buildShotFaceMaskPrompt(),
+      prompt: buildShotFaceMaskPrompt(style),
       runtimeOverride: nodeRuntime ?? undefined,
       size: DOUYIN_SHOT_IMAGE_SIZE,
       includeSystemPrompt: false,
@@ -221,8 +266,8 @@ export class DouyinShotImageService {
       imagePath: String(generated?.imagePath ?? ''),
       userId: scope.userId,
       tenantId: scope.tenantId,
-      originalName: `${topic.title} 分镜画面（卡通换头）`,
-      description: '抖音分镜画面:真人已换成卡通大头',
+      originalName: `${topic.title} 分镜画面（${styleLabel}）`,
+      description: `抖音分镜画面:人像已处理为${styleLabel}`,
       tags: [DOUYIN_SHOT_IMAGE_TAG],
     });
     const updated = await this.repository.updateShot(
@@ -236,6 +281,7 @@ export class DouyinShotImageService {
           url: image.url,
           coverUrl: image.thumbUrl || image.url,
         },
+        faceMaskStyle: style,
         // 已经处理过就不要再改 originalMedia，否则「恢复原图」会退回上一次的处理结果
         ...(shot.originalMedia ? {} : { originalMedia: shot.media }),
       },
@@ -266,7 +312,7 @@ export class DouyinShotImageService {
     const updated = await this.repository.updateShot(
       topicId,
       shotId,
-      { media: shot.originalMedia, originalMedia: null },
+      { media: shot.originalMedia, originalMedia: null, faceMaskStyle: null },
       scope,
     );
     return { topic: updated, shotId };

@@ -25,15 +25,18 @@ export class XhsPostStatService {
 
   /**
    * @description 确保集合索引存在
-   * @keyword-en ensure collection indexes
+   * @keyword-cn 帖子统计索引, 抓取明细时间线
+   * @keyword-en post-stat-indexes, crawl-detail-timeline
    */
   async ensureIndexes(): Promise<void> {
     await this.stats.createIndex({ id: 1 }, { unique: true });
     await this.stats.createIndex({ todoId: 1 });
+    await this.stats.createIndex({ todoId: 1, dataAt: -1 });
     await this.stats.createIndex({ postHash: 1 });
     await this.stats.createIndex({ todoId: 1, postHash: 1 });
     await this.stats.createIndex({ dataAt: -1 });
     await this.stats.createIndex({ topicId: 1, dataAt: -1 });
+    await this.stats.createIndex({ topicId: 1, dataAt: -1, id: -1 });
     await this.stats.createIndex({ crawlRunId: 1 });
     const exists = await this.counters.findOne({ _id: 'xhs_post_stats' });
     if (!exists)

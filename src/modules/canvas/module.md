@@ -79,10 +79,11 @@ Canvas控制器。
 
 Canvas服务。
 
+- `ensureIndexes()` — 建立租户、用户、类型更新时间线及图片组状态查询索引 | keywords: canvas, mongo, index, query-index
 - `create` — 创建图文 Canvas
 - `createImageGroupCanvas` — 创建图片组 Canvas（异步生成，快速返回 ID）。透传 `dedup` 到后台 runImageGroupGeneration
 - `prepareArticleImageSources(input)` — 生文图片阶段第一步：不创建独立 Canvas，按相关 tag 取图并完成版式与源图分配，不生成文件；不足时返回带竖图/横图缺口的 `stats`，供调用方提前拦截或告诉用户缺哪种图。`input.layoutCandidates` 指定版式，`input.dedup='prefer'` 优先用未用图，`input.allowSourceReuse` 放开本次内复用 | keywords: 生文配图工作流, 源图缺口统计, article-image-workflow, source-shortage-stats
-- `renderArticleImageGroups(input, preparation)` — 生文图片阶段第二步：按分配结果生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机 | keywords: 生文配图工作流, 文章图组, article-image-workflow, generated-image-group
+- `renderArticleImageGroups(input, preparation, hooks?)` — 生文图片阶段第二步：按分配结果生成封面、五张内页、动态拼图与可选 AI 封面；封面走 `input.coverStrategy`，`ai-overlay` 可用 `input.coverStyle` 选择素材风格预设或随机；`hooks` 透传给 `renderPreparedImageGroups` 做渐进渲染 | keywords: 生文配图工作流, 文章图组, article-image-workflow, generated-image-group
 - `generateImageGroupsForCanvas` — 在指定 canvasId 上复用图组生成逻辑并回写 imageGroups。**`append` 参数**: true=追加到现有图组(复用 Canvas 再生成新图组,xhs hasCanvasId 分支传 true);false/缺省=覆盖(新建 Canvas 首次生成,runImageGroupGeneration)。**`dedup` 参数**: 缺省/true=去重(排除 isUsed+生成后 markUsed);false=不去重(命中已用图、随机取图、不写 isUsed);'prefer'=优先不重复(未用图先分配、不够补已用图、生成后 markUsed) | keywords: dedup, includeUsed
 - `startArticleCoverRegeneration(input)` — 启动图文 Canvas 单篇封面重生成，立即置为 generating，后台仅替换 article.imageUrls/imageIds 的首项，参考图最多 4 张 | keywords: cover-regenerate, article-cover-only
 - `startArticleImageRegeneration(input)` — 启动图文 Canvas 单篇文章指定图片槽位重生成，立即置为 generating，后台仅替换目标 imageUrls/imageIds 下标，参考图最多 4 张；透传 `includeSystemPrompt`(默认 true) 决定是否叠加系统自带封面/内页提示词 | keywords: article-image-regenerate, image-slot-regenerate, system-prompt-toggle
@@ -127,8 +128,10 @@ Canvas服务。
 - `regenerateCoverImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 封面，不复用旧封面提示词/旧封面文案，写入动态封面图库；`includeSystemPrompt=false` 时只用用户提示词(必填)并向下游传 kind=cover ；生图模型取工作流节点 `xhs-article/cover-image` | keywords: cover-regenerate, selected-source-images, system-prompt-toggle
 - `regenerateInnerImage(input)` — 基于用户本次多选的最多 4 张图库图片一次性生成新的 3:4 Canvas 内页，不复用旧内页提示词/旧内页文字，不添加封面标题并写入动态内页图库；走内页专属规格(少文字重内容,kind=inner)，`includeSystemPrompt=false` 时只用用户提示词(必填) ；生图模型取工作流节点 `xhs-article/inner-image` | keywords: inner-regenerate, image-group-image-slot, system-prompt-toggle
 - `prepareImageGroupSources(input)` — 从已选标签并集或完整图库随机取图，再按 `input.layoutCandidates` / `preferCollageCover` 统一分配竖图/横图，不生成成品文件；`dedup='prefer'` 时保留池子「未用在前」的顺序不整体洗牌 | keywords: 图组源图准备, 标签随机取图, image-group-source-preparation, tag-random-selection
-- `renderPreparedImageGroups(input, preparation)` — 根据已完成的源图分配渲染图组；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用；严格去重与 `'prefer'` 都会 markUsed | keywords: render, prepared, image-group, concurrency, dedup
-- `renderOnePlan(plan, input, preparation)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用 | keywords: render, single-plan, image-group, cover-text
+- `renderPreparedImageGroups(input, preparation, hooks?)` — 根据已完成的源图分配渲染图组；可选 `ImageGroupRenderHooks` 让标题延后到达、每张图就绪即回调；`ai-direct` 输出无字封面底图，`ai-overlay` 输出含字海报素材封面；并发数由 `IMAGE_GROUP_RENDER_CONCURRENCY` 环境变量控制（默认 1）。**`input.dedup===false` 时跳过 markUsedBatch**，源图保留可无限复用；严格去重与 `'prefer'` 都会 markUsed | keywords: render, prepared, image-group, concurrency, dedup
+- `renderOnePlan(plan, input, preparation, hooks?)` — 渲染单个图组计划（封面底图或按预设风格生成的含字素材/内页/封面文案元数据），供并发调用；封面底图、各内页拼图合成入库与封面文案同时进行，AI 封面在底图与文案就绪后生成；带 `hooks.articlesReady` 时底图与内页不等标题先渲染，只有封面文案与 AI 封面等它；封面底图以 `final=false`、成品封面与内页以 `final=true` 经 `hooks.onImageReady` 报出 | keywords: 渐进渲染钩子, 单图就绪事件, render, single-plan, cover-text, parallel-render, progressive-images
+- `ImageGroupImageReadyEvent` — 单张图就绪事件（`articleIndex` / `role` / `url` / `final`） | keywords: 单图就绪事件, 渐进配图, image-ready-event, progressive-images
+- `ImageGroupRenderHooks` — 渐进渲染钩子：`articlesReady` 延后到达的文章标题、`onImageReady` 单张图就绪回调（回调抛错只记日志） | keywords: 渐进渲染钩子, 延后文章标题, progressive-render-hooks, deferred-article-title
 - `planImageGroupAllocation(pool, articles, options?)` — 在 Canvas 级一次性规划所有图组 source 图片，按版式统计竖图/横图需求，禁止跨组复用；`options.layoutCandidates` 按优先级取第一个池子能满足的版式、全不满足报不足；`options.allowSourceReuse` 放宽为「拼图≥2 横图、单图≥1 竖图」即可分配；未传时 `options.preferCollageCover` 先试拼图封面版式、池子不够即回落，自动版式还可在竖图不足时切到全拼图版式 | keywords: 候选版式, 配图规则, plan, allocation, no-reuse, layout-candidates
 - `PREFERRED_COLLAGE_COVER_LAYOUT` — 「封面优先拼图」命中的版式常量（`collage-cover-5inner`） | keywords: 封面优先拼图, 拼图封面, prefer-collage-cover, collage-cover
 - `buildImageGroupAllocationRequests(articles, options?)` — 根据文章列表生成图组版式槽位需求，支持自动版式覆盖 | keywords: plan, allocation, layout
@@ -138,7 +141,7 @@ Canvas服务。
 - `buildInsufficientImageGroups(articles)` — 构造图片不足时的 failed 空图组，供文章/Canvas 进入 requires_human 补图流程 | keywords: insufficient, requires-human, image-group
 - `collectPlanSourceImages(plan)` — 收集图组分配计划中的全部源图，用于文章正文和封面文案共享图片语义 | keywords: collect, allocation, image-context
 - `persistPlannedCollage(input)` — 将统一分配好的两张横图合成为动态拼图并入库，同时返回拼图画布格式 | keywords: collage, allocation, gallery, collage-canvas-format
-- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流；内容优先级为「文章标题 > 配图语义」，主标题只能提炼文章标题，配图标签/描述降级为方向参考（标签上限 8 条）且冲突时丢弃；模型取工作流节点 `xhs-article/cover-copy` | keywords: 封面文案, 工具内部非流, 标题优先, cover-text, internal-llm-nostream, title-first
+- `generateCoverTexts` — LLM 批量生成封面主/副标题（{title, subtitle}[]），内部 LLM 调用附加 `nostream`，避免跟随主 SSE token 流；内容优先级为「文章标题 > 配图语义」，主标题只能提炼文章标题，配图标签/描述降级为方向参考（标签上限 8 条）且冲突时丢弃；模型取工作流节点 `xhs-article/cover-copy`，并以 `disableThinking` 关闭思考 | keywords: 封面文案, 工具内部非流, 标题优先, cover-text, internal-llm-nostream, title-first
 - `isAiCoverEnabled` — 读取租户平台配置中的 AI 封面开关
 - `sanitizeCopyrightRiskText(raw)` — 将封面文案/生图提示中的高风险 IP、商标和角色专名替换为版权安全泛化表达 | keywords: sanitize, copyright-safe, image-prompt
 - `sanitizeCopyrightRiskList(items?)` — 清洗列表型封面上下文，去重后返回版权安全表达 | keywords: sanitize, copyright-safe, list
