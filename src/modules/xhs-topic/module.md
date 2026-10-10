@@ -145,11 +145,12 @@
 - `XhsArticleGenerationService.readTodoChargeOperationId(todo)` — 从 Todo 关联资源读取生文服务扣费单号 | keywords: 扣费单号读取, 关联资源, read-charge-operation-id, todo-resource
 - `XhsArticleGenerationService.resolveMotherImageTags(configuredTags,availableTags)` — 校验母题固定标签仍存在于当前真实图库并保留规范写法 | keywords: 母题配图标签, 真实图库校验, mother-image-tags, validate-gallery-tags
 - `ZXhsArticleDraft` — 一次交付整篇文章的结构（标题、正文、标签），交付工具与结构化输出共用 | keywords: 文章交付结构, 一次交付, article-draft-schema, single-shot-delivery
+- `XHS_ARTICLE_DRAFT_JSON_SCHEMA` — 交付结构的 JSON Schema 版本，只给结构化输出用，跳过 zod 严格校验改由交付校验清洗 | keywords: 文章交付JSON结构, 宽松解析, article-draft-json-schema, lenient-parsing
 - `ZXhsArticleImageTags` — 配图决策的结构化输出（2-5 个图库标签） | keywords: 配图决策结构, 图库标签, image-decision-schema, gallery-tags
-- `XhsArticleGenerationService.applyArticleSubmission(draft, input)` — 校验并写入一次文章交付，不合格不改内存文章并返回问题描述 | keywords: 写入文章交付, 交付校验, apply-article-submission, submission-validation
+- `XhsArticleGenerationService.applyArticleSubmission(draft, input)` — 校验并写入一次文章交付（标签交成一整串时按分隔符拆开），不合格不改内存文章并返回问题描述 | keywords: 写入文章交付, 交付校验, apply-article-submission, submission-validation
 - `XhsArticleGenerationService.createArticleSubmitTool(draft, state)` — 一次交付标题、正文、标签的工具（`xhs_article_submit`，`returnDirect` 交付即结束） | keywords: 文章交付工具, 一次交付, article-submit-tool, single-shot-delivery
 - `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章风格、合规、搜索与一次交付约束的提示词，改写时直接带上当前文章 | keywords: 构造文章提示词, 工具交付约束, 文章生成风格, build-article-prompt, tool-delivery-contract, article-writing-style
-- `XhsArticleGenerationService.writeArticle(system, searchTools, draft, scope)` — 写文章（节点 `xhs-article/article`，保留默认思考）：有搜索工具时用轻量 Agent（搜索 + 交付工具），否则一次结构化输出；没合格交付重试一次 | keywords: 执行文章Agent, 一次交付, 轻量Agent, run-article-agent, single-shot-delivery, lightweight-agent
+- `XhsArticleGenerationService.writeArticle(system, searchTools, draft, scope)` — 写文章（节点 `xhs-article/article`，保留默认思考）：有搜索工具时用轻量 Agent（搜索 + 交付工具），否则一次结构化输出（传 JSON Schema 跳过 zod 严格校验，解析异常记为不合格交付）；没合格交付重试一次 | keywords: 执行文章Agent, 一次交付, 轻量Agent, run-article-agent, single-shot-delivery, lightweight-agent
 - `XhsArticleGenerationService.decideImageTags(input, scope)` — 配图决策（节点 `xhs-article/image-decision`，关闭思考）从真实图库标签挑 2-5 个，失败按字面兜底 | keywords: 配图决策, 关闭思考, 并行选图, article-image-decision, thinking-off, parallel-image-pick
 - `XhsArticleGenerationService.pickImageTagsByRule(text, tags)` — 配图决策兜底：标签出现在选题文字里优先，其次按两字片段重合，取至多 3 个 | keywords: 字面匹配选图, 配图兜底, rule-based-image-tags, image-decision-fallback
 - `XhsArticleGenerationService.isArticleComplete(draft)` — 校验标题、正文与文章标签（配图标签由配图决策单独保证） | keywords: 校验文章完整性, 内存文章, validate-article-completeness, in-memory-article
@@ -244,6 +245,8 @@
 | 内存文章         | in-memory-article                 | Agent 通过工具设置标题、正文并逐个追加标签                                                  |
 | 真实文章         | persisted-article                 | 子选题 article 字段与右侧详情数据源                                                         |
 | 文章交付工具     | article-submit-tool               | `xhs_article_submit` 一次交付标题、正文与标签                                               |
+| 文章交付JSON结构 | article-draft-json-schema         | 结构化输出用的交付 JSON Schema，模型侧仍要求标签数组                                        |
+| 宽松解析         | lenient-parsing                   | 不在 LangChain 层严格校验，标签字符串也能拆开入库，不合格才带原因重试                       |
 | 配图决策         | article-image-decision            | 与写正文并行、关闭思考的图库标签选择（节点 `xhs-article/image-decision`）                   |
 | 文章生成排队通道 | article-generation-lane           | AI 生成排队服务里的 `xhs-article` 通道                                                      |
 | 文章落库         | persist-article                   | 完整性校验后统一持久化                                                                      |

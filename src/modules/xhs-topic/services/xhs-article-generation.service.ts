@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { OutputParserException } from '@langchain/core/output_parsers';
 import { tool } from '@langchain/core/tools';
+import { toJsonSchema } from '@langchain/core/utils/json_schema';
 import type { CreateAgentParams } from 'langchain';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -83,6 +85,15 @@ const ZXhsArticleDraft = z.object({
     .describe('完整正文，至少 180 个中文字符，结构清晰，可分段，不写 Markdown'),
   tags: z.array(z.string()).describe('3-8 个简短中文文章标签，不带 #，不重复'),
 });
+
+/**
+ * @description 交付结构的 JSON Schema 版本，只给结构化输出用：模型看到的仍是「标签为字符串数组」，但 LangChain
+ *   不再按 zod 严格校验。模型偶尔把标签交成逗号分隔的一整串，严格校验会直接抛 OUTPUT_PARSING_FAILURE
+ *   让整篇生成失败；改由 `applyArticleSubmission` 统一清洗与校验。
+ * @keyword-cn 文章交付JSON结构, 宽松解析
+ * @keyword-en article-draft-json-schema, lenient-parsing
+ */
+const XHS_ARTICLE_DRAFT_JSON_SCHEMA = toJsonSchema(ZXhsArticleDraft);
 
 /**
  * @description 配图决策的结构化输出：从图库标签清单里选出的 2-5 个标签。
@@ -965,6 +976,7 @@ export class XhsArticleGenerationService {
 
   /**
    * @description 校验并写入一次文章交付：标题压单行、正文截 5000 字、标签去井号去空白去重（最多 10 个）。
+   *   标签交成一整串时按逗号、顿号、分号、竖线、井号或换行拆开（都没有再按空白拆）。
    *   不合格时不改内存文章，返回问题描述供模型修正；合格返回空串。
    * @keyword-cn 写入文章交付, 交付校验
    * @keyword-en apply-article-submission, submission-validation
@@ -983,9 +995,15 @@ export class XhsArticleGenerationService {
     const body = (typeof input.body === 'string' ? input.body : '')
       .trim()
       .slice(0, 5000);
+    const tagText = typeof input.tags === 'string' ? input.tags : '';
+    const rawTags = Array.isArray(input.tags)
+      ? input.tags
+      : tagText.split(
+          /[,，、;；|#\n]/.test(tagText) ? /[,，、;；|#\n]+/ : /\s+/,
+        );
     const tags = [
       ...new Set(
-        (Array.isArray(input.tags) ? input.tags : [])
+        rawTags
           .map((tag) =>
             String(tag ?? '')
               .replace(/^#+/, '')
@@ -1089,7 +1107,8 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
 
   /**
    * @description 写文章（模型取节点 `xhs-article/article`，保留模型默认思考设置）：有搜索工具时用轻量 Agent，
-   *   只挂搜索与交付两类工具，交付即结束；没有搜索时直接一次结构化输出。没合格交付时带着问题重试一次。
+   *   只挂搜索与交付两类工具，交付即结束；没有搜索时直接一次结构化输出（传 JSON Schema 不做 zod 严格校验，
+   *   解析异常也记为不合格交付）。没合格交付时带着问题重试一次。
    * @keyword-cn 执行文章Agent, 一次交付, 轻量Agent
    * @keyword-en run-article-agent, single-shot-delivery, lightweight-agent
    * @param system 文章提示词。
@@ -1158,22 +1177,31 @@ ${input.searchAvailable ? '可以按需使用 DuckDuckGo MCP 搜索核实信息�
         }),
         this.adminService.getTenantPlatformAiPromptSupplement(scope.tenantId),
       ]);
-      const output = await llm
-        .withStructuredOutput(ZXhsArticleDraft, {
-          name: 'xhs_article_submit',
-          method: 'functionCalling',
-        })
-        .invoke(
-          [
-            new SystemMessage(
-              platformPrompt
-                ? `${prompt}\n\n【平台业务说明】\n${platformPrompt}`
-                : prompt,
-            ),
-            new HumanMessage('开始写作，一次交付标题、完整正文和标签。'),
-          ],
-          this.agentService.buildNoStreamInvokeOption(),
-        );
+      let output: Record<string, unknown> | undefined;
+      try {
+        output = await llm
+          .withStructuredOutput(XHS_ARTICLE_DRAFT_JSON_SCHEMA, {
+            name: 'xhs_article_submit',
+            method: 'functionCalling',
+          })
+          .invoke(
+            [
+              new SystemMessage(
+                platformPrompt
+                  ? `${prompt}\n\n【平台业务说明】\n${platformPrompt}`
+                  : prompt,
+              ),
+              new HumanMessage('开始写作，一次交付标题、完整正文和标签。'),
+            ],
+            this.agentService.buildNoStreamInvokeOption(),
+          );
+      } catch (error) {
+        // 模型没走函数调用或参数不是合法 JSON：记为一次不合格交付带原因重试，而不是让整篇直接失败
+        if (!(error instanceof OutputParserException)) throw error;
+        state.problem =
+          '交付格式不合法，请调用 xhs_article_submit 交付标题、正文与字符串数组形式的标签';
+        continue;
+      }
       state.problem = this.applyArticleSubmission(draft, output ?? {});
       state.submitted = !state.problem;
     }
