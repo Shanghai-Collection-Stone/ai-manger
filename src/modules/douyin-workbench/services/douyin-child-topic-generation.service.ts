@@ -39,6 +39,35 @@ type ScriptPersona = Parameters<typeof buildPersonaScriptBrief>[0];
 export const DOUYIN_SCRIPT_WRITE_CONCURRENCY = 6;
 
 /**
+ * @description 解析按场景分段写出的探店台词：每段以单独一行的「【场景k】」开头，k 对应第 k 张场景图；
+ *   标记缺失、序号越界或某段为空时返回空数组（调用方退回整段台词）。
+ * @keyword-cn 解析分场景台词, 场景标记
+ * @keyword-en parse-scene-segments, scene-marker
+ * @param {string} text 模型输出。
+ * @param {number[]} sceneImageIds 按顺序的场景图 ID。
+ * @returns {Array<{sceneImageId: number, lines: string}>} 分段台词。
+ */
+export function parseStoreVisitSceneSegments(
+  text: string,
+  sceneImageIds: number[],
+): Array<{ sceneImageId: number; lines: string }> {
+  const parts = String(text ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split(/^\s*【场景\s*(\d+)\s*】\s*$/m);
+  if (parts.length < 3) return [];
+  const segments: Array<{ sceneImageId: number; lines: string }> = [];
+  for (let index = 1; index < parts.length; index += 2) {
+    const sceneImageId = sceneImageIds[Number(parts[index]) - 1];
+    const lines = String(parts[index + 1] ?? '')
+      .trim()
+      .slice(0, 1000);
+    if (!sceneImageId || !lines) return [];
+    segments.push({ sceneImageId, lines });
+  }
+  return segments.slice(0, 8);
+}
+
+/**
  * @description 规划候选脚本的结构化输出：每条一个标题与切入角度，条数由 LLM 在 3 至 12 之间自主决定。
  * @keyword-cn 脚本规划结构, LLM自主数量
  * @keyword-en script-plan-schema, llm-decided-count
@@ -84,6 +113,7 @@ const ZDouyinScriptBody = z.object({
 export class DouyinChildTopicGenerationService {
   private readonly logger = new Logger(DouyinChildTopicGenerationService.name);
 
+  /** @description 初始化脚本与探店台词生成依赖。 @keyword-cn 初始化脚本生成, 生成依赖 @keyword-en init-script-generation, generation-dependencies */
   constructor(
     private readonly agentService: AgentService,
     private readonly adminService: AdminService,
@@ -336,6 +366,137 @@ export class DouyinChildTopicGenerationService {
       throw new BadRequestException('DOUYIN_SCRIPT_REFINE_FAILED');
     }
     return { script: refined };
+  }
+
+  /**
+   * @description 探店模式写台词：独立探店可按选题标题与场景说明写作，旧脚本按正文或分镜口播改写成第一人称、有现场感的探店口播，
+   *   约 30～60 秒；选了预设人物或风格时保持人称与调性。独立探店有场景图时按场景顺序分段（每段对应一张场景图），解析不出分段时只返回整段。
+   *   只返回台词，不落库，由前端放进台词框再随生成保存。
+   * @keyword-cn 探店台词生成, 数字人台词
+   * @keyword-en store-visit-lines, digital-human-lines
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string|undefined} prompt 一句话补充要求。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<{lines: string, segments?: Array<{sceneImageId: number, lines: string}>}>} 台词与按场景的分段。
+   * @throws {NotFoundException} 脚本不存在。
+   * @throws {BadRequestException} 没有写作资料，或模型没写出台词。
+   */
+  async writeStoreVisitLines(
+    topicId: number,
+    prompt: string | undefined,
+    scope: DouyinScope,
+  ): Promise<{
+    lines: string;
+    segments?: Array<{ sceneImageId: number; lines: string }>;
+  }> {
+    const topic = await this.repository.get(topicId, scope);
+    if (!topic || topic.kind !== 'child') {
+      throw new NotFoundException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
+    }
+    const source =
+      String(topic.script ?? '').trim() ||
+      (topic.storyboard ?? [])
+        .map((shot) => String(shot.narration ?? '').trim())
+        .filter(Boolean)
+        .join('\n') ||
+      (topic.productionMode === 'store-visit'
+        ? [topic.title, topic.storeVisit?.sceneDescription]
+            .filter(Boolean)
+            .join('\n')
+        : '');
+    if (!source) {
+      throw new BadRequestException(
+        '先写好脚本正文或生成分镜，AI 才能据此写探店台词',
+      );
+    }
+    const mother = topic.parentId
+      ? await this.repository.get(topic.parentId, scope)
+      : null;
+    const persona = topic.personaId
+      ? await this.personas.get(topic.personaId, scope)
+      : null;
+    const personaBrief = buildPersonaScriptBrief(persona);
+    const style =
+      topic.scriptStyle && topic.scriptStyle in DOUYIN_SCRIPT_STYLES
+        ? DOUYIN_SCRIPT_STYLES[topic.scriptStyle]
+        : undefined;
+    const requirement = String(prompt ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 500);
+    // 独立探店按场景图顺序分段，数眼通道每段配一张场景图对口型
+    const sceneImageIds =
+      topic.productionMode === 'store-visit'
+        ? (topic.storeVisit?.sceneImages ?? []).map((image) => image.id)
+        : [];
+
+    const result = await this.agentService.runWithMessages({
+      config: {
+        ...toWorkflowLlmConfig(
+          await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.douyinWorkbench.key,
+            WORKFLOW_NODES.douyinWorkbench.script,
+          ),
+        ),
+        tenantId: scope.tenantId,
+        temperature: 0.7,
+        noPostHook: true,
+        nonStreaming: true,
+        billingContext: {
+          tenantId: scope.tenantId,
+          userId: scope.userId,
+          source: 'douyin-workbench.store-visit-lines',
+          platformScope: !scope.tenantId,
+        },
+        system: [
+          '你负责根据选题、场景资料或现有脚本写出「探店」口播台词，由出镜人本人对着镜头边走边说，数字人会按台词对口型。',
+          '用第一人称、口语、有现场感：进店、看环境、点单或体验、说感受、给结论和推荐理由，句子短，方便念。',
+          '时长约 30～60 秒（150～300 字），按说话的停顿分行；不要写镜头号、动作提示、括号说明、标题、Markdown 或任何解释。',
+          '只用资料里给出的店名、产品、价格等事实，不编造；不写违法、危险、歧视、低俗、侵权或效果承诺类内容。',
+          personaBrief
+            ? '出镜人是固定的预设人物，台词必须是这个人物的第一人称、语气一致：\n' +
+              personaBrief
+            : '',
+          style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
+          sceneImageIds.length
+            ? `门店拍了 ${sceneImageIds.length} 个场景，镜头会按顺序在这些场景之间切换（一般是门头环境 → 产品 → 体验 → 总结推荐）。请按场景把台词分成 ${sceneImageIds.length} 段，每段至少 15 个字、不超过 120 个字；每段第一行只写「【场景k】」（k 从 1 开始按顺序），下一行起写这一段台词，除这个标记外不要写别的说明。`
+            : '',
+          '只输出台词本身。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            mother?.title ? `母选题：${mother.title}` : '',
+            `脚本标题：${topic.title}`,
+            `脚本内容：<script>${source.slice(0, 8000)}</script>`,
+            requirement
+              ? `补充要求：<requirement>${requirement}</requirement>`
+              : '',
+            '请输出探店台词。',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        },
+      ],
+    });
+
+    const text = this.readAgentText(result);
+    const segments = sceneImageIds.length
+      ? parseStoreVisitSceneSegments(text, sceneImageIds)
+      : [];
+    const lines = (
+      segments.length
+        ? segments.map((segment) => segment.lines).join('\n')
+        : text.replace(/^\s*【场景\s*\d+\s*】\s*$/gm, '').trim()
+    ).slice(0, 2000);
+    if (lines.length < 10) {
+      throw new BadRequestException('DOUYIN_STORE_VISIT_LINES_FAILED');
+    }
+    return segments.length ? { lines, segments } : { lines };
   }
 
   /**

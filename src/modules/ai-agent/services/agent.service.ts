@@ -931,6 +931,45 @@ export class AgentService {
   }
 
   /**
+   * @description 读取底图之外的多图参考（最多 3 张，本地路径或 URL），找不到的跳过并记警告，用于「人物 + 场景」这类多图合成。
+   * @keyword-cn 读取多图参考, 额外参考图
+   * @keyword-en load-extra-edit-images, multi-image-reference
+   * @param {string[]} [candidates] - 额外参考图候选。
+   * @returns {Promise<Array<{ buffer: Buffer; mimeType: string; fileName: string }>>} 读取到的参考图。
+   */
+  private async loadExtraEditImages(candidates?: string[]): Promise<
+    Array<{
+      buffer: Buffer;
+      mimeType: string;
+      fileName: string;
+    }>
+  > {
+    const images: Array<{
+      buffer: Buffer;
+      mimeType: string;
+      fileName: string;
+    }> = [];
+    for (const candidate of (Array.isArray(candidates) ? candidates : []).slice(
+      0,
+      3,
+    )) {
+      const normalized = this.normalizeMeituImageInputCandidate(
+        String(candidate ?? '').trim(),
+      );
+      if (!normalized) continue;
+      const source = /^https?:\/\//i.test(normalized)
+        ? normalized
+        : this.resolveExistingLocalFilePath(normalized);
+      if (!source) {
+        this.logger.warn(`[ai-cover][extra-image] miss candidate=${candidate}`);
+        continue;
+      }
+      images.push(await this.loadRuntimeEditImageInput(source));
+    }
+    return images;
+  }
+
+  /**
    * @description 读取运行时图片编辑输入，返回二进制与mime信息。
    * @param {string} imageInput - 本地路径或URL。
    * @returns {Promise<{ buffer: Buffer; mimeType: string; fileName: string }>} 输入图片信息。
@@ -1163,6 +1202,7 @@ export class AgentService {
       size?: string;
       baseImagePath?: string;
       baseImageCandidates?: string[];
+      extraImageCandidates?: string[];
       maxRetries?: number;
     },
   ): Promise<{
@@ -1187,6 +1227,10 @@ export class AgentService {
     const runtimeEditImage = runtimeBaseImage
       ? await this.loadRuntimeEditImageInput(runtimeBaseImage)
       : null;
+    // 多图参考（如「人物 + 场景」合成）：底图之外的参考图，只有 gemini / doubao / openai 三家会带上
+    const extraEditImages = runtimeEditImage
+      ? await this.loadExtraEditImages(input.extraImageCandidates)
+      : [];
 
     const provider = runtime.providerCode.toLowerCase();
 
@@ -1196,12 +1240,12 @@ export class AgentService {
       const endpoint = `${endpointBase.replace(/\/$/, '')}/v1beta/models/${encodeURIComponent(runtime.model)}:generateContent?key=${encodeURIComponent(runtime.apiKey)}`;
       const parts: Array<Record<string, unknown>> = runtimeEditImage
         ? [
-            {
+            ...[runtimeEditImage, ...extraEditImages].map((image) => ({
               inlineData: {
-                mimeType: runtimeEditImage.mimeType,
-                data: runtimeEditImage.buffer.toString('base64'),
+                mimeType: image.mimeType,
+                data: image.buffer.toString('base64'),
               },
-            },
+            })),
             { text: prompt },
           ]
         : [{ text: prompt }];
@@ -1286,12 +1330,19 @@ export class AgentService {
         watermark: false,
       };
       if (runtimeEditImage) {
-        const mimeType = runtimeEditImage.mimeType || 'image/png';
-        const base64 = Buffer.from(runtimeEditImage.buffer).toString('base64');
-        body['image'] = `data:${mimeType};base64,${base64}`;
+        const images = [runtimeEditImage, ...extraEditImages].map(
+          (image) =>
+            `data:${image.mimeType || 'image/png'};base64,${Buffer.from(image.buffer).toString('base64')}`,
+        );
+        // 单图沿用字符串写法；多图参考时按 Seedream 多图输入传数组
+        body['image'] = images.length > 1 ? images : images[0];
       }
       // 请求信息打印：api key 遮蔽；image 只打 data URI 头部前缀 + 总长度
-      const imageField = typeof body['image'] === 'string' ? body['image'] : '';
+      const imageField = Array.isArray(body['image'])
+        ? (body['image'] as string[]).join('|')
+        : typeof body['image'] === 'string'
+          ? body['image']
+          : '';
       const imagePreview = imageField
         ? `${imageField.slice(0, 64)}...<total=${imageField.length}>`
         : '(none)';
@@ -1386,13 +1437,17 @@ export class AgentService {
               if (/gpt-image/i.test(runtime.model)) {
                 form.append('moderation', 'low');
               }
-              form.append(
-                'image',
-                new Blob([new Uint8Array(runtimeEditImage.buffer)], {
-                  type: runtimeEditImage.mimeType || 'image/png',
-                }),
-                runtimeEditImage.fileName || 'base.png',
-              );
+              // 多图参考时按 gpt-image 的数组写法 image[] 逐张追加
+              const editImages = [runtimeEditImage, ...extraEditImages];
+              for (const [index, image] of editImages.entries()) {
+                form.append(
+                  editImages.length > 1 ? 'image[]' : 'image',
+                  new Blob([new Uint8Array(image.buffer)], {
+                    type: image.mimeType || 'image/png',
+                  }),
+                  image.fileName || `base-${index + 1}.png`,
+                );
+              }
               return {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${runtime.apiKey}` },
@@ -2461,6 +2516,8 @@ export class AgentService {
     size?: string;
     baseImagePath?: string;
     baseImageCandidates?: string[];
+    /** 底图之外的多图参考（如人物 + 场景），只有 gemini / doubao / openai 运行时会带上 */
+    extraImageCandidates?: string[];
     kind?: 'cover' | 'inner';
     includeSystemPrompt?: boolean;
     billingContext: AiBillingContext;
@@ -2520,6 +2577,7 @@ export class AgentService {
               size: input.size,
               baseImagePath: input.baseImagePath,
               baseImageCandidates: input.baseImageCandidates,
+              extraImageCandidates: input.extraImageCandidates,
               // 单个计费流水只覆盖一次供应商请求；禁用内部隐式重试，
               // 失败后的 meitu 降级会创建独立流水并再次预扣。
               maxRetries: 0,
@@ -2638,8 +2696,8 @@ export class AgentService {
   /**
    * @description 使用 AI 封面生成工具发送提示词并返回本地图片路径。kind 决定下游补齐
    * 封面规格还是内页规格(少文字重内容)；includeSystemPrompt=false 时只用用户提示词。
-   * 传 runtimeOverride 时按工作流节点指定的提供商与模型出图。
-   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[]; kind?: 'cover' | 'inner'; includeSystemPrompt?: boolean }} input - 生图请求。
+   * 传 runtimeOverride 时按工作流节点指定的提供商与模型出图；extraImageCandidates 是底图之外的多图参考（如人物 + 场景）。
+   * @param {{ prompt: string; size?: string; baseImagePath?: string; baseImageCandidates?: string[]; extraImageCandidates?: string[]; kind?: 'cover' | 'inner'; includeSystemPrompt?: boolean }} input - 生图请求。
    * @returns {Promise<{ providerCode: string; model: string; imagePath: string }>} 生图结果。
    * @keyword-cn 发送提示词生图, 封面规格, 内页规格, 系统自带提示词
    * @keyword-en send-prompt-for-image-generation
@@ -2651,6 +2709,8 @@ export class AgentService {
     size?: string;
     baseImagePath?: string;
     baseImageCandidates?: string[];
+    /** 底图之外的多图参考（如人物 + 场景），只有 gemini / doubao / openai 运行时会带上 */
+    extraImageCandidates?: string[];
     kind?: 'cover' | 'inner';
     includeSystemPrompt?: boolean;
     billingContext: AiBillingContext;
@@ -2676,6 +2736,7 @@ export class AgentService {
       size: input.size,
       baseImagePath: input.baseImagePath,
       baseImageCandidates: input.baseImageCandidates,
+      extraImageCandidates: input.extraImageCandidates,
       kind: input.kind,
       includeSystemPrompt: input.includeSystemPrompt,
       billingContext: input.billingContext,

@@ -55,7 +55,7 @@
 - **类型**: `AdminUserPublic` — 对外成员视图，可包含平台账号邮箱 | keywords: 公开成员视图, 账号邮箱, public-member-view, account-email
 - **函数**:
   - `ensureIndexes()` — 后台索引初始化，覆盖成员/供应商类别回退/接入配置/自媒体账号时间线，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
-  - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
+  - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video/audio），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login({username,password,tenantId?})` — 旧版单步登录，关联了账号的成员以账号密码校验 | keywords: 兼容登录, 用户名登录, legacy-login, username-login
   - `identifyLogin({account,password})` — 两步登录第一步：手机号账号关联成员 ∪ 同名历史用户名成员中密码通过且启用的，按租户去重，签发 5 分钟登录票据；全部停用抛 ACCOUNT_DISABLED | keywords: 两步登录, 手机号登录, 可选租户, two-step-login, phone-login, login-tenant-options
   - `selectLoginTenant({loginTicket,tenantId?})` — 两步登录第二步：票据失效抛 LOGIN_TICKET_EXPIRED，租户不在候选抛 TENANT_NOT_BOUND | keywords: 选择登录租户, 签发会话, select-login-tenant, issue-session
@@ -163,6 +163,7 @@
   - `AdminAccountEntity` — 平台手机号账号(`admin_accounts`，phone 唯一)，可选 email 以小写去空格形式存储 | keywords: 手机号账号, 多租户身份, phone-account-entity, multi-tenant-identity
   - `AdminLoginTicketPayload` — 两步登录票据载荷(typ/uids/exp/iat) | keywords: 登录票据, 候选租户, login-ticket-payload, tenant-candidates
   - `AdminLoginTenantOption` — 登录可选租户项(tenantId 空串为平台端) | keywords: 可选租户, 登录租户选择, login-tenant-option, tenant-selection
+  - `AdminAiProviderEntity` — AI 提供商配置，`providerCode + modelCategory` 唯一；类别 llm / em / image / video / audio（audio 支持音色克隆及声音设计，创建 / 更新 DTO 与服务端规整同步放行） | keywords: AI提供商配置, 模型类别, ai-provider-entity, model-category
 
 ### controller/admin.dto.ts
 后台请求体定义。

@@ -1183,21 +1183,22 @@ export class GalleryService {
   }
 
   /**
-   * @description 批量为图片添加/移除标签（基于 userId + id 列表）。
-   * @param {{ userId: string; ids: number[]; addTags?: unknown; removeTags?: unknown }} input - 批量更新输入。
+   * @description 批量为当前租户可见图片添加/移除标签，可见口径与图库列表一致。
+   * @param {{ userId?: string; tenantId?: string; ids: number[]; addTags?: unknown; removeTags?: unknown }} input - 批量更新输入。
    * @returns {Promise<{ matched: number; modified: number }>} 匹配与修改数量。
    * @throws {Error} 当MongoDB updateMany 失败时抛出。
    * @keyword gallery, tag, batch
+   * @keyword-cn 批量改标签, 租户可见范围
+   * @keyword-en batch-update-tags, tenant-visibility
    * @since 2026-02-04
    */
   async updateTagsBatch(input: {
-    userId: string;
+    userId?: string;
+    tenantId?: string;
     ids: number[];
     addTags?: unknown;
     removeTags?: unknown;
   }): Promise<{ matched: number; modified: number }> {
-    const userId = String(input?.userId ?? '').trim();
-    if (!userId) return { matched: 0, modified: 0 };
     const ids = (Array.isArray(input?.ids) ? input.ids : [])
       .map((x) => Number(x))
       .filter((x) => Number.isFinite(x));
@@ -1221,32 +1222,42 @@ export class GalleryService {
     }
 
     const res = await this.images.updateMany(
-      { userId, id: { $in: ids } },
+      {
+        $and: [
+          this.buildTenantFilter(input.userId, input.tenantId),
+          { id: { $in: ids } },
+        ],
+      },
       update,
     );
     return { matched: res.matchedCount ?? 0, modified: res.modifiedCount ?? 0 };
   }
 
   /**
-   * @description 删除单张图片记录，并在安全范围内尝试删除本地文件与缩略图文件。
-   * @param {{ userId: string; id: number }} input - 删除输入。
+   * @description 删除当前租户可见的单张图片记录，并在安全范围内尝试删除本地文件与缩略图文件。
+   * @param {{ userId?: string; tenantId?: string; id: number }} input - 删除输入。
    * @returns {Promise<{ ok: boolean }>} 删除结果。
    * @throws {Error} 当MongoDB查询或删除失败时抛出。
    * @keyword gallery, image, delete
+   * @keyword-cn 删除图片, 租户可见范围
+   * @keyword-en delete-image, tenant-visibility
    * @since 2026-02-04
    */
   async deleteImage(input: {
-    userId: string;
+    userId?: string;
+    tenantId?: string;
     id: number;
   }): Promise<{ ok: boolean }> {
-    const userId = String(input?.userId ?? '').trim();
     const id = Number(input?.id);
-    if (!userId || !Number.isFinite(id)) return { ok: false };
+    if (!Number.isFinite(id)) return { ok: false };
 
-    const doc = await this.images.findOne({ userId, id });
+    const filter = {
+      $and: [this.buildTenantFilter(input.userId, input.tenantId), { id }],
+    };
+    const doc = await this.images.findOne(filter);
     if (!doc) return { ok: false };
 
-    const del = await this.images.deleteOne({ userId, id });
+    const del = await this.images.deleteOne({ _id: doc._id });
     if (!del.deletedCount) return { ok: false };
 
     const absPath = typeof doc.absPath === 'string' ? doc.absPath : '';
@@ -1273,17 +1284,18 @@ export class GalleryService {
 
   /**
    * @description 批量删除图片记录及其本地原图/缩略图文件，逐条复用单删逻辑，互不阻断。
-   * @param {{ userId: string; ids: number[] }} input - 批量删除输入（当前租户 userId + 图片自增 id 列表）。
+   * @param {{ userId?: string; tenantId?: string; ids: number[] }} input - 批量删除输入（token 用户与租户 + 图片自增 id 列表）。
    * @returns {Promise<{ deleted: number; failed: number; deletedIds: number[] }>} 成功/失败统计与已删除 id。
    * @keyword gallery, image, delete, batch
    * @keyword-cn 图库批量删除
    * @keyword-en gallery batch delete images
    */
   async deleteManyImages(input: {
-    userId: string;
+    userId?: string;
+    tenantId?: string;
     ids: number[];
   }): Promise<{ deleted: number; failed: number; deletedIds: number[] }> {
-    const userId = String(input?.userId ?? '').trim();
+    const { userId, tenantId } = input;
     const ids = Array.from(
       new Set(
         (Array.isArray(input?.ids) ? input.ids : [])
@@ -1292,13 +1304,13 @@ export class GalleryService {
           .map((x) => Math.floor(x)),
       ),
     );
-    if (!userId || ids.length === 0) {
+    if (ids.length === 0) {
       return { deleted: 0, failed: 0, deletedIds: [] };
     }
     const deletedIds: number[] = [];
     let failed = 0;
     for (const id of ids) {
-      const res = await this.deleteImage({ userId, id });
+      const res = await this.deleteImage({ userId, tenantId, id });
       if (res.ok) deletedIds.push(id);
       else failed++;
     }
@@ -1306,20 +1318,21 @@ export class GalleryService {
   }
 
   /**
-   * @description 批量重建图片Embedding向量，支持从指定 startId 起更新 limit 条。
-   * @param {{ userId: string; startId?: number; limit?: number }} input - 重建输入。
+   * @description 批量重建当前租户可见图片的Embedding向量，支持从指定 startId 起更新 limit 条。
+   * @param {{ userId?: string; tenantId?: string; startId?: number; limit?: number }} input - 重建输入。
    * @returns {Promise<{ updated: number }>} 更新条数。
    * @throws {Error} 当MongoDB读取/写入失败时抛出。
    * @keyword gallery, embedding, batch
+   * @keyword-cn 重建向量, 租户可见范围
+   * @keyword-en rebuild-embeddings, tenant-visibility
    * @since 2026-02-04
    */
   async rebuildEmbeddings(input: {
-    userId: string;
+    userId?: string;
+    tenantId?: string;
     startId?: number;
     limit?: number;
   }): Promise<{ updated: number }> {
-    const userId = String(input?.userId ?? '').trim();
-    if (!userId) return { updated: 0 };
     const startId =
       typeof input?.startId === 'number' && Number.isFinite(input.startId)
         ? input.startId
@@ -1331,8 +1344,11 @@ export class GalleryService {
       Math.min(200, Math.floor(Number(input?.limit ?? 50))),
     );
 
-    const filter: Record<string, unknown> = { userId };
-    if (Number.isFinite(startId)) filter.id = { $gte: startId };
+    const conditions: Record<string, unknown>[] = [
+      this.buildTenantFilter(input.userId, input.tenantId),
+    ];
+    if (Number.isFinite(startId)) conditions.push({ id: { $gte: startId } });
+    const filter = { $and: conditions };
 
     const rows = await this.images
       .find(filter, {

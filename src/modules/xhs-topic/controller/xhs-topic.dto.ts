@@ -32,6 +32,10 @@ import {
   type XhsMotherImageRule,
   type XhsTopicKind,
 } from '../entities/xhs-topic.entity.js';
+import {
+  XHS_CLEANUP_MAX_COUNT_LIMIT,
+  XHS_CLEANUP_RETENTION_MAX_DAYS,
+} from '../xhs-topic-retention.constants.js';
 
 /**
  * @description 请求 Agent 生成母选题或子选题候选的参数，子题可指定文章生成风格。
@@ -599,4 +603,46 @@ export class UpdateXhsArticleDto {
   @IsOptional()
   @IsIn(['图文', '视频', '直播'])
   contentType?: '图文' | '视频' | '直播';
+}
+
+/**
+ * @description 单类内容的清理规则：开关、1 至 3650 天的保留天数、0 至 100000 的数量上限（0 表示不限）。
+ * @keyword-cn 清理规则参数, 保留天数, 数量上限
+ * @keyword-en cleanup-rule-dto, retention-days, max-count
+ */
+export class XhsCleanupRuleDto {
+  @IsBoolean()
+  enabled!: boolean;
+
+  @IsInt()
+  @Min(1)
+  @Max(XHS_CLEANUP_RETENTION_MAX_DAYS)
+  retentionDays!: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(XHS_CLEANUP_MAX_COUNT_LIMIT)
+  maxCount!: number;
+}
+
+/**
+ * @description 租户保存清理设置的请求，三类内容各自可选，未传的保持原值。
+ * @keyword-cn 保存清理设置参数, 租户清理设置
+ * @keyword-en update-cleanup-settings-dto, tenant-cleanup-settings
+ */
+export class UpdateXhsCleanupSettingsDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => XhsCleanupRuleDto)
+  motherTopic?: XhsCleanupRuleDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => XhsCleanupRuleDto)
+  draftArticle?: XhsCleanupRuleDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => XhsCleanupRuleDto)
+  libraryArticle?: XhsCleanupRuleDto;
 }

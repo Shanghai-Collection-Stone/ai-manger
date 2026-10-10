@@ -216,8 +216,8 @@ export class UpsertAiProviderDto {
   model?: string;
 
   @IsString()
-  @IsIn(['llm', 'em', 'image', 'video'])
-  modelCategory!: 'llm' | 'em' | 'image' | 'video';
+  @IsIn(['llm', 'em', 'image', 'video', 'audio'])
+  modelCategory!: 'llm' | 'em' | 'image' | 'video' | 'audio';
 
   @IsOptional()
   @IsString()
@@ -272,8 +272,8 @@ export class UpdateAiProviderDto {
   model?: string;
 
   @IsOptional()
-  @IsIn(['llm', 'em', 'image', 'video'])
-  modelCategory?: 'llm' | 'em' | 'image' | 'video';
+  @IsIn(['llm', 'em', 'image', 'video', 'audio'])
+  modelCategory?: 'llm' | 'em' | 'image' | 'video' | 'audio';
 
   @IsOptional()
   @IsString()

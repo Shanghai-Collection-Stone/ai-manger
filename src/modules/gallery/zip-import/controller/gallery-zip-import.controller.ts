@@ -102,7 +102,6 @@ export class GalleryZipImportController {
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body()
     body: {
-      userId?: string;
       groupId?: string;
       tags?: string;
     },
@@ -111,8 +110,8 @@ export class GalleryZipImportController {
     if (!file) throw new BadRequestException('未上传 ZIP 文件');
     file.originalname = normalizeGalleryUploadFilename(file.originalname);
     const scope = await this.resolveAuthScope(req);
-    const userId = String(body?.userId ?? '').trim() || scope.userId;
-    if (!userId) throw new BadRequestException('userId is required');
+    const userId = scope.userId;
+    if (!userId) throw new UnauthorizedException('AUTH_REQUIRED');
 
     const rawTags = String(body?.tags ?? '');
     const tags = rawTags
@@ -144,20 +143,18 @@ export class GalleryZipImportController {
   }
 
   /**
-   * @description 列出当前作用域最近的 zip 导入任务
+   * @description 列出当前作用域最近的 zip 导入任务；用户只取 token
    * @keyword-en list recent zip import jobs
    */
   @Get('list')
   async list(
     @Query('limit') limit: string | undefined,
-    @Query('userId') userId: string | undefined,
     @Req() req: Request,
   ): Promise<{ jobs: Array<Record<string, unknown>> }> {
     const scope = await this.resolveAuthScope(req);
     const lim = limit ? Number(limit) : 30;
-    const uid = String(userId ?? '').trim() || scope.userId;
     const rows = await this.zipImport.listRecent(
-      uid,
+      scope.userId,
       scope.tenantId,
       Number.isFinite(lim) ? lim : 30,
     );

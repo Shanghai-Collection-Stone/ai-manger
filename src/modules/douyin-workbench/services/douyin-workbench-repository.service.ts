@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
 import {
@@ -14,6 +15,8 @@ import {
   type DouyinScriptStyle,
   type DouyinStoryboardPreference,
   type DouyinStoryboardShot,
+  type DouyinStoreVisitSegment,
+  type DouyinStoreVisitVoiceSample,
   type DouyinTopicEntity,
   type DouyinVideoAudioSetting,
   type DouyinWorkspaceGroup,
@@ -146,6 +149,103 @@ export function normalizeReferenceImages(
 }
 
 /**
+ * @description 规整探店台词：统一换行、去掉首尾空白，最多 2000 字；空串表示清掉。
+ * @keyword-cn 规整探店台词, 台词字数
+ * @keyword-en normalize-store-visit-lines, lines-length
+ * @param input 前端传入的台词。
+ * @returns {string} 规整后的台词。
+ */
+export function normalizeStoreVisitLines(input?: string | null): string {
+  return String(input ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim()
+    .slice(0, 2000);
+}
+
+/**
+ * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（可灵语音合成单次上限），动作描述最多 300 字。
+ * @keyword-cn 探店分段上限, 单段台词上限
+ * @keyword-en store-visit-segment-limit, segment-lines-limit
+ */
+export const DOUYIN_STORE_VISIT_SEGMENT_LIMITS = {
+  count: 8,
+  lines: 1000,
+  action: 300,
+} as const;
+
+/**
+ * @description 规整探店分段（只收台词、场景图 ID、动作与段 ID，关键帧和成片由服务端写）：去掉空台词段，
+ *   段 ID 不合法或重复时换新，场景图不在本选题场景里时清空，最多 8 段。
+ * @keyword-cn 规整探店分段, 分段校验
+ * @keyword-en normalize-store-visit-segments, segment-validation
+ * @param input 前端传入的分段。
+ * @param sceneImageIds 本选题当前的场景图 ID。
+ * @returns {DouyinStoreVisitSegment[]} 规整后的分段（不含关键帧与成片）。
+ */
+export function normalizeStoreVisitSegments(
+  input: Array<Partial<DouyinStoreVisitSegment>> | null | undefined,
+  sceneImageIds: number[],
+): DouyinStoreVisitSegment[] {
+  const seen = new Set<string>();
+  const list: DouyinStoreVisitSegment[] = [];
+  for (const item of Array.isArray(input) ? input : []) {
+    const lines = normalizeStoreVisitLines(item?.lines).slice(
+      0,
+      DOUYIN_STORE_VISIT_SEGMENT_LIMITS.lines,
+    );
+    if (!lines) continue;
+    let id = String(item?.id ?? '').trim();
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || seen.has(id))
+      id = randomUUID().slice(0, 12);
+    seen.add(id);
+    const sceneImageId = Number(item?.sceneImageId);
+    const action = String(item?.action ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.action);
+    list.push({
+      id,
+      lines,
+      ...(sceneImageIds.includes(sceneImageId) ? { sceneImageId } : {}),
+      ...(action ? { action } : {}),
+    });
+    if (list.length >= DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count) break;
+  }
+  return list;
+}
+
+/**
+ * @description 保存分段时接上服务端写入的字段：同一段场景没变就保留关键帧；台词、场景、动作都没变且关键帧还在时保留成片。
+ * @keyword-cn 合并探店分段, 保留关键帧
+ * @keyword-en merge-store-visit-segments, keep-keyframe
+ * @param next 规整后的新分段。
+ * @param current 选题里已保存的分段。
+ * @returns {DouyinStoreVisitSegment[]} 合并后的分段。
+ */
+export function mergeStoreVisitSegments(
+  next: DouyinStoreVisitSegment[],
+  current: DouyinStoreVisitSegment[] | undefined,
+): DouyinStoreVisitSegment[] {
+  const byId = new Map((current ?? []).map((segment) => [segment.id, segment]));
+  return next.map((segment) => {
+    const previous = byId.get(segment.id);
+    if (!previous || previous.sceneImageId !== segment.sceneImageId)
+      return segment;
+    const keyframe = previous.keyframe;
+    const unchanged =
+      previous.lines === segment.lines &&
+      (previous.action ?? '') === (segment.action ?? '');
+    return {
+      ...segment,
+      ...(keyframe ? { keyframe } : {}),
+      ...(keyframe && unchanged && previous.videoId
+        ? { videoId: previous.videoId }
+        : {}),
+    };
+  });
+}
+
+/**
  * @description 持久化抖音母子选题、分镜与真实素材引用，并强制租户用户隔离。
  * @keyword-cn 抖音工作台仓储, 租户隔离
  * @keyword-en douyin-workbench-repository, tenant-isolation
@@ -217,7 +317,7 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
-   * @description 人工新建真实母选题，子选题只能由专用 LLM 生成链路批量写入。
+   * @description 人工新建真实母选题；探店模式同时建立独立制作草稿，分镜模式的脚本由 LLM 生成链路写入。
    * @keyword-cn 新建抖音母题, 人工母题
    * @keyword-en create-douyin-mother, manual-mother-topic
    */
@@ -225,6 +325,7 @@ export class DouyinWorkbenchRepositoryService {
     input: {
       kind: 'mother';
       title: string;
+      productionMode?: 'storyboard' | 'store-visit';
       knowledgeIds?: string[];
     },
     scope: DouyinScope,
@@ -237,6 +338,7 @@ export class DouyinWorkbenchRepositoryService {
       userId: scope.userId,
       kind: 'mother',
       title: input.title.trim(),
+      productionMode: input.productionMode || 'storyboard',
       knowledgeIds: normalizeKnowledgeIds(input.knowledgeIds),
       platform: 'douyin',
       storyboard: [],
@@ -244,7 +346,20 @@ export class DouyinWorkbenchRepositoryService {
       createdAt: now,
       updatedAt: now,
     };
-    await this.topics.insertOne(doc);
+    if (doc.productionMode === 'store-visit') {
+      const draft: DouyinTopicEntity = {
+        ...doc,
+        _id: new ObjectId(),
+        id: await this.nextId(),
+        kind: 'child',
+        parentId: doc.id,
+        knowledgeIds: undefined,
+        storeVisit: {},
+      };
+      await this.topics.insertMany([doc, draft]);
+    } else {
+      await this.topics.insertOne(doc);
+    }
     return doc;
   }
 
@@ -366,7 +481,18 @@ export class DouyinWorkbenchRepositoryService {
       videoAudio?: Partial<DouyinVideoAudioSetting>;
       fullVideoDuration?: number;
       fullVideoResolution?: string;
+      shotVideoResolution?: string;
       publishCopy?: Partial<DouyinPublishCopy>;
+      storeVisit?: {
+        faceImage?: Partial<DouyinMediaReference> | null;
+        sceneImages?: Array<Partial<DouyinMediaReference>>;
+        sceneDescription?: string;
+        voiceMode?: 'prompt';
+        voiceDescription?: string;
+        lines?: string;
+        segments?: Array<Partial<DouyinStoreVisitSegment>>;
+      };
+      autoConcatShots?: boolean;
       storyboard?: DouyinStoryboardShot[];
       generatedVideoId?: number;
     },
@@ -379,6 +505,8 @@ export class DouyinWorkbenchRepositoryService {
     if (input.generatedVideoId)
       await this.requireVideo(input.generatedVideoId, scope);
     const updates: Partial<DouyinTopicEntity> = { updatedAt: new Date() };
+    /* 探店设置按子字段写，避免前端改人脸或台词时冲掉服务端写入的音色 */
+    const nested: Record<string, unknown> = {};
     if (input.title !== undefined) updates.title = input.title.trim();
     if (input.knowledgeIds !== undefined && current.kind === 'mother')
       updates.knowledgeIds = normalizeKnowledgeIds(input.knowledgeIds);
@@ -423,10 +551,103 @@ export class DouyinWorkbenchRepositoryService {
         updates.fullVideoResolution = resolution;
       else unset.fullVideoResolution = '';
     }
+    // 分镜清晰度同一套规则，整条脚本的分镜共用
+    if (input.shotVideoResolution !== undefined) {
+      const resolution = String(input.shotVideoResolution ?? '').trim();
+      if (/^[A-Za-z0-9_]{1,20}$/.test(resolution))
+        updates.shotVideoResolution = resolution;
+      else unset.shotVideoResolution = '';
+    }
     if (input.publishCopy !== undefined) {
       const publishCopy = normalizePublishCopy(input.publishCopy);
       if (publishCopy) updates.publishCopy = publishCopy;
       else unset.publishCopy = '';
+    }
+    if (input.storeVisit?.faceImage !== undefined) {
+      const [faceImage] = normalizeReferenceImages(
+        input.storeVisit.faceImage ? [input.storeVisit.faceImage] : [],
+      );
+      if (faceImage) {
+        await this.validateMediaReferences([faceImage], scope);
+        nested['storeVisit.faceImage'] = faceImage;
+      } else unset['storeVisit.faceImage'] = '';
+    }
+    if (input.storeVisit?.lines !== undefined) {
+      const lines = normalizeStoreVisitLines(input.storeVisit.lines);
+      if (lines) nested['storeVisit.lines'] = lines;
+      else unset['storeVisit.lines'] = '';
+    }
+    if (input.autoConcatShots !== undefined) {
+      if (input.autoConcatShots) updates.autoConcatShots = true;
+      else unset.autoConcatShots = '';
+    }
+    let sceneImages = current.storeVisit?.sceneImages ?? [];
+    if (input.storeVisit?.sceneImages !== undefined) {
+      const images = normalizeReferenceImages(input.storeVisit.sceneImages);
+      await this.validateMediaReferences(images, scope);
+      nested['storeVisit.sceneImages'] = images;
+      sceneImages = images;
+    }
+    // 分段只收台词、场景与动作，关键帧和成片按段 ID 从已保存的分段接上；全文台词跟着分段走
+    if (input.storeVisit?.segments !== undefined) {
+      if (current.kind !== 'child')
+        throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
+      const segments = mergeStoreVisitSegments(
+        normalizeStoreVisitSegments(
+          input.storeVisit.segments,
+          sceneImages.map((image) => image.id),
+        ),
+        current.storeVisit?.segments,
+      );
+      nested['storeVisit.segments'] = segments;
+      if (input.storeVisit.lines === undefined) {
+        const lines = normalizeStoreVisitLines(
+          segments.map((segment) => segment.lines).join('\n'),
+        );
+        if (lines) {
+          nested['storeVisit.lines'] = lines;
+          delete unset['storeVisit.lines'];
+        } else unset['storeVisit.lines'] = '';
+      }
+    }
+    if (input.storeVisit?.sceneDescription !== undefined) {
+      nested['storeVisit.sceneDescription'] = String(
+        input.storeVisit.sceneDescription,
+      )
+        .trim()
+        .slice(0, 2000);
+    }
+    if (
+      input.storeVisit?.voiceDescription !== undefined ||
+      input.storeVisit?.voiceMode !== undefined
+    ) {
+      if (current.kind !== 'child')
+        throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
+      if (input.storeVisit.voiceDescription !== undefined) {
+        nested['storeVisit.voiceDescription'] = String(
+          input.storeVisit.voiceDescription,
+        )
+          .trim()
+          .slice(0, 1000);
+      }
+      if (input.storeVisit.voiceMode === 'prompt') {
+        nested['storeVisit.voiceSource'] = 'design';
+        nested['storeVisit.voiceMode'] = 'prompt';
+        for (const key of [
+          'voiceId',
+          'voiceName',
+          'voiceProviderId',
+          'voiceModel',
+          'voiceSample',
+          'voicePreviewText',
+          'voicePreviewUrl',
+          'voiceLanguage',
+          'voiceCreatedAt',
+          'voiceClonedAt',
+        ]) {
+          unset[`storeVisit.${key}`] = '';
+        }
+      }
     }
     if (input.storyboard !== undefined) {
       updates.storyboard = input.storyboard;
@@ -436,12 +657,132 @@ export class DouyinWorkbenchRepositoryService {
       updates.generatedVideoId = input.generatedVideoId;
       updates.status = 'video_ready';
     }
+    const $set = { ...updates, ...nested };
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id },
-      Object.keys(unset).length
-        ? { $set: updates, $unset: unset }
-        : { $set: updates },
+      Object.keys(unset).length ? { $set, $unset: unset } : { $set },
       { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 写入克隆、设计服务返回的音色或从数眼可灵音色库选的音色，并清除上一来源的样本、描述、试听和语种信息，人脸与台词保持不变。
+   * @keyword-cn 保存克隆音色, 探店音色
+   * @keyword-en save-cloned-voice, store-visit-voice
+   * @param {number} id 子选题（脚本）ID。
+   * @param {object} voice 音色来源、ID、提供商、模型，以及录音样本、设计描述、试听或语种。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，不存在时为 null。
+   */
+  async saveStoreVisitVoice(
+    id: number,
+    voice: {
+      voiceSource: 'clone' | 'design' | 'preset';
+      voiceName: string;
+      voiceSample?: DouyinStoreVisitVoiceSample;
+      voiceDescription?: string;
+      voicePreviewText?: string;
+      voicePreviewUrl?: string;
+      voiceLanguage?: 'zh' | 'en';
+      voiceId: string;
+      voiceProviderId: string;
+      voiceModel: string;
+    },
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    const now = new Date();
+    const optional = {
+      voiceSample: voice.voiceSample,
+      voiceDescription: voice.voiceDescription,
+      voicePreviewText: voice.voicePreviewText,
+      voicePreviewUrl: voice.voicePreviewUrl,
+      voiceLanguage: voice.voiceLanguage,
+      voiceClonedAt: voice.voiceSource === 'clone' ? now : undefined,
+    };
+    const fields: Record<string, unknown> = {};
+    const unset: Record<string, ''> = {};
+    for (const [key, value] of Object.entries(optional)) {
+      if (value !== undefined) fields[`storeVisit.${key}`] = value;
+      else unset[`storeVisit.${key}`] = '';
+    }
+    return await this.topics.findOneAndUpdate(
+      { ...this.scopeFilter(scope), id, kind: 'child' },
+      {
+        $set: {
+          ...fields,
+          'storeVisit.voiceSource': voice.voiceSource,
+          'storeVisit.voiceMode': 'generated',
+          'storeVisit.voiceName': voice.voiceName,
+          'storeVisit.voiceId': voice.voiceId,
+          'storeVisit.voiceProviderId': voice.voiceProviderId,
+          'storeVisit.voiceModel': voice.voiceModel,
+          'storeVisit.voiceCreatedAt': now,
+          updatedAt: now,
+        },
+        ...(Object.keys(unset).length ? { $unset: unset } : {}),
+      },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 原子地清掉「全部出片后自动合成」标记，只有真的清掉（之前是 true）的那次调用返回 true，
+   *   多个分镜同时出片时保证只触发一次合成。
+   * @keyword-cn 认领自动合成, 防重复合成
+   * @keyword-en claim-auto-concat, dedupe-concat
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<boolean>} 是否由本次调用认领到。
+   */
+  async claimAutoConcat(id: number, scope: DouyinScope): Promise<boolean> {
+    const result = await this.topics.updateOne(
+      { ...this.scopeFilter(scope), id, autoConcatShots: true },
+      { $unset: { autoConcatShots: '' }, $set: { updatedAt: new Date() } },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * @description 只更新探店某一段的服务端字段：`keyframe` 写入新关键帧（同时作废这段的成片），`videoId` 绑定成片（先校验视频库归属），
+   *   `videoId: null` 清掉成片。按段 ID 定位写入，多段同时出片时互不覆盖；段已被删掉时返回 null。
+   * @keyword-cn 更新探店分段, 分段局部写入
+   * @keyword-en update-store-visit-segment, partial-segment-write
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string} segmentId 分段 ID。
+   * @param {{keyframe?: DouyinMediaReference, videoId?: number|null}} patch 要写入的字段。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，选题或分段不存在时为 null。
+   */
+  async updateStoreVisitSegment(
+    topicId: number,
+    segmentId: string,
+    patch: { keyframe?: DouyinMediaReference; videoId?: number | null },
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    if (patch.videoId) await this.requireVideo(patch.videoId, scope);
+    if (patch.keyframe)
+      await this.validateMediaReferences([patch.keyframe], scope);
+    const $set: Record<string, unknown> = { updatedAt: new Date() };
+    const $unset: Record<string, ''> = {};
+    if (patch.keyframe) {
+      $set['storeVisit.segments.$[segment].keyframe'] = patch.keyframe;
+      $unset['storeVisit.segments.$[segment].videoId'] = '';
+    }
+    if (patch.videoId)
+      $set['storeVisit.segments.$[segment].videoId'] = patch.videoId;
+    else if (patch.videoId === null)
+      $unset['storeVisit.segments.$[segment].videoId'] = '';
+    return await this.topics.findOneAndUpdate(
+      {
+        ...this.scopeFilter(scope),
+        id: topicId,
+        'storeVisit.segments.id': segmentId,
+      },
+      Object.keys($unset).length ? { $set, $unset } : { $set },
+      {
+        returnDocument: 'after',
+        arrayFilters: [{ 'segment.id': segmentId }],
+      },
     );
   }
 

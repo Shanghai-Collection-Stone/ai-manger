@@ -28,6 +28,7 @@ import {
 } from '../../pixmax/services/pixmax-error.js';
 import {
   buildPixmaxVideoParams,
+  listPixmaxDurationChoices,
   mapPixmaxTaskStatus,
   requiresPixmaxCompliance,
   type PixmaxVideoMode,
@@ -397,15 +398,23 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
       (sum, shot) => sum + (Number(shot.duration) || 0),
       0,
     );
-    // 整片可在视频栏设定目标时长，未设定时按分镜总时长；单镜按这一镜的时长
+    // 整片可在视频栏设定目标时长，未设定时用模型能生成的最长时长（模型没有时长参数时按分镜总时长）；单镜按这一镜的时长
+    const durationChoices = listPixmaxDurationChoices(runtime.model);
     const chosenSeconds =
-      mode === 'full' && Number(topic.fullVideoDuration) > 0
-        ? Number(topic.fullVideoDuration)
-        : undefined;
+      mode !== 'full'
+        ? undefined
+        : Number(topic.fullVideoDuration) > 0
+          ? Number(topic.fullVideoDuration)
+          : durationChoices.length
+            ? Math.max(...durationChoices)
+            : undefined;
     const targetSeconds = chosenSeconds ?? plannedSeconds;
-    // 清晰度只在整片栏设定，分镜仍走模型默认档
-    const chosenResolution =
-      mode === 'full' ? String(topic.fullVideoResolution ?? '').trim() : '';
+    // 整片与分镜各有自己的清晰度设定，空串走模型默认档
+    const chosenResolution = String(
+      (mode === 'full'
+        ? topic.fullVideoResolution
+        : topic.shotVideoResolution) ?? '',
+    ).trim();
     const audio = normalizeVideoAudio(topic.videoAudio);
     const persona = topic.personaId
       ? await this.personas.get(topic.personaId, scope)

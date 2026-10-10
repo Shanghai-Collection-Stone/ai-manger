@@ -6,7 +6,12 @@ import { adminApi } from './adminApi';
  * @keyword-cn 节点类型文案
  * @keyword-en node-category-labels
  */
-const CATEGORY_LABELS = { llm: '文本', image: '生图', video: '生视频' };
+const CATEGORY_LABELS = {
+  llm: '文本',
+  image: '生图',
+  video: '生视频',
+  audio: '音色',
+};
 
 /**
  * @description 记住上次选中工作流子菜单的本地存储 key
@@ -16,7 +21,7 @@ const CATEGORY_LABELS = { llm: '文本', image: '生图', video: '生视频' };
 const ACTIVE_WORKFLOW_STORAGE_KEY = 'admin_workflow_models_active';
 
 /**
- * @description 节点未设置时的回退说明文案
+ * @description 节点未设置时的回退说明文案；节点自带 `unsetHint`（如探店节点未指定即不可用）时优先用它
  * @keyword-cn 默认回退文案, 未设置说明
  * @keyword-en fallback-label, unset-hint
  * @param {object} node 节点视图。
@@ -26,6 +31,7 @@ function describeFallback(node) {
   if (node.fallback) {
     return `${node.fallback.providerName}${node.fallback.model ? ` · ${node.fallback.model}` : ''}`;
   }
+  if (node.unsetHint) return node.unsetHint;
   if (node.category === 'image') return '未配置默认生图提供商，走美图兜底';
   if (node.category === 'video')
     return '未指定时走环境变量配置的视频生成直连服务';

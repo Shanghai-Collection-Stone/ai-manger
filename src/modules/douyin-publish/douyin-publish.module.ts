@@ -5,6 +5,7 @@ import { DouyinWorkbenchModule } from '../douyin-workbench/douyin-workbench.modu
 import { DouyinPublishController } from './controller/douyin-publish.controller.js';
 import { DouyinPublishTaskController } from './controller/douyin-publish-task.controller.js';
 import { DouyinPublishTokenGuard } from './guards/douyin-publish-token.guard.js';
+import { DouyinMiniappSchemaService } from './services/douyin-miniapp-schema.service.js';
 import { DouyinPublishLibraryService } from './services/douyin-publish-library.service.js';
 import { DouyinPublishWorkService } from './services/douyin-publish-work.service.js';
 
@@ -17,6 +18,7 @@ import { DouyinPublishWorkService } from './services/douyin-publish-work.service
   imports: [AdminModule, DataSourceModule, DouyinWorkbenchModule],
   controllers: [DouyinPublishController, DouyinPublishTaskController],
   providers: [
+    DouyinMiniappSchemaService,
     DouyinPublishLibraryService,
     DouyinPublishWorkService,
     DouyinPublishTokenGuard,

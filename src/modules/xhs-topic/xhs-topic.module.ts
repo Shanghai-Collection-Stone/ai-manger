@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AdminModule } from '../admin/admin.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
+import { ArticleLibraryModule } from '../article-library/article-library.module.js';
 import { CanvasModule } from '../canvas/canvas.module.js';
 import { McpFunctionCallModule } from '../function-call/mcp/mcp.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
@@ -15,6 +16,7 @@ import { XhsTopicService } from './services/xhs-topic.service.js';
 import { XhsTopicRepositoryService } from './services/xhs-topic-repository.service.js';
 import { XhsArticleGenerationService } from './services/xhs-article-generation.service.js';
 import { XhsTopicCleanupService } from './services/xhs-topic-cleanup.service.js';
+import { XhsTopicCleanupSettingsService } from './services/xhs-topic-cleanup-settings.service.js';
 
 /**
  * @description 小红书 AI 选题模块，编排 Agent 候选、MCP 搜索、Todo、真实图库与 MongoDB 真实选题。
@@ -26,6 +28,7 @@ import { XhsTopicCleanupService } from './services/xhs-topic-cleanup.service.js'
     AdminModule,
     AiAgentModule,
     AiBillingModule,
+    ArticleLibraryModule,
     CanvasModule,
     DataSourceModule,
     GalleryModule,
@@ -39,6 +42,7 @@ import { XhsTopicCleanupService } from './services/xhs-topic-cleanup.service.js'
   providers: [
     XhsArticleGenerationService,
     XhsTopicCleanupService,
+    XhsTopicCleanupSettingsService,
     XhsTopicRepositoryService,
     XhsTopicService,
   ],

@@ -49,7 +49,7 @@ Article-Library
 - `getStats(libraryId)` — 聚合文章库内发布状态和租约占用统计 | keywords: article-library, stats
 - `getThumbnailImages(libraryId,limit?)` — 读取文章库缩略图所需的最近文章首图 | keywords: article-library, thumbnail
 - `ArticleService()` — 文章服务 | keywords: article, service
-- `ensureIndexes()` — 建立文章队列、来源选题及 NoteId 关联查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
+- `ensureIndexes()` — 建立文章队列、来源选题、NoteId 关联及租户已发布清理查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
 - `getMaxArticleId()` — 读取当前最大文章业务 ID | keywords: article-id-counter, 文章入库, 计数器校准
 - `ensureCounterAtLeast(seq)` — 将 articles counter 至少推进到指定下限 | keywords: article-id-counter, 文章入库, 计数器校准
 - `nextId()` — 分配新文章业务 ID 前先校准 counter | keywords: article-id-counter, 文章入库, 计数器校准
@@ -61,6 +61,9 @@ Article-Library
 - `updatePublishStatus(id,status,tenantId?,leaseToken?,meta?)` — 更新发布状态并释放租约 | keywords: article, publish-status
 - `notifyCrawlSchedule(article,status)` — 小红书选题文章发布状态变化后通知专用采集调度表 | keywords: 发布触发采集, 调度表通知, publish-triggered-crawl, schedule-table-notify
 - `moveToLibrary({id,fromLibraryId,toLibraryId,tenantId?})` — 把文章移动到同租户下的另一个文章库，租约未过期的在途文章拒绝移动 | keywords: 移动文章, 跨库转移, move-article-to-library, cross-library-transfer
+- `listPublishedTenantIds()` — 列出存在已发布文章的租户，供按租户设置的自动清理遍历 | keywords: 已发布文章租户, 自动清理, list-published-tenants, auto-cleanup
+- `listPublishedForCleanup(tenantId?)` — 按发布时间升序列出租户已发布文章的轻量字段；无租户只匹配无租户文章 | keywords: 已发布文章清理候选, 发布时间排序, published-cleanup-candidates, published-at-order
+- `countByTenant(tenantId?)` — 统计租户全部文章（含未发布），作为文章库数量上限口径 | keywords: 租户文章总数, 数量上限, count-tenant-articles, max-count
 - `delete(id,tenantId?)` — 删除单篇文章 | keywords: article, delete
 - `leaseNext(params)` — 以 CAS 方式领取下一篇未发布文章并写入租约 | keywords: article, lease-next
 - `releaseLease(id,tenantId?,leaseToken?)` — 主动释放文章租约 | keywords: article, release-lease
@@ -150,6 +153,9 @@ Article-Library
 | 级联销毁工作区   | cascade-purge-workspace  |
 | 回收孤儿工作区   | purge-orphan-workspaces  |
 | 建库降级         | library-create-fallback  |
+| 已发布文章清理候选 | published-cleanup-candidates |
+| 租户文章总数     | count-tenant-articles    |
+| 已发布文章租户   | list-published-tenants   |
 
 ## 类型导出 (Type Exports)
 
@@ -175,3 +181,5 @@ Article-Library
 队列领取只面向 `unpublished` 文章，按 `createdAt` FIFO 排序，并通过 `findOneAndUpdate` 原子写入 `lockExpireAt` 和 `lastLeaseToken`。发布状态回写成功或主动 release 会释放租约；自然过期后文章可再次领取。`published` 文章不再参与领取池。
 
 二维码内容由文章库 `pushConfig.qrToken` 驱动，管理端可懒生成 token。默认二维码内容是包含 `token` 与 `articleLibraryId` 的 JSON 字符串；配置 `ARTICLE_LIBRARY_XHS_QR_SHORT_LINK` 或兼容环境变量时，会解析小红书短链落地 URL 并改写 miniapp qrcode 的 `p` 参数。
+
+**按租户设置的自动清理**：[xhs-topic](../xhs-topic/module.md) 的每日清理在租户开启「文章库文章」清理后，经 `listPublishedTenantIds` / `listPublishedForCleanup` / `countByTenant` 读取候选，只删除超过保留期或超出租户数量上限的已发布文章（数量按租户全部文章合计，未发布与租约中的不删），删除走 `delete` 以同步停止抓取调度。这三个方法在无租户时只匹配无租户文章，不像管理端接口那样放开到全部租户。

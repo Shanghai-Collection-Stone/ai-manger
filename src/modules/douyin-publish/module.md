@@ -10,7 +10,8 @@
 
 - `douyin-publish.module.ts` — Nest 模块声明，装配数据源、后台鉴权、抖音工作台视频校验、控制器与服务。
 - `entities/douyin-publish.entity.ts` — 发布库、发布作品、统计、接口视图与十分钟租约常量定义。
-- `services/douyin-publish-library.service.ts` — 发布库 CRUD、批量统计、二维码 token 与扫码 token 查询。
+- `services/douyin-publish-library.service.ts` — 发布库 CRUD、批量统计、二维码 token、长期 Schema 缓存与扫码 token 查询。
+- `services/douyin-miniapp-schema.service.ts` — 抖音小程序 client_token 缓存与「生成 SchemaV2」调用，产出抖音扫一扫可直接打开发布页的 `sslocal://miniapp?ticket=…`。
 - `services/douyin-publish-work.service.ts` — 视频快照入库、作品列表、选题位置、换库、FIFO 租约与发布结果回写。
 - `controller/douyin-publish.controller.ts` — `/api/douyin-publish` 管理端接口。
 - `controller/douyin-publish-task.controller.ts` — `/api/publish-tasks` 抖音小程序扫码 token 接口。
@@ -35,7 +36,18 @@
 - `require(id,scope)` — 要求当前作用域发布库存在 | keywords: 要求发布库, 发布库不存在, require-publish-library, publish-library-not-found
 - `update(id,name,scope)` — 更新发布库名称 | keywords: 更新发布库, update-publish-library
 - `remove(id,scope)` — 删除空发布库 | keywords: 删除发布库, 非空库保护, delete-publish-library, non-empty-library-guard
-- `getQr(id,scope)` — 懒生成 token 并构造二维码内容 | keywords: 生成发布二维码, 懒生成令牌, build-publish-qr, lazy-qr-token
+- `getQr(id,scope)` — 懒生成 token 并构造二维码内容：配置小程序 AppID 时为长期 Schema，否则沿用链接模板或原始 JSON | keywords: 生成发布二维码, 懒生成令牌, build-publish-qr, lazy-qr-token
+- `resolveQrSchema(library,query)` — 复用或生成一次发布库长期 Schema 并写回发布库，同库并发只生成一次 | keywords: 发布库Schema, 生成一次复用, publish-library-schema, generate-once-reuse
+- `DouyinMiniappSchemaError(code,detail?,errNo?)` — 抖音开放平台调用失败，带业务错误码与抖音原始错误 | keywords: 抖音开放平台错误, 生成Schema失败, douyin-open-api-error, generate-schema-failure
+- `DouyinMiniappSchemaService(config)` — 抖音小程序 Schema 生成服务，client_token 按进程缓存并在令牌失效时刷新重试一次 | keywords: 抖音小程序Schema, 扫码唤起小程序, douyin-miniapp-schema, qr-open-miniapp
+- `readSettings()` — 读取小程序 AppID、AppSecret、网关与发布页路径 | keywords: 小程序配置, 配置读取, miniapp-config, config-read
+- `isConfigured()` — 是否已配置小程序 AppID 与 AppSecret | keywords: 小程序配置, 是否启用Schema, miniapp-config, schema-enabled
+- `buildSchemaKey(query)` — 当前 Schema 的身份键（AppID + 发布页 + 启动参数） | keywords: Schema身份键, 失效判断, schema-identity-key, cache-invalidation
+- `generatePermanentSchema(query)` — 生成长期有效 Schema，启动参数原样作为页面 options | keywords: 生成长期Schema, 扫码唤起小程序, generate-permanent-schema, qr-open-miniapp
+- `postSchema(settings,token,body)` — 调用生成 SchemaV2 并整理错误码与 Schema | keywords: 生成Schema请求, 抖音开放平台, generate-schema-request, douyin-open-api
+- `getClientToken(settings,forceRefresh)` — 取缓存或单路在途换新 client_token | keywords: 获取client_token, 令牌缓存, get-client-token, token-cache
+- `fetchClientToken(settings)` — 以 client_credential 换取 client_token 并写入缓存 | keywords: 获取client_token, 非用户授权, get-client-token, client-credential
+- `postJson(url,body,headers?)` — 带超时的 JSON POST，网络错误与非 JSON 响应统一抛出 | keywords: 抖音接口请求, 超时控制, douyin-open-api-request, timeout-control
 - `findByToken(token)` — 通过全局唯一 token 查询发布库 | keywords: 二维码鉴权查询, find-library-by-token
 - `getStats(libraryId)` — 聚合单库发布统计 | keywords: 发布库统计聚合, aggregate-library-stats
 - `emptyStats()` — 返回全零统计 | keywords: 空发布统计, empty-publish-stats
@@ -111,11 +123,22 @@
 | 发布结果回写 | update-publish-result |
 | 按链接建作品 | create-work-from-link |
 | 手动链接作品 | manual-link-work |
+| 抖音小程序Schema | douyin-miniapp-schema |
+| 扫码唤起小程序 | qr-open-miniapp |
+| 生成长期Schema | generate-permanent-schema |
+| 发布库Schema | publish-library-schema |
+| 生成一次复用 | generate-once-reuse |
+| Schema身份键 | schema-identity-key |
+| 获取client_token | get-client-token |
+| 令牌缓存 | token-cache |
+| 非用户授权 | client-credential |
+| 抖音开放平台错误 | douyin-open-api-error |
+| 生成Schema失败 | generate-schema-failure |
 
 ## 类型导出 (Type Exports)
 
 - `DouyinPublishScope` — 租户与用户双重作用域 | keywords: 发布作用域, publish-scope
-- `DouyinPublishLibraryEntity` — 发布库 Mongo 实体 | keywords: 发布库实体, publish-library-entity
+- `DouyinPublishLibraryEntity` — 发布库 Mongo 实体；`qrSchema` / `qrSchemaKey` 缓存长期 Schema 及生成它时的 AppID + 发布页 + 启动参数 | keywords: 发布库实体, publish-library-entity
 - `DouyinPublishStatus` — `unpublished` / `published` 状态 | keywords: 作品发布状态, work-publish-status
 - `DouyinPublishedSnapshot` — 实际发布文案快照 | keywords: 发布文案快照, published-copy-snapshot
 - `DouyinPublishWorkSource` — 作品来源 `video` / `manual-link` | keywords: 作品来源, 手动链接作品, work-source, manual-link-work
@@ -155,6 +178,8 @@
 作品新增 `source`（`video` / `manual-link`，旧数据缺省按 `video` 输出）与 `douyinUrl`。`manual-link` 作品由 `douyin-data` 的「新增链接」经 `createFromLink` 创建：直接是已发布状态，`douyinVideoId` 为解析出的作品 ID，没有视频地址、封面与时长，因为不是未发布状态所以永远不会被小程序领取；同一发布库里同一 `douyinVideoId` 重复时返回 409 `DOUYIN_PUBLISH_WORK_EXISTS`。`findWork` 供数据监控在抓取前确认作品仍存在。
 
 领取使用 `findOneAndUpdate`，条件为 `status: unpublished` 且租约不存在、为空或已过期，按 `createdAt` 升序原子写入 `lockExpireAt = now + DOUYIN_PUBLISH_LEASE_MS` 与随机 `leaseToken`。租约固定十分钟；发布成功和失败均清除租约，失败写 `lastError` 且作品仍为未发布，成功写 `publishedAt`、`douyinVideoId` 和实际 `title` / `description` / `tags` 的 `publishedSnapshot`。已发布作品重复上报成功幂等返回 `{ ok: true }`。有效租约期间管理端换库、编辑或删除返回 409 `DOUYIN_PUBLISH_WORK_LEASED`。
+
+**扫码直接打开小程序（长期 Schema）**：配置了 `DOUYIN_MINIAPP_APP_ID` 与 `DOUYIN_MINIAPP_APP_SECRET` 时，`getQr` 的 `qrContent` 改为抖音「生成 SchemaV2」产出的长期链接 `sslocal://miniapp?ticket=…`（`qrContentType: douyin-schema`），抖音 App 扫一扫即可打开小程序发布页。Schema 的启动参数是扁平的 `{token, tenantId}`（不是 `path` JSON），小程序 `readPublishEntryPayload` 在没有 `path` 时直接从 options 读这两个键。每个发布库只生成一次，存在 `qrSchema`，`qrSchemaKey` 记下 AppID + 发布页 + 启动参数，任一项变化才重新生成；长期 Schema 全平台上限 10 万条，所以不能每次打开二维码都生成。client_token 来自 `POST /oauth/client_token/`（`grant_type=client_credential`），按进程缓存、提前 5 分钟刷新；多进程互相刷新导致令牌失效（`err_no=28001003`）时刷新后重试一次。生成失败返回 502 `DOUYIN_PUBLISH_QR_SCHEMA_FAILED` 并记日志（含抖音 `err_no` / `log_id`），不悄悄退回打不开的原始 JSON。可选配置：`DOUYIN_OPEN_API_BASE`（默认 `https://open.douyin.com`，沙盒用 `https://open-sandbox.douyin.com`）、`DOUYIN_MINIAPP_PUBLISH_PAGE`（默认 `pages/publish/index`）。小程序需开通 `ma.share.schema` 权限。
 
 二维码 token 懒生成，使用 32 字节随机数的 base64url 字符串。`path` 是 `{"token":"...","tenantId":"..."}` JSON；未配置 `DOUYIN_PUBLISH_QR_LINK_TEMPLATE` 时 `qrContent` 等于 `path`。配置模板时必须包含 `{path}`，服务会替换为 `encodeURIComponent(path)`；模板应指向抖音小程序页面 `pages/publish/index`，入口参数名为 `path`，可使用抖音小程序 schema 或抖音开放平台生成的带参链接。
 

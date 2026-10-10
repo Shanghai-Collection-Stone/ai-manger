@@ -55,6 +55,11 @@ export class ArticleService {
       lockExpireAt: 1,
       createdAt: 1,
     });
+    await this.articles.createIndex({
+      tenantId: 1,
+      publishStatus: 1,
+      publishedAt: 1,
+    });
     await this.ensureCounterAtLeast(await this.getMaxArticleId());
   }
 
@@ -360,6 +365,70 @@ export class ArticleService {
       { returnDocument: 'after', includeResultMetadata: true },
     );
     return res.value ?? null;
+  }
+
+  /**
+   * @description 列出存在已发布文章的租户，无租户账号以 `undefined` 表示，供按租户设置的自动清理遍历。
+   * @keyword-cn 已发布文章租户, 自动清理
+   * @keyword-en list-published-tenants, auto-cleanup
+   */
+  async listPublishedTenantIds(): Promise<Array<string | undefined>> {
+    const values = await this.articles.distinct('tenantId', {
+      publishStatus: 'published',
+    });
+    return [
+      ...new Set(
+        values.map((value) => String(value ?? '').trim() || undefined),
+      ),
+    ];
+  }
+
+  /**
+   * @description 按发布时间升序列出租户全部已发布文章的轻量字段，供自动清理按天数与数量上限挑选。
+   *   无租户只匹配无租户文章，不会像管理端接口那样放开到全部租户。
+   * @keyword-cn 已发布文章清理候选, 发布时间排序
+   * @keyword-en published-cleanup-candidates, published-at-order
+   */
+  async listPublishedForCleanup(
+    tenantId?: string,
+  ): Promise<
+    Array<
+      Pick<
+        ArticleEntity,
+        'id' | 'publishedAt' | 'updatedAt' | 'lockExpireAt' | 'source' | 'meta'
+      >
+    >
+  > {
+    const filter: Record<string, unknown> = {
+      tenantId: String(tenantId ?? '').trim() || null,
+      publishStatus: 'published',
+    };
+    return await this.articles
+      .find(filter, {
+        projection: {
+          _id: 0,
+          id: 1,
+          publishedAt: 1,
+          updatedAt: 1,
+          lockExpireAt: 1,
+          source: 1,
+          'meta.xhsTopicId': 1,
+        },
+      })
+      .sort({ publishedAt: 1, id: 1 })
+      .toArray();
+  }
+
+  /**
+   * @description 统计租户文章库内全部文章（含未发布），作为文章库数量上限的口径。
+   * @keyword-cn 租户文章总数, 数量上限
+   * @keyword-en count-tenant-articles, max-count
+   */
+  async countByTenant(tenantId?: string): Promise<number> {
+    const filter: Record<string, unknown> = {
+      tenantId: String(tenantId ?? '').trim() || null,
+    };
+    return await this.articles.countDocuments(filter);
   }
 
   /**

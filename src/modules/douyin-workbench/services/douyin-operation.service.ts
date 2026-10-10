@@ -28,6 +28,9 @@ import {
   listShuyanVideoResolutionChoices,
   resolveShuyanVideoRoute,
 } from './douyin-shuyan-video.service.js';
+import { DouyinStoreVisitService } from './douyin-store-visit.service.js';
+import { resolveStoreVisitAvatarEngine } from './douyin-store-visit-shuyan.service.js';
+import { DouyinShotConcatService } from './douyin-shot-concat.service.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
 import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
 import { isShuyanProvider } from '../../workflow-model/services/shuyan-model-catalog.js';
@@ -54,6 +57,11 @@ type DirectConfig = {
 export class DouyinOperationService {
   private readonly operations: Collection<DouyinOperationEntity>;
 
+  /**
+   * @description 初始化调用记录与视频供应商、客户端合成服务。
+   * @keyword-cn 初始化调用服务, 视频服务依赖
+   * @keyword-en init-operation-service, video-service-dependencies
+   */
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly repository: DouyinWorkbenchRepositoryService,
@@ -61,6 +69,8 @@ export class DouyinOperationService {
     private readonly workflowModels: WorkflowModelService,
     private readonly pixmaxVideos: DouyinPixmaxVideoService,
     private readonly shuyanVideos: DouyinShuyanVideoService,
+    private readonly storeVisit: DouyinStoreVisitService,
+    private readonly shotConcat: DouyinShotConcatService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
     void this.ensureIndexes();
@@ -223,6 +233,7 @@ export class DouyinOperationService {
       shotId,
       shotIndex: topic.storyboard.findIndex((item) => item.id === shotId) + 1,
       storyboard: [shot],
+      resolution: String(topic.shotVideoResolution ?? '').trim() || undefined,
       prompt: String(prompt ?? '').trim() || undefined,
     };
     const operationId = randomUUID();
@@ -313,9 +324,10 @@ export class DouyinOperationService {
   /**
    * @description 读取整片与分镜两个视频节点当前走的通道、模型、可选时长与可选清晰度，供视频栏展示「生成时长」「清晰度」选项。
    *   未指定模型时走直连服务（时长不限、清晰度由直连服务自己决定）；节点配置不可用时返回中文原因。
+   *   另带探店模式两个节点（音色克隆、探店数字人视频）是否已在后台指定提供商，生成弹窗据此提前提示。
    * @keyword-cn 视频生成选项, 可选时长, 可选清晰度
    * @keyword-en video-generation-options, duration-choices, resolution-choices
-   * @returns 整片与分镜两个节点的选项。
+   * @returns 整片与分镜两个节点的选项，以及探店两个节点的配置状态。
    */
   async getVideoOptions(): Promise<
     Record<
@@ -328,8 +340,66 @@ export class DouyinOperationService {
         resolutions: string[];
         error?: string;
       }
-    >
+    > & {
+      storeVisit: Record<
+        'voiceClone' | 'voiceDesign' | 'video',
+        {
+          configured: boolean;
+          /** 探店视频走的通道：通用数字人服务一次出片，或数眼按场景分段对口型 */
+          channel?: 'digital-human' | 'shuyan';
+          /** 数眼通道的数字人引擎（kling-avatar / wan-s2v） */
+          engine?: string;
+          model?: string;
+          providerName?: string;
+          error?: string;
+        }
+      >;
+    }
   > {
+    const readStoreVisitNode = async (nodeKey: string) => {
+      try {
+        const runtime = await this.workflowModels.resolveNodeRuntime(
+          WORKFLOW_NODES.douyinWorkbench.key,
+          nodeKey,
+        );
+        if (!runtime) return { configured: false };
+        if (isShuyanProvider(runtime.providerCode)) {
+          const route = resolveStoreVisitAvatarEngine(runtime.model);
+          return route
+            ? {
+                configured: true,
+                channel: 'shuyan' as const,
+                engine: route.engine,
+                model: runtime.model,
+                providerName: runtime.providerName,
+              }
+            : {
+                configured: false,
+                channel: 'shuyan' as const,
+                providerName: runtime.providerName,
+                error: `模型「${runtime.model}」认不出数字人引擎，请改填 kling-avatar-std、kling-avatar-pro 或 wan2.2-s2v`,
+              };
+        }
+        if (!String(runtime.baseUrl ?? '').trim())
+          return {
+            configured: false,
+            providerName: runtime.providerName,
+            error: `提供商「${runtime.providerName}」没有填服务地址`,
+          };
+        return {
+          configured: true,
+          channel: 'digital-human' as const,
+          model: runtime.model,
+          providerName: runtime.providerName,
+        };
+      } catch {
+        return {
+          configured: false,
+          error:
+            '节点选的提供商不能用于这一步，请改选 digital-human 提供商（探店数字人视频也可以选数眼智能）',
+        };
+      }
+    };
     const read = async (nodeKey: string) => {
       try {
         const runtime = await this.workflowModels.resolveNodeRuntime(
@@ -372,11 +442,19 @@ export class DouyinOperationService {
         };
       }
     };
-    const [full, shot] = await Promise.all([
-      read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
-      read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
-    ]);
-    return { full, shot };
+    const [full, shot, voiceClone, voiceDesign, storeVisitVideo] =
+      await Promise.all([
+        read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
+        read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
+        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceClone),
+        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceDesign),
+        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+      ]);
+    return {
+      full,
+      shot,
+      storeVisit: { voiceClone, voiceDesign, video: storeVisitVideo },
+    };
   }
 
   /**
@@ -450,11 +528,12 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 查询当前用户直连接口调用的真实状态与原始业务结果。
+   * @description 收敛超过 30 分钟无回报的客户端合成，并查询当前用户调用的真实状态与业务结果。
    * @keyword-cn 查询抖音调用, 真实接口结果
    * @keyword-en list-douyin-operations, real-api-result
    */
   async list(scope: DouyinScope): Promise<DouyinOperationView[]> {
+    await this.shotConcat.settleStale();
     const rows = await this.operations
       .find({ userId: scope.userId, ...this.tenantFilter(scope.tenantId) })
       .sort({ updatedAt: -1 })
@@ -464,11 +543,13 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进；直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
+   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进，探店数字人交给探店服务，客户端合成与克隆音色记录直接返回当前记录；
+   *   直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
    * @keyword-cn 同步抖音调用状态, 异步任务查询
    * @keyword-en sync-douyin-operation, async-job-status
    */
   async sync(id: string, user: AdminUserEntity): Promise<DouyinOperationView> {
+    await this.shotConcat.settleStale();
     const scope = this.scopeOf(user);
     const row = await this.operations.findOne({
       id,
@@ -477,7 +558,17 @@ export class DouyinOperationService {
     });
     if (!row) throw new BadRequestException('DOUYIN_OPERATION_NOT_FOUND');
     if (row.provider === 'pixmax') return this.pixmaxVideos.refresh(row.id);
+    if (row.provider === 'shuyan' && row.mode === 'store-visit')
+      return this.storeVisit.refresh(row.id);
     if (row.provider === 'shuyan') return this.shuyanVideos.refresh(row.id);
+    if (row.provider === 'digital-human')
+      return this.storeVisit.refresh(row.id);
+    if (
+      row.provider === 'client' ||
+      row.operation === 'voice-clone' ||
+      row.operation === 'voice-design'
+    )
+      return this.toView(row);
     if (!row.externalId)
       throw new BadRequestException('DOUYIN_OPERATION_EXTERNAL_ID_MISSING');
     const config = this.readConfig(row.operation);
@@ -765,12 +856,14 @@ export class DouyinOperationService {
       operation: row.operation,
       topicId: row.topicId,
       shotId: row.shotId,
+      segmentId: row.segmentId,
       provider: row.provider,
       mode: row.mode,
       model: row.model,
       progress: row.progress,
       plan:
-        row.provider === 'pixmax' || row.provider === 'shuyan'
+        (row.provider === 'pixmax' || row.provider === 'shuyan') &&
+        row.mode !== 'store-visit'
           ? readDouyinVideoPlan(row.request)
           : undefined,
       status: row.status,

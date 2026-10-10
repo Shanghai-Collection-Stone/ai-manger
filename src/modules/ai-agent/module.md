@@ -44,6 +44,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `generateImageByMeituSkill`: 使用 meitu-cli image-edit 执行封面编辑兜底（stdout 非 JSON 时走 parseMeituKeyValueText 扁平 key-value 兜底；result 字段取 http(s) URL 作为最终图片地址）/generate image by meitu image-edit fallback
   - `parseMeituKeyValueText`: 解析 meitu-cli "code: 0 message: success result: https://... progress: 1" 这类扁平键值空格串（即使加 --json CLI 仍可能如此输出）/parse meitu cli flat key value text
   - `sendPrompt`: 调用 AI 生图并强制携带 billingContext；有限额度租户在网络调用前按 Provider 固定 Token 预扣；可选 `runtimeOverride` 按工作流节点指定提供商与模型出图/send prompt for billed image generation
+  - `loadExtraEditImages(candidates?)`: 读取底图之外的多图参考（最多 3 张，本地路径或 URL），`sendPrompt` 的 `extraImageCandidates` 经它带给 gemini（多个 inlineData）、doubao（`image` 传数组）与 openai（`image[]`），用于「人物 + 场景」这类多图合成 | keywords: 读取多图参考, 额外参考图, load-extra-edit-images, multi-image-reference
   - `executeBilledImageCall(provider,billingContext,execute)` — 包装一次生图物理调用的预扣、成功结算与失败流水；关闭同一流水中的隐式网络重试，降级调用另开流水 | keywords: 生图调用计费, 固定Token预扣, billed-image-call, fixed-token-precharge
   - `generateBilledMeituImage(billingContext,input)` — 对 meitu 降级调用独立计费，避免主 Provider 失败后免费重试 | keywords: 美图降级计费, 降级防漏扣, meitu-fallback-billing, fallback-charge-guard
   - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection

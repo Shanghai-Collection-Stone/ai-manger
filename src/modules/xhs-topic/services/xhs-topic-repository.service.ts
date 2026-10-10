@@ -15,12 +15,9 @@ import {
   type XhsTopicUpdateInput,
   type XhsTopicWorkspaceGroup,
 } from '../entities/xhs-topic.entity.js';
-import {
-  addRetentionDays,
-  resolveRetentionDays,
-  XHS_DRAFT_RETENTION_DEFAULT_DAYS,
-  XHS_TOPIC_IDLE_DEFAULT_DAYS,
-} from '../xhs-topic-retention.constants.js';
+import type { XhsCleanupRule } from '../entities/xhs-topic-cleanup-settings.entity.js';
+import { addRetentionDays } from '../xhs-topic-retention.constants.js';
+import { XhsTopicCleanupSettingsService } from './xhs-topic-cleanup-settings.service.js';
 
 /**
  * @description 手动添加笔记链接时独立子选题使用的题目类型，数据监控行副标题会展示它。
@@ -40,7 +37,10 @@ export class XhsTopicRepositoryService {
   private readonly articles: Collection<Document>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
 
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly cleanupSettings: XhsTopicCleanupSettingsService,
+  ) {
     this.topics = db.collection<XhsTopicEntity>('xhs_topics');
     this.articles = db.collection('articles');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
@@ -138,20 +138,13 @@ export class XhsTopicRepositoryService {
         .map((entity) => entity.parentId)
         .filter((parentId): parentId is number => Number.isInteger(parentId)),
     );
-    const idleDays = resolveRetentionDays(
-      process.env.XHS_TOPIC_IDLE_DAYS,
-      XHS_TOPIC_IDLE_DEFAULT_DAYS,
-    );
-    const draftDays = resolveRetentionDays(
-      process.env.XHS_DRAFT_RETENTION_DAYS,
-      XHS_DRAFT_RETENTION_DEFAULT_DAYS,
-    );
+    const cleanup = await this.cleanupSettings.get(scope.tenantId);
     const childrenByParent = new Map<number, XhsChildTopicView[]>();
     for (const entity of childEntities) {
       if (entity.kind !== 'child' || !entity.parentId) continue;
       if (!options.includeStoredArticles && storedTopicIds.has(entity.id)) continue;
       const children = childrenByParent.get(entity.parentId) ?? [];
-      children.push(this.toChildView(entity, draftDays));
+      children.push(this.toChildView(entity, cleanup.draftArticle));
       childrenByParent.set(entity.parentId, children);
     }
     for (const children of childrenByParent.values()) {
@@ -173,7 +166,9 @@ export class XhsTopicRepositoryService {
         const children = childrenByParent.get(entity.id) ?? [];
         const lastActiveAt = entity.lastActiveAt ?? entity.createdAt;
         const protectedFromCleanup =
-          entity.starred === true || protectedMotherIds.has(entity.id);
+          !cleanup.motherTopic.enabled ||
+          entity.starred === true ||
+          protectedMotherIds.has(entity.id);
         return {
           id: entity.id,
           title: entity.title,
@@ -185,7 +180,10 @@ export class XhsTopicRepositoryService {
           lastActiveAt: lastActiveAt.toISOString(),
           idleCleanupAt: protectedFromCleanup
             ? null
-            : addRetentionDays(lastActiveAt, idleDays).toISOString(),
+            : addRetentionDays(
+                lastActiveAt,
+                cleanup.motherTopic.retentionDays,
+              ).toISOString(),
           topicCount: children.length,
           sourceTodoId: entity.sourceTodoId,
           createdAt: entity.createdAt.toISOString(),
@@ -508,37 +506,100 @@ export class XhsTopicRepositoryService {
   }
 
   /**
-   * @description 列出达到闲置期限且未星标的母题，文章库保护条件由清理服务按子题口径复核。
-   * @keyword-cn 过期闲置母题, 星标保护
-   * @keyword-en expired-idle-topics, starred-protection
+   * @description 列出存在选题的全部租户，无租户账号以 `undefined` 表示，供每日清理逐租户读取规则。
+   * @keyword-cn 选题租户列表, 逐租户清理
+   * @keyword-en list-topic-tenants, per-tenant-cleanup
    */
-  async listExpiredMotherTopics(cutoff: Date): Promise<XhsTopicEntity[]> {
-    return await this.topics
-      .find({
-        kind: 'mother',
-        starred: { $ne: true },
-        lastActiveAt: { $lt: cutoff },
-      })
-      .toArray();
+  async listTopicTenantIds(): Promise<Array<string | undefined>> {
+    const values = await this.topics.distinct('tenantId');
+    return [
+      ...new Set(
+        values.map((value) => String(value ?? '').trim() || undefined),
+      ),
+    ];
   }
 
   /**
-   * @description 列出草稿时钟早于截止时间且仍保留文章的子题，供清理服务进一步排除入库和运行中任务。
-   * @keyword-cn 过期文章草稿, 草稿时钟
-   * @keyword-en expired-article-drafts, draft-clock
+   * @description 列出租户内需要检查闲置母题的成员；传截止时间时只返回有未星标且已过期母题的成员。
+   * @keyword-cn 母题清理成员, 过期闲置母题
+   * @keyword-en mother-cleanup-users, expired-idle-topics
    */
-  async listExpiredDraftTopics(cutoff: Date): Promise<XhsTopicEntity[]> {
+  async listMotherCleanupUserIds(
+    tenantId: string | undefined,
+    cutoff?: Date,
+  ): Promise<string[]> {
+    const filter: Filter<XhsTopicEntity> = {
+      tenantId: String(tenantId ?? '').trim() || null,
+      kind: 'mother',
+    };
+    if (cutoff) {
+      filter.starred = { $ne: true };
+      filter.lastActiveAt = { $lt: cutoff };
+    }
+    return (await this.topics.distinct('userId', filter)).map(String);
+  }
+
+  /**
+   * @description 列出租户内需要检查草稿的成员；传截止时间时只返回有过期草稿的成员。
+   * @keyword-cn 草稿清理成员, 过期文章草稿
+   * @keyword-en draft-cleanup-users, expired-article-drafts
+   */
+  async listDraftCleanupUserIds(
+    tenantId: string | undefined,
+    cutoff?: Date,
+  ): Promise<string[]> {
+    const filter: Filter<XhsTopicEntity> = {
+      tenantId: String(tenantId ?? '').trim() || null,
+      kind: 'child',
+      article: { $exists: true },
+    };
+    if (cutoff) filter['article.draftAt'] = { $lt: cutoff };
+    return (await this.topics.distinct('userId', filter)).map(String);
+  }
+
+  /**
+   * @description 列出成员名下仍保留文章的子题，供清理服务按草稿时钟与数量上限挑选。
+   * @keyword-cn 成员草稿列表, 草稿时钟
+   * @keyword-en list-member-drafts, draft-clock
+   */
+  async listDraftTopics(scope: {
+    tenantId?: string;
+    userId: string;
+  }): Promise<XhsTopicEntity[]> {
     return await this.topics
       .find({
+        ...this.buildScopeFilter(scope),
         kind: 'child',
         article: { $exists: true },
-        'article.draftAt': { $lt: cutoff },
       })
       .toArray();
   }
 
   /**
-   * @description 原子清空仍处于过期状态的子题文章并恢复为未生成，重复执行不会产生额外副作用。
+   * @description 文章库已发布文章被自动清理后，同步清空来源子题的文章并恢复未生成，子题标题保留。
+   *   文章集合的 userId 与选题集合口径不同，所以只按子题 ID 与租户定位。
+   * @keyword-cn 文章库清理联动, 清空子题文章
+   * @keyword-en library-cleanup-cascade, clear-child-article
+   */
+  async clearArticleAfterLibraryCleanup(
+    topicId: number,
+    tenantId: string | undefined,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.topics.updateOne(
+      {
+        tenantId: String(tenantId ?? '').trim() || null,
+        id: topicId,
+        kind: 'child',
+        article: { $exists: true },
+      },
+      { $unset: { article: '' }, $set: { status: 'pending', updatedAt: now } },
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * @description 原子清空草稿时钟仍早于 `cutoff` 的子题文章并恢复为未生成；期间被编辑刷新过时钟的草稿不会被清，重复执行不会产生额外副作用。
    * @keyword-cn 清理过期草稿, 幂等更新
    * @keyword-en clear-expired-draft, idempotent-update
    */
@@ -997,28 +1058,30 @@ export class XhsTopicRepositoryService {
     tenantId?: string;
     userId: string;
   }): Promise<XhsChildTopicView[]> {
-    const entities = await this.topics
-      .find({
-        ...this.buildScopeFilter(scope),
-        kind: 'child',
-        parentId: { $exists: false },
-      })
-      .sort({ createdAt: 1, id: 1 })
-      .toArray();
-    return entities.map((entity) => this.toChildView(entity));
+    const [entities, cleanup] = await Promise.all([
+      this.topics
+        .find({
+          ...this.buildScopeFilter(scope),
+          kind: 'child',
+          parentId: { $exists: false },
+        })
+        .sort({ createdAt: 1, id: 1 })
+        .toArray(),
+      this.cleanupSettings.get(scope.tenantId),
+    ]);
+    return entities.map((entity) =>
+      this.toChildView(entity, cleanup.draftArticle),
+    );
   }
 
   /**
-   * @description 将子选题数据库实体及文章生成风格转换为前端列表结构。
+   * @description 将子选题数据库实体及文章生成风格转换为前端列表结构；租户关闭草稿清理时不返回清理时间。
    * @keyword-cn 子选题转换, 接口视图, 文章生成风格
    * @keyword-en child-topic-view, api-view, article-writing-style
    */
   private toChildView(
     entity: XhsTopicEntity,
-    draftRetentionDays = resolveRetentionDays(
-      process.env.XHS_DRAFT_RETENTION_DAYS,
-      XHS_DRAFT_RETENTION_DEFAULT_DAYS,
-    ),
+    draftRule: XhsCleanupRule,
   ): XhsChildTopicView {
     const draftAt = entity.article?.draftAt;
     return {
@@ -1041,9 +1104,10 @@ export class XhsTopicRepositoryService {
             updatedAt: entity.article.updatedAt.toISOString(),
           }
         : undefined,
-      draftCleanupAt: draftAt
-        ? addRetentionDays(draftAt, draftRetentionDays).toISOString()
-        : undefined,
+      draftCleanupAt:
+        draftAt && draftRule.enabled
+          ? addRetentionDays(draftAt, draftRule.retentionDays).toISOString()
+          : undefined,
       crawlStatus: entity.crawl?.status ?? 'crawling',
       lastCrawledAt: entity.crawl?.lastCrawledAt?.toISOString(),
       sourceTodoId: entity.sourceTodoId,

@@ -33,8 +33,10 @@
   - `createUploadThumbnails`: 批量生成缩略图
   - `extractUploadFileDimensions`: 提取上传文件尺寸
   - `getImageDimensionsFromFile`: 使用 jimp 读取图片尺寸
-  - `deleteImage`: `POST images/:id/delete` 删除单张图片
-  - `deleteImagesBatch`: `POST images/batch-delete` 批量删除图片(body `{ userId, ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
+  - `GalleryController.requireUserScope(req?)` — 从 Bearer token 解析 `{ userId, tenantId }`，userId 只认 token；控制器所有用到 userId 的入口共用，请求体 / 查询参数里的 userId 一律不再读取 | keywords: token用户解析, 身份防冒用, require-user-scope, token-user-identity
+  - `GalleryController.createGroup(body, req)` — `POST groups` 创建图库组，userId 与 tenantId 都取 token，与 `GET groups` 可见口径一致 | keywords: 创建图库组, 租户归属, create-gallery-group, tenant-ownership
+  - `deleteImage`: `POST images/:id/delete` 删除当前租户可见的单张图片，无请求体
+  - `deleteImagesBatch`: `POST images/batch-delete` 批量删除当前租户可见图片(body `{ ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
   - `listMaterialStyles`: `GET material-styles` 列出 AI 素材可选的风格预设与分组，只下发 id/展示名/分组/气质概括，提示词留服务端，缩略图由安装包按同名 id 自带 | keywords: 素材风格列表, list-material-styles
   - `detectMaterialTextIntent(prompt)` — 判断用户描述是否明确要求或排除画面文字，未明确要求时回落到无字贴纸 | keywords: 文字意图识别, 素材文字需求, material-text-intent, detect-text-intent
   - `buildAiMaterialPrompt({ rawPrompt, stylePreset, referenceImageUrl, wantsText })` — 以用户原始描述为最高内容优先级拼装素材提示词，风格与默认贴纸规格只补足未说明部分 | keywords: 素材提示词, 描述优先, build-ai-material-prompt, prompt-first
@@ -64,6 +66,8 @@
 ### 鉴权说明
 
 `gallery` 控制器全部入口走模块自有的 `resolveAuthScope(req)`(Bearer token → `AdminService.getUserByToken` → tenantId/userId,失败抛 `UnauthorizedException`),不使用 admin 的 CASL `RequirePermission` 装饰器——后者绑定 `AdminAuthGuard` 且 subject 注册中心里没有 Gallery 主体,挂上会把租户侧调用方全部挡死。新增入口一律沿用 `resolveAuthScope`,与同模块既有 20+ 入口保持一致。
+
+userId 只从 token 取(`requireUserScope`),不接受请求体 / 查询参数传入。图片写操作(`updateTagsBatch` / `deleteImage` / `deleteManyImages` / `rebuildEmbeddings`)按租户可见范围过滤(`buildTenantFilter`),与图库列表、`updateImageMeta` 同口径——历史上网页端把 `userId=default` 写进了图片记录,按 userId 精确过滤会导致这些图片再也删不掉。图库组仍按 userId 归属。
 
 ### filters/gallery-upload-exception.filter.ts
 
@@ -110,7 +114,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤 | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
   - `findAccessibleImagesByIds`: 按用户选择的图片 ID 精确读取当前租户可见图片，并按输入顺序返回，用于封面重生成/reference images by ids for cover regenerate
   - `searchSimilar`: 向量相似检索/search similar
-  - `rebuildEmbeddings`: 批量重建向量/rebuild embeddings
+  - `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
   - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
   - `generateThumbnail`: 生成缩略图
@@ -119,8 +123,9 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `countAvailableByTags`: 统计指定 tags 当前可用图片数(**默认排除 isUsed,传 includeUsed=true 关闭**),返回 total + byTag,用于生成前的不足量预估(去重/不去重生成共用)/count available images by tags excluding used by default
   - `listTopTagsWithCount`: 列出租户可见的热门 tag(按图片数量倒序,排除 isUsed),用于 AI 推荐 tag 选择/list top tags by count for AI recommendation
   - `markUsedBatch`: 批量标记图片为已使用 (isUsed=true,usedAt=now),生成图组/拼图完成后调用,reset=true 可反向重置/mark images as used
-  - `deleteImage`: 删除单张图片(记录+本地原图/缩略图文件)/delete one image
-  - `deleteManyImages({ userId, ids })`: 批量删除图片,逐条复用单删逻辑互不阻断,返回 {deleted, failed, deletedIds} | keywords: gallery batch delete images, 图库批量删除
+  - `GalleryService.updateTagsBatch({ userId?, tenantId?, ids, addTags?, removeTags? })` — 批量为当前租户可见图片增删标签 | keywords: 批量改标签, 租户可见范围, batch-update-tags, tenant-visibility
+  - `GalleryService.deleteImage({ userId?, tenantId?, id })` — 删除当前租户可见的单张图片(记录+本地原图/缩略图文件) | keywords: 删除图片, 租户可见范围, delete-image, tenant-visibility
+  - `deleteManyImages({ userId?, tenantId?, ids })`: 批量删除当前租户可见图片,逐条复用单删逻辑互不阻断,返回 {deleted, failed, deletedIds} | keywords: gallery batch delete images, 图库批量删除
 
 ### gallery-group.service.ts
 

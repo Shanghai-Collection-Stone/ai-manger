@@ -1,11 +1,12 @@
 import { ObjectId } from 'mongodb';
 
 /**
- * @description 工作流节点使用的模型类型，与 AI 提供商的 `modelCategory` 一一对应（节点不用向量模型）。
+ * @description 工作流节点使用的模型类型，与 AI 提供商的 `modelCategory` 一一对应（节点不用向量模型）；
+ *   `audio` 是克隆或设计音色类模型（录音或描述 → 音色 ID）。
  * @keyword-cn 节点模型类型, 提供商类型
  * @keyword-en node-model-category, provider-category
  */
-export type WorkflowNodeCategory = 'llm' | 'image' | 'video';
+export type WorkflowNodeCategory = 'llm' | 'image' | 'video' | 'audio';
 
 /**
  * @description 代码内固定的一个预设工作流节点：后台只能为它选择提供商与模型，不能增删节点。
@@ -17,6 +18,10 @@ export interface WorkflowNodeDefinition {
   label: string;
   description: string;
   category: WorkflowNodeCategory;
+  /** 该节点运行时只接受这些提供商代码；为空时按类型的 `WORKFLOW_RUNTIME_SUPPORT` 判断 */
+  runtimeProviders?: string[];
+  /** 节点没有指定提供商时后台显示的说明；为空时按类型显示默认提供商 */
+  unsetHint?: string;
 }
 
 /**
@@ -47,6 +52,9 @@ export const WORKFLOW_NODES = {
     personaImage: 'persona-image',
     shotVideo: 'shot-video',
     fullVideo: 'full-video',
+    voiceClone: 'voice-clone',
+    voiceDesign: 'voice-design',
+    storeVisitVideo: 'store-visit-video',
   },
   xhsArticle: {
     key: 'xhs-article',
@@ -121,7 +129,7 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
   {
     key: 'douyin-workbench',
     label: '抖音视频制作',
-    description: '母选题 → 脚本 → 分镜 → 分镜画面 → 分镜视频',
+    description: '分镜制作，或按人物、场景、音色与台词制作探店视频',
     nodes: [
       {
         key: 'script',
@@ -160,6 +168,7 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         description:
           '分镜模式：每段分镜单独生成一段视频（有画面时以画面为首帧）',
         category: 'video',
+        runtimeProviders: ['pixmax', 'shuyan', 'shuyanai'],
       },
       {
         key: 'full-video',
@@ -167,6 +176,34 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         description:
           '整片模式：所有分镜写进一条提示词、带上各镜画面作参考，一次生成一条完整视频；建议选单次时长长的模型',
         category: 'video',
+        runtimeProviders: ['pixmax', 'shuyan', 'shuyanai'],
+      },
+      {
+        key: 'voice-clone',
+        label: '音色克隆',
+        description:
+          '探店模式：用户上传一段本人录音，克隆出音色 ID，数字人按这个声音念台词',
+        category: 'audio',
+        runtimeProviders: ['digital-human'],
+        unsetHint: '未指定时探店模式不能克隆音色',
+      },
+      {
+        key: 'voice-design',
+        label: '声音设计（固定音色，可选）',
+        description:
+          '可选：按声音提示词额外生成固定音色与试听；纯提示词声音随视频生成，无需此节点',
+        category: 'audio',
+        runtimeProviders: ['digital-human'],
+        unsetHint: '未指定时不能额外生成固定音色，纯提示词声音仍可使用',
+      },
+      {
+        key: 'store-visit-video',
+        label: '探店数字人视频',
+        description:
+          '探店模式：选 digital-human 时按人脸 + 音色 + 台词交给通用数字人服务；选数眼智能时按场景分段，可灵语音合成配音后用可灵数字人（模型填 kling-avatar-std / kling-avatar-pro）或万相数字人（wan2.2-s2v）逐段对口型，再在客户端拼接',
+        category: 'video',
+        runtimeProviders: ['digital-human', 'shuyan', 'shuyanai'],
+        unsetHint: '未指定时探店模式不能生成视频',
       },
     ],
   },
@@ -174,6 +211,7 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
 
 /**
  * @description 各模型类型当前运行时真正能调用的提供商：`null` 表示除 `excluded` 外都可以。
+ *   节点登记了 `runtimeProviders` 时再按节点收窄（例如 `digital-human` 只能用在探店节点，不能挂到分镜 / 整片视频）。
  *   后台仍允许提前保存不支持的组合，但会标出「运行时暂不支持」，调用时直接报错而不是静默降级。
  * @keyword-cn 运行时支持范围, 提供商兼容
  * @keyword-en runtime-support-matrix, provider-compatibility
@@ -182,12 +220,16 @@ export const WORKFLOW_RUNTIME_SUPPORT: Record<
   WorkflowNodeCategory,
   { allowed: string[] | null; excluded: string[] }
 > = {
-  llm: { allowed: null, excluded: ['pixmax'] },
+  llm: { allowed: null, excluded: ['pixmax', 'digital-human'] },
   image: {
     allowed: ['gemini', 'doubao', 'ark', 'openai', 'shuyan', 'shuyanai'],
     excluded: [],
   },
-  video: { allowed: ['pixmax', 'shuyan', 'shuyanai'], excluded: [] },
+  video: {
+    allowed: ['pixmax', 'shuyan', 'shuyanai', 'digital-human'],
+    excluded: [],
+  },
+  audio: { allowed: ['digital-human'], excluded: [] },
 };
 
 /**

@@ -191,6 +191,58 @@ describe('workflow model service', () => {
     expect(isWorkflowRuntimeSupported('video', 'openai')).toBe(false);
   });
 
+  it('节点登记了可用提供商时按节点收窄：通用数字人服务只能用在探店节点', () => {
+    const nodes = WORKFLOW_MODEL_CATALOG.find(
+      (workflow) => workflow.key === WORKFLOW_NODES.douyinWorkbench.key,
+    )!.nodes;
+    const providersOf = (key: string) =>
+      nodes.find((node) => node.key === key)?.runtimeProviders;
+    expect(
+      isWorkflowRuntimeSupported(
+        'video',
+        'digital-human',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+      ),
+    ).toBe(true);
+    expect(
+      isWorkflowRuntimeSupported(
+        'video',
+        'digital-human',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.shotVideo),
+      ),
+    ).toBe(false);
+    expect(
+      isWorkflowRuntimeSupported(
+        'video',
+        'pixmax',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+      ),
+    ).toBe(false);
+    expect(
+      isWorkflowRuntimeSupported(
+        'video',
+        'shuyan',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+      ),
+    ).toBe(true);
+    expect(
+      isWorkflowRuntimeSupported(
+        'audio',
+        'Digital-Human',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.voiceClone),
+      ),
+    ).toBe(true);
+    expect(isWorkflowRuntimeSupported('audio', 'openai')).toBe(false);
+    expect(
+      isWorkflowRuntimeSupported(
+        'audio',
+        'digital-human',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.voiceDesign),
+      ),
+    ).toBe(true);
+    expect(isWorkflowRuntimeSupported('llm', 'digital-human')).toBe(false);
+  });
+
   it('节点 key 常量与工作流目录一一对应', () => {
     const fromConstants = Object.values(WORKFLOW_NODES)
       .flatMap(({ key, ...nodes }) =>

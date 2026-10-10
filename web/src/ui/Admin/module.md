@@ -3,7 +3,7 @@
 ## 模块描述
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
-支持 AI 提供商按模型类型管理(llm/em/image/video，video 为生视频；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)与 PixMax(`pixmax`)，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
+支持 AI 提供商按模型类型管理(llm/em/image/video/audio，video 为生视频、audio 为音色克隆；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)、PixMax(`pixmax`)与通用数字人服务(`digital-human`，选中时类别自动切到音色克隆，并提示按类别各建一条、服务地址必填及 `/voice-clone`、`/digital-human/tasks`、`/digital-human/tasks/{id}`、`/models` 的契约)，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
@@ -17,6 +17,8 @@
 ## 功能描述及关键词
 
 ### AdminApp.jsx
+
+探店音色类别为克隆 / 设计（Audio）；voice-design 是可选固定音色生成节点，POST /voice-design 返回 ID 与可选试听。默认纯提示词由视频服务接收 voiceMode=prompt 和 voiceDescription，无需音色节点且可不带 voiceId。
 
 后台管理主应用,包含多 Tab 管理界面与数据加载逻辑,刷新后保留上次点击 Tab。平台 SuperClaw Tab 支持节点 CRUD、一次性 Token 展示/轮换、连接状态和工作区槽位查看；租户管理表单选择 SuperClaw 后，该租户全部工作区归属并计入所选节点。
 **代码分割**: `@uiw/react-md-editor`(含 CodeMirror,约 1.6 MB)改为 `React.lazy` 按需加载 — 模块内自建 `MDEditor` 与 `MDEditor.Markdown` 两个 Suspense 包装组件,三处调用点写法不变;编辑器样式表仍静态引入避免 FOUC。后台首屏包由 1.77 MB 降到 88 KB。
@@ -235,15 +237,15 @@
 
 ### WorkflowModelPanel.jsx
 
-后台「工作流节点模型」Tab(`platformOnly`，仅超管)的独立面板，由 `AdminApp.jsx` 在 `activeTab === 'workflow_models'` 时挂载。左侧是工作流子菜单（小红书图文、抖音视频制作，显示节点数与已指定数，本地记住上次选择），右侧列出选中工作流的全部模型节点（小红书：选题生成 / 文章生成 / 封面文案 / 封面底图 / 封面文字海报 / 内页重绘；抖音：脚本生成 / 分镜拆解 / 分镜画面 / 分镜视频），每个节点可选「使用默认提供商」或某个同类型的已启用提供商；选 PixMax 时实时拉取该账号可用模型只能从列表选，选数眼智能时实时拉取该 Key 下该类型的模型给下拉、同时保留手填框（分类是启发式的，漏判可手填纠正），其他提供商可手填模型（留空用提供商默认模型）。未指定时显示当前生效的默认提供商；运行时暂不支持的组合、已失效的提供商会给出提示。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md)。
+后台「工作流节点模型」Tab（platformOnly，仅超管）的独立面板，由 AdminApp.jsx 挂载。左侧工作流菜单显示节点数与已指定数，记住上次选择；右侧列出后端目录的全部节点，抖音含音色克隆、声音设计与探店数字人视频，audio 类型显示「音色」。每个节点选择同类型已启用提供商；PixMax 实时拉取账号模型且只允许列表选择，数眼实时拉取并允许手填纠正分类，其他提供商可手填（留空用提供商默认模型）。节点带 unsetHint 时显示节点自己的说明，探店三个节点未指定即不可用；不支持组合或已失效提供商会提示。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md)。
 
 - **关键词**: workflow model panel, per node model, pixmax model list, shuyan model list, default provider fallback
 - **函数**:
   - `WorkflowModelPanel({ onNotice, onError })` — 工作流节点模型面板主体 | keywords: 工作流节点模型面板, 节点指定模型, workflow-model-panel, per-node-model
-  - `CATEGORY_LABELS` — 节点类型中文名 | keywords: 节点类型文案, node-category-labels
+  - `CATEGORY_LABELS` — 节点类型中文名，audio 显示「音色」以涵盖克隆与设计 | keywords: 节点类型文案, node-category-labels
   - `ACTIVE_WORKFLOW_STORAGE_KEY` — 记住上次选中工作流的本地存储 key | keywords: 工作流菜单记忆, active-workflow-storage-key
   - `selectWorkflow(key)` — 切换左侧工作流子菜单并记住选择 | keywords: 切换工作流菜单, 记住选择, select-workflow-tab, remember-selection
-  - `describeFallback(node)` — 未指定时的默认提供商说明 | keywords: 默认回退文案, 未设置说明, fallback-label, unset-hint
+  - `describeFallback(node)` — 优先节点 `unsetHint`，未指定时的默认提供商说明 | keywords: 默认回退文案, 未设置说明, fallback-label, unset-hint
   - `NodeModelRow(props)` — 单个节点的提供商 / 模型选择与保存、恢复默认 | keywords: 节点模型编辑行, 选择模型, node-model-row, pick-model
   - `onChangeProvider(nextId)` — 切换提供商并预填其默认模型 | keywords: 切换提供商, 预填模型, change-provider, prefill-model
   - `apply(res)` — 回填工作流与提供商 | keywords: 回填节点设置, apply-workflow-models

@@ -4,6 +4,7 @@ import {
   ArrayMinSize,
   IsMongoId,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -24,6 +25,13 @@ import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.en
 
 /** @type {string[]} 允许的脚本风格键名，取自实体登记表，前后端同源。 */
 const SCRIPT_STYLE_KEYS = Object.keys(DOUYIN_SCRIPT_STYLES);
+
+/**
+ * @description 探店台词最长字数（约 3 分钟口播），前端台词框上限与它一致。
+ * @keyword-cn 探店台词上限, 台词字数
+ * @keyword-en store-visit-lines-limit, lines-length
+ */
+export const DOUYIN_STORE_VISIT_LINES_MAX = 2000;
 
 /**
  * @description 校验分镜素材引用，只允许真实图库或视频库业务 ID 与地址。
@@ -136,6 +144,10 @@ export class CreateDouyinMotherTopicDto {
   @IsIn(['mother'])
   kind!: 'mother';
 
+  @IsOptional()
+  @IsIn(['storyboard', 'store-visit'])
+  productionMode?: 'storyboard' | 'store-visit';
+
   @IsString()
   @MinLength(2)
   @MaxLength(100)
@@ -246,6 +258,78 @@ export class DouyinPublishCopyDto {
   @IsString({ each: true })
   @MaxLength(21, { each: true })
   tags!: string[];
+}
+
+/**
+ * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图 ID 与动作描述；关键帧和成片只由服务端写入。
+ * @keyword-cn 探店分段参数, 分段台词
+ * @keyword-en store-visit-segment-dto, segment-lines
+ */
+export class DouyinStoreVisitSegmentDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  id?: string;
+
+  @IsString()
+  @MaxLength(1000)
+  lines!: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sceneImageId?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  action?: string;
+}
+
+/**
+ * @description 校验探店人物、场景、台词、分段与声音提示词；voiceMode=prompt 移除固定音色并使用描述，音色 ID 仍仅由创建接口写入。
+ * @keyword-cn 探店设置参数, 出镜人脸
+ * @keyword-en store-visit-setting-dto, presenter-face
+ */
+export class DouyinStoreVisitDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinReferenceImageDto)
+  faceImage?: DouyinReferenceImageDto | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinReferenceImageDto)
+  sceneImages?: DouyinReferenceImageDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  sceneDescription?: string;
+
+  @IsOptional()
+  @IsIn(['prompt'])
+  voiceMode?: 'prompt';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  voiceDescription?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(DOUYIN_STORE_VISIT_LINES_MAX)
+  lines?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinStoreVisitSegmentDto)
+  segments?: DouyinStoreVisitSegmentDto[];
 }
 
 /**
@@ -374,9 +458,23 @@ export class UpdateDouyinTopicDto {
   fullVideoResolution?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  shotVideoResolution?: string;
+
+  @IsOptional()
   @ValidateNested()
   @Type(() => DouyinPublishCopyDto)
   publishCopy?: DouyinPublishCopyDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinStoreVisitDto)
+  storeVisit?: DouyinStoreVisitDto;
+
+  @IsOptional()
+  @IsBoolean()
+  autoConcatShots?: boolean;
 
   @IsOptional()
   @IsArray()
@@ -468,6 +566,141 @@ export class GenerateDouyinShotVideoDto {
   @IsOptional()
   @IsString()
   @MaxLength(1000)
+  prompt?: string;
+}
+
+/**
+ * @description 校验客户端准备合成的参数：`auto` 表示「全部出片后自动合成」由客户端领取。
+ * @keyword-cn 分镜合成参数, 自动合成领取
+ * @keyword-en concat-shot-videos-dto, auto-concat-claim
+ */
+export class ConcatDouyinShotVideosDto {
+  @IsOptional()
+  @IsBoolean()
+  auto?: boolean;
+}
+
+/**
+ * @description 校验客户端回报的合成结果：进行中带进度，完成带已登记的视频库 ID，失败带中文原因与原始信息。
+ * @keyword-cn 合成结果参数, 客户端回报
+ * @keyword-en concat-result-dto, client-report
+ */
+export class ReportDouyinConcatResultDto {
+  @IsIn(['running', 'completed', 'failed'])
+  status!: 'running' | 'completed' | 'failed';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  progress?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  videoId?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  error?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  errorDetail?: string;
+}
+
+/**
+ * @description 校验 AI 写探店台词的一句话补充要求（如「突出性价比」），为空时按脚本正文改写。
+ * @keyword-cn 探店台词参数, 台词补充要求
+ * @keyword-en store-visit-lines-dto, lines-requirement
+ */
+export class GenerateDouyinStoreVisitLinesDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  prompt?: string;
+}
+
+/**
+ * @description 校验文字设计音色的描述、可选名称与试听文本。
+ * @keyword-cn 声音设计参数, 音色试听文本
+ * @keyword-en voice-design-dto, voice-preview-text
+ */
+export class DesignDouyinStoreVisitVoiceDto {
+  @IsString()
+  @MinLength(10)
+  @MaxLength(1000)
+  description!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(10)
+  @MaxLength(300)
+  previewText?: string;
+}
+
+/**
+ * @description 校验探店视频生成：通用数字人通道要这次念的台词（同时保存到探店设置），数眼分段通道按已保存的分段生成、可不传台词；另带可选补充要求。
+ * @keyword-cn 探店视频参数, 数字人台词
+ * @keyword-en store-visit-video-dto, digital-human-lines
+ */
+export class GenerateDouyinStoreVisitVideoDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(10)
+  @MaxLength(DOUYIN_STORE_VISIT_LINES_MAX)
+  lines?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  prompt?: string;
+}
+
+/**
+ * @description 校验选用数眼可灵音色库里的音色：音色 ID、名称、可选试听地址与语种。
+ * @keyword-cn 可灵音色参数, 选用音色库
+ * @keyword-en preset-voice-dto, pick-voice-library
+ */
+export class UseDouyinStoreVisitPresetVoiceDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  voiceId!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  voiceName!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  trialUrl?: string;
+
+  @IsOptional()
+  @IsIn(['zh', 'en'])
+  language?: 'zh' | 'en';
+}
+
+/**
+ * @description 校验生成探店分段关键帧的可选补充描述（如「站在吧台前举着咖啡」）。
+ * @keyword-cn 关键帧参数, 关键帧补充描述
+ * @keyword-en keyframe-dto, keyframe-requirement
+ */
+export class GenerateDouyinStoreVisitKeyframeDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
   prompt?: string;
 }
 

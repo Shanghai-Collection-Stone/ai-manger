@@ -99,16 +99,18 @@ export interface AdminSessionEntity {
 }
 
 /**
- * @description AI提供商配置实体
- * @keyword-en ai provider settings entity
+ * @description AI提供商配置实体：同一提供商代码按模型类别（llm / em / image / video / audio）各存一条，
+ *   audio 是音色类模型（抖音探店的「音色克隆 / 声音设计」节点用）。
+ * @keyword-cn AI提供商配置, 模型类别
+ * @keyword-en ai-provider-entity, model-category
  */
 export interface AdminAiProviderEntity {
   _id: ObjectId;
   providerCode: string;
   name: string;
   baseUrl?: string;
-  /** llm 文本 / em 向量 / image 生图 / video 生视频 */
-  modelCategory: 'llm' | 'em' | 'image' | 'video';
+  /** llm 文本 / em 向量 / image 生图 / video 生视频 / audio 克隆或设计音色 */
+  modelCategory: 'llm' | 'em' | 'image' | 'video' | 'audio';
   model?: string;
   apiKey?: string;
   enabled: boolean;

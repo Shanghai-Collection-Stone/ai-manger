@@ -9,6 +9,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -28,6 +29,7 @@ import {
   RecommendXhsArticleRequirementsDto,
   RecommendXhsTopicPromptDto,
   UpdateXhsArticleDto,
+  UpdateXhsCleanupSettingsDto,
   UpdateXhsTopicDto,
 } from './xhs-topic.dto.js';
 import {
@@ -36,12 +38,9 @@ import {
   XhsArticleGenerationService,
 } from '../services/xhs-article-generation.service.js';
 import { XhsTopicService } from '../services/xhs-topic.service.js';
+import { XhsTopicCleanupSettingsService } from '../services/xhs-topic-cleanup-settings.service.js';
 import { XhsTopicRepositoryService } from '../services/xhs-topic-repository.service.js';
-import {
-  addRetentionDays,
-  resolveRetentionDays,
-  XHS_DRAFT_RETENTION_DEFAULT_DAYS,
-} from '../xhs-topic-retention.constants.js';
+import { addRetentionDays } from '../xhs-topic-retention.constants.js';
 
 /**
  * @description 小红书 AI 选题接口，返回携带结构化 taskResult 的 Todo。
@@ -62,6 +61,7 @@ export class XhsTopicController {
     private readonly xhsTopicService: XhsTopicService,
     private readonly articleGenerationService: XhsArticleGenerationService,
     private readonly repository: XhsTopicRepositoryService,
+    private readonly cleanupSettings: XhsTopicCleanupSettingsService,
   ) {}
 
   /**
@@ -334,16 +334,53 @@ export class XhsTopicController {
     if (!topic?.article?.draftAt) {
       throw new NotFoundException('XHS_ARTICLE_NOT_FOUND');
     }
-    const retentionDays = resolveRetentionDays(
-      process.env.XHS_DRAFT_RETENTION_DAYS,
-      XHS_DRAFT_RETENTION_DEFAULT_DAYS,
-    );
+    const { draftArticle } = await this.cleanupSettings.get(user.tenantId);
     return {
       ok: true,
-      draftCleanupAt: addRetentionDays(
-        topic.article.draftAt,
-        retentionDays,
-      ).toISOString(),
+      draftCleanupAt: draftArticle.enabled
+        ? addRetentionDays(
+            topic.article.draftAt,
+            draftArticle.retentionDays,
+          ).toISOString()
+        : null,
+    };
+  }
+
+  /**
+   * @description 读取当前租户的清理设置与平台默认值。
+   * @keyword-cn 读取清理设置接口, 租户清理设置
+   * @keyword-en get-cleanup-settings-api, tenant-cleanup-settings
+   */
+  @Get('cleanup-settings')
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'XhsTopic')
+  async getCleanupSettings(@Req() req: AdminRequest) {
+    const user = this.requireUser(req);
+    return {
+      settings: await this.cleanupSettings.get(user.tenantId),
+      defaults: this.cleanupSettings.defaults(),
+    };
+  }
+
+  /**
+   * @description 保存当前租户的清理设置，租户内成员都可修改，下一次每日清理按新设置执行。
+   * @keyword-cn 保存清理设置接口, 租户清理设置
+   * @keyword-en update-cleanup-settings-api, tenant-cleanup-settings
+   */
+  @Put('cleanup-settings')
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('update', 'XhsTopic')
+  async updateCleanupSettings(
+    @Req() req: AdminRequest,
+    @Body() dto: UpdateXhsCleanupSettingsDto,
+  ) {
+    const user = this.requireUser(req);
+    return {
+      settings: await this.cleanupSettings.save(
+        user.tenantId,
+        dto,
+        user._id.toHexString(),
+      ),
     };
   }
 

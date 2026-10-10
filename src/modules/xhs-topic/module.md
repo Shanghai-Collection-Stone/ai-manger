@@ -10,16 +10,18 @@
 
 ## 文件清单 (File List)
 
-- `xhs-topic.module.ts` — NestJS 模块入口，装配后台鉴权、Agent、MCP、Todo、Canvas 生文配图、图库、工作流节点模型与选题服务。
-- `controller/xhs-topic.controller.ts` — 小红书选题生成 HTTP 接口与权限声明。
-- `controller/xhs-topic.dto.ts` — 生成层级、提示词、生成需求候选项、母选题、文章生成风格、母题配图标签与配图规则、数量与检索开关校验。
+- `xhs-topic.module.ts` — NestJS 模块入口，装配后台鉴权、Agent、MCP、Todo、Canvas 生文配图、图库、文章库、工作流节点模型与选题服务。
+- `controller/xhs-topic.controller.ts` — 小红书选题生成 HTTP 接口、租户清理设置接口与权限声明。
+- `controller/xhs-topic.dto.ts` — 生成层级、提示词、生成需求候选项、母选题、文章生成风格、母题配图标签与配图规则、数量与检索开关、租户清理设置校验。
 - `entities/xhs-topic.entity.ts` — 选题候选、数据库实体、文章生成风格、母题配图标签、母题配图规则及合法取值、母子列表、生成输入、Todo 结果与接口响应类型。
-- `xhs-topic-retention.constants.ts` — 母题闲置与文章草稿保留天数默认值、非法配置回退和到期时间计算。
+- `entities/xhs-topic-cleanup-settings.entity.ts` — 租户清理设置的清理对象、单类规则（开关 / 保留天数 / 数量上限）与集合文档类型。
+- `xhs-topic-retention.constants.ts` — 三类内容的平台默认清理设置、天数与数量取值范围、设置归一化、租户作用域键、到期时间计算与超出数量上限的挑选。
+- `services/xhs-topic-cleanup-settings.service.ts` — `xhs_topic_cleanup_settings` 集合读写：按租户读取、合并保存与每日清理批量读取。
 - `xhs-article-collage-key.ts` — 拼图成品指纹（与工作台 `articleCanvasBoard.js` 同算法），保存到文章库时据此跳过没改过的拼图页。
 - `services/xhs-topic-repository.service.ts` — MongoDB 索引、真实母子选题列表（已存入文章库的子题不再返回）、文章生成风格与母题配图标签/配图规则持久化、批量入库和级联删除。
 - `services/xhs-article-generation.service.ts` — 文章 Todo、文章通道排队、一次交付文章（轻量 Agent + 搜索 / 结构化输出）、与写正文并行的配图决策和源图分配、子题文章风格、母题配图约束、母题配图规则版式、扣费前配图预检、生成失败退点、横/竖图太少抛回、优先不重复与允许重复取图、Duck 搜索、生文图组工作流与文章落库。
 - `services/xhs-article-generation-progress.ts` — 生文阶段产出写入器：先写好的正文与逐张就绪的配图合并写进运行中 Todo，关闭后不再写。
-- `services/xhs-topic-cleanup.service.ts` — 历史清理时钟回填、母题闲置清理、文章草稿清理及每日幂等调度。
+- `services/xhs-topic-cleanup.service.ts` — 历史清理时钟回填，以及每日按各租户设置执行的文章库已发布文章、子题草稿与闲置母题幂等清理。
 - `services/xhs-topic.service.ts` — Todo 生命周期、数量解析、生成需求一键推荐、Agent 工具写入、Duck 搜索筛选与结果持久化。
 
 ## 函数清单 (Function List)
@@ -34,8 +36,26 @@
 - `UpdateXhsTopicDto({ title?, topicType?, imageTags?, imageRule?, knowledgeIds?, articleStyle?, starred?, status? })` — 校验真实选题内容、状态、母题星标与引用知识或子题文章生成风格更新；子题传 `starred` 时忽略 | keywords: 更新真实选题, 选题状态, 母题星标, 文章生成风格, update-persisted-topic, topic-status, mother-topic-star, article-writing-style
 - `XHS_TOPIC_IDLE_DEFAULT_DAYS` — 定义母题无活动且未受保护时的默认保留天数 | keywords: 母题闲置期限, 默认保留天数, topic-idle-retention, default-retention-days
 - `XHS_DRAFT_RETENTION_DEFAULT_DAYS` — 定义未入文章库草稿文章的默认保留天数 | keywords: 草稿保留期限, 默认保留天数, draft-retention, default-retention-days
+- `XHS_LIBRARY_RETENTION_DEFAULT_DAYS` — 文章库已发布文章的默认保留天数（该类默认关闭） | keywords: 文章库保留期限, 默认保留天数, library-article-retention, default-retention-days
+- `XHS_CLEANUP_RETENTION_MAX_DAYS` — 租户可设置的最长保留天数 3650 | keywords: 保留天数上限, 清理设置校验, retention-days-limit, cleanup-settings-validation
+- `XHS_CLEANUP_MAX_COUNT_LIMIT` — 租户可设置的最大数量上限值 100000 | keywords: 数量上限取值, 清理设置校验, max-count-limit, cleanup-settings-validation
+- `XHS_CLEANUP_PLATFORM_SCOPE_KEY` — 无租户账号的清理设置键 `__platform__` | keywords: 平台作用域, 清理设置键, platform-scope, cleanup-scope-key
 - `resolveRetentionDays(value, fallback)` — 读取正整数保留天数配置并让非法值回落默认值 | keywords: 保留天数配置, 非法值回落, retention-days-config, invalid-value-fallback
 - `addRetentionDays(date, days)` — 计算接口展示与清理判断共用的到期时间 | keywords: 清理到期时间, 保留期限计算, cleanup-deadline, retention-deadline
+- `resolveDefaultCleanupSettings(env?)` — 租户未保存设置时的平台默认值：母题与草稿开启并读环境变量天数，文章库关闭，数量不限 | keywords: 平台默认清理设置, 环境变量默认值, default-cleanup-settings, env-default-retention
+- `normalizeCleanupSettings(input, fallback)` — 逐项校验三类清理规则，缺失或越界字段沿用回退值 | keywords: 清理设置归一化, 非法值回落, normalize-cleanup-settings, invalid-value-fallback
+- `normalizeCleanupRule(input, fallback)` — 校验单条规则的开关、1 至 3650 天与 0 至 100000 条 | keywords: 清理规则校验, 非法值回落, normalize-cleanup-rule, invalid-value-fallback
+- `xhsCleanupScopeKey(tenantId?)` — 租户 ID 转清理设置键，无租户归平台作用域 | keywords: 清理设置键, 平台作用域, cleanup-scope-key, platform-scope
+- `selectCapacityOverflow({ candidates, total, maxCount, excluded, isEvictable, timeOf })` — 扣掉已按天数选中的条目后仍超出上限的部分，从可清理条目里按时间最早优先挑选 | keywords: 超出数量上限, 最早优先清理, select-capacity-overflow, oldest-first-eviction
+- `XHS_CLEANUP_TARGETS` — 三类清理对象 `motherTopic` / `draftArticle` / `libraryArticle` | keywords: 清理对象, 租户清理设置, cleanup-target, tenant-cleanup-settings
+- `XhsCleanupRuleDto({ enabled, retentionDays, maxCount })` — 校验单类清理规则，天数 1 至 3650、数量 0 至 100000 | keywords: 清理规则参数, 保留天数, 数量上限, cleanup-rule-dto, retention-days, max-count
+- `UpdateXhsCleanupSettingsDto({ motherTopic?, draftArticle?, libraryArticle? })` — 校验租户保存清理设置请求，未传的清理对象保持原值 | keywords: 保存清理设置参数, 租户清理设置, update-cleanup-settings-dto, tenant-cleanup-settings
+- `XhsTopicCleanupSettingsService({ db })` — 租户清理设置服务，未保存过时回落平台默认值 | keywords: 租户清理设置, 平台默认清理设置, tenant-cleanup-settings, default-cleanup-settings
+- `XhsTopicCleanupSettingsService.ensureIndexes()` — 按租户作用域建唯一索引 | keywords: 清理设置索引, 租户唯一, cleanup-settings-index, unique-tenant-scope
+- `XhsTopicCleanupSettingsService.defaults()` — 返回平台默认清理设置 | keywords: 平台默认清理设置, 环境变量默认值, default-cleanup-settings, env-default-retention
+- `XhsTopicCleanupSettingsService.get(tenantId?)` — 读取租户清理设置并按默认值补齐 | keywords: 读取清理设置, 租户作用域, get-cleanup-settings, tenant-scope
+- `XhsTopicCleanupSettingsService.save(tenantId, input, updatedBy)` — 合并保存租户清理设置并返回完整设置 | keywords: 保存清理设置, 部分更新, save-cleanup-settings, partial-update
+- `XhsTopicCleanupSettingsService.loadAll()` — 一次读出全部租户清理设置供每日清理使用 | keywords: 批量读取清理设置, 每日清理, load-all-cleanup-settings, daily-cleanup
 - `GenerateXhsArticleDto({ prompt?, useSearch?, dedup?, coverStyle?, regenerateImages?, imageRule?, allowImageRepeat? })` — 校验真实文章生成请求、配图去重（`true` 严格去重，缺省/`false` 优先不重复）、封面风格预设、重新配图，以及仅本次生效的配图规则覆盖与允许重复用图 | keywords: 文章生成参数, 文章提示词, article-generation-dto, article-prompt
 - `XHS_MOTHER_IMAGE_RULES` — 母选题配图规则合法取值（`default` / `collage-first` / `portrait-first`），DTO 校验与仓储归一化共用 | keywords: 母题配图规则, 规则取值, mother-image-rule, image-rule-values
 - `XhsArticleCanvasCollageCellDto({ src, imageId?, x, y, width, height, objectFit?, focusX?, focusY?, zoom? })` — 校验拼图画布格式里的单个源图格子及其裁切焦点与缩放参数 | keywords: 拼图格子, 裁切参数, collage-cell, crop-parameters
@@ -55,19 +75,22 @@
 - `XhsTopicService.getDuckSearchTools()` — 按 `ddg-search` 服务名隔离读取 DuckDuckGo MCP 工具 | keywords: Duck搜索工具, 搜索筛选, duck-search-tools, tool-filter
 - `XhsTopicService.buildSystemPrompt(input)` — 构造文章风格、合规、检索与工具交付约束 | keywords: 构造选题提示词, 工具交付约束, 文章生成风格, build-topic-prompt, tool-delivery-contract, article-writing-style
 - `XhsTopicService.runAgent(system, tools, remainingCount, scope)` — 执行 Agent（模型取节点 `xhs-article/topic`）、按租户计费并忽略其最终文本 | keywords: 执行选题Agent, 忽略最终文本, run-topic-agent, ignore-final-text
-- `XhsTopicRepositoryService({ db })` — 管理租户用户隔离的 MongoDB 选题集合 | keywords: 选题数据库服务, 租户隔离, topic-repository, tenant-isolation
+- `XhsTopicRepositoryService({ db, cleanupSettings })` — 管理租户用户隔离的 MongoDB 选题集合，列表清理时间按租户清理设置计算 | keywords: 选题数据库服务, 租户隔离, topic-repository, tenant-isolation
 - `XhsTopicRepositoryService.ensureIndexes()` — 创建业务 ID、作用域、父子关系及自动清理时钟索引 | keywords: 选题索引, 父子关系, 清理时钟, topic-indexes, parent-child-relation, cleanup-clock
 - `XhsTopicRepositoryService.listStoredArticleTopicIds(scope, topicIds)` — 在给定子选题里挑出已存入文章库的那些 ID，按选题 ID 反查而不按 userId 关联 | keywords: 已入库子选题, 文章库来源, stored-topic-ids, article-library-source
-- `XhsTopicRepositoryService.listWorkspace(scope,options?)` — 聚合当前用户的真实母题、固定配图标签与按需保留的已入库子题 | keywords: 读取选题工作台, 母子聚合, 保留已入库子题, list-topic-workspace, parent-child-aggregation, include-stored-topics
+- `XhsTopicRepositoryService.listWorkspace(scope,options?)` — 聚合当前用户的真实母题、固定配图标签与按需保留的已入库子题，`idleCleanupAt` / `draftCleanupAt` 按租户清理设置计算、关闭时为空 | keywords: 读取选题工作台, 母子聚合, 保留已入库子题, list-topic-workspace, parent-child-aggregation, include-stored-topics
 - `XhsTopicRepositoryService.createMany(input, scope)` — 批量保存候选及子题文章风格并校验父题归属 | keywords: 批量创建选题, 父题校验, 文章生成风格, create-topics, parent-validation, article-writing-style
 - `XhsTopicRepositoryService.getOwnedTopic(id, scope)` — 按作用域读取文章生成所需真实选题 | keywords: 读取真实选题, 文章生成上下文, get-owned-topic, article-generation-context
 - `XhsTopicRepositoryService.saveGeneratedArticle(id, article, scope)` — 将完整内存文章写入子选题 | keywords: 保存生成文章, 文章落库, save-generated-article, persist-article
 - `XhsTopicRepositoryService.updateArticle(id, input, scope)` — 更新已生成文章内容、真实配图与结构化画板元数据 | keywords: 更新真实文章, 文章配图, update-persisted-article, article-images
 - `XhsTopicRepositoryService.touchDraft(id, scope)` — 重置文章从文章库回到草稿后的保留时钟 | keywords: 重置草稿时钟, 草稿保留期限, touch-draft-clock, draft-retention
 - `XhsTopicRepositoryService.backfillCleanupTimestamps(now)` — 为历史母题和文章补齐清理时钟并给予完整宽限期 | keywords: 首次上线回填, 清理宽限期, cleanup-timestamp-backfill, retention-grace-period
-- `XhsTopicRepositoryService.listExpiredMotherTopics(cutoff)` — 列出达到闲置期限且未星标的母题 | keywords: 过期闲置母题, 星标保护, expired-idle-topics, starred-protection
-- `XhsTopicRepositoryService.listExpiredDraftTopics(cutoff)` — 列出草稿时钟已过期且仍有文章的子题 | keywords: 过期文章草稿, 草稿时钟, expired-article-drafts, draft-clock
-- `XhsTopicRepositoryService.clearExpiredDraft(id, cutoff, now, scope)` — 幂等清空过期文章并恢复未生成状态 | keywords: 清理过期草稿, 幂等更新, clear-expired-draft, idempotent-update
+- `XhsTopicRepositoryService.listTopicTenantIds()` — 列出存在选题的全部租户，无租户为 `undefined` | keywords: 选题租户列表, 逐租户清理, list-topic-tenants, per-tenant-cleanup
+- `XhsTopicRepositoryService.listMotherCleanupUserIds(tenantId, cutoff?)` — 列出租户内需检查闲置母题的成员，传截止时间时只返回有过期母题的成员 | keywords: 母题清理成员, 过期闲置母题, mother-cleanup-users, expired-idle-topics
+- `XhsTopicRepositoryService.listDraftCleanupUserIds(tenantId, cutoff?)` — 列出租户内需检查草稿的成员，传截止时间时只返回有过期草稿的成员 | keywords: 草稿清理成员, 过期文章草稿, draft-cleanup-users, expired-article-drafts
+- `XhsTopicRepositoryService.listDraftTopics(scope)` — 列出成员名下仍保留文章的子题 | keywords: 成员草稿列表, 草稿时钟, list-member-drafts, draft-clock
+- `XhsTopicRepositoryService.clearArticleAfterLibraryCleanup(topicId, tenantId, now)` — 文章库已发布文章被自动清理后清空来源子题文章并恢复未生成 | keywords: 文章库清理联动, 清空子题文章, library-cleanup-cascade, clear-child-article
+- `XhsTopicRepositoryService.clearExpiredDraft(id, cutoff, now, scope)` — 幂等清空草稿时钟早于 `cutoff` 的文章并恢复未生成，期间被刷新过时钟的草稿不清 | keywords: 清理过期草稿, 幂等更新, clear-expired-draft, idempotent-update
 - `XhsTopicRepositoryService.setCrawlStatus(id, status, scope)` — 切换子选题数据抓取开关，恢复时清空取消时间 | keywords: 切换抓取状态, 取消恢复抓取, toggle-crawl-status, cancel-resume-crawl
 - `XhsTopicRepositoryService.markCrawlScheduled(id, at)` — 记录一次调度已建抓取任务，供频率节流 | keywords: 记录调度时间, 抓取频率节流, mark-crawl-scheduled, schedule-throttle
 - `XhsTopicRepositoryService.markCrawled(id, at)` — 记录一次抓取成功回写数据的时间 | keywords: 记录抓取时间, 最后抓取, mark-crawled, last-crawled-at
@@ -89,14 +112,15 @@
 - `XhsTopicRepositoryService.normalizeStringList(values, maximumItems, maximumLength)` — 规整文章标签或图片列表并去重截断 | keywords: 规整文章列表, 去重截断, normalize-article-list, deduplicate-values
 - `XhsTopicRepositoryService.normalizeMotherImageTags(values?)` — 规整母题固定配图标签并去除井号、空值和大小写重复项 | keywords: 母题配图标签, 标签去重, mother-image-tags, normalize-mother-tags
 - `XhsTopicRepositoryService.normalizeMotherImageRule(value?)` — 规整母题配图规则，历史缺字段或非法值回落 `default` | keywords: 母题配图规则, 规则归一化, mother-image-rule, normalize-image-rule
-- `XhsTopicRepositoryService.toChildView(entity, draftRetentionDays?)` — 转换子题数据库实体并计算草稿清理时间 | keywords: 子选题转换, 接口视图, 文章生成风格, child-topic-view, api-view, article-writing-style
-- `XhsTopicCleanupService({ repository, articleGeneration })` — 回填历史清理时钟并编排母题与文章草稿的每日幂等清理 | keywords: 选题自动清理, 首次上线回填, 幂等清理, topic-auto-cleanup, startup-backfill, idempotent-cleanup
+- `XhsTopicRepositoryService.toChildView(entity, draftRule)` — 转换子题数据库实体并按租户草稿规则计算清理时间，关闭草稿清理时不返回 | keywords: 子选题转换, 接口视图, 文章生成风格, child-topic-view, api-view, article-writing-style
+- `XhsTopicCleanupService({ repository, articleGeneration, cleanupSettings, articles })` — 回填历史清理时钟并按各租户设置编排文章库、草稿与母题的每日幂等清理 | keywords: 选题自动清理, 首次上线回填, 幂等清理, topic-auto-cleanup, startup-backfill, idempotent-cleanup
 - `XhsTopicCleanupService.onModuleInit()` — 启动时回填历史时间、立即清理并启动每小时检查；多进程时只在 leader 进程上跑 | keywords: 启动清理调度, 历史时间回填, start-cleanup-scheduler, historical-timestamp-backfill
 - `XhsTopicCleanupService.onModuleDestroy()` — 模块销毁时释放清理定时器 | keywords: 停止清理调度, 释放定时器, stop-cleanup-scheduler, clear-cleanup-timer
-- `XhsTopicCleanupService.cleanupIdleMotherTopics(now)` — 删除未星标、已闲置且没有已入库子题保护的母题 | keywords: 清理闲置母题, 已入库保护, 级联删除, cleanup-idle-mothers, stored-article-protection, cascade-delete
-- `XhsTopicCleanupService.cleanupExpiredDrafts(now)` — 清空过期、未入库且无生成任务运行的子题文章 | keywords: 清理过期草稿, 运行任务保护, 已入库保护, cleanup-expired-drafts, running-task-protection, stored-article-protection
+- `XhsTopicCleanupService.runCleanup(now)` — 遍历有选题或已发布文章的租户，按各自设置依次清理文章库、草稿与母题，单租户失败不影响其他租户 | keywords: 按租户清理, 租户清理设置, per-tenant-cleanup, tenant-cleanup-settings
+- `XhsTopicCleanupService.cleanupLibraryArticles(tenantId, rule, now)` — 删除租户内超过保留期或超出数量上限的已发布文章，来源为选题时同时清空子题文章 | keywords: 清理文章库文章, 只清已发布, 文章库清理联动, cleanup-library-articles, published-only, library-cleanup-cascade
+- `XhsTopicCleanupService.cleanupExpiredDrafts(tenantId, rule, now)` — 清空各成员超过保留期或超出数量上限、未入库且无生成任务运行的子题文章 | keywords: 清理过期草稿, 运行任务保护, 已入库保护, cleanup-expired-drafts, running-task-protection, stored-article-protection
+- `XhsTopicCleanupService.cleanupIdleMotherTopics(tenantId, rule, now)` — 删除各成员超过闲置期限或超出数量上限、未星标且没有已入库子题保护的母题 | keywords: 清理闲置母题, 已入库保护, 级联删除, cleanup-idle-mothers, stored-article-protection, cascade-delete
 - `XhsTopicCleanupService.runCleanupIfDue(now)` — 每小时检查每日门控并防止进程内重叠执行 | keywords: 每日清理门控, 防止重叠执行, daily-cleanup-gate, overlapping-run-guard
-- `XhsTopicCleanupService.groupByScope(entities)` — 按租户用户作用域归组选题以沿用隔离口径 | keywords: 清理作用域分组, 租户隔离, cleanup-scope-grouping, tenant-isolation
 - `XhsArticleGenerationService({ adminService, agentService, aiBillingService, mcpAdapters, todoService, repository, galleryService, canvasService, workflowModels, queue })` — 编排服务固定扣费、经 AI 生成排队服务 `xhs-article` 通道限制平台及租户并发、一次交付文章与生文图组工作流 | keywords: 文章生成服务, 内存文章, article-generation-service, in-memory-article
 - `XHS_ARTICLE_ERROR_MESSAGES` — 文章生成失败码与前端可读中文原因的对照表 | keywords: 文章生成错误码, 失败原因文案, article-error-code, failure-reason-text
 - `XHS_MOTHER_IMAGE_RULE_LAYOUT` — 母题配图规则到固定版式的映射（默认 5 拼 1 竖 / 全拼图 / 全竖图），凑不齐不换版式 | keywords: 母题配图规则, 规则版式, mother-image-rule, rule-layout
@@ -155,7 +179,9 @@
 - `XhsTopicController.recommendArticleRequirements(req, id, dto)` — 为当前作用域内的子选题一键推荐文章生成需求 | keywords: 生成需求推荐接口, 子题上下文, requirement-recommendation-api, child-topic-context
 - `XhsTopicController.generateArticle(req, id, dto)` — 异步排队文章生成并立即返回等待中的 Todo | keywords: 生成真实文章接口, 异步生成文章, 并发生成, generate-persisted-article-api, start-article-generation, concurrent-generation
 - `XhsTopicController.updateArticle(req, id, dto)` — 修改已生成文章与真实配图 | keywords: 更新真实文章接口, 文章配图, update-persisted-article-api, article-images
-- `XhsTopicController.touchDraft(req, id)` — 文章从文章库回到草稿后重置草稿保留时钟 | keywords: 重置草稿接口, 草稿保留期限, touch-draft-api, draft-retention
+- `XhsTopicController.touchDraft(req, id)` — 文章从文章库回到草稿后重置草稿保留时钟，租户关闭草稿清理时 `draftCleanupAt` 为 null | keywords: 重置草稿接口, 草稿保留期限, touch-draft-api, draft-retention
+- `XhsTopicController.getCleanupSettings(req)` — 返回当前租户清理设置与平台默认值 | keywords: 读取清理设置接口, 租户清理设置, get-cleanup-settings-api, tenant-cleanup-settings
+- `XhsTopicController.updateCleanupSettings(req, dto)` — 保存当前租户清理设置，租户内成员都可修改 | keywords: 保存清理设置接口, 租户清理设置, update-cleanup-settings-api, tenant-cleanup-settings
 - `XhsTopicController.generate(req, dto)` — 生成候选并返回 taskResult 已落盘的 Todo | keywords: 生成选题接口, 待办结果, generate-topic-api, todo-result
 - `XhsTopicController.requireUser(req)` — 读取当前后台用户并拒绝未鉴权请求 | keywords: 读取后台用户, 鉴权上下文, read-admin-user, auth-context
 - `XhsTopicModule()` — 装配选题生成业务依赖 | keywords: 小红书选题模块, 选题生成, xhs-topic-module, topic-generation
@@ -179,8 +205,16 @@
 | 选题数据库服务   | topic-repository                  | `xhs_topics` 集合读写与租户用户隔离                                                         |
 | 母子聚合         | parent-child-aggregation          | 真实母题与子题工作台列表                                                                    |
 | 母题星标         | mother-topic-star                 | 星标母题置顶并永久跳过闲置清理                                                              |
-| 母题闲置期限     | topic-idle-retention              | `XHS_TOPIC_IDLE_DAYS`，默认 30 天，非法值回落默认                                            |
-| 草稿保留期限     | draft-retention                   | `XHS_DRAFT_RETENTION_DAYS`，默认 7 天，非法值回落默认                                        |
+| 母题闲置期限     | topic-idle-retention              | 租户设置 `motherTopic.retentionDays`；未设置时读 `XHS_TOPIC_IDLE_DAYS`，默认 30 天          |
+| 草稿保留期限     | draft-retention                   | 租户设置 `draftArticle.retentionDays`；未设置时读 `XHS_DRAFT_RETENTION_DAYS`，默认 7 天     |
+| 文章库保留期限   | library-article-retention         | 租户设置 `libraryArticle.retentionDays`，默认 90 天且该类默认关闭                           |
+| 租户清理设置     | tenant-cleanup-settings           | `xhs_topic_cleanup_settings` 每租户一份，三类内容各有开关、保留天数与数量上限               |
+| 平台默认清理设置 | default-cleanup-settings          | 租户未保存时的回落值：母题与草稿开启、文章库关闭、数量不限                                  |
+| 超出数量上限     | select-capacity-overflow          | 扣掉按天数选中的条目后仍超出上限的部分，最早优先清理；受保护条目计数但不清理               |
+| 按租户清理       | per-tenant-cleanup                | 每日清理逐租户读规则，顺序为文章库 → 草稿 → 母题                                           |
+| 只清已发布       | published-only                    | 文章库自动清理只删已发布文章，未发布与租约中的不删                                         |
+| 文章库清理联动   | library-cleanup-cascade           | 来源为选题的已发布文章被清理时同时清空子题文章，不回到草稿                                 |
+| 平台作用域       | platform-scope                    | 无租户账号的清理设置键 `__platform__`                                                       |
 | 首次上线回填     | cleanup-timestamp-backfill        | 启动时为历史母题 `lastActiveAt` 与文章 `draftAt` 补当前时间                                  |
 | 已入库保护       | stored-article-protection         | 名下有已入库子题的母题不清理，已入库子题的草稿文章不清理                                    |
 | 运行任务保护     | running-task-protection           | 正在等待或执行生文任务的子题文章不清理                                                      |
@@ -266,8 +300,12 @@
 - `XhsTopicArticle` — 子选题持久化的真实文章、标签、图片、内容形式与草稿时钟 `draftAt`。
 - `XhsTopicCreateInput` — 用户确认候选的批量入库输入，可随母题保存 `imageTags`、随子题保存 `articleStyle`。
 - `XhsTopicUpdateInput` — 真实选题更新输入；支持母题 `starred` / `imageTags` / `imageRule` / `knowledgeIds` 与子题 `articleStyle`。
-- `XhsChildTopicView` — 子题接口列表结构，文章存在时含 `draftCleanupAt`，并保留抓取状态字段。
-- `XhsTopicWorkspaceGroup` — 母题及其子题聚合结构，含 `starred`、`lastActiveAt` 与可空的 `idleCleanupAt`。
+- `XhsChildTopicView` — 子题接口列表结构，文章存在且租户开启草稿清理时含 `draftCleanupAt`，并保留抓取状态字段。
+- `XhsTopicWorkspaceGroup` — 母题及其子题聚合结构，含 `starred`、`lastActiveAt` 与可空的 `idleCleanupAt`（星标、已入库保护或租户关闭母题清理时为 null）。
+- `XhsCleanupTarget` — 清理对象：`motherTopic` / `draftArticle` / `libraryArticle`。
+- `XhsCleanupRule` — 单类清理规则 `{ enabled, retentionDays, maxCount }`，`maxCount=0` 表示不限条数。
+- `XhsCleanupSettings` — 一个租户的完整清理设置，三类对象各一条规则。
+- `XhsCleanupSettingsEntity` — `xhs_topic_cleanup_settings` 文档，按 `scopeKey` 唯一，记录 `tenantId`、`updatedBy` 与时间戳。
 - `XhsTopicGenerateInput` — 服务层标准生成输入，子题支持 `articleStyle`。
 - `XhsArticleUpdateInput` — 已生成文章编辑输入。
 - `XhsArticleMemoryDraft` — Agent 工具在单次运行中调整的文章内存，含文章标签与真实图库配图标签。
@@ -294,9 +332,15 @@
 
 `GET /api/xhs-topic` 从 `xhs_topics` 返回当前租户用户的母子选题工作台，并在每个母题分组原样返回 `imageTags` 与 `imageRule`（历史数据缺省为 `default`）、在每个子题原样返回 `articleStyle`；同时通过 `articles.source=xhs-topic` 与 `meta.xhsTopicId` 过滤已经存入选题文章库的子题，历史已入库文章同样生效，库内文章删除后对应子题会重新出现。无租户账号同时兼容历史缺失字段与 MongoDB 序列化的 `null`；`POST /api/xhs-topic` 将用户确认的候选、母题 `imageTags` 及子题 `articleStyle` 批量入库并返回最新工作台；`PATCH /api/xhs-topic/:id` 更新标题、类型、状态、母题 `imageTags` / `imageRule` 或子题 `articleStyle`，空值可恢复对应默认链路；`POST` 创建母题时同样可带 `imageRule`；`DELETE /api/xhs-topic` 删除当前用户指定选题，母题命中时级联删除所有子题。入口分别声明 `read/create/update/delete XhsTopic` 权限。
 
-**星标与闲置清理**：母题创建时写入 `starred=false` 与当前 `lastActiveAt`；修改母题、批量创建或修改子题、文章生成落库及文章编辑都会刷新所属母题的活动时间。工作台按星标优先、其余按 `createdAt` 降序排列母题，子题也按 `createdAt` 降序，并返回 `starred`、`lastActiveAt`、`idleCleanupAt`。`PATCH /api/xhs-topic/:id` 接受 `starred`，只对母题生效，子题传入时忽略。闲置期限读取 `XHS_TOPIC_IDLE_DAYS`（默认 30，非法值回落默认）；未星标、超过期限且名下没有任何已存入文章库子题的母题才会连同子题级联删除。启动时先为缺 `lastActiveAt` 的历史母题回填当前时间，确保完整宽限期。
+**租户清理设置**：过期清理由租户自己设置，不再由平台统一处理。`GET /api/xhs-topic/cleanup-settings` 返回 `{ settings, defaults }`，`PUT` 接收 `{ motherTopic?, draftArticle?, libraryArticle? }`，每项为 `{ enabled, retentionDays, maxCount }`（天数 1–3650，数量 0–100000，`0` 表示不限），未传的对象保持原值，返回 `{ settings }`。设置存在 `xhs_topic_cleanup_settings`，按 `scopeKey`（租户 ID，无租户为 `__platform__`）唯一；租户内成员都能读写。租户没保存过时使用平台默认值：母题开启、天数读 `XHS_TOPIC_IDLE_DAYS`（默认 30）；草稿开启、天数读 `XHS_DRAFT_RETENTION_DAYS`（默认 7）；文章库关闭（开启时默认 90 天）；数量都不限，因此老租户行为不变。数量上限的口径：母题与草稿按成员各自计算（选题本身按租户 + 成员隔离），文章库按整个租户合计（库是租户共享的，未发布文章计入总数但不会被删）。超出上限时先扣掉按天数已选中的条目，剩余超出部分从时间最早的可清理条目开始清；星标、已入库保护、生成中与租约中的条目计数但不清，所以上限可能腾不满。
 
-**草稿自动清理**：文章生成落库、文章编辑及 `POST /api/xhs-topic/:id/article/touch-draft` 都会刷新 `article.draftAt`；工作台在文章存在时返回 `draftCleanupAt`。草稿期限读取 `XHS_DRAFT_RETENTION_DAYS`（默认 7，非法值回落默认）；只清空过期、未存入文章库且没有等待中或运行中生文任务的子题 `article`，并把状态恢复为 `pending`，子题标题继续保留。启动时为缺 `draftAt` 的历史文章回填当前时间。定时器每小时检查、每 24 小时实际执行一次并 `unref`；删除与条件 `$unset` 均可安全重复执行，多实例并发结果幂等。`touch-draft` 用于文章从文章库恢复为草稿后重新获得完整保留期。
+**星标与闲置清理**：母题创建时写入 `starred=false` 与当前 `lastActiveAt`；修改母题、批量创建或修改子题、文章生成落库及文章编辑都会刷新所属母题的活动时间。工作台按星标优先、其余按 `createdAt` 降序排列母题，子题也按 `createdAt` 降序，并返回 `starred`、`lastActiveAt`、`idleCleanupAt`（星标、已入库保护或租户关闭母题清理时为 null）。`PATCH /api/xhs-topic/:id` 接受 `starred`，只对母题生效，子题传入时忽略。闲置期限与数量上限取租户 `motherTopic` 规则；未星标、名下没有任何已存入文章库子题的母题才会在超过期限或超出上限时连同子题级联删除，删除前复核没有被星标或刷新活动时间。启动时先为缺 `lastActiveAt` 的历史母题回填当前时间，确保完整宽限期。
+
+**草稿自动清理**：文章生成落库、文章编辑及 `POST /api/xhs-topic/:id/article/touch-draft` 都会刷新 `article.draftAt`；工作台在文章存在且租户开启草稿清理时返回 `draftCleanupAt`，`touch-draft` 在关闭时返回 `draftCleanupAt: null`。保留期限与数量上限取租户 `draftArticle` 规则；只清空未存入文章库且没有等待中或运行中生文任务的子题 `article`，并把状态恢复为 `pending`，子题标题继续保留；清空时以观察到的草稿时钟为条件，期间被编辑过的草稿不会被误清。启动时为缺 `draftAt` 的历史文章回填当前时间。`touch-draft` 用于文章从文章库恢复为草稿后重新获得完整保留期。
+
+**文章库自动清理**：租户开启 `libraryArticle` 后，每日清理删除该租户超过保留期（按 `publishedAt`，缺失时按 `updatedAt`）或超出数量上限的**已发布**文章，未发布与租约中的文章不删；删除走 `ArticleService.delete`，会同步停止对应的抓取调度。来源为选题（`source=xhs-topic`）的文章被删后，如果同一子题没有再存进别的库，会同时清空子题 `article` 并恢复 `pending`，不会以草稿形式回到选题页。
+
+**清理调度**：定时器只在 leader 进程上跑，每小时检查、每 24 小时实际执行一次并 `unref`。每次遍历所有有选题或已发布文章的租户，按各自设置依次清理文章库 → 草稿 → 母题（文章库清理会解除子题的入库保护，母题判断随后才能看到最新状态）；单个租户失败只记日志，不影响其他租户。删除与条件 `$unset` 均可安全重复执行，多实例并发结果幂等。
 
 **入口鉴权**：
 
@@ -304,6 +348,8 @@
 | --- | --- | --- |
 | `POST /api/xhs-topic/:id/article/touch-draft` | `update XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；当前作用域内子题没有文章时返回 404 |
 | `POST /api/xhs-topic/:id/article/requirements/recommend` | `create XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；仅允许读取当前作用域内子题及其母题 |
+| `GET /api/xhs-topic/cleanup-settings` | `read XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；只返回当前租户设置 |
+| `PUT /api/xhs-topic/cleanup-settings` | `update XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；租户内成员（含操作员）都可修改，只写当前租户 |
 
 `PATCH /api/xhs-topic/:id/article` 同时接受生成阶段的 `cover/inner` 画板和灵感画布保存的 `edited` 画板。编辑态使用版本化 `editorState` 保存模板、120~1600 像素画板尺寸及最多 200 个有序图层，重新进入灵感画布时可恢复上次编辑结果；原有封面素材、拼图与文章图片结构继续兼容。
 

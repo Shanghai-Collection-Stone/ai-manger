@@ -10,10 +10,14 @@ import {
   Req,
   Res,
   UnauthorizedException,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { RequirePermission } from '../../admin/decorators/require-permission.decorator.js';
 import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard.js';
@@ -21,18 +25,25 @@ import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
 import type { AdminRequest } from '../../admin/types/admin-request.types.js';
 import type { Response } from 'express';
 import {
+  ConcatDouyinShotVideosDto,
   ConfirmDouyinScriptDraftsDto,
+  ReportDouyinConcatResultDto,
   CrawlDouyinDataDto,
   CreateDouyinMotherTopicDto,
+  DesignDouyinStoreVisitVoiceDto,
   MaskDouyinShotFacesDto,
   GenerateDouyinChildrenDto,
   GenerateDouyinShotImageDto,
   GenerateDouyinShotVideoDto,
+  GenerateDouyinStoreVisitKeyframeDto,
+  GenerateDouyinStoreVisitLinesDto,
+  GenerateDouyinStoreVisitVideoDto,
   GenerateDouyinStoryboardDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
   RefineDouyinScriptDto,
   UpdateDouyinTopicDto,
+  UseDouyinStoreVisitPresetVoiceDto,
 } from './douyin-workbench.dto.js';
 import {
   DOUYIN_SCRIPT_STYLES,
@@ -41,7 +52,13 @@ import {
 import { DouyinOperationService } from '../services/douyin-operation.service.js';
 import { DouyinChildTopicGenerationService } from '../services/douyin-child-topic-generation.service.js';
 import { DouyinGenerationJobService } from '../services/douyin-generation-job.service.js';
+import { DouyinShotConcatService } from '../services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from '../services/douyin-shot-image.service.js';
+import {
+  DOUYIN_VOICE_SAMPLE_MAX_BYTES,
+  DouyinStoreVisitService,
+} from '../services/douyin-store-visit.service.js';
+import { DouyinStoreVisitShuyanService } from '../services/douyin-store-visit-shuyan.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
 
 /**
@@ -65,6 +82,9 @@ export class DouyinWorkbenchController {
     private readonly generationJobs: DouyinGenerationJobService,
     private readonly operations: DouyinOperationService,
     private readonly shotImages: DouyinShotImageService,
+    private readonly shotConcat: DouyinShotConcatService,
+    private readonly storeVisit: DouyinStoreVisitService,
+    private readonly storeVisitSegments: DouyinStoreVisitShuyanService,
   ) {}
 
   /**
@@ -411,6 +431,223 @@ export class DouyinWorkbenchController {
   }
 
   /**
+   * @description 准备一次客户端合成：校验每一镜都已出片、写运行中的调用记录，返回按分镜顺序的各镜视频地址，
+   *   由桌面端用内置 ffmpeg 合成、直传视频库后经 `operations/:id/concat-result` 回报。`auto` 表示领取「全部出片后自动合成」。
+   * @keyword-cn 准备客户端合成接口, 分镜视频地址
+   * @keyword-en prepare-client-concat-api, shot-video-urls
+   */
+  @Post('topics/:id/video/concat')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async concatShotVideos(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: ConcatDouyinShotVideosDto,
+  ) {
+    return await this.shotConcat.prepare(
+      this.readId(id),
+      this.scopeOf(this.requireUser(req)),
+      { auto: dto.auto },
+    );
+  }
+
+  /**
+   * @description 桌面端回报客户端合成的进度、结果或失败原因；完成时把成片设为脚本当前整片。
+   * @keyword-cn 回报合成结果接口, 设为当前整片
+   * @keyword-en report-concat-result-api, bind-merged-video
+   */
+  @Post('operations/:id/concat-result')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async reportConcatResult(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: ReportDouyinConcatResultDto,
+  ) {
+    const operationId = String(id ?? '').trim();
+    if (!/^[0-9a-f-]{8,64}$/i.test(operationId))
+      throw new BadRequestException('DOUYIN_OPERATION_ID_INVALID');
+    return {
+      operation: await this.shotConcat.report(
+        operationId,
+        dto,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 探店模式上传一段录音克隆音色（multipart 字段 `file`，最多 10MB），音色 ID 写进脚本，录音本身只转交克隆服务不落盘。
+   * @keyword-cn 克隆探店音色接口, 上传录音
+   * @keyword-en clone-store-visit-voice-api, upload-voice-sample
+   */
+  @Post('topics/:id/store-visit/voice')
+  @RequirePermission('create', 'DouyinWorkbench')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: DOUYIN_VOICE_SAMPLE_MAX_BYTES },
+    }),
+  )
+  async cloneStoreVisitVoice(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.storeVisit.cloneVoice(
+      this.readId(id),
+      file,
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 用文字描述设计音色，成功后保存音色与可选试听，并返回当前租户工作台。
+   * @keyword-cn 声音设计接口, 探店音色
+   * @keyword-en design-store-visit-voice-api, store-visit-voice
+   */
+  @Post('topics/:id/store-visit/voice/design')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async designStoreVisitVoice(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: DesignDouyinStoreVisitVoiceDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.storeVisit.designVoice(
+      this.readId(id),
+      dto,
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 按脚本正文让 AI 写一版探店台词（出镜人第一人称口播），只返回台词、不落库。
+   * @keyword-cn 探店台词接口, 数字人台词
+   * @keyword-en store-visit-lines-api, digital-human-lines
+   */
+  @Post('topics/:id/store-visit/lines')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitLines(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitLinesDto,
+  ) {
+    return await this.childTopics.writeStoreVisitLines(
+      this.readId(id),
+      dto.prompt,
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 探店模式生成视频：保存台词后把出镜人脸、克隆音色、台词与分镜画面交给数字人服务，按生视频服务扣费，返回调用记录。
+   * @keyword-cn 探店视频生成接口, 数字人生视频
+   * @keyword-en store-visit-video-api, digital-human-video
+   */
+  @Post('topics/:id/store-visit/generate')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitVideo(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitVideoDto,
+  ) {
+    return await this.storeVisit.start(
+      this.readId(id),
+      dto,
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 列出数眼可灵音色库（「探店数字人视频」节点选了数眼智能时可用），供探店音色步骤试听挑选。
+   * @keyword-cn 可灵音色库接口, 预置音色列表
+   * @keyword-en kling-preset-voices-api, preset-voice-list
+   */
+  @Get('store-visit/voices')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async listStoreVisitPresetVoices() {
+    return { voices: await this.storeVisitSegments.listPresetVoices() };
+  }
+
+  /**
+   * @description 选用可灵音色库里的一个音色作为脚本的固定音色，并返回当前租户工作台。
+   * @keyword-cn 选用可灵音色接口, 保存预置音色
+   * @keyword-en use-kling-preset-voice-api, save-preset-voice
+   */
+  @Post('topics/:id/store-visit/voice/preset')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async useStoreVisitPresetVoice(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: UseDouyinStoreVisitPresetVoiceDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.storeVisitSegments.usePresetVoice(
+      this.readId(id),
+      dto,
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 为探店某一段生成「人物在这个场景里」的关键帧（按分镜画面节点的生图模型扣费），返回关键帧、更新后的脚本与当前租户工作台。
+   * @keyword-cn 探店关键帧接口, 人物进场景
+   * @keyword-en store-visit-keyframe-api, person-in-scene
+   */
+  @Post('topics/:id/store-visit/segments/:segmentId/keyframe')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitKeyframe(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('segmentId') segmentId: string,
+    @Body() dto: GenerateDouyinStoreVisitKeyframeDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.storeVisitSegments.generateKeyframe(
+      this.readId(id),
+      this.readSegmentId(segmentId),
+      dto.prompt,
+      scope,
+    );
+    return {
+      ...result,
+      topic: { ...result.topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 重新生成探店某一段的对口型视频（数眼通道），按生视频服务扣费，返回这一段的调用记录。
+   * @keyword-cn 重新生成探店分段接口, 单段重做
+   * @keyword-en regenerate-store-visit-segment-api, single-segment-retry
+   */
+  @Post('topics/:id/store-visit/segments/:segmentId/generate')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitSegment(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('segmentId') segmentId: string,
+  ) {
+    return await this.storeVisitSegments.startOne(
+      this.readId(id),
+      this.readSegmentId(segmentId),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
    * @description 读取整片 / 分镜视频节点的通道、模型与可选时长。
    * @keyword-cn 视频生成选项接口, 可选时长
    * @keyword-en video-generation-options-api, duration-choices
@@ -520,6 +757,18 @@ export class DouyinWorkbenchController {
     const id = Number(value);
     if (!Number.isInteger(id) || id < 1)
       throw new BadRequestException('DOUYIN_TOPIC_ID_INVALID');
+    return id;
+  }
+
+  /**
+   * @description 解析并校验路由中的探店分段 ID（字母数字、下划线、短横线，最多 40 位）。
+   * @keyword-cn 解析探店分段ID, 路由校验
+   * @keyword-en parse-segment-id, route-validation
+   */
+  private readSegmentId(value: string): string {
+    const id = String(value ?? '').trim();
+    if (!/^[A-Za-z0-9_-]{1,40}$/.test(id))
+      throw new BadRequestException('DOUYIN_STORE_VISIT_SEGMENT_ID_INVALID');
     return id;
   }
 

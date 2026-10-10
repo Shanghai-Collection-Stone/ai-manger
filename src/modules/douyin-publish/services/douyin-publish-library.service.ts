@@ -1,8 +1,10 @@
 import {
+  BadGatewayException,
   BadRequestException,
   ConflictException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,6 +17,10 @@ import type {
   DouyinPublishScope,
   DouyinPublishWorkEntity,
 } from '../entities/douyin-publish.entity.js';
+import {
+  DouyinMiniappSchemaError,
+  DouyinMiniappSchemaService,
+} from './douyin-miniapp-schema.service.js';
 
 /**
  * @description 管理抖音视频发布库、二维码 token 与聚合统计。
@@ -23,12 +29,16 @@ import type {
  */
 @Injectable()
 export class DouyinPublishLibraryService {
+  private readonly logger = new Logger(DouyinPublishLibraryService.name);
   private readonly libraries: Collection<DouyinPublishLibraryEntity>;
   private readonly works: Collection<DouyinPublishWorkEntity>;
+  /** 同一发布库同一时刻只生成一次 Schema，避免并发打开二维码时重复占用长期 Schema 配额 */
+  private readonly schemaInFlight = new Map<string, Promise<string>>();
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly config: ConfigService,
+    private readonly schemas: DouyinMiniappSchemaService,
   ) {
     this.libraries = db.collection<DouyinPublishLibraryEntity>(
       'douyin_publish_libraries',
@@ -245,7 +255,8 @@ export class DouyinPublishLibraryService {
   }
 
   /**
-   * @description 懒生成 32 字节 base64url 二维码 token 并构造小程序入口内容。
+   * @description 懒生成 32 字节 base64url 二维码 token 并构造小程序入口内容：配置了抖音小程序 AppID 时内容为长期 Schema，
+   *   抖音扫一扫可直接打开小程序发布页；否则沿用 `DOUYIN_PUBLISH_QR_LINK_TEMPLATE` 模板或原始 JSON。
    * @keyword-cn 生成发布二维码, 懒生成令牌
    * @keyword-en build-publish-qr, lazy-qr-token
    */
@@ -280,10 +291,17 @@ export class DouyinPublishLibraryService {
     }
     if (!library.qrToken)
       throw new ConflictException('DOUYIN_PUBLISH_QR_TOKEN_FAILED');
-    const path = JSON.stringify({
-      token: library.qrToken,
-      tenantId: library.tenantId ?? '',
-    });
+    const query = { token: library.qrToken, tenantId: library.tenantId ?? '' };
+    const path = JSON.stringify(query);
+    if (this.schemas.isConfigured()) {
+      return {
+        libraryId: library._id.toHexString(),
+        token: library.qrToken,
+        path,
+        qrContent: await this.resolveQrSchema(library, query),
+        qrContentType: 'douyin-schema' as const,
+      };
+    }
     const template = String(
       this.config.get<string>('DOUYIN_PUBLISH_QR_LINK_TEMPLATE') ?? '',
     ).trim();
@@ -294,7 +312,57 @@ export class DouyinPublishLibraryService {
       qrContent: template.includes('{path}')
         ? template.replaceAll('{path}', encodeURIComponent(path))
         : path,
+      qrContentType: template.includes('{path}')
+        ? ('template' as const)
+        : ('json' as const),
     };
+  }
+
+  /**
+   * @description 取发布库的长期 Schema：已存的 Schema 与当前 AppID / 发布页 / 启动参数一致就直接复用，否则生成一次并写回发布库。
+   *   启动参数是扁平的 `{token, tenantId}`，小程序在 onLoad 的 options 里直接读这两个键。
+   * @keyword-cn 发布库Schema, 生成一次复用
+   * @keyword-en publish-library-schema, generate-once-reuse
+   * @throws {BadGatewayException} 抖音开放平台调用失败（`DOUYIN_PUBLISH_QR_SCHEMA_FAILED`）。
+   */
+  private async resolveQrSchema(
+    library: DouyinPublishLibraryEntity,
+    query: { token: string; tenantId: string },
+  ): Promise<string> {
+    const key = this.schemas.buildSchemaKey(query);
+    if (library.qrSchema && key && library.qrSchemaKey === key) {
+      return library.qrSchema;
+    }
+    const inflightKey = `${library._id.toHexString()}|${key}`;
+    let pending = this.schemaInFlight.get(inflightKey);
+    if (!pending) {
+      pending = (async () => {
+        const schema = await this.schemas.generatePermanentSchema(query);
+        // 只在 token 没变时写回；不改 updatedAt，二维码生成不算发布库内容变化
+        await this.libraries.updateOne(
+          { _id: library._id, qrToken: query.token },
+          { $set: { qrSchema: schema, qrSchemaKey: key ?? '' } },
+        );
+        return schema;
+      })().finally(() => this.schemaInFlight.delete(inflightKey));
+      this.schemaInFlight.set(inflightKey, pending);
+    }
+    try {
+      return await pending;
+    } catch (error) {
+      const code =
+        error instanceof DouyinMiniappSchemaError ? error.code : 'UNKNOWN';
+      const detail =
+        error instanceof DouyinMiniappSchemaError
+          ? (error.detail ?? '')
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      this.logger.warn(
+        `[qr] schema_failed library=${library._id.toHexString()} code=${code} ${detail}`,
+      );
+      throw new BadGatewayException('DOUYIN_PUBLISH_QR_SCHEMA_FAILED');
+    }
   }
 
   /**

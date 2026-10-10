@@ -510,17 +510,23 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       (sum, shot) => sum + (Number(shot.duration) || 0),
       0,
     );
+    // 整片没设定时长时用模型能生成的最长时长；单镜按这一镜自己的时长
     const chosenSeconds =
-      mode === 'full' && Number(topic.fullVideoDuration) > 0
-        ? Number(topic.fullVideoDuration)
+      mode === 'full'
+        ? Number(topic.fullVideoDuration) > 0
+          ? Number(topic.fullVideoDuration)
+          : Math.max(...listShuyanVideoDurationChoices(runtime.model))
         : undefined;
     const duration = clampShuyanVideoDuration(
       runtime.model,
       chosenSeconds ?? plannedSeconds,
     );
-    // 清晰度只在整片栏设定，分镜仍走默认档
-    const chosenResolution =
-      mode === 'full' ? String(topic.fullVideoResolution ?? '').trim() : '';
+    // 整片与分镜各有自己的清晰度设定，空串走模型默认档
+    const chosenResolution = String(
+      (mode === 'full'
+        ? topic.fullVideoResolution
+        : topic.shotVideoResolution) ?? '',
+    ).trim();
     const resolution = clampShuyanVideoResolution(
       runtime.model,
       chosenResolution,
@@ -700,7 +706,11 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
    * @returns {Promise<DouyinOperationView>} 最新记录。
    */
   async refresh(id: string): Promise<DouyinOperationView> {
-    const row = await this.operations.findOne({ id, provider: 'shuyan' });
+    const row = await this.operations.findOne({
+      id,
+      provider: 'shuyan',
+      mode: { $ne: 'store-visit' },
+    });
     if (!row) throw new BadRequestException('DOUYIN_OPERATION_NOT_FOUND');
     await this.refreshRow(row);
     const latest = await this.operations.findOne({ id });
@@ -708,7 +718,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 跟进一轮未结束的数眼任务，同一进程内不重入。
+   * @description 跟进一轮未结束的数眼任务，同一进程内不重入；探店分段（`mode=store-visit`）由探店分段通道自己跟进。
    * @keyword-cn 轮询数眼视频调用, 防重入
    * @keyword-en poll-shuyan-video-operations, reentry-guard
    */
@@ -719,6 +729,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.operations
         .find({
           provider: 'shuyan',
+          mode: { $ne: 'store-visit' },
           $or: [
             { status: { $in: ['queued', 'running'] } },
             {

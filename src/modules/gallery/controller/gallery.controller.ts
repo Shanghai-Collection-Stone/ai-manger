@@ -468,6 +468,23 @@ export class GalleryController {
   }
 
   /**
+   * @description 从 Bearer token 解析当前用户与租户；userId 只认 token，不接受请求体/查询参数传入，防止冒用他人身份。
+   * @param {Request} [req] - 当前 HTTP 请求。
+   * @returns {Promise<{ userId: string; tenantId?: string }>} token 对应的用户名与租户。
+   * @throws {UnauthorizedException} 无 token、token 失效或 token 用户缺少用户名时抛出 `AUTH_REQUIRED`。
+   * @keyword-cn token用户解析, 身份防冒用
+   * @keyword-en require-user-scope, token-user-identity
+   */
+  private async requireUserScope(
+    req?: Request,
+  ): Promise<{ userId: string; tenantId?: string }> {
+    if (!req) throw new UnauthorizedException('AUTH_REQUIRED');
+    const authScope = await this.resolveAuthScope(req);
+    if (!authScope.userId) throw new UnauthorizedException('AUTH_REQUIRED');
+    return { userId: authScope.userId, tenantId: authScope.tenantId };
+  }
+
+  /**
    * @description 将默认动态分组（动态封面/动态拼图）固定置顶展示。
    * @param {GalleryGroupEntity[]} groups - 原始分组列表。
    * @param {number[]} defaultIds - 默认分组ID顺序（封面在前，拼图在后）。
@@ -515,9 +532,9 @@ export class GalleryController {
   /**
    * @description 上传图片文件并写入图库记录（含Embedding向量）。
    * @param {Express.Multer.File[]} files - 上传的文件数组（字段名：files）。
-   * @param {{ userId?: string; tenantId?: string; groupId?: string; tags?: string; description?: string; note?: string; aiFaceProtected?: string }} body - 表单字段。
+   * @param {{ tenantId?: string; groupId?: string; tags?: string; description?: string; note?: string; aiFaceProtected?: string }} body - 表单字段；归属用户取 token。
    * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 新建图片记录列表。
-   * @throws {BadRequestException} 当未上传文件或缺少 userId 时抛出。
+   * @throws {BadRequestException} 当未上传文件时抛出。
    * @keyword-cn 图库上传, 图片元数据, 上传文件名
    * @keyword-en gallery-upload, image-metadata, upload-filename
    * @since 2026-02-04
@@ -561,7 +578,6 @@ export class GalleryController {
     @UploadedFiles() files: Express.Multer.File[],
     @Body()
     body: {
-      userId?: string;
       tenantId?: string;
       groupId?: string;
       tags?: string;
@@ -588,10 +604,8 @@ export class GalleryController {
         `最多只能同时上传 24 个文件，当前选择了 ${files.length} 个`,
       );
     }
-    const authScope = req ? await this.resolveAuthScope(req) : {};
-    const userId =
-      String(body?.userId ?? '').trim() || authScope.userId || undefined;
-    if (!userId) throw new BadRequestException('userId is required');
+    const authScope = await this.requireUserScope(req);
+    const userId = authScope.userId;
     const tenantId =
       authScope.tenantId || String(body?.tenantId ?? '').trim() || undefined;
 
@@ -827,8 +841,8 @@ export class GalleryController {
    * 前端 GPU 去底。可选参考图与 `stylePreset` 只约束配色、字体气质与构成语言，不改变
    * 用户描述的主体；`random` 风格会在每次生成时随机选择一条视觉处理方式。
    * 生成结果打 `ai素材` 标签供素材面板筛选。
-   * @param {{ prompt?: string; size?: string; tags?: string; userId?: string; referenceImageUrl?: string; stylePreset?: string }} body - 生成参数。
-   * @param {Request} [req] - Express 请求对象，用于解析租户范围。
+   * @param {{ prompt?: string; size?: string; tags?: string; referenceImageUrl?: string; stylePreset?: string }} body - 生成参数。
+   * @param {Request} [req] - Express 请求对象，用于解析 token 用户与租户范围。
    * @returns {Promise<{ image: Omit<GalleryImageEntity, '_id'> }>} 入库后的素材记录。
    * @throws {BadRequestException} 提示词为空或生图结果落盘失败时抛出。
    * @keyword-cn AI素材生成, 描述优先
@@ -841,17 +855,12 @@ export class GalleryController {
       prompt?: string;
       size?: string;
       tags?: string;
-      userId?: string;
       referenceImageUrl?: string;
       stylePreset?: string;
     },
     @Req() req?: Request,
   ): Promise<{ image: Omit<GalleryImageEntity, '_id'> }> {
-    const authScope = req ? await this.resolveAuthScope(req) : {};
-    const userId =
-      String(body?.userId ?? '').trim() || authScope.userId || undefined;
-    if (!userId) throw new BadRequestException('userId is required');
-    const tenantId = authScope.tenantId || undefined;
+    const { userId, tenantId } = await this.requireUserScope(req);
 
     const rawPrompt = String(body?.prompt ?? '')
       .replace(/\s+/g, ' ')
@@ -901,8 +910,7 @@ export class GalleryController {
   }
 
   /**
-   * @description 列出图库图片，支持游标兼容、多标签、收藏、随机和收藏优先排序。
-   * @param {string} [userId] - 查询参数：用户ID。
+   * @description 列出图库图片，支持游标兼容、多标签、收藏、随机和收藏优先排序；用户取 token。
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [groupId] - 查询参数：图库组ID。
    * @param {string} [tag] - 查询参数：标签。
@@ -917,7 +925,6 @@ export class GalleryController {
    */
   @Get()
   async list(
-    @Query('userId') userId?: string,
     @Query('tenantId') tenantId?: string,
     @Query('groupId') groupId?: string,
     @Query('tag') tag?: string,
@@ -933,7 +940,7 @@ export class GalleryController {
     @Query('offset') offset?: string,
   ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
     // 优先从请求token解析tenantId，其次使用query参数
-    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : undefined;
     const cid = cursorId ? Number(cursorId) : undefined;
@@ -970,7 +977,7 @@ export class GalleryController {
         : groupId
       : undefined;
     const rows = await this.gallery.findAccessibleImages(
-      userId ?? 'default',
+      authScope.userId,
       tid,
       {
         groupId: resolvedGroupId,
@@ -1151,8 +1158,7 @@ export class GalleryController {
   }
 
   /**
-   * @description 列出图库中已存在的所有标签（distinct tags）。
-   * @param {string} [userId] - 查询参数：用户ID过滤。
+   * @description 列出图库中已存在的所有标签（distinct tags）；用户取 token。
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @returns {Promise<{ tags: string[] }>} 标签列表。
@@ -1161,16 +1167,15 @@ export class GalleryController {
    */
   @Get('tags')
   async listTags(
-    @Query('userId') userId?: string,
     @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
     @Req() req?: Request,
   ): Promise<{ tags: string[] }> {
-    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 500;
     const tags = await this.gallery.listDistinctTagsWithTenant(
-      userId ? String(userId).trim() : 'default',
+      authScope.userId,
       tid,
       lim,
     );
@@ -1178,10 +1183,11 @@ export class GalleryController {
   }
 
   /**
-   * @description 批量为图片添加/移除标签。
-   * @param {{ userId?: string; ids?: Array<number | string>; addTags?: string[] | string; removeTags?: string[] | string }} body - 批量更新输入。
+   * @description 批量为当前租户可见图片添加/移除标签；用户与租户取 token。
+   * @param {{ ids?: Array<number | string>; addTags?: string[] | string; removeTags?: string[] | string }} body - 批量更新输入。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ matched: number; modified: number }>} 匹配与修改数量。
-   * @throws {BadRequestException} 当缺少 userId 或 ids 时抛出。
+   * @throws {BadRequestException} 当缺少 ids 时抛出。
    * @keyword gallery, tag, batch
    * @since 2026-02-04
    */
@@ -1189,14 +1195,13 @@ export class GalleryController {
   async updateImageTagsBatch(
     @Body()
     body: {
-      userId?: string;
       ids?: Array<number | string>;
       addTags?: string[] | string;
       removeTags?: string[] | string;
     },
+    @Req() req: Request,
   ): Promise<{ matched: number; modified: number }> {
-    const userId = String(body?.userId ?? '').trim();
-    if (!userId) throw new BadRequestException('userId is required');
+    const { userId, tenantId } = await this.requireUserScope(req);
     const ids = (Array.isArray(body?.ids) ? body.ids : [])
       .map((x) => Number(x))
       .filter((x) => Number.isFinite(x));
@@ -1204,6 +1209,7 @@ export class GalleryController {
 
     const res = await this.gallery.updateTagsBatch({
       userId,
+      tenantId,
       ids,
       addTags: body?.addTags,
       removeTags: body?.removeTags,
@@ -1212,54 +1218,54 @@ export class GalleryController {
   }
 
   /**
-   * @description 删除单张图片（记录+可选本地文件）。
+   * @description 删除当前租户可见的单张图片（记录+可选本地文件）；用户与租户取 token。
    * @param {string} id - 路径参数：图片ID（自增 id）。
-   * @param {{ userId?: string }} body - 请求体：用户ID。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ ok: boolean }>} 删除结果。
-   * @throws {BadRequestException} 当缺少 userId 或 id 无效时抛出。
+   * @throws {BadRequestException} 当 id 无效时抛出。
    * @keyword gallery, image, delete
    * @since 2026-02-04
    */
   @Post('images/:id/delete')
   async deleteImage(
     @Param('id') id: string,
-    @Body() body: { userId?: string },
+    @Req() req: Request,
   ): Promise<{ ok: boolean }> {
-    const userId = String(body?.userId ?? '').trim();
-    if (!userId) throw new BadRequestException('userId is required');
+    const { userId, tenantId } = await this.requireUserScope(req);
     const imageId = Number(id);
     if (!Number.isFinite(imageId))
       throw new BadRequestException('id is invalid');
-    return await this.gallery.deleteImage({ userId, id: imageId });
+    return await this.gallery.deleteImage({ userId, tenantId, id: imageId });
   }
 
   /**
-   * @description 批量删除图片（记录+本地原图/缩略图文件）。
-   * @param {{ userId?: string; ids?: Array<number | string> }} body - 批量删除输入。
+   * @description 批量删除当前租户可见图片（记录+本地原图/缩略图文件）；用户与租户取 token。
+   * @param {{ ids?: Array<number | string> }} body - 批量删除输入。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ deleted: number; failed: number; deletedIds: number[] }>} 删除统计。
-   * @throws {BadRequestException} 当缺少 userId 或 ids 时抛出。
+   * @throws {BadRequestException} 当缺少 ids 时抛出。
    * @keyword gallery, image, delete, batch
    * @keyword-cn 图库批量删除
    * @keyword-en gallery batch delete images
    */
   @Post('images/batch-delete')
   async deleteImagesBatch(
-    @Body() body: { userId?: string; ids?: Array<number | string> },
+    @Body() body: { ids?: Array<number | string> },
+    @Req() req: Request,
   ): Promise<{ deleted: number; failed: number; deletedIds: number[] }> {
-    const userId = String(body?.userId ?? '').trim();
-    if (!userId) throw new BadRequestException('userId is required');
+    const { userId, tenantId } = await this.requireUserScope(req);
     const ids = (Array.isArray(body?.ids) ? body.ids : [])
       .map((x) => Number(x))
       .filter((x) => Number.isFinite(x));
     if (ids.length === 0) throw new BadRequestException('ids is required');
-    return await this.gallery.deleteManyImages({ userId, ids });
+    return await this.gallery.deleteManyImages({ userId, tenantId, ids });
   }
 
   /**
-   * @description 批量重建图片Embedding向量，支持从 startId 起更新 limit 条。
-   * @param {{ userId?: string; startId?: number | string; limit?: number | string }} body - 重建输入。
+   * @description 批量重建当前租户可见图片的Embedding向量，支持从 startId 起更新 limit 条；用户与租户取 token。
+   * @param {{ startId?: number | string; limit?: number | string }} body - 重建输入。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ updated: number }>} 更新条数。
-   * @throws {BadRequestException} 当缺少 userId 时抛出。
    * @keyword gallery, embedding, rebuild
    * @since 2026-02-04
    */
@@ -1267,42 +1273,44 @@ export class GalleryController {
   async rebuildImageEmbeddings(
     @Body()
     body: {
-      userId?: string;
       startId?: number | string;
       limit?: number | string;
     },
+    @Req() req: Request,
   ): Promise<{ updated: number }> {
-    const userId = String(body?.userId ?? '').trim();
-    if (!userId) throw new BadRequestException('userId is required');
+    const { userId, tenantId } = await this.requireUserScope(req);
     const startId = Number(body?.startId ?? 1);
     const lim = Number(body?.limit ?? 50);
     return await this.gallery.rebuildEmbeddings({
       userId,
+      tenantId,
       startId: Number.isFinite(startId) ? startId : 1,
       limit: Number.isFinite(lim) ? lim : 50,
     });
   }
 
   /**
-   * @description 创建图库组。
-   * @param {{ userId?: string; name?: string; description?: string; tags?: string }} body - 表单字段。
+   * @description 创建图库组；归属用户与租户取自 token，与 `GET groups` 的可见口径一致。
+   * @param {{ name?: string; description?: string; tags?: string }} body - 表单字段。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ group: Omit<GalleryGroupEntity, '_id'> }>} 新建的图库组。
-   * @throws {BadRequestException} 当缺少 userId 或 name 时抛出。
+   * @throws {BadRequestException} 当缺少 name 时抛出。
    * @keyword gallery, groups, create
+   * @keyword-cn 创建图库组, 租户归属
+   * @keyword-en create-gallery-group, tenant-ownership
    * @since 2026-02-04
    */
   @Post('groups')
   async createGroup(
     @Body()
     body: {
-      userId?: string;
       name?: string;
       description?: string;
       tags?: string;
     },
+    @Req() req: Request,
   ): Promise<{ group: Omit<GalleryGroupEntity, '_id'> }> {
-    const userId = String(body?.userId ?? '').trim();
-    if (!userId) throw new BadRequestException('userId is required');
+    const { userId, tenantId } = await this.requireUserScope(req);
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('name is required');
 
@@ -1317,15 +1325,20 @@ export class GalleryController {
         ? body.description.trim()
         : undefined;
 
-    const doc = await this.groups.create({ userId, name, description, tags });
+    const doc = await this.groups.create({
+      userId,
+      tenantId,
+      name,
+      description,
+      tags,
+    });
     const clean = { ...doc } as unknown as { _id?: unknown };
     delete clean._id;
     return { group: clean as unknown as Omit<GalleryGroupEntity, '_id'> };
   }
 
   /**
-   * @description 列出图库组，支持按 userId 与 tag 过滤。
-   * @param {string} [userId] - 查询参数：用户ID。
+   * @description 列出 token 用户的图库组，支持按 tag 过滤。
    * @param {string} [tag] - 查询参数：标签。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @returns {Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id'>> }>} 图库组列表。
@@ -1334,16 +1347,14 @@ export class GalleryController {
    */
   @Get('groups')
   async listGroups(
-    @Query('userId') userId?: string,
     @Query('tenantId') tenantId?: string,
     @Query('tag') tag?: string,
     @Query('limit') limit?: string,
     @Req() req?: Request,
   ): Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id'>> }> {
-    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
-    const resolvedUserId =
-      String(userId ?? '').trim() || authScope.userId || 'default';
+    const resolvedUserId = authScope.userId;
     const lim = limit ? Number(limit) : 50;
 
     const defaults = await this.groups.ensureDefaultDynamicGroups(
@@ -1419,9 +1430,8 @@ export class GalleryController {
   }
 
   /**
-   * @description 图库组向量相似检索接口。
+   * @description 图库组向量相似检索接口；只检索 token 用户的分组。
    * @param {string} [q] - 查询参数：检索文本（必填）。
-   * @param {string} [userId] - 查询参数：用户ID过滤。
    * @param {string} [limit] - 查询参数：返回条数。
    * @param {string} [minScore] - 查询参数：最小相似度阈值。
    * @returns {Promise<{ results: Array<{ group: Record<string, unknown>; score: number }> }>} 检索结果。
@@ -1432,7 +1442,6 @@ export class GalleryController {
   @Get('groups/search')
   async searchGroups(
     @Query('q') q?: string,
-    @Query('userId') userId?: string,
     @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
     @Query('minScore') minScore?: string,
@@ -1442,13 +1451,13 @@ export class GalleryController {
   }> {
     const query = String(q ?? '').trim();
     if (!query) throw new BadRequestException('q is required');
-    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
     const results = await this.groups.searchSimilar(
       query,
-      userId,
+      authScope.userId,
       tid,
       lim,
       ms,
@@ -1462,9 +1471,8 @@ export class GalleryController {
   }
 
   /**
-   * @description 向量相似检索接口。
+   * @description 向量相似检索接口；用户取 token。
    * @param {string} [q] - 查询参数：检索文本（必填）。
-   * @param {string} [userId] - 查询参数：用户ID过滤。
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [limit] - 查询参数：返回条数。
    * @param {string} [minScore] - 查询参数：最小相似度阈值。
@@ -1476,7 +1484,6 @@ export class GalleryController {
   @Get('search')
   async search(
     @Query('q') q?: string,
-    @Query('userId') userId?: string,
     @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
     @Query('minScore') minScore?: string,
@@ -1486,13 +1493,13 @@ export class GalleryController {
   }> {
     const query = String(q ?? '').trim();
     if (!query) throw new BadRequestException('q is required');
-    const authScope = req ? await this.resolveAuthScope(req) : {};
+    const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const lim = limit ? Number(limit) : 8;
     const ms = minScore ? Number(minScore) : 0.5;
     const results = await this.gallery.searchSimilar(
       query,
-      userId,
+      authScope.userId,
       tid,
       lim,
       ms,

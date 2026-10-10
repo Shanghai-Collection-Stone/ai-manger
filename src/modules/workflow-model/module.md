@@ -18,19 +18,19 @@
 ## 函数清单 (Function List)
 
 - `WorkflowModelModule()` — 装配节点模型设置并导出服务 | keywords: 工作流节点模型模块, 按节点取模型, workflow-model-module, per-node-model
-- `WorkflowNodeCategory` — 节点模型类型 llm / image / video | keywords: 节点模型类型, 提供商类型, node-model-category, provider-category
-- `WorkflowNodeDefinition` — 代码固定的节点定义 | keywords: 预设工作流节点, 节点定义, preset-workflow-node, node-definition
+- `WorkflowNodeCategory` — 节点模型类型 llm / image / video / audio（audio 为录音克隆或文字声音设计） | keywords: 节点模型类型, 提供商类型, node-model-category, provider-category
+- `WorkflowNodeDefinition` — 代码固定的节点定义，可带 `runtimeProviders`（节点只接受的提供商代码）与 `unsetHint`（未指定时的后台说明） | keywords: 预设工作流节点, 节点定义, preset-workflow-node, node-definition
 - `WorkflowDefinition` — 代码固定的工作流定义 | keywords: 预设工作流, 工作流定义, preset-workflow, workflow-definition
 - `WORKFLOW_NODES` — 工作流与节点 key 常量，业务调用处统一从这里取 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
-- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
-- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax 与 shuyan/shuyanai） | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
+- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video / voice-clone / voice-design / store-visit-video） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
+- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax 与 digital-human；生图增加 shuyan/shuyanai；生视频支持 pixmax、shuyan/shuyanai 与 digital-human；音色克隆只支持 digital-human），节点登记了 `runtimeProviders` 时再按节点收窄 | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
 - `WorkflowNodeModelEntity` — 节点设置持久化实体（`workflow_node_models`） | keywords: 节点模型设置, 平台级配置, node-model-binding, platform-setting
 - `WorkflowNodeRuntime` — 节点调用时的提供商运行配置 | keywords: 节点运行配置, 提供商密钥, node-runtime, provider-credential
 - `WorkflowProviderOption` — 不含密钥的提供商选项 | keywords: 提供商选项, 隐藏密钥, provider-option, hide-api-key
 - `WorkflowNodeView` — 节点定义 + 当前设置 + 默认回退 | keywords: 节点设置视图, 默认回退, node-setting-view, default-fallback
 - `WorkflowView` — 后台列表里的一条工作流 | keywords: 工作流设置视图, 节点列表, workflow-setting-view, node-list
-- `PIXMAX_NODE_TYPES` — 节点类型与 PixMax `nodeType` 对照 | keywords: PixMax节点类型, 类型映射, pixmax-node-type, category-mapping
-- `isWorkflowRuntimeSupported(category,providerCode)` — 判断提供商在该类型下运行时能否调用 | keywords: 运行时支持判断, 提供商兼容, is-runtime-supported, provider-compatibility
+- `PIXMAX_NODE_TYPES` — 节点类型与 PixMax `nodeType` 对照（audio → `GENERATE_AUDIO`） | keywords: PixMax节点类型, 类型映射, pixmax-node-type, category-mapping
+- `isWorkflowRuntimeSupported(category,providerCode,nodeProviders?)` — 判断提供商在该类型下运行时能否调用，传了节点允许的提供商时还要在其中 | keywords: 运行时支持判断, 提供商兼容, is-runtime-supported, provider-compatibility
 - `toWorkflowLlmConfig(runtime)` — 节点运行配置转成 `runWithMessages` 的 provider/model/apiKey/baseUrl 覆盖字段，未设置返回空对象 | keywords: 节点LLM覆盖参数, 默认回退, node-llm-config-override, default-fallback
 - `WorkflowModelService()` — 节点模型设置服务 | keywords: 工作流节点模型, 节点指定模型, workflow-node-model, per-node-model
 - `WorkflowModelService.ensureIndexes()` — 建立工作流 + 节点唯一索引 | keywords: 节点设置索引, 唯一约束, node-binding-index, unique-constraint
@@ -47,9 +47,9 @@
 - `fetchShuyanModels(input)` — 用 Key 实时拉账号可调模型，失败抛 `SHUYAN_MODEL_LIST_FAILED:<原因>` | keywords: 拉取数眼模型, 账号可用模型, fetch-shuyan-models, available-models
 - `listShuyanModelsByCategory(input)` — 拉取后按节点类型过滤并排序 | keywords: 数眼可选模型, 按分类过滤, list-shuyan-models-by-category, filter-by-category
 - `WorkflowModelService.resolveNodeRuntime(workflowKey,nodeKey)` — 取节点运行配置：未设置或提供商已删除/停用返回 null 回退默认，类型不符或运行时不支持直接报错 | keywords: 解析节点运行配置, 回退默认提供商, resolve-node-runtime, fallback-default-provider
-- `WorkflowModelService.readFallback(category)` — 读取未设置时生效的默认提供商（视频未指定时走直连服务，返回 null） | keywords: 读取默认提供商, 回退说明, read-fallback-provider, fallback-label
+- `WorkflowModelService.readFallback(category)` — 读取未设置时生效的默认提供商（视频未指定时走直连服务、音色克隆未指定时不可用，都返回 null） | keywords: 读取默认提供商, 回退说明, read-fallback-provider, fallback-label
 - `WorkflowModelService.requireNode(workflowKey,nodeKey)` — 查找目录里的节点定义 | keywords: 查找节点定义, 目录校验, require-node-definition, catalog-check
-- `WorkflowModelService.isNodeCategory(category)` — 排除向量模型 | keywords: 节点可用类型, 排除向量, is-node-category, exclude-embedding
+- `WorkflowModelService.isNodeCategory(category)` — 排除向量模型（含音色克隆） | keywords: 节点可用类型, 排除向量, is-node-category, exclude-embedding
 - `WorkflowModelService.toProviderOption(row)` — 提供商实体转无密钥选项 | keywords: 提供商选项视图, 隐藏密钥, provider-option-view, hide-api-key
 - `WorkflowModelAdminController()` — 平台后台节点模型接口 | keywords: 节点模型后台接口, 平台配置, workflow-model-admin-controller, platform-setting
 - `WorkflowModelAdminController.list(req)` — `GET admin/workflow-models` | keywords: 节点模型列表接口, 工作流目录, list-workflow-models-api, workflow-catalog
@@ -58,7 +58,7 @@
 - `WorkflowModelAdminController.reset(req,workflowKey,nodeKey)` — `DELETE admin/workflow-models/:workflowKey/nodes/:nodeKey` | keywords: 重置节点模型接口, 回退默认, reset-node-model-api, fallback-default
 - `WorkflowModelAdminController.requireUser(req)` — 读取后台用户 | keywords: 读取后台用户, 鉴权上下文, read-admin-user, auth-context
 - `SaveWorkflowNodeModelDto()` — 校验提供商 ID 与可选模型 | keywords: 保存节点模型参数, 提供商选择, save-node-model-dto, provider-selection
-- `ListWorkflowProviderModelsDto()` — 校验节点类型 | keywords: 查询可选模型参数, 节点类型, list-provider-models-dto, node-category
+- `ListWorkflowProviderModelsDto()` — 校验节点类型（llm / image / video / audio） | keywords: 查询可选模型参数, 节点类型, list-provider-models-dto, node-category
 
 ## 关键词索引 (Keyword Index)
 
@@ -78,6 +78,8 @@
 | 数眼模型分类     | classify-shuyan-model     |
 | 拉取数眼模型     | fetch-shuyan-models       |
 | 按名兜底         | name-fallback             |
+| 节点可用提供商   | node-runtime-providers    |
+| 音色克隆节点     | voice-clone-node          |
 
 ## 类型导出 (Type Exports)
 
@@ -99,6 +101,10 @@
 
 **当前接入情况（小红书图文）**：`topic` 覆盖选题候选生成与子选题提示词推荐（`xhs-topic.service`），`article` 覆盖写文章的首次生文与重写，`image-decision` 覆盖与写正文并行、关闭思考的配图标签决策（二者在 `xhs-article-generation.service`），`cover-copy` 覆盖图组封面主副标题生成（关闭思考），`cover-image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘，`cover-overlay` 覆盖 `ai-overlay` 文字海报素材层，`inner-image` 覆盖灵感画布内页重绘（后四者在 `canvas-image-group.service`）。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
 
-**当前接入情况（抖音视频制作）**：`script`（候选脚本生成、生成要求推荐、发布文案）、`storyboard`（分镜拆解）与 `image-decision`（图库自找时的分镜选图，关闭思考）经 `toWorkflowLlmConfig` 覆盖 LLM 的 provider/model/apiKey/baseUrl；`shot-image` 把节点配置作为 `AgentService.sendPrompt` 的 `runtimeOverride`，指定后出图失败直接报错、不降级美图；`shot-video`（分镜模式）与 `full-video`（整片模式）指定 PixMax 模型后由 `DouyinPixmaxVideoService` 调用 PixMax，未指定时仍走 `DOUYIN_VIDEO_GENERATION_*` 直连服务。
+**当前接入情况（抖音视频制作）**：script（候选脚本、生成要求、发布文案）、storyboard（分镜拆解）与 image-decision（图库选图）覆盖 LLM 的节点配置；shot-image 指定后出图失败直接报错。shot-video（分镜）与 full-video（整片）指定 PixMax 后调用 PixMax，未指定时仍走既有直连服务。探店 voice-clone / voice-design（audio）只接受 digital-human 通用服务；store-visit-video（video）接受 digital-human 或数眼智能（shuyan / shuyanai，模型填 kling-avatar-std / kling-avatar-pro / wan2.2-s2v，按场景分段对口型），没有默认回退，未指定时提示管理员配置。shot-video / full-video 只接受 pixmax / shuyan / shuyanai，digital-human 不会误用于分镜或整片视频。
 
 **后台页面**：「工作流节点模型」Tab 左侧是工作流子菜单（显示节点数与已指定数，记住上次选择），右侧是选中工作流的全部模型节点设置。单测 `workflow-model.service.spec.ts` 校验 `WORKFLOW_NODES` 与目录逐项一致。
+
+**声音设计节点**：voice-design（audio）只负责可选固定音色生成，未指定时不可额外生成音色，纯提示词仍可使用。voice-clone / voice-design 独立绑定 digital-human 提供商和模型；store-visit-video 接受固定音色或 voiceMode=prompt 的声音提示词，实际厂商和能力由适配服务对接。
+
+**音色类型与节点级提供商**：WorkflowNodeCategory.audio 对应 Ai 提供商的 modelCategory=audio，涵盖克隆与设计。默认回退、模型查询与保存校验都按它处理（PixMax 映射 GENERATE_AUDIO，数眼目录不出 audio 模型）。节点 runtimeProviders 白名单优先于类型矩阵，list 与 resolveNodeRuntime 都传节点白名单；同为 video 类型，digital-human 只能用在探店节点；探店节点也可以选数眼智能。unsetHint 在探店三个节点未指定时分别显示不可用说明。

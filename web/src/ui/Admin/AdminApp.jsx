@@ -182,6 +182,10 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'kimi', label: 'Kimi (Moonshot)' },
   { value: 'shuyan', label: '数眼智能 ShuyanAI（OpenAI 兼容中转）' },
   { value: 'pixmax', label: 'PixMax（生视频 / 多模型中转）' },
+  {
+    value: 'digital-human',
+    label: '通用数字人服务（克隆 / 声音设计 / 对口型视频，按契约对接）',
+  },
 ];
 
 /**
@@ -2923,6 +2927,13 @@ const AdminApp = () => {
                   ) {
                     updateForm('provider', 'modelCategory', 'video');
                   }
+                  // 通用数字人服务分音色（克隆 / 设计）与生视频两类，默认先建音色
+                  if (
+                    e.target.value === 'digital-human' &&
+                    !['audio', 'video'].includes(forms.provider.modelCategory)
+                  ) {
+                    updateForm('provider', 'modelCategory', 'audio');
+                  }
                 }}
               >
                 <option value="">请选择提供商编码</option>
@@ -2951,6 +2962,23 @@ const AdminApp = () => {
                   Key 可以相同；服务地址留空默认
                   https://app.pixmax.cn；模型可留空，到「工作流节点模型」里为每个节点从账号可用模型中选择。目前业务侧接入了
                   PixMax 生视频。
+                </p>
+              ) : null}
+              {forms.provider.providerCode === 'digital-human' ? (
+                <p className="rounded bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
+                  抖音探店模式用。按类别各建一条：「音色模型」给工作流节点「音色克隆 / 声音设计」，「生视频模型」给「探店数字人视频」，两条可以指向同一个服务。克隆与设计可在节点里分别选择模型。
+                  服务地址必填，指向按契约实现的服务（由它去对接具体厂商）：POST
+                  /voice-clone 克隆音色并返回 voiceId；POST /voice-design 按 description 和 previewText 设计音色并返回 voiceId，可带 previewUrl 试听；POST /digital-human/tasks
+                  提交人脸 + 固定音色或声音提示词 + 台词并返回任务 id；纯提示词方式支持 voiceMode=prompt / voiceDescription，可不传 voiceId；GET
+                  /digital-human/tasks/{'{id}'} 查询状态，完成时给
+                  videoUrl；GET /models 用于「测试」。API Key 以 Bearer
+                  传过去，模型名原样带在请求的 model 字段里。
+                </p>
+              ) : null}
+              {forms.provider.providerCode === 'digital-human' &&
+              !['audio', 'video'].includes(forms.provider.modelCategory) ? (
+                <p className="rounded bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">
+                  通用数字人服务请选择「音色模型」或「生视频模型」类别。
                 </p>
               ) : null}
               {forms.provider.providerCode === 'pixmax' &&
@@ -2985,6 +3013,7 @@ const AdminApp = () => {
                 <option value="em">类别: EM模型（向量计算）</option>
                 <option value="image">类别: 生图模型（Image）</option>
                 <option value="video">类别: 生视频模型（Video）</option>
+                <option value="audio">类别: 音色模型（克隆 / 设计，Audio）</option>
               </select>
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
@@ -2995,7 +3024,9 @@ const AdminApp = () => {
                       ? '请输入生图模型（Image模型）'
                       : forms.provider.modelCategory === 'video'
                         ? '请输入默认生视频模型（如 SEEDANCE_2_0 或 doubao-seedance-2-5-oinone）'
-                        : '请输入非EM模型（LLM模型）'
+                        : forms.provider.modelCategory === 'audio'
+                          ? '请输入默认音色模型（克隆 / 设计节点可分别指定模型）'
+                          : '请输入非EM模型（LLM模型）'
                 }
                 value={forms.provider.model}
                 onChange={(e) =>
@@ -3100,7 +3131,9 @@ const AdminApp = () => {
                             ? '生图模型'
                             : item.modelCategory === 'video'
                               ? '生视频模型'
-                              : '非EM模型'}
+                              : item.modelCategory === 'audio'
+                                ? '音色模型'
+                                : '非EM模型'}
                       </div>
                       <div className="text-xs text-slate-500">
                         模型：{item.model || '-'}
@@ -3117,7 +3150,7 @@ const AdminApp = () => {
                       </div>
                       <div className="text-xs text-slate-500">
                         {item.isDefault
-                          ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : item.modelCategory === 'video' ? '生视频' : '非EM'}默认`
+                          ? `${item.modelCategory === 'em' ? 'EM' : item.modelCategory === 'image' ? '生图' : item.modelCategory === 'video' ? '生视频' : item.modelCategory === 'audio' ? '音色' : '非EM'}默认`
                           : '候选提供商'}
                       </div>
                     </div>

@@ -29,6 +29,6 @@ export class SaveWorkflowNodeModelDto {
  * @keyword-en list-provider-models-dto, node-category
  */
 export class ListWorkflowProviderModelsDto {
-  @IsIn(['llm', 'image', 'video'])
-  category!: 'llm' | 'image' | 'video';
+  @IsIn(['llm', 'image', 'video', 'audio'])
+  category!: 'llm' | 'image' | 'video' | 'audio';
 }

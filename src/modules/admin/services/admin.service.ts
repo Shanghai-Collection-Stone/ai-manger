@@ -249,6 +249,7 @@ export class AdminService {
       'em',
       'image',
       'video',
+      'audio',
     ];
     for (const modelCategory of categories) {
       const defaults = await this.aiProviders
@@ -1337,7 +1338,7 @@ export class AdminService {
       name: string;
       baseUrl?: string;
       model?: string;
-      modelCategory: 'llm' | 'em' | 'image' | 'video';
+      modelCategory: 'llm' | 'em' | 'image' | 'video' | 'audio';
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
@@ -1350,7 +1351,8 @@ export class AdminService {
     const modelCategory: AdminAiProviderEntity['modelCategory'] =
       input.modelCategory === 'em' ||
       input.modelCategory === 'image' ||
-      input.modelCategory === 'video'
+      input.modelCategory === 'video' ||
+      input.modelCategory === 'audio'
         ? input.modelCategory
         : 'llm';
     const filter: Record<string, unknown> = {
@@ -1408,7 +1410,7 @@ export class AdminService {
       name?: string;
       baseUrl?: string;
       model?: string;
-      modelCategory?: 'llm' | 'em' | 'image' | 'video';
+      modelCategory?: 'llm' | 'em' | 'image' | 'video' | 'audio';
       apiKey?: string;
       enabled?: boolean;
       isDefault?: boolean;
@@ -1437,7 +1439,8 @@ export class AdminService {
       input.modelCategory === 'llm' ||
       input.modelCategory === 'em' ||
       input.modelCategory === 'image' ||
-      input.modelCategory === 'video'
+      input.modelCategory === 'video' ||
+      input.modelCategory === 'audio'
     ) {
       updates.modelCategory = input.modelCategory;
     }
@@ -1706,7 +1709,7 @@ export class AdminService {
    * @keyword-en get default ai provider
    */
   async getDefaultAiProvider(
-    modelCategory: 'llm' | 'em' | 'image' | 'video' = 'llm',
+    modelCategory: 'llm' | 'em' | 'image' | 'video' | 'audio' = 'llm',
   ): Promise<AdminAiProviderEntity | null> {
     const row = await this.aiProviders.findOne(
       { enabled: true, isDefault: true, modelCategory },

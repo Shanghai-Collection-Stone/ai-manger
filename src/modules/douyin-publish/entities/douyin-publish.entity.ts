@@ -28,6 +28,10 @@ export interface DouyinPublishLibraryEntity {
   userId: string;
   name: string;
   qrToken?: string;
+  /** 抖音小程序长期 Schema（`sslocal://miniapp?ticket=…`），配置了小程序 AppID 时作为二维码内容，生成一次后复用 */
+  qrSchema?: string;
+  /** 生成 qrSchema 时的 AppID + 发布页 + 启动参数；与当前不一致时重新生成 */
+  qrSchemaKey?: string;
   createdAt: Date;
   updatedAt: Date;
 }

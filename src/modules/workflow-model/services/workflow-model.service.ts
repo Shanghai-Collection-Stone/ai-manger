@@ -36,23 +36,27 @@ const PIXMAX_NODE_TYPES: Record<WorkflowNodeCategory, string> = {
   llm: 'GENERATE_TEXT',
   image: 'GENERATE_IMAGE',
   video: 'GENERATE_VIDEO',
+  audio: 'GENERATE_AUDIO',
 };
 
 /**
- * @description 判断某提供商在该模型类型下当前运行时能否真正调用。
+ * @description 判断某提供商在该模型类型下当前运行时能否真正调用；传了节点的 `runtimeProviders` 时还要在节点允许的提供商里。
  * @keyword-cn 运行时支持判断, 提供商兼容
  * @keyword-en is-runtime-supported, provider-compatibility
  * @param category 节点模型类型。
  * @param providerCode 提供商代码。
+ * @param nodeProviders 节点允许的提供商代码，为空不限。
  * @returns {boolean} 是否支持。
  */
 export function isWorkflowRuntimeSupported(
   category: WorkflowNodeCategory,
   providerCode: string,
+  nodeProviders?: string[],
 ): boolean {
   const code = String(providerCode ?? '')
     .trim()
     .toLowerCase();
+  if (nodeProviders?.length && !nodeProviders.includes(code)) return false;
   const support = WORKFLOW_RUNTIME_SUPPORT[category];
   if (support.excluded.includes(code)) return false;
   return support.allowed === null || support.allowed.includes(code);
@@ -138,7 +142,7 @@ export class WorkflowModelService {
       WorkflowNodeCategory,
       WorkflowNodeView['fallback']
     >();
-    for (const category of ['llm', 'image', 'video'] as const) {
+    for (const category of ['llm', 'image', 'video', 'audio'] as const) {
       fallbacks.set(category, await this.readFallback(category));
     }
 
@@ -164,6 +168,7 @@ export class WorkflowModelService {
                   ? isWorkflowRuntimeSupported(
                       node.category,
                       provider.providerCode,
+                      node.runtimeProviders,
                     )
                   : false,
                 updatedAt: row.updatedAt,
@@ -355,7 +360,11 @@ export class WorkflowModelService {
     }
     if (
       provider.modelCategory !== node.category ||
-      !isWorkflowRuntimeSupported(node.category, provider.providerCode)
+      !isWorkflowRuntimeSupported(
+        node.category,
+        provider.providerCode,
+        node.runtimeProviders,
+      )
     ) {
       throw new BadRequestException(
         `WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:${node.category}:${provider.providerCode}`,
@@ -375,14 +384,14 @@ export class WorkflowModelService {
 
   /**
    * @description 读取节点未设置时实际生效的默认提供商（生图没有默认时由美图兜底，返回 null；
-   *   生视频未指定时业务走环境变量直连服务，不读默认提供商，返回 null）。
+   *   生视频未指定时业务走环境变量直连服务、音色克隆未指定时不可用，都不读默认提供商，返回 null）。
    * @keyword-cn 读取默认提供商, 回退说明
    * @keyword-en read-fallback-provider, fallback-label
    */
   private async readFallback(
     category: WorkflowNodeCategory,
   ): Promise<WorkflowNodeView['fallback']> {
-    if (category === 'video') return null;
+    if (category === 'video' || category === 'audio') return null;
     const row =
       category === 'image'
         ? await this.adminService.getDefaultImageProviderRuntime()
@@ -413,14 +422,19 @@ export class WorkflowModelService {
   }
 
   /**
-   * @description 判断提供商类型是否可被节点使用（排除向量模型）。
+   * @description 判断提供商类型是否可被节点使用（排除向量模型，含音色克隆）。
    * @keyword-cn 节点可用类型, 排除向量
    * @keyword-en is-node-category, exclude-embedding
    */
   private isNodeCategory(
     category: AdminAiProviderEntity['modelCategory'],
   ): category is WorkflowNodeCategory {
-    return category === 'llm' || category === 'image' || category === 'video';
+    return (
+      category === 'llm' ||
+      category === 'image' ||
+      category === 'video' ||
+      category === 'audio'
+    );
   }
 
   /**
