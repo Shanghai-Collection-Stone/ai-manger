@@ -153,10 +153,12 @@ export const XHS_ARTICLE_ERROR_MESSAGES: Record<string, string> = {
     '该子选题正在生成中，请等本次生成结束后再试。',
   XHS_ARTICLE_GENERATION_INTERRUPTED:
     '服务端生成任务已中断，请重新点击生成文章。',
+  XHS_ARTICLE_GENERATION_FAILED: '文章生成失败，请稍后重试。',
 };
 
 /**
- * @description 把文章生成失败码翻译成前端可直接展示的中文原因，未知码回退为原始码。
+ * @description 把文章生成失败码翻译成前端可直接展示的中文原因，未知码回退为通用失败文案（不向界面暴露原始异常）。
+ *   生文不完整的明细是给模型看的交付问题，不拼进界面文案，只放进 errorDetail。
  * @param {string} code - 失败码。
  * @param {string} [detail] - 补充明细，例如本次使用的图库标签。
  * @returns {string} 可展示的中文失败原因。
@@ -164,8 +166,12 @@ export const XHS_ARTICLE_ERROR_MESSAGES: Record<string, string> = {
  * @keyword-en failure-reason-text, error-code-translate
  */
 export function describeXhsArticleError(code: string, detail?: string): string {
-  const base = XHS_ARTICLE_ERROR_MESSAGES[code] ?? `文章生成失败：${code}`;
-  return detail ? `${base}（${detail}）` : base;
+  const base =
+    XHS_ARTICLE_ERROR_MESSAGES[code] ??
+    XHS_ARTICLE_ERROR_MESSAGES.XHS_ARTICLE_GENERATION_FAILED;
+  return detail && code !== 'XHS_ARTICLE_GENERATION_INCOMPLETE'
+    ? `${base}（${detail}）`
+    : base;
 }
 
 /**
@@ -635,22 +641,32 @@ export class XhsArticleGenerationService {
         taskResult: JSON.stringify(result),
       });
     } catch (error) {
-      const code =
-        error instanceof XhsArticleGenerationError
-          ? error.code
-          : error instanceof Error
-            ? error.message
-            : String(error);
-      const detail =
-        error instanceof XhsArticleGenerationError ? error.detail : undefined;
+      // 未知异常（模型输出解析失败、网络等）统一归为通用失败码：界面只给友好文案，
+      // 原始异常文本放进 errorDetail，供控制台与运维上报排查
+      const known = error instanceof XhsArticleGenerationError;
+      const rawReason = error instanceof Error ? error.message : String(error);
+      const code = known ? error.code : 'XHS_ARTICLE_GENERATION_FAILED';
+      const detail = known ? error.detail : undefined;
       const errorMessage = describeXhsArticleError(code, detail);
+      // errorDetail 只放界面文案里没有的信息：未知异常原文、被隐藏的模型交付问题；
+      // 配图张数这类已拼进文案的明细属于用户可处理的情况，不当故障上报
+      const errorDetail = (
+        known
+          ? detail && !errorMessage.includes(detail)
+            ? detail
+            : undefined
+          : rawReason
+      )?.slice(0, 2000);
       this.logger.error(
         `[generate] failed todo=${todo.id} topic=${topicId}: ${code}${
-          detail ? ` ${detail}` : ''
+          errorDetail ? ` ${errorDetail}` : ''
         }`,
+        known || !(error instanceof Error) ? undefined : error.stack,
       );
       // 先退点再回写 Todo：回写失败也不影响退款
-      if (!articleSaved) await this.refundArticleCharge(operationId, code);
+      if (!articleSaved) {
+        await this.refundArticleCharge(operationId, known ? code : rawReason);
+      }
       await progress.close();
       const result: XhsArticleGenerationResult = {
         topicId,
@@ -660,6 +676,7 @@ export class XhsArticleGenerationService {
         generatedAt: new Date().toISOString(),
         error: code,
         errorMessage,
+        ...(errorDetail ? { errorDetail } : {}),
       };
       await this.todoService.update({
         id: todo.id,
@@ -759,14 +776,7 @@ export class XhsArticleGenerationService {
         todoId: todo.id,
         status,
         ...(progress ? { progress, startedAt: progress.startedAt } : {}),
-        ...(status === 'failed'
-          ? {
-              error: this.readTodoErrorCode(todo),
-              errorMessage:
-                todo.abnormalReason ??
-                describeXhsArticleError('XHS_ARTICLE_GENERATION_FAILED'),
-            }
-          : {}),
+        ...(status === 'failed' ? this.readTodoFailure(todo) : {}),
         updatedAt: (todo.updatedAt ?? new Date()).toISOString(),
       });
     }
@@ -926,22 +936,49 @@ export class XhsArticleGenerationService {
   }
 
   /**
-   * @description 从生成 Todo 的 taskResult 里读取失败码，解析不出时回退为通用失败码。
+   * @description 从生成 Todo 读取失败码、界面文案与原始明细。旧记录把底层异常原文直接当失败码存着，
+   *   认不出的码一律收敛为通用失败码与通用文案，原文挪进 errorDetail，界面不再展示整段异常。
    * @param {TodoEntity} todo - 文章生成 Todo。
-   * @returns {string} 失败码。
-   * @keyword-cn 失败码, 待办结果解析
-   * @keyword-en failure-code, task-result-parse
+   * @returns {{ error: string; errorMessage: string; errorDetail?: string }} 失败信息。
+   * @keyword-cn 失败码, 待办结果解析, 旧记录清洗
+   * @keyword-en failure-code, task-result-parse, legacy-error-sanitize
    */
-  private readTodoErrorCode(todo: TodoEntity): string {
+  private readTodoFailure(todo: TodoEntity): {
+    error: string;
+    errorMessage: string;
+    errorDetail?: string;
+  } {
+    let error = '';
+    let errorDetail = '';
     try {
       const parsed = JSON.parse(todo.taskResult ?? '{}') as {
         error?: unknown;
+        errorDetail?: unknown;
       };
-      if (typeof parsed.error === 'string' && parsed.error) return parsed.error;
+      if (typeof parsed.error === 'string') error = parsed.error;
+      if (typeof parsed.errorDetail === 'string') {
+        errorDetail = parsed.errorDetail;
+      }
     } catch {
       // taskResult 非 JSON 时按通用失败码处理
     }
-    return 'XHS_ARTICLE_GENERATION_FAILED';
+    if (
+      !Object.prototype.hasOwnProperty.call(XHS_ARTICLE_ERROR_MESSAGES, error)
+    ) {
+      const legacyDetail = (errorDetail || error || todo.abnormalReason || '')
+        .trim()
+        .slice(0, 2000);
+      return {
+        error: 'XHS_ARTICLE_GENERATION_FAILED',
+        errorMessage: describeXhsArticleError('XHS_ARTICLE_GENERATION_FAILED'),
+        ...(legacyDetail ? { errorDetail: legacyDetail } : {}),
+      };
+    }
+    return {
+      error,
+      errorMessage: todo.abnormalReason || describeXhsArticleError(error),
+      ...(errorDetail ? { errorDetail } : {}),
+    };
   }
 
   /**

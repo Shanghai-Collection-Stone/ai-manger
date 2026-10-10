@@ -128,7 +128,7 @@
 - `XHS_ARTICLE_CHARGE_RESOURCE_TYPE` — 生成 Todo 上记录生文服务扣费单号的资源类型，进程中断时凭它找回 operationId 退点 | keywords: 扣费单号资源, 中断退点, charge-operation-resource, interrupted-refund
 - `XHS_ARTICLE_RUNTIME_MISS_LIMIT` — 定义持久化运行态缺失真实执行实例时的连续确认次数 | keywords: 异步存活确认, 连续查询, async-liveness-confirmation, consecutive-polls
 - `XHS_ARTICLE_SERVICE_CODE` — 将小红书生文工作流绑定到固定收费服务 | keywords: 生文服务编码, 服务计费, text-service-code, service-billing
-- `describeXhsArticleError(code, detail?)` — 把失败码翻译成可直接展示的中文原因，未知码回退为原始码 | keywords: 失败原因文案, 错误码翻译, failure-reason-text, error-code-translate
+- `describeXhsArticleError(code, detail?)` — 把失败码翻译成可直接展示的中文原因，未知码回退为通用失败文案；生文不完整的模型交付问题不拼进文案 | keywords: 失败原因文案, 错误码翻译, failure-reason-text, error-code-translate
 - `XhsArticleGenerationError(code, detail?)` — 携带失败码与明细的文章生成错误，供接口层原样抛给前端 | keywords: 文章生成错误, 失败码, article-generation-error, failure-code
 - `XhsArticleGenerationService.start(topicId, input, scope)` — 校验重复任务（本进程集合 + 排队登记簿，覆盖其他进程）、扣除一次生文服务费并创建等待 Todo，交给 `xhs-article` 通道排队（全局及租户并发上限） | keywords: 异步生成文章, 后台任务, 并发生成, start-article-generation, background-task, concurrent-generation
 - `XHS_ARTICLE_QUEUE_LANE` — 文章生成在 AI 生成排队服务里的通道名 `xhs-article` | keywords: 文章生成排队通道, 并发槽位, article-generation-lane, concurrency-slot
@@ -139,7 +139,7 @@
 - `XhsArticleGenerationService.buildRuntimeConfirmationKey(scope,topicId)` — 构造租户用户及子选题隔离的连续存活确认键 | keywords: 存活确认键, 租户隔离, liveness-confirmation-key, tenant-isolation
 - `XhsArticleGenerationService.readTodoTopicId(todo)` — 从 Todo 关联资源读取对应子选题 ID | keywords: 生成任务关联资源, 子选题归位, generation-todo-resource, topic-binding
 - `XhsArticleGenerationService.readTodoProgress(todo)` — 从运行中 Todo 结果解析阶段产出，没有或解析不出时返回 undefined | keywords: 读取生文阶段产出, 待办结果解析, read-generation-progress, task-result-parse
-- `XhsArticleGenerationService.readTodoErrorCode(todo)` — 从 Todo 结果解析文章生成失败码 | keywords: 失败码, 待办结果解析, failure-code, task-result-parse
+- `XhsArticleGenerationService.readTodoFailure(todo)` — 从 Todo 读取失败码、界面文案与原始明细，旧记录里当失败码存的异常原文收敛为通用失败并挪进 errorDetail | keywords: 失败码, 待办结果解析, 旧记录清洗, failure-code, task-result-parse, legacy-error-sanitize
 - `XhsArticleGenerationService.refundArticleCharge(operationId,reason)` — 文章生成失败时退回生文服务扣点，退款失败只记日志不覆盖原始失败 | keywords: 文章失败退点, 生文退款, article-failure-refund, text-service-refund
 - `XhsArticleGenerationService.refundInterruptedCharge(todo,topicId,scope)` — 进程中断导致的失败退点，先确认该 Todo 的文章未落库再退 | keywords: 中断退点, 落库确认, interrupted-refund, persisted-check
 - `XhsArticleGenerationService.readTodoChargeOperationId(todo)` — 从 Todo 关联资源读取生文服务扣费单号 | keywords: 扣费单号读取, 关联资源, read-charge-operation-id, todo-resource
@@ -271,6 +271,7 @@
 | 数值规范化       | number-canonicalization           | 指纹里的数值统一保留两位小数，吸收前端未取整的拖动值                                        |
 | 文章生成错误码   | article-error-code                | 失败码与中文原因对照表，接口层据此下发用户可读提示                                          |
 | 失败原因文案     | failure-reason-text               | `describeXhsArticleError` 翻译出的中文失败原因                                              |
+| 旧记录清洗       | legacy-error-sanitize             | 历史失败记录里的异常原文不再下发为界面文案，只放进 `errorDetail`                           |
 | 文章生成错误     | article-generation-error          | `XhsArticleGenerationError` 携带失败码与明细，配图不足时附带本次图库标签                    |
 | 异步存活确认     | async-liveness-confirmation       | 查询时同时核对 Todo 状态与当前进程执行集合，连续两次缺失后判定服务中断                      |
 | 生文阶段产出     | generation-progress-reporter      | `XhsArticleGenerationProgressReporter` 把先写好的正文与逐张配图合并写进运行中 Todo          |
@@ -313,8 +314,8 @@
 - `XhsArticleUpdateInput` — 已生成文章编辑输入。
 - `XhsArticleMemoryDraft` — Agent 工具在单次运行中调整的文章内存，含文章标签与真实图库配图标签。
 - `XhsArticleGenerateInput` — 真实文章生成输入，包含配图去重（`true` 严格，缺省优先不重复）、素材风格库封面预设、可选的整组配图重新生成开关，以及仅本次生效的 `imageRule` 覆盖与 `allowImageRepeat`。
-- `XhsArticleGenerationResult` — 写入 Todo `taskResult` 的文章生成结果。
-- `XhsArticleGenerationState` — 单个子选题最近一次文章生成任务的等待、运行、完成或失败状态；运行中带 `startedAt` 与阶段产出 `progress`。
+- `XhsArticleGenerationResult` — 写入 Todo `taskResult` 的文章生成结果；失败时带 `error`（失败码）、`errorMessage`（界面文案）与可选 `errorDetail`（原始明细，只给控制台与运维上报）。
+- `XhsArticleGenerationState` — 单个子选题最近一次文章生成任务的等待、运行、完成或失败状态；运行中带 `startedAt` 与阶段产出 `progress`；失败时带 `error`、`errorMessage` 与可选 `errorDetail`。
 - `XhsArticleGenerationProgress` — 生成中的阶段产出：`startedAt`、正文轨（`running` / `done` 及标题正文标签）、配图轨（`pending` / `running` / `done` / `skipped`、计划张数 `total`、按槽位的已就绪图 `items`）。
 - `XhsTopicGenerationResult` — 写入 Todo `taskResult` 的结果结构。
 - `XhsTopicGenerateResponse` — 服务内部携带 Todo 与生成结果的响应，控制器仅输出 Todo。
@@ -365,3 +366,5 @@
 **渐进显示（阶段产出）**：`runGeneration` 用 `XhsArticleGenerationProgressReporter` 把阶段产出写进运行中 Todo 的 `taskResult.progress`：正文完整校验后写标题、正文与标签；源图分配完成写计划张数；每张内页就绪写一次，封面先写无字底图（`final=false`）、成品封面就绪后同槽位替换。写入单路在途、期间的变化合并成下一次写入，一篇文章约 3-8 次；落库或失败前先 `close`，终态结果不会被晚到的阶段写入覆盖。阶段写入会刷新 Todo `updatedAt`，因此 `listGenerations` 在运行态额外返回 `startedAt`（出队时刻）与 `progress`，前端进度以 `startedAt` 为起点。正文先失败时已开始的内页渲染会继续跑完但结果作废（图库里留下动态拼图，源图不标已用）。
 
 **并发排队**：文章任务经 [AI 生成排队](../generation-queue/module.md) 的 `xhs-article` 通道排队，全平台上限读平台信息 `xhsArticleGlobalConcurrencyLimit`（默认 4），租户上限读 `xhsArticleConcurrencyLimit`（默认 2）；`listGenerations` 每次轮询都会 `requestDrain`，后台调高上限后立即补位。排队逻辑原来写在本服务里，现在与抖音生成共用同一套机制、各自上限。
+
+**失败信息分层**：失败结果分三层下发——`error` 是失败码，`errorMessage` 是给用户看的短文案（Todo `abnormalReason` 同步写它），`errorDetail` 是原始明细（底层异常原文、生文不完整时模型的交付问题，截 2000 字）。模型输出解析失败、网络异常这类未知错误不再把异常原文当失败码，统一记为 `XHS_ARTICLE_GENERATION_FAILED`「文章生成失败，请稍后重试。」，原文进 `errorDetail` 与服务端错误日志（带堆栈）；工作台只展示 `errorMessage`，把 `errorDetail` 打到控制台并收录进运维上报。历史记录由 `readTodoFailure` 读取时按同一规则收敛，无需迁移数据。

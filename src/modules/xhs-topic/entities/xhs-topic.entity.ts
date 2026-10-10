@@ -362,6 +362,8 @@ export interface XhsArticleGenerationResult {
   error?: string;
   /** 前端可直接展示的中文失败原因 */
   errorMessage?: string;
+  /** 原始失败明细（底层异常文本、模型交付问题），只给控制台与运维上报用，界面不展示 */
+  errorDetail?: string;
 }
 
 /**
@@ -377,6 +379,8 @@ export interface XhsArticleGenerationState {
   error?: string;
   /** 前端可直接展示的中文失败原因，仅 status=failed 时存在 */
   errorMessage?: string;
+  /** 原始失败明细，只给控制台与运维上报用，界面不展示；仅 status=failed 且有明细时存在 */
+  errorDetail?: string;
   /** 本次真正开始执行的时间；阶段产出写入会刷新 updatedAt，前端进度以它为起点。首次阶段写入前缺省 */
   startedAt?: string;
   /** 生成中的阶段产出（先写好的正文、逐张就绪的配图），仅 status=running 时存在 */
