@@ -123,8 +123,20 @@ describe('DouyinShotConcatService（客户端合成）', () => {
       storyboard: [],
       storeVisit: {
         segments: [
-          { id: 'g1', lines: '今天带大家来到这家咖啡店', videoId: 21 },
-          { id: 'g2', lines: '招牌拿铁', videoId: 22 },
+          {
+            id: 'g1',
+            lines: '今天带大家来到这家咖啡店',
+            videoId: 21,
+            audioUrl: 'https://cdn/a21.wav',
+            audioSeconds: 5.2,
+          },
+          {
+            id: 'g2',
+            lines: '招牌拿铁',
+            videoId: 22,
+            audioUrl: 'https://cdn/a22.wav',
+            audioSeconds: 2.4,
+          },
         ],
       },
     };
@@ -148,10 +160,12 @@ describe('DouyinShotConcatService（客户端合成）', () => {
         clip.shotId,
         clip.videoId,
         clip.fallbackSeconds,
+        clip.audioUrl,
+        clip.subtitle,
       ]),
     ).toEqual([
-      ['g1', 21, 3],
-      ['g2', 22, 2],
+      ['g1', 21, 5.2, 'https://cdn/a21.wav', '今天带大家来到这家咖啡店'],
+      ['g2', 22, 2.4, 'https://cdn/a22.wav', '招牌拿铁'],
     ]);
     expect(operations.rows[0].request).toMatchObject({
       segmentIds: ['g1', 'g2'],

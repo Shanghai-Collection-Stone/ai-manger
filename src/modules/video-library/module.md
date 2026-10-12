@@ -115,7 +115,7 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 
 - `VideoEntity` / `VideoCreateInput` / `VideoUpdateInput`（`entities/video.entity.ts`）。
 - `VideoGroupEntity` / `VideoGroupCreateInput` / `VideoGroupUpdateInput` / `VideoGroupView`（`entities/video-group.entity.ts`）。
-- `OssUploadScene` / `OssUploadTicket`（`services/oss-storage.service.ts`）——票据结构是与桌面端的接口契约，改字段要同步改 `xhs-manger` 的 `ossDirectUpload.js`。
+- `OssUploadScene` / `OssUploadTicket`（`services/oss-storage.service.ts`）——票据结构是与桌面端的接口契约，改字段要同步改 `xhs-manger` 的 `ossDirectUpload.js`。场景 `audio` 只给服务端 `putObject` 存抖音探店配音与临时克隆录音，直传票据接口仍只放行 `video` / `poster`。
 
 ## 模块功能描述 (Module Feature Description)
 

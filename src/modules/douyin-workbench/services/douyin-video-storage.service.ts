@@ -44,8 +44,8 @@ export function resolveStaticFilePath(url: string): string | null {
 }
 
 /**
- * @description 抖音工作台成片落库：把本地合成的视频或供应商临时地址的视频存进视频库。OSS 配好时上传 OSS 并按对象键登记；
- *   没配 OSS 时合成文件落到 `public/uploads/douyin-video`、供应商地址直接登记外链，并记警告。
+ * @description 抖音工作台成片落库：把本地合成的视频或供应商临时地址的视频存进视频库，另存探店配音与临时克隆录音。OSS 配好时上传 OSS 并按对象键登记；
+ *   没配 OSS 时合成文件落到 `public/uploads/douyin-video`、配音落到 `public/uploads/douyin-audio`、供应商地址直接登记外链，并记警告。
  * @keyword-cn 抖音成片落库, 视频库登记
  * @keyword-en douyin-output-video-storage, video-library-register
  */
@@ -132,6 +132,61 @@ export class DouyinVideoStorageService {
     } finally {
       await fsPromises.rm(workDir, { recursive: true, force: true });
     }
+  }
+
+  /**
+   * @description 保存一段音频（探店配音或克隆录音）：OSS 配好时上传到 `audio` 场景并返回公网地址与对象键；
+   *   没配 OSS 时落到 `public/uploads/douyin-audio`，返回站内地址（这种地址外部服务访问不到，克隆前要先判断 `hasPublicStorage`）。
+   * @keyword-cn 保存配音文件, 音频入存储
+   * @keyword-en save-audio-file, store-voiceover
+   * @param {Buffer} buffer 音频内容。
+   * @param {{scope: DouyinScope, fileName: string, contentType: string}} meta 作用域、带扩展名的文件名与媒体类型。
+   * @returns {Promise<{url: string, key?: string}>} 地址与 OSS 对象键（本地落盘时没有）。
+   */
+  async saveAudio(
+    buffer: Buffer,
+    meta: { scope: DouyinScope; fileName: string; contentType: string },
+  ): Promise<{ url: string; key?: string }> {
+    if (this.oss.isConfigured()) {
+      const key = this.oss.buildObjectKey({
+        scene: 'audio',
+        fileName: meta.fileName,
+        tenantId: meta.scope.tenantId,
+      });
+      const url = await this.oss.putObject(key, buffer, meta.contentType);
+      return { url, key };
+    }
+    const tenant =
+      String(meta.scope.tenantId ?? '').replace(/[^A-Za-z0-9_-]/g, '') ||
+      'platform';
+    const extension = /\.[a-z0-9]{1,8}$/i.exec(meta.fileName)?.[0] ?? '';
+    const relative = `uploads/douyin-audio/${tenant}/${randomUUID()}${extension.toLowerCase()}`;
+    const target = join(process.cwd(), 'public', relative);
+    await fsPromises.mkdir(dirname(target), { recursive: true });
+    await fsPromises.writeFile(target, buffer);
+    this.logger.warn(`[saveAudio] OSS 未配置，音频存到本机 public/${relative}`);
+    return { url: `/static/${relative}` };
+  }
+
+  /**
+   * @description 删掉 `saveAudio` 存到 OSS 的音频（克隆完录音立即删），失败不抛错。
+   * @keyword-cn 删除音频文件, 清理录音
+   * @keyword-en delete-audio-file, cleanup-voice-sample
+   * @param {string} key OSS 对象键。
+   * @returns {Promise<void>} 删除完成。
+   */
+  async deleteAudio(key: string): Promise<void> {
+    await this.oss.deleteObjects([key]).catch(() => undefined);
+  }
+
+  /**
+   * @description 存储能否给外部服务公网访问：只有配了 OSS 才能把录音交给百炼克隆。
+   * @keyword-cn 公网存储可用, OSS已配置
+   * @keyword-en public-storage-available, oss-configured
+   * @returns {boolean} 是否配了 OSS。
+   */
+  hasPublicStorage(): boolean {
+    return this.oss.isConfigured();
   }
 
   /**

@@ -144,11 +144,12 @@
 - `XhsArticleGenerationService.refundInterruptedCharge(todo,topicId,scope)` — 进程中断导致的失败退点，先确认该 Todo 的文章未落库再退 | keywords: 中断退点, 落库确认, interrupted-refund, persisted-check
 - `XhsArticleGenerationService.readTodoChargeOperationId(todo)` — 从 Todo 关联资源读取生文服务扣费单号 | keywords: 扣费单号读取, 关联资源, read-charge-operation-id, todo-resource
 - `XhsArticleGenerationService.resolveMotherImageTags(configuredTags,availableTags)` — 校验母题固定标签仍存在于当前真实图库并保留规范写法 | keywords: 母题配图标签, 真实图库校验, mother-image-tags, validate-gallery-tags
-- `ZXhsArticleDraft` — 一次交付整篇文章的结构（标题、正文、标签），交付工具与结构化输出共用 | keywords: 文章交付结构, 一次交付, article-draft-schema, single-shot-delivery
+- `ZXhsArticleDraft` — 一次交付整篇文章的结构（标题、正文、标签数组），结构化输出直接用，交付工具在它基础上放宽标签 | keywords: 文章交付结构, 一次交付, article-draft-schema, single-shot-delivery
 - `XHS_ARTICLE_DRAFT_JSON_SCHEMA` — 交付结构的 JSON Schema 版本，只给结构化输出用，跳过 zod 严格校验改由交付校验清洗 | keywords: 文章交付JSON结构, 宽松解析, article-draft-json-schema, lenient-parsing
+- `ZXhsArticleSubmitInput` — 交付工具 `xhs_article_submit` 的参数结构：标签除字符串数组外也接受逗号分隔的一整串，免得轻量 Agent 的工具参数校验把整篇打回 | keywords: 交付工具参数结构, 宽松解析, article-submit-tool-schema, lenient-parsing
 - `ZXhsArticleImageTags` — 配图决策的结构化输出（2-5 个图库标签） | keywords: 配图决策结构, 图库标签, image-decision-schema, gallery-tags
 - `XhsArticleGenerationService.applyArticleSubmission(draft, input)` — 校验并写入一次文章交付（标签交成一整串时按分隔符拆开），不合格不改内存文章并返回问题描述 | keywords: 写入文章交付, 交付校验, apply-article-submission, submission-validation
-- `XhsArticleGenerationService.createArticleSubmitTool(draft, state)` — 一次交付标题、正文、标签的工具（`xhs_article_submit`，`returnDirect` 交付即结束） | keywords: 文章交付工具, 一次交付, article-submit-tool, single-shot-delivery
+- `XhsArticleGenerationService.createArticleSubmitTool(draft, state)` — 一次交付标题、正文、标签的工具（`xhs_article_submit`，`returnDirect` 交付即结束），参数按 `ZXhsArticleSubmitInput` 校验，标签交成一整串也收下 | keywords: 文章交付工具, 一次交付, article-submit-tool, single-shot-delivery
 - `XhsArticleGenerationService.buildSystemPrompt(input)` — 构造文章风格、合规、搜索与一次交付约束的提示词，改写时直接带上当前文章 | keywords: 构造文章提示词, 工具交付约束, 文章生成风格, build-article-prompt, tool-delivery-contract, article-writing-style
 - `XhsArticleGenerationService.writeArticle(system, searchTools, draft, scope)` — 写文章（节点 `xhs-article/article`，保留默认思考）：有搜索工具时用轻量 Agent（搜索 + 交付工具），否则一次结构化输出（传 JSON Schema 跳过 zod 严格校验，解析异常记为不合格交付）；没合格交付重试一次 | keywords: 执行文章Agent, 一次交付, 轻量Agent, run-article-agent, single-shot-delivery, lightweight-agent
 - `XhsArticleGenerationService.decideImageTags(input, scope)` — 配图决策（节点 `xhs-article/image-decision`，关闭思考）从真实图库标签挑 2-5 个，失败按字面兜底 | keywords: 配图决策, 关闭思考, 并行选图, article-image-decision, thinking-off, parallel-image-pick
@@ -247,6 +248,7 @@
 | 文章交付工具     | article-submit-tool               | `xhs_article_submit` 一次交付标题、正文与标签                                               |
 | 文章交付JSON结构 | article-draft-json-schema         | 结构化输出用的交付 JSON Schema，模型侧仍要求标签数组                                        |
 | 宽松解析         | lenient-parsing                   | 不在 LangChain 层严格校验，标签字符串也能拆开入库，不合格才带原因重试                       |
+| 交付工具参数结构 | article-submit-tool-schema        | 有搜索时交付工具的参数校验，标签接受字符串数组或一整串                                      |
 | 配图决策         | article-image-decision            | 与写正文并行、关闭思考的图库标签选择（节点 `xhs-article/image-decision`）                   |
 | 文章生成排队通道 | article-generation-lane           | AI 生成排队服务里的 `xhs-article` 通道                                                      |
 | 文章落库         | persist-article                   | 完整性校验后统一持久化                                                                      |

@@ -29,7 +29,7 @@ import {
   resolveShuyanVideoRoute,
 } from './douyin-shuyan-video.service.js';
 import { DouyinStoreVisitService } from './douyin-store-visit.service.js';
-import { resolveStoreVisitAvatarEngine } from './douyin-store-visit-shuyan.service.js';
+import { DASHSCOPE_PROVIDER_CODE } from './douyin-cosyvoice.service.js';
 import { DouyinShotConcatService } from './douyin-shot-concat.service.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
 import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
@@ -324,7 +324,7 @@ export class DouyinOperationService {
   /**
    * @description 读取整片与分镜两个视频节点当前走的通道、模型、可选时长与可选清晰度，供视频栏展示「生成时长」「清晰度」选项。
    *   未指定模型时走直连服务（时长不限、清晰度由直连服务自己决定）；节点配置不可用时返回中文原因。
-   *   另带探店模式两个节点（音色克隆、探店数字人视频）是否已在后台指定提供商，生成弹窗据此提前提示。
+   *   另带探店模式两个节点（音色克隆与配音、探店画面视频）是否已在后台指定可用的提供商与画面可选秒数，探店工作区据此提前提示。
    * @keyword-cn 视频生成选项, 可选时长, 可选清晰度
    * @keyword-en video-generation-options, duration-choices, resolution-choices
    * @returns 整片与分镜两个节点的选项，以及探店两个节点的配置状态。
@@ -342,15 +342,13 @@ export class DouyinOperationService {
       }
     > & {
       storeVisit: Record<
-        'voiceClone' | 'voiceDesign' | 'video',
+        'voiceClone' | 'video',
         {
           configured: boolean;
-          /** 探店视频走的通道：通用数字人服务一次出片，或数眼按场景分段对口型 */
-          channel?: 'digital-human' | 'shuyan';
-          /** 数眼通道的数字人引擎（kling-avatar / wan-s2v） */
-          engine?: string;
           model?: string;
           providerName?: string;
+          /** 探店画面视频型号可选的整数秒数，前端据此提示单段台词别太长 */
+          durations?: number[];
           error?: string;
         }
       >;
@@ -363,40 +361,45 @@ export class DouyinOperationService {
           nodeKey,
         );
         if (!runtime) return { configured: false };
-        if (isShuyanProvider(runtime.providerCode)) {
-          const route = resolveStoreVisitAvatarEngine(runtime.model);
-          return route
-            ? {
-                configured: true,
-                channel: 'shuyan' as const,
-                engine: route.engine,
-                model: runtime.model,
-                providerName: runtime.providerName,
-              }
-            : {
-                configured: false,
-                channel: 'shuyan' as const,
-                providerName: runtime.providerName,
-                error: `模型「${runtime.model}」认不出数字人引擎，请改填 kling-avatar-std、kling-avatar-pro 或 wan2.2-s2v`,
-              };
+        const base = {
+          model: runtime.model,
+          providerName: runtime.providerName,
+        };
+        if (nodeKey === WORKFLOW_NODES.douyinWorkbench.voiceClone) {
+          if (
+            String(runtime.providerCode).toLowerCase() !==
+            DASHSCOPE_PROVIDER_CODE
+          )
+            return {
+              configured: false,
+              ...base,
+              error: '音色克隆与配音要选阿里云百炼（dashscope）提供商',
+            };
+          return String(runtime.apiKey ?? '').trim()
+            ? { configured: true, ...base }
+            : { configured: false, ...base, error: '百炼提供商没有填 API Key' };
         }
-        if (!String(runtime.baseUrl ?? '').trim())
+        if (!isShuyanProvider(runtime.providerCode))
           return {
             configured: false,
-            providerName: runtime.providerName,
-            error: `提供商「${runtime.providerName}」没有填服务地址`,
+            ...base,
+            error: '探店画面视频要选数眼智能提供商',
+          };
+        if (!resolveShuyanVideoRoute(runtime.model))
+          return {
+            configured: false,
+            ...base,
+            error: `模型「${runtime.model}」还没接入，请改选 Seedance 或 MiniMax-H3 型号`,
           };
         return {
           configured: true,
-          channel: 'digital-human' as const,
-          model: runtime.model,
-          providerName: runtime.providerName,
+          ...base,
+          durations: listShuyanVideoDurationChoices(runtime.model),
         };
       } catch {
         return {
           configured: false,
-          error:
-            '节点选的提供商不能用于这一步，请改选 digital-human 提供商（探店数字人视频也可以选数眼智能）',
+          error: '节点选的提供商不能用于这一步，请到后台重新选择',
         };
       }
     };
@@ -442,18 +445,16 @@ export class DouyinOperationService {
         };
       }
     };
-    const [full, shot, voiceClone, voiceDesign, storeVisitVideo] =
-      await Promise.all([
-        read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
-        read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
-        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceClone),
-        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceDesign),
-        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
-      ]);
+    const [full, shot, voiceClone, storeVisitVideo] = await Promise.all([
+      read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
+      read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
+      readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceClone),
+      readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+    ]);
     return {
       full,
       shot,
-      storeVisit: { voiceClone, voiceDesign, video: storeVisitVideo },
+      storeVisit: { voiceClone, video: storeVisitVideo },
     };
   }
 
@@ -543,7 +544,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进，探店数字人交给探店服务，客户端合成与克隆音色记录直接返回当前记录；
+   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进，探店分段交给探店服务，客户端合成、音色审计与通用数字人历史记录直接返回当前记录；
    *   直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
    * @keyword-cn 同步抖音调用状态, 异步任务查询
    * @keyword-en sync-douyin-operation, async-job-status
@@ -561,10 +562,10 @@ export class DouyinOperationService {
     if (row.provider === 'shuyan' && row.mode === 'store-visit')
       return this.storeVisit.refresh(row.id);
     if (row.provider === 'shuyan') return this.shuyanVideos.refresh(row.id);
-    if (row.provider === 'digital-human')
-      return this.storeVisit.refresh(row.id);
+    // 音色审计、客户端合成，以及通用数字人通道下线前的历史记录都没有可查询的远端任务
     if (
       row.provider === 'client' ||
+      row.provider === 'digital-human' ||
       row.operation === 'voice-clone' ||
       row.operation === 'voice-design'
     )

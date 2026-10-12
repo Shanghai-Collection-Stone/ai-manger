@@ -827,6 +827,9 @@ export class AgentService {
       case 'shuyan':
       case 'shuyanai':
         return 'https://platform.shuyanai.com/v1';
+      // 阿里云百炼 OpenAI 兼容地址：同一个 Key 也能调通义千问等文本模型
+      case 'dashscope':
+        return 'https://dashscope.aliyuncs.com/compatible-mode/v1';
       default:
         return undefined;
     }

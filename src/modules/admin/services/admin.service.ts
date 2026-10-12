@@ -1670,6 +1670,9 @@ export class AdminService {
       case 'moonshot':
       case 'moonshotai':
         return 'https://api.moonshot.ai/v1';
+      // 阿里云百炼：OpenAI 兼容地址（测试按钮用 /models 探活），CosyVoice 语音接口只取它的域名
+      case 'dashscope':
+        return 'https://dashscope.aliyuncs.com/compatible-mode/v1';
       // 数眼智能开放平台：OpenAI 兼容中转（备用节点 https://cloud.shuyanai.com/v1）
       case 'shuyan':
       case 'shuyanai':
