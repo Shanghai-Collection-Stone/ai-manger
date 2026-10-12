@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -15,95 +16,51 @@ import { Collection, Db, ObjectId } from 'mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AiBillingService } from '../../ai-billing/services/ai-billing.service.js';
 import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js';
-import { WORKFLOW_NODES } from '../../workflow-model/entities/workflow-model.entity.js';
+import {
+  WORKFLOW_NODES,
+  type WorkflowNodeRuntime,
+} from '../../workflow-model/entities/workflow-model.entity.js';
 import { isShuyanProvider } from '../../workflow-model/services/shuyan-model-catalog.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
 import type {
-  DouyinMediaReference,
   DouyinOperationEntity,
   DouyinOperationView,
+  DouyinStoreVisitSegment,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
-import { DouyinStoreVisitShuyanService } from './douyin-store-visit-shuyan.service.js';
+import {
+  buildCosyVoicePrefix,
+  COSYVOICE_CLONE_MODEL,
+  COSYVOICE_PRESET_MODEL,
+  COSYVOICE_PRESET_VOICES,
+  type CosyVoicePresetVoice,
+  DASHSCOPE_PROVIDER_CODE,
+  type DashScopeRuntime,
+  describeCosyVoiceFailure,
+  DouyinCosyVoiceService,
+} from './douyin-cosyvoice.service.js';
+import {
+  clampShuyanVideoDuration,
+  clampShuyanVideoResolution,
+  describeShuyanVideoError,
+  describeShuyanVideoFailure,
+  listShuyanVideoDurationChoices,
+  mapShuyanVideoStatus,
+  normalizeShuyanVideoModel,
+  resolveShuyanVideoGateway,
+  resolveShuyanVideoRoute,
+  resolveShuyanVideoTaskUrl,
+  type ShuyanVideoRoute,
+  type ShuyanVideoTask,
+  unwrapShuyanVideoTask,
+} from './douyin-shuyan-video.service.js';
 import {
   DouyinVideoStorageService,
   resolveStaticFilePath,
 } from './douyin-video-storage.service.js';
-import {
-  DouyinWorkbenchRepositoryService,
-  normalizeStoreVisitLines,
-  normalizeVideoAudio,
-} from './douyin-workbench-repository.service.js';
+import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
-
-/**
- * @description 探店克隆、设计与视频能力的提供商运行配置（来自后台「Ai提供商设置」+「工作流节点模型」）。
- * @keyword-cn 探店提供商配置, 节点运行配置
- * @keyword-en store-visit-provider-runtime, node-runtime
- */
-export interface DouyinStoreVisitRuntime {
-  providerId: string;
-  providerName: string;
-  model: string;
-  baseUrl: string;
-  apiKey?: string;
-}
-
-/**
- * @description 通用数字人服务的提供商代码：在「Ai提供商设置」里按类别各建一条——音色克隆模型（audio）给「音色克隆」节点，
- *   生视频模型（video）给「探店数字人视频」节点；服务地址指向按本契约实现的服务，具体厂商由那个服务对接。
- * @keyword-cn 数字人提供商代码, 通用契约
- * @keyword-en digital-human-provider-code, generic-contract
- */
-export const DIGITAL_HUMAN_PROVIDER_CODE = 'digital-human';
-
-/**
- * @description 通用数字人服务契约的固定路径（拼在提供商服务地址后面）：克隆或设计音色、提交数字人任务、查询任务（`{id}` 为任务 ID）。
- * @keyword-cn 数字人契约路径, 服务地址拼接
- * @keyword-en digital-human-contract-paths, base-url-join
- */
-export const DIGITAL_HUMAN_PATHS = {
-  voiceClone: '/voice-clone',
-  voiceDesign: '/voice-design',
-  submitTask: '/digital-human/tasks',
-  queryTask: '/digital-human/tasks/{id}',
-} as const;
-
-/**
- * @description 把契约路径拼到提供商服务地址后面（去掉多余斜杠，`{id}` 按需替换并编码）。
- * @keyword-cn 拼接契约地址, 服务地址拼接
- * @keyword-en build-contract-url, base-url-join
- * @param {string} baseUrl 提供商服务地址。
- * @param {string} path 契约路径。
- * @param {string} [id] 任务 ID。
- * @returns {string} 完整地址。
- */
-export function buildDigitalHumanUrl(
-  baseUrl: string,
-  path: string,
-  id?: string,
-): string {
-  const resolved = id ? path.replace('{id}', encodeURIComponent(id)) : path;
-  return `${String(baseUrl ?? '')
-    .trim()
-    .replace(/\/+$/, '')}${resolved}`;
-}
-
-/**
- * @description 后台跟进数字人生视频任务的间隔（15 秒）。
- * @keyword-cn 数字人轮询间隔, 后台轮询
- * @keyword-en digital-human-poll-interval, background-polling
- */
-export const DOUYIN_DIGITAL_HUMAN_POLL_MS = 15 * 1000;
-
-/**
- * @description 数字人任务超过 2 小时未结束判为超时；保存中超过 10 分钟可重新认领。
- * @keyword-cn 数字人任务超时, 保存中断
- * @keyword-en digital-human-task-timeout, saving-stale
- */
-export const DOUYIN_DIGITAL_HUMAN_TASK_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-const DOUYIN_DIGITAL_HUMAN_SAVING_STALE_MS = 10 * 60 * 1000;
 
 /**
  * @description 克隆音色录音的大小上限（10MB），前端上传前也按它拦。
@@ -113,119 +70,103 @@ const DOUYIN_DIGITAL_HUMAN_SAVING_STALE_MS = 10 * 60 * 1000;
 export const DOUYIN_VOICE_SAMPLE_MAX_BYTES = 10 * 1024 * 1024;
 
 /**
- * @description 浏览器没给出 `audio/*` 类型时按扩展名认可的录音格式。
+ * @description 百炼声音复刻接受的录音格式（WAV 16bit、MP3、M4A），按扩展名认。
  * @keyword-cn 录音格式, 音频扩展名
  * @keyword-en voice-sample-format, audio-extension
  */
-export const DOUYIN_VOICE_SAMPLE_EXTENSIONS = [
-  '.mp3',
-  '.wav',
-  '.m4a',
-  '.aac',
-  '.ogg',
-  '.webm',
-  '.flac',
-];
+export const DOUYIN_VOICE_SAMPLE_EXTENSIONS: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+};
 
 /**
- * @description 探店模式一次最多带给数字人服务的场景参考图（分镜画面）张数。
- * @keyword-cn 场景参考图上限, 分镜画面
- * @keyword-en scene-image-limit, storyboard-frame
+ * @description 后台跟进探店分段空镜视频的间隔（15 秒）。
+ * @keyword-cn 探店分段轮询间隔, 后台轮询
+ * @keyword-en store-visit-segment-poll-interval, background-polling
  */
-export const DOUYIN_STORE_VISIT_SCENE_IMAGE_LIMIT = 4;
+export const DOUYIN_STORE_VISIT_POLL_MS = 15 * 1000;
 
 /**
- * @description 把直连服务五花八门的状态值收成工作台统一的 queued / running / completed / failed，认不出的按生成中处理。
- * @keyword-cn 数字人状态映射, 直连状态归一
- * @keyword-en map-digital-human-status, direct-status-normalize
- * @param {unknown} status 对端状态值。
- * @returns {'queued'|'running'|'completed'|'failed'} 统一状态。
+ * @description 探店分段空镜视频超过 3 小时未完成判超时；保存中超过 10 分钟可重新认领。
+ * @keyword-cn 探店分段超时, 保存中断
+ * @keyword-en store-visit-segment-timeout, saving-stale
  */
-export function mapDigitalHumanStatus(
-  status: unknown,
-): 'queued' | 'running' | 'completed' | 'failed' {
-  const value = String(status ?? '')
-    .trim()
-    .toLowerCase();
-  if (
-    [
-      'queued',
-      'pending',
-      'submitted',
-      'accepted',
-      'waiting',
-      'created',
-    ].includes(value)
-  )
-    return 'queued';
-  if (
-    [
-      'succeeded',
-      'success',
-      'completed',
-      'complete',
-      'done',
-      'finished',
-    ].includes(value)
-  )
-    return 'completed';
-  if (
-    [
-      'failed',
-      'failure',
-      'error',
-      'canceled',
-      'cancelled',
-      'aborted',
-      'expired',
-    ].includes(value)
-  )
-    return 'failed';
-  return 'running';
+export const DOUYIN_STORE_VISIT_TASK_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+const DOUYIN_STORE_VISIT_SAVING_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * @description 配音比画面模型单段最长秒数多出这几秒以内时，合成阶段把画面最后一帧定格补齐；再长就要求拆短。
+ * @keyword-cn 定格补齐容差, 单段配音上限
+ * @keyword-en freeze-frame-tolerance, segment-audio-limit
+ */
+export const DOUYIN_STORE_VISIT_FREEZE_TOLERANCE_SECONDS = 3;
+
+/**
+ * @description 探店空镜视频默认清晰度：在型号支持的档位里取最接近 720p 的一档。
+ * @keyword-cn 空镜视频清晰度, 默认清晰度
+ * @keyword-en broll-resolution, default-resolution
+ */
+export const DOUYIN_STORE_VISIT_VIDEO_RESOLUTION = '720p';
+
+/**
+ * @description 系统音色与克隆音色的试听句子。
+ * @keyword-cn 音色试听文本, 试听句子
+ * @keyword-en voice-preview-text, trial-sentence
+ */
+export const DOUYIN_STORE_VISIT_PREVIEW_TEXT =
+  '大家好，今天带大家去探一家宝藏小店，环境和味道都特别不错，一起来看看吧。';
+
+/**
+ * @description 写探店某一段空镜视频的提示词：以场景图为首帧、按画面描述运镜，旁白只用来理解内容，
+ *   画面里不要文字、不要有人对镜头说话、不要声音（配音和字幕由桌面端合成时加上）。
+ * @keyword-cn 空镜视频提示词, 探店画面
+ * @keyword-en broll-video-prompt, store-visit-footage
+ * @param {{title: string, sceneDescription?: string, action?: string, lines: string, seconds: number}} input 脚本标题、场景说明、画面描述、本段旁白与秒数。
+ * @returns {string} 提示词。
+ */
+export function buildStoreVisitBrollPrompt(input: {
+  title: string;
+  sceneDescription?: string;
+  action?: string;
+  lines: string;
+  seconds: number;
+}): string {
+  return [
+    `探店短视频「${input.title}」的空镜画面，竖屏 9:16，时长约 ${input.seconds} 秒。`,
+    `以首帧画面为起点：${input.action?.trim() || '镜头缓慢推近，展现门店环境、产品与细节'}。`,
+    input.sceneDescription?.trim()
+      ? `门店与场景：${input.sceneDescription.trim().slice(0, 300)}`
+      : '',
+    `这一段的旁白（只用来理解画面内容，不要出现在画面里）：${input.lines.slice(0, 200)}`,
+    '要求：真实自然的门店实拍质感，光线明亮，运镜平稳；画面里不要出现任何文字、字幕、水印或 Logo；不要有人对着镜头说话。',
+    '【声音】静音，不要人声，不要背景音乐。',
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /**
- * @description 从直连服务响应里按候选字段名顺序找值，每个字段名依次查顶层、`data`、`result`、`output`，返回第一个非空值。
- * @keyword-cn 读取响应字段, 多层兜底
- * @keyword-en read-response-field, nested-fallback
- * @param {Record<string, unknown>} response 对端响应。
- * @param {string[]} keys 候选字段名。
- * @returns {string} 找到的值，没有时为空串。
+ * @description 把分段生成失败的原始信息翻成中文：百炼语音的报错按语音规则解释，其余按数眼视频规则解释。
+ * @keyword-cn 探店分段失败说明, 报错翻译
+ * @keyword-en store-visit-segment-failure, error-translation
+ * @param {string} raw 原始报错。
+ * @returns {string} 用户可读说明。
  */
-export function readDirectField(
-  response: Record<string, unknown>,
-  keys: string[],
-): string {
-  const layers = [
-    response,
-    response.data,
-    response.result,
-    response.output,
-  ].filter(
-    (layer): layer is Record<string, unknown> =>
-      Boolean(layer) && typeof layer === 'object',
-  );
-  /* 字段名优先于层级：先在各层找第一个候选名，再找第二个，避免顶层的请求 ID 抢在 data.voiceId 前面 */
-  for (const key of keys) {
-    for (const layer of layers) {
-      const value = layer[key];
-      if (
-        (typeof value === 'string' && value.trim()) ||
-        typeof value === 'number'
-      )
-        return String(value).trim();
-    }
-  }
-  return '';
+export function describeStoreVisitSegmentFailure(raw: string): string {
+  const text = String(raw ?? '');
+  return /^DASHSCOPE_/.test(text)
+    ? describeCosyVoiceFailure(text)
+    : describeShuyanVideoFailure(text);
 }
 
 /**
- * @description 探店模式：直接使用声音提示词，或录音克隆及可选文字生成固定音色，再按人物、声音与台词提交数字人视频。
- *   三项能力都在后台「Ai提供商设置」里配（提供商代码 `digital-human`，按 `DIGITAL_HUMAN_PATHS` 契约实现），
- *   再到「工作流节点模型 · 抖音视频制作」为「音色克隆」「声音设计」「探店数字人视频」节点指定；
- *   数字人任务后台每 15 秒按任务记录上的提供商跟进，完成后成片转存视频库并设为脚本当前成片。
- * @keyword-cn 探店模式, 克隆音色, 数字人生视频
- * @keyword-en store-visit-mode, voice-clone, digital-human-video
+ * @description 探店画外音：音色来自百炼 CosyVoice（录音克隆或系统音色），每段台词先配成音，再以这一段的场景图为首帧，
+ *   用数眼智能（Seedance / MiniMax-H3）生成同样长的空镜视频；各段出片后桌面端把画面、配音与字幕按顺序拼成成片。
+ *   音色走后台「工作流节点模型 · 抖音视频制作 · 音色克隆与配音」节点（百炼提供商），空镜走「探店画面视频」节点（数眼智能）；
+ *   分段任务后台每 15 秒跟进一次，完成后转存视频库并绑定到分段。
+ * @keyword-cn 探店画外音, 克隆音色, 空镜视频
+ * @keyword-en store-visit-voiceover, voice-clone, broll-video
  */
 @Injectable()
 export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
@@ -233,7 +174,14 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   private readonly operations: Collection<DouyinOperationEntity>;
   private timer?: NodeJS.Timeout;
   private polling = false;
+  /** @description 试听地址缓存（`模型:音色` → 地址与过期时间），百炼临时地址 24 小时有效，这里只留 20 小时 */
+  private readonly previews = new Map<string, { url: string; expiresAt: number }>();
 
+  /**
+   * @description 初始化调用集合与音色、存储、计费依赖。
+   * @keyword-cn 初始化探店服务, 画外音依赖
+   * @keyword-en init-store-visit-service, voiceover-dependencies
+   */
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly repository: DouyinWorkbenchRepositoryService,
@@ -241,37 +189,37 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     private readonly storage: DouyinVideoStorageService,
     private readonly workflowModels: WorkflowModelService,
     private readonly adminService: AdminService,
-    private readonly shuyanSegments: DouyinStoreVisitShuyanService,
+    private readonly cosyVoice: DouyinCosyVoiceService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
   }
 
   /**
-   * @description 启动数字人任务后台轮询，服务重启后继续跟进；多进程时只在 leader 进程上轮询。
-   * @keyword-cn 启动数字人轮询, 重启续跟
-   * @keyword-en start-digital-human-polling, resume-after-restart
+   * @description 启动分段任务后台轮询，服务重启后继续跟进；多进程时只在 leader 进程上轮询。
+   * @keyword-cn 启动探店分段轮询, 重启续跟
+   * @keyword-en start-store-visit-polling, resume-after-restart
    */
   onModuleInit(): void {
     if (!isLeaderProcess()) return;
     this.timer = setInterval(
       () => void this.pollOnce(),
-      DOUYIN_DIGITAL_HUMAN_POLL_MS,
+      DOUYIN_STORE_VISIT_POLL_MS,
     );
     this.timer.unref?.();
   }
 
   /**
-   * @description 停止数字人任务后台轮询。
-   * @keyword-cn 停止数字人轮询, 模块销毁
-   * @keyword-en stop-digital-human-polling, module-destroy
+   * @description 停止分段任务后台轮询。
+   * @keyword-cn 停止探店分段轮询, 模块销毁
+   * @keyword-en stop-store-visit-polling, module-destroy
    */
   onModuleDestroy(): void {
     if (this.timer) clearInterval(this.timer);
   }
 
   /**
-   * @description 用一段录音克隆音色：校验格式与大小后把录音（base64）交给克隆服务，拿到音色 ID 写进脚本的探店设置；录音本身不落盘。
-   *   每次调用都记一条 `voice-clone` 审计（不含录音内容）。
+   * @description 用一段录音克隆音色：录音临时传到 OSS 拿公网地址交给百炼声音复刻，等审核通过后立即删掉录音；
+   *   音色 ID、合成模型与提供商写进脚本，换音色时顺手删掉这条脚本之前克隆的旧音色。每次调用记一条 `voice-clone` 审计（不含录音）。
    * @keyword-cn 克隆探店音色, 上传录音
    * @keyword-en clone-store-visit-voice, upload-voice-sample
    * @param {number} topicId 子选题（脚本）ID。
@@ -279,8 +227,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
    * @param {DouyinScope} scope 租户用户作用域。
    * @returns {Promise<DouyinTopicEntity>} 写好音色后的脚本。
    * @throws {BadRequestException} 没有录音、格式不对或超过 10MB。
-   * @throws {ServiceUnavailableException} 「音色克隆」节点没指定提供商。
-   * @throws {BadGatewayException} 克隆服务失败或没返回音色 ID。
+   * @throws {ServiceUnavailableException} 没配百炼节点或没配 OSS。
+   * @throws {BadGatewayException} 克隆失败或审核不通过。
    */
   async cloneVoice(
     topicId: number,
@@ -291,93 +239,83 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   ): Promise<DouyinTopicEntity> {
     if (!file?.buffer?.length) throw new BadRequestException('请上传一段录音');
     const extension = extname(String(file.originalname ?? '')).toLowerCase();
-    const mimetype = String(file.mimetype ?? '').toLowerCase();
-    if (
-      !mimetype.startsWith('audio/') &&
-      !DOUYIN_VOICE_SAMPLE_EXTENSIONS.includes(extension)
-    )
+    const contentType = DOUYIN_VOICE_SAMPLE_EXTENSIONS[extension];
+    if (!contentType)
       throw new BadRequestException(
-        '录音格式不支持，请上传 mp3、wav、m4a 等音频文件',
+        '录音格式不支持，请上传 mp3、wav 或 m4a 音频文件',
       );
     if (file.size > DOUYIN_VOICE_SAMPLE_MAX_BYTES)
       throw new BadRequestException(
-        '录音不能超过 10MB，截一段 10～60 秒的清晰人声即可',
+        '录音不能超过 10MB，截一段 10～20 秒的清晰人声即可',
       );
     const topic = await this.requireChild(topicId, scope);
-    const runtime = await this.readNodeRuntime(
-      WORKFLOW_NODES.douyinWorkbench.voiceClone,
-      '音色克隆',
-    );
+    const runtime = await this.readVoiceRuntime();
+    if (!this.storage.hasPublicStorage())
+      throw new ServiceUnavailableException(
+        '克隆音色需要先在后台配置视频库 OSS（录音要临时传到 OSS 交给百炼）',
+      );
+    const targetModel = /^cosyvoice/i.test(runtime.model)
+      ? runtime.model
+      : COSYVOICE_CLONE_MODEL;
     const sample = {
-      name: String(file.originalname || `voice${extension || '.mp3'}`).slice(
-        0,
-        200,
-      ),
-      contentType: mimetype || 'audio/mpeg',
+      name: String(file.originalname || `voice${extension}`).slice(0, 200),
+      contentType,
       sizeBytes: file.size,
     };
-    const request = {
-      model: runtime.model,
-      topicId,
-      name: `${topic.title}·探店音色`.slice(0, 60),
-      language: normalizeVideoAudio(topic.videoAudio).language,
-      audioFileName: sample.name,
-      audioContentType: sample.contentType,
-    };
-    const operationId = randomUUID();
     const now = new Date();
     const base = {
       _id: new ObjectId(),
-      id: operationId,
+      id: randomUUID(),
       operation: 'voice-clone' as const,
       topicId,
       tenantId: scope.tenantId,
       userId: scope.userId,
-      provider: 'digital-human' as const,
+      provider: 'dashscope' as const,
       providerId: runtime.providerId,
-      model: runtime.model,
-      request,
+      model: targetModel,
+      request: { audioFileName: sample.name, audioContentType: contentType },
       createdAt: now,
       updatedAt: now,
     };
-    let response: Record<string, unknown>;
+    const uploaded = await this.storage.saveAudio(file.buffer, {
+      scope,
+      fileName: `voice-sample${extension}`,
+      contentType,
+    });
+    let voiceId = '';
     try {
-      response = await this.fetchJson(
-        buildDigitalHumanUrl(runtime.baseUrl, DIGITAL_HUMAN_PATHS.voiceClone),
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            operationId,
-            ...request,
-            audioBase64: file.buffer.toString('base64'),
-          }),
-        },
-        runtime.apiKey,
-      );
+      voiceId = await this.cosyVoice.createVoice(runtime, {
+        targetModel,
+        prefix: buildCosyVoicePrefix(topicId),
+        audioUrl: uploaded.url,
+      });
+      await this.cosyVoice.waitVoiceReady(runtime, voiceId);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      if (voiceId) await this.cosyVoice.deleteVoice(runtime, voiceId);
       await this.operations.insertOne({
         ...base,
         status: 'failed',
-        error: '音色克隆失败',
+        error: describeCosyVoiceFailure(detail),
         errorDetail: detail,
       });
-      throw new BadGatewayException(`音色克隆失败：${detail}`);
+      throw new BadGatewayException(describeCosyVoiceFailure(detail));
+    } finally {
+      if (uploaded.key) await this.storage.deleteAudio(uploaded.key);
     }
-    const voiceId = readDirectField(response, [
-      'voiceId',
-      'voice_id',
-      'speakerId',
-      'speaker_id',
-      'id',
-    ]);
     await this.operations.insertOne({
       ...base,
-      status: voiceId ? 'completed' : 'failed',
-      result: response,
-      ...(voiceId ? {} : { error: '音色克隆服务没有返回音色 ID' }),
+      status: 'completed',
+      result: { voiceId },
     });
-    if (!voiceId) throw new BadGatewayException('音色克隆服务没有返回音色 ID');
+    const previous = topic.storeVisit;
+    if (
+      previous?.voiceSource === 'clone' &&
+      previous.voiceId &&
+      previous.voiceId !== voiceId &&
+      previous.voiceProviderId === runtime.providerId
+    )
+      await this.cosyVoice.deleteVoice(runtime, previous.voiceId);
     const updated = await this.repository.saveStoreVisitVoice(
       topicId,
       {
@@ -385,7 +323,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         voiceName: sample.name,
         voiceId,
         voiceProviderId: runtime.providerId,
-        voiceModel: runtime.model,
+        voiceModel: targetModel,
         voiceSample: { ...sample, uploadedAt: now },
       },
       scope,
@@ -395,105 +333,44 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 通过声音设计节点按文字描述创建音色，成功后保存来源与试听，失败时保留原音色并记录审计。
-   * @keyword-cn 设计探店音色, 文字声音设计
-   * @keyword-en design-store-visit-voice, text-voice-design
+   * @description 列出探店可选的百炼系统音色。
+   * @keyword-cn 系统音色列表, 探店音色库
+   * @keyword-en list-preset-voices, store-visit-voice-library
+   * @returns {readonly CosyVoicePresetVoice[]} 音色目录。
    */
-  async designVoice(
+  listPresetVoices(): readonly CosyVoicePresetVoice[] {
+    return COSYVOICE_PRESET_VOICES;
+  }
+
+  /**
+   * @description 选用一个百炼系统音色作为这条脚本的音色（合成模型固定为 `COSYVOICE_PRESET_MODEL`），清掉克隆录音信息。
+   * @keyword-cn 选用系统音色, 保存预置音色
+   * @keyword-en use-preset-voice, save-preset-voice
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string} voiceId 系统音色 ID。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity>} 更新后的脚本。
+   * @throws {BadRequestException} 音色不在目录里或脚本不存在。
+   */
+  async usePresetVoice(
     topicId: number,
-    input: { description: string; name?: string; previewText?: string },
+    voiceId: string,
     scope: DouyinScope,
   ): Promise<DouyinTopicEntity> {
-    const description = String(input.description ?? '').trim();
-    const name = String(input.name ?? '').trim();
-    const previewText =
-      input.previewText === undefined
-        ? '你好，今天带大家来探店，看看这里有哪些值得推荐的招牌好物。'
-        : String(input.previewText).trim();
-    if (description.length < 10 || description.length > 1000)
-      throw new BadRequestException('声音描述需要 10～1000 个字');
-    if (name.length > 60)
-      throw new BadRequestException('音色名称不能超过 60 个字');
-    if (previewText.length < 10 || previewText.length > 300)
-      throw new BadRequestException('试听文本需要 10～300 个字');
-    const topic = await this.requireChild(topicId, scope);
-    const runtime = await this.readNodeRuntime(
-      WORKFLOW_NODES.douyinWorkbench.voiceDesign,
-      '声音设计',
+    const voice = COSYVOICE_PRESET_VOICES.find(
+      (item) => item.voiceId === voiceId,
     );
-    const request = {
-      model: runtime.model,
-      topicId,
-      name: name || `${topic.title}·设计音色`.slice(0, 60),
-      description,
-      previewText,
-      language: normalizeVideoAudio(topic.videoAudio).language,
-    };
-    const operationId = randomUUID();
-    const now = new Date();
-    const base = {
-      _id: new ObjectId(),
-      id: operationId,
-      operation: 'voice-design' as const,
-      topicId,
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      provider: 'digital-human' as const,
-      providerId: runtime.providerId,
-      model: runtime.model,
-      request,
-      createdAt: now,
-      updatedAt: now,
-    };
-    let response: Record<string, unknown>;
-    try {
-      response = await this.fetchJson(
-        buildDigitalHumanUrl(runtime.baseUrl, DIGITAL_HUMAN_PATHS.voiceDesign),
-        { method: 'POST', body: JSON.stringify({ operationId, ...request }) },
-        runtime.apiKey,
-      );
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      await this.operations.insertOne({
-        ...base,
-        status: 'failed',
-        error: '声音设计失败',
-        errorDetail: detail,
-      });
-      throw new BadGatewayException(`声音设计失败：${detail}`);
-    }
-    const voiceId = readDirectField(response, [
-      'voiceId',
-      'voice_id',
-      'speakerId',
-      'speaker_id',
-    ]);
-    await this.operations.insertOne({
-      ...base,
-      status: voiceId ? 'completed' : 'failed',
-      result: response,
-      ...(voiceId ? {} : { error: '声音设计服务没有返回音色 ID' }),
-    });
-    if (!voiceId) throw new BadGatewayException('声音设计服务没有返回音色 ID');
-    const previewUrl = readDirectField(response, [
-      'previewUrl',
-      'preview_url',
-      'audioUrl',
-      'audio_url',
-    ]);
+    if (!voice) throw new BadRequestException('这个音色不在可选音色里');
+    await this.requireChild(topicId, scope);
+    const runtime = await this.readVoiceRuntime();
     const updated = await this.repository.saveStoreVisitVoice(
       topicId,
       {
-        voiceSource: 'design',
-        voiceName: request.name,
-        voiceDescription: description,
-        voicePreviewText: previewText,
-        voicePreviewUrl: /^https?:\/\/\S+$/i.test(previewUrl)
-          ? previewUrl
-          : undefined,
-        voiceId,
+        voiceSource: 'preset',
+        voiceName: `${voice.voiceName} · ${voice.trait}`,
+        voiceId: voice.voiceId,
         voiceProviderId: runtime.providerId,
-        voiceModel: runtime.model,
+        voiceModel: COSYVOICE_PRESET_MODEL,
       },
       scope,
     );
@@ -502,234 +379,133 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 提交探店视频：节点选了数眼智能时交给分段通道（逐段配音对口型、客户端拼接）；否则保存台词，再把人物、固定音色或纯声音提示词、
-   *   台词和最多 4 张场景图交给通用数字人服务，按 `video-generation` 扣费；提交失败退款并记失败记录。对端直接给出成片时当场转存，否则后台轮询跟进。
-   * @keyword-cn 提交探店视频, 数字人生视频
-   * @keyword-en submit-store-visit-video, digital-human-video
+   * @description 合成一句试听：系统音色直接合成；其他音色只允许这条脚本自己克隆的音色，并用它绑定的模型合成。结果缓存 20 小时。
+   * @keyword-cn 音色试听, 合成试听
+   * @keyword-en preview-voice, synthesize-trial
    * @param {number} topicId 子选题（脚本）ID。
-   * @param {{lines?: string, prompt?: string}} input 台词与补充要求（分段通道不用）。
+   * @param {string} voiceId 要试听的音色 ID。
    * @param {DouyinScope} scope 租户用户作用域。
-   * @returns {Promise<DouyinOperationView|{operations: DouyinOperationView[]}>} 调用记录；分段通道为各段调用记录。
-   * @throws {BadRequestException} 台词太短、没选人脸或场景、缺克隆音色或声音提示词。
-   * @throws {ServiceUnavailableException} 「探店数字人视频」节点没指定提供商。
+   * @returns {Promise<{url: string}>} 试听音频地址。
+   * @throws {BadRequestException} 音色既不是系统音色也不是这条脚本的克隆音色。
+   * @throws {BadGatewayException} 合成失败。
+   */
+  async previewVoice(
+    topicId: number,
+    voiceId: string,
+    scope: DouyinScope,
+  ): Promise<{ url: string }> {
+    const topic = await this.requireChild(topicId, scope);
+    const preset = COSYVOICE_PRESET_VOICES.some(
+      (item) => item.voiceId === voiceId,
+    );
+    const own =
+      topic.storeVisit?.voiceSource === 'clone' &&
+      topic.storeVisit.voiceId === voiceId;
+    if (!preset && !own)
+      throw new BadRequestException('只能试听系统音色或这条脚本克隆的音色');
+    const model = preset
+      ? COSYVOICE_PRESET_MODEL
+      : String(topic.storeVisit?.voiceModel || COSYVOICE_CLONE_MODEL);
+    const cacheKey = `${model}:${voiceId}`;
+    const cached = this.previews.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return { url: cached.url };
+    const runtime = preset
+      ? await this.readVoiceRuntime()
+      : await this.readVoiceRuntimeFor(topic.storeVisit?.voiceProviderId);
+    try {
+      const { url } = await this.cosyVoice.synthesizePreview(runtime, {
+        model,
+        voice: voiceId,
+        text: DOUYIN_STORE_VISIT_PREVIEW_TEXT,
+      });
+      this.previews.set(cacheKey, {
+        url,
+        expiresAt: Date.now() + 20 * 60 * 60 * 1000,
+      });
+      return { url };
+    } catch (error) {
+      throw new BadGatewayException(
+        describeCosyVoiceFailure(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
+  /**
+   * @description 生成这条脚本的全部分段（画外音配音 + 空镜视频），返回各段调用记录。
+   * @keyword-cn 提交探店视频, 全部分段生成
+   * @keyword-en submit-store-visit-video, generate-all-segments
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<{operations: DouyinOperationView[]}>} 各段调用记录。
+   * @throws {BadRequestException} 还没分段。
    */
   async start(
     topicId: number,
-    input: { lines?: string; prompt?: string },
     scope: DouyinScope,
-  ): Promise<DouyinOperationView | { operations: DouyinOperationView[] }> {
+  ): Promise<{ operations: DouyinOperationView[] }> {
     const topic = await this.requireChild(topicId, scope);
-    if (await this.usesShuyanChannel())
-      return this.shuyanSegments.startAll(topicId, scope);
-    const lines = normalizeStoreVisitLines(input.lines);
-    if (lines.length < 10)
-      throw new BadRequestException('台词太短，至少写 10 个字');
-    const faceImage = topic.storeVisit?.faceImage;
-    if (!faceImage) throw new BadRequestException('先选一张出镜人脸照');
-    const voiceSource = topic.storeVisit?.voiceSource || 'clone';
-    const useVoicePrompt =
-      voiceSource === 'design' &&
-      (topic.storeVisit?.voiceMode === 'prompt' || !topic.storeVisit?.voiceId);
-    const voiceDescription = String(
-      topic.storeVisit?.voiceDescription || '',
-    ).trim();
-    const voiceId = useVoicePrompt ? undefined : topic.storeVisit?.voiceId;
-    if (useVoicePrompt && (!voiceDescription || voiceDescription.length > 1000))
-      throw new BadRequestException('请填写声音提示词，最多 1000 个字');
-    if (!useVoicePrompt && !voiceId)
-      throw new BadRequestException(
-        '先上传录音克隆音色，或选择声音设计并填写提示词',
-      );
-    const sceneImages = this.collectSceneImages(topic);
-    if (topic.productionMode === 'store-visit' && !sceneImages.length) {
-      throw new BadRequestException('先上传或选择至少一张探店场景图');
-    }
-    const runtime = await this.readNodeRuntime(
-      WORKFLOW_NODES.douyinWorkbench.storeVisitVideo,
-      '探店数字人视频',
-    );
-    await this.repository.update(topicId, { storeVisit: { lines } }, scope);
-
-    const audio = normalizeVideoAudio(topic.videoAudio);
-    const request = {
-      model: runtime.model,
-      topicId,
-      title: topic.title,
-      aspectRatio: '9:16',
-      voiceId,
-      voiceModel: useVoicePrompt ? undefined : topic.storeVisit?.voiceModel,
-      voiceSource,
-      voiceMode: useVoicePrompt ? 'prompt' : 'generated',
-      voiceDescription: useVoicePrompt ? voiceDescription : undefined,
-      voiceProviderId: useVoicePrompt
-        ? undefined
-        : topic.storeVisit?.voiceProviderId,
-      lines,
-      sceneDescription:
-        String(topic.storeVisit?.sceneDescription ?? '').trim() || undefined,
-      language: audio.language,
-      resolution: String(topic.fullVideoResolution ?? '').trim() || undefined,
-      prompt:
-        [
-          String(input.prompt ?? '').trim(),
-          useVoicePrompt ? `【声音设计】\n${voiceDescription}` : '',
-        ]
-          .filter(Boolean)
-          .join('\n\n') || undefined,
-    };
-    const operationId = randomUUID();
-    await this.billing.chargeService({
-      serviceCode: 'video-generation',
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      operationId,
-      source: 'douyin-workbench.store-visit-generation',
-      platformScope: !scope.tenantId,
-    });
-    const now = new Date();
-    const base = {
-      _id: new ObjectId(),
-      id: operationId,
-      operation: 'generate' as const,
-      topicId,
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      provider: 'digital-human' as const,
-      providerId: runtime.providerId,
-      model: runtime.model,
-      mode: 'store-visit' as const,
-      /* 记录里只留素材 ID，不存 base64 图片 */
-      request: {
-        ...request,
-        faceImageId: faceImage.id,
-        sceneImageIds: sceneImages.map((image) => image.id),
-      },
-      createdAt: now,
-      updatedAt: now,
-    };
-    let response: Record<string, unknown>;
-    try {
-      response = await this.billing.runWithServiceBilling(async () =>
-        this.fetchJson(
-          buildDigitalHumanUrl(runtime.baseUrl, DIGITAL_HUMAN_PATHS.submitTask),
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              operationId,
-              ...request,
-              faceImageUrl: await this.toImagePayload(faceImage.url),
-              sceneImageUrls: await Promise.all(
-                sceneImages.map((image) => this.toImagePayload(image.url)),
-              ),
-            }),
-          },
-          runtime.apiKey,
-        ),
-      );
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      await this.billing
-        .refundService({
-          operationId,
-          reason: 'douyin-store-visit-submit-failed',
-        })
-        .catch(() => false);
-      const doc: DouyinOperationEntity = {
-        ...base,
-        status: 'failed',
-        error: '数字人服务没有受理这次生成，已退回扣费，请稍后重试。',
-        errorDetail: detail,
-      };
-      await this.operations.insertOne(doc);
-      throw new BadGatewayException(`探店视频提交失败：${detail}`);
-    }
-    const status = mapDigitalHumanStatus(response.status ?? response.state);
-    const externalId =
-      readDirectField(response, ['id', 'taskId', 'task_id', 'jobId']) ||
-      undefined;
-    const doc: DouyinOperationEntity = {
-      ...base,
-      status: status === 'completed' ? 'running' : status,
-      progress: 0,
-      externalId,
-      result: response,
-      ...(status === 'failed'
-        ? {
-            error: '数字人服务生成失败',
-            errorDetail:
-              readDirectField(response, ['error', 'errorMessage', 'message']) ||
-              undefined,
-          }
-        : {}),
-    };
-    await this.operations.insertOne(doc);
-    if (status === 'failed') {
-      await this.billing
-        .refundService({ operationId, reason: 'douyin-store-visit-rejected' })
-        .catch(() => false);
-    }
-    if (status === 'completed') {
-      await this.advance(doc, response);
-    } else if (status !== 'failed' && !externalId) {
-      await this.fail(
-        doc.id,
-        '数字人服务没有返回任务 ID，也没有直接给出成片，无法跟进这次生成。',
-      );
-    } else if (status !== 'failed') {
-      setTimeout(() => void this.pollOnce(), 5000).unref?.();
-    }
-    const row = await this.operations.findOne({ id: doc.id });
-    return this.toView(row ?? doc);
+    const segments = topic.storeVisit?.segments ?? [];
+    if (!segments.length)
+      throw new BadRequestException('先在「台词」步骤把台词按场景分好段');
+    return { operations: await this.startSegments(topic, segments, scope) };
   }
 
   /**
-   * @description 判断「探店数字人视频」节点当前是否选了数眼智能（走分段通道）；节点没配或配置不可用时按通用数字人处理，由后续校验给出中文原因。
-   * @keyword-cn 判断探店通道, 数眼分段通道
-   * @keyword-en detect-store-visit-channel, shuyan-segment-channel
-   * @returns {Promise<boolean>} 是否走数眼分段通道。
+   * @description 重新生成某一段：只清掉这一段的旧成片并打上自动合成标记，其余段保持不变。
+   * @keyword-cn 重新生成探店分段, 单段重做
+   * @keyword-en regenerate-store-visit-segment, single-segment-retry
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string} segmentId 分段 ID。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<{operations: DouyinOperationView[]}>} 这一段的调用记录。
    */
-  private async usesShuyanChannel(): Promise<boolean> {
-    try {
-      const runtime = await this.workflowModels.resolveNodeRuntime(
-        WORKFLOW_NODES.douyinWorkbench.key,
-        WORKFLOW_NODES.douyinWorkbench.storeVisitVideo,
-      );
-      return Boolean(runtime && isShuyanProvider(runtime.providerCode));
-    } catch {
-      return false;
-    }
+  async startOne(
+    topicId: number,
+    segmentId: string,
+    scope: DouyinScope,
+  ): Promise<{ operations: DouyinOperationView[] }> {
+    const topic = await this.requireChild(topicId, scope);
+    const segment = (topic.storeVisit?.segments ?? []).find(
+      (item) => item.id === segmentId,
+    );
+    if (!segment)
+      throw new BadRequestException('这一段还没保存或已被删除，请先保存台词');
+    return { operations: await this.startSegments(topic, [segment], scope) };
   }
 
   /**
-   * @description 手动同步一条探店调用：数字人任务查一次状态并推进，数眼分段交给分段通道；克隆音色的审计记录原样返回。
-   * @keyword-cn 同步探店调用, 手动刷新
-   * @keyword-en sync-store-visit-operation, manual-refresh
+   * @description 手动同步一条分段调用。
+   * @keyword-cn 同步探店分段, 手动刷新
+   * @keyword-en sync-store-visit-segment, manual-refresh
    * @param {string} id 调用记录 ID。
-   * @returns {Promise<DouyinOperationView>} 最新调用记录。
+   * @returns {Promise<DouyinOperationView>} 最新记录。
    */
   async refresh(id: string): Promise<DouyinOperationView> {
     const row = await this.operations.findOne({
       id,
-      provider: 'digital-human',
+      provider: 'shuyan',
+      mode: 'store-visit',
     });
-    if (!row) return this.shuyanSegments.refresh(id);
-    if (row.operation === 'generate') {
-      try {
-        await this.refreshRow(row);
-      } catch (error) {
-        throw new BadGatewayException(
-          `数字人任务状态查询失败：${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+    if (!row) throw new BadRequestException('DOUYIN_OPERATION_NOT_FOUND');
+    try {
+      await this.refreshRow(row);
+    } catch (error) {
+      throw new BadGatewayException(
+        describeStoreVisitSegmentFailure(
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
     }
     const latest = await this.operations.findOne({ id });
     return this.toView(latest ?? row);
   }
 
   /**
-   * @description 跟进一轮未结束的数字人任务，同一进程内不重入。
-   * @keyword-cn 轮询数字人任务, 防重入
-   * @keyword-en poll-digital-human-operations, reentry-guard
+   * @description 跟进一轮未结束的分段任务，同一进程内不重入。
+   * @keyword-cn 轮询探店分段, 防重入
+   * @keyword-en poll-store-visit-segments, reentry-guard
    */
   async pollOnce(): Promise<void> {
     if (this.polling) return;
@@ -737,16 +513,14 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     try {
       const rows = await this.operations
         .find({
-          provider: 'digital-human',
-          operation: 'generate',
+          provider: 'shuyan',
+          mode: 'store-visit',
           $or: [
             { status: { $in: ['queued', 'running'] } },
             {
               status: 'saving',
               updatedAt: {
-                $lt: new Date(
-                  Date.now() - DOUYIN_DIGITAL_HUMAN_SAVING_STALE_MS,
-                ),
+                $lt: new Date(Date.now() - DOUYIN_STORE_VISIT_SAVING_STALE_MS),
               },
             },
           ],
@@ -757,7 +531,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       for (const row of rows) {
         await this.refreshRow(row).catch((error) =>
           this.logger.warn(
-            `[pollOnce] 数字人任务跟进失败 operation=${row.id}: ${error instanceof Error ? error.message : String(error)}`,
+            `[pollOnce] 探店分段跟进失败 operation=${row.id}: ${error instanceof Error ? error.message : String(error)}`,
           ),
         );
       }
@@ -767,90 +541,332 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 按任务记录上的提供商查一次数字人任务并推进：提供商删除或停用时收成失败，失败写原因，超过 2 小时判超时，完成时转存成片。
-   * @keyword-cn 推进数字人任务, 状态查询
-   * @keyword-en advance-digital-human-task, status-query
+   * @description 校验并提交若干段：要有场景图、每段选了场景、选好音色、两个节点都配好、没有段在生成；
+   *   先清掉这些段的旧成片、打上自动合成标记，再逐段配音并提交空镜视频。全部失败时抛出第一个错误。
+   * @keyword-cn 提交探店分段, 分段前置校验
+   * @keyword-en submit-store-visit-segment-batch, segment-precheck
+   * @param {DouyinTopicEntity} topic 脚本。
+   * @param {DouyinStoreVisitSegment[]} segments 要生成的段。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinOperationView[]>} 提交成功的调用记录。
+   */
+  private async startSegments(
+    topic: DouyinTopicEntity,
+    segments: DouyinStoreVisitSegment[],
+    scope: DouyinScope,
+  ): Promise<DouyinOperationView[]> {
+    const setting = topic.storeVisit ?? {};
+    const all = setting.segments ?? [];
+    const indexOf = (segment: DouyinStoreVisitSegment) =>
+      all.findIndex((item) => item.id === segment.id) + 1;
+    const scenes = new Map(
+      (setting.sceneImages ?? []).map((image) => [image.id, image]),
+    );
+    if (!scenes.size)
+      throw new BadRequestException('先在「场景」步骤上传至少一张场景图');
+    const noScene = segments.filter(
+      (segment) => !segment.sceneImageId || !scenes.has(segment.sceneImageId),
+    );
+    if (noScene.length)
+      throw new BadRequestException(
+        `第 ${noScene.map(indexOf).join('、')} 段还没选场景图`,
+      );
+    const voiceId = String(setting.voiceId ?? '').trim();
+    const voiceModel = String(setting.voiceModel ?? '').trim();
+    if (!voiceId || !voiceModel || !setting.voiceSource)
+      throw new BadRequestException('先在「音色」步骤克隆或选一个音色');
+    const voiceRuntime =
+      setting.voiceSource === 'preset'
+        ? await this.readVoiceRuntime()
+        : await this.readVoiceRuntimeFor(setting.voiceProviderId);
+    const videoRuntime = await this.readVideoRuntime();
+    const route = resolveShuyanVideoRoute(videoRuntime.model) as ShuyanVideoRoute;
+    const running = await this.operations.findOne({
+      topicId: topic.id,
+      provider: 'shuyan',
+      mode: 'store-visit',
+      status: { $in: ['queued', 'running', 'saving'] },
+      userId: scope.userId,
+    });
+    if (running)
+      throw new ConflictException('这条脚本还有分段在生成，完成后再试');
+    for (const segment of segments) {
+      await this.repository.updateStoreVisitSegment(
+        topic.id,
+        segment.id,
+        null,
+        scope,
+      );
+    }
+    await this.repository.update(topic.id, { autoConcatShots: true }, scope);
+    const views: DouyinOperationView[] = [];
+    let firstError: Error | undefined;
+    for (const segment of segments) {
+      try {
+        views.push(
+          await this.submitSegment({
+            topic,
+            segment,
+            index: indexOf(segment),
+            sceneUrl: String(scenes.get(Number(segment.sceneImageId))?.url ?? ''),
+            voice: { voiceId, model: voiceModel, runtime: voiceRuntime },
+            videoRuntime,
+            route,
+            scope,
+          }),
+        );
+      } catch (error) {
+        firstError ??=
+          error instanceof Error ? error : new Error(String(error ?? '提交失败'));
+      }
+    }
+    if (!views.length && firstError) throw firstError;
+    return views;
+  }
+
+  /**
+   * @description 提交一段：按 `video-generation` 扣费 → 百炼配音（WAV，校验时长不超过画面上限 + 定格容差）→ 配音存储 →
+   *   以场景图为首帧提交数眼空镜视频（时长取配音秒数向上取整再收敛到型号范围），写排队中的调用记录；任一步失败退款并写失败记录。
+   * @keyword-cn 提交单段画外音, 分段配音
+   * @keyword-en submit-segment-voiceover, segment-broll
+   * @param input 脚本、分段及序号、场景图地址、音色、视频节点运行配置、路由与作用域。
+   * @returns {Promise<DouyinOperationView>} 调用记录。
+   * @throws {BadRequestException} 配音太长。
+   * @throws {BadGatewayException} 配音、存储或提交失败。
+   */
+  private async submitSegment(input: {
+    topic: DouyinTopicEntity;
+    segment: DouyinStoreVisitSegment;
+    index: number;
+    sceneUrl: string;
+    voice: { voiceId: string; model: string; runtime: DashScopeRuntime };
+    videoRuntime: WorkflowNodeRuntime;
+    route: ShuyanVideoRoute;
+    scope: DouyinScope;
+  }): Promise<DouyinOperationView> {
+    const { topic, segment, videoRuntime, route, scope } = input;
+    const operationId = randomUUID();
+    const request: Record<string, unknown> = {
+      segmentId: segment.id,
+      segmentIndex: input.index,
+      lines: segment.lines,
+      action: segment.action ?? '',
+      sceneImageId: segment.sceneImageId,
+      voiceId: input.voice.voiceId,
+      voiceModel: input.voice.model,
+    };
+    const base = {
+      operation: 'generate' as const,
+      topicId: topic.id,
+      segmentId: segment.id,
+      provider: 'shuyan' as const,
+      mode: 'store-visit' as const,
+      model: videoRuntime.model,
+      providerId: videoRuntime.providerId,
+      tenantId: scope.tenantId,
+      userId: scope.userId,
+    };
+    await this.billing.chargeService({
+      serviceCode: 'video-generation',
+      tenantId: scope.tenantId,
+      userId: scope.userId,
+      operationId,
+      source: 'douyin-workbench.store-visit-segment',
+      platformScope: !scope.tenantId,
+    });
+    const now = new Date();
+    try {
+      const speech = await this.cosyVoice.synthesize(input.voice.runtime, {
+        model: input.voice.model,
+        voice: input.voice.voiceId,
+        text: segment.lines,
+      });
+      const choices = listShuyanVideoDurationChoices(videoRuntime.model);
+      const maxSeconds = choices[choices.length - 1];
+      if (
+        speech.seconds >
+        maxSeconds + DOUYIN_STORE_VISIT_FREEZE_TOLERANCE_SECONDS
+      )
+        throw new BadRequestException(
+          `第 ${input.index} 段配音约 ${Math.round(speech.seconds)} 秒，超过单段画面上限 ${maxSeconds} 秒，请把这段拆短`,
+        );
+      const audio = await this.storage.saveAudio(speech.buffer, {
+        scope,
+        fileName: 'voiceover.wav',
+        contentType: 'audio/wav',
+      });
+      const seconds = clampShuyanVideoDuration(
+        videoRuntime.model,
+        Math.ceil(speech.seconds),
+      );
+      const resolution = clampShuyanVideoResolution(
+        videoRuntime.model,
+        DOUYIN_STORE_VISIT_VIDEO_RESOLUTION,
+      );
+      Object.assign(request, {
+        audioUrl: audio.url,
+        audioSeconds: speech.seconds,
+        characters: speech.characters,
+        duration: seconds,
+        resolution,
+      });
+      const content = [
+        {
+          type: 'text',
+          text: buildStoreVisitBrollPrompt({
+            title: topic.title,
+            sceneDescription: topic.storeVisit?.sceneDescription,
+            action: segment.action,
+            lines: segment.lines,
+            seconds,
+          }),
+        },
+        {
+          type: 'image_url',
+          image_url: { url: await this.toVideoImageUrl(input.sceneUrl) },
+          role: 'first_frame',
+        },
+      ];
+      // MiniMax-H3 带首帧时宽高比由图片决定、没有声音开关；Seedance 关掉声音，合成时用配音替换
+      const payload =
+        route === 'hailuo-v2'
+          ? {
+              model: normalizeShuyanVideoModel(videoRuntime.model),
+              content,
+              resolution,
+              duration: seconds,
+              ratio: 'adaptive',
+              aigc_watermark: false,
+            }
+          : {
+              model: videoRuntime.model,
+              content,
+              resolution,
+              ratio: '9:16',
+              duration: seconds,
+              generate_audio: false,
+              watermark: false,
+            };
+      const task = unwrapShuyanVideoTask(
+        await this.fetchShuyan(
+          resolveShuyanVideoTaskUrl(
+            resolveShuyanVideoGateway(videoRuntime.baseUrl),
+            route,
+          ),
+          { method: 'POST', body: JSON.stringify(payload) },
+          videoRuntime.apiKey,
+        ),
+      );
+      const externalId = String(task.id ?? task.task_id ?? '').trim();
+      if (!externalId) throw new Error('SHUYAN_VIDEO_TASK_ID_MISSING');
+      const doc: DouyinOperationEntity = {
+        _id: new ObjectId(),
+        id: operationId,
+        ...base,
+        request,
+        status: 'queued',
+        progress: 0,
+        externalId,
+        result: task,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await this.operations.insertOne(doc);
+      setTimeout(() => void this.pollOnce(), 10 * 1000).unref?.();
+      return this.toView(doc);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const friendly =
+        error instanceof BadRequestException
+          ? detail
+          : `第 ${input.index} 段提交失败：${describeStoreVisitSegmentFailure(detail)}`;
+      await this.billing
+        .refundService({
+          operationId,
+          reason: 'douyin-store-visit-segment-submit-failed',
+        })
+        .catch(() => false);
+      await this.operations.insertOne({
+        _id: new ObjectId(),
+        id: operationId,
+        ...base,
+        request,
+        status: 'failed',
+        error: `${friendly}（已退回扣费）`,
+        errorDetail: detail,
+        createdAt: now,
+        updatedAt: now,
+      });
+      throw new BadGatewayException(friendly);
+    }
+  }
+
+  /**
+   * @description 按调用记录上的提供商查一次分段空镜任务并推进：失败写原因，超时判失败，完成时认领保存权、转存视频库，
+   *   连同这段的配音一起绑定到分段；生成期间台词、场景、画面描述或音色被改过时不绑定，免得旧内容混进成片。
+   * @keyword-cn 推进探店分段, 分段转存
+   * @keyword-en advance-store-visit-segment, save-segment-video
    * @param {DouyinOperationEntity} row 调用记录。
    */
   private async refreshRow(row: DouyinOperationEntity): Promise<void> {
     if (!['queued', 'running', 'saving'].includes(row.status)) return;
     if (!row.externalId) {
-      await this.fail(row.id, '数字人任务 ID 缺失，无法查询进度。');
+      await this.fail(row.id, '数眼任务 ID 缺失，无法查询进度。');
       return;
     }
-    // 按提交时的提供商查询；后台换了节点提供商也不影响已提交的任务
     const provider = row.providerId
       ? await this.adminService.getAiProviderRuntimeById(row.providerId)
       : null;
-    const baseUrl = String(provider?.baseUrl ?? '').trim();
-    if (!provider || !baseUrl) {
-      // 提供商被删掉或停用后不再每 15 秒重试，直接收成失败
+    if (!provider) {
       await this.fail(
         row.id,
-        '数字人服务提供商已删除、停用或没有服务地址，无法继续查询这次生成。',
+        '数眼智能提供商已删除或停用，无法继续查询这段视频。',
       );
       return;
     }
-    const response = await this.fetchJson(
-      buildDigitalHumanUrl(
-        baseUrl,
-        DIGITAL_HUMAN_PATHS.queryTask,
-        row.externalId,
+    const route = resolveShuyanVideoRoute(row.model ?? '') ?? 'seedance';
+    const task = unwrapShuyanVideoTask(
+      await this.fetchShuyan(
+        resolveShuyanVideoTaskUrl(
+          resolveShuyanVideoGateway(provider.baseUrl),
+          route,
+          row.externalId,
+        ),
+        { method: 'GET' },
+        provider.apiKey,
       ),
-      { method: 'GET' },
-      provider.apiKey,
     );
-    const status = mapDigitalHumanStatus(response.status ?? response.state);
+    const status = mapShuyanVideoStatus(task.status);
+    const index = Number(row.request?.segmentIndex) || 0;
     if (status === 'failed') {
       await this.fail(
         row.id,
-        '数字人服务生成失败，请检查人脸照是否清晰正脸、台词是否合规后重试。',
-        readDirectField(response, ['error', 'errorMessage', 'message']) ||
-          JSON.stringify(response).slice(0, 2000),
+        `第 ${index} 段空镜视频生成失败：${describeShuyanVideoError(task)}`,
+        JSON.stringify(task.error ?? { status: task.status }).slice(0, 2000),
       );
       return;
     }
     if (status !== 'completed') {
       if (
         Date.now() - new Date(row.createdAt).getTime() >
-        DOUYIN_DIGITAL_HUMAN_TASK_TIMEOUT_MS
+        DOUYIN_STORE_VISIT_TASK_TIMEOUT_MS
       ) {
-        await this.fail(row.id, '数字人任务超过 2 小时仍未完成，已判定超时。');
+        await this.fail(row.id, '这段空镜视频超过 3 小时仍未完成，已判定超时。');
         return;
       }
-      const progress = Number(
-        readDirectField(response, ['progress', 'percent']),
-      );
       await this.operations.updateOne(
         { id: row.id, status: { $in: ['queued', 'running'] } },
         {
           $set: {
             status,
-            ...(Number.isFinite(progress) && progress > 0
-              ? { progress: Math.min(99, progress) }
-              : {}),
-            result: response,
+            progress: status === 'running' ? 50 : 0,
+            result: task,
             updatedAt: new Date(),
           },
         },
       );
       return;
     }
-    await this.advance(row, response);
-  }
-
-  /**
-   * @description 数字人任务完成后认领保存权（防并发重复转存），把成片存进视频库并设为脚本当前成片；
-   *   对端直接给了本服务视频库 ID 时直接绑定。
-   * @keyword-cn 转存探店成片, 认领保存
-   * @keyword-en save-store-visit-video, claim-saving
-   * @param {DouyinOperationEntity} row 调用记录。
-   * @param {Record<string, unknown>} response 对端完成时的响应。
-   */
-  private async advance(
-    row: DouyinOperationEntity,
-    response: Record<string, unknown>,
-  ): Promise<void> {
     const claimed = await this.operations.findOneAndUpdate(
       {
         id: row.id,
@@ -859,7 +875,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           {
             status: 'saving',
             updatedAt: {
-              $lt: new Date(Date.now() - DOUYIN_DIGITAL_HUMAN_SAVING_STALE_MS),
+              $lt: new Date(Date.now() - DOUYIN_STORE_VISIT_SAVING_STALE_MS),
             },
           },
         ],
@@ -870,31 +886,39 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     if (!claimed) return;
     const scope = { tenantId: row.tenantId, userId: row.userId };
     try {
+      const videoUrl = String(
+        task.content?.video_url ?? task.content?.url ?? '',
+      ).trim();
+      if (!videoUrl) throw new Error('SHUYAN_VIDEO_RESULT_URL_MISSING');
       const topic = await this.repository.get(row.topicId, scope);
-      const ownVideoId = Number(readDirectField(response, ['videoId']));
-      let video: { id: number; url: string };
-      if (Number.isInteger(ownVideoId) && ownVideoId > 0) {
-        const record = await this.repository.requireVideo(ownVideoId, scope);
-        video = { id: ownVideoId, url: String(record.url ?? '') };
-      } else {
-        const videoUrl = readDirectField(response, [
-          'videoUrl',
-          'video_url',
-          'url',
-        ]);
-        if (!videoUrl) throw new Error('DIGITAL_HUMAN_RESULT_URL_MISSING');
-        video = await this.storage.saveRemote(videoUrl, {
-          name: `${topic?.title ?? `脚本 ${row.topicId}`} 探店`,
-          scope,
-          tags: ['抖音探店视频', 'AI生成', '数字人'],
-          durationSeconds:
-            Number(readDirectField(response, ['duration'])) || undefined,
-        });
-      }
-      if (topic) {
-        await this.repository.update(
+      const saved = await this.storage.saveRemote(videoUrl, {
+        name: `${topic?.title ?? `脚本 ${row.topicId}`} 探店第 ${index} 段`,
+        scope,
+        tags: ['抖音探店空镜', 'AI生成', '数眼智能'],
+        durationSeconds: Number(task.duration) || Number(row.request?.duration),
+      });
+      const segment = (topic?.storeVisit?.segments ?? []).find(
+        (item) => item.id === row.segmentId,
+      );
+      const audioUrl = String(row.request?.audioUrl ?? '');
+      const voiceId = String(row.request?.voiceId ?? '');
+      const stale =
+        !segment ||
+        !audioUrl ||
+        segment.lines !== row.request?.lines ||
+        segment.sceneImageId !== row.request?.sceneImageId ||
+        (segment.action ?? '') !== (row.request?.action ?? '') ||
+        topic?.storeVisit?.voiceId !== voiceId;
+      if (!stale && row.segmentId) {
+        await this.repository.updateStoreVisitSegment(
           row.topicId,
-          { generatedVideoId: video.id },
+          row.segmentId,
+          {
+            videoId: saved.id,
+            audioUrl,
+            audioSeconds: Number(row.request?.audioSeconds) || 0,
+            voiceId,
+          },
           scope,
         );
       }
@@ -904,65 +928,120 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           $set: {
             status: 'completed',
             progress: 100,
-            result: { ...response, videoId: video.id, videoUrl: video.url },
-            ...(topic
-              ? {}
-              : { error: '成片已存入视频库，但脚本已被删除，未能回填。' }),
+            result: { ...task, videoId: saved.id, videoUrl: saved.url },
+            ...(stale
+              ? {
+                  error:
+                    '空镜已存入视频库，但这段的台词、场景或音色在生成期间改过，没有绑定到分段。',
+                }
+              : {}),
             updatedAt: new Date(),
           },
-          $unset: topic ? { error: '', errorDetail: '' } : { errorDetail: '' },
+          ...(stale ? {} : { $unset: { error: '', errorDetail: '' } }),
         },
       );
     } catch (error) {
       await this.fail(
         row.id,
-        '探店成片转存失败，请稍后同步状态重试。',
+        '这段空镜视频转存失败，请稍后同步状态重试。',
         error instanceof Error ? error.message : String(error),
       );
     }
   }
 
   /**
-   * @description 优先收集独立探店场景图，旧数据未保存场景时兼容分镜图片，去重后最多四张。
-   * @keyword-cn 收集场景参考图, 分镜画面去重
-   * @keyword-en collect-scene-images, dedupe-shot-images
-   * @param {DouyinTopicEntity} topic 脚本。
-   * @returns {DouyinMediaReference[]} 场景参考图。
+   * @description 读取「音色克隆与配音」节点的百炼运行配置：没指定、不是百炼或没填 Key 时用中文说明拒绝。
+   * @keyword-cn 读取百炼节点配置, 缺配置拒绝
+   * @keyword-en read-dashscope-runtime, reject-unconfigured
+   * @returns {Promise<WorkflowNodeRuntime>} 运行配置。
+   * @throws {ServiceUnavailableException} 节点不可用。
    */
-  private collectSceneImages(topic: DouyinTopicEntity): DouyinMediaReference[] {
-    const seen = new Set<number>();
-    const images: DouyinMediaReference[] = [];
-    const references =
-      topic.storeVisit?.sceneImages ??
-      (topic.storyboard ?? []).map((shot) => shot.media);
-    for (const media of references) {
-      if (
-        media?.type !== 'image' ||
-        !String(media.url ?? '').trim() ||
-        seen.has(media.id)
-      )
-        continue;
-      seen.add(media.id);
-      images.push(media);
-      if (images.length >= DOUYIN_STORE_VISIT_SCENE_IMAGE_LIMIT) break;
+  private async readVoiceRuntime(): Promise<WorkflowNodeRuntime> {
+    let runtime: WorkflowNodeRuntime | null;
+    try {
+      runtime = await this.workflowModels.resolveNodeRuntime(
+        WORKFLOW_NODES.douyinWorkbench.key,
+        WORKFLOW_NODES.douyinWorkbench.voiceClone,
+      );
+    } catch {
+      runtime = null;
     }
-    return images;
+    if (
+      !runtime ||
+      String(runtime.providerCode).toLowerCase() !== DASHSCOPE_PROVIDER_CODE
+    )
+      throw new ServiceUnavailableException(
+        '后台「工作流节点模型 · 抖音视频制作 · 音色克隆与配音」还没有选阿里云百炼（dashscope）提供商',
+      );
+    if (!String(runtime.apiKey ?? '').trim())
+      throw new ServiceUnavailableException(
+        '阿里云百炼的 API Key 还没有配置，请到后台「Ai提供商设置」里填写',
+      );
+    return runtime;
   }
 
   /**
-   * @description 图片交给直连服务的写法：公网地址原样给，站内图片读文件转成 data URL（对端访问不到本服务的相对地址）。
-   * @keyword-cn 图片转直连入参, 站内图片Base64
-   * @keyword-en image-to-direct-payload, local-image-data-url
-   * @param {string} url 图库图片地址。
-   * @returns {Promise<string>} 公网地址或 data URL。
+   * @description 克隆音色属于克隆时那个百炼账号：优先用音色记录上的提供商取 Key，提供商已删除时退回节点当前的提供商。
+   * @keyword-cn 读取音色所属提供商, 克隆音色账号
+   * @keyword-en read-voice-owner-runtime, cloned-voice-account
+   * @param {string} [providerId] 音色记录上的提供商 ID。
+   * @returns {Promise<DashScopeRuntime>} 百炼地址与 Key。
    */
-  private async toImagePayload(url: string): Promise<string> {
+  private async readVoiceRuntimeFor(
+    providerId?: string,
+  ): Promise<DashScopeRuntime> {
+    const owner = providerId
+      ? await this.adminService.getAiProviderRuntimeById(providerId)
+      : null;
+    if (owner && String(owner.apiKey ?? '').trim()) return owner;
+    return await this.readVoiceRuntime();
+  }
+
+  /**
+   * @description 读取「探店画面视频」节点的数眼运行配置：没指定、不是数眼智能、型号没有接入原生路由或没填 Key 时用中文说明拒绝。
+   * @keyword-cn 读取探店画面节点, 缺配置拒绝
+   * @keyword-en read-broll-runtime, reject-unconfigured
+   * @returns {Promise<WorkflowNodeRuntime>} 运行配置。
+   * @throws {ServiceUnavailableException} 节点不可用。
+   */
+  private async readVideoRuntime(): Promise<WorkflowNodeRuntime> {
+    let runtime: WorkflowNodeRuntime | null;
+    try {
+      runtime = await this.workflowModels.resolveNodeRuntime(
+        WORKFLOW_NODES.douyinWorkbench.key,
+        WORKFLOW_NODES.douyinWorkbench.storeVisitVideo,
+      );
+    } catch {
+      runtime = null;
+    }
+    if (!runtime || !isShuyanProvider(runtime.providerCode))
+      throw new ServiceUnavailableException(
+        '后台「工作流节点模型 · 抖音视频制作 · 探店画面视频」还没有选数眼智能',
+      );
+    if (!resolveShuyanVideoRoute(runtime.model))
+      throw new ServiceUnavailableException(
+        `「探店画面视频」节点的模型「${runtime.model}」还没接入，请改选 Seedance 或 MiniMax-H3 型号`,
+      );
+    if (!String(runtime.apiKey ?? '').trim())
+      throw new ServiceUnavailableException(
+        '数眼智能的 API Key 还没有配置，请到后台「Ai提供商设置」里填写',
+      );
+    return runtime;
+  }
+
+  /**
+   * @description 场景图入参：公网地址原样给数眼，站内 `/static` 图片读文件转成 data URL（Seedance 与 MiniMax-H3 都接受）。
+   * @keyword-cn 场景图入参, 本地图片Base64
+   * @keyword-en scene-image-input, local-image-data-url
+   * @param {string} url 图库地址。
+   * @returns {Promise<string>} 公网地址或 data URL。
+   * @throws {BadRequestException} 地址无效。
+   */
+  private async toVideoImageUrl(url: string): Promise<string> {
     const clean = String(url ?? '').trim();
-    if (/^https?:\/\//i.test(clean) || /^data:image\//i.test(clean))
-      return clean;
+    if (/^https?:\/\//i.test(clean) || /^data:image\//i.test(clean)) return clean;
     const filePath = resolveStaticFilePath(clean);
-    if (!filePath) throw new BadRequestException('图片地址无效');
-    const buffer = await readFile(filePath);
+    if (!filePath) throw new BadRequestException('场景图地址无效');
     const extension = extname(clean.split('?')[0]).toLowerCase();
     const contentType =
       extension === '.png'
@@ -970,68 +1049,23 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         : extension === '.webp'
           ? 'image/webp'
           : 'image/jpeg';
-    return `data:${contentType};base64,${buffer.toString('base64')}`;
+    return `data:${contentType};base64,${(await readFile(filePath)).toString('base64')}`;
   }
 
   /**
-   * @description 读取探店节点在「工作流节点模型」里指定的提供商：没指定、提供商被停用或选了运行时不支持的提供商时，
-   *   用中文说明拒绝（写明去哪里配）；提供商没填服务地址时同样拒绝。
-   * @keyword-cn 读取探店节点提供商, 缺配置拒绝
-   * @keyword-en read-store-visit-node-runtime, reject-unconfigured
-   * @param {string} nodeKey 节点 key（`voice-clone` / `voice-design` / `store-visit-video`）。
-   * @param {string} label 节点中文名。
-   * @returns {Promise<DouyinStoreVisitRuntime>} 提供商运行配置。
-   * @throws {ServiceUnavailableException} 节点不可用。
-   */
-  private async readNodeRuntime(
-    nodeKey: string,
-    label: string,
-  ): Promise<DouyinStoreVisitRuntime> {
-    let runtime: Awaited<
-      ReturnType<WorkflowModelService['resolveNodeRuntime']>
-    >;
-    try {
-      runtime = await this.workflowModels.resolveNodeRuntime(
-        WORKFLOW_NODES.douyinWorkbench.key,
-        nodeKey,
-      );
-    } catch {
-      throw new ServiceUnavailableException(
-        `后台「工作流节点模型 · 抖音视频制作 · ${label}」选的提供商不能用于这一步，请改选提供商代码为 ${DIGITAL_HUMAN_PROVIDER_CODE} 的提供商（「探店数字人视频」也可以选数眼智能）`,
-      );
-    }
-    if (!runtime)
-      throw new ServiceUnavailableException(
-        `还没有在后台「工作流节点模型 · 抖音视频制作」里为「${label}」指定提供商（或提供商已停用），请联系管理员`,
-      );
-    const baseUrl = String(runtime.baseUrl ?? '').trim();
-    if (!baseUrl)
-      throw new ServiceUnavailableException(
-        `「${label}」的提供商「${runtime.providerName}」没有填服务地址，请在「Ai提供商设置」里补上`,
-      );
-    return {
-      providerId: runtime.providerId,
-      providerName: runtime.providerName,
-      model: runtime.model,
-      baseUrl,
-      apiKey: runtime.apiKey,
-    };
-  }
-
-  /**
-   * @description 发起带超时（10 分钟）和可选 Bearer 密钥的 JSON 请求，非 2xx 时把对端错误体放进报错信息。
-   * @keyword-cn 探店直连请求, 超时控制
-   * @keyword-en store-visit-direct-request, timeout-control
+   * @description 发起带 Bearer 与超时（5 分钟）的数眼 JSON 请求；非 2xx 抛 `SHUYAN_VIDEO_HTTP_<状态码>`，保留对端报错供排查。
+   * @keyword-cn 数眼探店请求, 错误体保留
+   * @keyword-en shuyan-store-visit-request, preserve-error-body
    * @param {string} url 接口地址。
    * @param {RequestInit} init fetch 参数。
-   * @param {string} [apiKey] 密钥。
-   * @returns {Promise<Record<string, unknown>>} JSON 响应。
+   * @param {string} [apiKey] 数眼 Key。
+   * @returns {Promise<ShuyanVideoTask>} 任务响应。
    */
-  private async fetchJson(
+  private async fetchShuyan(
     url: string,
     init: RequestInit,
     apiKey?: string,
-  ): Promise<Record<string, unknown>> {
+  ): Promise<ShuyanVideoTask> {
     let response: Response;
     try {
       response = await fetch(url, {
@@ -1040,27 +1074,23 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           Accept: 'application/json',
           'Content-Type': 'application/json',
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-          ...(init.headers ?? {}),
         },
-        signal: AbortSignal.timeout(10 * 60 * 1000),
+        signal: AbortSignal.timeout(5 * 60 * 1000),
       });
     } catch (error) {
-      throw new Error(
-        `网络错误：${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw new Error(`SHUYAN_VIDEO_NETWORK_ERROR:${String(error)}`);
     }
     const text = await response.text();
-    let data: Record<string, unknown> = {};
+    let data: ShuyanVideoTask = {};
     try {
-      data = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      data = text ? (JSON.parse(text) as ShuyanVideoTask) : {};
     } catch {
-      data = { raw: text };
+      data = { error: { message: text.slice(0, 1000) } };
     }
-    if (!response.ok) {
+    if (!response.ok)
       throw new Error(
-        `HTTP ${response.status} ${JSON.stringify(data).slice(0, 1000)}`,
+        `SHUYAN_VIDEO_HTTP_${response.status}:${JSON.stringify(data).slice(0, 2000)}`,
       );
-    }
     return data;
   }
 
@@ -1083,9 +1113,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 标记数字人调用失败，`error` 为中文说明、`detail` 为原始信息。
-   * @keyword-cn 标记数字人失败, 失败原因
-   * @keyword-en mark-digital-human-failed, failure-reason
+   * @description 标记分段调用失败，`error` 为中文说明、`detail` 为原始信息。
+   * @keyword-cn 标记分段失败, 失败原因
+   * @keyword-en mark-segment-failed, failure-reason
    * @param {string} id 调用记录 ID。
    * @param {string} message 中文说明。
    * @param {string} [detail] 原始信息。
@@ -1109,9 +1139,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 去掉数据库字段与请求正文后的探店调用视图。
-   * @keyword-cn 探店调用视图, 隐藏请求
-   * @keyword-en store-visit-operation-view, hide-request
+   * @description 去掉数据库字段与请求正文后的分段调用视图。
+   * @keyword-cn 分段调用视图, 隐藏请求
+   * @keyword-en segment-operation-view, hide-request
    * @param {DouyinOperationEntity} row 调用记录。
    * @returns {DouyinOperationView} 前端安全视图。
    */
@@ -1120,8 +1150,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       id: row.id,
       operation: row.operation,
       topicId: row.topicId,
+      segmentId: row.segmentId,
       provider: row.provider,
       mode: row.mode,
+      model: row.model,
       progress: row.progress,
       status: row.status,
       externalId: row.externalId,

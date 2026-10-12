@@ -38,9 +38,10 @@ export const DOUYIN_RUNNING_OPERATION_STATUSES = [
 ];
 
 /**
- * @description 交给客户端合成的一段分镜视频：镜号、视频库 ID、下载地址与分镜时长（探测不到时长时兜底）。
- * @keyword-cn 合成片段, 分镜视频地址
- * @keyword-en concat-clip, shot-video-url
+ * @description 交给客户端合成的一段视频：镜号（探店为段号）、视频库 ID、下载地址与时长（探测不到时长时兜底）；
+ *   探店画外音的段还带配音地址与字幕文字，客户端以配音时长为准，画面短了定格补齐、长了截断，并把字幕烧进画面。
+ * @keyword-cn 合成片段, 分镜视频地址, 画外音片段
+ * @keyword-en concat-clip, shot-video-url, voiceover-clip
  */
 export interface DouyinConcatClip {
   shotId: string;
@@ -48,6 +49,10 @@ export interface DouyinConcatClip {
   videoId: number;
   url: string;
   fallbackSeconds: number;
+  /** 探店画外音：这一段的配音地址，有它时客户端用配音替换画面原声 */
+  audioUrl?: string;
+  /** 探店画外音：这一段要烧进画面的字幕（就是本段台词） */
+  subtitle?: string;
 }
 
 /**
@@ -112,15 +117,24 @@ export class DouyinShotConcatService {
         : [];
     const bySegments = segments.length > 0;
     const unit = bySegments ? '段' : '镜';
-    // 探店分段按台词字数估时长（约 4.5 字/秒），探测不到视频时长时兜底
-    const shots: Array<{ id: string; videoId?: number; duration: number }> =
-      bySegments
-        ? segments.map((segment) => ({
-            id: segment.id,
-            videoId: segment.videoId,
-            duration: Math.max(2, Math.round(segment.lines.length / 4.5)),
-          }))
-        : (topic.storyboard ?? []);
+    // 探店分段以配音时长为准，没有配音时按台词字数估（约 4.5 字/秒）
+    const shots: Array<{
+      id: string;
+      videoId?: number;
+      duration: number;
+      audioUrl?: string;
+      subtitle?: string;
+    }> = bySegments
+      ? segments.map((segment) => ({
+          id: segment.id,
+          videoId: segment.audioUrl ? segment.videoId : undefined,
+          duration:
+            Number(segment.audioSeconds) ||
+            Math.max(2, Math.round(segment.lines.length / 4.5)),
+          audioUrl: segment.audioUrl,
+          subtitle: segment.lines,
+        }))
+      : (topic.storyboard ?? []);
     if (!shots.length)
       throw new BadRequestException('DOUYIN_STORYBOARD_REQUIRED');
     const missing = shots
@@ -175,6 +189,9 @@ export class DouyinShotConcatService {
         videoId: Number(shot.videoId),
         url,
         fallbackSeconds: Number(shot.duration) || 5,
+        ...(shot.audioUrl
+          ? { audioUrl: shot.audioUrl, subtitle: shot.subtitle ?? '' }
+          : {}),
       });
     }
     // 自动合成要先领到标记；手动合成也清掉标记，免得之后重生成某一镜又自动合成一次

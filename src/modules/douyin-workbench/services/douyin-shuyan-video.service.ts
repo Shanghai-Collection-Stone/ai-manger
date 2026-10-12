@@ -121,7 +121,7 @@ export function describeShuyanVideoFailure(raw: string): string {
  * @keyword-cn 数眼视频任务, Seedance任务, H3任务
  * @keyword-en shuyan-video-task, seedance-task, minimax-h3-task
  */
-interface ShuyanVideoTask {
+export interface ShuyanVideoTask {
   id?: string;
   task_id?: string;
   task?: ShuyanVideoTask;

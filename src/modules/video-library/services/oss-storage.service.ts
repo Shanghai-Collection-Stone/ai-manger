@@ -21,8 +21,8 @@ import { extname } from 'path';
  * @keyword-en oss-storage, post-policy-signature, delete-object
  */
 
-/** @description 直传场景，决定对象前缀与大小上限。 */
-export type OssUploadScene = 'video' | 'poster';
+/** @description 对象场景，决定对象前缀与大小上限；`audio` 只给服务端上传探店配音与克隆录音用，不签发直传票据。 */
+export type OssUploadScene = 'video' | 'poster' | 'audio';
 
 /**
  * @description 签发给前端的直传票据，字段与桌面端 `ossDirectUpload.js` 逐字对应。

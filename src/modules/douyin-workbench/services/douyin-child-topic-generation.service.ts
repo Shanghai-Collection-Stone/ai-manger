@@ -369,11 +369,11 @@ export class DouyinChildTopicGenerationService {
   }
 
   /**
-   * @description 探店模式写台词：独立探店可按选题标题与场景说明写作，旧脚本按正文或分镜口播改写成第一人称、有现场感的探店口播，
-   *   约 30～60 秒；选了预设人物或风格时保持人称与调性。独立探店有场景图时按场景顺序分段（每段对应一张场景图），解析不出分段时只返回整段。
-   *   只返回台词，不落库，由前端放进台词框再随生成保存。
-   * @keyword-cn 探店台词生成, 数字人台词
-   * @keyword-en store-visit-lines, digital-human-lines
+   * @description 探店模式写画外音台词：独立探店可按选题标题与场景说明写作，旧脚本按正文或分镜口播改写成第一人称、有现场感的探店旁白，
+   *   约 30～60 秒；选了预设人物或风格时保持人称与调性。独立探店有场景图时按场景分段（每段对应一张场景图、约 60 字内，配音不超过单段画面时长），
+   *   解析不出分段时只返回整段。只返回台词，不落库，由前端放进台词框再随生成保存。
+   * @keyword-cn 探店台词生成, 画外音台词
+   * @keyword-en store-visit-lines, voiceover-lines
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string|undefined} prompt 一句话补充要求。
    * @param {DouyinScope} scope 租户用户作用域。
@@ -424,7 +424,7 @@ export class DouyinChildTopicGenerationService {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 500);
-    // 独立探店按场景图顺序分段，数眼通道每段配一张场景图对口型
+    // 独立探店按场景分段，每段配一张场景图生成空镜，配音不能超过单段画面时长
     const sceneImageIds =
       topic.productionMode === 'store-visit'
         ? (topic.storeVisit?.sceneImages ?? []).map((image) => image.id)
@@ -449,7 +449,7 @@ export class DouyinChildTopicGenerationService {
           platformScope: !scope.tenantId,
         },
         system: [
-          '你负责根据选题、场景资料或现有脚本写出「探店」口播台词，由出镜人本人对着镜头边走边说，数字人会按台词对口型。',
+          '你负责根据选题、场景资料或现有脚本写出「探店」画外音旁白：画面是门店环境、产品与细节的空镜，旁白由配音念出来，配合画面讲述探店体验。',
           '用第一人称、口语、有现场感：进店、看环境、点单或体验、说感受、给结论和推荐理由，句子短，方便念。',
           '时长约 30～60 秒（150～300 字），按说话的停顿分行；不要写镜头号、动作提示、括号说明、标题、Markdown 或任何解释。',
           '只用资料里给出的店名、产品、价格等事实，不编造；不写违法、危险、歧视、低俗、侵权或效果承诺类内容。',
@@ -459,7 +459,7 @@ export class DouyinChildTopicGenerationService {
             : '',
           style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
           sceneImageIds.length
-            ? `门店拍了 ${sceneImageIds.length} 个场景，镜头会按顺序在这些场景之间切换（一般是门头环境 → 产品 → 体验 → 总结推荐）。请按场景把台词分成 ${sceneImageIds.length} 段，每段至少 15 个字、不超过 120 个字；每段第一行只写「【场景k】」（k 从 1 开始按顺序），下一行起写这一段台词，除这个标记外不要写别的说明。`
+            ? `门店拍了 ${sceneImageIds.length} 个场景，每段旁白配一个场景的空镜，镜头一般按门头环境 → 产品 → 体验 → 总结推荐切换。请把台词分成 ${Math.min(8, Math.max(sceneImageIds.length, 3))}～8 段，每段对应一个场景（同一个场景可以用在多段），每段 15～60 个字（单段画面最长约 15 秒，超过会念不完）；每段第一行只写「【场景k】」（k 是场景序号，从 1 开始），下一行起写这一段台词，除这个标记外不要写别的说明。`
             : '',
           '只输出台词本身。',
         ]

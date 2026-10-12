@@ -14,19 +14,19 @@ import { DouyinWorkbenchController } from './controller/douyin-workbench.control
 import { DouyinOperationService } from './services/douyin-operation.service.js';
 import { DouyinPixmaxVideoService } from './services/douyin-pixmax-video.service.js';
 import { DouyinShuyanVideoService } from './services/douyin-shuyan-video.service.js';
+import { DouyinCosyVoiceService } from './services/douyin-cosyvoice.service.js';
 import { DouyinChildTopicGenerationService } from './services/douyin-child-topic-generation.service.js';
 import { DouyinGenerationJobService } from './services/douyin-generation-job.service.js';
 import { DouyinShotConcatService } from './services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from './services/douyin-shot-image.service.js';
 import { DouyinStoreVisitService } from './services/douyin-store-visit.service.js';
-import { DouyinStoreVisitShuyanService } from './services/douyin-store-visit-shuyan.service.js';
 import { DouyinStoryboardGenerationService } from './services/douyin-storyboard-generation.service.js';
 import { DouyinStoryboardImageService } from './services/douyin-storyboard-image.service.js';
 import { DouyinVideoStorageService } from './services/douyin-video-storage.service.js';
 import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-repository.service.js';
 
 /**
- * @description 装配抖音母子选题、分镜、视频生成（整片 / 分镜 / 分镜合成 / 探店数字人）、发布与抓取真实业务能力（含预设人物能力，用于脚本、分镜与出图的人物一致性）。
+ * @description 装配抖音母子选题、分镜、视频生成（整片 / 分镜 / 分镜合成 / 探店画外音）、发布与抓取真实业务能力（含预设人物能力，用于脚本、分镜与出图的人物一致性）。
  * @keyword-cn 抖音工作台模块, 视频业务编排
  * @keyword-en douyin-workbench-module, video-business-orchestration
  */
@@ -47,6 +47,7 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
   controllers: [DouyinWorkbenchController],
   providers: [
     DouyinChildTopicGenerationService,
+    DouyinCosyVoiceService,
     DouyinGenerationJobService,
     DouyinOperationService,
     DouyinPixmaxVideoService,
@@ -54,7 +55,6 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     DouyinShotConcatService,
     DouyinShotImageService,
     DouyinStoreVisitService,
-    DouyinStoreVisitShuyanService,
     DouyinStoryboardGenerationService,
     DouyinStoryboardImageService,
     DouyinVideoStorageService,

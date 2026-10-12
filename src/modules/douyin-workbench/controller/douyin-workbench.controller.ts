@@ -30,20 +30,17 @@ import {
   ReportDouyinConcatResultDto,
   CrawlDouyinDataDto,
   CreateDouyinMotherTopicDto,
-  DesignDouyinStoreVisitVoiceDto,
+  DouyinStoreVisitVoiceDto,
   MaskDouyinShotFacesDto,
   GenerateDouyinChildrenDto,
   GenerateDouyinShotImageDto,
   GenerateDouyinShotVideoDto,
-  GenerateDouyinStoreVisitKeyframeDto,
   GenerateDouyinStoreVisitLinesDto,
-  GenerateDouyinStoreVisitVideoDto,
   GenerateDouyinStoryboardDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
   RefineDouyinScriptDto,
   UpdateDouyinTopicDto,
-  UseDouyinStoreVisitPresetVoiceDto,
 } from './douyin-workbench.dto.js';
 import {
   DOUYIN_SCRIPT_STYLES,
@@ -58,7 +55,6 @@ import {
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
-import { DouyinStoreVisitShuyanService } from '../services/douyin-store-visit-shuyan.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
 
 /**
@@ -84,7 +80,6 @@ export class DouyinWorkbenchController {
     private readonly shotImages: DouyinShotImageService,
     private readonly shotConcat: DouyinShotConcatService,
     private readonly storeVisit: DouyinStoreVisitService,
-    private readonly storeVisitSegments: DouyinStoreVisitShuyanService,
   ) {}
 
   /**
@@ -475,7 +470,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 探店模式上传一段录音克隆音色（multipart 字段 `file`，最多 10MB），音色 ID 写进脚本，录音本身只转交克隆服务不落盘。
+   * @description 探店模式上传一段录音克隆音色（multipart 字段 `file`，最多 10MB），录音临时传 OSS 交给百炼声音复刻、克隆完即删，音色 ID 写进脚本。
    * @keyword-cn 克隆探店音色接口, 上传录音
    * @keyword-en clone-store-visit-voice-api, upload-voice-sample
    */
@@ -505,33 +500,9 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 用文字描述设计音色，成功后保存音色与可选试听，并返回当前租户工作台。
-   * @keyword-cn 声音设计接口, 探店音色
-   * @keyword-en design-store-visit-voice-api, store-visit-voice
-   */
-  @Post('topics/:id/store-visit/voice/design')
-  @RequirePermission('create', 'DouyinWorkbench')
-  async designStoreVisitVoice(
-    @Req() req: AdminRequest,
-    @Param('id') id: string,
-    @Body() dto: DesignDouyinStoreVisitVoiceDto,
-  ) {
-    const scope = this.scopeOf(this.requireUser(req));
-    const topic = await this.storeVisit.designVoice(
-      this.readId(id),
-      dto,
-      scope,
-    );
-    return {
-      topic: { ...topic, _id: undefined },
-      groups: await this.repository.listWorkspace(scope),
-    };
-  }
-
-  /**
-   * @description 按脚本正文让 AI 写一版探店台词（出镜人第一人称口播），只返回台词、不落库。
-   * @keyword-cn 探店台词接口, 数字人台词
-   * @keyword-en store-visit-lines-api, digital-human-lines
+   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库。
+   * @keyword-cn 探店台词接口, 画外音台词
+   * @keyword-en store-visit-lines-api, voiceover-lines
    */
   @Post('topics/:id/store-visit/lines')
   @RequirePermission('create', 'DouyinWorkbench')
@@ -548,51 +519,49 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 探店模式生成视频：保存台词后把出镜人脸、克隆音色、台词与分镜画面交给数字人服务，按生视频服务扣费，返回调用记录。
-   * @keyword-cn 探店视频生成接口, 数字人生视频
-   * @keyword-en store-visit-video-api, digital-human-video
+   * @description 探店模式生成视频：每段先用选定音色配音，再以场景图为首帧生成空镜视频，按生视频服务逐段扣费，返回各段调用记录。
+   * @keyword-cn 探店视频生成接口, 画外音生成
+   * @keyword-en store-visit-video-api, voiceover-generation
    */
   @Post('topics/:id/store-visit/generate')
   @RequirePermission('create', 'DouyinWorkbench')
   async generateStoreVisitVideo(
     @Req() req: AdminRequest,
     @Param('id') id: string,
-    @Body() dto: GenerateDouyinStoreVisitVideoDto,
   ) {
     return await this.storeVisit.start(
       this.readId(id),
-      dto,
       this.scopeOf(this.requireUser(req)),
     );
   }
 
   /**
-   * @description 列出数眼可灵音色库（「探店数字人视频」节点选了数眼智能时可用），供探店音色步骤试听挑选。
-   * @keyword-cn 可灵音色库接口, 预置音色列表
-   * @keyword-en kling-preset-voices-api, preset-voice-list
+   * @description 列出探店可选的百炼系统音色（名称、特质、性别与方言）。
+   * @keyword-cn 系统音色接口, 探店音色库
+   * @keyword-en preset-voices-api, store-visit-voice-library
    */
   @Get('store-visit/voices')
   @RequirePermission('read', 'DouyinWorkbench')
-  async listStoreVisitPresetVoices() {
-    return { voices: await this.storeVisitSegments.listPresetVoices() };
+  listStoreVisitPresetVoices() {
+    return { voices: this.storeVisit.listPresetVoices() };
   }
 
   /**
-   * @description 选用可灵音色库里的一个音色作为脚本的固定音色，并返回当前租户工作台。
-   * @keyword-cn 选用可灵音色接口, 保存预置音色
-   * @keyword-en use-kling-preset-voice-api, save-preset-voice
+   * @description 选用一个百炼系统音色作为脚本的音色，并返回当前租户工作台。
+   * @keyword-cn 选用系统音色接口, 保存预置音色
+   * @keyword-en use-preset-voice-api, save-preset-voice
    */
   @Post('topics/:id/store-visit/voice/preset')
   @RequirePermission('update', 'DouyinWorkbench')
   async useStoreVisitPresetVoice(
     @Req() req: AdminRequest,
     @Param('id') id: string,
-    @Body() dto: UseDouyinStoreVisitPresetVoiceDto,
+    @Body() dto: DouyinStoreVisitVoiceDto,
   ) {
     const scope = this.scopeOf(this.requireUser(req));
-    const topic = await this.storeVisitSegments.usePresetVoice(
+    const topic = await this.storeVisit.usePresetVoice(
       this.readId(id),
-      dto,
+      dto.voiceId,
       scope,
     );
     return {
@@ -602,34 +571,26 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 为探店某一段生成「人物在这个场景里」的关键帧（按分镜画面节点的生图模型扣费），返回关键帧、更新后的脚本与当前租户工作台。
-   * @keyword-cn 探店关键帧接口, 人物进场景
-   * @keyword-en store-visit-keyframe-api, person-in-scene
+   * @description 合成一句音色试听（系统音色或这条脚本克隆的音色），返回试听地址。
+   * @keyword-cn 音色试听接口, 合成试听
+   * @keyword-en voice-preview-api, synthesize-trial
    */
-  @Post('topics/:id/store-visit/segments/:segmentId/keyframe')
-  @RequirePermission('create', 'DouyinWorkbench')
-  async generateStoreVisitKeyframe(
+  @Post('topics/:id/store-visit/voice/preview')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async previewStoreVisitVoice(
     @Req() req: AdminRequest,
     @Param('id') id: string,
-    @Param('segmentId') segmentId: string,
-    @Body() dto: GenerateDouyinStoreVisitKeyframeDto,
+    @Body() dto: DouyinStoreVisitVoiceDto,
   ) {
-    const scope = this.scopeOf(this.requireUser(req));
-    const result = await this.storeVisitSegments.generateKeyframe(
+    return await this.storeVisit.previewVoice(
       this.readId(id),
-      this.readSegmentId(segmentId),
-      dto.prompt,
-      scope,
+      dto.voiceId,
+      this.scopeOf(this.requireUser(req)),
     );
-    return {
-      ...result,
-      topic: { ...result.topic, _id: undefined },
-      groups: await this.repository.listWorkspace(scope),
-    };
   }
 
   /**
-   * @description 重新生成探店某一段的对口型视频（数眼通道），按生视频服务扣费，返回这一段的调用记录。
+   * @description 重新生成探店某一段（配音 + 空镜视频），按生视频服务扣费，返回这一段的调用记录。
    * @keyword-cn 重新生成探店分段接口, 单段重做
    * @keyword-en regenerate-store-visit-segment-api, single-segment-retry
    */
@@ -640,7 +601,7 @@ export class DouyinWorkbenchController {
     @Param('id') id: string,
     @Param('segmentId') segmentId: string,
   ) {
-    return await this.storeVisitSegments.startOne(
+    return await this.storeVisit.startOne(
       this.readId(id),
       this.readSegmentId(segmentId),
       this.scopeOf(this.requireUser(req)),

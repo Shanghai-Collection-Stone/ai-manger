@@ -139,7 +139,7 @@ export interface DouyinPublishCopy {
 }
 
 /**
- * @description 探店模式克隆音色用过的录音样本信息。录音本身只转交克隆服务、不在本服务落盘（声音属于个人生物特征），这里只记文件名、类型与大小。
+ * @description 探店模式克隆音色用过的录音样本信息。录音只为克隆临时传到对象存储、克隆完就删掉（声音属于个人生物特征），这里只记文件名、类型与大小。
  * @keyword-cn 克隆音色录音, 探店音色样本
  * @keyword-en voice-clone-sample, store-visit-voice-sample
  */
@@ -151,56 +151,53 @@ export interface DouyinStoreVisitVoiceSample {
 }
 
 /**
- * @description 探店分段（数眼通道）：一段台词配一张场景图，先生成「人物在这个场景里」的关键帧，
- *   再用固定音色合成本段配音、交给数字人对口型出一段视频；各段出片后由客户端按顺序拼成成片。
- *   `keyframe` 与 `videoId` 由服务端写入，台词或场景改了就作废。
- * @keyword-cn 探店分段, 场景关键帧, 分段成片
- * @keyword-en store-visit-segment, scene-keyframe, segment-video
+ * @description 探店分段（画外音）：一段台词配一张场景图。生成时先用选定音色把台词配成音，再以场景图为首帧生成同样长的空镜视频；
+ *   各段出片后由桌面端按顺序把画面、配音与字幕拼成成片。`videoId`、`audioUrl`、`audioSeconds`、`voiceId` 由服务端写入，
+ *   台词、场景或画面描述改了就作废。
+ * @keyword-cn 探店分段, 画外音配音, 分段成片
+ * @keyword-en store-visit-segment, segment-voiceover, segment-video
  */
 export interface DouyinStoreVisitSegment {
   id: string;
   lines: string;
-  /** @description 本段对应的场景图（`sceneImages` 里的图库 ID） */
+  /** @description 本段对应的场景图（`sceneImages` 里的图库 ID），空镜视频以它为首帧 */
   sceneImageId?: number;
-  /** @description 本段的动作、情绪与运镜描述，写进关键帧与数字人提示词 */
+  /** @description 本段画面的镜头与氛围描述，写进空镜视频提示词 */
   action?: string;
-  /** @description 「人物在这个场景里」的关键帧，数字人以它为画面 */
-  keyframe?: DouyinMediaReference;
-  /** @description 本段最近一次生成成功的视频 */
+  /** @description 本段最近一次生成成功的空镜视频 */
   videoId?: number;
+  /** @description 本段配音（WAV）的地址，与 `videoId` 同一次生成写入 */
+  audioUrl?: string;
+  /** @description 本段配音时长（秒），合成时以它为本段时长 */
+  audioSeconds?: number;
+  /** @description 配音用的音色 ID，换了音色后前端据此提示重新生成 */
+  voiceId?: string;
 }
 
 /**
- * @description 探店人物与场景、声音提示词及可选固定音色 ID、来源和使用模式、录音样本或试听、探店台词与分段。
- *   通用数字人服务按「人脸 + 音色 + 台词」一次出片；数眼通道按 `segments` 逐段对口型后由客户端拼接，成片都绑定到脚本的 `generatedVideoId`。
- * @keyword-cn 探店模式设置, 出镜人脸, 克隆音色
- * @keyword-en store-visit-setting, presenter-face, cloned-voice
+ * @description 探店画外音设置：场景图与说明、音色（录音克隆或系统音色）、台词与分段。
+ *   各段配音 + 空镜视频由桌面端拼接后绑定到脚本的 `generatedVideoId`。
+ *   旧版数字人流程留下的 `faceImage`、声音设计等字段不再读取，留在旧数据里也无影响。
+ * @keyword-cn 探店模式设置, 画外音设置, 克隆音色
+ * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
 export interface DouyinStoreVisitSetting {
-  faceImage?: DouyinMediaReference;
   /** @description 独立选择的探店场景图，最多四张，不依赖分镜。 */
   sceneImages?: DouyinMediaReference[];
   /** @description 门店环境、产品与拍摄氛围的文字说明。 */
   sceneDescription?: string;
   voiceSample?: DouyinStoreVisitVoiceSample;
-  /** @description 音色来源；`preset` 为数眼可灵音色库里选的音色；旧记录未设置时按录音克隆处理。 */
-  voiceSource?: 'clone' | 'design' | 'preset';
-  /** @description 可灵语音合成要求的音色语种，与音色对应 */
-  voiceLanguage?: 'zh' | 'en';
-  /** @description 声音设计默认直接使用提示词，generated 表示使用已创建音色；旧记录按 voiceId 推断。 */
-  voiceMode?: 'prompt' | 'generated';
+  /** @description 音色来源：`clone` 为录音克隆，`preset` 为百炼系统音色 */
+  voiceSource?: 'clone' | 'preset';
   voiceName?: string;
-  voiceDescription?: string;
-  voicePreviewText?: string;
-  voicePreviewUrl?: string;
   voiceCreatedAt?: Date;
   voiceId?: string;
-  /** @description 克隆这个音色的提供商记录 ID 与模型，数字人请求里带上 `voiceModel`，方便对端认出音色来自哪个模型 */
+  /** @description 音色所属的提供商记录 ID 与合成模型；克隆音色只能用克隆时绑定的模型配音 */
   voiceProviderId?: string;
   voiceModel?: string;
   voiceClonedAt?: Date;
   lines?: string;
-  /** @description 数眼通道的分段，最多 8 段；`lines` 同步保存各段拼起来的全文 */
+  /** @description 分段，最多 8 段；`lines` 同步保存各段拼起来的全文 */
   segments?: DouyinStoreVisitSegment[];
 }
 
@@ -253,7 +250,7 @@ export interface DouyinTopicEntity {
   shotVideoResolution?: string;
   /** @description 脚本的发布文案，生成分镜时由 AI 同步写好，保存到发布库时作为默认值；为空表示还没写 */
   publishCopy?: DouyinPublishCopy;
-  /** @description 探店模式的出镜人脸、克隆音色与台词，为空表示没用过探店模式 */
+  /** @description 探店模式的场景、音色、台词与分段，为空表示没用过探店模式 */
   storeVisit?: DouyinStoreVisitSetting;
   /** @description 为 true 时，桌面客户端发现全部分镜出片后自动把它们合成为一条成片，客户端领走合成后清掉 */
   autoConcatShots?: boolean;
@@ -349,7 +346,7 @@ export interface DouyinGenerationJobEntity extends DouyinGenerationJobView {
  */
 export interface DouyinOperationView {
   id: string;
-  /** @description `voice-clone` / `voice-design` 是音色创建审计，不产出视频。 */
+  /** @description `voice-clone` 是音色克隆审计，不产出视频；`voice-design` 只出现在下线前的历史记录里。 */
   operation: 'generate' | 'publish' | 'crawl' | 'voice-clone' | 'voice-design';
   topicId: number;
   /** @description 分镜级视频生成才有：对应 `DouyinStoryboardShot.id`；为空表示整条成片 */
@@ -357,10 +354,11 @@ export interface DouyinOperationView {
   /** @description 探店分段生成才有：对应 `DouyinStoreVisitSegment.id` */
   segmentId?: string;
   /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` / `shuyan` 为后台节点指定的供应商，
-   *   `client` 为桌面客户端用内置 ffmpeg 合成分镜视频，`digital-human` 为后台指定的通用数字人服务 */
-  provider?: 'direct' | 'pixmax' | 'shuyan' | 'client' | 'digital-human';
+   *   `client` 为桌面客户端用内置 ffmpeg 合成分镜视频，`dashscope` 为百炼音色克隆审计；
+   *   `digital-human` 只出现在通用数字人通道下线前的历史记录里 */
+  provider?: 'direct' | 'pixmax' | 'shuyan' | 'client' | 'dashscope' | 'digital-human';
   /** @description 视频生成模式：`shot` 单镜，`full` 所有分镜一次生成整片，`concat` 把已出片的分镜（或探店分段）视频合成一条，
-   *   `store-visit` 探店模式（通用数字人一次出片；数眼通道为带 `segmentId` 的单段对口型视频） */
+   *   `store-visit` 探店画外音的单段空镜视频（带 `segmentId`） */
   mode?: 'shot' | 'full' | 'concat' | 'store-visit';
   /** @description 实际使用的模型编码（节点供应商通道） */
   model?: string;

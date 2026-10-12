@@ -74,7 +74,7 @@ type XhsPreparedArticleVisuals = {
 };
 
 /**
- * @description 一次交付整篇文章的结构：标题、正文与标签（交付工具与结构化输出共用）。
+ * @description 一次交付整篇文章的结构：标题、正文与标签。结构化输出直接用它；交付工具用放宽了标签的 `ZXhsArticleSubmitInput`。
  * @keyword-cn 文章交付结构, 一次交付
  * @keyword-en article-draft-schema, single-shot-delivery
  */
@@ -94,6 +94,18 @@ const ZXhsArticleDraft = z.object({
  * @keyword-en article-draft-json-schema, lenient-parsing
  */
 const XHS_ARTICLE_DRAFT_JSON_SCHEMA = toJsonSchema(ZXhsArticleDraft);
+
+/**
+ * @description 交付工具 `xhs_article_submit` 的参数结构：标签除字符串数组外也接受逗号分隔的一整串。轻量 Agent 调工具前
+ *   会按这里的 zod 校验参数，严格数组会把一整串标签直接打回，模型只能整篇重交；放宽后统一由 `applyArticleSubmission` 拆分与校验。
+ * @keyword-cn 交付工具参数结构, 宽松解析
+ * @keyword-en article-submit-tool-schema, lenient-parsing
+ */
+const ZXhsArticleSubmitInput = ZXhsArticleDraft.extend({
+  tags: z
+    .union([z.array(z.string()), z.string()])
+    .describe('3-8 个简短中文文章标签，不带 #，不重复；优先给字符串数组'),
+});
 
 /**
  * @description 配图决策的结构化输出：从图库标签清单里选出的 2-5 个标签。
@@ -1063,7 +1075,8 @@ export class XhsArticleGenerationService {
   }
 
   /**
-   * @description 创建一次交付整篇文章的工具（标题、正文、标签同时给），交付后 Agent 直接结束，不再多跑一轮收尾。
+   * @description 创建一次交付整篇文章的工具（标题、正文、标签同时给），交付后 Agent 直接结束，不再多跑一轮收尾；
+   *   标签交成一整串也收下，由 `applyArticleSubmission` 拆开。
    * @keyword-cn 文章交付工具, 一次交付
    * @keyword-en article-submit-tool, single-shot-delivery
    * @param draft 本次运行的内存文章。
@@ -1086,7 +1099,7 @@ export class XhsArticleGenerationService {
         name: 'xhs_article_submit',
         description:
           '一次交付整篇文章：标题、完整正文和 3-8 个标签同时给出。写好后只调用一次；禁止用最终文本代替本工具交付。',
-        schema: ZXhsArticleDraft,
+        schema: ZXhsArticleSubmitInput,
         returnDirect: true,
       },
     );

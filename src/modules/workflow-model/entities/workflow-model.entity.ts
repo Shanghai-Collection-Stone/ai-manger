@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb';
 
 /**
  * @description 工作流节点使用的模型类型，与 AI 提供商的 `modelCategory` 一一对应（节点不用向量模型）；
- *   `audio` 是克隆或设计音色类模型（录音或描述 → 音色 ID）。
+ *   `audio` 是语音类模型（录音克隆音色、按音色配音）。
  * @keyword-cn 节点模型类型, 提供商类型
  * @keyword-en node-model-category, provider-category
  */
@@ -53,7 +53,6 @@ export const WORKFLOW_NODES = {
     shotVideo: 'shot-video',
     fullVideo: 'full-video',
     voiceClone: 'voice-clone',
-    voiceDesign: 'voice-design',
     storeVisitVideo: 'store-visit-video',
   },
   xhsArticle: {
@@ -129,7 +128,7 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
   {
     key: 'douyin-workbench',
     label: '抖音视频制作',
-    description: '分镜制作，或按人物、场景、音色与台词制作探店视频',
+    description: '分镜制作，或按场景、音色与台词制作探店画外音视频',
     nodes: [
       {
         key: 'script',
@@ -180,29 +179,20 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
       },
       {
         key: 'voice-clone',
-        label: '音色克隆',
+        label: '音色克隆与配音',
         description:
-          '探店模式：用户上传一段本人录音，克隆出音色 ID，数字人按这个声音念台词',
+          '探店模式：选阿里云百炼（dashscope）。用户录音克隆音色（模型填 cosyvoice-v3.5-plus，克隆音色只能用它配音），或选系统音色（固定用 cosyvoice-v3-flash），再给每段台词配画外音',
         category: 'audio',
-        runtimeProviders: ['digital-human'],
-        unsetHint: '未指定时探店模式不能克隆音色',
-      },
-      {
-        key: 'voice-design',
-        label: '声音设计（固定音色，可选）',
-        description:
-          '可选：按声音提示词额外生成固定音色与试听；纯提示词声音随视频生成，无需此节点',
-        category: 'audio',
-        runtimeProviders: ['digital-human'],
-        unsetHint: '未指定时不能额外生成固定音色，纯提示词声音仍可使用',
+        runtimeProviders: ['dashscope'],
+        unsetHint: '未指定时探店模式不能克隆音色、也不能配音',
       },
       {
         key: 'store-visit-video',
-        label: '探店数字人视频',
+        label: '探店画面视频',
         description:
-          '探店模式：选 digital-human 时按人脸 + 音色 + 台词交给通用数字人服务；选数眼智能时按场景分段，可灵语音合成配音后用可灵数字人（模型填 kling-avatar-std / kling-avatar-pro）或万相数字人（wan2.2-s2v）逐段对口型，再在客户端拼接',
+          '探店模式：选数眼智能（Seedance 或 MiniMax-H3 型号），每段以场景图为首帧生成与配音等长的空镜视频，再在客户端加配音与字幕拼成一条',
         category: 'video',
-        runtimeProviders: ['digital-human', 'shuyan', 'shuyanai'],
+        runtimeProviders: ['shuyan', 'shuyanai'],
         unsetHint: '未指定时探店模式不能生成视频',
       },
     ],
@@ -211,7 +201,7 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
 
 /**
  * @description 各模型类型当前运行时真正能调用的提供商：`null` 表示除 `excluded` 外都可以。
- *   节点登记了 `runtimeProviders` 时再按节点收窄（例如 `digital-human` 只能用在探店节点，不能挂到分镜 / 整片视频）。
+ *   节点登记了 `runtimeProviders` 时再按节点收窄（例如探店的两个节点只收百炼与数眼智能）。
  *   后台仍允许提前保存不支持的组合，但会标出「运行时暂不支持」，调用时直接报错而不是静默降级。
  * @keyword-cn 运行时支持范围, 提供商兼容
  * @keyword-en runtime-support-matrix, provider-compatibility
@@ -220,16 +210,16 @@ export const WORKFLOW_RUNTIME_SUPPORT: Record<
   WorkflowNodeCategory,
   { allowed: string[] | null; excluded: string[] }
 > = {
-  llm: { allowed: null, excluded: ['pixmax', 'digital-human'] },
+  llm: { allowed: null, excluded: ['pixmax'] },
   image: {
     allowed: ['gemini', 'doubao', 'ark', 'openai', 'shuyan', 'shuyanai'],
     excluded: [],
   },
   video: {
-    allowed: ['pixmax', 'shuyan', 'shuyanai', 'digital-human'],
+    allowed: ['pixmax', 'shuyan', 'shuyanai'],
     excluded: [],
   },
-  audio: { allowed: ['digital-human'], excluded: [] },
+  audio: { allowed: ['dashscope'], excluded: [] },
 };
 
 /**
