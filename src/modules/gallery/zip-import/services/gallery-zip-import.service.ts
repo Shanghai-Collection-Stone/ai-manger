@@ -1,4 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { promises as fs } from 'fs';
 import { existsSync, mkdirSync } from 'fs';
@@ -49,6 +54,20 @@ const IMAGE_EXT_SET = new Set([
 ]);
 
 const MAX_IMPORT_PER_BATCH = 20;
+/** 未结束的任务状态：排队、解压、写库。 */
+const ACTIVE_STATUSES: GalleryZipImportStatus[] = [
+  'pending',
+  'extracting',
+  'importing',
+];
+/** 负责进程给自己名下未结束任务刷新心跳的间隔。 */
+const HEARTBEAT_INTERVAL_MS = 30_000;
+/** 心跳超过这么久没刷新，就认定负责进程已经不在（重启、发版或崩溃）。 */
+const HEARTBEAT_STALE_MS = 2 * 60_000;
+/** 本次改动前创建的任务没有心跳，只能看 updatedAt；正常处理每 5 张就会刷新，给足余量。 */
+const LEGACY_STALE_MS = 10 * 60_000;
+/** 扫描中断任务的间隔。 */
+const RECOVERY_INTERVAL_MS = 60_000;
 const CLIENT_PREPROCESS_MANIFEST = '_gallery_manifest.json';
 const MAX_CLIENT_MANIFEST_BYTES = 5 * 1024 * 1024;
 
@@ -57,11 +76,17 @@ const MAX_CLIENT_MANIFEST_BYTES = 5 * 1024 * 1024;
  * @keyword-en gallery zip import service, queue, extract, batch import
  */
 @Injectable()
-export class GalleryZipImportService {
+export class GalleryZipImportService implements OnModuleInit, OnModuleDestroy {
   private readonly jobs: Collection<GalleryZipImportEntity>;
   /** @description 进程内运行中任务 id,保证一次只跑一个,避免大 zip 互相挤垮内存 */
   private runningJobId: string | null = null;
   private streamZipCtorPromise: Promise<StreamZipCtor> | null = null;
+  /** @description 本进程标识：每次启动都换新，任务记录它来判断负责进程是否还在 */
+  private readonly ownerId = randomUUID();
+  /** @description 本进程名下还没结束的任务，只为它们刷新心跳 */
+  private readonly ownedJobIds = new Set<string>();
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private recoveryTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
@@ -69,6 +94,156 @@ export class GalleryZipImportService {
   ) {
     this.jobs = db.collection<GalleryZipImportEntity>('gallery_zip_imports');
     void this.ensureIndexes();
+  }
+
+  /**
+   * @description 启动心跳与中断任务扫描：启动后稍等一会儿先扫一次（接手重启前排队的任务、结束卡住的任务），之后每分钟扫一次。
+   *   多进程时每个进程都扫，靠带过期条件的原子更新保证同一任务只有一个进程接手。
+   * @keyword-cn ZIP任务恢复, 心跳续期
+   * @keyword-en zip-job-recovery, heartbeat-renewal
+   */
+  onModuleInit(): void {
+    this.heartbeatTimer = setInterval(() => {
+      void this.renewHeartbeats().catch((e) => {
+        console.error('[GalleryZipImportService.heartbeat] failed', e);
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+    this.heartbeatTimer.unref();
+    this.recoveryTimer = setInterval(() => {
+      void this.recoverOrphanedJobs().catch((e) => {
+        console.error('[GalleryZipImportService.recover] failed', e);
+      });
+    }, RECOVERY_INTERVAL_MS);
+    this.recoveryTimer.unref();
+    setTimeout(() => {
+      void this.recoverOrphanedJobs().catch((e) => {
+        console.error('[GalleryZipImportService.recover] failed', e);
+      });
+    }, 5_000).unref();
+  }
+
+  /**
+   * @description 停止心跳与扫描定时器。
+   * @keyword-cn 停止定时器, ZIP任务恢复
+   * @keyword-en stop-timers, zip-job-recovery
+   */
+  onModuleDestroy(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.recoveryTimer) clearInterval(this.recoveryTimer);
+  }
+
+  /**
+   * @description 给本进程名下还没结束的任务刷新心跳；名下没有任务时不写库。
+   * @keyword-cn 心跳续期, 任务归属
+   * @keyword-en heartbeat-renewal, job-ownership
+   */
+  private async renewHeartbeats(): Promise<void> {
+    if (this.ownedJobIds.size === 0) return;
+    await this.jobs.updateMany(
+      {
+        id: { $in: [...this.ownedJobIds] },
+        ownerId: this.ownerId,
+        status: { $in: ACTIVE_STATUSES },
+      },
+      { $set: { heartbeatAt: new Date() } },
+    );
+  }
+
+  /**
+   * @description 判定负责进程已不在的未结束任务的过滤条件：有心跳的看心跳是否过期，旧任务没有心跳就看 updatedAt。
+   * @keyword-cn 中断任务判定, 心跳过期
+   * @keyword-en orphaned-job-filter, stale-heartbeat
+   */
+  private buildOrphanFilter(now: Date): Record<string, unknown> {
+    return {
+      status: { $in: ACTIVE_STATUSES },
+      $or: [
+        { heartbeatAt: { $lt: new Date(now.getTime() - HEARTBEAT_STALE_MS) } },
+        {
+          heartbeatAt: { $exists: false },
+          updatedAt: { $lt: new Date(now.getTime() - LEGACY_STALE_MS) },
+        },
+      ],
+    };
+  }
+
+  /**
+   * @description 处理负责进程已不在（重启、发版、崩溃）的任务：已请求取消的按取消收尾；还在排队的由本进程原子接手继续处理；
+   *   解压或写库到一半的判为失败并说明已入库多少张（这些图保留），同时清理临时 ZIP。以前这类任务会永远停在「导入中」，也删不掉。
+   * @keyword-cn ZIP任务恢复, 中断任务接手
+   * @keyword-en zip-job-recovery, take-over-pending-job, fail-interrupted-job
+   */
+  async recoverOrphanedJobs(): Promise<void> {
+    const now = new Date();
+    const orphans = await this.jobs
+      .find(this.buildOrphanFilter(now), {
+        projection: {
+          id: 1,
+          status: 1,
+          cancelRequested: 1,
+          zipAbsPath: 1,
+          imageIds: 1,
+        },
+      })
+      .limit(50)
+      .toArray();
+    for (const orphan of orphans) {
+      const stillOrphaned = { id: orphan.id, ...this.buildOrphanFilter(now) };
+      const zipPath = String(orphan.zipAbsPath ?? '');
+      if (orphan.cancelRequested) {
+        const cancelled = await this.jobs.updateOne(stillOrphaned, {
+          $set: {
+            status: 'cancelled' as GalleryZipImportStatus,
+            stage: `已取消(已入库 ${orphan.imageIds?.length ?? 0} 张)`,
+            finishedAt: now,
+            updatedAt: now,
+          },
+        });
+        if (cancelled.modifiedCount && zipPath) await this.safeUnlink(zipPath);
+        continue;
+      }
+      if (orphan.status === 'pending' && zipPath && existsSync(zipPath)) {
+        const claimed = await this.jobs.updateOne(stillOrphaned, {
+          $set: {
+            ownerId: this.ownerId,
+            heartbeatAt: now,
+            stage: '排队中,服务重启后继续处理',
+            updatedAt: now,
+          },
+        });
+        if (claimed.modifiedCount) this.scheduleJob(orphan.id);
+        continue;
+      }
+      const imported = orphan.imageIds?.length ?? 0;
+      const failed = await this.jobs.updateOne(stillOrphaned, {
+        $set: {
+          status: 'failed' as GalleryZipImportStatus,
+          stage:
+            orphan.status === 'pending'
+              ? '服务重启后找不到 ZIP 临时文件，请重新上传'
+              : `服务重启导致导入中断，已入库 ${imported} 张已保留，剩余图片请重新上传`,
+          finishedAt: now,
+          updatedAt: now,
+        },
+      });
+      if (failed.modifiedCount && zipPath) await this.safeUnlink(zipPath);
+    }
+  }
+
+  /**
+   * @description 把任务登记到本进程名下并异步排进本进程的串行处理（不等待）。
+   * @keyword-cn 登记本进程任务, 串行处理
+   * @keyword-en register-owned-job, sequential-processing
+   */
+  private scheduleJob(id: string): void {
+    this.ownedJobIds.add(id);
+    setImmediate(() => {
+      void this.processJob(id)
+        .catch((e) => {
+          console.error('[GalleryZipImportService.processJob] crashed', e);
+        })
+        .finally(() => this.ownedJobIds.delete(id));
+    });
   }
 
   /**
@@ -106,15 +281,13 @@ export class GalleryZipImportService {
       progress: { total: 0, processed: 0, success: 0, failed: 0 },
       errors: [],
       imageIds: [],
+      ownerId: this.ownerId,
+      heartbeatAt: now,
       createdAt: now,
       updatedAt: now,
     };
     await this.jobs.insertOne(doc);
-    setImmediate(() => {
-      void this.processJob(doc.id).catch((e) => {
-        console.error('[GalleryZipImportService.processJob] crashed', e);
-      });
-    });
+    this.scheduleJob(doc.id);
     return doc;
   }
 
@@ -317,10 +490,19 @@ export class GalleryZipImportService {
       try {
         const docs = await this.gallery.createMany(batch.map((b) => b.input));
         success += docs.length;
+        const batchIds: number[] = [];
         for (const d of docs) {
           if (typeof d.id === 'number' && Number.isFinite(d.id)) {
             imageIds.push(d.id);
+            batchIds.push(d.id);
           }
+        }
+        // 每批入库后就记下图片 id：进程中途退出时，恢复扫描据此说明已入库多少张
+        if (batchIds.length) {
+          await this.jobs.updateOne(
+            { id },
+            { $push: { imageIds: { $each: batchIds } } },
+          );
         }
       } catch (e) {
         failed += batch.length;
@@ -631,8 +813,11 @@ export class GalleryZipImportService {
     try {
       const entry = zip.entry(CLIENT_PREPROCESS_MANIFEST);
       const size = Math.max(0, Number(entry?.size) || 0);
-      if (!entry || size <= 0 || size > MAX_CLIENT_MANIFEST_BYTES) return output;
-      const raw = zip.entryDataSync(CLIENT_PREPROCESS_MANIFEST).toString('utf8');
+      if (!entry || size <= 0 || size > MAX_CLIENT_MANIFEST_BYTES)
+        return output;
+      const raw = zip
+        .entryDataSync(CLIENT_PREPROCESS_MANIFEST)
+        .toString('utf8');
       const parsed = JSON.parse(raw) as {
         version?: unknown;
         processor?: unknown;

@@ -1,7 +1,7 @@
 # Admin Module
 
 ## 模块描述
- 后台管理模块，负责平台手机号账号(`admin_accounts`，一个人一条，可含邮箱)与租户成员身份(`admin_users.accountId`)的分离管理；账号资料归平台，租户只管理本租户成员关系、角色与启用状态。模块同时负责两步登录(账号密码 → 选已绑定租户)、兼容旧版租户化登录、JWT鉴权、基于 CASL 的角色能力鉴权(RBAC 静态角色目录)、角色管理(只读)、平台级AI提供商、固定收费服务 Credit 点数配置、租户 Credit 管理、Claw 接入配置管理、Agent 配置管理。
+ 后台管理模块，负责平台手机号账号(`admin_accounts`，一个人一条，可含邮箱)与租户成员身份(`admin_users.accountId`)的分离管理；账号资料归平台，租户只管理本租户成员关系、角色与启用状态。模块同时负责两步登录(账号密码 → 选已绑定租户)、登录后切换租户(同一手机号账号的成员间换会话并吊销旧会话)、兼容旧版租户化登录、JWT鉴权、基于 CASL 的角色能力鉴权(RBAC 静态角色目录)、角色管理(只读)、平台级AI提供商、固定收费服务 Credit 点数配置、租户 Credit 管理、Claw 接入配置管理、Agent 配置管理。
 文件路径: `src/modules/admin`
 鉴权分层: `AdminAuthGuard`(校验 JWT/注入用户) → `AdminPoliciesGuard`(校验 `@RequirePermission` 声明的 CASL 能力)。角色权限矩阵唯一定义源为 `casl/admin-ability.factory.ts` 的 `ROLE_CATALOG`。
 
@@ -14,6 +14,8 @@
   - `login(body)` — POST /admin/auth/login 旧版单步登录(用户名+租户)，公开免鉴权，保留兼容 | keywords: 兼容登录接口, 用户名登录, legacy-login-endpoint, username-login
   - `identifyLogin(body)` — POST /admin/auth/login/identify 两步登录第一步(公开免鉴权)，手机号或用户名+密码换登录票据与已绑定租户 | keywords: 登录识别接口, 手机号登录, login-identify-endpoint, phone-login
   - `selectLoginTenant(body)` — POST /admin/auth/login/select 两步登录第二步(公开免鉴权，凭票据)，选定租户签发会话 | keywords: 选择租户接口, 签发会话, login-select-endpoint, issue-session
+  - `listSwitchableTenants(req)` — GET /admin/auth/switch-tenants 登录后列出同一手机号账号下可切换的租户并标出当前租户（`read User`） | keywords: 可切换租户接口, 当前租户标记, switchable-tenants-endpoint, current-tenant-flag
+  - `switchTenant(req,body)` — POST /admin/auth/switch-tenant 登录后切换租户：签发目标租户新会话并吊销当前会话（`read User`） | keywords: 切换租户接口, 吊销旧会话, switch-tenant-endpoint, revoke-old-session
   - `getSalesContact()` — GET /admin/auth/sales-contact 租户入驻页业务员二维码与提示语(公开免鉴权，只读平台配置) | keywords: 业务员二维码接口, 租户入驻, sales-contact-endpoint, tenant-onboarding
   - `register(req,body)` — POST /admin/auth/register 公开自助注册，挂 `@RequireSmsCode('register')` + `@RequireEmailCode('register')` 需 smsPhone/smsCode 与 email/emailCode，以已验证手机号和已验证邮箱建账号并固定加入默认租户「其他」 | keywords: 自助注册接口, 默认租户, self-register-endpoint, default-tenant
   - `listLoginTenants`: 登录租户选项/list login tenants
@@ -59,6 +61,10 @@
   - `login({username,password,tenantId?})` — 旧版单步登录，关联了账号的成员以账号密码校验 | keywords: 兼容登录, 用户名登录, legacy-login, username-login
   - `identifyLogin({account,password})` — 两步登录第一步：手机号账号关联成员 ∪ 同名历史用户名成员中密码通过且启用的，按租户去重，签发 5 分钟登录票据；全部停用抛 ACCOUNT_DISABLED | keywords: 两步登录, 手机号登录, 可选租户, two-step-login, phone-login, login-tenant-options
   - `selectLoginTenant({loginTicket,tenantId?})` — 两步登录第二步：票据失效抛 LOGIN_TICKET_EXPIRED，租户不在候选抛 TENANT_NOT_BOUND | keywords: 选择登录租户, 签发会话, select-login-tenant, issue-session
+  - `toTenantOptions(members)` — 成员行转可选租户项并补租户名（平台端显示「平台端」，查不到为「未知租户」），登录与切换共用 | keywords: 可选租户项, 补租户名, tenant-options, tenant-name-lookup
+  - `findSameAccountMembers(user)` — 同一手机号账号（accountId）下启用中的成员，每租户一行，当前租户固定用当前成员；未关联账号的历史成员只有自己 | keywords: 同账号成员, 可切换范围, same-account-members, switch-scope
+  - `listSwitchableTenants(user)` — 列出可切换租户并标出当前租户 | keywords: 可切换租户, 当前租户标记, switchable-tenants, current-tenant-flag
+  - `switchTenant(user,token,tenantId?)` — 切到同账号在目标租户的启用成员：目标为当前租户抛 TENANT_ALREADY_ACTIVE，不在同账号成员里抛 TENANT_NOT_BOUND；签发新会话后吊销当前会话 | keywords: 切换租户, 吊销旧会话, switch-tenant, revoke-old-session
   - `getSalesContact()` — 读取平台作用域业务员二维码与提示语 | keywords: 业务员二维码, 租户入驻, sales-wechat-qrcode, tenant-onboarding
   - `findPasswordMatchedUsers(account,password)` — 收集密码校验通过的成员行 | keywords: 密码匹配成员, 手机号账号, password-matched-members, phone-account
   - `verifyUserPassword(user,password)` — 已关联账号以账号密码为准，否则回退成员自身密码 | keywords: 成员密码校验, 账号密码, verify-member-password, account-password
@@ -73,7 +79,7 @@
   - `ensureAccountsFromLegacyPhones()` — 启动迁移：带 phone 未关联的历史成员按手机号建账号并关联，密码取该号最近登录成员 | keywords: 手机号账号迁移, 历史成员关联, migrate-phone-accounts, link-legacy-members
   - `getMe(currentUser)` — 返回当前成员及租户名，关联账号时包含账号邮箱 | keywords: 当前成员信息, 账号邮箱, current-member-profile, account-email
   - `listUsers(currentUser)` — 一次 `$in` 批量查询账号，以账号昵称、手机号和邮箱覆盖成员快照 | keywords: 成员列表, 账号资料覆盖, member-list, account-profile-overlay
-  - `createUser(currentUser,input)` — 租户管理员只能把已有平台账号加入本租户；超管保留原有账号与独立成员创建能力 | keywords: 创建成员, 租户成员管理, create-admin-user, tenant-membership-management
+  - `createUser(currentUser,input)` — 租户管理员只能把已有平台账号加入本租户；超管保留原有账号与独立成员创建能力，传手机号且不带密码即把已有账号加入目标租户（账号不存在报 ACCOUNT_NOT_FOUND） | keywords: 创建成员, 租户成员管理, create-admin-user, tenant-membership-management
   - `updateUser(currentUser,id,input)` — 租户管理员只能改角色、启用和租户归属；超管改账号昵称时同步全部成员快照 | keywords: 更新成员, 成员资料只读, update-admin-user, readonly-member-profile
   - `toPublicUser(user,account?)` — 转换公开成员视图并按需覆盖账号资料 | keywords: 公开成员转换, 账号资料覆盖, public-member-transform, account-profile-overlay
   - `signLoginTicket(payload)` — 签发登录票据，HMAC 输入带 `login_ticket:` 域前缀与访问 JWT 互不通用 | keywords: 签发登录票据, 签名域隔离, sign-login-ticket, signature-domain-separation
@@ -146,6 +152,8 @@
   - `createForUser`: 依据登录用户角色构建 CASL ability/create ability for admin user | keywords: create-ability-for-admin-user
 
 ### casl/admin-permission.constants.ts
+
+租户 MCP 权限主体为 `TenantMcp`；`tenant_admin` 授 `manage TenantMcp`，操作员不授予，超管通过 `manage all` 管理。对应业务模块见 `../tenant-mcp/module.md`，租户范围由服务层强制限定。
 后台权限主体注册中心(subject 根 key)与动作枚举定义，鉴权声明的 subject 必须逐字取自 `ADMIN_SUBJECTS`；包含小红书 AI 选题生成主体 `XhsTopic`、抖音真实工作台主体 `DouyinWorkbench`、运行参数主体 `PlatformSetting`、热点采集榜主体 `HotTopic`、平台节点主体 `SuperClaw`、短信验证码配置主体 `SmsSetting`(接口类型 / 短信专用 AccessKey / 签名 / 模板)与阿里云配置主体 `AliyunSetting`(OSS 对象存储与 OSS 专用 AccessKey)，后两者不在任何非超管角色目录中，仅超管可用。租户管理员与操作员均可管理各自租户用户边界内的抖音选题、分镜和直连调用；`HotTopic` 覆盖采集规则、榜单条目、归类标签与热点推荐：`tenant_admin` 授 `manage HotTopic`，`operator` 只授 `read HotTopic`(能看榜单、能调推荐，改不了采集规则)。引用知识主体 `Knowledge`(小红书与抖音母选题引用的知识条目，租户内共享)：`tenant_admin` 与 `operator` 都授 `manage Knowledge`，操作员建母选题时要能新建和维护知识。
 - **关键词**: permission, subject, action, registry, root-key, casl
 - **类型导出**: `AdminAction`, `AdminSubject`; 常量 `ADMIN_ACTIONS`, `ADMIN_SUBJECTS`
@@ -165,12 +173,19 @@
   - `AdminLoginTenantOption` — 登录可选租户项(tenantId 空串为平台端) | keywords: 可选租户, 登录租户选择, login-tenant-option, tenant-selection
   - `AdminAiProviderEntity` — AI 提供商配置，`providerCode + modelCategory` 唯一；类别 llm / em / image / video / audio（audio 支持音色克隆及声音设计，创建 / 更新 DTO 与服务端规整同步放行） | keywords: AI提供商配置, 模型类别, ai-provider-entity, model-category
 
+### services/admin-tenant-switch.spec.ts
+登录后切换租户的单元测试：同账号成员列表、未关联账号的历史成员、签发新会话并吊销旧会话、拒绝当前或未绑定租户。
+- **关键词**: tenant switch, same account, session revoke, spec
+- **函数**:
+  - `buildSwitchService(rows)` — 构造切换租户测试服务，替换成员、租户、会话依赖 | keywords: 切换租户测试服务, 同账号成员, tenant-switch-test-service, same-account-members
+
 ### controller/admin.dto.ts
 后台请求体定义。
 - **关键词**: dto, login dto, tenant, provider default, claw config dto, agent config dto, llm setting dto
 - **函数**:
   - `AdminLoginIdentifyDto` — 两步登录第一步请求体(account/password) | keywords: 登录识别请求体, 手机号登录, login-identify-dto, phone-login
   - `AdminLoginSelectDto` — 两步登录第二步请求体(loginTicket/tenantId?) | keywords: 选择租户请求体, 登录票据, login-select-dto, login-ticket
+  - `AdminSwitchTenantDto` — 登录后切换租户请求体(tenantId?，不传为平台端) | keywords: 切换租户请求体, 目标租户, switch-tenant-dto, target-tenant
   - `AdminRegisterDto` — 自助注册请求体(displayName?/email/password；email 必填、须先通过邮箱验证码，校验格式且不超过 254 字符，tenantName?、username? 仅兼容旧客户端) | keywords: 自助注册请求体, 默认租户, admin-register-dto, default-tenant
   - `CreateAdminUserDto` — username/displayName/password/phone 均为可选字段，由服务按操作者角色校验 | keywords: 创建成员请求体, 可选账号字段, create-admin-user-dto, optional-account-fields
   - `UpsertPlatformInfoDto` — 新增 `salesWechatQrCodeUrl`(http(s) 或 data:image base64，≤700000 字符) 与 `salesContactTip`(≤200) | keywords: 业务员二维码, 平台信息, sales-wechat-qrcode, platform-info

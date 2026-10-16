@@ -32,6 +32,7 @@ Todo服务。
   - `create`: 创建待办/create
   - `update`: 更新待办/update
   - `listByScope`: 范围查询（支持 category 过滤）/list by scope
+  - `listLatestByResource({ userId, tenantId?, category, resourceType, omitResultStatuses? })` — 在数据库里按绑定资源分组，只取每个资源最新的一条待办，指定状态不带 `taskResult`，供高频状态轮询用（索引 `{ tenantId, userId, category, id }`） | keywords: 每资源最新待办, 轮询轻量查询, latest-todo-per-resource, lightweight-polling-query
   - `claimNextByAssignees({ tenantId, assignees })` — 通过租户、Agent、状态、截止时间和创建时间组合索引，原子领取最早 pending 任务；跳过主动推送已预留未 ACK 的任务及已有 abnormalReason 的异常任务 | keywords: 原子领取任务, SuperClaw下发, atomic-task-claim, super-claw-dispatch
   - `reserveNextForDelivery({ tenantIds, workspaceIds, assignees, includePlatform?, superClawId, deliveryId, ackDeadline, maxExecutionAttempts? })` — 从节点所辖租户及平台工作区中预留最早任务并轮换本次投递 Token，跳过已达重复领取上限及已有 abnormalReason 的任务 | keywords: 预留推送任务, 轮换任务令牌, reserve-push-task, rotate-task-token
   - `failExhaustedTaskDeliveries(workspaceIds,maxExecutionAttempts)` — 把被节点反复领取仍未写入终态的任务判为 failed，阻断无限重投 | keywords: 封顶重复领取, 阻断无限重投, cap-repeated-claim, stop-infinite-redelivery

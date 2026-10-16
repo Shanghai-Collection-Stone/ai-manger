@@ -279,6 +279,7 @@ export class XhsTopicCleanupService implements OnModuleInit, OnModuleDestroy {
       const scope = { tenantId, userId };
       const groups = await this.repository.listWorkspace(scope, {
         includeStoredArticles: true,
+        withArticles: false,
       });
       const storedIds = await this.repository.listStoredArticleTopicIds(
         scope,

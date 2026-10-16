@@ -20,12 +20,32 @@ import {
 import {
   DOUYIN_FACE_MASK_STYLES,
   DOUYIN_SCRIPT_STYLES,
+  DOUYIN_STORE_VISIT_TEMPLATES,
   type DouyinFaceMaskStyle,
+  type DouyinStoreVisitTemplate,
 } from '../entities/douyin-workbench.entity.js';
 import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.entity.js';
 
 /** @type {string[]} 允许的脚本风格键名，取自实体登记表，前后端同源。 */
 const SCRIPT_STYLE_KEYS = Object.keys(DOUYIN_SCRIPT_STYLES);
+
+/** @description 续接探店待生成片段，只收真实前段视频与已入图库的尾帧编号。 @keyword-cn 续段生成参数, 尾帧编号 @keyword-en continue-segment-dto, tail-image-id */
+export class ContinueDouyinStoreVisitDto {
+  @IsInt()
+  @Min(1)
+  previousVideoId!: number;
+
+  @IsInt()
+  @Min(1)
+  tailImageId!: number;
+}
+
+/** @description 截帧失败的可持久化原因，不接受状态或视频输出字段。 @keyword-cn 续段失败参数, 截帧错误 @keyword-en continuation-failure-dto, frame-extraction-error */
+export class FailDouyinStoreVisitContinuationDto {
+  @IsString()
+  @MaxLength(500)
+  error!: string;
+}
 
 /**
  * @description 探店台词最长字数（约 3 分钟口播），前端台词框上限与它一致。
@@ -228,6 +248,26 @@ export class DouyinReferenceImageDto {
 }
 
 /**
+ * @description 校验探店场景图：图库图片引用，另带这张场景的说明（最多 500 字，与图库备注同上限）与标签（最多 10 个、每个 30 字内）。
+ *   旧数据可以没有说明，保存时不拦，生成前由服务端要求补齐。
+ * @keyword-cn 探店场景图参数, 场景说明标签
+ * @keyword-en store-visit-scene-image-dto, scene-description-tags
+ */
+export class DouyinStoreVisitSceneImageDto extends DouyinReferenceImageDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  @MaxLength(30, { each: true })
+  tags?: string[];
+}
+
+/**
  * @description 校验视频声音设置：配音 / 仅音乐 / 静音，与配音语言。
  * @keyword-cn 声音设置参数, 配音语言
  * @keyword-en video-audio-dto, voiceover-language
@@ -262,11 +302,16 @@ export class DouyinPublishCopyDto {
 }
 
 /**
- * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图 ID 与画面描述；成片与配音只由服务端写入。
+ * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图 ID、画面描述与镜头类型（人物出镜 / 门店空镜）；
+ *   人物首帧、成片与配音只由服务端写入。
  * @keyword-cn 探店分段参数, 分段台词
  * @keyword-en store-visit-segment-dto, segment-lines
  */
 export class DouyinStoreVisitSegmentDto {
+  @IsOptional()
+  @IsIn(['presenter', 'broll'])
+  shot?: 'presenter' | 'broll';
+
   @IsOptional()
   @IsString()
   @MaxLength(40)
@@ -289,17 +334,26 @@ export class DouyinStoreVisitSegmentDto {
 }
 
 /**
- * @description 校验探店场景、场景说明、台词与分段；音色只由克隆和选用接口写入，这里不收。
+ * @description 校验探店出镜人物（图库图片，传 null 清掉）、出镜模板、场景、场景说明、台词与分段；音色只由克隆和选用接口写入，这里不收。
  * @keyword-cn 探店设置参数, 场景台词
  * @keyword-en store-visit-setting-dto, scene-lines
  */
 export class DouyinStoreVisitDto {
   @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinReferenceImageDto)
+  faceImage?: DouyinReferenceImageDto | null;
+
+  @IsOptional()
+  @IsIn(DOUYIN_STORE_VISIT_TEMPLATES)
+  template?: DouyinStoreVisitTemplate;
+
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(4)
   @ValidateNested({ each: true })
-  @Type(() => DouyinReferenceImageDto)
-  sceneImages?: DouyinReferenceImageDto[];
+  @Type(() => DouyinStoreVisitSceneImageDto)
+  sceneImages?: DouyinStoreVisitSceneImageDto[];
 
   @IsOptional()
   @IsString()
@@ -613,6 +667,18 @@ export class GenerateDouyinStoreVisitLinesDto {
 }
 
 /**
+ * @description 校验生成人物首帧的可选补充描述（最多 500 字），如「站在门口指着招牌」。
+ * @keyword-cn 人物首帧参数, 首帧补充描述
+ * @keyword-en keyframe-dto, keyframe-requirement
+ */
+export class GenerateDouyinStoreVisitKeyframeDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  prompt?: string;
+}
+
+/**
  * @description 校验选用或试听的音色 ID：系统音色 ID 由服务端按目录再校验一次，克隆音色只允许本脚本自己的。
  * @keyword-cn 音色参数, 选用试听音色
  * @keyword-en store-visit-voice-dto, pick-or-preview-voice
@@ -623,6 +689,23 @@ export class DouyinStoreVisitVoiceDto {
   @MaxLength(200)
   @Matches(/^[A-Za-z0-9_.-]+$/)
   voiceId!: string;
+}
+
+/**
+ * @description 校验提示词定制音色：声音描述 5～500 字（百炼声音设计只认中英文描述、最多 500 字），可选一个 30 字内的音色名称。
+ * @keyword-cn 提示词定制音色参数, 声音描述
+ * @keyword-en design-voice-dto, voice-prompt
+ */
+export class DesignDouyinStoreVisitVoiceDto {
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  prompt!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  name?: string;
 }
 
 /**

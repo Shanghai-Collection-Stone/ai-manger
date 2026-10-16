@@ -45,10 +45,14 @@ const EMBEDDING_PATTERNS = [
   'm3e',
 ];
 
-/** 生视频：`-video` 后缀之外，按平台在售的视频模型族名兜底。 */
+/** 生视频：`-video` 后缀之外，按平台在售的视频模型族名兜底；万相按任务后缀（如 `wan2.7-i2v`）认。 */
 const VIDEO_PATTERNS = [
   '-video',
   'video-',
+  '-i2v',
+  '-t2v',
+  '-r2v',
+  '-s2v',
   'seedance',
   'hailuo',
   'happyhorse',

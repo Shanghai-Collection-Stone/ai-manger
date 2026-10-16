@@ -180,7 +180,8 @@ export class DouyinPersonaGenerationService {
     id: number,
     scope: DouyinPersonaScope,
   ): Promise<DouyinPersonaView> {
-    const persona = await this.repository.get(id, scope);
+    // 只给自己拥有的人物出图：平台公开人物对租户只读，避免出完三张才在回填时失败。
+    const persona = await this.repository.getOwned(id, scope);
     if (!persona) throw new BadRequestException('DOUYIN_PERSONA_NOT_FOUND');
     const appearance = String(persona.appearance ?? '').trim();
     if (!appearance) {

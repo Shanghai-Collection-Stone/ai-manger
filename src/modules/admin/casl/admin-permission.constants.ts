@@ -24,6 +24,8 @@ export type AdminAction = (typeof ADMIN_ACTIONS)[number];
  * @keyword-cn 权限主体注册中心
  */
 export const ADMIN_SUBJECTS = {
+  /** @keyword-en tenant-mcp, key-management */
+  TenantMcp: 'TenantMcp',
   /** 后台用户 */
   User: 'User',
   /** 平台 AI 提供商与计费换算配置 */

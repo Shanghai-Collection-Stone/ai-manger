@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -65,6 +66,11 @@ export class CreateDouyinPersonaDto {
   @ValidateNested()
   @Type(() => DouyinPersonaVoiceDto)
   voice?: DouyinPersonaVoiceDto;
+
+  /** 仅母平台可传：公开给所有租户只读选用 */
+  @IsOptional()
+  @IsBoolean()
+  isPublic?: boolean;
 }
 
 /**
@@ -105,6 +111,11 @@ export class UpdateDouyinPersonaDto {
   @IsOptional()
   @IsIn(['active', 'archived'])
   status?: 'active' | 'archived';
+
+  /** 仅母平台可传：公开给所有租户只读选用 */
+  @IsOptional()
+  @IsBoolean()
+  isPublic?: boolean;
 }
 
 /**

@@ -52,7 +52,7 @@ export class DouyinPersonaController {
   ) {}
 
   /**
-   * @description 查询本租户的预设人物列表，`includeArchived=1` 时连同已归档一起返回（后台管理页使用）。
+   * @description 查询本租户的预设人物列表（含平台公开人物，带 `fromPlatform` 只读标记），`includeArchived=1` 时连同本租户已归档的一起返回（后台管理页使用）。
    * @keyword-cn 查询预设人物接口, 人物列表
    * @keyword-en list-douyin-personas-api, persona-list
    */
@@ -116,7 +116,7 @@ export class DouyinPersonaController {
   }
 
   /**
-   * @description 更新人物设定或归档状态。
+   * @description 更新人物设定、归档状态或平台公开开关（仅母平台可设公开）。
    * @keyword-cn 更新预设人物接口, 归档人物
    * @keyword-en update-douyin-persona-api, archive-persona
    */

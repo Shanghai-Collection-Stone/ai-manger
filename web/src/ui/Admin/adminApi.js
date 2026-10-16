@@ -150,6 +150,11 @@ export function buildTenantInviteUrl(code) {
  * @keyword-en admin api service
  */
 export const adminApi = {
+  /** @keyword-en tenant-mcp-api, key-management */
+  tenantMcp(path = '', options = {}, tenantId = '') {
+    const query = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : '';
+    return request(`/tenant-mcp${path}${query}`, options);
+  },
   async login(username, password, tenantId = '') {
     return request('/auth/login', {
       method: 'POST',

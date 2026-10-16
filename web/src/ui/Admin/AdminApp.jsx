@@ -13,6 +13,7 @@ import OpsReportPanel from './OpsReportPanel';
 import AliyunSettingPanel from './AliyunSettingPanel';
 import TenantJoinPanel from './TenantJoinPanel';
 import WorkflowModelPanel from './WorkflowModelPanel';
+import TenantMcpPanel from './TenantMcpPanel';
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
 const LazyMDMarkdown = React.lazy(() =>
@@ -183,10 +184,19 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'shuyan', label: '数眼智能 ShuyanAI（OpenAI 兼容中转）' },
   { value: 'pixmax', label: 'PixMax（生视频 / 多模型中转）' },
   {
-    value: 'digital-human',
-    label: '通用数字人服务（克隆 / 声音设计 / 对口型视频，按契约对接）',
+    value: 'dashscope',
+    label: '阿里云百炼 DashScope（探店音色克隆与配音 · CosyVoice）',
   },
 ];
+
+/**
+ * @description 已下线、不再出现在下拉里的提供商编码；编辑旧记录时仍显示出来并标注已下线，避免下拉框显示成空白。
+ * @keyword-cn 已下线提供商编码, 旧记录兼容
+ * @keyword-en retired-provider-codes, legacy-record-compat
+ */
+const RETIRED_PROVIDER_CODE_LABELS = {
+  'digital-human': '通用数字人服务（已下线，探店改用阿里云百炼 + 数眼智能）',
+};
 
 /**
  * @description Credit 流水类型的后台中文标签。
@@ -244,7 +254,7 @@ const renderPager = (pageInfo, onPrev, onNext) => (
 const isSuperAdmin = (role) => role === 'super_admin';
 
 /**
- * @description 将成员关系接口错误码转换为租户管理员可执行的中文提示
+ * @description 将成员关系接口错误码转换为租户管理员和超管可执行的中文提示
  * @keyword-cn 成员错误提示, 租户只读资料
  * @keyword-en member-error-message, tenant-profile-readonly
  */
@@ -252,8 +262,11 @@ const formatUserMutationError = (message) => {
   if (String(message).includes('ACCOUNT_NOT_FOUND')) {
     return '该手机号尚未注册，请让对方先注册，或到「入驻审批」生成邀请链接发送给对方';
   }
+  if (String(message).includes('ACCOUNT_DELETED')) {
+    return '该账号已注销，不能加入租户';
+  }
   if (String(message).includes('PHONE_ALREADY_IN_TENANT')) {
-    return '该手机号已在本租户';
+    return '该手机号已在该租户中';
   }
   if (String(message).includes('MEMBER_PROFILE_READONLY')) {
     return '租户不能修改成员的昵称和密码';
@@ -340,6 +353,7 @@ const ALL_TABS = [
   { id: 'douyin_personas', label: '抖音预设人物' },
   { id: 'tenant_join', label: '入驻审批', adminOnly: true },
   { id: 'ops_reports', label: '运维上报', adminOnly: true },
+  { id: 'tenant_mcp', label: 'MCP 接入', adminOnly: true },
   { id: 'aliyun_settings', label: '阿里云配置', platformOnly: true },
   { id: 'mail_settings', label: '发信邮箱', platformOnly: true },
   { id: 'finance', label: '财务' },
@@ -469,6 +483,8 @@ const AdminApp = () => {
   /** 当前选中的 binding name(空=新建) | @keyword-en finance currently selected binding name */
   const [financeSelectedName, setFinanceSelectedName] = useState('');
   const [editingUserId, setEditingUserId] = useState('');
+  /** 超管新增用户方式：new=新建用户，existing=按手机号把已有账号加入租户 | @keyword-cn 新增用户方式 @keyword-en user-create-mode */
+  const [userCreateMode, setUserCreateMode] = useState('new');
   const [editingProviderId, setEditingProviderId] = useState('');
   const [editingTenantId, setEditingTenantId] = useState('');
   /** Credit 充值/调账及流水弹窗状态 | @keyword-en credit account dialog state */
@@ -2112,6 +2128,41 @@ const AdminApp = () => {
     });
   };
 
+  /** 超管正处于「添加已有账号」新增方式 | @keyword-cn 新增用户方式 @keyword-en user-create-mode */
+  const isAddingExistingAccount =
+    isSuperAdmin(currentRole) && !editingUserId && userCreateMode === 'existing';
+
+  /**
+   * @description 切换超管新增用户方式，切到已有账号时把超管角色回退为操作员
+   * @keyword-cn 切换新增方式, 新增用户方式
+   * @keyword-en switch-user-create-mode, user-create-mode
+   */
+  const onSwitchUserCreateMode = (mode) => {
+    setUserCreateMode(mode);
+    if (mode === 'existing' && forms.user.role === 'super_admin') {
+      updateForm('user', 'role', 'operator');
+    }
+  };
+
+  /**
+   * @description 超管按手机号把已注册账号加入指定租户，同一账号可加入多个租户
+   * @keyword-cn 已有账号加入租户, 一人多租户
+   * @keyword-en add-existing-account-to-tenant, multi-tenant-membership
+   */
+  const onAddExistingAccountToTenant = async () => {
+    const phone = forms.user.phone.trim();
+    if (!phone) throw new Error('请输入已注册用户手机号');
+    if (!forms.user.tenantId) throw new Error('请选择要加入的租户');
+    const res = await adminApi.createUser({
+      phone,
+      role: forms.user.role,
+      tenantId: forms.user.tenantId,
+    });
+    const tenantName = tenants.find((tenant) => tenant._id === forms.user.tenantId)?.name;
+    setUsers((prev) => [res.user, ...prev]);
+    setNotice(tenantName ? `已将该账号加入租户「${tenantName}」` : '已将该账号加入租户');
+  };
+
   /**
    * @description 超管维护完整用户资料，租户管理员仅新增或更新本租户成员关系
    * @keyword-cn 用户成员关系, 租户资料只读
@@ -2138,6 +2189,10 @@ const AdminApp = () => {
         setUsers((prev) => [res.user, ...prev]);
         setNotice('成员已添加');
       }
+      return;
+    }
+    if (isAddingExistingAccount) {
+      await onAddExistingAccountToTenant();
       return;
     }
     const payload = {
@@ -2729,7 +2784,32 @@ const AdminApp = () => {
                   用户资料（昵称、密码）归平台账号所有，租户只能管理成员的角色、启用状态与移除。
                 </p>
               ) : null}
-              {isSuperAdmin(currentRole) ? (
+              {isSuperAdmin(currentRole) && !editingUserId ? (
+                <div className="flex gap-2">
+                  {[
+                    { id: 'new', label: '新建用户' },
+                    { id: 'existing', label: '添加已有账号' },
+                  ].map((mode) => (
+                    <button
+                      key={mode.id}
+                      onClick={() => onSwitchUserCreateMode(mode.id)}
+                      className={`text-xs px-3 py-1.5 rounded-lg border ${
+                        userCreateMode === mode.id
+                          ? 'bg-slate-900 text-white border-slate-900'
+                          : 'bg-white text-slate-600 border-slate-200'
+                      }`}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {isAddingExistingAccount ? (
+                <p className="text-xs text-slate-500 rounded-lg bg-slate-50 p-3">
+                  按手机号把已注册账号加入所选租户，账号原有的租户身份保留，登录时可选择进入哪个租户。
+                </p>
+              ) : null}
+              {isSuperAdmin(currentRole) && !isAddingExistingAccount ? (
                 <>
                   <input
                     className="w-full border rounded px-3 py-2 text-sm"
@@ -2772,7 +2852,8 @@ const AdminApp = () => {
               >
                 {ROLE_OPTIONS.filter(
                   (roleItem) =>
-                    isSuperAdmin(currentRole) || roleItem.value !== 'super_admin',
+                    roleItem.value !== 'super_admin' ||
+                    (isSuperAdmin(currentRole) && !isAddingExistingAccount),
                 ).map((roleItem) => (
                   <option key={roleItem.value} value={roleItem.value}>
                     {roleItem.label}
@@ -2785,13 +2866,15 @@ const AdminApp = () => {
                   value={forms.user.tenantId}
                   onChange={(e) => updateForm('user', 'tenantId', e.target.value)}
                 >
-                  <option value="">不绑定租户（平台级）</option>
+                  <option value="">
+                    {isAddingExistingAccount ? '请选择要加入的租户' : '不绑定租户（平台级）'}
+                  </option>
                   {tenants.map((tenant) => (
                     <option key={tenant._id} value={tenant._id}>{tenant.name}</option>
                   ))}
                 </select>
               ) : null}
-              {isSuperAdmin(currentRole) || editingUserId ? (
+              {(isSuperAdmin(currentRole) && !isAddingExistingAccount) || editingUserId ? (
                 <select
                   className="w-full border rounded px-3 py-2 text-sm"
                   value={forms.user.enabled ? '1' : '0'}
@@ -2808,7 +2891,13 @@ const AdminApp = () => {
                   }
                   className="px-3 py-2 bg-slate-900 text-white text-sm rounded"
                 >
-                  {editingUserId ? '保存' : isSuperAdmin(currentRole) ? '创建用户' : '添加成员'}
+                  {editingUserId
+                    ? '保存'
+                    : isAddingExistingAccount
+                      ? '加入租户'
+                      : isSuperAdmin(currentRole)
+                        ? '创建用户'
+                        : '添加成员'}
                 </button>
                 {editingUserId ? (
                   <button
@@ -2927,10 +3016,10 @@ const AdminApp = () => {
                   ) {
                     updateForm('provider', 'modelCategory', 'video');
                   }
-                  // 通用数字人服务分音色（克隆 / 设计）与生视频两类，默认先建音色
+                  // 阿里云百炼在这里主要用于探店音色克隆与配音，默认切到音色类别（也可改回文本类别接通义千问）
                   if (
-                    e.target.value === 'digital-human' &&
-                    !['audio', 'video'].includes(forms.provider.modelCategory)
+                    e.target.value === 'dashscope' &&
+                    forms.provider.modelCategory !== 'audio'
                   ) {
                     updateForm('provider', 'modelCategory', 'audio');
                   }
@@ -2942,6 +3031,11 @@ const AdminApp = () => {
                     {opt.label}
                   </option>
                 ))}
+                {RETIRED_PROVIDER_CODE_LABELS[forms.provider.providerCode] ? (
+                  <option value={forms.provider.providerCode} disabled>
+                    {RETIRED_PROVIDER_CODE_LABELS[forms.provider.providerCode]}
+                  </option>
+                ) : null}
               </select>
               {forms.provider.providerCode === 'shuyan' ? (
                 <p className="rounded bg-sky-50 px-3 py-2 text-xs leading-5 text-sky-700">
@@ -2964,21 +3058,18 @@ const AdminApp = () => {
                   PixMax 生视频。
                 </p>
               ) : null}
-              {forms.provider.providerCode === 'digital-human' ? (
+              {forms.provider.providerCode === 'dashscope' ? (
                 <p className="rounded bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
-                  抖音探店模式用。按类别各建一条：「音色模型」给工作流节点「音色克隆 / 声音设计」，「生视频模型」给「探店数字人视频」，两条可以指向同一个服务。克隆与设计可在节点里分别选择模型。
-                  服务地址必填，指向按契约实现的服务（由它去对接具体厂商）：POST
-                  /voice-clone 克隆音色并返回 voiceId；POST /voice-design 按 description 和 previewText 设计音色并返回 voiceId，可带 previewUrl 试听；POST /digital-human/tasks
-                  提交人脸 + 固定音色或声音提示词 + 台词并返回任务 id；纯提示词方式支持 voiceMode=prompt / voiceDescription，可不传 voiceId；GET
-                  /digital-human/tasks/{'{id}'} 查询状态，完成时给
-                  videoUrl；GET /models 用于「测试」。API Key 以 Bearer
-                  传过去，模型名原样带在请求的 model 字段里。
+                  抖音探店模式的音色克隆与画外音配音用它（CosyVoice）。类别选「音色模型」，到「工作流节点模型 · 抖音视频制作 · 音色克隆与配音」选这条。
+                  API Key 填百炼控制台的 sk- 开头原始串，不要带 Bearer；服务地址留空默认
+                  https://dashscope.aliyuncs.com/compatible-mode/v1（北京地域，「测试」按它的 /models 探活，配音接口只取域名），业务空间专属域名直接填对应地址。
+                  模型填 cosyvoice-v3.5-plus：录音克隆出的音色只能用克隆时的模型配音；系统音色固定用 cosyvoice-v3-flash，不用另建。
+                  录音克隆需要先配好视频库的 OSS（录音要临时传到公网给百炼取，克隆完即删）。
                 </p>
               ) : null}
-              {forms.provider.providerCode === 'digital-human' &&
-              !['audio', 'video'].includes(forms.provider.modelCategory) ? (
-                <p className="rounded bg-red-50 px-3 py-2 text-xs leading-5 text-red-600">
-                  通用数字人服务请选择「音色模型」或「生视频模型」类别。
+              {forms.provider.providerCode === 'digital-human' ? (
+                <p className="rounded bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+                  通用数字人服务已下线，工作流节点里不会再出现这条记录。探店模式改为：「音色克隆与配音」选阿里云百炼，「探店画面视频」选数眼智能（Seedance / MiniMax-H3 型号）。这条旧记录可以删除。
                 </p>
               ) : null}
               {forms.provider.providerCode === 'pixmax' &&
@@ -5428,9 +5519,17 @@ const AdminApp = () => {
           <HotTopicPanel onNotice={setNotice} onError={setError} />
         ) : null}
 
+        {activeTab === 'tenant_mcp' ? (
+          <TenantMcpPanel currentRole={currentRole} tenants={tenants} onNotice={setNotice} onError={setError} />
+        ) : null}
+
         {/* 抖音预设人物（人设 / 音色 / AI 三视图形象图，供工作台按脚本选用） | @keyword-en douyin persona tab */}
         {activeTab === 'douyin_personas' ? (
-          <DouyinPersonaPanel onNotice={setNotice} onError={setError} />
+          <DouyinPersonaPanel
+            isPlatform={isSuperAdmin(currentRole)}
+            onNotice={setNotice}
+            onError={setError}
+          />
         ) : null}
 
         {/* 入驻审批与邀请链接（仅超管和租户管理员） | @keyword-en tenant-join-admin-tab */}

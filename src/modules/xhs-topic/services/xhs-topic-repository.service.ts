@@ -109,12 +109,92 @@ export class XhsTopicRepositoryService {
   }
 
   /**
+   * @description 查询当前用户自己的子选题各自存在哪个文章库、对应哪篇库内文章：先按选题集合确认归属
+   *   （文章集合的 userId 口径不同，不能用它判定），再按 `meta.xhsTopicId` 一次查出；同一子选题有多篇时取最早入库的那篇。
+   *   代替前端把每个文章库的文章逐库拉下来比对。
+   * @keyword-cn 查询文章所在库, 保存转移动
+   * @keyword-en locate-topic-articles, save-as-move
+   * @param scope 当前租户与用户作用域。
+   * @param topicIds 待查询的子选题业务 ID（最多 200 个）。
+   * @returns {Promise<Array<{topicId:number,libraryId:number,articleId:number}>>} 已入库子选题的位置。
+   */
+  async listArticleLocations(
+    scope: { tenantId?: string; userId: string },
+    topicIds: number[],
+  ): Promise<Array<{ topicId: number; libraryId: number; articleId: number }>> {
+    const candidateIds = [
+      ...new Set(
+        topicIds.filter((topicId) => Number.isInteger(topicId) && topicId > 0),
+      ),
+    ].slice(0, 200);
+    if (!candidateIds.length) return [];
+    const owned = await this.topics
+      .find(
+        {
+          ...this.buildScopeFilter(scope),
+          id: { $in: candidateIds },
+          kind: 'child',
+        },
+        { projection: { id: 1 } },
+      )
+      .toArray();
+    const ownedIds = owned.map((entity) => entity.id);
+    if (!ownedIds.length) return [];
+    const tenantId = String(scope.tenantId ?? '').trim();
+    const filter: Filter<Document> = {
+      source: 'xhs-topic',
+      'meta.xhsTopicId': { $in: ownedIds },
+    };
+    if (tenantId) filter.tenantId = tenantId;
+    const stored = await this.articles
+      .find(filter, {
+        projection: { id: 1, libraryId: 1, 'meta.xhsTopicId': 1 },
+      })
+      .sort({ id: 1 })
+      .toArray();
+    const locations = new Map<
+      number,
+      { topicId: number; libraryId: number; articleId: number }
+    >();
+    for (const article of stored) {
+      const topicId = Number(
+        (article.meta as { xhsTopicId?: unknown } | undefined)?.xhsTopicId,
+      );
+      if (!Number.isInteger(topicId) || locations.has(topicId)) continue;
+      locations.set(topicId, {
+        topicId,
+        libraryId: Number(article.libraryId),
+        articleId: Number(article.id),
+      });
+    }
+    return [...locations.values()];
+  }
+
+  /**
+   * @description 把一条子选题实体转成与工作台列表相同的接口视图，供只回传改动那篇的接口使用。
+   * @keyword-cn 单篇子选题视图, 只回改动选题
+   * @keyword-en single-child-topic-view, changed-topic-response
+   * @param entity 子选题实体（含文章）。
+   * @param scope 当前租户与用户作用域，用于读取租户草稿清理规则。
+   * @returns {Promise<XhsChildTopicView>} 子选题接口视图。
+   */
+  async describeChildTopic(
+    entity: XhsTopicEntity,
+    scope: { tenantId?: string; userId: string },
+  ): Promise<XhsChildTopicView> {
+    const cleanup = await this.cleanupSettings.get(scope.tenantId);
+    return this.toChildView(entity, cleanup.draftArticle);
+  }
+
+  /**
    * @description 按当前租户和用户读取母题及其真实子题列表。选题页传默认值剔除已存入文章库的子题；
    *   数据看板传 `includeStoredArticles` 保留它们——已发文的子选题恰恰是最需要看抓取数据的那批。
-   * @keyword-cn 读取选题工作台, 母子聚合, 保留已入库子题
-   * @keyword-en list-topic-workspace, parent-child-aggregation, include-stored-topics
+   *   文章（含画板与图层）是选题集合里最大的字段：先不带文章读出全部母子题，定好要展示的子题后只为它们补读文章，
+   *   已入库被剔除的子题不再白读整篇；`withArticles: false` 时完全不读文章（数据看板、清理任务用不到）。
+   * @keyword-cn 读取选题工作台, 母子聚合, 保留已入库子题, 按需读取文章
+   * @keyword-en list-topic-workspace, parent-child-aggregation, include-stored-topics, lazy-article-load
    * @param scope 当前租户与用户作用域。
-   * @param options 是否保留已存入文章库的子选题。
+   * @param options 是否保留已存入文章库的子选题、是否带文章。
    * @returns {Promise<XhsTopicWorkspaceGroup[]>} 母题及其子题聚合列表。
    */
   async listWorkspace(
@@ -122,16 +202,43 @@ export class XhsTopicRepositoryService {
       tenantId?: string;
       userId: string;
     },
-    options: { includeStoredArticles?: boolean } = {},
+    options: { includeStoredArticles?: boolean; withArticles?: boolean } = {},
   ): Promise<XhsTopicWorkspaceGroup[]> {
     const entities = await this.topics
-      .find(this.buildScopeFilter(scope))
+      .find(this.buildScopeFilter(scope), { projection: { article: 0 } })
       .toArray();
     const childEntities = entities.filter((entity) => entity.kind === 'child');
     const storedTopicIds = await this.listStoredArticleTopicIds(
       scope,
       childEntities.map((entity) => Number(entity.id)),
     );
+    if (options.withArticles !== false) {
+      const visibleChildIds = childEntities
+        .filter(
+          (entity) =>
+            options.includeStoredArticles || !storedTopicIds.has(entity.id),
+        )
+        .map((entity) => entity.id);
+      const articles = visibleChildIds.length
+        ? await this.topics
+            .find(
+              {
+                ...this.buildScopeFilter(scope),
+                id: { $in: visibleChildIds },
+                article: { $exists: true },
+              },
+              { projection: { id: 1, article: 1 } },
+            )
+            .toArray()
+        : [];
+      const articleById = new Map(
+        articles.map((entity) => [entity.id, entity.article]),
+      );
+      for (const entity of childEntities) {
+        const article = articleById.get(entity.id);
+        if (article) entity.article = article;
+      }
+    }
     const protectedMotherIds = new Set(
       childEntities
         .filter((entity) => storedTopicIds.has(entity.id))
@@ -142,7 +249,8 @@ export class XhsTopicRepositoryService {
     const childrenByParent = new Map<number, XhsChildTopicView[]>();
     for (const entity of childEntities) {
       if (entity.kind !== 'child' || !entity.parentId) continue;
-      if (!options.includeStoredArticles && storedTopicIds.has(entity.id)) continue;
+      if (!options.includeStoredArticles && storedTopicIds.has(entity.id))
+        continue;
       const children = childrenByParent.get(entity.parentId) ?? [];
       children.push(this.toChildView(entity, cleanup.draftArticle));
       childrenByParent.set(entity.parentId, children);
@@ -438,7 +546,11 @@ export class XhsTopicRepositoryService {
       { returnDocument: 'after' },
     );
     if (updated?.parentId) {
-      await this.touchParentLastActive(updated.parentId, article.updatedAt, scope);
+      await this.touchParentLastActive(
+        updated.parentId,
+        article.updatedAt,
+        scope,
+      );
     }
     return updated;
   }
@@ -483,10 +595,7 @@ export class XhsTopicRepositoryService {
       this.topics.updateMany(
         {
           kind: 'mother',
-          $or: [
-            { lastActiveAt: { $exists: false } },
-            { lastActiveAt: null },
-          ],
+          $or: [{ lastActiveAt: { $exists: false } }, { lastActiveAt: null }],
         },
         { $set: { lastActiveAt: now } },
       ),
@@ -647,8 +756,8 @@ export class XhsTopicRepositoryService {
         height: Number(cell?.height) || 0,
         objectFit: cell?.objectFit === 'contain' ? 'contain' : 'cover',
         ...(cell?.focusX !== undefined &&
-          cell.focusX !== null &&
-          Number.isFinite(Number(cell.focusX))
+        cell.focusX !== null &&
+        Number.isFinite(Number(cell.focusX))
           ? {
               focusX:
                 Math.round(
@@ -657,8 +766,8 @@ export class XhsTopicRepositoryService {
             }
           : {}),
         ...(cell?.focusY !== undefined &&
-          cell.focusY !== null &&
-          Number.isFinite(Number(cell.focusY))
+        cell.focusY !== null &&
+        Number.isFinite(Number(cell.focusY))
           ? {
               focusY:
                 Math.round(
@@ -667,13 +776,12 @@ export class XhsTopicRepositoryService {
             }
           : {}),
         ...(cell?.zoom !== undefined &&
-          cell.zoom !== null &&
-          Number.isFinite(Number(cell.zoom))
+        cell.zoom !== null &&
+        Number.isFinite(Number(cell.zoom))
           ? {
               zoom:
-                Math.round(
-                  Math.min(3, Math.max(1, Number(cell.zoom))) * 100,
-                ) / 100,
+                Math.round(Math.min(3, Math.max(1, Number(cell.zoom))) * 100) /
+                100,
             }
           : {}),
       }))

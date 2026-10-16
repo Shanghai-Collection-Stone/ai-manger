@@ -35,7 +35,7 @@ import type { Callbacks } from '@langchain/core/callbacks/manager';
 import type { SubAgent } from 'deepagents';
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
-import { ChatAnthropic } from '@langchain/anthropic';
+import { AnthropicCompatChatModel } from './anthropic-compat-chat.model.js';
 import type * as z3 from 'zod/v3';
 import type * as z4 from 'zod/v4/core';
 import type * as z4Classic from 'zod/v4';
@@ -357,7 +357,8 @@ export class AgentService {
       });
     }
     if (protocol === 'anthropic') {
-      return new ChatAnthropic({
+      // MiniMax 等兼容端业务失败时回 200 + content:null,原生 ChatAnthropic 会直接崩,走兼容层兜底
+      return new AnthropicCompatChatModel({
         model: modelName,
         apiKey: runtime.apiKey,
         anthropicApiUrl: runtime.baseUrl,

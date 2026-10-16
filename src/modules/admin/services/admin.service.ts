@@ -345,17 +345,6 @@ export class AdminService {
     const candidates = [...byTenant.values()];
     if (candidates.length === 0)
       throw new ForbiddenException('ACCOUNT_DISABLED');
-    const tenantIds = candidates
-      .map((user) => user.tenantId)
-      .filter((id): id is string => Boolean(id) && ObjectId.isValid(id!));
-    const tenants = tenantIds.length
-      ? await this.sassTenants
-          .find({ _id: { $in: tenantIds.map((id) => new ObjectId(id)) } })
-          .toArray()
-      : [];
-    const tenantNames = new Map(
-      tenants.map((row) => [String(row._id), row.name]),
-    );
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + this.LOGIN_TICKET_EXPIRE_SECONDS;
     return {
@@ -366,16 +355,115 @@ export class AdminService {
         exp,
       }),
       expiresIn: this.LOGIN_TICKET_EXPIRE_SECONDS,
-      tenants: candidates.map((user) => ({
-        tenantId: user.tenantId ?? '',
-        tenantName: user.tenantId
-          ? (tenantNames.get(user.tenantId) ?? '未知租户')
-          : '平台端',
-        role: user.role,
-        displayName: user.displayName,
-        lastLoginAt: user.lastLoginAt,
-      })),
+      tenants: await this.toTenantOptions(candidates),
     };
+  }
+
+  /**
+   * @description 把成员行转成可选租户项：按租户 ID 补租户名，平台端成员显示「平台端」，查不到的租户显示「未知租户」。
+   * @keyword-cn 可选租户项, 补租户名
+   * @keyword-en tenant-options, tenant-name-lookup
+   * @param {AdminUserEntity[]} members 成员行（每个租户一行）。
+   * @returns {Promise<AdminLoginTenantOption[]>} 可选租户。
+   */
+  private async toTenantOptions(
+    members: AdminUserEntity[],
+  ): Promise<AdminLoginTenantOption[]> {
+    const tenantIds = members
+      .map((user) => user.tenantId)
+      .filter((id): id is string => Boolean(id) && ObjectId.isValid(id!));
+    const tenants = tenantIds.length
+      ? await this.sassTenants
+          .find({ _id: { $in: tenantIds.map((id) => new ObjectId(id)) } })
+          .toArray()
+      : [];
+    const tenantNames = new Map(
+      tenants.map((row) => [String(row._id), row.name]),
+    );
+    return members.map((user) => ({
+      tenantId: user.tenantId ?? '',
+      tenantName: user.tenantId
+        ? (tenantNames.get(user.tenantId) ?? '未知租户')
+        : '平台端',
+      role: user.role,
+      displayName: user.displayName,
+      lastLoginAt: user.lastLoginAt,
+    }));
+  }
+
+  /**
+   * @description 找出与当前成员同属一个手机号账号（`accountId`）、仍启用的成员，每个租户一行：当前租户固定用当前成员，
+   *   其他租户取最近登录的一行。没关联手机号账号的历史成员只有自己，不能凭登录态切到别处。
+   * @keyword-cn 同账号成员, 可切换范围
+   * @keyword-en same-account-members, switch-scope
+   * @param {AdminUserEntity} user 当前登录成员。
+   * @returns {Promise<AdminUserEntity[]>} 每个租户一行的成员。
+   */
+  private async findSameAccountMembers(
+    user: AdminUserEntity,
+  ): Promise<AdminUserEntity[]> {
+    if (!user.accountId) return [user];
+    const rows = await this.users
+      .find({ accountId: user.accountId, enabled: true })
+      .toArray();
+    const byTenant = new Map<string, AdminUserEntity>([
+      [user.tenantId ?? '', user],
+    ]);
+    for (const row of rows.sort(
+      (a, b) =>
+        (b.lastLoginAt?.getTime() ?? 0) - (a.lastLoginAt?.getTime() ?? 0),
+    )) {
+      const key = row.tenantId ?? '';
+      if (!byTenant.has(key)) byTenant.set(key, row);
+    }
+    return [...byTenant.values()];
+  }
+
+  /**
+   * @description 列出当前登录者可切换的租户（同一手机号账号下启用中的成员），并标出当前所在租户。
+   * @keyword-cn 可切换租户, 当前租户标记
+   * @keyword-en switchable-tenants, current-tenant-flag
+   * @param {AdminUserEntity} user 当前登录成员。
+   * @returns {Promise<Array<AdminLoginTenantOption & {current: boolean}>>} 可切换租户。
+   */
+  async listSwitchableTenants(
+    user: AdminUserEntity,
+  ): Promise<Array<AdminLoginTenantOption & { current: boolean }>> {
+    const current = user.tenantId ?? '';
+    const options = await this.toTenantOptions(
+      await this.findSameAccountMembers(user),
+    );
+    return options.map((option) => ({
+      ...option,
+      current: option.tenantId === current,
+    }));
+  }
+
+  /**
+   * @description 登录后切换租户：只能切到同一手机号账号在目标租户的启用成员，签发新会话后吊销当前会话；
+   *   目标就是当前租户时拒绝，避免白白换掉令牌。
+   * @keyword-cn 切换租户, 吊销旧会话
+   * @keyword-en switch-tenant, revoke-old-session
+   * @param {AdminUserEntity} user 当前登录成员。
+   * @param {string} token 当前会话令牌，切换成功后吊销。
+   * @param {string} [tenantId] 目标租户 ID，空表示平台端身份。
+   * @returns {Promise<{token: string, user: AdminUserPublic}>} 新会话。
+   */
+  async switchTenant(
+    user: AdminUserEntity,
+    token: string,
+    tenantId?: string,
+  ): Promise<{ token: string; user: AdminUserPublic }> {
+    const target = tenantId?.trim() ?? '';
+    if ((user.tenantId ?? '') === target)
+      throw new BadRequestException('TENANT_ALREADY_ACTIVE');
+    const next = (await this.findSameAccountMembers(user)).find(
+      (row) => (row.tenantId ?? '') === target,
+    );
+    if (!next) throw new ForbiddenException('TENANT_NOT_BOUND');
+    const session = await this.issueSession(next);
+    await this.logout(token);
+    return session;
   }
 
   /**
@@ -1033,7 +1121,7 @@ export class AdminService {
   }
 
   /**
-   * @description 创建成员；租户管理员只能把已有平台账号加入本租户，超管保留创建账号或独立成员的能力
+   * @description 创建成员；租户管理员只能把已有平台账号加入本租户，超管保留创建账号或独立成员的能力，传手机号不带密码即把已有账号加入目标租户
    * @keyword-cn 创建成员, 租户成员管理
    * @keyword-en create-admin-user, tenant-membership-management
    */
@@ -1086,8 +1174,9 @@ export class AdminService {
         );
         if (existing) throw new BadRequestException('PHONE_ALREADY_IN_TENANT');
       } else {
+        // 没有该手机号账号又没给密码，说明是在添加已有账号，按账号不存在报错。
         if (!input.password) {
-          throw new BadRequestException('USER_FIELDS_REQUIRED');
+          throw new BadRequestException('ACCOUNT_NOT_FOUND');
         }
         account = await this.createPlatformAccount({
           phone,

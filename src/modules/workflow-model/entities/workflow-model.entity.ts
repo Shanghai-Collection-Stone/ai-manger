@@ -54,6 +54,8 @@ export const WORKFLOW_NODES = {
     fullVideo: 'full-video',
     voiceClone: 'voice-clone',
     storeVisitVideo: 'store-visit-video',
+    storeVisitAvatar: 'store-visit-avatar',
+    storeVisitContinuity: 'store-visit-continuity',
   },
   xhsArticle: {
     key: 'xhs-article',
@@ -137,6 +139,13 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         category: 'llm',
       },
       {
+        key: 'store-visit-continuity',
+        label: '探店尾帧衔接',
+        description:
+          '使用支持看图的视觉语言模型理解实际尾帧、原始场景和下一段台词，规划连续运镜与出镜切换',
+        category: 'llm',
+      },
+      {
         key: 'storyboard',
         label: '分镜拆解',
         description: '把脚本正文拆成逐段分镜与配图提示词',
@@ -190,10 +199,19 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         key: 'store-visit-video',
         label: '探店画面视频',
         description:
-          '探店模式：选数眼智能（Seedance 或 MiniMax-H3 型号），每段以场景图为首帧生成与配音等长的空镜视频，再在客户端加配音与字幕拼成一条',
+          '探店模式的门店空镜段：选数眼智能（Seedance、MiniMax-H3 或 wan2.7-i2v 型号），以场景图为首帧生成与配音等长的空镜视频，再在客户端加配音与字幕拼成一条',
         category: 'video',
         runtimeProviders: ['shuyan', 'shuyanai'],
-        unsetHint: '未指定时探店模式不能生成视频',
+        unsetHint: '未指定时探店模式不能生成门店空镜段',
+      },
+      {
+        key: 'store-visit-avatar',
+        label: '探店人物对口型',
+        description:
+          '探店模式的人物出镜段：选数眼智能。填 wan2.7-i2v 时以首帧（场景人物画面或上一段尾帧）加这段配音一次生成会动、口型跟配音的视频（需配置 OSS）；填 kling-avatar-std（标准）或 kling-avatar-pro（高品质）时生成基本站着讲解的数字人；填 Seedance / MiniMax-H3 时先生成画面，再交给可灵按配音对口型',
+        category: 'video',
+        runtimeProviders: ['shuyan', 'shuyanai'],
+        unsetHint: '未指定时探店模式不能生成人物出镜的段（纯画外音不受影响）',
       },
     ],
   },

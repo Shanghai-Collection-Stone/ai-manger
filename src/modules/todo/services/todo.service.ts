@@ -55,6 +55,13 @@ export class TodoService {
     await this.todos.createIndex({ assignee: 1 });
     await this.todos.createIndex({ tenantId: 1, assignee: 1, updatedAt: -1 });
     await this.todos.createIndex({ tenantId: 1, category: 1, updatedAt: -1 });
+    // 生文状态轮询：按用户与分类取每个资源最新的一条
+    await this.todos.createIndex({
+      tenantId: 1,
+      userId: 1,
+      category: 1,
+      id: -1,
+    });
     await this.todos.createIndex({
       tenantId: 1,
       assignee: 1,
@@ -400,6 +407,76 @@ export class TodoService {
     return this.todos
       .find(filter, { projection: { _id: 0 } })
       .sort({ updatedAt: -1 })
+      .toArray();
+  }
+
+  /**
+   * @description 只取某用户某分类下每个绑定资源最新的一条待办（按业务 ID 倒序取第一条），供高频状态轮询用：
+   *   在数据库里分组，不把历史待办整批读进内存；`omitResultStatuses` 里的状态不带 `taskResult`（完成任务的结果
+   *   往往是整篇产出，轮询用不上）。
+   * @keyword-cn 每资源最新待办, 轮询轻量查询
+   * @keyword-en latest-todo-per-resource, lightweight-polling-query
+   * @param input 用户、租户、分类、绑定资源类型与不带结果的状态。
+   * @returns {Promise<TodoEntity[]>} 每个资源最新的一条待办，不含 `_id`。
+   */
+  async listLatestByResource(input: {
+    userId: string;
+    tenantId?: string;
+    category: string;
+    resourceType: string;
+    omitResultStatuses?: TodoEntity['status'][];
+  }): Promise<TodoEntity[]> {
+    const omitResultStatuses = input.omitResultStatuses ?? [];
+    return this.todos
+      .aggregate<TodoEntity>([
+        {
+          $match: {
+            ...this.buildTenantFilter(input.tenantId),
+            userId: input.userId,
+            category: input.category,
+            'associatedResources.type': input.resourceType,
+          },
+        },
+        { $sort: { id: -1 } },
+        // 先丢掉用不上的大字段再分组，分组阶段只搬运轻量文档
+        { $unset: '_id' },
+        ...(omitResultStatuses.length
+          ? [
+              {
+                $set: {
+                  taskResult: {
+                    $cond: [
+                      { $in: ['$status', omitResultStatuses] },
+                      '$REMOVE',
+                      '$taskResult',
+                    ],
+                  },
+                },
+              },
+            ]
+          : []),
+        {
+          $group: {
+            _id: {
+              $let: {
+                vars: {
+                  bound: {
+                    $first: {
+                      $filter: {
+                        input: '$associatedResources',
+                        cond: { $eq: ['$$this.type', input.resourceType] },
+                      },
+                    },
+                  },
+                },
+                in: '$$bound.resourceId',
+              },
+            },
+            todo: { $first: '$$ROOT' },
+          },
+        },
+        { $replaceRoot: { newRoot: '$todo' } },
+      ])
       .toArray();
   }
 

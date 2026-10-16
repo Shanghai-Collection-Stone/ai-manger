@@ -1,4 +1,5 @@
 import {
+  buildShuyanWanPayload,
   clampShuyanVideoDuration,
   describeShuyanVideoError,
   listShuyanVideoDurationChoices,
@@ -12,6 +13,7 @@ import {
   resolveShuyanVideoRoute,
   resolveShuyanVideoTaskUrl,
   shuyanResolutionHeightOf,
+  SHUYAN_WAN_PROMPT_MAX,
   unwrapShuyanVideoTask,
 } from './douyin-shuyan-video.service';
 
@@ -180,5 +182,106 @@ describe('数眼视频运行时（Seedance / MiniMax-H3）', () => {
     expect(describeShuyanVideoFailure('SHUYAN_VIDEO_HTTP_429:{}')).toBe(
       '请求数眼智能太频繁，请稍等片刻再试。',
     );
+  });
+});
+
+describe('数眼视频运行时（万相 wan2.7-i2v · 百炼协议）', () => {
+  it('wan2.7-i2v 及其快照走万相路由，其他万相型号仍未接入', () => {
+    expect(resolveShuyanVideoRoute('wan2.7-i2v')).toBe('wan');
+    expect(resolveShuyanVideoRoute('wan2.7-i2v-2026-04-25')).toBe('wan');
+    expect(resolveShuyanVideoRoute('wan2.6-i2v')).toBeNull();
+    expect(resolveShuyanVideoRoute('wan2.7-t2v')).toBeNull();
+  });
+
+  it('按百炼异步协议拼创建与查询地址', () => {
+    const gateway = 'https://platform.shuyanai.com';
+    expect(resolveShuyanVideoTaskUrl(gateway, 'wan')).toBe(
+      'https://platform.shuyanai.com/ali/api/v1/services/aigc/video-generation/video-synthesis',
+    );
+    expect(resolveShuyanVideoTaskUrl(gateway, 'wan', 'task-9')).toBe(
+      'https://platform.shuyanai.com/ali/api/v1/tasks/task-9',
+    );
+  });
+
+  it('把 output 里的任务 ID、状态、成片、错误与 usage 时长拆成平铺结构', () => {
+    expect(
+      unwrapShuyanVideoTask({
+        request_id: 'r',
+        output: { task_id: 't-1', task_status: 'PENDING' },
+      }),
+    ).toEqual({ id: 't-1', status: 'PENDING', content: { video_url: '' } });
+    expect(
+      unwrapShuyanVideoTask({
+        output: {
+          task_id: 't-1',
+          task_status: 'SUCCEEDED',
+          video_url: 'https://dashscope.example/v.mp4',
+        },
+        usage: { duration: 6 },
+      }),
+    ).toEqual({
+      id: 't-1',
+      status: 'SUCCEEDED',
+      content: { video_url: 'https://dashscope.example/v.mp4' },
+      duration: 6,
+    });
+    const failed = unwrapShuyanVideoTask({
+      output: {
+        task_id: 't-1',
+        task_status: 'FAILED',
+        code: 'DataInspectionFailed',
+        message: 'bad',
+      },
+    });
+    expect(failed.error).toEqual({
+      code: 'DataInspectionFailed',
+      message: 'bad',
+    });
+    expect(mapShuyanVideoStatus(failed.status)).toBe('failed');
+    expect(mapShuyanVideoStatus('SUCCEEDED')).toBe('completed');
+    expect(mapShuyanVideoStatus('CANCELED')).toBe('failed');
+    expect(mapShuyanVideoStatus('UNKNOWN')).toBe('failed');
+    expect(mapShuyanVideoStatus('PENDING')).toBe('queued');
+  });
+
+  it('首帧必传、配音作驱动音频，提示词按 5000 字截断，不改写提示词也不加水印', () => {
+    const payload = buildShuyanWanPayload({
+      model: 'wan2.7-i2v',
+      prompt: '字'.repeat(6000),
+      firstFrameUrl: 'https://cdn/k.jpg',
+      audioUrl: 'https://oss/a.wav',
+      duration: 10,
+      resolution: '720P',
+    }) as { input: { prompt: string; media: unknown[] }; parameters: unknown };
+    expect(payload.input.prompt).toHaveLength(SHUYAN_WAN_PROMPT_MAX);
+    expect(payload.input.media).toEqual([
+      { type: 'first_frame', url: 'https://cdn/k.jpg' },
+      { type: 'driving_audio', url: 'https://oss/a.wav' },
+    ]);
+    expect(payload.parameters).toEqual({
+      resolution: '720P',
+      duration: 10,
+      prompt_extend: false,
+      watermark: false,
+    });
+    const silent = buildShuyanWanPayload({
+      model: 'wan2.7-i2v',
+      prompt: 'p',
+      firstFrameUrl: 'https://cdn/k.jpg',
+      duration: 5,
+      resolution: '720P',
+    }) as { input: { media: unknown[] } };
+    expect(silent.input.media).toHaveLength(1);
+  });
+
+  it('可选 2~15 秒、720P / 1080P，探店请求的 720p 对到 720P', () => {
+    expect(listShuyanVideoDurationChoices('wan2.7-i2v')[0]).toBe(2);
+    expect(listShuyanVideoDurationChoices('wan2.7-i2v').at(-1)).toBe(15);
+    expect(listShuyanVideoResolutionChoices('wan2.7-i2v')).toEqual([
+      '720P',
+      '1080P',
+    ]);
+    expect(clampShuyanVideoResolution('wan2.7-i2v', '720p')).toBe('720P');
+    expect(clampShuyanVideoResolution('wan2.7-i2v')).toBe('720P');
   });
 });

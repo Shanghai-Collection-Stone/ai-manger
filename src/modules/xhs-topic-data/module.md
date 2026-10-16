@@ -52,7 +52,7 @@
 - `UpdateXhsCrawlSettingsDto({ dailyCrawlAt?,channel?,tikhubApiKey?,tikhubBaseUrl?,intervalMinutes? })` — 校验每日抓取时刻（`HH:mm`）、采集渠道与 TikHub 凭证；Key 传空串清空、不传保持不变，`intervalMinutes` 为废弃字段传了也忽略 | keywords: 抓取时刻参数, 每日定点, crawl-settings-dto, daily-crawl-time
 - `UpdateXhsCrawlWindowDto({ startAt,endAt })` — 校验单选题抓取区间起止时间 | keywords: 抓取区间参数, 起止时间, crawl-window-dto, start-end-time
 - `CreateXhsManualLinkDto({ libraryId,title,url })` — 校验手动添加链接的目标文章库、标题（≤100）与链接（≤2000） | keywords: 手动添加链接参数, 标题链接, manual-link-dto, title-url
-- `XhsTopicDataController.topics(req)` — 返回看板左侧母/子选题列表，保留已存入文章库的子题，并在 `standaloneTopics` 返回手动链接的独立子选题 | keywords: 看板选题列表, 保留已入库子题, 独立子选题, dashboard-topic-list, include-stored-topics, standalone-child-topic
+- `XhsTopicDataController.topics(req)` — 返回看板左侧母/子选题列表，保留已存入文章库的子题，并在 `standaloneTopics` 返回手动链接的独立子选题；看板只用标题、题目类型与抓取状态，子题不带文章（`withArticles: false`） | keywords: 看板选题列表, 保留已入库子题, 独立子选题, dashboard-topic-list, include-stored-topics, standalone-child-topic
 - `XhsTopicDataController.createManualLink(req, dto)` — 手动添加笔记链接，解析不到 NoteId 返回 400，入库即进入监控 | keywords: 手动添加链接接口, 解析笔记ID, manual-link-endpoint, parse-note-id
 - `XHS_NOTE_ID_PATTERN` — 小红书笔记 ID 形态（24 位十六进制） | keywords: 小红书笔记ID, 链接解析, xhs-note-id, link-parse
 - `parseXhsNoteId(link)` — 从笔记链接或分享文本解析 NoteId，短链与位数不对返回 null | keywords: 解析笔记ID, 链接解析, parse-note-id, link-parse

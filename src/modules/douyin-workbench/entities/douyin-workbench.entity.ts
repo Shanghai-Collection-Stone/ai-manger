@@ -151,20 +151,41 @@ export interface DouyinStoreVisitVoiceSample {
 }
 
 /**
- * @description 探店分段（画外音）：一段台词配一张场景图。生成时先用选定音色把台词配成音，再以场景图为首帧生成同样长的空镜视频；
- *   各段出片后由桌面端按顺序把画面、配音与字幕拼成成片。`videoId`、`audioUrl`、`audioSeconds`、`voiceId` 由服务端写入，
- *   台词、场景或画面描述改了就作废。
+ * @description 探店出镜模板：`presenter-all` 一镜到底（每段人物出镜讲解）、`bookend` 首尾出镜（开场与结尾人物出镜，中间门店空镜）、
+ *   `opening` 只开场出镜、`voiceover` 纯画外音（人物不出镜）、`custom` 用户逐段改过。模板只决定新分段默认的镜头类型，以分段的 `shot` 为准。
+ * @keyword-cn 探店出镜模板, 镜头编排
+ * @keyword-en store-visit-template, shot-arrangement
+ */
+export const DOUYIN_STORE_VISIT_TEMPLATES = [
+  'presenter-all',
+  'bookend',
+  'opening',
+  'voiceover',
+  'custom',
+] as const;
+export type DouyinStoreVisitTemplate =
+  (typeof DOUYIN_STORE_VISIT_TEMPLATES)[number];
+
+/**
+ * @description 探店分段：一段台词配一张场景图。生成时先用选定音色把台词配成音；`shot=presenter`（人物出镜）的段以「人物在场景里」的
+ *   首帧 `keyframe` 加这段配音用可灵数字人对口型，其余（门店空镜）以场景图为首帧生成同样长的空镜视频；
+ *   各段出片后由桌面端按顺序把画面、配音与字幕拼成成片。`keyframe`、`videoId`、`audioUrl`、`audioSeconds`、`voiceId` 由服务端写入：
+ *   场景改了首帧作废，台词、场景、画面描述或镜头类型改了成片作废。
  * @keyword-cn 探店分段, 画外音配音, 分段成片
  * @keyword-en store-visit-segment, segment-voiceover, segment-video
  */
 export interface DouyinStoreVisitSegment {
   id: string;
   lines: string;
-  /** @description 本段对应的场景图（`sceneImages` 里的图库 ID），空镜视频以它为首帧 */
+  /** @description 本段对应的场景图（`sceneImages` 里的图库 ID），空镜以它为首帧，人物首帧以它为场景参考 */
   sceneImageId?: number;
-  /** @description 本段画面的镜头与氛围描述，写进空镜视频提示词 */
+  /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
   action?: string;
-  /** @description 本段最近一次生成成功的空镜视频 */
+  /** @description 镜头类型：`presenter` 人物出镜对口型，缺省为门店空镜 */
+  shot?: 'presenter' | 'broll';
+  /** @description 人物出镜段的首帧（人物在这一段场景里），服务端生成写入 */
+  keyframe?: DouyinMediaReference;
+  /** @description 本段最近一次生成成功的视频（空镜或对口型） */
   videoId?: number;
   /** @description 本段配音（WAV）的地址，与 `videoId` 同一次生成写入 */
   audioUrl?: string;
@@ -175,21 +196,39 @@ export interface DouyinStoreVisitSegment {
 }
 
 /**
- * @description 探店画外音设置：场景图与说明、音色（录音克隆或系统音色）、台词与分段。
- *   各段配音 + 空镜视频由桌面端拼接后绑定到脚本的 `generatedVideoId`。
- *   旧版数字人流程留下的 `faceImage`、声音设计等字段不再读取，留在旧数据里也无影响。
+ * @description 探店的一张场景图：图库「场景图库」里的图片引用，另带这张场景的说明与标签（与图库图片的备注、标签同步）。
+ *   说明会写进台词、首帧与视频提示词，生成前每张场景都必须写好说明。
+ * @keyword-cn 探店场景图, 场景说明
+ * @keyword-en store-visit-scene-image, scene-description
+ */
+export interface DouyinStoreVisitSceneImage extends DouyinMediaReference {
+  /** @description 这张场景拍的是什么、重点介绍什么 */
+  description?: string;
+  /** @description 场景标签，例如「门头」「吧台」「招牌菜」 */
+  tags?: string[];
+}
+
+/**
+ * @description 探店设置：出镜人物与出镜模板、场景图（各带说明与标签）与门店整体说明、音色（录音克隆、音色库或提示词定制）、台词与分段。
+ *   各段视频 + 配音由桌面端拼接后绑定到脚本的 `generatedVideoId`。旧版数字人流程留下的声音设计等字段不再读取。
  * @keyword-cn 探店模式设置, 画外音设置, 克隆音色
  * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
 export interface DouyinStoreVisitSetting {
-  /** @description 独立选择的探店场景图，最多四张，不依赖分镜。 */
-  sceneImages?: DouyinMediaReference[];
-  /** @description 门店环境、产品与拍摄氛围的文字说明。 */
+  /** @description 出镜人物照（租户图库图片），人物出镜段的首帧以它为底图；换人物会作废各段首帧 */
+  faceImage?: DouyinMediaReference;
+  /** @description 出镜模板，决定新分段默认是人物出镜还是门店空镜 */
+  template?: DouyinStoreVisitTemplate;
+  /** @description 独立选择的探店场景图，最多四张，不依赖分镜；每张带自己的说明与标签。 */
+  sceneImages?: DouyinStoreVisitSceneImage[];
+  /** @description 门店整体的补充说明（选填），每张场景各自的说明写在 `sceneImages[].description`。 */
   sceneDescription?: string;
   voiceSample?: DouyinStoreVisitVoiceSample;
-  /** @description 音色来源：`clone` 为录音克隆，`preset` 为百炼系统音色 */
-  voiceSource?: 'clone' | 'preset';
+  /** @description 音色来源：`clone` 为录音克隆，`preset` 为音色库里的百炼预置音色，`design` 为按提示词设计的音色 */
+  voiceSource?: 'clone' | 'preset' | 'design';
   voiceName?: string;
+  /** @description 提示词定制音色用的声音描述，只有 `voiceSource=design` 时有值 */
+  voicePrompt?: string;
   voiceCreatedAt?: Date;
   voiceId?: string;
   /** @description 音色所属的提供商记录 ID 与合成模型；克隆音色只能用克隆时绑定的模型配音 */
@@ -356,7 +395,8 @@ export interface DouyinOperationView {
   /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` / `shuyan` 为后台节点指定的供应商，
    *   `client` 为桌面客户端用内置 ffmpeg 合成分镜视频，`dashscope` 为百炼音色克隆审计；
    *   `digital-human` 只出现在通用数字人通道下线前的历史记录里 */
-  provider?: 'direct' | 'pixmax' | 'shuyan' | 'client' | 'dashscope' | 'digital-human';
+  provider?:
+    'direct' | 'pixmax' | 'shuyan' | 'client' | 'dashscope' | 'digital-human';
   /** @description 视频生成模式：`shot` 单镜，`full` 所有分镜一次生成整片，`concat` 把已出片的分镜（或探店分段）视频合成一条，
    *   `store-visit` 探店画外音的单段空镜视频（带 `segmentId`） */
   mode?: 'shot' | 'full' | 'concat' | 'store-visit';
@@ -385,6 +425,14 @@ export interface DouyinOperationView {
   };
   status: string;
   externalId?: string;
+  /** @description 探店连续生成的公开阶段与前置段，内部请求和模型凭证不外发。 @keyword-cn 连续生成状态, 前置片段 @keyword-en continuity-status, predecessor-segment */
+  continuity?: {
+    stage: 'waiting' | 'planning' | 'generating';
+    previousSegmentId?: string;
+    sequenceId: string;
+  };
+  /** @description 探店人物段（视频型号）出片后的对口型阶段：识别人脸、对口型中、完成或跳过（跳过时保留原画面并写原因）。 @keyword-cn 对口型阶段, 口型跳过原因 @keyword-en lip-sync-stage, lip-sync-skip-reason */
+  lipSync?: DouyinStoreVisitLipSyncView;
   result?: unknown;
   /** @description 给用户看的失败说明（中文） */
   error?: string;
@@ -395,12 +443,39 @@ export interface DouyinOperationView {
 }
 
 /**
+ * @description 探店人物段对口型的公开状态：`identifying` 识别并比对人脸，`syncing` 可灵对口型中，`done` 已对上口型，`skipped` 没对上（保留原画面）。
+ * @keyword-cn 对口型公开状态, 对口型阶段
+ * @keyword-en lip-sync-public-state, lip-sync-stage
+ */
+export interface DouyinStoreVisitLipSyncView {
+  stage: 'identifying' | 'syncing' | 'done' | 'skipped';
+  /** 跳过时给用户看的中文原因 */
+  reason?: string;
+}
+
+/**
+ * @description 对口型的服务端状态：在公开状态外记原视频地址与时长、人脸会话、选中的脸和可灵任务 ID，不外发。
+ * @keyword-cn 对口型内部状态, 原视频回退
+ * @keyword-en lip-sync-internal-state, source-video-fallback
+ */
+export interface DouyinStoreVisitLipSyncState extends DouyinStoreVisitLipSyncView {
+  sourceVideoUrl: string;
+  sourceSeconds?: number;
+  sessionId?: string;
+  faceIds?: string[];
+  taskId?: string;
+  /** 跳过时的原始报错，供排查 */
+  detail?: string;
+}
+
+/**
  * @description 视频生成、发布或抓取直连接口的一次持久化调用记录。
  * @keyword-cn 抖音调用记录, 直连接口审计
  * @keyword-en douyin-operation-record, direct-api-audit
  */
 export interface DouyinOperationEntity extends DouyinOperationView {
   _id: ObjectId;
+  lipSync?: DouyinStoreVisitLipSyncState;
   tenantId?: string;
   userId: string;
   request: Record<string, unknown>;

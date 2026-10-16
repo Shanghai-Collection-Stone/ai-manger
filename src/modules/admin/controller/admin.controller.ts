@@ -29,6 +29,7 @@ import {
   AdminLoginDto,
   AdminLoginIdentifyDto,
   AdminLoginSelectDto,
+  AdminSwitchTenantDto,
   AdminRegisterDto,
   AdjustTenantCreditDto,
   CreateAdminUserDto,
@@ -148,6 +149,41 @@ export class AdminController {
   @Get('auth/me')
   async me(@Req() req: Request) {
     return this.adminService.getMe(this.requireUser(req));
+  }
+
+  /**
+   * @description 列出当前登录者可切换的租户（同一手机号账号下启用中的成员），标出当前租户
+   * @keyword-cn 可切换租户接口, 当前租户标记
+   * @keyword-en switchable-tenants-endpoint, current-tenant-flag
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
+  @Get('auth/switch-tenants')
+  async listSwitchableTenants(@Req() req: Request) {
+    const tenants = await this.adminService.listSwitchableTenants(
+      this.requireUser(req),
+    );
+    return { tenants };
+  }
+
+  /**
+   * @description 登录后切换租户：签发目标租户的新会话并吊销当前会话
+   * @keyword-cn 切换租户接口, 吊销旧会话
+   * @keyword-en switch-tenant-endpoint, revoke-old-session
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
+  @Post('auth/switch-tenant')
+  async switchTenant(@Req() req: Request, @Body() body: AdminSwitchTenantDto) {
+    const token = (req as AdminRequest).adminToken;
+    if (typeof token !== 'string' || !token) {
+      throw new UnauthorizedException('UNAUTHORIZED');
+    }
+    return this.adminService.switchTenant(
+      this.requireUser(req),
+      token,
+      body.tenantId,
+    );
   }
 
   /**

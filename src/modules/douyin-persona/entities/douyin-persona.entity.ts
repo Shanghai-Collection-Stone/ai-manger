@@ -105,16 +105,20 @@ export interface DouyinPersonaEntity {
   voice: DouyinPersonaVoice;
   referenceImages: DouyinPersonaImage[];
   status: 'active' | 'archived';
+  /** @description 仅平台级人物有效：为真时所有租户都能读取并在脚本上选用，但不能修改 */
+  isPublic?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
 /**
- * @description 前端使用的预设人物视图，去掉 Mongo `_id`。
+ * @description 前端使用的预设人物视图，去掉 Mongo `_id`；`fromPlatform` 标记平台公开给当前租户的只读人物。
  * @keyword-cn 预设人物视图, 隐藏数据库ID
  * @keyword-en douyin-persona-view, hide-database-id
  */
-export type DouyinPersonaView = Omit<DouyinPersonaEntity, '_id'>;
+export type DouyinPersonaView = Omit<DouyinPersonaEntity, '_id'> & {
+  fromPlatform?: boolean;
+};
 
 /**
  * @description 三视图各自的构图要求，AI 生成形象时逐张按这里的措辞出图，保证三张是同一个人。

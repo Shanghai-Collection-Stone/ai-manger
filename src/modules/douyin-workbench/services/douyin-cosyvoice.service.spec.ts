@@ -1,7 +1,9 @@
 import {
   buildCosyVoicePrefix,
+  COSYVOICE_PRESET_CATEGORIES,
   COSYVOICE_PRESET_VOICES,
   describeCosyVoiceFailure,
+  describeVoiceDesignFailure,
   DouyinCosyVoiceService,
   readWavSeconds,
   resolveDashScopeOrigin,
@@ -62,6 +64,64 @@ describe('百炼 CosyVoice 客户端', () => {
     expect(readWavSeconds(buildWav(2.5, 24000))).toBe(2.5);
     expect(readWavSeconds(buildWav(1.2, 16000, 0xffffffff))).toBe(1.2);
     expect(readWavSeconds(Buffer.from('ID3 mp3 data that is not wav at all.....'))).toBe(0);
+  });
+
+  it('音色库每个分类都同时有男声和女声，每个音色都归到已有分类', () => {
+    const keys = COSYVOICE_PRESET_CATEGORIES.map((category) => category.key);
+    for (const voice of COSYVOICE_PRESET_VOICES)
+      expect(keys).toContain(voice.category);
+    for (const key of keys) {
+      const genders = new Set(
+        COSYVOICE_PRESET_VOICES.filter((voice) => voice.category === key).map(
+          (voice) => voice.gender,
+        ),
+      );
+      expect([...genders].sort()).toEqual(['female', 'male']);
+    }
+  });
+
+  it('声音设计：按描述与试听句创建音色，响应里取音色 ID', async () => {
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          output: { voice_id: 'cosyvoice-v3.5-plus-vd-aim2-x' },
+        }),
+        { status: 200 },
+      ),
+    );
+    const voiceId = await new DouyinCosyVoiceService().designVoice(
+      { apiKey: 'sk-test' },
+      {
+        targetModel: 'cosyvoice-v3.5-plus',
+        prefix: 'aim2',
+        prompt: '二十多岁的女生，声音清亮',
+        previewText: '大家好，今天带大家去探一家宝藏小店。',
+      },
+    );
+    expect(voiceId).toBe('cosyvoice-v3.5-plus-vd-aim2-x');
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      'https://dashscope.aliyuncs.com/api/v1/services/audio/tts/customization',
+    );
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      model: 'voice-enrollment',
+      input: {
+        action: 'create_voice',
+        target_model: 'cosyvoice-v3.5-plus',
+        prefix: 'aim2',
+        voice_prompt: '二十多岁的女生，声音清亮',
+        language_hints: ['zh'],
+      },
+    });
+  });
+
+  it('声音设计报错：描述不合格时提示换个说法，其余沿用通用说明', () => {
+    expect(describeVoiceDesignFailure('DASHSCOPE_VOICE_REJECTED')).toContain(
+      '换个说法',
+    );
+    expect(describeVoiceDesignFailure('DASHSCOPE_HTTP_401:x')).toContain(
+      'API Key',
+    );
   });
 
   it('系统音色 ID 不重复、都带名称和特质', () => {

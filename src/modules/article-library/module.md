@@ -49,7 +49,7 @@ Article-Library
 - `getStats(libraryId)` — 聚合文章库内发布状态和租约占用统计 | keywords: article-library, stats
 - `getThumbnailImages(libraryId,limit?)` — 读取文章库缩略图所需的最近文章首图 | keywords: article-library, thumbnail
 - `ArticleService()` — 文章服务 | keywords: article, service
-- `ensureIndexes()` — 建立文章队列、来源选题、NoteId 关联及租户已发布清理查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
+- `ensureIndexes()` — 建立文章队列、来源选题（含不带 userId 的 `{ source, meta.xhsTopicId }`，供选题页剔除已入库子题与「保存到」查所在库）、NoteId 关联及租户已发布清理查询索引并校准 articles counter | keywords: article-id-counter, 文章入库, 计数器校准
 - `getMaxArticleId()` — 读取当前最大文章业务 ID | keywords: article-id-counter, 文章入库, 计数器校准
 - `ensureCounterAtLeast(seq)` — 将 articles counter 至少推进到指定下限 | keywords: article-id-counter, 文章入库, 计数器校准
 - `nextId()` — 分配新文章业务 ID 前先校准 counter | keywords: article-id-counter, 文章入库, 计数器校准

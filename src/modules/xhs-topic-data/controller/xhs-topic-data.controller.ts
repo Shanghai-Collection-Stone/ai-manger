@@ -80,8 +80,10 @@ export class XhsTopicDataController {
     const user = this.requireUser(req);
     const scope = { tenantId: user.tenantId, userId: user._id.toHexString() };
     return {
+      // 看板只用标题、题目类型与抓取状态，不读整篇文章
       groups: await this.repository.listWorkspace(scope, {
         includeStoredArticles: true,
+        withArticles: false,
       }),
       standaloneTopics: await this.repository.listStandaloneChildren(scope),
     };

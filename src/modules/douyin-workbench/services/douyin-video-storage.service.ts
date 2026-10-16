@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, promises as fsPromises } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { OssStorageService } from '../../video-library/services/oss-storage.service.js';
@@ -166,6 +166,54 @@ export class DouyinVideoStorageService {
     await fsPromises.writeFile(target, buffer);
     this.logger.warn(`[saveAudio] OSS 未配置，音频存到本机 public/${relative}`);
     return { url: `/static/${relative}` };
+  }
+
+  /**
+   * @description 把一张首帧图（图库里的站内图片或 Base64）传到 OSS 的 `poster` 场景，换成外部服务能读的公网地址；
+   *   已经是 http(s) 地址时原样返回。给只认公网地址的视频型号（万相 wan2.7-i2v）用。
+   * @keyword-cn 首帧图转公网地址, 图片传OSS
+   * @keyword-en publish-frame-image, image-to-oss
+   * @param {string} url 图片地址：`/static/...` 站内地址、`data:image/...` 或 http(s)。
+   * @param {DouyinScope} scope 租户用户作用域（决定对象键里的租户目录）。
+   * @returns {Promise<string>} 公网地址。
+   * @throws {Error} 没配 OSS 抛 `DOUYIN_PUBLIC_STORAGE_MISSING`，地址无效抛 `DOUYIN_FRAME_IMAGE_INVALID`。
+   */
+  async publishImage(url: string, scope: DouyinScope): Promise<string> {
+    const clean = String(url ?? '').trim();
+    if (/^https?:\/\//i.test(clean)) return clean;
+    if (!this.oss.isConfigured())
+      throw new Error('DOUYIN_PUBLIC_STORAGE_MISSING');
+    const inline = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(clean);
+    let buffer: Buffer;
+    let contentType: string;
+    if (inline) {
+      contentType = inline[1].toLowerCase();
+      buffer = Buffer.from(inline[2], 'base64');
+    } else {
+      const filePath = resolveStaticFilePath(clean);
+      if (!filePath) throw new Error('DOUYIN_FRAME_IMAGE_INVALID');
+      buffer = await fsPromises.readFile(filePath);
+      const extension = extname(clean.split('?')[0]).toLowerCase();
+      contentType =
+        extension === '.png'
+          ? 'image/png'
+          : extension === '.webp'
+            ? 'image/webp'
+            : 'image/jpeg';
+    }
+    if (!buffer.length) throw new Error('DOUYIN_FRAME_IMAGE_INVALID');
+    const extension =
+      contentType === 'image/png'
+        ? '.png'
+        : contentType === 'image/webp'
+          ? '.webp'
+          : '.jpg';
+    const key = this.oss.buildObjectKey({
+      scene: 'poster',
+      fileName: `first-frame${extension}`,
+      tenantId: scope.tenantId,
+    });
+    return await this.oss.putObject(key, buffer, contentType);
   }
 
   /**

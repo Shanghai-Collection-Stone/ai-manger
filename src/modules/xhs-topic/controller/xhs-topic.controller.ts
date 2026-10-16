@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -288,9 +289,10 @@ export class XhsTopicController {
   }
 
   /**
-   * @description 修改当前用户已生成文章的真实内容、标签、配图或内容形式。
-   * @keyword-cn 更新真实文章接口, 文章配图
-   * @keyword-en update-persisted-article-api, article-images
+   * @description 修改当前用户已生成文章的真实内容、标签、配图或内容形式。带 `?view=topic` 时只回传改动的那篇子选题
+   *   （`{ topic }`），不再每次编辑都把整个工作台重读一遍回传；不带时保持旧客户端的 `{ groups }`。
+   * @keyword-cn 更新真实文章接口, 文章配图, 只回改动选题
+   * @keyword-en update-persisted-article-api, article-images, changed-topic-response
    */
   @Patch(':id/article')
   @RequirePermission('update', 'XhsTopic')
@@ -298,6 +300,7 @@ export class XhsTopicController {
     @Req() req: AdminRequest,
     @Param('id') id: string,
     @Body() dto: UpdateXhsArticleDto,
+    @Query('view') view?: string,
   ) {
     const topicId = Number(id);
     if (!Number.isInteger(topicId) || topicId < 1) {
@@ -310,7 +313,35 @@ export class XhsTopicController {
     };
     const topic = await this.repository.updateArticle(topicId, dto, scope);
     if (!topic) throw new BadRequestException('XHS_ARTICLE_NOT_FOUND');
+    if (view === 'topic') {
+      return { topic: await this.repository.describeChildTopic(topic, scope) };
+    }
     return { groups: await this.repository.listWorkspace(scope) };
+  }
+
+  /**
+   * @description 查询当前用户若干子选题各自已存在哪个文章库及对应的库内文章，供「保存到」弹窗把再次保存转成跨库移动。
+   * @keyword-cn 查询文章所在库接口, 保存转移动
+   * @keyword-en article-locations-api, save-as-move
+   */
+  @Get('article-locations')
+  @RequirePermission('read', 'XhsTopic')
+  async listArticleLocations(
+    @Req() req: AdminRequest,
+    @Query('ids') ids?: string,
+  ) {
+    const user = this.requireUser(req);
+    const topicIds = String(ids ?? '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0)
+      .slice(0, 200);
+    return {
+      locations: await this.repository.listArticleLocations(
+        { tenantId: user.tenantId, userId: user._id.toHexString() },
+        topicIds,
+      ),
+    };
   }
 
   /**

@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import {
   DOUYIN_PERSONA_PERSPECTIVES,
@@ -57,7 +62,7 @@ export function normalizePersonaPerspective(
 
 /**
  * @description 持久化租户内共享的预设人物，并强制租户数据边界。人物按租户共享而不按创建人隔离，
- *   后台管理员维护一次，租户内所有工作台用户都能在脚本上选用。
+ *   后台管理员维护一次，租户内所有工作台用户都能在脚本上选用；平台设为公开的人物所有租户只读可用。
  * @keyword-cn 预设人物仓储, 租户共享
  * @keyword-en douyin-persona-repository, tenant-shared
  */
@@ -73,39 +78,47 @@ export class DouyinPersonaRepositoryService {
   }
 
   /**
-   * @description 创建人物业务 ID 唯一索引与租户列表查询索引。
+   * @description 创建人物业务 ID 唯一索引、租户列表查询索引与平台公开人物索引。
    * @keyword-cn 预设人物索引, 租户列表查询
    * @keyword-en douyin-persona-indexes, tenant-list-query
    */
   async ensureIndexes(): Promise<void> {
     await this.personas.createIndex({ id: 1 }, { unique: true });
     await this.personas.createIndex({ tenantId: 1, status: 1, updatedAt: -1 });
+    await this.personas.createIndex({ isPublic: 1, status: 1 });
   }
 
   /**
-   * @description 列出当前租户的预设人物，默认只返回启用中的，最近更新在前。
+   * @description 列出当前租户的预设人物，默认只返回启用中的，最近更新在前；租户额外看到平台公开且启用中的人物。
    * @keyword-cn 查询预设人物, 启用中人物
    * @keyword-en list-douyin-personas, active-personas
    * @param scope 租户用户作用域。
-   * @param options `includeArchived` 为真时连同已归档一起返回，供后台管理页使用。
+   * @param options `includeArchived` 为真时连同本租户已归档的一起返回，供后台管理页使用。
    * @returns {Promise<DouyinPersonaView[]>} 人物列表。
    */
   async list(
     scope: DouyinPersonaScope,
     options?: { includeArchived?: boolean },
   ): Promise<DouyinPersonaView[]> {
+    const active = { status: 'active' as const };
+    const own = {
+      ...this.tenantFilter(scope.tenantId),
+      ...(options?.includeArchived ? {} : active),
+    };
     const rows = await this.personas
-      .find({
-        ...this.tenantFilter(scope.tenantId),
-        ...(options?.includeArchived ? {} : { status: 'active' }),
-      })
+      .find(
+        scope.tenantId
+          ? { $or: [own, { ...this.publicFilter(), ...active }] }
+          : own,
+      )
       .sort({ updatedAt: -1 })
       .toArray();
-    return rows.map((row) => this.toView(row));
+    return rows.map((row) => this.toView(row, scope.tenantId));
   }
 
   /**
-   * @description 按业务 ID 读取本租户的一个人物，越权或不存在时返回 null。
+   * @description 按业务 ID 读取当前租户可用的一个人物（本租户人物或平台公开人物），越权或不存在时返回 null；
+   *   平台公开人物归档后仍可读，已选用它的脚本不受影响。
    * @keyword-cn 读取预设人物, 租户校验
    * @keyword-en get-douyin-persona, tenant-check
    * @param id 人物业务 ID。
@@ -113,6 +126,26 @@ export class DouyinPersonaRepositoryService {
    * @returns {Promise<DouyinPersonaEntity|null>} 人物记录。
    */
   async get(
+    id: number,
+    scope: DouyinPersonaScope,
+  ): Promise<DouyinPersonaEntity | null> {
+    return this.personas.findOne({
+      id,
+      ...(scope.tenantId
+        ? { $or: [{ tenantId: scope.tenantId }, this.publicFilter()] }
+        : this.tenantFilter()),
+    } as Filter<DouyinPersonaEntity>);
+  }
+
+  /**
+   * @description 按业务 ID 读取当前作用域自己拥有的人物，不含平台公开人物，供需要写回的链路先校验归属。
+   * @keyword-cn 读取自有人物, 归属校验
+   * @keyword-en get-owned-douyin-persona, ownership-check
+   * @param id 人物业务 ID。
+   * @param scope 租户用户作用域。
+   * @returns {Promise<DouyinPersonaEntity|null>} 人物记录。
+   */
+  async getOwned(
     id: number,
     scope: DouyinPersonaScope,
   ): Promise<DouyinPersonaEntity | null> {
@@ -138,9 +171,11 @@ export class DouyinPersonaRepositoryService {
       persona?: string;
       perspective?: string;
       voice?: Partial<DouyinPersonaVoice>;
+      isPublic?: boolean;
     },
     scope: DouyinPersonaScope,
   ): Promise<DouyinPersonaView> {
+    this.assertPublicToggle(scope, input.isPublic);
     const now = new Date();
     const doc: DouyinPersonaEntity = {
       _id: new ObjectId(),
@@ -155,15 +190,17 @@ export class DouyinPersonaRepositoryService {
       voice: normalizePersonaVoice(input.voice),
       referenceImages: [],
       status: 'active',
+      ...(scope.tenantId ? {} : { isPublic: input.isPublic === true }),
       createdAt: now,
       updatedAt: now,
     };
     await this.personas.insertOne(doc);
-    return this.toView(doc);
+    return this.toView(doc, scope.tenantId);
   }
 
   /**
-   * @description 更新人物设定或归档状态，只写传入的字段；形象参考图由专用生成链路写入，不走这里。
+   * @description 更新人物设定、归档状态或平台公开开关，只写传入的字段；形象参考图由专用生成链路写入，不走这里。
+   *   平台公开人物对租户只读，租户更新它按不存在处理。
    * @keyword-cn 更新预设人物, 归档人物
    * @keyword-en update-douyin-persona, archive-persona
    * @param id 人物业务 ID。
@@ -171,6 +208,7 @@ export class DouyinPersonaRepositoryService {
    * @param scope 租户用户作用域。
    * @returns {Promise<DouyinPersonaView>} 更新后的人物。
    * @throws {NotFoundException} 人物不存在或不属于当前租户时抛出。
+   * @throws {ForbiddenException} 租户传入公开开关时抛出。
    */
   async update(
     id: number,
@@ -182,9 +220,11 @@ export class DouyinPersonaRepositoryService {
       perspective?: string;
       voice?: Partial<DouyinPersonaVoice>;
       status?: 'active' | 'archived';
+      isPublic?: boolean;
     },
     scope: DouyinPersonaScope,
   ): Promise<DouyinPersonaView> {
+    this.assertPublicToggle(scope, input.isPublic);
     const patch: Partial<DouyinPersonaEntity> = { updatedAt: new Date() };
     if (input.name !== undefined) patch.name = this.trimLine(input.name, 40);
     if (input.summary !== undefined) {
@@ -205,13 +245,14 @@ export class DouyinPersonaRepositoryService {
     if (input.status === 'active' || input.status === 'archived') {
       patch.status = input.status;
     }
+    if (input.isPublic !== undefined) patch.isPublic = input.isPublic;
     const result = await this.personas.findOneAndUpdate(
       { id, ...this.tenantFilter(scope.tenantId) },
       { $set: patch },
       { returnDocument: 'after', includeResultMetadata: true },
     );
     if (!result.value) throw new NotFoundException('DOUYIN_PERSONA_NOT_FOUND');
-    return this.toView(result.value);
+    return this.toView(result.value, scope.tenantId);
   }
 
   /**
@@ -240,7 +281,7 @@ export class DouyinPersonaRepositoryService {
       { returnDocument: 'after', includeResultMetadata: true },
     );
     if (!result.value) throw new NotFoundException('DOUYIN_PERSONA_NOT_FOUND');
-    return this.toView(result.value);
+    return this.toView(result.value, scope.tenantId);
   }
 
   /**
@@ -300,6 +341,33 @@ export class DouyinPersonaRepositoryService {
   }
 
   /**
+   * @description 构造平台公开人物过滤：无 tenantId 的平台级人物且公开开关为真。
+   * @keyword-cn 平台公开人物, 公开人物过滤
+   * @keyword-en platform-public-persona, public-persona-filter
+   * @returns {Filter<DouyinPersonaEntity>} 过滤条件。
+   */
+  private publicFilter(): Filter<DouyinPersonaEntity> {
+    return { $and: [this.tenantFilter(), { isPublic: true }] };
+  }
+
+  /**
+   * @description 公开开关只允许母平台设置，租户传入即拒绝。
+   * @keyword-cn 公开仅限平台, 公开开关校验
+   * @keyword-en public-platform-only, public-toggle-guard
+   * @param scope 租户用户作用域。
+   * @param isPublic 请求里的公开开关。
+   * @throws {ForbiddenException} 租户传入公开开关时抛出 `DOUYIN_PERSONA_PUBLIC_PLATFORM_ONLY`。
+   */
+  private assertPublicToggle(
+    scope: DouyinPersonaScope,
+    isPublic?: boolean,
+  ): void {
+    if (isPublic !== undefined && scope.tenantId) {
+      throw new ForbiddenException('DOUYIN_PERSONA_PUBLIC_PLATFORM_ONLY');
+    }
+  }
+
+  /**
    * @description 压掉换行与多余空白的单行文本裁剪。
    * @keyword-cn 单行文本裁剪, 去空白
    * @keyword-en trim-single-line, collapse-whitespace
@@ -329,15 +397,22 @@ export class DouyinPersonaRepositoryService {
   }
 
   /**
-   * @description 移除 Mongo `_id` 后生成前端安全的人物视图。
+   * @description 移除 Mongo `_id` 后生成前端安全的人物视图，租户读到的平台人物标记 `fromPlatform`。
    * @keyword-cn 预设人物视图, 隐藏数据库ID
    * @keyword-en douyin-persona-view, hide-database-id
    * @param row 数据库记录。
+   * @param tenantId 当前读取方租户 ID，缺省表示母平台。
    * @returns {DouyinPersonaView} 前端视图。
    */
-  private toView(row: DouyinPersonaEntity): DouyinPersonaView {
+  private toView(
+    row: DouyinPersonaEntity,
+    tenantId?: string,
+  ): DouyinPersonaView {
     const view = { ...row } as Partial<DouyinPersonaEntity>;
     delete view._id;
-    return view as DouyinPersonaView;
+    return {
+      ...view,
+      fromPlatform: Boolean(tenantId) && !row.tenantId,
+    } as DouyinPersonaView;
   }
 }

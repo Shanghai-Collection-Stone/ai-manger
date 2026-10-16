@@ -2,11 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
-import type {
-  GalleryGroupCreateInput,
-  GalleryGroupEntity,
-  GalleryGroupSearchResult,
-  GalleryGroupUpdateInput,
+import {
+  GALLERY_SCENE_GROUP_SYSTEM,
+  type GalleryGroupCreateInput,
+  type GalleryGroupEntity,
+  type GalleryGroupSearchResult,
+  type GalleryGroupSystemKey,
+  type GalleryGroupUpdateInput,
 } from '../entities/gallery-group.entity.js';
 
 @Injectable()
@@ -19,6 +21,12 @@ export class GalleryGroupService {
   private readonly DYNAMIC_COVER_ID = 'default_group_image';
   private readonly DYNAMIC_COLLAGE_ID = 'default_collage_image';
   private readonly LEGACY_COLLAGE_GROUP_NAME = '拼图封面';
+  private readonly SCENE_GROUP_NAME = '场景图库';
+  /** @description 同一用户同一租户并发确保场景图库时共用一次创建，避免建出两个 */
+  private readonly sceneGroupPending = new Map<
+    string,
+    Promise<GalleryGroupEntity>
+  >();
   private isAtlasAvailable: boolean | null = null;
 
   constructor(
@@ -238,6 +246,7 @@ export class GalleryGroupService {
     tags: string[];
     userId?: string;
     tenantId?: string;
+    system?: GalleryGroupSystemKey;
   }): Promise<GalleryGroupEntity> {
     const now = new Date();
     const id = await this.nextId();
@@ -257,12 +266,85 @@ export class GalleryGroupService {
       name: input.name,
       description: input.description,
       tags: input.tags,
+      ...(input.system ? { system: input.system } : {}),
       embedding,
       createdAt: now,
       updatedAt: now,
     };
     await this.groups.insertOne(doc);
     return doc;
+  }
+
+  /**
+   * @description 查找或创建当前用户在本租户的「场景图库」固定分组；已有同名普通分组时收编为固定分组。
+   *   探店制作的场景照片都放这里，每张带场景说明（备注）与标签。
+   * @keyword-cn 场景图库分组, 固定分组
+   * @keyword-en scene-gallery-group, system-group
+   * @param {string | undefined} userId - 用户ID。
+   * @param {string | undefined} tenantId - 租户ID。
+   * @returns {Promise<GalleryGroupEntity>} 场景图库分组。
+   */
+  async findOrCreateSceneGroup(
+    userId: string | undefined,
+    tenantId?: string,
+  ): Promise<GalleryGroupEntity> {
+    const key = `${userId ?? ''}:${tenantId?.trim() ?? ''}`;
+    const pending = this.sceneGroupPending.get(key);
+    if (pending) return pending;
+    const task = (async () => {
+      const filter = this.buildTenantFilter(userId, tenantId);
+      const existing = await this.groups.findOne(
+        { ...filter, system: GALLERY_SCENE_GROUP_SYSTEM },
+        { projection: { _id: 0 } },
+      );
+      if (existing) return existing as GalleryGroupEntity;
+      const named = await this.findByName(
+        this.SCENE_GROUP_NAME,
+        userId,
+        tenantId,
+      );
+      if (named) {
+        await this.groups.updateOne(
+          { id: named.id },
+          {
+            $set: { system: GALLERY_SCENE_GROUP_SYSTEM, updatedAt: new Date() },
+          },
+        );
+        return { ...named, system: GALLERY_SCENE_GROUP_SYSTEM };
+      }
+      return this.createGeneratedGroup({
+        name: this.SCENE_GROUP_NAME,
+        description:
+          '探店场景照片：每张都带场景说明与标签，探店制作从这里选场景',
+        tags: ['场景', '探店场景'],
+        userId,
+        tenantId,
+        system: GALLERY_SCENE_GROUP_SYSTEM,
+      });
+    })();
+    this.sceneGroupPending.set(key, task);
+    try {
+      return await task;
+    } finally {
+      this.sceneGroupPending.delete(key);
+    }
+  }
+
+  /**
+   * @description 读取分组的系统固定标识，普通分组或分组不存在时返回空。
+   * @keyword-cn 读取固定分组标识, 分组保护
+   * @keyword-en read-system-group-key, group-protection
+   * @param {string | number} id - 图库组ID。
+   * @returns {Promise<GalleryGroupSystemKey | undefined>} 固定分组标识。
+   */
+  async findSystemKey(
+    id: string | number,
+  ): Promise<GalleryGroupSystemKey | undefined> {
+    const group = await this.groups.findOne(
+      { id },
+      { projection: { _id: 0, system: 1 } },
+    );
+    return group?.system;
   }
 
   /**
@@ -447,7 +529,8 @@ export class GalleryGroupService {
    * @param {string} [tag] - 标签
    * @param {number} [limit=50] - 返回条数上限
    * @returns {Promise<GalleryGroupEntity[]>} 图库组列表
-   * @keyword-en list gallery groups with tenant filter
+   * @keyword-en tenant-group-list, omit-embedding
+   * @keyword-cn 租户分组列表, 不返回向量
    * @since 2026-03-24
    */
   async listAccessibleGroups(
@@ -459,8 +542,9 @@ export class GalleryGroupService {
     const filter = this.buildTenantFilter(userId, tenantId);
     if (tag) filter.tags = tag;
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
+    // 列表不读向量：分组语义检索自己读原始文档，调用方只用名称、标签与描述
     return this.groups
-      .find(filter, { projection: { _id: 0 } })
+      .find(filter, { projection: { _id: 0, embedding: 0 } })
       .sort({ createdAt: -1, id: -1 })
       .limit(lim)
       .toArray();

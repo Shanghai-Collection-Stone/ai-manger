@@ -53,6 +53,8 @@ describe('classifyShuyanModel 按模型名兜底', () => {
     ['qwen3.8-max', 'llm'],
     ['minimax-m3', 'llm'],
     ['wan3.0-video', 'video'],
+    ['wan2.7-i2v', 'video'],
+    ['wan2.6-t2v', 'video'],
     ['minimax-h3', 'video'],
     ['hailuo-2.3', 'video'],
     ['seedance-2.0', 'video'],

@@ -393,6 +393,17 @@ export class DouyinChildTopicGenerationService {
     if (!topic || topic.kind !== 'child') {
       throw new NotFoundException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
     }
+    // 独立探店按场景分段，每段配一张场景图生成空镜；每张场景的说明与标签告诉 AI 这个场景是什么
+    const sceneImages =
+      topic.productionMode === 'store-visit'
+        ? (topic.storeVisit?.sceneImages ?? [])
+        : [];
+    const sceneCatalog = sceneImages
+      .map((image, index) => {
+        const tags = (image.tags ?? []).join('、');
+        return `场景${index + 1}：${String(image.description ?? '').trim() || image.name}${tags ? `（标签：${tags}）` : ''}`;
+      })
+      .join('\n');
     const source =
       String(topic.script ?? '').trim() ||
       (topic.storyboard ?? [])
@@ -400,7 +411,7 @@ export class DouyinChildTopicGenerationService {
         .filter(Boolean)
         .join('\n') ||
       (topic.productionMode === 'store-visit'
-        ? [topic.title, topic.storeVisit?.sceneDescription]
+        ? [topic.title, topic.storeVisit?.sceneDescription, sceneCatalog]
             .filter(Boolean)
             .join('\n')
         : '');
@@ -424,11 +435,8 @@ export class DouyinChildTopicGenerationService {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 500);
-    // 独立探店按场景分段，每段配一张场景图生成空镜，配音不能超过单段画面时长
-    const sceneImageIds =
-      topic.productionMode === 'store-visit'
-        ? (topic.storeVisit?.sceneImages ?? []).map((image) => image.id)
-        : [];
+    // 配音不能超过单段画面时长
+    const sceneImageIds = sceneImages.map((image) => image.id);
 
     const result = await this.agentService.runWithMessages({
       config: {
@@ -459,7 +467,7 @@ export class DouyinChildTopicGenerationService {
             : '',
           style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
           sceneImageIds.length
-            ? `门店拍了 ${sceneImageIds.length} 个场景，每段旁白配一个场景的空镜，镜头一般按门头环境 → 产品 → 体验 → 总结推荐切换。请把台词分成 ${Math.min(8, Math.max(sceneImageIds.length, 3))}～8 段，每段对应一个场景（同一个场景可以用在多段），每段 15～60 个字（单段画面最长约 15 秒，超过会念不完）；每段第一行只写「【场景k】」（k 是场景序号，从 1 开始），下一行起写这一段台词，除这个标记外不要写别的说明。`
+            ? `门店提供了 ${sceneImageIds.length} 个场景。台词按说话时长分成 ${Math.min(8, Math.max(sceneImageIds.length, 3))}～8 段，每段 15～60 个字（单段画面最长约 15 秒，超过会念不完）。台词分段不代表换场景：谈同一空间或产品时连续多段使用相同场景编号，不要为了换段轮流切图、重复开场或重新介绍环境；只有内容明确移动到另一空间时才换场景。每段第一行只写「【场景k】」（k 是场景序号，从 1 开始），下一行起写这一段台词，除这个标记外不要写别的说明。`
             : '',
           '只输出台词本身。',
         ]
@@ -473,6 +481,9 @@ export class DouyinChildTopicGenerationService {
             mother?.title ? `母选题：${mother.title}` : '',
             `脚本标题：${topic.title}`,
             `脚本内容：<script>${source.slice(0, 8000)}</script>`,
+            sceneCatalog
+              ? `门店场景（序号即【场景k】的 k）：<scenes>\n${sceneCatalog}\n</scenes>`
+              : '',
             requirement
               ? `补充要求：<requirement>${requirement}</requirement>`
               : '',

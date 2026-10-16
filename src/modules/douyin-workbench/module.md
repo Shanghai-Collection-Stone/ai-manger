@@ -4,11 +4,13 @@ AI 抖音工作台（douyin-workbench）
 
 ## 概述 (Overview)
 
-提供租户隔离的抖音母选题、LLM 子选题、逐段分镜持久化，以及生成视频（整片 / 分镜 / 分镜合成 / 探店画外音）、发布视频和作品数据抓取直连接口。母题由用户创建；子题综合母题、租户或母平台 AI 提示词与用户补充要求生成，生成数量由 LLM 自主规划，内容类型在服务端固定为短视频。支持由 LLM 推荐一条可编辑的生成要求。分镜使用项目现有 LLM 并按 `text-generation` 服务一次扣费；其他三类操作只调用显式配置的 HTTP 服务，不会隐式使用 SuperClaw，也不会产生模拟结果。
+提供租户隔离的抖音母选题、LLM 子选题、逐段分镜持久化，以及生成视频（整片 / 分镜 / 分镜合成 / 探店人物出镜与画外音）、发布视频和作品数据抓取直连接口。母题由用户创建；子题综合母题、租户或母平台 AI 提示词与用户补充要求生成，生成数量由 LLM 自主规划，内容类型在服务端固定为短视频。支持由 LLM 推荐一条可编辑的生成要求。分镜使用项目现有 LLM 并按 `text-generation` 服务一次扣费；其他三类操作只调用显式配置的 HTTP 服务，不会隐式使用 SuperClaw，也不会产生模拟结果。
 每条脚本可选一个 [预设人物](../douyin-persona/module.md)（决定出镜人物的长相、叙事视角与成片音色）、一种脚本风格（决定口播调性与画面质感），以及最多 4 张来自租户图库的参考图。AI 出图偏向下逐镜出图为线性串行：第 N 镜以第 N-1 镜刚生成的画面为底图，叠加人物形象图与脚本参考图，换取镜头之间场景、色调与人物状态的连贯。
 
 ## 文件清单 (File List)
 
+- `services/douyin-store-visit-lip-sync.ts` — 人物段视频型号出片后的对口型：可灵人脸识别与对口型地址、人脸解析、按出现时长挑主播与视觉比对提示、配音按出现时间切给选中的脸、跳过原因翻译与公开视图。
+- `services/douyin-store-visit-continuity.ts` — 台词与场景边界判断、场景起始图复用、视觉 LLM 尾帧衔接任务和严格结构化结果校验。
 - `douyin-workbench.module.ts` — NestJS 模块入口与依赖装配（含分镜自动配图所需的 `GalleryModule`、按节点取模型的 `WorkflowModelModule`、成片落库所需的 `VideoLibraryModule`）。
 - `controller/douyin-workbench.controller.ts` — 抖音工作台鉴权 REST 接口。
 - `controller/douyin-workbench.dto.ts` — 选题、分镜、生成、发布和抓取输入校验。
@@ -22,10 +24,10 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-operation.service.ts` — 整片 / 单镜头视频生成、发布、抓取与调用审计，按通道同步状态；列表与同步入口收敛过期客户端合成。
 - `services/douyin-shot-concat.service.ts` — 客户端合成协调：校验分镜（探店模式按分段）就绪、返回有序视频地址（探店分段另带配音地址与字幕）、认领自动合成预约、接收进度与成片 ID、绑定当前整片。
 - `services/douyin-shot-concat.service.spec.ts` — 客户端合成领取、探店分段合成、旧视频重生成保护、结果回报与过期收敛测试。
-- `services/douyin-store-visit.service.ts` — 探店画外音：百炼 CosyVoice 录音克隆或系统音色与试听、逐段配音后以场景图为首帧经数眼智能（Seedance / MiniMax-H3）生成等长空镜视频、后台轮询转存并绑定分段；音色走「音色克隆与配音」节点（百炼），空镜走「探店画面视频」节点（数眼智能）。
-- `services/douyin-cosyvoice.service.ts` — 阿里云百炼 CosyVoice 客户端：声音复刻（创建、等审核、删除音色）、非实时语音合成与试听、WAV 时长解析、系统音色目录与报错翻译。
-- `services/douyin-cosyvoice.service.spec.ts` — 服务域名解析、克隆前缀、WAV 时长、系统音色目录、报错翻译、合成配音请求与下载、错误保留单测。
-- `services/douyin-store-visit-workflow.spec.ts` — 独立探店画外音流程测试：新建探店草稿、场景租户校验、音色字段只由克隆与选用接口写入、分段成片保留与作废、百炼克隆（OSS 前置、删录音与旧音色、审核失败清理、格式校验）、系统音色选用与试听缓存、逐段配音与静音空镜提交、配音超长退费、仅凭标题与场景写台词。
+- `services/douyin-store-visit.service.ts` — 探店分段视频：百炼 CosyVoice 录音克隆、音色库预置音色或提示词定制音色与试听、人物出镜段的「人物在场景里」首帧（分镜画面节点生图）、逐段配音后人物段经数眼可灵数字人对口型（探店人物对口型节点）、空镜段以场景图为首帧经数眼 Seedance / MiniMax-H3 生成等长空镜（探店画面视频节点）、后台轮询转存并绑定分段。
+- `services/douyin-cosyvoice.service.ts` — 阿里云百炼 CosyVoice 客户端：声音复刻（创建、等审核、删除音色）、按提示词设计音色、非实时语音合成与试听、WAV 时长解析、分类音色库目录与报错翻译。
+- `services/douyin-cosyvoice.service.spec.ts` — 服务域名解析、克隆前缀、WAV 时长、音色库目录（每个分类男女声都有）、声音设计请求、报错翻译、合成配音请求与下载、错误保留单测。
+- `services/douyin-store-visit-workflow.spec.ts` — 独立探店流程测试：新建探店草稿、场景租户校验、音色字段只由克隆、选用与提示词定制接口写入、场景说明标签保存与生成前必填、提示词定制音色、出镜人物与模板参数校验、分段成片与人物首帧的保留与作废、换人物作废首帧、百炼克隆（OSS 前置、删录音与旧音色、审核失败清理、格式校验）、系统音色选用与试听缓存、逐段配音与静音空镜提交、人物出镜段前置校验与首尾出镜混合提交（可灵对口型 + 数眼空镜）、配音超长 / 过短退费、仅凭标题与场景写台词。
 - `services/douyin-video-storage.service.ts` — 成片落库：本地合成文件或供应商临时地址存进视频库（OSS 优先，未配置时落 `public/uploads` 或登记外链），另存探店配音与克隆用的临时录音。
 - `services/douyin-pixmax-video.service.ts` — PixMax 生视频通道：分镜 / 整片提示词、提交任务、后台轮询、成片转存视频库并回填。
 - `services/douyin-pixmax-video.service.spec.ts` — 分镜与整片提示词单测。
@@ -35,6 +37,51 @@ AI 抖音工作台（douyin-workbench）
 
 ## 函数清单 (Function List)
 
+- `isStoreVisitSceneStart(segments,index)` — 区分真实场景切换与台词或镜头类型分段 | keywords: 场景起始判断, 台词场景分离, scene-start-check, dialogue-scene-separation
+- `readStoreVisitSceneKeyframe(segment,segments)` — 读取同场景共享的人物起始图 | keywords: 共享场景首帧, 场景画面复用, shared-scene-keyframe, scene-frame-reuse
+- `StoreVisitContinuityPlan()` — 声明尾帧理解、衔接动作和实际视频提示词 | keywords: 尾帧衔接方案, 连续视频提示, tail-frame-plan, continuous-video-prompt
+- `parseStoreVisitContinuityPlan(text)` — 校验视觉模型返回的三个非空字段 | keywords: 解析衔接方案, 视觉结果校验, parse-continuity-plan, vision-result-check
+- `buildStoreVisitContinuityBrief({title,previous,segment,sceneChanged,sceneDescription?})` — 要求视觉 LLM 根据真实尾帧、原始场景与下一段台词规划衔接 | keywords: 尾帧理解要求, 场景衔接规划, tail-frame-analysis, scene-continuity-planning
+- `DouyinOperationView.continuity()` — 公开连续生成阶段、前置段和序列编号 | keywords: 连续生成状态, 前置片段, continuity-status, predecessor-segment
+- `DouyinOperationView.lipSync()` — 公开人物段对口型阶段与跳过原因 | keywords: 对口型阶段, 口型跳过原因, lip-sync-stage, lip-sync-skip-reason
+- `DouyinStoreVisitLipSyncView()` — 对口型公开状态：识别人脸、对口型中、完成或跳过 | keywords: 对口型公开状态, 对口型阶段, lip-sync-public-state, lip-sync-stage
+- `DouyinStoreVisitLipSyncState()` — 对口型服务端状态：原视频地址与时长、人脸会话、选中的脸、可灵任务与跳过原始报错，不外发 | keywords: 对口型内部状态, 原视频回退, lip-sync-internal-state, source-video-fallback
+- `STORE_VISIT_LIP_SYNC_SKIP_PREFIX` — 对口型主动跳过的报错前缀，后接中文原因 | keywords: 对口型跳过标记, 跳过原因, lip-sync-skip-prefix, skip-reason
+- `describeStoreVisitLipSyncSkip(raw)` — 翻成「没对上口型：…，已保留原画面」：主动跳过用自带原因，数眼 404 说明没开放接口，可灵业务错误带原话 | keywords: 对口型跳过说明, 报错翻译, lip-sync-skip-message, error-translation
+- `STORE_VISIT_LIP_SYNC_MIN_MS` — 对口型单个音频片段最短 2000 毫秒 | keywords: 对口型最短片段, 音频裁剪下限, lip-sync-min-clip, audio-clip-floor
+- `STORE_VISIT_FACE_COVERAGE_MIN` — 出现不到半段视频的脸视为路人 | keywords: 人脸出现占比, 路人过滤, face-coverage-threshold, passerby-filter
+- `STORE_VISIT_FACE_MATCH_LIMIT` — 交给视觉模型比对的候选脸最多 6 张 | keywords: 候选人脸上限, 视觉比对数量, face-candidate-limit, vision-match-count
+- `StoreVisitDetectedFace()` — 识别到的一张脸：编号、截图、出现起止毫秒 | keywords: 识别到的人脸, 人脸时间段, detected-face, face-time-range
+- `StoreVisitLipSyncFace()` — 提交给可灵的一张脸与对应配音片段（毫秒） | keywords: 对口型人脸片段, 配音时间窗, lip-sync-face-clip, audio-window
+- `buildStoreVisitLipSyncUrl(gateway,kind,taskId?)` — 拼 `/kling/v1/videos/identify-face` 与 `/kling/v1/videos/advanced-lip-sync[/{id}]` | keywords: 对口型接口地址, 人脸识别地址, lip-sync-task-url, identify-face-url
+- `readFaceText(value)` — 取可灵返回的文本或数字字段（会话 ID、人脸编号、截图），其他类型当空 | keywords: 读取识别字段, 文本字段, read-face-field, text-field
+- `readStoreVisitFaces(data,videoMs)` — 读出会话 ID 与每张脸，缺起止时间按整段算，Base64 截图补前缀 | keywords: 解析人脸识别, 人脸会话, parse-identify-face, face-session
+- `planStoreVisitFaceMatch(faces,videoMs)` — 只有一张脸出现超过半段时直接用，否则按出现时长取候选交给视觉比对，备选为出现超过半段的最长那张 | keywords: 挑选主播人脸, 出现时长筛选, pick-presenter-face, coverage-filter
+- `buildStoreVisitFaceMatchBrief(count)` — 出镜人物照对比候选脸的视觉任务，同一人被拆成多段时都列出 | keywords: 人脸比对提示, 主播身份确认, face-match-brief, presenter-identity-check
+- `parseStoreVisitFaceMatches(text,count)` — 解析 `{"matches":[…]}`，只收范围内去重编号 | keywords: 解析人脸比对, 候选编号校验, parse-face-matches, candidate-index-check
+- `buildStoreVisitLipSyncFaces(faces,{audioMs,videoMs,soundFile})` — 选中的脸按出现时间各对同一时段的配音，重叠归先出现的脸，短于 2 秒不提交 | keywords: 对口型片段编排, 配音时间切分, build-lip-sync-clips, audio-time-split
+- `toStoreVisitLipSyncView(state?)` — 对外只给阶段与跳过原因 | keywords: 对口型状态视图, 隐藏内部字段, lip-sync-view, hide-internal-fields
+- `ContinueDouyinStoreVisitDto()` — 校验前段视频与图库尾帧编号 | keywords: 续段生成参数, 尾帧编号, continue-segment-dto, tail-image-id
+- `FailDouyinStoreVisitContinuationDto()` — 校验本机截帧或上传失败原因 | keywords: 续段失败参数, 截帧错误, continuation-failure-dto, frame-extraction-error
+- `continueStoreVisitSegment(req,operationId,dto)` — 鉴权后以实际尾帧认领并续接待处理段 | keywords: 续段生成接口, 尾帧衔接, continue-segment-api, tail-frame-continuity
+- `failStoreVisitContinuation(req,operationId,dto)` — 仅结束本人尚在等待尾帧的调用 | keywords: 续段失败接口, 等待状态保护, continuation-failure-api, waiting-state-guard
+- `readStoreVisitContinuationInput(req,operationId)` — 鉴权后返回前段真实素材地址与配音时长 | keywords: 续段素材接口, 前段视频鉴权, continuation-input-api, predecessor-video-auth
+- `DouyinStoreVisitService.continueOperation(operationId,{previousVideoId,tailImageId},scope)` — 原子认领待处理段，视觉 LLM 规划后严格从尾帧继续生成 | keywords: 续接探店片段, 原子续段认领, continue-store-visit-segment, atomic-continuation-claim
+- `DouyinStoreVisitService.failPendingContinuation(id,error,scope)` — 截帧失败时原子结束未认领任务 | keywords: 停止尾帧等待, 续段失败记录, stop-tail-wait, continuation-failure-record
+- `DouyinStoreVisitService.readContinuationInput(id,scope)` — 复核前段视频归属并返回真实地址与配音时长 | keywords: 读取续段素材, 前段视频鉴权, read-continuation-input, predecessor-video-auth
+- `DouyinWorkbenchRepositoryService.requireImage(id,scope)` — 验证图库归属并读取真实尾帧 URL | keywords: 校验尾帧素材, 图库归属, require-tail-image, gallery-ownership
+- `buildContinuityService()` — 构造原子认领和视觉模型测试服务 | keywords: 连续生成测试服务, 原子认领测试, continuity-test-service, atomic-claim-test
+- `buildContinuityService.findQueuedOperation(query)` — 按用户与租户匹配测试记录 | keywords: 续段作用域测试, 记录匹配, continuation-scope-test, record-match
+- `buildContinuityService.claimQueuedOperation()` — 只允许一次原子认领 | keywords: 测试原子认领, 重复提交防护, test-atomic-claim, duplicate-submit-guard
+- `buildContinuityService.patchQueuedOperation(query,patch)` — 将状态修改应用到测试记录 | keywords: 测试状态写入, 续段记录, test-status-write, continuation-record
+- `applySet(target,patch?)` — 把 `$set`（含点号路径）写进内存记录，模拟 Mongo 更新 | keywords: 测试内存更新, 点号路径, test-memory-set, dotted-path
+- `buildLipSyncService(options?)` — 构造 MiniMax-H3 人物段已出片的调用记录与数眼 / 可灵替身，验证出片后识别人脸与对口型 | keywords: 对口型测试服务, 人物段出片, lip-sync-test-service, presenter-video-ready
+- `buildLipSyncService.claimLipSyncRow(query,patch)` — 按状态与对口型字段原子认领测试记录 | keywords: 测试对口型认领, 防重复提交, test-lip-sync-claim, duplicate-submit-guard
+- `buildLipSyncService.patchLipSyncRow(query,patch)` — 将状态修改应用到对口型测试记录 | keywords: 测试状态写入, 对口型记录, test-status-write, lip-sync-record
+- `buildLipSyncService.fakeShuyan(url)` — 按地址模拟数眼 H3 查询、可灵人脸识别与对口型 | keywords: 测试数眼替身, 可灵对口型替身, test-shuyan-double, kling-lip-sync-double
+- `buildLipSyncService.fakeShuyanResponse(url)` — 按地址给出数眼 H3 查询、可灵人脸识别与对口型的响应 | keywords: 测试数眼响应, 可灵对口型响应, test-shuyan-response, kling-lip-sync-response
+- `buildWanService()` — 构造「探店人物对口型」填 wan2.7-i2v 的测试服务 | keywords: 万相测试服务, 配音驱动人物段, wan-test-service, audio-driven-presenter
+- `buildWanService.fakeWan(url)` — 按地址模拟数眼万相的创建与查询响应 | keywords: 测试万相替身, 百炼协议响应, test-wan-double, dashscope-protocol-response
 - `buildStoreVisitRepository()` — 构造独立探店草稿与素材归属测试仓储 | keywords: 探店流程测试仓储, 租户素材测试, store-visit-test-repository, tenant-media-test
 - `buildVoiceoverService(topic?)` — 构造探店画外音测试服务：保留真实作用域校验、扣费退费与分段校验，替换数据库、存储、百炼与数眼网络 | keywords: 画外音测试服务, 探店服务替身, voiceover-test-service, store-visit-service-double
 - `DouyinChildTopicGenerationService.constructor(agentService,adminService,personas,repository,workflowModels,knowledge)` — 初始化脚本与探店台词生成依赖 | keywords: 初始化脚本生成, 生成依赖, init-script-generation, generation-dependencies
@@ -65,6 +112,7 @@ AI 抖音工作台（douyin-workbench）
 - `DOUYIN_SCRIPT_STYLES` — 脚本风格登记表：生活随拍 / 电影质感 / 干净商业 / 纪实街头 / 高饱和潮流 / 温暖治愈，每项含口播调性 `tone` 与画面质感 `visual` | keywords: 脚本风格, 画面质感风格, script-style, visual-style
 - `normalizeScriptStyle(input?)` — 规整脚本风格，未登记回退为不指定 | keywords: 规整脚本风格, 默认不指定风格, normalize-script-style, default-no-style
 - `normalizeReferenceImages(input?)` — 规整脚本参考图：只留图片、去重、最多 4 张 | keywords: 规整脚本参考图, 参考图去重, normalize-reference-images, reference-dedupe
+- `normalizeStoreVisitSceneImages(input?)` — 规整探店场景图：沿用图库引用规整（去重、最多 4 张），另保留每张的说明（500 字）与标签（去空去重、最多 10 个、每个 30 字） | keywords: 规整探店场景图, 场景说明标签, normalize-store-visit-scenes, scene-description-tags
 - `GenerateDouyinStoryboardDto()` — 校验 LLM 分镜补充要求 | keywords: 生成分镜参数, 创作要求, generate-storyboard-dto, creative-requirement
 - `GenerateDouyinVideoDto()` — 校验视频生成补充提示 | keywords: 生成视频参数, 分镜合成, generate-video-dto, storyboard-rendering
 - `PublishDouyinVideoDto()` — 校验视频库素材和发布文案 | keywords: 发布视频参数, 抖音文案, publish-video-dto, douyin-caption
@@ -80,7 +128,7 @@ AI 抖音工作台（douyin-workbench）
 - `create(input,scope)` — 人工新建母选题，可带引用知识与制作模式；探店同时创建空制作草稿 | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
 - `createChildren(parentId,candidates,scope)` — 批量保存用户挑中的脚本（标题 + 口播正文 + 配图偏向 + 出镜人物 + 风格 + 参考图）并固定短视频类型 | keywords: 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向, persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference
 - `get(id,scope)` — 按作用域读取选题 | keywords: 读取抖音选题, 所有权校验, get-douyin-topic, ownership-check
-- `update(id,input,scope)` — 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长与清晰度、发布文案、完整分镜或成片绑定，以及探店场景、台词与分段（音色字段不收，只由克隆与选用接口写入），遵守选题作用域 | keywords: 更新抖音选题, 保存脚本正文, 持久化分镜, update-douyin-topic, persist-script-body, persist-storyboard
+- `update(id,input,scope)` — 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长与清晰度、发布文案、完整分镜或成片绑定，以及探店出镜人物（按租户图库校验，换人时作废首帧与人物段成片）、出镜模板、场景、台词与分段（音色字段不收），遵守选题作用域 | keywords: 更新抖音选题, 保存脚本正文, 持久化分镜, update-douyin-topic, persist-script-body, persist-storyboard
 - `updateShot(topicId,shotId,patch,scope)` — 用 arrayFilters 只写一镜的画面 / 配图提示词 / 分镜视频，并发互不覆盖 | keywords: 更新单段分镜, 分镜局部写入, update-single-shot, partial-storyboard-write
 - `remove(id,scope)` — 删除选题并级联子题 | keywords: 删除抖音选题, 级联删除, delete-douyin-topic, cascade-delete
 - `requireVideo(id,scope)` — 校验真实视频库记录 | keywords: 校验视频素材, 视频库归属, require-video-asset, video-library-ownership
@@ -159,7 +207,7 @@ AI 抖音工作台（douyin-workbench）
 - `createCrawl(topicId,platformVideoId,user)` — 直连抓取真实作品指标 | keywords: 直连抖音抓取, 真实作品数据, direct-douyin-crawl, real-published-metrics
 - `list(scope)` — 收敛过期客户端合成并查询当前用户的真实调用结果 | keywords: 查询抖音调用, 真实接口结果, list-douyin-operations, real-api-result
 - `DouyinOperationService.DIRECT_RESOLUTIONS` — 直连视频服务的可选清晰度（720P / 1080P） | keywords: 直连可选清晰度, 整片清晰度, direct-resolution-choices, full-video-resolution
-- `getVideoOptions()` — 读取整片和分镜节点的通道、模型、可选时长与清晰度，另带探店两个节点（`storeVisit.voiceClone` 音色克隆与配音、`storeVisit.video` 探店画面视频）是否已指定可用提供商及画面可选秒数 | keywords: 视频生成选项, 可选时长, 可选清晰度, video-generation-options, duration-choices, resolution-choices
+- `getVideoOptions()` — 读取整片和分镜节点的通道、模型、可选时长与清晰度，另带探店三个节点（`storeVisit.voiceClone` 音色克隆与配音、`storeVisit.video` 探店画面视频、`storeVisit.avatar` 探店人物对口型，带 `lipSync` 区分可灵对口型与视频型号，Seedance / MiniMax-H3 另带 `postLipSync` 表示出片后再对口型，wan2.7-i2v 另带 `audioDriven` 表示按配音一次生成口型）是否已指定可用提供商及画面可选秒数 | keywords: 视频生成选项, 可选时长, 可选清晰度, video-generation-options, duration-choices, resolution-choices
 - `openVideoDownload(videoId,user)` — 校验视频归属后由服务端拉取视频地址（站内地址读本地文件），返回可读流、类型、大小与文件名 | keywords: 代理下载视频, 跨域下载, proxy-video-download, cross-origin-download
 - `sync(id,user)` — 收敛过期合成并按提供商同步异步调用：PixMax / 数眼直接查询推进，探店分段交给探店服务，客户端合成、音色审计与通用数字人历史记录返回当前记录 | keywords: 同步抖音调用状态, 异步任务查询, sync-douyin-operation, async-job-status
 - `invoke(operation,topicId,request,config,scope,operationId?)` — 调用外部接口并写审计 | keywords: 调用抖音外部接口, 保存调用审计, invoke-douyin-external-api, persist-call-audit
@@ -215,24 +263,27 @@ AI 抖音工作台（douyin-workbench）
 - `SHUYAN_VIDEO_ERROR_RULES` — 数眼通道自己的错误对照（网络 / 密钥 / 限流 / 型号未接入），不套用写着 PixMax 的文案 | keywords: 数眼错误对照, 通道错误, shuyan-error-rules, channel-error
 - `describeRejectedShuyanImages(raw)` — 从报错里的 `content[N]` 认出被拒的是第几张参考图 | keywords: 定位被拒参考图, 报错图片序号, locate-rejected-image, error-image-index
 - `describeShuyanVideoFailure(raw)` — 数眼报错翻译成中文：先查通道规则，再复用 PixMax 的上游模型规则，并点名被拒的参考图 | keywords: 翻译数眼报错, 友好错误提示, describe-shuyan-error, friendly-error-message
-- `listShuyanVideoResolutionChoices(model)` — 数眼型号可选清晰度，写法与接口逐字一致（MiniMax-H3 为 `768P` / `2K`；1080p 仅 Seedance 2.x） | keywords: Seedance可选清晰度, 型号清晰度范围, seedance-resolution-choices, model-resolution-range
+- `listShuyanVideoResolutionChoices(model)` — 数眼型号可选清晰度，写法与接口逐字一致（MiniMax-H3 为 `768P` / `2K`；wan2.7-i2v 为 `720P` / `1080P`；1080p 仅 Seedance 2.x） | keywords: Seedance可选清晰度, 型号清晰度范围, seedance-resolution-choices, model-resolution-range
 - `shuyanResolutionHeightOf(label)` — 清晰度档位换算短边像素（`720p` → 720、`2K` → 1440、`4K` → 2160），供就近取档 | keywords: 清晰度短边像素, 档位换算, resolution-short-edge, resolution-to-pixels
 - `clampShuyanVideoResolution(model,resolution?)` — 设定的清晰度（大小写不限）收敛到型号档位，对不上按像素就近取；没设定用默认档，型号没有默认档时取最低档 | keywords: Seedance清晰度收敛, 视频清晰度, clamp-seedance-resolution, video-resolution
 - `ShuyanVideoTask` — 数眼创建 / 查询任务的内部响应结构（Seedance 平铺、`id`、`content.video_url`；MiniMax-H3 创建返回 `task_id`、查询包在 `task` 里、`content.url`） | keywords: 数眼视频任务, Seedance任务, H3任务, shuyan-video-task, seedance-task, minimax-h3-task
-- `ShuyanVideoRoute` — 数眼已接入的视频原生路由 `seedance` / `hailuo-v2` | keywords: 数眼视频路由, 原生端点, shuyan-video-route, native-endpoint
-- `resolveShuyanVideoRoute(model)` — 按模型名判路由：含 seedance → `seedance`，MiniMax-H3 → `hailuo-v2`，其余视频族返回 null | keywords: 数眼视频路由, 视频模型支持, resolve-shuyan-video-route, video-model-support
+- `ShuyanVideoRoute` — 数眼已接入的视频原生路由 `seedance` / `hailuo-v2` / `wan`（万相百炼协议） | keywords: 数眼视频路由, 原生端点, shuyan-video-route, native-endpoint
+- `resolveShuyanVideoRoute(model)` — 按模型名判路由：含 seedance → `seedance`，MiniMax-H3 → `hailuo-v2`，wan2.7-i2v（含快照）→ `wan`，其余视频族返回 null | keywords: 数眼视频路由, 视频模型支持, resolve-shuyan-video-route, video-model-support
 - `normalizeShuyanVideoModel(model)` — MiniMax-H3 不分大小写对齐到接口枚举 `MiniMax-H3`，其余原样 | keywords: 数眼模型名规整, H3模型枚举, normalize-shuyan-video-model, minimax-h3-model-enum
-- `resolveShuyanVideoTaskUrl(gateway,route,taskId?)` — 拼创建 / 查询地址（Seedance `/seedance/api/v3/contents/generations/tasks[/{id}]`；H3 `/hailuo/v2/video_generation`、`/hailuo/v2/query/video_generation/{id}`） | keywords: 数眼视频任务地址, 创建与查询, shuyan-video-task-url, create-and-query
-- `unwrapShuyanVideoTask(raw)` — 拆掉 MiniMax-H3 查询结果的 `task` 外壳，平铺结果原样 | keywords: 拆包数眼任务, H3查询结果, unwrap-shuyan-video-task, minimax-h3-query-result
+- `resolveShuyanVideoTaskUrl(gateway,route,taskId?)` — 拼创建 / 查询地址（Seedance `/seedance/api/v3/contents/generations/tasks[/{id}]`；H3 `/hailuo/v2/video_generation`、`/hailuo/v2/query/video_generation/{id}`；万相 `/ali/api/v1/services/aigc/video-generation/video-synthesis`、`/ali/api/v1/tasks/{id}`） | keywords: 数眼视频任务地址, 创建与查询, shuyan-video-task-url, create-and-query
+- `unwrapShuyanVideoTask(raw)` — 拆掉 MiniMax-H3 查询结果的 `task` 外壳；万相 `output` 里的任务 ID、状态、成片、错误与 `usage.duration` 规整成平铺结构；平铺结果原样 | keywords: 拆包数眼任务, H3查询结果, unwrap-shuyan-video-task, minimax-h3-query-result
+- `SHUYAN_WAN_ASYNC_HEADERS` — 万相创建任务必带的 `X-DashScope-Async: enable` | keywords: 万相异步请求头, 百炼异步任务, wan-async-header, dashscope-async-task
+- `SHUYAN_WAN_PROMPT_MAX` — 万相提示词上限 5000 字符 | keywords: 万相提示词上限, 提示词截断, wan-prompt-limit, prompt-truncate
+- `buildShuyanWanPayload({model,prompt,firstFrameUrl,audioUrl?,duration,resolution})` — 万相百炼协议请求体：首帧 `first_frame`、可选配音 `driving_audio`，不改写提示词、不加水印 | keywords: 万相请求体, 首帧驱动音频, wan-request-body, first-frame-driving-audio
 - `resolveShuyanVideoGateway(baseUrl?)` — 从 OpenAI `/v1` baseUrl 还原数眼原生视频网关 | keywords: 数眼视频网关, 移除V1路径, shuyan-video-gateway, strip-v1-path
-- `listShuyanVideoDurationChoices(model)` — 返回整数秒可选范围（MiniMax-H3 4~15 秒，Seedance 按版本） | keywords: Seedance可选时长, 型号时长范围, seedance-duration-choices, model-duration-range
+- `listShuyanVideoDurationChoices(model)` — 返回整数秒可选范围（wan2.7-i2v 2~15 秒，MiniMax-H3 4~15 秒，Seedance 按版本） | keywords: Seedance可选时长, 型号时长范围, seedance-duration-choices, model-duration-range
 - `clampShuyanVideoDuration(model,seconds)` — 收敛到数眼型号允许的整数秒 | keywords: Seedance时长收敛, 视频时长, clamp-seedance-duration, video-duration
-- `mapShuyanVideoStatus(status?)` — 把 queued / running / succeeded / failed 等状态映射成工作台状态，初建无状态视为 queued | keywords: 数眼视频状态映射, 初建无状态, map-shuyan-video-status, missing-status-queued
+- `mapShuyanVideoStatus(status?)` — 把 queued / running / succeeded / failed 等状态（含万相 CANCELED / UNKNOWN 判失败）映射成工作台状态，初建无状态视为 queued | keywords: 数眼视频状态映射, 初建无状态, map-shuyan-video-status, missing-status-queued
 - `describeShuyanVideoError(task)` — 保留错误码与消息生成中文失败说明 | keywords: 数眼视频错误, 上游错误码, describe-shuyan-video-error, upstream-error-code
 - `DouyinShuyanVideoService()` — 数眼 Seedance / MiniMax-H3 生视频、轮询与成片转存通道 | keywords: 数眼Seedance生视频, 数眼H3生视频, 成片转存, 分镜视频, shuyan-seedance-video, shuyan-minimax-h3-video, persist-generated-video, shot-video
 - `DouyinShuyanVideoService.onModuleInit()` — 启动后台轮询并在重启后续跟；多进程时只在 leader 进程上轮询 | keywords: 启动数眼视频轮询, 重启续跟, start-shuyan-video-polling, resume-after-restart
 - `DouyinShuyanVideoService.onModuleDestroy()` — 停止数眼后台轮询 | keywords: 停止数眼视频轮询, 模块销毁, stop-shuyan-video-polling, module-destroy
-- `DouyinShuyanVideoService.start(input)` — 按型号选 Seedance / MiniMax-H3 路由，组装多模态 content、扣费、提交任务并写调用记录 | keywords: 提交数眼视频, Seedance多模态, submit-shuyan-video, seedance-multimodal
+- `DouyinShuyanVideoService.start(input)` — 按型号选 Seedance / MiniMax-H3 / 万相路由，组装多模态 content（万相为百炼协议请求体，必须有公网地址的分镜画面作首帧）、扣费、提交任务并写调用记录 | keywords: 提交数眼视频, Seedance多模态, submit-shuyan-video, seedance-multimodal
 - `DouyinShuyanVideoService.refresh(id)` — 手动同步一条数眼调用 | keywords: 同步数眼视频调用, 手动刷新, sync-shuyan-video-operation, manual-refresh
 - `DouyinShuyanVideoService.pollOnce()` — 跟进一轮未结束数眼调用（探店分段除外），不重入 | keywords: 轮询数眼视频调用, 防重入, poll-shuyan-video-operations, reentry-guard
 - `DouyinShuyanVideoService.refreshRow(row)` — 按记录型号选路由查询并推进任务，成功后认领、转存与回填；手动同步可重试曾经失败的成片转存 | keywords: 推进数眼视频调用, 完成转存, advance-shuyan-video-operation, save-on-complete
@@ -261,7 +312,7 @@ AI 抖音工作台（douyin-workbench）
 - `generateVideo(req,id,dto)` — 调用视频生成服务 | keywords: 生成视频任务接口, 服务扣费, generate-video-task-api, service-charge
 - `publish(req,id,dto)` — 调用抖音发布服务 | keywords: 发布抖音视频接口, 真实视频素材, publish-douyin-video-api, real-video-asset
 - `crawl(req,id,dto)` — 调用作品数据服务 | keywords: 抓取抖音数据接口, 真实作品, crawl-douyin-data-api, real-published-video
-- `videoOptions()` — `GET video/options` 返回整片 / 分镜节点的通道、模型、可选时长与清晰度，以及探店两个节点的就绪状态（`read DouyinWorkbench`） | keywords: 视频生成选项接口, 可选时长, video-generation-options-api, duration-choices
+- `videoOptions()` — `GET video/options` 返回整片 / 分镜节点的通道、模型、可选时长与清晰度，以及探店三个节点的就绪状态（`read DouyinWorkbench`） | keywords: 视频生成选项接口, 可选时长, video-generation-options-api, duration-choices
 - `downloadVideo(req,videoId,res)` — `GET videos/:videoId/download` 以附件形式代理下载视频库视频（`read DouyinWorkbench`） | keywords: 下载视频接口, 代理下载, download-video-api, proxy-download
 - `listOperations(req)` — 查询直连调用记录 | keywords: 查询抖音任务接口, 供应商响应, list-douyin-operations-api, provider-response
 - `syncOperation(req,id)` — 同步供应商异步状态 | keywords: 同步抖音任务接口, 供应商状态, sync-douyin-operation-api, provider-status
@@ -269,23 +320,30 @@ AI 抖音工作台（douyin-workbench）
 - `requireUser(req)` — 读取鉴权用户 | keywords: 读取抖音用户, 鉴权上下文, read-douyin-user, auth-context
 - `scopeOf(user)` — 构造控制器数据边界 | keywords: 构造抖音作用域, 用户边界, build-douyin-scope, user-boundary
 - `DouyinStoreVisitVoiceSample` — 克隆音色用过的录音信息（文件名、类型、大小）；录音只为克隆临时传到对象存储、克隆完即删 | keywords: 克隆音色录音, 探店音色样本, voice-clone-sample, store-visit-voice-sample
-- `DouyinStoreVisitSetting` — 探店画外音设置：独立场景图与说明、音色（来源 clone / preset、ID、名称、模型、提供商、录音样本与克隆时间）、台词与分段；旧版数字人字段不再读取 | keywords: 探店模式设置, 画外音设置, 克隆音色, store-visit-setting, voiceover-setting, cloned-voice
-- `DouyinStoreVisitSegment` — 探店分段：段 ID、台词、场景图 ID、画面描述，服务端写入的空镜视频、配音地址与时长、所用音色；台词、场景或画面描述改了就作废 | keywords: 探店分段, 画外音配音, 分段成片, store-visit-segment, segment-voiceover, segment-video
+- `DouyinStoreVisitSetting` — 探店设置：出镜人物照、出镜模板、独立场景图（各带说明与标签）与选填的门店整体说明、音色（来源 clone / preset / design、ID、名称、模型、提供商、录音样本与克隆时间、提示词定制的声音描述 `voicePrompt`）、台词与分段；旧版数字人的声音设计字段不再读取 | keywords: 探店模式设置, 画外音设置, 克隆音色, store-visit-setting, voiceover-setting, cloned-voice
+- `DouyinStoreVisitSceneImage` — 探店场景图：图库「场景图库」图片引用，另带这张场景的说明与标签（与图库备注、标签同步），生成前每张都必须写好说明 | keywords: 探店场景图, 场景说明, store-visit-scene-image, scene-description
+- `DOUYIN_STORE_VISIT_TEMPLATES` — 出镜模板取值：`presenter-all` 一镜到底、`bookend` 首尾出镜、`opening` 只开场出镜、`voiceover` 纯画外音、`custom` 逐段自定义 | keywords: 探店出镜模板, 镜头编排, store-visit-template, shot-arrangement
+- `DouyinStoreVisitSegment` — 探店分段：段 ID、台词、场景图 ID、画面描述、镜头类型（人物出镜 / 门店空镜），服务端写入的人物首帧、视频、配音地址与时长、所用音色；场景改了首帧作废，台词、场景、画面描述或镜头类型改了成片作废 | keywords: 探店分段, 画外音配音, 分段成片, store-visit-segment, segment-voiceover, segment-video
 - `DOUYIN_STORE_VISIT_LINES_MAX` — 探店台词最长 2000 字，前端台词框同上限 | keywords: 探店台词上限, 台词字数, store-visit-lines-limit, lines-length
-- `DouyinStoreVisitSegmentDto()` — 校验一段分段：段 ID、台词（最多 1000 字）、场景图 ID 与画面描述，成片与配音只由服务端写 | keywords: 探店分段参数, 分段台词, store-visit-segment-dto, segment-lines
-- `DouyinStoreVisitDto()` — 校验探店场景、场景说明、台词与最多 8 段分段；音色只由克隆和选用接口写入，这里不收 | keywords: 探店设置参数, 场景台词, store-visit-setting-dto, scene-lines
+- `DouyinStoreVisitSegmentDto()` — 校验一段分段：段 ID、台词（最多 1000 字）、场景图 ID、画面描述与镜头类型 `presenter` / `broll`，人物首帧、成片与配音只由服务端写 | keywords: 探店分段参数, 分段台词, store-visit-segment-dto, segment-lines
+- `DouyinStoreVisitDto()` — 校验出镜人物（图库图片，传 null 清掉）、出镜模板、探店场景（各带说明与标签）、门店整体说明、台词与最多 8 段分段；音色只由克隆、选用和提示词定制接口写入，这里不收 | keywords: 探店设置参数, 场景台词, store-visit-setting-dto, scene-lines
+- `DouyinStoreVisitSceneImageDto()` — 校验探店场景图：图库图片引用另带说明（最多 500 字）与标签（最多 10 个、每个 30 字内），旧数据没有说明时保存不拦 | keywords: 探店场景图参数, 场景说明标签, store-visit-scene-image-dto, scene-description-tags
 - `ConcatDouyinShotVideosDto()` — 校验客户端是否领取自动合成预约 | keywords: 分镜合成参数, 自动合成领取, concat-shot-videos-dto, auto-concat-claim
 - `GenerateDouyinStoreVisitLinesDto()` — 校验 AI 写探店台词的一句话补充要求 | keywords: 探店台词参数, 台词补充要求, store-visit-lines-dto, lines-requirement
-- `DouyinStoreVisitVoiceDto()` — 校验选用或试听的音色 ID（字母数字）：系统音色由服务端按目录再校验，克隆音色只允许本脚本自己的 | keywords: 音色参数, 选用试听音色, store-visit-voice-dto, pick-or-preview-voice
+- `DouyinStoreVisitVoiceDto()` — 校验选用或试听的音色 ID（字母数字）：音色库音色由服务端按目录再校验，克隆、定制音色只允许本脚本自己的 | keywords: 音色参数, 选用试听音色, store-visit-voice-dto, pick-or-preview-voice
+- `DesignDouyinStoreVisitVoiceDto()` — 校验提示词定制音色：声音描述 5～500 字（百炼声音设计只认中英文、最多 500 字），可选 30 字内的音色名称 | keywords: 提示词定制音色参数, 声音描述, design-voice-dto, voice-prompt
+- `GenerateDouyinStoreVisitKeyframeDto()` — 校验生成人物首帧的可选补充描述（最多 500 字） | keywords: 人物首帧参数, 首帧补充描述, keyframe-dto, keyframe-requirement
 - `normalizeStoreVisitLines(input?)` — 规整探店台词：统一换行、去首尾空白、最多 2000 字 | keywords: 规整探店台词, 台词字数, normalize-store-visit-lines, lines-length
 - `DOUYIN_STORE_VISIT_SEGMENT_LIMITS` — 分段上限：最多 8 段、单段台词 1000 字（实际按单段视频时长控制在约 60 字内）、画面描述 300 字 | keywords: 探店分段上限, 单段台词上限, store-visit-segment-limit, segment-lines-limit
-- `normalizeStoreVisitSegments(input,sceneImageIds)` — 规整分段（只收台词、场景图 ID、画面描述与段 ID）：去空段、非法或重复段 ID 换新、清掉不在本选题场景里的场景图 | keywords: 规整探店分段, 分段校验, normalize-store-visit-segments, segment-validation
-- `mergeStoreVisitSegments(next,current)` — 保存分段时按段 ID 接上服务端字段：台词、场景、画面描述都没变时保留空镜视频、配音与所用音色，任一改了就作废 | keywords: 合并探店分段, 保留分段成片, merge-store-visit-segments, keep-segment-output
-- `saveStoreVisitVoice(id,voice,scope)` — 写入录音克隆或选用的系统音色：克隆带录音样本与克隆时间，系统音色清掉它们；同时清掉旧版数字人的声音设计、试听与语种字段，场景与台词不动 | keywords: 保存探店音色, 克隆音色, save-store-visit-voice, save-cloned-voice
+- `normalizeStoreVisitSegments(input,sceneImageIds)` — 规整分段（只收台词、场景图 ID、画面描述、镜头类型与段 ID）：去空段、非法或重复段 ID 换新、清掉不在本选题场景里的场景图 | keywords: 规整探店分段, 分段校验, normalize-store-visit-segments, segment-validation
+- `mergeStoreVisitSegments(next,current)` — 同场景保留起始图，前段编辑或重排后作废整条后续成片依赖 | keywords: 合并探店分段, 保留分段成片, merge-store-visit-segments, keep-segment-output
+- `clearPresenterKeyframes(segments)` — 换人物后清除所有场景起始图及依赖旧尾帧的成片 | keywords: 换人物作废首帧, 人物出镜成片作废, reset-presenter-keyframes, invalidate-presenter-output
+- `saveStoreVisitVoice(id,voice,scope)` — 写入录音克隆、音色库预置音色或提示词定制的音色：克隆带录音样本与克隆时间，提示词定制带声音描述 `voicePrompt`，其余来源清掉它们；同时清掉旧版数字人的声音设计、试听与语种字段，场景与台词不动 | keywords: 保存探店音色, 克隆音色, save-store-visit-voice, save-cloned-voice
 - `claimAutoConcat(id,scope)` — 原子清掉「全部出片后自动合成」标记，只有真正清掉的那次返回 true | keywords: 认领自动合成, 防重复合成, claim-auto-concat, dedupe-concat
 - `updateStoreVisitSegment(topicId,segmentId,output,scope)` — 按段 ID 一次绑定空镜视频（先校验视频库归属）、配音地址与时长、所用音色，传 null 一次清掉；段不存在时返回 null | keywords: 更新探店分段, 分段局部写入, update-store-visit-segment, partial-segment-write
+- `setStoreVisitSegmentKeyframe(topicId,segmentId,keyframe,scope)` — 同场景共享人物起始图，并作废依赖旧尾帧的后续输出 | keywords: 写入人物首帧, 首帧作废成片, save-segment-keyframe, keyframe-invalidates-output
 - `parseStoreVisitSceneSegments(text,sceneImageIds)` — 解析以「【场景k】」开头的分段台词，标记缺失或越界时返回空 | keywords: 解析分场景台词, 场景标记, parse-scene-segments, scene-marker
-- `writeStoreVisitLines(topicId,prompt,scope)` — 按现有脚本或分镜口播、独立探店选题与场景写 30～60 秒第一人称探店画外音（节点 `script`），保持人物人称与风格调性；有场景图时按场景分段（每段约 60 字内）返回 `segments`，不落库 | keywords: 探店台词生成, 画外音台词, store-visit-lines, voiceover-lines
+- `writeStoreVisitLines(topicId,prompt,scope)` — 按配音时长写台词段，同场景可连续使用多段编号，仅空间变化时换场景；每张场景的说明与标签按序号写进提示（`<scenes>`），新建探店没有脚本时也拿它们当写作资料 | keywords: 探店台词生成, 画外音台词, store-visit-lines, voiceover-lines
 - `DouyinOutputVideoMeta` — 成片登记参数（名称、作用域、标签、时长、尺寸） | keywords: 成片登记参数, 视频库登记, output-video-meta, video-library-register
 - `resolveStaticFilePath(url)` — 站内 `/static/...` 地址换成 `public` 下的磁盘路径，拒绝 `..` 穿越 | keywords: 站内地址转磁盘路径, 路径穿越防护, static-url-to-path, path-traversal-guard
 - `DouyinVideoStorageService()` — 抖音成片落库服务，另存探店配音与临时克隆录音 | keywords: 抖音成片落库, 视频库登记, douyin-output-video-storage, video-library-register
@@ -295,6 +353,7 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinVideoStorageService.commonFields(meta)` — 视频库登记公共字段（时长换算毫秒） | keywords: 视频登记公共字段, 时长换算, video-register-fields, duration-to-ms
 - `DouyinVideoStorageService.saveAudio(buffer,meta)` — 保存探店配音或克隆录音：OSS 配好时上传到 `audio` 场景返回公网地址与对象键，否则落 `public/uploads/douyin-audio` 返回站内地址 | keywords: 保存配音文件, 音频入存储, save-audio-file, store-voiceover
 - `DouyinVideoStorageService.deleteAudio(key)` — 删掉 `saveAudio` 存到 OSS 的音频（克隆完录音立即删），失败不抛错 | keywords: 删除音频文件, 清理录音, delete-audio-file, cleanup-voice-sample
+- `DouyinVideoStorageService.publishImage(url,scope)` — 把首帧图（图库站内图片或 Base64）传到 OSS 的 `poster` 场景换公网地址，已是 http(s) 原样返回；给只认公网地址的万相用，没配 OSS 抛 `DOUYIN_PUBLIC_STORAGE_MISSING` | keywords: 首帧图转公网地址, 图片传OSS, publish-frame-image, image-to-oss
 - `DouyinVideoStorageService.hasPublicStorage()` — 存储能否给外部服务公网访问，只有配了 OSS 才能把录音交给百炼克隆 | keywords: 公网存储可用, OSS已配置, public-storage-available, oss-configured
 - `DOUYIN_SHOT_CONCAT_STALE_MS()` — 合成记录 30 分钟无进度判中断 | keywords: 合成中断判定, 静默超时, concat-stale-threshold, silent-timeout
 - `DOUYIN_RUNNING_OPERATION_STATUSES()` — 生成中状态值，与前端一致，自动合成据此等待仍在生成的分镜 | keywords: 生成中状态, 自动合成等待, running-operation-statuses, auto-concat-wait
@@ -308,40 +367,63 @@ AI 抖音工作台（douyin-workbench）
 - `DOUYIN_VOICE_SAMPLE_EXTENSIONS` — 百炼声音复刻接受的录音格式（WAV 16bit、MP3、M4A），按扩展名认 | keywords: 录音格式, 音频扩展名, voice-sample-format, audio-extension
 - `DOUYIN_STORE_VISIT_FREEZE_TOLERANCE_SECONDS` — 配音比画面型号单段上限多出这几秒内时合成阶段定格补齐，再长要求拆短 | keywords: 定格补齐容差, 单段配音上限, freeze-frame-tolerance, segment-audio-limit
 - `DOUYIN_STORE_VISIT_VIDEO_RESOLUTION` — 空镜视频默认清晰度，在型号档位里取最接近 720p 的一档 | keywords: 空镜视频清晰度, 默认清晰度, broll-resolution, default-resolution
-- `DOUYIN_STORE_VISIT_PREVIEW_TEXT` — 系统音色与克隆音色的试听句子 | keywords: 音色试听文本, 试听句子, voice-preview-text, trial-sentence
+- `DOUYIN_STORE_VISIT_PREVIEW_TEXT` — 音色库、克隆与提示词定制音色共用的试听句子，也是声音设计的试听文本（百炼要求 15～200 字） | keywords: 音色试听文本, 试听句子, voice-preview-text, trial-sentence
+- `buildStoreVisitSceneBrief(setting,sceneImageId?)` — 拼分段用的场景说明：这一段场景图自己的说明与标签在前，门店整体说明在后，最多 600 字；写进首帧、续段衔接与视频提示词 | keywords: 分段场景说明, 场景标签, segment-scene-brief, scene-tags
 - `buildStoreVisitBrollPrompt(input)` — 写某段空镜视频提示词：场景图为首帧、按画面描述运镜，旁白只用来理解内容，画面无文字、无人对镜头说话、无声音 | keywords: 空镜视频提示词, 探店画面, broll-video-prompt, store-visit-footage
-- `describeStoreVisitSegmentFailure(raw)` — 分段失败原因翻成中文：百炼语音报错按语音规则，其余按数眼视频规则 | keywords: 探店分段失败说明, 报错翻译, store-visit-segment-failure, error-translation
-- `DouyinStoreVisitService()` — 探店画外音服务：百炼音色与逐段配音、数眼空镜视频、后台轮询转存并绑定分段 | keywords: 探店画外音, 克隆音色, 空镜视频, store-visit-voiceover, voice-clone, broll-video
-- `DouyinStoreVisitService.constructor(db,repository,billing,storage,workflowModels,adminService,cosyVoice)` — 初始化调用集合与音色、存储、计费依赖 | keywords: 初始化探店服务, 画外音依赖, init-store-visit-service, voiceover-dependencies
+- `describeStoreVisitSegmentFailure(raw)` — 分段失败原因翻成中文：百炼语音报错按语音规则，可灵数字人业务错误带对端原话，其余按数眼视频规则 | keywords: 探店分段失败说明, 报错翻译, store-visit-segment-failure, error-translation
+- `STORE_VISIT_AVATAR_AUDIO_SECONDS` — 人物出镜段配音时长范围 2～300 秒（可灵数字人限制） | keywords: 对口型配音时长, 可灵数字人限制, avatar-audio-range, kling-avatar-limit
+- `STORE_VISIT_WAN_AUDIO_MIN_SECONDS` — wan2.7-i2v 驱动音频最短 2 秒 | keywords: 万相驱动音频下限, 配音最短时长, wan-driving-audio-min, voiceover-min-seconds
+- `buildStoreVisitTalkingPrompt(input)` — 人物段（万相按配音生成）提示词：人物按传入配音说话，口型、表情与手势跟着配音走，只有主播露正脸，不加背景音乐与文字 | keywords: 万相说话提示词, 配音驱动画面, wan-talking-prompt, audio-driven-video
+- `readKlingText(value)` — 把对端响应字段读成去空白的字符串，只认字符串与数字 | keywords: 读取响应文本, 字段转字符串, read-response-text, field-to-string
+- `resolveStoreVisitAvatarMode(model)` — 对口型节点模型名含 kling / avatar 时取可灵模式（含 pro 为高品质），万相与认不出的返回 null | keywords: 解析对口型模式, 模型名路由, resolve-avatar-mode, model-routing
+- `resolveStoreVisitPresenterEngine(model)` — 按「探店人物对口型」节点模型决定人物段怎么生成：kling / avatar 型号走可灵数字人对口型，wan2.7-i2v 带配音作驱动音频一次生成口型，Seedance / MiniMax-H3 走数眼图生视频、出片后再交给可灵对口型，认不出返回 null | keywords: 解析人物出镜引擎, 模型名路由, resolve-presenter-engine, model-routing
+- `buildStoreVisitPresenterPrompt(input)` — 人物出镜段（视频型号）图生视频提示词：以人物首帧为起点带着镜头介绍门店，大部分时间正脸对镜头、只有主播露正脸，方便出片后对口型，无文字、静音 | keywords: 人物出镜视频提示词, 正脸对镜头, presenter-video-prompt, face-camera
+- `buildStoreVisitAvatarUrl(gateway,taskId?)` — 拼可灵数字人 `/kling/v1/videos/avatar/image2video[/{id}]` 创建或查询地址 | keywords: 对口型任务地址, 创建与查询, avatar-task-url, create-and-query
+- `mapStoreVisitAvatarStatus(status?)` — 可灵任务状态收成 queued / running / completed / failed | keywords: 对口型状态映射, 可灵状态, map-avatar-status, kling-status
+- `buildStoreVisitKeyframePrompt(input)` — 人物首帧图像编辑提示词：底图人物 + 第二张场景图，生成人物带着镜头介绍门店的竖屏首帧，正脸清晰、嘴巴自然闭合 | keywords: 人物首帧提示词, 人物进场景, keyframe-prompt, person-in-scene
+- `buildStoreVisitAvatarPrompt(action?)` — 可灵数字人动作提示：有画面描述用它，没有时看着镜头自然讲解 | keywords: 对口型动作提示, 讲解神态, avatar-motion-prompt, presenting-manner
+- `DouyinStoreVisitService()` — 探店分段视频服务：百炼音色与逐段配音、人物首帧、人物段可灵数字人或 wan2.7-i2v 按配音生成（Seedance / MiniMax-H3 出片后再对口型）、空镜段数眼空镜视频、后台轮询转存并绑定分段 | keywords: 探店画外音, 克隆音色, 空镜视频, store-visit-voiceover, voice-clone, broll-video
+- `DouyinStoreVisitService.constructor(db,repository,billing,storage,workflowModels,adminService,cosyVoice,agentService,aiImages,personas)` — 初始化调用集合与音色、存储、计费、生图与人物依赖 | keywords: 初始化探店服务, 画外音依赖, init-store-visit-service, voiceover-dependencies
 - `DouyinStoreVisitService.onModuleInit()` — 启动分段任务后台轮询，重启后续跟；多进程时只在 leader 进程上轮询 | keywords: 启动探店分段轮询, 重启续跟, start-store-visit-polling, resume-after-restart
 - `DouyinStoreVisitService.onModuleDestroy()` — 停止分段任务后台轮询 | keywords: 停止探店分段轮询, 模块销毁, stop-store-visit-polling, module-destroy
-- `DouyinStoreVisitService.cloneVoice(topicId,file,scope)` — 录音临时传 OSS 交给百炼声音复刻，审核通过后立即删录音；音色 ID、模型与提供商写进脚本，换音色时删掉本脚本之前克隆的旧音色，记 `voice-clone` 审计（不含录音） | keywords: 克隆探店音色, 上传录音, clone-store-visit-voice, upload-voice-sample
+- `DouyinStoreVisitService.cloneVoice(topicId,file,scope)` — 录音临时传 OSS 交给百炼声音复刻，审核通过后立即删录音；音色 ID、模型与提供商写进脚本，换音色时删掉本脚本之前克隆或定制的旧音色，记 `voice-clone` 审计（不含录音） | keywords: 克隆探店音色, 上传录音, clone-store-visit-voice, upload-voice-sample
 - `DouyinStoreVisitService.listPresetVoices()` — 列出探店可选的百炼系统音色 | keywords: 系统音色列表, 探店音色库, list-preset-voices, store-visit-voice-library
+- `DouyinStoreVisitService.listPresetCategories()` — 列出音色库风格分类（顺序即展示顺序），每类男女声都有 | keywords: 音色分类列表, 男女声分类, list-voice-categories, gender-balanced-category
+- `DouyinStoreVisitService.designVoice(topicId,input,scope)` — 按声音描述调百炼声音设计生成音色（模型取节点 v3 / v3.5 模型，否则 `COSYVOICE_CLONE_MODEL`）并等可用，写进脚本（`voiceSource=design`），删掉本脚本旧的克隆 / 定制音色，记 `voice-design` 审计；失败删半成品、保留原音色 | keywords: 提示词定制音色, 声音设计, design-store-visit-voice, voice-design
 - `DouyinStoreVisitService.usePresetVoice(topicId,voiceId,scope)` — 选用目录里的系统音色（模型固定 `COSYVOICE_PRESET_MODEL`），清掉克隆录音信息 | keywords: 选用系统音色, 保存预置音色, use-preset-voice, save-preset-voice
-- `DouyinStoreVisitService.previewVoice(topicId,voiceId,scope)` — 合成一句试听：系统音色直接合成，其他只允许本脚本克隆的音色并用其绑定模型；结果缓存 20 小时 | keywords: 音色试听, 合成试听, preview-voice, synthesize-trial
-- `DouyinStoreVisitService.start(topicId,scope)` — 生成全部分段（画外音配音 + 空镜视频），返回各段调用记录 | keywords: 提交探店视频, 全部分段生成, submit-store-visit-video, generate-all-segments
-- `DouyinStoreVisitService.startOne(topicId,segmentId,scope)` — 只重新生成某一段，清掉这段旧成片并打自动合成标记 | keywords: 重新生成探店分段, 单段重做, regenerate-store-visit-segment, single-segment-retry
+- `DouyinStoreVisitService.previewVoice(topicId,voiceId,scope)` — 合成一句试听：音色库音色直接合成，其他只允许本脚本克隆或定制的音色并用其绑定模型；结果缓存 20 小时 | keywords: 音色试听, 合成试听, preview-voice, synthesize-trial
+- `DouyinStoreVisitService.generateKeyframe(topicId,segmentId,prompt,scope)` — 出镜人物作底图、这段场景图作第二张参考图，按「分镜画面」节点出竖屏人物首帧，入图库并写进分段（同时作废这段旧成片） | keywords: 生成人物首帧, 人物进场景, generate-segment-keyframe, person-in-scene
+- `DouyinStoreVisitService.start(topicId,scope)` — 生成全部分段（配音 + 人物对口型或门店空镜），返回各段调用记录 | keywords: 提交探店视频, 全部分段生成, submit-store-visit-video, generate-all-segments
+- `DouyinStoreVisitService.startOne(topicId,segmentId,scope)` — 从指定段重建后续连续生成队列，清除依赖旧尾帧的输出 | keywords: 重新生成探店分段, 单段重做, regenerate-store-visit-segment, single-segment-retry
 - `DouyinStoreVisitService.refresh(id)` — 手动同步一条分段调用 | keywords: 同步探店分段, 手动刷新, sync-store-visit-segment, manual-refresh
 - `DouyinStoreVisitService.pollOnce()` — 跟进一轮未结束的分段任务，同一进程内不重入 | keywords: 轮询探店分段, 防重入, poll-store-visit-segments, reentry-guard
-- `DouyinStoreVisitService.startSegments(topic,segments,scope)` — 校验场景图、每段场景、音色、两个节点已配且没有段在生成，清旧成片、打自动合成标记后逐段配音并提交空镜；全部失败抛第一个错误 | keywords: 提交探店分段, 分段前置校验, submit-store-visit-segment-batch, segment-precheck
-- `DouyinStoreVisitService.submitSegment(input)` — 扣费 → 百炼配音（校验时长不超过画面上限 + 定格容差）→ 配音存储 → 以场景图为首帧提交数眼空镜（时长取配音秒数向上取整再收敛），任一步失败退款并写失败记录 | keywords: 提交单段画外音, 分段配音, submit-segment-voiceover, segment-broll
-- `DouyinStoreVisitService.refreshRow(row)` — 查一次分段空镜任务并推进：失败写原因、超时判失败，完成时认领保存权、转存视频库并连同配音绑定到分段；生成期间台词、场景、画面描述或音色被改过时不绑定 | keywords: 推进探店分段, 分段转存, advance-store-visit-segment, save-segment-video
+- `DouyinStoreVisitService.startSegments(topic,segments,scope)` — 校验场景（每张都要有说明，否则在扣费前拒绝）与音色，第一段立即提交，后续持久化等待实际尾帧且不提前扣费 | keywords: 提交探店分段, 分段前置校验, submit-store-visit-segment-batch, segment-precheck
+- `DouyinStoreVisitService.submitSegment(input)` — 已认领续段按视觉衔接提示配音并生视频，同场景严格以实际尾帧作为首帧；人物段（视频型号）配音不得超过型号最长秒数（不给定格容差）；wan2.7-i2v 人物段配音至少 2 秒，站内首帧先传 OSS 换公网地址、配音也须为公网地址，配音作驱动音频 | keywords: 提交单段画外音, 分段配音, submit-segment-voiceover, segment-broll
+- `DouyinStoreVisitService.refreshRow(row)` — 等待段复核前置依赖，已提交段跟进供应商并复核前段视频后绑定结果；Seedance / MiniMax-H3 人物段先走识别人脸与可灵对口型，完成后入库对口型版本，没做成入库原画面并记原因；wan2.7-i2v 人物段（`audioDriven`）直接入库 | keywords: 推进探店分段, 分段转存, advance-store-visit-segment, save-segment-video
+- `DouyinStoreVisitService.startLipSync(row,{gateway,apiKey?,videoUrl,videoSeconds?})` — 原子认领对口型：识别人脸 → 挑主播的脸 → 配音按出现时间提交可灵对口型，任何一步失败记原因并返回跳过 | keywords: 发起人物对口型, 识别比对人脸, start-presenter-lip-sync, identify-and-match-face
+- `DouyinStoreVisitService.matchPresenterFaces(row,faces,videoMs)` — 一张脸出现超过半段直接用，否则用「探店尾帧衔接」视觉模型拿出镜人物照比对，失败退回出现最久的那张 | keywords: 比对主播人脸, 视觉模型认人, match-presenter-face, vision-face-match
 - `DouyinStoreVisitService.readVoiceRuntime()` — 读取「音色克隆与配音」节点的百炼运行配置，没指定、不是百炼或没填 Key 时用中文说明拒绝 | keywords: 读取百炼节点配置, 缺配置拒绝, read-dashscope-runtime, reject-unconfigured
 - `DouyinStoreVisitService.readVoiceRuntimeFor(providerId)` — 克隆音色属于克隆时的百炼账号：优先用音色记录上的提供商取 Key，提供商已删除时退回节点当前提供商 | keywords: 读取音色所属提供商, 克隆音色账号, read-voice-owner-runtime, cloned-voice-account
 - `DouyinStoreVisitService.readVideoRuntime()` — 读取「探店画面视频」节点的数眼运行配置，没指定、不是数眼、型号没接原生路由或没填 Key 时用中文说明拒绝 | keywords: 读取探店画面节点, 缺配置拒绝, read-broll-runtime, reject-unconfigured
+- `DouyinStoreVisitService.readAvatarRuntime()` — 读取「探店人物对口型」节点的数眼运行配置，没指定、不是数眼、模型既不是可灵数字人也不是已接入的视频型号或没填 Key 时用中文说明拒绝 | keywords: 读取对口型节点, 缺配置拒绝, read-avatar-runtime, reject-unconfigured
 - `DouyinStoreVisitService.toVideoImageUrl(url)` — 场景图入参：公网地址原样给数眼，站内 `/static` 图片转 data URL | keywords: 场景图入参, 本地图片Base64, scene-image-input, local-image-data-url
-- `DouyinStoreVisitService.fetchShuyan(url,init,apiKey)` — 带 Bearer 与 5 分钟超时的数眼 JSON 请求，非 2xx 抛 `SHUYAN_VIDEO_HTTP_<状态码>` 并保留对端报错 | keywords: 数眼探店请求, 错误体保留, shuyan-store-visit-request, preserve-error-body
+- `DouyinStoreVisitService.toPublicFrameUrl(url,index,scope)` — 万相首帧入参：场景图、场景起始画面、尾帧等站内图片先传 OSS 换公网地址，没配 OSS、地址无效或上传失败时中文拒绝（这段扣费退回） | keywords: 万相首帧公网地址, 首帧传OSS, wan-first-frame-public-url, first-frame-to-oss
+- `DouyinStoreVisitService.toKlingMedia(url,label)` — 可灵图片与音频入参：公网地址原样给，站内 `/static` 文件转不带前缀的 Base64 | keywords: 可灵素材入参, 站内文件Base64, kling-media-input, local-file-base64
+- `DouyinStoreVisitService.fetchKling(url,init,apiKey?)` — 沿用数眼请求调可灵数字人接口，业务码非 0 时抛 `SHUYAN_KLING_ERROR` | keywords: 可灵数字人请求, 业务码校验, kling-avatar-request, business-code-check
+- `DouyinStoreVisitService.fetchShuyan(url,init,apiKey)` — 带 Bearer 与 5 分钟超时的数眼 JSON 请求，一并带上调用方的请求头（万相异步头），非 2xx 抛 `SHUYAN_VIDEO_HTTP_<状态码>` 并保留对端报错 | keywords: 数眼探店请求, 错误体保留, shuyan-store-visit-request, preserve-error-body
 - `DouyinStoreVisitService.requireChild(topicId,scope)` — 校验当前用户拥有的子选题（脚本） | keywords: 校验探店脚本, 操作所有权, require-store-visit-topic, operation-ownership
 - `DouyinStoreVisitService.fail(id,message,detail?)` — 标记分段调用失败，`error` 为中文说明、`detail` 为原始信息 | keywords: 标记分段失败, 失败原因, mark-segment-failed, failure-reason
-- `DouyinStoreVisitService.toView(row)` — 去掉数据库字段与请求正文后的分段调用视图 | keywords: 分段调用视图, 隐藏请求, segment-operation-view, hide-request
+- `DouyinStoreVisitService.toView(row)` — 去掉数据库字段与请求正文后的分段调用视图，对口型只给阶段与跳过原因 | keywords: 分段调用视图, 隐藏请求, segment-operation-view, hide-request
 - `concatShotVideos(req,id,dto)` — 校验并领取客户端合成，返回调用记录与有序片段，权限为 create DouyinWorkbench | keywords: 准备客户端合成接口, 分镜视频地址, prepare-client-concat-api, shot-video-urls
 - `cloneStoreVisitVoice(req,id,file)` — `POST topics/:id/store-visit/voice`（`create DouyinWorkbench`，multipart `file` ≤10MB），录音临时传 OSS 交给百炼声音复刻、克隆完即删，音色 ID 写进脚本 | keywords: 克隆探店音色接口, 上传录音, clone-store-visit-voice-api, upload-voice-sample
 - `generateStoreVisitLines(req,id,dto)` — `POST topics/:id/store-visit/lines`（`create DouyinWorkbench`），按场景分段写探店画外音台词，只返回台词 | keywords: 探店台词接口, 画外音台词, store-visit-lines-api, voiceover-lines
 - `generateStoreVisitVideo(req,id)` — `POST topics/:id/store-visit/generate`（`create DouyinWorkbench`），逐段配音并以场景图为首帧生成空镜视频，按生视频服务逐段扣费，返回各段调用记录 | keywords: 探店视频生成接口, 画外音生成, store-visit-video-api, voiceover-generation
-- `listStoreVisitPresetVoices()` — `GET store-visit/voices`（`read DouyinWorkbench`），列出百炼系统音色（名称、特质、性别与方言） | keywords: 系统音色接口, 探店音色库, preset-voices-api, store-visit-voice-library
-- `useStoreVisitPresetVoice(req,id,dto)` — `POST topics/:id/store-visit/voice/preset`（`update DouyinWorkbench`），选用系统音色并返回当前租户工作台 | keywords: 选用系统音色接口, 保存预置音色, use-preset-voice-api, save-preset-voice
-- `previewStoreVisitVoice(req,id,dto)` — `POST topics/:id/store-visit/voice/preview`（`read DouyinWorkbench`），合成一句系统音色或本脚本克隆音色的试听并返回地址 | keywords: 音色试听接口, 合成试听, voice-preview-api, synthesize-trial
-- `generateStoreVisitSegment(req,id,segmentId)` — `POST topics/:id/store-visit/segments/:segmentId/generate`（`create DouyinWorkbench`），重新生成单段（配音 + 空镜），返回这一段的调用记录 | keywords: 重新生成探店分段接口, 单段重做, regenerate-store-visit-segment-api, single-segment-retry
+- `listStoreVisitPresetVoices()` — `GET store-visit/voices`（`read DouyinWorkbench`），返回音色库 `voices`（名称、特质、性别、风格分类与方言）与分类目录 `categories` | keywords: 音色库接口, 探店音色库, preset-voices-api, store-visit-voice-library
+- `designStoreVisitVoice(req,id,dto)` — `POST topics/:id/store-visit/voice/design`（`create DouyinWorkbench`），按声音描述定制音色并返回当前租户工作台 | keywords: 提示词定制音色接口, 声音设计, design-voice-api, voice-design
+- `useStoreVisitPresetVoice(req,id,dto)` — `POST topics/:id/store-visit/voice/preset`（`update DouyinWorkbench`），选用音色库里的预置音色并返回当前租户工作台 | keywords: 选用系统音色接口, 保存预置音色, use-preset-voice-api, save-preset-voice
+- `previewStoreVisitVoice(req,id,dto)` — `POST topics/:id/store-visit/voice/preview`（`read DouyinWorkbench`），合成一句音色库音色或本脚本克隆、定制音色的试听并返回地址 | keywords: 音色试听接口, 合成试听, voice-preview-api, synthesize-trial
+- `generateStoreVisitSegment(req,id,segmentId)` — `POST topics/:id/store-visit/segments/:segmentId/generate`（`create DouyinWorkbench`），重新生成单段（配音 + 人物对口型或门店空镜），返回这一段的调用记录 | keywords: 重新生成探店分段接口, 单段重做, regenerate-store-visit-segment-api, single-segment-retry
+- `generateStoreVisitKeyframe(req,id,segmentId,dto)` — `POST topics/:id/store-visit/segments/:segmentId/keyframe`（`create DouyinWorkbench`），为人物出镜段生成首帧，返回脚本、首帧与工作台 | keywords: 人物首帧接口, 人物进场景, segment-keyframe-api, person-in-scene
 - `readSegmentId(value)` — 校验路由里的探店分段 ID | keywords: 解析探店分段ID, 路由校验, parse-segment-id, route-validation
 - `DASHSCOPE_PROVIDER_CODE` — 百炼在「Ai提供商设置」里的提供商代码 `dashscope`，探店音色克隆与配音都走它 | keywords: 百炼提供商代码, 探店语音, dashscope-provider-code, store-visit-speech
 - `DASHSCOPE_DEFAULT_BASE_URL` — 百炼提供商没填地址时的默认 OpenAI 兼容地址，CosyVoice 只取它的域名 | keywords: 百炼默认地址, 兼容模式, dashscope-default-base-url, compatible-mode
@@ -349,15 +431,19 @@ AI 抖音工作台（douyin-workbench）
 - `COSYVOICE_PRESET_MODEL` — 系统音色使用的合成模型 `cosyvoice-v3-flash`（v3.5 不支持系统音色） | keywords: 系统音色模型, 预置音色, cosyvoice-preset-model, system-voice
 - `COSYVOICE_SAMPLE_RATE` — 配音输出 24kHz WAV 16bit 单声道，时长可从文件头精确算出 | keywords: 配音采样率, 配音格式, tts-sample-rate, tts-format
 - `COSYVOICE_VOICE_READY_TIMEOUT_MS` — 等待克隆音色审核通过的最长时间 | keywords: 音色审核等待, 克隆超时, voice-review-timeout, clone-timeout
-- `CosyVoicePresetVoice` — 一个系统音色（ID、名称、特质、性别、可选方言） | keywords: 系统音色条目, 探店音色, cosyvoice-preset-voice, store-visit-voice
-- `COSYVOICE_PRESET_VOICES` — 探店可选的系统音色目录：适合口播的普通话男女声与两个方言音色 | keywords: 系统音色目录, 探店音色库, cosyvoice-preset-catalog, store-visit-voice-library
+- `CosyVoicePresetVoice` — 音色库里的一个预置音色（ID、名称、特质、性别、风格分类、可选方言） | keywords: 预置音色条目, 探店音色, cosyvoice-preset-voice, store-visit-voice
+- `CosyVoicePresetCategory` — 音色库风格分类键：活力种草、温柔亲切、知性专业、方言特色 | keywords: 音色分类键, 音色风格, voice-category-key, voice-style
+- `COSYVOICE_PRESET_CATEGORIES` — 音色库分类目录（键、名称、适用场景说明），每类都同时有男声和女声 | keywords: 音色分类目录, 男女声分类, voice-category-catalog, gender-balanced-category
+- `COSYVOICE_PRESET_VOICES` — 探店音色库：适合口播的普通话男女声与两个方言音色，分到四个风格分类，每类男女声都有 | keywords: 系统音色目录, 探店音色库, cosyvoice-preset-catalog, store-visit-voice-library
 - `DashScopeRuntime` — 百炼接口需要的运行配置（服务地址与 Key） | keywords: 百炼运行配置, 语音服务配置, dashscope-runtime, speech-runtime
 - `resolveDashScopeOrigin(baseUrl)` — 取百炼服务域名：兼容模式地址或专属域名都只取 origin，没填或填错用默认域名 | keywords: 百炼服务域名, 去掉兼容路径, dashscope-origin, strip-compatible-path
 - `buildCosyVoicePrefix(topicId)` — 克隆音色名称前缀：`aim` + 脚本 ID 的 36 进制，只含字母数字且不超过 10 个字符 | keywords: 克隆音色前缀, 音色命名, clone-voice-prefix, voice-naming
 - `readWavSeconds(buffer)` — 按 `fmt ` 字节率与 `data` 块大小算 WAV 时长，流式占位按文件剩余长度算，非 WAV 返回 0 | keywords: WAV时长, 配音时长, wav-duration, voiceover-seconds
 - `describeCosyVoiceFailure(raw)` — 百炼语音报错翻成中文：Key 无效、限流、音色与模型不匹配、录音不合格分别说明，其余带原始信息 | keywords: 百炼语音报错, 中文说明, cosyvoice-error-message, friendly-error
-- `DouyinCosyVoiceService()` — 百炼 CosyVoice 客户端：声音复刻与非实时语音合成 | keywords: 百炼CosyVoice, 声音复刻, 语音合成, dashscope-cosyvoice, voice-enrollment, speech-synthesis
+- `describeVoiceDesignFailure(raw)` — 声音设计报错翻成中文：描述没通过或不合要求时提示换个说法，超时提示重试，其余沿用通用语音报错 | keywords: 声音设计报错, 中文说明, voice-design-error-message, friendly-error
+- `DouyinCosyVoiceService()` — 百炼 CosyVoice 客户端：声音复刻、按提示词设计音色与非实时语音合成 | keywords: 百炼CosyVoice, 声音复刻, 语音合成, dashscope-cosyvoice, voice-enrollment, speech-synthesis
 - `DouyinCosyVoiceService.createVoice(runtime,input)` — 用公网可访问的录音创建克隆音色，返回音色 ID（可能还在审核） | keywords: 创建克隆音色, 声音复刻, create-cloned-voice, enroll-voice
+- `DouyinCosyVoiceService.designVoice(runtime,input)` — 按声音描述（≤500 字）与试听文本（15～200 字）调百炼声音设计 `create_voice`，返回音色 ID（可能还在部署） | keywords: 提示词设计音色, 声音设计, design-voice-from-prompt, voice-design
 - `DouyinCosyVoiceService.waitVoiceReady(runtime,voiceId,timeoutMs)` — 轮询克隆音色审核状态直到 `OK`，`UNDEPLOYED` 或超时抛错 | keywords: 等待音色审核, 克隆音色状态, wait-voice-ready, voice-review-status
 - `DouyinCosyVoiceService.deleteVoice(runtime,voiceId)` — 删除一个克隆音色，失败不抛错 | keywords: 删除克隆音色, 清理旧音色, delete-cloned-voice, cleanup-old-voice
 - `DouyinCosyVoiceService.synthesize(runtime,input)` — 按音色把一段文字合成 24kHz 单声道 WAV，下载回来并算出时长（百炼地址 24 小时有效，调用方自行转存） | keywords: 合成配音, 画外音配音, synthesize-voiceover, cosyvoice-tts
@@ -365,6 +451,58 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinCosyVoiceService.post(runtime,path,body)` — 调一次百炼语音接口（Bearer、1 分钟超时），非 2xx 或响应带 `code` 时抛 `DASHSCOPE_HTTP_<状态码>:<响应体>` | keywords: 百炼语音请求, 错误体保留, dashscope-speech-request, preserve-error-body
 
 ## 关键词索引 (Keyword Index)
+
+| 中文 | English |
+|---|---|
+| 探店场景图 | store-visit-scene-image |
+| 场景说明标签 | scene-description-tags |
+| 规整探店场景图 | normalize-store-visit-scenes |
+| 分段场景说明 | segment-scene-brief |
+| 提示词定制音色 | design-store-visit-voice |
+| 声音设计 | voice-design |
+| 声音设计报错 | voice-design-error-message |
+| 首帧图转公网地址 | publish-frame-image |
+| 万相首帧公网地址 | wan-first-frame-public-url |
+| 音色分类目录 | voice-category-catalog |
+| 男女声分类 | gender-balanced-category |
+| 音色库接口 | preset-voices-api |
+| 场景起始判断 | scene-start-check |
+| 台词场景分离 | dialogue-scene-separation |
+| 共享场景首帧 | shared-scene-keyframe |
+| 场景画面复用 | scene-frame-reuse |
+| 尾帧衔接方案 | tail-frame-plan |
+| 连续视频提示 | continuous-video-prompt |
+| 解析衔接方案 | parse-continuity-plan |
+| 视觉结果校验 | vision-result-check |
+| 尾帧理解要求 | tail-frame-analysis |
+| 场景衔接规划 | scene-continuity-planning |
+| 连续生成状态 | continuity-status |
+| 前置片段 | predecessor-segment |
+| 续段生成参数 | continue-segment-dto |
+| 尾帧编号 | tail-image-id |
+| 续段失败参数 | continuation-failure-dto |
+| 截帧错误 | frame-extraction-error |
+| 续段生成接口 | continue-segment-api |
+| 尾帧衔接 | tail-frame-continuity |
+| 续段失败接口 | continuation-failure-api |
+| 等待状态保护 | waiting-state-guard |
+| 续段素材接口 | continuation-input-api |
+| 前段视频鉴权 | predecessor-video-auth |
+| 续接探店片段 | continue-store-visit-segment |
+| 原子续段认领 | atomic-continuation-claim |
+| 停止尾帧等待 | stop-tail-wait |
+| 续段失败记录 | continuation-failure-record |
+| 读取续段素材 | read-continuation-input |
+| 校验尾帧素材 | require-tail-image |
+| 图库归属 | gallery-ownership |
+| 连续生成测试服务 | continuity-test-service |
+| 原子认领测试 | atomic-claim-test |
+| 续段作用域测试 | continuation-scope-test |
+| 记录匹配 | record-match |
+| 测试原子认领 | test-atomic-claim |
+| 重复提交防护 | duplicate-submit-guard |
+| 测试状态写入 | test-status-write |
+| 续段记录 | continuation-record |
 
 | 中文           | English                      |
 | -------------- | ---------------------------- |
@@ -496,12 +634,91 @@ AI 抖音工作台（douyin-workbench）
 | 空镜视频提示词 | broll-video-prompt |
 | 定格补齐容差 | freeze-frame-tolerance |
 | 探店分段失败说明 | store-visit-segment-failure |
+| 探店出镜模板 | store-visit-template |
+| 镜头编排 | shot-arrangement |
+| 生成人物首帧 | generate-segment-keyframe |
+| 人物进场景 | person-in-scene |
+| 人物首帧提示词 | keyframe-prompt |
+| 人物首帧接口 | segment-keyframe-api |
+| 写入人物首帧 | save-segment-keyframe |
+| 换人物作废首帧 | reset-presenter-keyframes |
+| 读取对口型节点 | read-avatar-runtime |
+| 解析对口型模式 | resolve-avatar-mode |
+| 解析人物出镜引擎 | resolve-presenter-engine |
+| 人物出镜视频提示词 | presenter-video-prompt |
+| 正脸对镜头 | face-camera |
+| 对口型阶段 | lip-sync-stage |
+| 口型跳过原因 | lip-sync-skip-reason |
+| 对口型公开状态 | lip-sync-public-state |
+| 对口型内部状态 | lip-sync-internal-state |
+| 原视频回退 | source-video-fallback |
+| 对口型跳过标记 | lip-sync-skip-prefix |
+| 跳过原因 | skip-reason |
+| 对口型跳过说明 | lip-sync-skip-message |
+| 对口型最短片段 | lip-sync-min-clip |
+| 音频裁剪下限 | audio-clip-floor |
+| 人脸出现占比 | face-coverage-threshold |
+| 路人过滤 | passerby-filter |
+| 候选人脸上限 | face-candidate-limit |
+| 视觉比对数量 | vision-match-count |
+| 识别到的人脸 | detected-face |
+| 人脸时间段 | face-time-range |
+| 对口型人脸片段 | lip-sync-face-clip |
+| 配音时间窗 | audio-window |
+| 对口型接口地址 | lip-sync-task-url |
+| 人脸识别地址 | identify-face-url |
+| 解析人脸识别 | parse-identify-face |
+| 人脸会话 | face-session |
+| 挑选主播人脸 | pick-presenter-face |
+| 出现时长筛选 | coverage-filter |
+| 人脸比对提示 | face-match-brief |
+| 主播身份确认 | presenter-identity-check |
+| 解析人脸比对 | parse-face-matches |
+| 候选编号校验 | candidate-index-check |
+| 对口型片段编排 | build-lip-sync-clips |
+| 配音时间切分 | audio-time-split |
+| 对口型状态视图 | lip-sync-view |
+| 发起人物对口型 | start-presenter-lip-sync |
+| 识别比对人脸 | identify-and-match-face |
+| 比对主播人脸 | match-presenter-face |
+| 视觉模型认人 | vision-face-match |
+| 测试内存更新 | test-memory-set |
+| 点号路径 | dotted-path |
+| 对口型测试服务 | lip-sync-test-service |
+| 人物段出片 | presenter-video-ready |
+| 测试对口型认领 | test-lip-sync-claim |
+| 防重复提交 | duplicate-submit-guard |
+| 对口型记录 | lip-sync-record |
+| 测试数眼替身 | test-shuyan-double |
+| 可灵对口型替身 | kling-lip-sync-double |
+| 测试数眼响应 | test-shuyan-response |
+| 可灵对口型响应 | kling-lip-sync-response |
+| 读取识别字段 | read-face-field |
+| 文本字段 | text-field |
+| 万相异步请求头 | wan-async-header |
+| 百炼异步任务 | dashscope-async-task |
+| 万相提示词上限 | wan-prompt-limit |
+| 提示词截断 | prompt-truncate |
+| 万相请求体 | wan-request-body |
+| 首帧驱动音频 | first-frame-driving-audio |
+| 万相驱动音频下限 | wan-driving-audio-min |
+| 配音最短时长 | voiceover-min-seconds |
+| 万相说话提示词 | wan-talking-prompt |
+| 配音驱动画面 | audio-driven-video |
+| 万相测试服务 | wan-test-service |
+| 配音驱动人物段 | audio-driven-presenter |
+| 测试万相替身 | test-wan-double |
+| 百炼协议响应 | dashscope-protocol-response |
+| 对口型任务地址 | avatar-task-url |
+| 对口型状态映射 | map-avatar-status |
+| 对口型配音时长 | avatar-audio-range |
+| 可灵素材入参 | kling-media-input |
+| 可灵数字人请求 | kling-avatar-request |
 | 全部分段生成 | generate-all-segments |
 | 提交单段画外音 | submit-segment-voiceover |
 | 读取百炼节点配置 | read-dashscope-runtime |
 | 读取探店画面节点 | read-broll-runtime |
 | 音色参数 | store-visit-voice-dto |
-| 系统音色接口 | preset-voices-api |
 | 选用系统音色 | use-preset-voice |
 | 探店音色库 | store-visit-voice-library |
 | 音色试听 | preview-voice |
@@ -522,17 +739,21 @@ AI 抖音工作台（douyin-workbench）
 ## 类型导出 (Type Exports)
 
 - `DouyinPublishCopy` — 脚本发布文案（标题、正文、话题），子选题的 `publishCopy` 字段。
-- `DouyinStoreVisitSetting` / `DouyinStoreVisitVoiceSample` / `DouyinStoreVisitSegment` — 探店画外音设置（独立场景图片与说明、录音样本信息、音色来源 clone / preset 与 ID、模型、提供商、台词与分段；分段带服务端写入的空镜视频、配音地址与时长、所用音色），子选题的 `storeVisit` 字段；子选题另有 `autoConcatShots`（全部出片后自动合成，探店分段同样使用）。调用记录视图带 `segmentId`（探店分段）。
+- `DouyinStoreVisitSetting` / `DouyinStoreVisitVoiceSample` / `DouyinStoreVisitSegment` — 探店设置（出镜人物照与出镜模板 `DouyinStoreVisitTemplate`、独立场景图片与说明、录音样本信息、音色来源 clone / preset 与 ID、模型、提供商、台词与分段；分段带镜头类型 `shot`，服务端写入人物首帧、视频、配音地址与时长、所用音色），子选题的 `storeVisit` 字段；子选题另有 `autoConcatShots`（全部出片后自动合成，探店分段同样使用）。调用记录视图带 `segmentId`（探店分段）。
 - `DouyinConcatClip` / `DouyinConcatReport` — 客户端合成的有序片段（探店分段带配音地址与字幕）与结果回报；`DouyinOutputVideoMeta` — 供应商成片登记参数。
 - `DouyinMediaReference` / `DouyinStoryboardShot` / `DouyinStoryboardPreference` / `DouyinVideoAudioSetting` / `DouyinScriptDraft` / `DouyinTopicEntity` / `DouyinWorkspaceGroup` / `DouyinOperationView` / `DouyinOperationEntity`。
 - `DouyinScriptStyle` — 脚本风格键名联合类型，取值来自 `DOUYIN_SCRIPT_STYLES`。
 - `DouyinGenerationJobKind` / `DouyinGenerationJobProgress` / `DouyinGenerationJobView` / `DouyinGenerationJobEntity` — 后台生成任务类型、真实进度（阶段含 `queued` / `imaging` + 已写入数或已出图数 + 总数）、前端视图（结果含候选脚本与处理时间）与持久化实体。
-- `ShuyanVideoRoute` — 数眼视频原生路由 `seedance` / `hailuo-v2`（MiniMax-H3）。
-- `CosyVoicePresetVoice` / `DashScopeRuntime` — 百炼系统音色条目与百炼运行配置（服务地址、Key）。
+- `DouyinStoreVisitLipSyncView` / `DouyinStoreVisitLipSyncState` — 人物段对口型的公开阶段（`identifying` / `syncing` / `done` / `skipped` + 原因）与服务端状态（原视频、人脸会话、选中的脸、可灵任务）；`StoreVisitDetectedFace` / `StoreVisitLipSyncFace` — 识别到的脸与提交给可灵的脸和配音片段。
+- `ShuyanVideoRoute` — 数眼视频原生路由 `seedance` / `hailuo-v2`（MiniMax-H3）/ `wan`（万相 wan2.7-i2v，百炼异步协议）。
+- `CosyVoicePresetVoice` / `CosyVoicePresetCategory` / `DashScopeRuntime` — 音色库预置音色条目、风格分类键与百炼运行配置（服务地址、Key）。
+- `DouyinStoreVisitSceneImage` — 探店场景图：图库引用 + `description` + `tags`。
 - `StoryboardImageCandidate` — 分镜自动配图的候选图（编号、名称、原图与缩略图地址、标签、描述、是否竖图）。
 - `DouyinMediaReferenceDto` / `DouyinStoryboardShotDto` / `DouyinStoryboardPreferenceDto` / `DouyinVideoAudioDto` / `DouyinScriptDraftPickDto` / `ConfirmDouyinScriptDraftsDto` / `CreateDouyinMotherTopicDto` / `GenerateDouyinChildrenDto` / `UpdateDouyinTopicDto` / `GenerateDouyinStoryboardDto` / `GenerateDouyinVideoDto` / `GenerateDouyinShotImageDto` / `GenerateDouyinShotVideoDto` / `PublishDouyinVideoDto` / `CrawlDouyinDataDto` / `DouyinReferenceImageDto` / `RefineDouyinScriptDto` / `DouyinPublishCopyDto` / `DouyinStoreVisitDto` / `DouyinStoreVisitSegmentDto` / `ConcatDouyinShotVideosDto` / `GenerateDouyinStoreVisitLinesDto` / `DouyinStoreVisitVoiceDto`。
 
 ## 模块功能描述 (Module Feature Description)
+
+**连续探店生成**：台词分段与场景独立；只有视频开头或 `sceneImageId` 实际变化时使用场景起始画面，同场景复用人物场景图且续段不重新生图。首尾出镜模板仍保留，人物与空镜之间的自然入画、退出或平滑转向由视觉 LLM 规划。批量提交先生成第一段，其余持久化为 `queued` 且 `continuity.stage=waiting`，不提前配音、扣视频生成费用或请求供应商。桌面端在前段出片后，通过鉴权 `continuation-input` 获取真实视频及配音时长，用本机 ffmpeg 截取最终成片实际播放的末帧（按 30fps，与截断或定格补齐一致，未烧字幕），上传租户图库，再调用 `POST operations/:operationId/store-visit/continue`（`create DouyinWorkbench`）。服务端验证待处理调用归属、前段视频编号、图库尾帧、台词与人物快照，原子将等待状态改为规划中；按「探店尾帧衔接」节点调用支持看图的 LLM，输入真实尾帧、原始场景和固定人物身份参考，解析画面理解、转场与下一段提示词。同场景视频请求只把尾帧传为 `first_frame`，不混入互斥的 `reference_image`；新场景用其场景起始图。认领后才配音、扣视频费用和提交视频任务，结果保存还会复核前段编号。客户端关闭时等待状态留库，重新打开后继续；规划中断超过十分钟判失败。截帧失败经 `continuation-failure`（`update DouyinWorkbench`）只结束尚未认领的任务，前段失败会停止后续队列。重做中间段重建整个后续队列；修改、增删、重排前段或换人物会作废依赖旧尾帧的成片。可灵数字人只保留单段或明确新场景起始的对口型用法，同场景人物续接必须选 Seedance / MiniMax-H3 视频型号。
 
 **新增选题即选择制作流程**：`POST topics` 可带 `productionMode=storyboard|store-visit`，缺省分镜模式。探店模式一次写入母题与空子题草稿，二者同为探店模式，草稿不含脚本或分镜；沿用既有租户用户隔离与接口权限，不创建生成任务。`storeVisit.sceneImages` 保存最多 4 张独立图库图片，按租户校验；`sceneDescription` 最多 2000 字，嵌套更新不覆盖音色。台词生成在没有正文或分镜时直接使用探店标题和场景说明；新探店选题提交生成前必须有场景图片，在供应商调用和扣费前校验。每段以自己选的场景图为首帧生成空镜，不再回退分镜图片。
 
@@ -586,12 +807,18 @@ AI 抖音工作台（douyin-workbench）
 
 **全部出片后自动合成**：客户端在全部所选分镜成功提交后 PATCH topics/:id 写 autoConcatShots=true。在线工作台发现所有镜头有视频、没有分镜生成或合成正在运行时自动领取；claimAutoConcat 原子清掉预约标记，避免多个客户端重复领取。重新提交分镜前先取消旧预约，部分人像处理或视频提交失败时不重新预约，防止合入旧视频。手动合成也清掉预约；autoConcatShots=false 可取消。客户端需要保持打开，离线期间已保存的预约在下次打开工作台时继续检查。
 
-**探店画外音（百炼配音 + 数眼空镜）**：探店不再生成真人数字人口播，改为「画外音 + 空镜」。`storeVisit` 保存独立场景图（最多 4 张）与说明、台词、分段（最多 8 段，每段一张场景图 + 台词 + 画面描述）和音色（`voiceSource=clone|preset`、`voiceId`、`voiceModel`、`voiceProviderId`）。`PATCH topics/:id` 只收场景、台词与分段，音色字段只由克隆与选用接口写入；旧版数字人流程留下的人脸、声音设计、`voiceMode`、语种等字段不再读取，写音色时由 `saveStoreVisitVoice` 顺手清掉。
+**探店人物出镜与画外音**：探店支持「人物带着镜头讲解」和「门店空镜配画外音」两种镜头，按段混排。`storeVisit` 保存出镜人物照 `faceImage`（租户图库图片，`PATCH` 传 null 清掉）、出镜模板 `template`（`bookend` 首尾出镜 / `presenter-all` 一镜到底 / `opening` 只开场出镜 / `voiceover` 纯画外音 / `custom` 逐段自定义，模板只决定前端默认编排）、独立场景图（最多 4 张）与说明、台词、分段（最多 8 段，每段一张场景图 + 台词 + 画面描述 + 镜头类型 `shot`）和音色（`voiceSource=clone|preset`、`voiceId`、`voiceModel`、`voiceProviderId`）。`PATCH topics/:id` 收人物、模板、场景、台词与分段，音色字段只由克隆与选用接口写入；换了出镜人物会清掉各段人物首帧并作废人物出镜段的成片。旧版数字人留下的声音设计、`voiceMode`、语种等字段不再读取，写音色时由 `saveStoreVisitVoice` 顺手清掉。
 
-**探店节点配置**：音色走「工作流节点模型 · 抖音视频制作 · 音色克隆与配音」节点（`voice-clone`），必须指定提供商代码为 `dashscope` 的百炼提供商（没填地址时用 `DASHSCOPE_DEFAULT_BASE_URL`，CosyVoice 接口只取域名拼 `{origin}/api/v1/services/audio/tts/…`）；空镜走「探店画面视频」节点（`store-visit-video`），必须是数眼智能且型号已接入原生路由（Seedance / MiniMax-H3）。`GET video/options` 的 `storeVisit.voiceClone` / `storeVisit.video` 告诉前端两个节点是否就绪及画面可选秒数。
+**探店节点配置**：音色走「工作流节点模型 · 抖音视频制作 · 音色克隆与配音」节点（`voice-clone`），必须指定提供商代码为 `dashscope` 的百炼提供商（没填地址时用 `DASHSCOPE_DEFAULT_BASE_URL`，CosyVoice 接口只取域名拼 `{origin}/api/v1/services/audio/tts/…`）；门店空镜走「探店画面视频」节点（`store-visit-video`），必须是数眼智能且型号已接入原生路由（Seedance / MiniMax-H3）；人物出镜走「探店人物对口型」节点（`store-visit-avatar`），必须是数眼智能：模型为 `kling-avatar-std` / `kling-avatar-pro` 时对口型，也可以先填 Seedance / MiniMax-H3 视频型号试效果（以人物首帧为第一帧图生视频，人物会动但嘴型不跟配音，单段时长受该型号上限约束）；人物首帧走「分镜画面」节点（`shot-image`）的生图模型。`GET video/options` 的 `storeVisit.voiceClone` / `storeVisit.video` / `storeVisit.avatar` 告诉前端各节点是否就绪及空镜可选秒数。
 
-**探店音色**：`POST topics/:id/store-visit/voice`（`create DouyinWorkbench`，multipart `file` ≤10MB，WAV / MP3 / M4A）要求已配 OSS，否则在上传录音和调用百炼之前拒绝；录音临时传 OSS 拿公网地址交给百炼声音复刻（模型取节点模型，缺省 `COSYVOICE_CLONE_MODEL`），审核 `OK` 后立即删录音，审核不通过同样删录音与半成品音色并记失败审计，换音色时删掉本脚本之前克隆的旧音色。`GET store-visit/voices`（`read`）列出 `COSYVOICE_PRESET_VOICES`，`POST topics/:id/store-visit/voice/preset`（`update`）只接受目录里的音色、模型固定 `COSYVOICE_PRESET_MODEL`。`POST topics/:id/store-visit/voice/preview`（`read`）合成一句试听（系统音色或本脚本克隆的音色），返回百炼 24 小时临时地址，服务端缓存 20 小时。克隆音色属于克隆时那个百炼账号，配音时优先用音色记录上的提供商取 Key。
+**探店音色**：`POST topics/:id/store-visit/voice`（`create DouyinWorkbench`，multipart `file` ≤10MB，WAV / MP3 / M4A）要求已配 OSS，否则在上传录音和调用百炼之前拒绝；录音临时传 OSS 拿公网地址交给百炼声音复刻（模型取节点模型，缺省 `COSYVOICE_CLONE_MODEL`），审核 `OK` 后立即删录音，审核不通过同样删录音与半成品音色并记失败审计，换音色时删掉本脚本之前克隆的旧音色。`GET store-visit/voices`（`read`）返回音色库 `COSYVOICE_PRESET_VOICES` 与分类目录 `COSYVOICE_PRESET_CATEGORIES`（活力种草 / 温柔亲切 / 知性专业 / 方言特色，每类男女声都有），`POST topics/:id/store-visit/voice/preset`（`update`）只接受目录里的音色、模型固定 `COSYVOICE_PRESET_MODEL`。`POST topics/:id/store-visit/voice/preview`（`read`）合成一句试听（音色库音色或本脚本克隆、定制的音色），返回百炼 24 小时临时地址，服务端缓存 20 小时。`POST topics/:id/store-visit/voice/design`（`create`）按 5～500 字声音描述调百炼声音设计（`voice-enrollment` / `create_voice`，`voice_prompt` + 固定试听句，模型取节点 v3 / v3.5 模型，否则 `COSYVOICE_CLONE_MODEL`），等音色可用后写成 `voiceSource=design` 并保存描述 `voicePrompt`，失败删半成品、保留原音色并记 `voice-design` 失败审计。克隆和定制音色属于创建时那个百炼账号，配音时优先用音色记录上的提供商取 Key；换音色时删掉本脚本之前克隆或定制的旧音色。
 
-**探店分段生成**：`POST topics/:id/store-visit/generate`（`create DouyinWorkbench`）生成全部分段，`segments/:segmentId/generate` 重做单段。提交前校验场景图、每段场景、音色、两个节点已配且没有段在生成，清掉这些段的旧成片并打 `autoConcatShots`。每段按 `video-generation` 扣费 → 百炼把台词合成 24kHz WAV（时长从文件头算出，超过画面型号单段上限 + `DOUYIN_STORE_VISIT_FREEZE_TOLERANCE_SECONDS` 时退款并提示拆短）→ 配音存储（OSS 或 `public/uploads/douyin-audio`）→ 以场景图为首帧、按 `buildStoreVisitBrollPrompt` 提交数眼空镜视频（时长取配音秒数向上取整再收敛到型号范围，清晰度取最接近 720p 的档，画面无文字、无人对镜头说话、无声音）；任一步失败退款并写失败记录。分段记录 `provider=shuyan`、`mode=store-visit`、带 `segmentId`，由探店服务每 15 秒轮询（数眼视频通道跳过它们），3 小时未结束判超时；完成后转存视频库，连同配音地址、时长与所用音色一起绑定到分段，生成期间台词、场景、画面描述或音色被改过就不绑定。失败原因经 `describeStoreVisitSegmentFailure` 翻成中文（百炼语音按 `describeCosyVoiceFailure`，其余按数眼视频规则）。
+**探店场景说明**：`storeVisit.sceneImages[]` 每张带 `description` 与 `tags`（前端从图库「场景图库」固定分组选，说明即图库备注）。`buildStoreVisitSceneBrief` 把这一段场景的说明标签与门店整体说明 `sceneDescription` 拼起来写进人物首帧、续段衔接与视频提示词；`writeStoreVisitLines` 把各场景说明按序号写进提示，让 AI 知道【场景k】是什么。生成前任何场景没写说明都会在扣费前拒绝。
+
+**探店场景起始画面与分段生成**：人物起始图只在开场或真实换场景时准备，以人物照和该场景图生图并入图库，同一场景的各台词段共享。开场按原有音色与视频节点提交；后续段按本模块「连续探店生成」流程等待实际尾帧、视觉规划、严格首帧续接，不按台词段重新生图。视频型号出的人物段在出片后再对口型（见下方「人物段出片后对口型」），配音与字幕由桌面最终合成加入；独立单段或明确新场景起始仍可选可灵数字人对口型。分段任务由后台每十五秒跟进，生成结果经租户校验后转存视频库，并复核台词、人物、场景、音色及前段视频编号；旧内容不会重新绑定到连续成片。
 
 **探店桌面端合成**：全部分段出片后，桌面端照常用 `topics/:id/video/concat` 领取合成，片段按分段顺序排列且额外带 `audioUrl` 与 `subtitle`：客户端以配音时长为准，画面短了定格补齐、长了截断，并把字幕烧进画面，结果设为脚本成片。
+
+**人物段出片后对口型**：「探店人物对口型」节点填视频型号（Seedance / MiniMax-H3）时，人物段先按首帧或上段尾帧生成能走动运镜的画面（提示词要求大部分时间正脸对镜头、只有主播露正脸），出片后不立即入库，而是原子认领进入对口型：用同一数眼 Key 调可灵 `identify-face` 识别画面里的人脸；只有一张脸出现超过半段时直接当主播，否则把候选脸截图（按出现时长取前 6 张）和出镜人物照交给「探店尾帧衔接」节点的视觉模型比对，同一人被拆成多段时都选上，比对失败退回出现超过半段的最长那张；选中的脸按各自出现时间对上同一时段的配音（配音从第 0 秒铺，短于 2 秒的片段不提交），提交 `advanced-lip-sync` 后由后台轮询，完成后把对口型版本入库并绑定分段，下一段从它的尾帧接续。识别不到人脸、找不到主播、接口未开放或对口型失败时不让整段失败：保留原画面入库，调用记录的 `lipSync` 写 `skipped` 与中文原因，工作台在分段进度里标出。因为定格补齐的几秒嘴不会动，人物段配音不得超过视频型号最长秒数。对口型目前不单独向租户扣费，计入这段的一次生视频扣费。
+
+**数眼万相路由（wan2.7-i2v）**：数眼把百炼原生协议挂在 `/ali/` 前缀下，用同一个数眼 Key：`POST /ali/api/v1/services/aigc/video-generation/video-synthesis`（必须带 `X-DashScope-Async: enable`）返回 `output.task_id`，`GET /ali/api/v1/tasks/{id}` 查 `output.task_status`（PENDING / RUNNING / SUCCEEDED / FAILED / CANCELED / UNKNOWN）与 `output.video_url`。请求体为 `input.prompt` + `input.media`（`first_frame` 必传，`driving_audio` 可选）+ `parameters`（`resolution` 720P / 1080P、`duration` 2～15 秒、关闭提示词改写与水印），图片和音频都只收公网 http(s) 地址。分镜 / 整片 / 探店空镜都能选它（只能图生视频，必须有首帧）；「探店人物对口型」节点选它时，人物段以场景人物画面或上一段尾帧为首帧、这段配音为驱动音频，一次生成会动且口型跟配音的画面，不再走出片后对口型；人物段配音 2 秒到 15 秒、不给定格容差，没配 OSS 时在建队列和扣费前拒绝。后台模型列表按名字兜底分类时，`-i2v` / `-t2v` / `-r2v` / `-s2v` 归为视频模型。

@@ -9,9 +9,18 @@ import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   GalleryImageCreateInput,
   GalleryImageEntity,
+  GalleryPublicImage,
   GallerySearchResult,
 } from '../entities/gallery-image.entity.js';
 import { AI_GENERATED_IMAGE_TAG } from '../gallery.constants.js';
+
+/**
+ * @description 对外返回图片时的读取投影：不读 Mongo 主键和 768 维向量。向量只在服务端相似检索里用，前端从不需要，
+ *   却占了图库列表响应的大半体积；需要向量的相似检索自己读原始文档，不走这个投影。
+ * @keyword-cn 图片公开投影, 不返回向量
+ * @keyword-en public-image-projection, omit-embedding
+ */
+const PUBLIC_IMAGE_PROJECTION = { _id: 0, embedding: 0 } as const;
 
 /**
  * @description 图库中由系统写入的封面类标签。
@@ -78,7 +87,7 @@ export class GalleryService {
             { id: { $in: orderedIds } },
           ],
         },
-        { projection: { _id: 0 } },
+        { projection: PUBLIC_IMAGE_PROJECTION },
       )
       .toArray();
     const byId = new Map(rows.map((row) => [Number(row.id), row]));
@@ -214,17 +223,22 @@ export class GalleryService {
   }
 
   /**
-   * @description 把数据库图片归一化为对外图片，补齐历史数据缺失的图库重构字段并移除Mongo主键。
+   * @description 把数据库图片归一化为对外图片，补齐历史数据缺失的图库重构字段，并移除 Mongo 主键与向量（向量只供服务端相似检索）。
    * @keyword-cn 图片公开归一化, 历史默认值
-   * @keyword-en public-image-normalization, legacy-defaults
+   * @keyword-en public-image-normalization, legacy-defaults, omit-embedding
    */
   toPublicImage(
-    image: GalleryImageEntity | Omit<GalleryImageEntity, '_id'>,
-  ): Omit<GalleryImageEntity, '_id'> {
+    image:
+      | GalleryImageEntity
+      | Omit<GalleryImageEntity, '_id'>
+      | Omit<GalleryImageEntity, '_id' | 'embedding'>,
+  ): GalleryPublicImage {
     const raw = image as GalleryImageEntity & { _id?: ObjectId };
-    const { _id: _ignored, ...clean } = raw;
+    const clean: Partial<GalleryImageEntity> & { _id?: ObjectId } = { ...raw };
+    delete clean._id;
+    delete clean.embedding;
     return {
-      ...clean,
+      ...(clean as GalleryPublicImage),
       favorite: raw.favorite === true,
       note: typeof raw.note === 'string' ? raw.note : '',
       aiFaceProtected: raw.aiFaceProtected === true,
@@ -371,8 +385,10 @@ export class GalleryService {
     });
 
     await this.images.insertMany(docs);
+    // 服务内部调用方拿完整实体（含向量）；经 HTTP 返回时由 toPublicImage 去掉向量
     return docs.map((doc) => ({
       ...this.toPublicImage(doc),
+      embedding: doc.embedding,
       _id: doc._id,
     }));
   }
@@ -455,12 +471,14 @@ export class GalleryService {
         .aggregate<GalleryImageEntity>([
           { $match: filter },
           { $sample: { size: lim } },
-          { $project: { _id: 0 } },
+          { $project: PUBLIC_IMAGE_PROJECTION },
         ])
         .toArray();
       return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
     }
-    const query = this.images.find(filter, { projection: { _id: 0 } });
+    const query = this.images.find(filter, {
+      projection: PUBLIC_IMAGE_PROJECTION,
+    });
     if (resolvedSort === 'favorite') {
       query
         .sort({ favorite: -1, favoritedAt: -1, createdAt: -1, id: -1 })
@@ -509,7 +527,7 @@ export class GalleryService {
     aiFaceProtected?: boolean;
     addTags?: string[];
     removeTags?: string[];
-  }): Promise<Omit<GalleryImageEntity, '_id'> | null> {
+  }): Promise<GalleryPublicImage | null> {
     const filter = {
       $and: [
         this.buildTenantFilter(input.userId, input.tenantId),
@@ -649,7 +667,7 @@ export class GalleryService {
     tenantId?: string;
     id: number;
     limit: number;
-  }): Promise<Array<Omit<GalleryImageEntity, '_id'>>> {
+  }): Promise<Array<GalleryPublicImage>> {
     const scope = this.buildTenantFilter(input.userId, input.tenantId);
     const source = await this.images.findOne({
       $and: [scope, { id: input.id }],
@@ -893,7 +911,7 @@ export class GalleryService {
     }
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
     const rows = await this.images
-      .find(filter, { projection: { _id: 0 } })
+      .find(filter, { projection: PUBLIC_IMAGE_PROJECTION })
       .sort({ id: -1 })
       .limit(lim)
       .toArray();
@@ -1001,7 +1019,7 @@ export class GalleryService {
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     const rows = await this.images
-      .find(filter, { projection: { _id: 0 } })
+      .find(filter, { projection: PUBLIC_IMAGE_PROJECTION })
       .sort({ id: -1 })
       .limit(lim)
       .toArray();
@@ -1175,7 +1193,7 @@ export class GalleryService {
     const lim = Math.max(1, Math.min(200, Math.floor(input.limit ?? 24)));
     const pipe: Record<string, unknown>[] = [{ $match: filter }];
     pipe.push({ $sample: { size: lim } });
-    pipe.push({ $project: { _id: 0 } });
+    pipe.push({ $project: PUBLIC_IMAGE_PROJECTION });
     const rows = await this.images
       .aggregate<GalleryImageEntity>(pipe)
       .toArray();
@@ -1440,7 +1458,7 @@ export class GalleryService {
           },
         },
         { $addFields: { score: { $meta: 'vectorSearchScore' } } },
-        { $project: { _id: 0 } },
+        { $project: PUBLIC_IMAGE_PROJECTION },
       ];
       const rows = await this.images
         .aggregate<GalleryImageEntity & { score: number }>(pipe)

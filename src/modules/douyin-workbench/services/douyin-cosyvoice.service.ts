@@ -45,8 +45,31 @@ export const COSYVOICE_SAMPLE_RATE = 24000;
 export const COSYVOICE_VOICE_READY_TIMEOUT_MS = 90 * 1000;
 
 /**
- * @description 探店可选的一个 CosyVoice 系统音色。
- * @keyword-cn 系统音色条目, 探店音色
+ * @description 音色库的风格分类键：活力种草、温柔亲切、知性专业、方言特色。
+ * @keyword-cn 音色分类键, 音色风格
+ * @keyword-en voice-category-key, voice-style
+ */
+export type CosyVoicePresetCategory = 'lively' | 'gentle' | 'steady' | 'dialect';
+
+/**
+ * @description 音色库分类目录（顺序即展示顺序）：每个分类都同时有男声和女声。
+ * @keyword-cn 音色分类目录, 男女声分类
+ * @keyword-en voice-category-catalog, gender-balanced-category
+ */
+export const COSYVOICE_PRESET_CATEGORIES: ReadonlyArray<{
+  key: CosyVoicePresetCategory;
+  label: string;
+  hint: string;
+}> = [
+  { key: 'lively', label: '活力种草', hint: '热情带感，适合探店推荐、带货种草' },
+  { key: 'gentle', label: '温柔亲切', hint: '像朋友聊天，适合咖啡、甜品、生活方式' },
+  { key: 'steady', label: '知性专业', hint: '清晰稳重，适合讲解产品、品牌介绍' },
+  { key: 'dialect', label: '方言特色', hint: '地方口音，适合本地老店、风味小吃' },
+];
+
+/**
+ * @description 探店音色库里的一个 CosyVoice 预置音色。
+ * @keyword-cn 预置音色条目, 探店音色
  * @keyword-en cosyvoice-preset-voice, store-visit-voice
  */
 export interface CosyVoicePresetVoice {
@@ -55,12 +78,15 @@ export interface CosyVoicePresetVoice {
   /** @description 声音特质，例如「阳光大男孩」 */
   trait: string;
   gender: 'male' | 'female';
+  /** @description 风格分类，见 `COSYVOICE_PRESET_CATEGORIES` */
+  category: CosyVoicePresetCategory;
   /** @description 方言音色标注方言，普通话为空 */
   dialect?: string;
 }
 
 /**
- * @description 探店画外音可选的系统音色（`cosyvoice-v3-flash`，华北 2 北京可用），按官方音色列表挑了适合口播的普通话男女声和两个方言音色。
+ * @description 探店音色库（`cosyvoice-v3-flash` 预置音色，华北 2 北京可用）：按官方音色列表挑了适合口播的普通话男女声和两个方言音色，
+ *   分到四个风格分类里，每个分类男女声都有。
  * @keyword-cn 系统音色目录, 探店音色库
  * @keyword-en cosyvoice-preset-catalog, store-visit-voice-library
  */
@@ -70,150 +96,175 @@ export const COSYVOICE_PRESET_VOICES: readonly CosyVoicePresetVoice[] = [
     voiceName: '龙安洋',
     trait: '阳光大男孩',
     gender: 'male',
+    category: 'lively',
   },
   {
     voiceId: 'longanhuan',
     voiceName: '龙安欢',
     trait: '欢脱元气女',
     gender: 'female',
+    category: 'lively',
   },
   {
     voiceId: 'longxiaochun_v3',
     voiceName: '龙小淳',
     trait: '知性积极女',
     gender: 'female',
+    category: 'steady',
   },
   {
     voiceId: 'longanlang_v3',
     voiceName: '龙安朗',
     trait: '清爽利落男',
     gender: 'male',
+    category: 'steady',
   },
   {
     voiceId: 'longhua_v3',
     voiceName: '龙华',
     trait: '元气甜美女',
     gender: 'female',
+    category: 'lively',
   },
   {
     voiceId: 'longanyun_v3',
     voiceName: '龙安昀',
     trait: '居家暖男',
     gender: 'male',
+    category: 'gentle',
   },
   {
     voiceId: 'longanqin_v3',
     voiceName: '龙安亲',
     trait: '亲和活泼女',
     gender: 'female',
+    category: 'lively',
   },
   {
     voiceId: 'longze_v3',
     voiceName: '龙泽',
     trait: '温暖元气男',
     gender: 'male',
+    category: 'gentle',
   },
   {
     voiceId: 'longxing_v3',
     voiceName: '龙星',
     trait: '温婉邻家女',
     gender: 'female',
+    category: 'gentle',
   },
   {
     voiceId: 'longcheng_v3',
     voiceName: '龙橙',
     trait: '智慧青年男',
     gender: 'male',
+    category: 'steady',
   },
   {
     voiceId: 'longanrou_v3',
     voiceName: '龙安柔',
     trait: '温柔闺蜜女',
     gender: 'female',
+    category: 'gentle',
   },
   {
     voiceId: 'longyichen_v3',
     voiceName: '龙逸尘',
     trait: '洒脱活力男',
     gender: 'male',
+    category: 'lively',
   },
   {
     voiceId: 'longyingxiao_v3',
     voiceName: '龙应笑',
     trait: '清甜推销女',
     gender: 'female',
+    category: 'lively',
   },
   {
     voiceId: 'longanzhi_v3',
     voiceName: '龙安智',
     trait: '睿智轻熟男',
     gender: 'male',
+    category: 'steady',
   },
   {
     voiceId: 'longanwen_v3',
     voiceName: '龙安温',
     trait: '优雅知性女',
     gender: 'female',
+    category: 'steady',
   },
   {
     voiceId: 'longtian_v3',
     voiceName: '龙天',
     trait: '磁性理智男',
     gender: 'male',
+    category: 'steady',
   },
   {
     voiceId: 'longanli_v3',
     voiceName: '龙安莉',
     trait: '利落从容女',
     gender: 'female',
+    category: 'steady',
   },
   {
     voiceId: 'longnan_v3',
     voiceName: '龙楠',
     trait: '睿智青年男',
     gender: 'male',
+    category: 'steady',
   },
   {
     voiceId: 'longwan_v3',
     voiceName: '龙婉',
     trait: '细腻柔声女',
     gender: 'female',
+    category: 'gentle',
   },
   {
     voiceId: 'longsanshu_v3',
     voiceName: '龙三叔',
     trait: '沉稳质感男',
     gender: 'male',
+    category: 'steady',
   },
   {
     voiceId: 'longxiaoxia_v3',
     voiceName: '龙小夏',
     trait: '沉稳权威女',
     gender: 'female',
+    category: 'steady',
   },
   {
     voiceId: 'longfei_v3',
     voiceName: '龙飞',
     trait: '热血磁性男',
     gender: 'male',
+    category: 'lively',
   },
   {
     voiceId: 'longmiao_v3',
     voiceName: '龙妙',
     trait: '抑扬顿挫女',
     gender: 'female',
+    category: 'steady',
   },
   {
     voiceId: 'longyumi_v3',
     voiceName: 'YUMI',
     trait: '正经青年女',
     gender: 'female',
+    category: 'steady',
   },
   {
     voiceId: 'longlaotie_v3',
     voiceName: '龙老铁',
     trait: '东北直率男',
     gender: 'male',
+    category: 'dialect',
     dialect: '东北话',
   },
   {
@@ -221,6 +272,7 @@ export const COSYVOICE_PRESET_VOICES: readonly CosyVoicePresetVoice[] = [
     voiceName: '龙嘉欣',
     trait: '优雅粤语女',
     gender: 'female',
+    category: 'dialect',
     dialect: '粤语',
   },
 ];
@@ -331,7 +383,23 @@ export function describeCosyVoiceFailure(raw: string): string {
 }
 
 /**
- * @description 阿里云百炼 CosyVoice 客户端：声音复刻（创建、查询审核状态、删除音色）与非实时语音合成。
+ * @description 把百炼声音设计的报错翻成中文：描述没通过或不合要求时提示换个说法，其余沿用通用语音报错说明。
+ * @keyword-cn 声音设计报错, 中文说明
+ * @keyword-en voice-design-error-message, friendly-error
+ * @param {string} raw 原始报错。
+ * @returns {string} 用户可读说明。
+ */
+export function describeVoiceDesignFailure(raw: string): string {
+  const text = String(raw ?? '');
+  if (/DASHSCOPE_VOICE_REJECTED|DASHSCOPE_HTTP_400:\/customization/.test(text))
+    return '这段描述没能生成音色，换个说法再试：写清性别、大概年龄、音色特点和说话语气，只用中文或英文';
+  if (/DASHSCOPE_VOICE_REVIEW_TIMEOUT/.test(text))
+    return '音色生成超时，请稍后重试';
+  return describeCosyVoiceFailure(text);
+}
+
+/**
+ * @description 阿里云百炼 CosyVoice 客户端：声音复刻（创建、查询审核状态、删除音色）、按提示词设计音色与非实时语音合成。
  *   探店画外音用它克隆用户录音、给每段台词配音；Key 与地址来自后台「音色克隆」节点选的百炼提供商。
  * @keyword-cn 百炼CosyVoice, 声音复刻, 语音合成
  * @keyword-en dashscope-cosyvoice, voice-enrollment, speech-synthesis
@@ -359,6 +427,43 @@ export class DouyinCosyVoiceService {
         prefix: input.prefix,
         url: input.audioUrl,
       },
+    });
+    const voiceId = String(
+      (response.output as Record<string, unknown> | undefined)?.voice_id ?? '',
+    ).trim();
+    if (!voiceId) throw new Error('DASHSCOPE_VOICE_ID_MISSING');
+    return voiceId;
+  }
+
+  /**
+   * @description 按一段文字描述设计音色（百炼 CosyVoice 声音设计，仅北京地域），返回音色 ID（可能还在部署，要再 `waitVoiceReady`）。
+   * @keyword-cn 提示词设计音色, 声音设计
+   * @keyword-en design-voice-from-prompt, voice-design
+   * @param {DashScopeRuntime} runtime 百炼地址与 Key。
+   * @param {{targetModel: string, prefix: string, prompt: string, previewText: string}} input 绑定的合成模型、名称前缀、声音描述（≤500 字）与试听文本（15～200 字）。
+   * @returns {Promise<string>} 音色 ID。
+   * @throws {Error} 百炼返回错误或没给音色 ID。
+   */
+  async designVoice(
+    runtime: DashScopeRuntime,
+    input: {
+      targetModel: string;
+      prefix: string;
+      prompt: string;
+      previewText: string;
+    },
+  ): Promise<string> {
+    const response = await this.post(runtime, '/customization', {
+      model: 'voice-enrollment',
+      input: {
+        action: 'create_voice',
+        target_model: input.targetModel,
+        prefix: input.prefix,
+        voice_prompt: input.prompt.slice(0, 500),
+        preview_text: input.previewText.slice(0, 200),
+        language_hints: ['zh'],
+      },
+      parameters: { sample_rate: COSYVOICE_SAMPLE_RATE, response_format: 'wav' },
     });
     const voiceId = String(
       (response.output as Record<string, unknown> | undefined)?.voice_id ?? '',

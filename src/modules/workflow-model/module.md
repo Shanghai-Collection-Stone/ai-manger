@@ -18,12 +18,12 @@
 ## 函数清单 (Function List)
 
 - `WorkflowModelModule()` — 装配节点模型设置并导出服务 | keywords: 工作流节点模型模块, 按节点取模型, workflow-model-module, per-node-model
-- `WorkflowNodeCategory` — 节点模型类型 llm / image / video / audio（audio 为录音克隆或文字声音设计） | keywords: 节点模型类型, 提供商类型, node-model-category, provider-category
+- `WorkflowNodeCategory` — 节点模型类型 llm / image / video / audio（audio 为音色克隆与配音，当前只有阿里云百炼） | keywords: 节点模型类型, 提供商类型, node-model-category, provider-category
 - `WorkflowNodeDefinition` — 代码固定的节点定义，可带 `runtimeProviders`（节点只接受的提供商代码）与 `unsetHint`（未指定时的后台说明） | keywords: 预设工作流节点, 节点定义, preset-workflow-node, node-definition
 - `WorkflowDefinition` — 代码固定的工作流定义 | keywords: 预设工作流, 工作流定义, preset-workflow, workflow-definition
 - `WORKFLOW_NODES` — 工作流与节点 key 常量，业务调用处统一从这里取 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
-- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video / voice-clone / voice-design / store-visit-video） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
-- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax 与 digital-human；生图增加 shuyan/shuyanai；生视频支持 pixmax、shuyan/shuyanai 与 digital-human；音色克隆只支持 digital-human），节点登记了 `runtimeProviders` 时再按节点收窄 | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
+- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video / voice-clone / store-visit-video / store-visit-avatar / store-visit-continuity） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
+- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax 与 shuyan/shuyanai；音色只支持阿里云百炼 dashscope），节点登记了 `runtimeProviders` 时再按节点收窄 | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
 - `WorkflowNodeModelEntity` — 节点设置持久化实体（`workflow_node_models`） | keywords: 节点模型设置, 平台级配置, node-model-binding, platform-setting
 - `WorkflowNodeRuntime` — 节点调用时的提供商运行配置 | keywords: 节点运行配置, 提供商密钥, node-runtime, provider-credential
 - `WorkflowProviderOption` — 不含密钥的提供商选项 | keywords: 提供商选项, 隐藏密钥, provider-option, hide-api-key
@@ -43,7 +43,7 @@
 - `ShuyanModelCategory` — 节点三类之外另出 em / other，按分类过滤时自然排除 | keywords: 数眼模型分类, 向量与其他, shuyan-model-category, embedding-and-other
 - `ShuyanModelItem` — `/v1/models` 返回的单条模型 | keywords: 数眼模型条目, 端点类型, shuyan-model-item, endpoint-types
 - `isShuyanProvider(providerCode)` — 判断提供商代码是否数眼智能 | keywords: 数眼智能识别, 提供商代码, is-shuyan-provider, provider-code
-- `classifyShuyanModel(item)` — 优先按 New API `supported_endpoint_types` 判分类，没有该字段时按模型名兜底，都不命中当文本模型 | keywords: 数眼模型分类, 按名兜底, classify-shuyan-model, name-fallback
+- `classifyShuyanModel(item)` — 优先按 New API `supported_endpoint_types` 判分类，没有该字段时按模型名兜底（万相按 `-i2v` / `-t2v` / `-r2v` / `-s2v` 后缀归视频），都不命中当文本模型 | keywords: 数眼模型分类, 按名兜底, classify-shuyan-model, name-fallback
 - `fetchShuyanModels(input)` — 用 Key 实时拉账号可调模型，失败抛 `SHUYAN_MODEL_LIST_FAILED:<原因>` | keywords: 拉取数眼模型, 账号可用模型, fetch-shuyan-models, available-models
 - `listShuyanModelsByCategory(input)` — 拉取后按节点类型过滤并排序 | keywords: 数眼可选模型, 按分类过滤, list-shuyan-models-by-category, filter-by-category
 - `WorkflowModelService.resolveNodeRuntime(workflowKey,nodeKey)` — 取节点运行配置：未设置或提供商已删除/停用返回 null 回退默认，类型不符或运行时不支持直接报错 | keywords: 解析节点运行配置, 回退默认提供商, resolve-node-runtime, fallback-default-provider
@@ -89,6 +89,8 @@
 
 ## 模块功能描述 (Module Feature Description)
 
+**探店连续衔接节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitContinuity` 登记为 `store-visit-continuity`，后台显示「探店尾帧衔接」，类型为 `llm`。应指定支持看图的视觉语言模型，用于理解实际播放尾帧、原始场景和人物身份，结合下一段台词规划衔接；未单独配置时按现有文本节点规则回退默认 LLM，默认模型也必须支持图片输入。
+
 **节点目录写在代码里**：`WORKFLOW_NODES` 定义 key 常量，`WORKFLOW_MODEL_CATALOG` 登记每条预设工作流里会调用模型的节点及其类型（文本 / 生图 / 生视频），后台只能为节点选模型，不能增删节点。新增节点时先在目录里登记，再在业务调用处取节点配置；`workflowKey` / `nodeKey` 上线后不要改名。
 
 **保存规则**：`PUT admin/workflow-models/:workflowKey/nodes/:nodeKey` 只接受已启用、且 `modelCategory` 与节点类型一致的提供商；模型留空时用该提供商记录里的默认模型，两者都没有则拒绝。同一提供商代码在不同类型下是不同记录（例如 PixMax 生图、PixMax 生视频各一条），与「Ai提供商设置」现有的 `providerCode + modelCategory` 唯一规则一致。`DELETE` 清除设置。四个接口都挂 `AiProvider` 权限（平台 AI 配置，仅超管）。
@@ -101,10 +103,8 @@
 
 **当前接入情况（小红书图文）**：`topic` 覆盖选题候选生成与子选题提示词推荐（`xhs-topic.service`），`article` 覆盖写文章的首次生文与重写，`image-decision` 覆盖与写正文并行、关闭思考的配图标签决策（二者在 `xhs-article-generation.service`），`cover-copy` 覆盖图组封面主副标题生成（关闭思考），`cover-image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘，`cover-overlay` 覆盖 `ai-overlay` 文字海报素材层，`inner-image` 覆盖灵感画布内页重绘（后四者在 `canvas-image-group.service`）。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
 
-**当前接入情况（抖音视频制作）**：script（候选脚本、生成要求、发布文案）、storyboard（分镜拆解）与 image-decision（图库选图）覆盖 LLM 的节点配置；shot-image 指定后出图失败直接报错。shot-video（分镜）与 full-video（整片）指定 PixMax 后调用 PixMax，未指定时仍走既有直连服务。探店 voice-clone / voice-design（audio）只接受 digital-human 通用服务；store-visit-video（video）接受 digital-human 或数眼智能（shuyan / shuyanai，模型填 kling-avatar-std / kling-avatar-pro / wan2.2-s2v，按场景分段对口型），没有默认回退，未指定时提示管理员配置。shot-video / full-video 只接受 pixmax / shuyan / shuyanai，digital-human 不会误用于分镜或整片视频。
+**当前接入情况（抖音视频制作）**：script（候选脚本、生成要求、发布文案）、storyboard（分镜拆解）与 image-decision（图库选图）覆盖 LLM 的节点配置；shot-image 指定后出图失败直接报错。shot-video（分镜）与 full-video（整片）指定 PixMax 后调用 PixMax，未指定时仍走既有直连服务。探店 voice-clone「音色克隆与配音」（audio）只接受阿里云百炼 dashscope（录音克隆模型填 cosyvoice-v3.5-plus，系统音色固定 cosyvoice-v3-flash）；store-visit-video「探店画面视频」（video）只接受数眼智能（shuyan / shuyanai，Seedance、MiniMax-H3 或 wan2.7-i2v 型号，门店空镜段以场景图为首帧生成空镜）；store-visit-avatar「探店人物对口型」（video）只接受数眼智能，模型填 kling-avatar-std / kling-avatar-pro 时人物出镜段以人物首帧加配音对口型，填 wan2.7-i2v 时以首帧加这段配音（驱动音频）一次生成口型跟配音的画面，填 Seedance / MiniMax-H3 视频型号时先以人物首帧图生视频、出片后再交给可灵按配音对口型，没有默认回退，未指定时提示管理员配置。shot-video / full-video 只接受 pixmax / shuyan / shuyanai。原通用数字人服务 digital-human 与声音设计节点 voice-design 已下线。
 
 **后台页面**：「工作流节点模型」Tab 左侧是工作流子菜单（显示节点数与已指定数，记住上次选择），右侧是选中工作流的全部模型节点设置。单测 `workflow-model.service.spec.ts` 校验 `WORKFLOW_NODES` 与目录逐项一致。
 
-**声音设计节点**：voice-design（audio）只负责可选固定音色生成，未指定时不可额外生成音色，纯提示词仍可使用。voice-clone / voice-design 独立绑定 digital-human 提供商和模型；store-visit-video 接受固定音色或 voiceMode=prompt 的声音提示词，实际厂商和能力由适配服务对接。
-
-**音色类型与节点级提供商**：WorkflowNodeCategory.audio 对应 Ai 提供商的 modelCategory=audio，涵盖克隆与设计。默认回退、模型查询与保存校验都按它处理（PixMax 映射 GENERATE_AUDIO，数眼目录不出 audio 模型）。节点 runtimeProviders 白名单优先于类型矩阵，list 与 resolveNodeRuntime 都传节点白名单；同为 video 类型，digital-human 只能用在探店节点；探店节点也可以选数眼智能。unsetHint 在探店三个节点未指定时分别显示不可用说明。
+**音色类型与节点级提供商**：WorkflowNodeCategory.audio 对应 Ai 提供商的 modelCategory=audio（后台「音色模型」类别），当前只有阿里云百炼。默认回退、模型查询与保存校验都按它处理（PixMax 映射 GENERATE_AUDIO，数眼目录不出 audio 模型）。节点 runtimeProviders 白名单优先于类型矩阵，list 与 resolveNodeRuntime 都传节点白名单：voice-clone 只收 dashscope，store-visit-video 与 store-visit-avatar 只收 shuyan / shuyanai。unsetHint 在探店三个节点未指定时分别显示不可用说明。

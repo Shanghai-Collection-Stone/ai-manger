@@ -52,6 +52,7 @@ import { MailModule } from './modules/mail/mail.module.js';
 import { EmailVerificationModule } from './modules/email-verification/email-verification.module.js';
 import { TenantJoinModule } from './modules/tenant-join/tenant-join.module.js';
 import { OpsReportModule } from './modules/ops-report/ops-report.module.js';
+import { TenantMcpModule } from './modules/tenant-mcp/tenant-mcp.module.js';
 
 @Module({
   imports: [
@@ -102,6 +103,7 @@ import { OpsReportModule } from './modules/ops-report/ops-report.module.js';
     EmailVerificationModule,
     TenantJoinModule,
     OpsReportModule,
+    TenantMcpModule,
     AiBillingModule,
     DouyinPersonaModule,
     DouyinWorkbenchModule,

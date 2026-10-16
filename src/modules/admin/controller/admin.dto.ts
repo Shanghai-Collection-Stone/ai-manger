@@ -88,6 +88,17 @@ export class AdminLoginSelectDto {
 }
 
 /**
+ * @description 登录后切换租户请求体：目标租户 ID，不传表示切回平台端身份
+ * @keyword-cn 切换租户请求体, 目标租户
+ * @keyword-en switch-tenant-dto, target-tenant
+ */
+export class AdminSwitchTenantDto {
+  @IsOptional()
+  @IsMongoId()
+  tenantId?: string;
+}
+
+/**
  * @description 自助注册请求体：以已验证手机号为身份固定注册进默认租户，邮箱必填且须先通过邮箱验证码，存入平台账号；tenantName 仅为兼容旧客户端保留且被忽略
  * @keyword-cn 自助注册请求体, 默认租户
  * @keyword-en admin-register-dto, default-tenant

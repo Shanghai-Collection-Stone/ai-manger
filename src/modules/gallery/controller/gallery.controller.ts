@@ -34,7 +34,7 @@ import type {
   MaterialStyleGroupId,
   MaterialStylePreset,
 } from '../material-styles/material-style.presets.js';
-import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
+import type { GalleryPublicImage } from '../entities/gallery-image.entity.js';
 import type { GalleryGroupEntity } from '../entities/gallery-group.entity.js';
 import {
   BatchUpdateGalleryImageMetaDto,
@@ -533,7 +533,7 @@ export class GalleryController {
    * @description 上传图片文件并写入图库记录（含Embedding向量）。
    * @param {Express.Multer.File[]} files - 上传的文件数组（字段名：files）。
    * @param {{ tenantId?: string; groupId?: string; tags?: string; description?: string; note?: string; aiFaceProtected?: string }} body - 表单字段；归属用户取 token。
-   * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 新建图片记录列表。
+   * @returns {Promise<{ images: Array<GalleryPublicImage> }>} 新建图片记录列表。
    * @throws {BadRequestException} 当未上传文件时抛出。
    * @keyword-cn 图库上传, 图片元数据, 上传文件名
    * @keyword-en gallery-upload, image-metadata, upload-filename
@@ -592,7 +592,7 @@ export class GalleryController {
       aiFaceProtected?: string;
     },
     @Req() req?: Request,
-  ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
+  ): Promise<{ images: Array<GalleryPublicImage> }> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('No image files uploaded');
     }
@@ -843,7 +843,7 @@ export class GalleryController {
    * 生成结果打 `ai素材` 标签供素材面板筛选。
    * @param {{ prompt?: string; size?: string; tags?: string; referenceImageUrl?: string; stylePreset?: string }} body - 生成参数。
    * @param {Request} [req] - Express 请求对象，用于解析 token 用户与租户范围。
-   * @returns {Promise<{ image: Omit<GalleryImageEntity, '_id'> }>} 入库后的素材记录。
+   * @returns {Promise<{ image: GalleryPublicImage }>} 入库后的素材记录。
    * @throws {BadRequestException} 提示词为空或生图结果落盘失败时抛出。
    * @keyword-cn AI素材生成, 描述优先
    * @keyword-en ai-material-generate, prompt-first
@@ -859,7 +859,7 @@ export class GalleryController {
       stylePreset?: string;
     },
     @Req() req?: Request,
-  ): Promise<{ image: Omit<GalleryImageEntity, '_id'> }> {
+  ): Promise<{ image: GalleryPublicImage }> {
     const { userId, tenantId } = await this.requireUserScope(req);
 
     const rawPrompt = String(body?.prompt ?? '')
@@ -918,7 +918,7 @@ export class GalleryController {
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @param {Request} [req] - 当前 HTTP 请求。
    * @param {'asc'|'desc'} [sortOrder] - 查询参数：创建时间排序方向，默认 desc。
-   * @returns {Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }>} 图片列表。
+   * @returns {Promise<{ images: Array<GalleryPublicImage> }>} 图片列表。
    * @keyword-cn 图库多条件排序, 多标签筛选
    * @keyword-en gallery-multi-sort, multi-tag-filter
    * @since 2026-02-04
@@ -938,7 +938,7 @@ export class GalleryController {
     @Query('tags') tags?: string,
     @Query('favoriteOnly') favoriteOnly?: string,
     @Query('offset') offset?: string,
-  ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
+  ): Promise<{ images: Array<GalleryPublicImage> }> {
     // 优先从请求token解析tenantId，其次使用query参数
     const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
@@ -950,14 +950,12 @@ export class GalleryController {
       sort &&
       !supportedSorts.includes(sort as (typeof supportedSorts)[number])
     ) {
-      throw new BadRequestException('sort只能是newest、oldest、random或favorite');
+      throw new BadRequestException(
+        'sort只能是newest、oldest、random或favorite',
+      );
     }
     const resolvedSort = sort as
-      | 'newest'
-      | 'oldest'
-      | 'random'
-      | 'favorite'
-      | undefined;
+      'newest' | 'oldest' | 'random' | 'favorite' | undefined;
     const resolvedTags = String(tags ?? '')
       .split(',')
       .map((value) => value.trim())
@@ -1003,9 +1001,12 @@ export class GalleryController {
    * @keyword-en gallery-exact-stats, tenant-visibility
    */
   @Get('stats')
-  async stats(
-    @Req() req: Request,
-  ): Promise<{ images: number; favorites: number; groups: number; tags: number }> {
+  async stats(@Req() req: Request): Promise<{
+    images: number;
+    favorites: number;
+    groups: number;
+    tags: number;
+  }> {
     const authScope = await this.resolveAuthScope(req);
     const userId = authScope.userId || 'default';
     await this.groups.ensureDefaultDynamicGroups(userId, authScope.tenantId);
@@ -1054,7 +1055,7 @@ export class GalleryController {
     @Param('id') id: string,
     @Body() body: UpdateGalleryImageMetaDto,
     @Req() req: Request,
-  ): Promise<{ image: Omit<GalleryImageEntity, '_id'> }> {
+  ): Promise<{ image: GalleryPublicImage }> {
     const imageId = Number(id);
     if (!Number.isInteger(imageId) || imageId <= 0) {
       throw new BadRequestException('图片ID无效');
@@ -1080,7 +1081,7 @@ export class GalleryController {
     @Param('id') id: string,
     @Query('limit') limit: string | undefined,
     @Req() req: Request,
-  ): Promise<{ images: Array<Omit<GalleryImageEntity, '_id'>> }> {
+  ): Promise<{ images: Array<GalleryPublicImage> }> {
     const imageId = Number(id);
     const resolvedLimit = limit === undefined ? 12 : Number(limit);
     if (!Number.isInteger(imageId) || imageId <= 0) {
@@ -1338,7 +1339,7 @@ export class GalleryController {
   }
 
   /**
-   * @description 列出 token 用户的图库组，支持按 tag 过滤。
+   * @description 列出 token 用户的图库组，支持按 tag 过滤；确保「场景图库」固定分组存在并排在最前，其后是动态封面与动态拼图。
    * @param {string} [tag] - 查询参数：标签。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @returns {Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id'>> }>} 图库组列表。
@@ -1351,16 +1352,16 @@ export class GalleryController {
     @Query('tag') tag?: string,
     @Query('limit') limit?: string,
     @Req() req?: Request,
-  ): Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id'>> }> {
+  ): Promise<{ groups: Array<Omit<GalleryGroupEntity, '_id' | 'embedding'>> }> {
     const authScope = await this.requireUserScope(req);
     const tid = authScope.tenantId || tenantId?.trim() || undefined;
     const resolvedUserId = authScope.userId;
     const lim = limit ? Number(limit) : 50;
 
-    const defaults = await this.groups.ensureDefaultDynamicGroups(
-      resolvedUserId,
-      tid,
-    );
+    const [defaults, sceneGroup] = await Promise.all([
+      this.groups.ensureDefaultDynamicGroups(resolvedUserId, tid),
+      this.groups.findOrCreateSceneGroup(resolvedUserId, tid),
+    ]);
     const rows = await this.groups.listAccessibleGroups(
       resolvedUserId,
       tid,
@@ -1369,19 +1370,19 @@ export class GalleryController {
     );
 
     const merged = this.prioritizeDefaultGroups(rows, [
+      sceneGroup.id,
       defaults.coverGroup.id,
       defaults.collageGroup.id,
     ]);
     const safeLimit = Math.max(1, Math.min(200, Math.floor(lim)));
+    // listAccessibleGroups 已不读向量，置顶只是对它的结果重排
     return {
-      groups: merged.slice(0, Math.max(safeLimit, 2)) as Array<
-        Omit<GalleryGroupEntity, '_id'>
-      >,
+      groups: merged.slice(0, Math.max(safeLimit, 3)),
     };
   }
 
   /**
-   * @description 更新图库组。
+   * @description 更新图库组；场景图库等系统固定分组拒绝改名。
    * @param {string} id - 路径参数：图库组ID。
    * @param {{ name?: string; description?: string; tags?: string }} body - 更新字段。
    * @returns {Promise<{ group: Omit<GalleryGroupEntity, '_id'> | null }>} 更新后的图库组。
@@ -1394,6 +1395,8 @@ export class GalleryController {
     @Body() body: { name?: string; description?: string; tags?: string },
   ): Promise<{ group: Omit<GalleryGroupEntity, '_id'> | null }> {
     const gid = Number(id);
+    if (await this.groups.findSystemKey(gid))
+      throw new BadRequestException('场景图库是固定分组，不能改名');
     const rawTags = String(body?.tags ?? '');
     const tags = rawTags.length
       ? rawTags
@@ -1417,7 +1420,7 @@ export class GalleryController {
   }
 
   /**
-   * @description 删除图库组。
+   * @description 删除图库组；场景图库等系统固定分组拒绝删除。
    * @param {string} id - 路径参数：图库组ID。
    * @returns {Promise<{ ok: boolean }>} 删除结果。
    * @keyword gallery, groups, delete
@@ -1426,6 +1429,8 @@ export class GalleryController {
   @Post('groups/:id/delete')
   async deleteGroup(@Param('id') id: string): Promise<{ ok: boolean }> {
     const gid = Number(id);
+    if (await this.groups.findSystemKey(gid))
+      throw new BadRequestException('场景图库是固定分组，不能删除');
     return await this.groups.remove(gid);
   }
 

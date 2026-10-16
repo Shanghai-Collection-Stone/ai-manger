@@ -702,6 +702,7 @@ export class XhsArticleGenerationService {
 
   /**
    * @description 汇总最近一次文章生成状态，并以 Todo 持久化状态和当前进程执行集合进行双重确认；连续两次找不到执行实例才收敛陈旧运行态。
+   *   每个子选题最新的一条在数据库里分组取出（`TodoService.listLatestByResource`），已完成的不带整篇结果。
    * @param {{ tenantId?: string; userId: string }} scope - 租户用户作用域。
    * @returns {Promise<XhsArticleGenerationState[]>} 按子选题去重后的最近一次生成状态。
    * @keyword-cn 文章生成状态, 逐条进度, 异步存活确认
@@ -713,12 +714,15 @@ export class XhsArticleGenerationService {
   }): Promise<XhsArticleGenerationState[]> {
     // 后台提高额度后，无需等待当前任务结束；下一次状态轮询即可补充占用新槽位。
     this.queue.requestDrain(XHS_ARTICLE_QUEUE_LANE, scope.tenantId);
-    const todos = await this.todoService.list(
-      scope.userId,
-      scope.tenantId,
-      undefined,
-      'xhs-article',
-    );
+    // 前端生文时每 3 秒轮询一次：在数据库里按子选题取最新一条，已完成的不带整篇结果，
+    // 不再把用户历史上所有生文待办整批读出来
+    const todos = await this.todoService.listLatestByResource({
+      userId: scope.userId,
+      tenantId: scope.tenantId,
+      category: 'xhs-article',
+      resourceType: XHS_ARTICLE_TODO_RESOURCE_TYPE,
+      omitResultStatuses: ['done'],
+    });
     const latest = new Map<number, TodoEntity>();
     for (const todo of todos) {
       const topicId = this.readTodoTopicId(todo);

@@ -59,6 +59,13 @@ export interface GalleryImageEntity {
   updatedAt: Date;
 }
 
+/**
+ * @description 对外返回的图片：不含 Mongo 主键与 768 维向量（向量只供服务端相似检索）。
+ * @keyword-cn 对外图片结构, 不返回向量
+ * @keyword-en public-gallery-image, omit-embedding
+ */
+export type GalleryPublicImage = Omit<GalleryImageEntity, '_id' | 'embedding'>;
+
 export interface GalleryImageCreateInput {
   userId: string;
   /** @description 数据可见范围，默认 tenant */

@@ -3,18 +3,32 @@
 ## 模块描述
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
-支持 AI 提供商按模型类型管理(llm/em/image/video/audio，video 为生视频、audio 为音色克隆；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)、PixMax(`pixmax`)与通用数字人服务(`digital-human`，选中时类别自动切到音色克隆，并提示按类别各建一条、服务地址必填及 `/voice-clone`、`/digital-human/tasks`、`/digital-human/tasks/{id}`、`/models` 的契约)，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
+支持 AI 提供商按模型类型管理(llm/em/image/video/audio，video 为生视频、audio 为音色克隆；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)、PixMax(`pixmax`)与阿里云百炼(`dashscope`，选中时类别自动切到「音色模型」，并提示用于探店音色克隆与配音、Key 填 sk- 原始串、服务地址留空默认 https://dashscope.aliyuncs.com/compatible-mode/v1、模型填 cosyvoice-v3.5-plus、系统音色固定 cosyvoice-v3-flash、录音克隆需先配 OSS)；已下线的通用数字人服务(`digital-human`)不再出现在下拉里，编辑旧记录时由 `RETIRED_PROVIDER_CODE_LABELS` 显示为「已下线」并提示改用百炼 + 数眼智能，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
 新增“入驻审批”Tab：超管与租户管理员可审批入驻申请、查看邮件通知结果，并生成、复制、撤销不限人数的限时邀请链接；新增“运维上报”Tab：查看客户端问题与完整日志，超管可更新处理状态和备注；新增平台级“发信邮箱”Tab：维护 SMTP 配置并真实测试发信。
 新增平台级「阿里云配置」Tab(原「短信验证码」Tab 并入)：对象存储 OSS 与短信验证码集中维护，两边各填各的 AccessKey(可以是不同阿里云账号)，由 `AliyunSettingPanel.jsx` 承载。
-用户管理按平台账号与租户成员关系分权：超管保留完整用户资料管理能力；租户管理员只能按手机号添加已注册账号，并维护本租户成员的角色、启用状态与移除，不能修改昵称和密码；列表展示成员邮箱。
+用户管理按平台账号与租户成员关系分权：超管保留完整用户资料管理能力，并可按手机号把已有账号加入任意租户（一人多租户）；租户管理员只能按手机号添加已注册账号，并维护本租户成员的角色、启用状态与移除，不能修改昵称和密码；列表展示成员邮箱。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
 
 文件路径: `web/src/ui/Admin`
 
 ## 功能描述及关键词
+
+### TenantMcpPanel.jsx
+
+- `TenantMcpPanel({currentRole,tenants,onNotice,onError})` — 租户 MCP 链接、密钥、权限与一次性明文展示页面 | keywords: tenant-mcp-panel, key-management
+- `PermissionPicker({tools,selected,onChange,disabled})` — 勾选单把密钥可用的工具 | keywords: mcp-permission-picker, tool-permission
+- `KeyEditor({item,tools,busy,onSave,onDelete})` — 修改密钥名称、过期时间、权限和启用状态并撤销密钥 | keywords: mcp-key-editor, key-management
+- `EndpointEditor({endpoint,tools,busy,mutate,onSecret})` — 修改或删除链接并创建独立密钥 | keywords: mcp-endpoint-editor, key-management
+- `EndpointEditor.createKey(event)` — 创建密钥并交回一次性明文与客户端配置 | keywords: mcp-create-key, one-time-secret
+- `TenantMcpPanel.reload()` — 刷新当前租户的链接和密钥 | keywords: mcp-reload, key-management
+- `TenantMcpPanel.mutate(path,method,body)` — 提交配置变更并刷新列表 | keywords: mcp-mutation, key-management
+- `TenantMcpPanel.createEndpoint(event)` — 创建新的租户 MCP 链接 | keywords: mcp-create-endpoint, key-management
+- `adminApi.tenantMcp(path,options,tenantId)` — 调用 MCP 管理接口并携带超管选择的租户参数 | keywords: tenant-mcp-api, key-management
+
+“MCP 接入”Tab 只对超管、租户管理员开放；超管选择目标租户，租户管理员自动锁定本租户。密钥明文只保留在组件状态，关闭后不再读取。中文/英文索引：租户MCP / tenant-mcp-panel，工具权限 / tool-permission，密钥管理 / key-management，一次性密钥 / one-time-secret。后端索引见 `../../../../src/modules/tenant-mcp/module.md`。
 
 ### AdminApp.jsx
 
@@ -90,14 +104,17 @@
 - `onDeleteTenant(id)` — 删除未分配节点的租户 | keywords: 删除租户, 分配保护, delete-tenant, allocation-protection
 - `ALL_TABS` — 定义后台标签及 `platformOnly`、`tenantOnly`、`adminOnly` 角色过滤标记 | keywords: 后台标签, 角色过滤, admin-tabs, role-filter
 - `formatUserMutationError(message)` — 把成员关系接口错误码转换为可执行的中文提示 | keywords: 成员错误提示, 租户只读资料, member-error-message, tenant-profile-readonly
+- `userCreateMode` / `isAddingExistingAccount` — 超管新增用户方式（`new` 新建用户 / `existing` 添加已有账号）及当前是否处于添加已有账号 | keywords: 新增用户方式, user-create-mode
+- `onSwitchUserCreateMode(mode)` — 切换超管新增用户方式，切到已有账号时把超管角色回退为操作员 | keywords: 切换新增方式, 新增用户方式, switch-user-create-mode, user-create-mode
+- `onAddExistingAccountToTenant()` — 超管按手机号把已注册账号加入指定租户，同一账号可加入多个租户 | keywords: 已有账号加入租户, 一人多租户, add-existing-account-to-tenant, multi-tenant-membership
 - `onSubmitUser()` — 超管维护完整用户资料，租户管理员仅新增或更新成员关系 | keywords: 用户成员关系, 租户资料只读, user-membership, tenant-profile-readonly
 - `onDeleteUser(id)` — 超管删除用户，租户管理员仅从本租户移除成员关系 | keywords: 移除租户成员, 删除平台用户, remove-tenant-member, delete-platform-user
 
-用户管理 Tab 对租户管理员隐藏昵称、密码与租户归属输入；新增时仅提交 `{ phone, role }`，编辑时仅提交 `{ role, enabled }`。`ACCOUNT_NOT_FOUND`、`PHONE_ALREADY_IN_TENANT`、`MEMBER_PROFILE_READONLY` 均显示简体中文指引。`adminOnly` Tab 仅 `super_admin` 与 `tenant_admin` 可见，操作员隐藏。
+用户管理 Tab 对租户管理员隐藏昵称、密码与租户归属输入；新增时仅提交 `{ phone, role }`，编辑时仅提交 `{ role, enabled }`。超管新增时可切换「新建用户 / 添加已有账号」：添加已有账号只填手机号、角色（不含超管）和必选租户，提交 `{ phone, role, tenantId }`，为该账号在目标租户新建一条成员记录，原有租户身份保留，由此实现一人多租户；编辑已有成员改「租户」仍是迁移该条成员记录。`ACCOUNT_NOT_FOUND`、`ACCOUNT_DELETED`、`PHONE_ALREADY_IN_TENANT`、`MEMBER_PROFILE_READONLY` 均显示简体中文指引。`adminOnly` Tab 仅 `super_admin` 与 `tenant_admin` 可见，操作员隐藏。
 
 ### DouyinPersonaPanel.jsx
 
-后台「抖音预设人物」Tab 的独立面板组件,由 `AdminApp.jsx` 在 `activeTab === 'douyin_personas'` 时挂载并透传 `onNotice` / `onError`。左列是人物列表(三视图缩略图、叙事视角徽标、音色一句话、外貌摘要,以及编辑/生成三视图/删除)。**缩略图可点开全屏灯箱看原图**——三视图的用处就是核对「三张是不是同一个人」,14×20 的缩略图看不出五官差异,不能放大等于白生成,右列是人设表单。表单顶部可写一句人物需求让 AI 起草人设并回填,管理员确认或修改后再保存——**人物先保存,再单独点「生成三视图」出形象图**,因为三张图串行出、耗时长,不适合卡在保存流程里。外貌设定是形象图与后续每一镜画面的唯一依据,因此校验最少 20 字。音色是写进生视频提示词【声音】段的结构化描述,不是固定音色 ID,面板里明说这一点避免误解。改了外貌后保存会提示重新生成三视图,否则分镜仍按旧形象出图。后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
+后台「抖音预设人物」Tab 的独立面板组件,由 `AdminApp.jsx` 在 `activeTab === 'douyin_personas'` 时挂载并透传 `isPlatform`(超管即母平台) / `onNotice` / `onError`。**平台公开人物**:母平台在表单勾选或列表点「公开给租户 / 取消公开」切换 `isPublic`,列表显示「已公开」角标;租户看到后端标了 `fromPlatform` 的平台公开人物显示「平台公开」角标,隐藏编辑/生成三视图/删除,只能在工作台选用。左列是人物列表(三视图缩略图、叙事视角徽标、音色一句话、外貌摘要,以及编辑/生成三视图/删除)。**缩略图可点开全屏灯箱看原图**——三视图的用处就是核对「三张是不是同一个人」,14×20 的缩略图看不出五官差异,不能放大等于白生成,右列是人设表单。表单顶部可写一句人物需求让 AI 起草人设并回填,管理员确认或修改后再保存——**人物先保存,再单独点「生成三视图」出形象图**,因为三张图串行出、耗时长,不适合卡在保存流程里。外貌设定是形象图与后续每一镜画面的唯一依据,因此校验最少 20 字。音色是写进生视频提示词【声音】段的结构化描述,不是固定音色 ID,面板里明说这一点避免误解。改了外貌后保存会提示重新生成三视图,否则分镜仍按旧形象出图。后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 
 - **关键词**: douyin persona panel, persona form, reference sheet generation, persona voice, ai draft persona, persona image lightbox
 - **常量**:
@@ -109,12 +126,13 @@
   - `describeVoice(voice)` — 音色拼成一句中文,与后端 `describePersonaVoice` 说法一致 | keywords: 音色短文案, 音色一句话, voice-label, timbre-one-liner
   - `PersonaImageLightbox({ images, index, name, onIndexChange, onClose })` — 形象图全屏灯箱:左右箭头 / 方向键 / 底部胶片条切图,Esc 或点背景关闭,可在新标签打开原图 | keywords: 形象图灯箱, 三视图放大, persona-image-lightbox, reference-sheet-zoom
   - `onKeyDown(event)` — 灯箱的方向键切图与 Esc 关闭 | keywords: 灯箱键盘操作, 左右切图, lightbox-keyboard, arrow-navigation
-  - `DouyinPersonaPanel({ onNotice, onError })` — 预设人物面板主体 | keywords: 预设人物管理页, 三视图生成, 人物音色, douyin-persona-panel, reference-sheet-generation, persona-voice
+  - `DouyinPersonaPanel({ isPlatform, onNotice, onError })` — 预设人物面板主体,母平台可设公开,租户对平台公开人物只读 | keywords: 预设人物管理页, 三视图生成, 人物音色, douyin-persona-panel, reference-sheet-generation, persona-voice
   - `reload()` — 并行拉取人物列表与视角登记表 | keywords: 加载预设人物, 视角登记表, load-personas, perspective-registry
   - `draftPersona()` — 按一句话需求让 AI 写人设草稿并回填表单 | keywords: AI生成人设, 草稿回填, ai-draft-persona, hydrate-form
   - `submit()` — 新建或更新人物,外貌不足 20 字直接拦下 | keywords: 保存预设人物, 外貌必填, save-persona, appearance-required
   - `generateSheet(row)` — 串行生成三视图形象图,期间禁用该行按钮 | keywords: 生成人物三视图, 形象一致, generate-reference-sheet, identity-consistency
   - `remove(row)` — 删除人物(二次确认),已选用它的脚本退回不指定出镜人物 | keywords: 删除预设人物, 引用降级, delete-persona, dangling-reference
+  - `togglePublic(row)` — 母平台切换人物公开状态,取消公开前二次确认(租户脚本引用会降级) | keywords: 切换人物公开, 平台公开人物, toggle-persona-public, platform-public-persona
 
 ### HotTopicPanel.jsx
 

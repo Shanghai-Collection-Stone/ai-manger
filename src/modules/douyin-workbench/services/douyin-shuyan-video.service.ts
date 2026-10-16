@@ -91,7 +91,7 @@ export const SHUYAN_VIDEO_ERROR_RULES: ReadonlyArray<{
   {
     pattern: /SHUYAN_VIDEO_MODEL_NOT_SUPPORTED/,
     message:
-      '所选数眼模型还没有接入对应的原生路由，请到后台「工作流节点模型」换成 Seedance 或 MiniMax-H3 型号。',
+      '所选数眼模型还没有接入对应的原生路由，请到后台「工作流节点模型」换成 Seedance、MiniMax-H3 或 wan2.7-i2v 型号。',
   },
   {
     pattern: /SHUYAN_VIDEO_TASK_ID_MISSING/,
@@ -167,11 +167,28 @@ const DOUYIN_SHUYAN_SAVING_STALE_MS = 10 * 60 * 1000;
 
 /**
  * @description 数眼已接入的视频原生路由：`seedance` 走 `/seedance/api/v3/contents/generations/tasks`，
- *   `hailuo-v2`（MiniMax-H3）走 `/hailuo/v2/video_generation`。
+ *   `hailuo-v2`（MiniMax-H3）走 `/hailuo/v2/video_generation`，`wan`（万相 wan2.7-i2v）走百炼原生异步协议
+ *   `/ali/api/v1/services/aigc/video-generation/video-synthesis`。
  * @keyword-cn 数眼视频路由, 原生端点
  * @keyword-en shuyan-video-route, native-endpoint
  */
-export type ShuyanVideoRoute = 'seedance' | 'hailuo-v2';
+export type ShuyanVideoRoute = 'seedance' | 'hailuo-v2' | 'wan';
+
+/**
+ * @description 万相走百炼异步协议，创建任务必须带这个请求头，否则对端按同步调用拒绝。
+ * @keyword-cn 万相异步请求头, 百炼异步任务
+ * @keyword-en wan-async-header, dashscope-async-task
+ */
+export const SHUYAN_WAN_ASYNC_HEADERS = {
+  'X-DashScope-Async': 'enable',
+} as const;
+
+/**
+ * @description 万相 wan2.7-i2v 提示词上限 5000 字符（对端超出自动截断），提交前按这个上限截断。
+ * @keyword-cn 万相提示词上限, 提示词截断
+ * @keyword-en wan-prompt-limit, prompt-truncate
+ */
+export const SHUYAN_WAN_PROMPT_MAX = 5000;
 
 /**
  * @description MiniMax-H3 接口的 `model` 是枚举，大小写要和文档逐字一致。
@@ -179,7 +196,8 @@ export type ShuyanVideoRoute = 'seedance' | 'hailuo-v2';
 const SHUYAN_HAILUO_V2_MODELS = ['MiniMax-H3'];
 
 /**
- * @description 按模型名判断数眼视频走哪条原生路由；Kling / Vidu / 旧版 Hailuo / 即梦等其他视频族还没接入，返回 null。
+ * @description 按模型名判断数眼视频走哪条原生路由：Seedance、MiniMax-H3、万相 wan2.7-i2v（含快照版本）；
+ *   Kling / Vidu / 旧版 Hailuo / 即梦 / 其他万相型号还没接入，返回 null。
  * @keyword-cn 数眼视频路由, 视频模型支持
  * @keyword-en resolve-shuyan-video-route, video-model-support
  * @param model 模型编码。
@@ -193,6 +211,7 @@ export function resolveShuyanVideoRoute(
     .toLowerCase();
   if (value.includes('seedance')) return 'seedance';
   if (/minimax[-_.]?h3/.test(value)) return 'hailuo-v2';
+  if (/^wan2\.7[-_.]?i2v/.test(value)) return 'wan';
   return null;
 }
 
@@ -227,6 +246,11 @@ export function resolveShuyanVideoTaskUrl(
   taskId?: string,
 ): string {
   const id = taskId ? encodeURIComponent(taskId) : '';
+  if (route === 'wan') {
+    return id
+      ? `${gateway}/ali/api/v1/tasks/${id}`
+      : `${gateway}/ali/api/v1/services/aigc/video-generation/video-synthesis`;
+  }
   if (route === 'hailuo-v2') {
     return id
       ? `${gateway}/hailuo/v2/query/video_generation/${id}`
@@ -237,14 +261,74 @@ export function resolveShuyanVideoTaskUrl(
 }
 
 /**
- * @description MiniMax-H3 查询结果包在 `task` 里，取出来后与 Seedance 平铺结构一致；本来就平铺的原样返回。
+ * @description MiniMax-H3 查询结果包在 `task` 里；万相（百炼协议）的任务 ID、状态、成片与错误都在 `output` 里。
+ *   都取出来规整成与 Seedance 平铺一致的结构（`id` / `status` / `content.video_url` / `error`），本来就平铺的原样返回。
  * @keyword-cn 拆包数眼任务, H3查询结果
  * @keyword-en unwrap-shuyan-video-task, minimax-h3-query-result
  * @param raw 接口原始响应。
  * @returns {ShuyanVideoTask} 任务本体。
  */
 export function unwrapShuyanVideoTask(raw: ShuyanVideoTask): ShuyanVideoTask {
+  const output = raw.output as Record<string, unknown> | undefined;
+  if (
+    output &&
+    typeof output === 'object' &&
+    ('task_id' in output || 'task_status' in output)
+  ) {
+    const text = (value: unknown) =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    const code = text(output.code);
+    const message = text(output.message);
+    const seconds = Number(
+      (raw.usage as Record<string, unknown> | undefined)?.duration,
+    );
+    return {
+      id: text(output.task_id),
+      status: text(output.task_status),
+      content: { video_url: text(output.video_url) },
+      ...(seconds > 0 ? { duration: seconds } : {}),
+      ...(code || message ? { error: { code, message } } : {}),
+    };
+  }
   return raw.task && typeof raw.task === 'object' ? raw.task : raw;
+}
+
+/**
+ * @description 拼万相 wan2.7-i2v 的百炼协议请求体：首帧必传，传了配音时作为驱动音频（口型和动作跟着它生成）；
+ *   提示词按 5000 字截断，不让对端改写提示词、不加水印。首帧与配音都要公网 http(s) 地址。
+ * @keyword-cn 万相请求体, 首帧驱动音频
+ * @keyword-en wan-request-body, first-frame-driving-audio
+ * @param input 模型、提示词、首帧地址、可选配音地址、秒数与清晰度。
+ * @returns {Record<string, unknown>} 请求体。
+ */
+export function buildShuyanWanPayload(input: {
+  model: string;
+  prompt: string;
+  firstFrameUrl: string;
+  audioUrl?: string;
+  duration: number;
+  resolution: string;
+}): Record<string, unknown> {
+  return {
+    model: input.model,
+    input: {
+      prompt: input.prompt.slice(0, SHUYAN_WAN_PROMPT_MAX),
+      media: [
+        { type: 'first_frame', url: input.firstFrameUrl },
+        ...(input.audioUrl
+          ? [{ type: 'driving_audio', url: input.audioUrl }]
+          : []),
+      ],
+    },
+    parameters: {
+      resolution: input.resolution,
+      duration: input.duration,
+      prompt_extend: false,
+      watermark: false,
+    },
+  };
 }
 
 /**
@@ -270,7 +354,7 @@ export function resolveShuyanVideoGateway(baseUrl?: string): string {
 }
 
 /**
- * @description 返回当前数眼视频型号可选的整数秒数：MiniMax-H3 为 4~15 秒，Seedance 按版本区分，未知新版本按 4~15 秒能力处理。
+ * @description 返回当前数眼视频型号可选的整数秒数：万相 wan2.7-i2v 为 2~15 秒，MiniMax-H3 为 4~15 秒，Seedance 按版本区分，未知新版本按 4~15 秒能力处理。
  * @keyword-cn Seedance可选时长, 型号时长范围
  * @keyword-en seedance-duration-choices, model-duration-range
  * @param model 模型编码。
@@ -281,13 +365,15 @@ export function listShuyanVideoDurationChoices(model: string): number[] {
     .trim()
     .toLowerCase();
   const range =
-    resolveShuyanVideoRoute(value) === 'hailuo-v2'
-      ? [4, 15]
-      : /seedance[-_.]?1[-_.]?0/.test(value)
-        ? [2, 12]
-        : /seedance[-_.]?1[-_.]?5/.test(value)
-          ? [4, 12]
-          : [4, 15];
+    resolveShuyanVideoRoute(value) === 'wan'
+      ? [2, 15]
+      : resolveShuyanVideoRoute(value) === 'hailuo-v2'
+        ? [4, 15]
+        : /seedance[-_.]?1[-_.]?0/.test(value)
+          ? [2, 12]
+          : /seedance[-_.]?1[-_.]?5/.test(value)
+            ? [4, 12]
+            : [4, 15];
   return Array.from(
     { length: range[1] - range[0] + 1 },
     (_unused, index) => range[0] + index,
@@ -315,7 +401,7 @@ export function clampShuyanVideoDuration(
 
 /**
  * @description 返回当前数眼视频型号可选的清晰度档位（按清晰度升序，写法与接口要求逐字一致）：MiniMax-H3 为
- *   `768P` / `2K`；Seedance 2.x 到 1080p，其余 Seedance 到 720p。官方按「分辨率 × 时长」计费，档位越高越贵。
+ *   `768P` / `2K`；万相 wan2.7-i2v 为 `720P` / `1080P`；Seedance 2.x 到 1080p，其余 Seedance 到 720p。官方按「分辨率 × 时长」计费，档位越高越贵。
  * @keyword-cn Seedance可选清晰度, 型号清晰度范围
  * @keyword-en seedance-resolution-choices, model-resolution-range
  * @param model 模型编码。
@@ -326,6 +412,7 @@ export function listShuyanVideoResolutionChoices(model: string): string[] {
     .trim()
     .toLowerCase();
   if (resolveShuyanVideoRoute(value) === 'hailuo-v2') return ['768P', '2K'];
+  if (resolveShuyanVideoRoute(value) === 'wan') return ['720P', '1080P'];
   return /seedance[-_.]?2/.test(value)
     ? ['480p', '720p', '1080p']
     : ['480p', '720p'];
@@ -397,7 +484,9 @@ export function mapShuyanVideoStatus(
     .trim()
     .toLowerCase();
   if (value === 'succeeded') return 'completed';
-  if (['failed', 'cancelled', 'expired'].includes(value)) return 'failed';
+  // 万相（百炼协议）取消写作 CANCELED，任务过期或查不到为 UNKNOWN
+  if (['failed', 'cancelled', 'canceled', 'expired', 'unknown'].includes(value))
+    return 'failed';
   if (value === 'running') return 'running';
   return 'queued';
 }
@@ -465,8 +554,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 提交一次数眼视频生成，按型号走 Seedance 或 MiniMax-H3 路由；分镜带画面时以它为首帧，
-   *   整片在 Seedance 2.x 与 MiniMax-H3 下最多带 9 张参考图。
+   * @description 提交一次数眼视频生成，按型号走 Seedance、MiniMax-H3 或万相 wan2.7-i2v 路由；分镜带画面时以它为首帧，
+   *   整片在 Seedance 2.x 与 MiniMax-H3 下最多带 9 张参考图；万相只能图生视频，必须有公网地址的画面作首帧。
    * @keyword-cn 提交数眼视频, Seedance多模态
    * @keyword-en submit-shuyan-video, seedance-multimodal
    * @param input 脚本、模式、单镜 ID、补充要求、节点运行配置与作用域。
@@ -542,6 +631,10 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       mode === 'full' &&
       (route === 'hailuo-v2' || /seedance[-_.]?2/i.test(runtime.model));
     const usedImages = images.slice(0, multiReference ? 9 : 1);
+    if (route === 'wan' && !usedImages.length)
+      throw new BadRequestException(
+        'wan2.7-i2v 是图生视频，要先给分镜配好画面作首帧，或改选 Seedance / MiniMax-H3',
+      );
     const prompt =
       mode === 'shot'
         ? buildShotVideoPrompt({
@@ -572,30 +665,46 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
         role: multiReference ? 'reference_image' : 'first_frame',
       })),
     );
+    // 万相只收公网地址，站内图片转成的 data URL 不行
+    if (
+      route === 'wan' &&
+      !/^https?:\/\//i.test(imageContents[0].image_url.url)
+    )
+      throw new BadRequestException(
+        'wan2.7-i2v 只能读取公网图片，请先在后台配置 OSS，再重新生成或上传分镜画面',
+      );
     const gateway = resolveShuyanVideoGateway(runtime.baseUrl);
     const endpoint = resolveShuyanVideoTaskUrl(gateway, route);
     const content = [{ type: 'text', text: prompt }, ...imageContents];
     // MiniMax-H3 带首帧时宽高比由图片决定，接口要求恒为 adaptive；它没有声音开关，静音只靠提示词【声音】段约束
     const payload =
-      route === 'hailuo-v2'
-        ? {
-            model: normalizeShuyanVideoModel(runtime.model),
-            content,
-            resolution,
-            duration,
-            ratio:
-              imageContents[0]?.role === 'first_frame' ? 'adaptive' : '9:16',
-            aigc_watermark: false,
-          }
-        : {
+      route === 'wan'
+        ? buildShuyanWanPayload({
             model: runtime.model,
-            content,
-            resolution,
-            ratio: '9:16',
+            prompt,
+            firstFrameUrl: imageContents[0].image_url.url,
             duration,
-            generate_audio: audio.mode !== 'mute',
-            watermark: false,
-          };
+            resolution,
+          })
+        : route === 'hailuo-v2'
+          ? {
+              model: normalizeShuyanVideoModel(runtime.model),
+              content,
+              resolution,
+              duration,
+              ratio:
+                imageContents[0]?.role === 'first_frame' ? 'adaptive' : '9:16',
+              aigc_watermark: false,
+            }
+          : {
+              model: runtime.model,
+              content,
+              resolution,
+              ratio: '9:16',
+              duration,
+              generate_audio: audio.mode !== 'mute',
+              watermark: false,
+            };
     const operationId = randomUUID();
     const scriptIncluded =
       mode === 'shot'
@@ -620,13 +729,15 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       audio,
       scriptIncluded,
       prompt,
-      resolution: payload.resolution,
+      resolution,
       targetResolution: chosenResolution || undefined,
       resolutionClamped: Boolean(
         chosenResolution &&
-        chosenResolution.toLowerCase() !== payload.resolution.toLowerCase(),
+        chosenResolution.toLowerCase() !== resolution.toLowerCase(),
       ),
-      ratio: payload.ratio,
+      // 万相按首帧决定画幅，请求里没有 ratio
+      ratio:
+        route === 'wan' ? undefined : (payload as { ratio?: string }).ratio,
     };
     const base = {
       operation: 'generate' as const,
@@ -660,11 +771,12 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
           headers: {
             Authorization: `Bearer ${runtime.apiKey}`,
             'Content-Type': 'application/json',
+            ...(route === 'wan' ? SHUYAN_WAN_ASYNC_HEADERS : {}),
           },
           body: JSON.stringify(payload),
         }),
       );
-      // Seedance 返回 id，MiniMax-H3 返回 task_id
+      // Seedance 返回 id，MiniMax-H3 返回 task_id，万相在 output.task_id（拆包后为 id）
       const externalId = String(task.id ?? task.task_id ?? '').trim();
       if (!externalId) throw new Error('SHUYAN_VIDEO_TASK_ID_MISSING');
       const doc: DouyinOperationEntity = {

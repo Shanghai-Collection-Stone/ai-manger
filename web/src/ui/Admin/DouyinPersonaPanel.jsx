@@ -46,6 +46,7 @@ const EMPTY_FORM = {
   perspective: 'recommend',
   voice: { gender: 'female', age: 'young', pace: 'normal', timbre: '' },
   status: 'active',
+  isPublic: false,
 };
 
 /**
@@ -69,6 +70,7 @@ const personaToForm = (row) => ({
     timbre: row.voice?.timbre || '',
   },
   status: row.status || 'active',
+  isPublic: Boolean(row.isPublic),
 });
 
 /**
@@ -179,12 +181,13 @@ function PersonaImageLightbox({ images, index, name, onIndexChange, onClose }) {
  * @description 抖音预设人物管理页：维护租户内共享的人设（外貌、性格语气、叙事视角、音色），
  *   支持按一句话需求让 AI 写出人设草稿，以及为人物串行生成正面 / 侧身 / 特写三视图形象图。
  *   形象图是工作台分镜出图时的底图来源，决定同一条视频里人物长相是否一致。
+ *   母平台可把人物设为公开给所有租户；租户看到的平台公开人物只读，只能在工作台选用。
  * @keyword-cn 预设人物管理页, 三视图生成, 人物音色
  * @keyword-en douyin-persona-panel, reference-sheet-generation, persona-voice
- * @param {{onNotice: Function, onError: Function}} props - 顶层提示回调。
+ * @param {{isPlatform: boolean, onNotice: Function, onError: Function}} props - 是否母平台与顶层提示回调。
  * @returns {JSX.Element} 管理面板。
  */
-export default function DouyinPersonaPanel({ onNotice, onError }) {
+export default function DouyinPersonaPanel({ isPlatform, onNotice, onError }) {
   const [personas, setPersonas] = useState([]);
   const [perspectives, setPerspectives] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -285,6 +288,8 @@ export default function DouyinPersonaPanel({ onNotice, onError }) {
           timbre: form.voice.timbre.trim() || undefined,
         },
       };
+      /* 公开开关只有母平台能传，租户带上会被后端拒绝 */
+      if (isPlatform) payload.isPublic = form.isPublic;
       if (editing) {
         await adminApi.updateDouyinPersona(form.id, {
           ...payload,
@@ -346,6 +351,30 @@ export default function DouyinPersonaPanel({ onNotice, onError }) {
     }
   };
 
+  /**
+   * @description 母平台切换人物公开状态；取消公开前确认，因为已选用它的租户脚本会按人物已删除降级。
+   * @keyword-cn 切换人物公开, 平台公开人物
+   * @keyword-en toggle-persona-public, platform-public-persona
+   */
+  const togglePublic = async (row) => {
+    if (
+      row.isPublic &&
+      !window.confirm(
+        `取消公开「${row.name}」？租户将看不到它，已经选用它的租户脚本会退回为不指定出镜人物。`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await adminApi.updateDouyinPersona(row.id, { isPublic: !row.isPublic });
+      if (form.id === row.id) setForm((c) => ({ ...c, isPublic: !row.isPublic }));
+      onNotice?.(row.isPublic ? `「${row.name}」已取消公开` : `「${row.name}」已公开给所有租户`);
+      await reload();
+    } catch (error) {
+      onError?.(error.message);
+    }
+  };
+
   /* 按 id 现查而不是缓存图组：重新生成三视图后列表会刷新，灯箱要跟着换成新图 */
   const previewPersona = preview
     ? personas.find((item) => item.id === preview.personaId)
@@ -358,7 +387,10 @@ export default function DouyinPersonaPanel({ onNotice, onError }) {
           <div>
             <h3 className="text-sm font-semibold text-slate-800">预设人物</h3>
             <p className="mt-0.5 text-xs text-slate-500">
-              租户内共享。工作台在每条脚本上选一个人物后，脚本按 TA 的视角写，分镜按 TA 的形象图出图，成片按 TA 的音色配音。
+              {isPlatform
+                ? '平台人物设为公开后，所有租户都能在工作台选用（只读，租户改不了）。'
+                : '租户内共享，另含平台公开的人物（只读）。'}
+              工作台在每条脚本上选一个人物后，脚本按 TA 的视角写，分镜按 TA 的形象图出图，成片按 TA 的音色配音。
             </p>
           </div>
           <button
@@ -419,6 +451,16 @@ export default function DouyinPersonaPanel({ onNotice, onError }) {
                           已归档
                         </span>
                       ) : null}
+                      {isPlatform && row.isPublic ? (
+                        <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-700">
+                          已公开
+                        </span>
+                      ) : null}
+                      {row.fromPlatform ? (
+                        <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700">
+                          平台公开
+                        </span>
+                      ) : null}
                     </div>
                     {row.summary ? (
                       <p className="mt-0.5 text-xs text-slate-500">
@@ -433,34 +475,49 @@ export default function DouyinPersonaPanel({ onNotice, onError }) {
                     </p>
                   </div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setForm(personaToForm(row))}
-                    className="rounded border border-slate-200 px-2.5 py-1 text-slate-600"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void generateSheet(row)}
-                    disabled={sheetBusyId === row.id}
-                    className="rounded border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-700 disabled:opacity-50"
-                  >
-                    {sheetBusyId === row.id
-                      ? '正在出图，三张要一会儿…'
-                      : row.referenceImages?.length
-                        ? '重新生成三视图'
-                        : '生成三视图'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void remove(row)}
-                    className="rounded border border-rose-200 px-2.5 py-1 text-rose-600"
-                  >
-                    删除
-                  </button>
-                </div>
+                {row.fromPlatform ? (
+                  <p className="mt-2 text-[11px] text-slate-400">
+                    平台公开人物，只能在工作台选用，不能修改。
+                  </p>
+                ) : (
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setForm(personaToForm(row))}
+                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600"
+                    >
+                      编辑
+                    </button>
+                    {isPlatform ? (
+                      <button
+                        type="button"
+                        onClick={() => void togglePublic(row)}
+                        className={`rounded border px-2.5 py-1 ${row.isPublic ? 'border-slate-200 text-slate-600' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}
+                      >
+                        {row.isPublic ? '取消公开' : '公开给租户'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void generateSheet(row)}
+                      disabled={sheetBusyId === row.id}
+                      className="rounded border border-violet-200 bg-violet-50 px-2.5 py-1 font-medium text-violet-700 disabled:opacity-50"
+                    >
+                      {sheetBusyId === row.id
+                        ? '正在出图，三张要一会儿…'
+                        : row.referenceImages?.length
+                          ? '重新生成三视图'
+                          : '生成三视图'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void remove(row)}
+                      className="rounded border border-rose-200 px-2.5 py-1 text-rose-600"
+                    >
+                      删除
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -619,6 +676,19 @@ export default function DouyinPersonaPanel({ onNotice, onError }) {
               }
             />
             归档（工作台不再显示，已选用的脚本不受影响）
+          </label>
+        ) : null}
+
+        {isPlatform ? (
+          <label className="mt-3 flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={form.isPublic}
+              onChange={(event) =>
+                setForm((c) => ({ ...c, isPublic: event.target.checked }))
+              }
+            />
+            公开给所有租户（租户只能选用，不能修改）
           </label>
         ) : null}
 

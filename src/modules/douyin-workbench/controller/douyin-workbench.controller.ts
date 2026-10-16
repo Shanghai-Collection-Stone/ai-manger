@@ -26,15 +26,19 @@ import type { AdminRequest } from '../../admin/types/admin-request.types.js';
 import type { Response } from 'express';
 import {
   ConcatDouyinShotVideosDto,
+  ContinueDouyinStoreVisitDto,
+  FailDouyinStoreVisitContinuationDto,
   ConfirmDouyinScriptDraftsDto,
   ReportDouyinConcatResultDto,
   CrawlDouyinDataDto,
   CreateDouyinMotherTopicDto,
+  DesignDouyinStoreVisitVoiceDto,
   DouyinStoreVisitVoiceDto,
   MaskDouyinShotFacesDto,
   GenerateDouyinChildrenDto,
   GenerateDouyinShotImageDto,
   GenerateDouyinShotVideoDto,
+  GenerateDouyinStoreVisitKeyframeDto,
   GenerateDouyinStoreVisitLinesDto,
   GenerateDouyinStoryboardDto,
   GenerateDouyinVideoDto,
@@ -536,18 +540,45 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 列出探店可选的百炼系统音色（名称、特质、性别与方言）。
-   * @keyword-cn 系统音色接口, 探店音色库
+   * @description 列出探店音色库：百炼预置音色（名称、特质、性别、风格分类与方言）与风格分类目录。
+   * @keyword-cn 音色库接口, 探店音色库
    * @keyword-en preset-voices-api, store-visit-voice-library
    */
   @Get('store-visit/voices')
   @RequirePermission('read', 'DouyinWorkbench')
   listStoreVisitPresetVoices() {
-    return { voices: this.storeVisit.listPresetVoices() };
+    return {
+      voices: this.storeVisit.listPresetVoices(),
+      categories: this.storeVisit.listPresetCategories(),
+    };
   }
 
   /**
-   * @description 选用一个百炼系统音色作为脚本的音色，并返回当前租户工作台。
+   * @description 按一段声音描述定制音色（百炼声音设计），写进脚本并返回当前租户工作台。
+   * @keyword-cn 提示词定制音色接口, 声音设计
+   * @keyword-en design-voice-api, voice-design
+   */
+  @Post('topics/:id/store-visit/voice/design')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async designStoreVisitVoice(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: DesignDouyinStoreVisitVoiceDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.storeVisit.designVoice(
+      this.readId(id),
+      { prompt: dto.prompt, name: dto.name },
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 选用音色库里的一个百炼预置音色作为脚本的音色，并返回当前租户工作台。
    * @keyword-cn 选用系统音色接口, 保存预置音色
    * @keyword-en use-preset-voice-api, save-preset-voice
    */
@@ -571,7 +602,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 合成一句音色试听（系统音色或这条脚本克隆的音色），返回试听地址。
+   * @description 合成一句音色试听（音色库预置音色或这条脚本克隆、定制的音色），返回试听地址。
    * @keyword-cn 音色试听接口, 合成试听
    * @keyword-en voice-preview-api, synthesize-trial
    */
@@ -590,7 +621,35 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 重新生成探店某一段（配音 + 空镜视频），按生视频服务扣费，返回这一段的调用记录。
+   * @description 为人物出镜的一段生成首帧（出镜人物放进这段场景，按「分镜画面」节点生图计费），写进分段并返回脚本、首帧与工作台。
+   * @keyword-cn 人物首帧接口, 人物进场景
+   * @keyword-en segment-keyframe-api, person-in-scene
+   */
+  @Post('topics/:id/store-visit/segments/:segmentId/keyframe')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitKeyframe(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('segmentId') segmentId: string,
+    @Body() dto: GenerateDouyinStoreVisitKeyframeDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.storeVisit.generateKeyframe(
+      this.readId(id),
+      this.readSegmentId(segmentId),
+      dto.prompt,
+      scope,
+    );
+    return {
+      topic: { ...result.topic, _id: undefined },
+      segmentId: result.segmentId,
+      keyframe: result.keyframe,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 重新生成探店某一段（配音 + 人物对口型或门店空镜），按生视频服务扣费，返回这一段的调用记录。
    * @keyword-cn 重新生成探店分段接口, 单段重做
    * @keyword-en regenerate-store-visit-segment-api, single-segment-retry
    */
@@ -606,6 +665,27 @@ export class DouyinWorkbenchController {
       this.readSegmentId(segmentId),
       this.scopeOf(this.requireUser(req)),
     );
+  }
+
+  /** @description 校验当前用户权限并用上一段实际尾帧继续生成待处理片段。 @keyword-cn 续段生成接口, 尾帧衔接 @keyword-en continue-segment-api, tail-frame-continuity */
+  @Post('operations/:operationId/store-visit/continue')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async continueStoreVisitSegment(@Req() req: AdminRequest, @Param('operationId') operationId: string, @Body() dto: ContinueDouyinStoreVisitDto) {
+    return this.storeVisit.continueOperation(operationId, dto, this.scopeOf(this.requireUser(req)));
+  }
+
+  /** @description 截取尾帧或上传失败时，只终止当前用户尚在等待的调用，不覆盖已开始生成的任务。 @keyword-cn 续段失败接口, 等待状态保护 @keyword-en continuation-failure-api, waiting-state-guard */
+  @Post('operations/:operationId/store-visit/continuation-failure')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async failStoreVisitContinuation(@Req() req: AdminRequest, @Param('operationId') operationId: string, @Body() dto: FailDouyinStoreVisitContinuationDto) {
+    return this.storeVisit.failPendingContinuation(operationId, dto.error, this.scopeOf(this.requireUser(req)));
+  }
+
+  /** @description 读取待衔接片段的真实前段素材，权限和素材归属同时校验。 @keyword-cn 续段素材接口, 前段视频鉴权 @keyword-en continuation-input-api, predecessor-video-auth */
+  @Get('operations/:operationId/store-visit/continuation-input')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async readStoreVisitContinuationInput(@Req() req: AdminRequest, @Param('operationId') operationId: string) {
+    return this.storeVisit.readContinuationInput(operationId, this.scopeOf(this.requireUser(req)));
   }
 
   /**

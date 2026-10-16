@@ -65,6 +65,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'DouyinPersona' },
       { action: 'manage', subject: 'Knowledge' },
       { action: 'manage', subject: 'PlatformSetting' },
+      { action: 'manage', subject: 'TenantMcp' },
       { action: 'manage', subject: 'HotTopic' },
       { action: 'read', subject: 'Role' },
       { action: 'manage', subject: 'Workspace' },

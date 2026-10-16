@@ -22,7 +22,7 @@
 - `services/xhs-article-generation.service.ts` — 文章 Todo、文章通道排队、一次交付文章（轻量 Agent + 搜索 / 结构化输出）、与写正文并行的配图决策和源图分配、子题文章风格、母题配图约束、母题配图规则版式、扣费前配图预检、生成失败退点、横/竖图太少抛回、优先不重复与允许重复取图、Duck 搜索、生文图组工作流与文章落库。
 - `services/xhs-article-generation-progress.ts` — 生文阶段产出写入器：先写好的正文与逐张就绪的配图合并写进运行中 Todo，关闭后不再写。
 - `services/xhs-topic-cleanup.service.ts` — 历史清理时钟回填，以及每日按各租户设置执行的文章库已发布文章、子题草稿与闲置母题幂等清理。
-- `services/xhs-topic.service.ts` — Todo 生命周期、数量解析、生成需求一键推荐、Agent 工具写入、Duck 搜索筛选与结果持久化。
+- `services/xhs-topic.service.ts` — Todo 生命周期、数量解析、生成需求一键推荐与子选题提示词推荐（一次结构化交付）、轻量 Agent 一次批量交付候选、Duck 搜索筛选与结果持久化。
 
 ## 函数清单 (Function List)
 
@@ -67,18 +67,26 @@
 - `UpdateXhsArticleDto({ title?, body?, tags?, images?, canvasBoards?, contentType? })` — 校验真实文章、配图与结构化画板编辑请求 | keywords: 编辑文章参数, 真实配图, update-article-dto, persisted-images
 - `XHS_TOPIC_COMPLIANCE_PROMPT()` — 定义候选生成的法律、平台、真实性与高风险内容边界 | keywords: 合规提示词, 选题安全, compliance-prompt, topic-safety
 - `resolveRequestedTopicCount(prompt, explicitCount, kind)` — 优先使用显式数量，否则从提示词解析并限制候选数 | keywords: 解析选题数量, 提示词数量, resolve-topic-count, prompt-quantity
-- `XhsTopicService({ agentService, mcpAdapters, todoService, workflowModels, repository })` — 编排模型推荐、工具写入内存候选并持久化 Todo | keywords: 选题生成服务, 内存候选, topic-generation-service, in-memory-candidates
-- `XhsTopicService.recommendPrompt(parentTopicInput, scope)` — 根据母题生成可编辑的子选题提示词并提供稳定回退模板，模型取节点 `xhs-article/topic` | keywords: 推荐子选题提示词, 母题上下文, recommend-child-topic-prompt, parent-topic-context
-- `XhsTopicService.recommendArticleRequirements(topicId, options, scope)` — 读取子题、母题与文章风格，调用 `xhs-article/topic` 节点推荐并安全过滤生成需求 | keywords: 生成需求推荐, 选项安全过滤, requirement-recommendation, option-safe-normalization
+- `ZXhsTopicSubmitInput` — 交付工具 `xhs_topic_submit_candidates` 的参数结构：`candidates` 接受数组或 JSON 字符串，单项字段不做严格长度校验，免得整批被打回 | keywords: 批量交付参数结构, 宽松解析, batch-submit-tool-schema, lenient-parsing
+- `recordTopicCandidates(candidates, raw, requestedCount, articleStyle?)` — 把一次批量交付逐条清洗、去重写入内存候选集，返回新记录数与每条未记录的原因 | keywords: 批量写入候选, 逐条判定, record-topic-candidates, per-item-validation
+- `XhsRequirementOptions` — 「AI 一键推荐」的四组候选项 `{ purposes, personas, styles, lengths }`，由前端按自身选项表传入 | keywords: 生成需求候选项, 推荐约束, requirement-options, recommendation-constraint
+- `XhsRequirementRecommendation` — 「AI 一键推荐」回填表单的结果 `{ purpose, persona, styleTags, keywords, length, idea }` | keywords: 生成需求推荐结果, 表单回填, requirement-recommendation-result, form-fill
+- `normalizeRequirementRecommendation(raw, options)` — 宽松归一模型提交的生成需求：单选先精确后唯一近似匹配候选，风格与关键词也接受分隔符串，越界值丢弃并记成问题 | keywords: 归一生成需求推荐, 宽松匹配候选, normalize-requirement-recommendation, lenient-option-match
+- `XhsTopicService({ adminService, agentService, mcpAdapters, todoService, workflowModels, repository, knowledge })` — 编排模型推荐、工具写入内存候选并持久化 Todo | keywords: 选题生成服务, 内存候选, topic-generation-service, in-memory-candidates
+- `XhsTopicService.submitStructured(input)` — 让选题节点模型经一个交付工具一次提交结构化结果：强制函数调用、JSON Schema 不做 zod 严格校验、不走 Agent、流式计费 | keywords: 一次结构化交付, 强制函数调用, single-structured-submit, forced-function-call
+- `XhsTopicService.recommendPrompt(parentTopicInput, scope)` — 根据母题经 `xhs_topic_prompt_submit` 一次提交可编辑的子选题提示词，失败或空内容时用稳定回退模板，模型取节点 `xhs-article/topic` | keywords: 推荐子选题提示词, 母题上下文, 一次结构化交付, recommend-child-topic-prompt, parent-topic-context, single-structured-submit
+- `XhsTopicService.recommendArticleRequirements(topicId, options, scope)` — 读取子题、母题与文章风格，经 `xhs_requirement_submit` 一次提交生成需求（单选与风格用 enum 限定为请求候选），宽松归一，不合格带原因重试一次，仍不完整时返回部分结果 | keywords: 生成需求推荐, 选项安全过滤, 一次结构化交付, requirement-recommendation, option-safe-normalization, single-structured-submit
 - `XhsTopicService.generate(input, scope)` — 创建 Todo、按文章风格执行 Agent 并返回写入 taskResult 的候选 | keywords: 生成选题候选, 待办结果, 文章生成风格, generate-topic-candidates, todo-result, article-writing-style
-- `XhsTopicService.createCandidateTool(candidates, requestedCount, articleStyle?)` — 创建标题、题目类型和本轮文章风格的逐项内存追加工具 | keywords: 追加候选工具, 内存写入, 文章生成风格, candidate-append-tool, memory-write, article-writing-style
+- `XhsTopicService.createCandidateTool(candidates, requestedCount, articleStyle, submission)` — 创建一次交付全部候选的工具（`xhs_topic_submit_candidates`，`returnDirect` 交付即结束），未记录原因写进 `submission.problems` | keywords: 批量交付候选工具, 内存写入, 文章生成风格, batch-submit-candidates-tool, memory-write, article-writing-style
 - `XhsTopicService.getDuckSearchTools()` — 按 `ddg-search` 服务名隔离读取 DuckDuckGo MCP 工具 | keywords: Duck搜索工具, 搜索筛选, duck-search-tools, tool-filter
 - `XhsTopicService.buildSystemPrompt(input)` — 构造文章风格、合规、检索与工具交付约束 | keywords: 构造选题提示词, 工具交付约束, 文章生成风格, build-topic-prompt, tool-delivery-contract, article-writing-style
-- `XhsTopicService.runAgent(system, tools, remainingCount, scope)` — 执行 Agent（模型取节点 `xhs-article/topic`）、按租户计费并忽略其最终文本 | keywords: 执行选题Agent, 忽略最终文本, run-topic-agent, ignore-final-text
+- `XhsTopicService.runAgent(system, tools, remainingCount, scope)` — 用轻量 Agent 执行（模型取节点 `xhs-article/topic`，只挂搜索与交付工具）、按租户计费并忽略其最终文本 | keywords: 执行选题Agent, 忽略最终文本, 轻量Agent, run-topic-agent, ignore-final-text, lightweight-agent
 - `XhsTopicRepositoryService({ db, cleanupSettings })` — 管理租户用户隔离的 MongoDB 选题集合，列表清理时间按租户清理设置计算 | keywords: 选题数据库服务, 租户隔离, topic-repository, tenant-isolation
 - `XhsTopicRepositoryService.ensureIndexes()` — 创建业务 ID、作用域、父子关系及自动清理时钟索引 | keywords: 选题索引, 父子关系, 清理时钟, topic-indexes, parent-child-relation, cleanup-clock
 - `XhsTopicRepositoryService.listStoredArticleTopicIds(scope, topicIds)` — 在给定子选题里挑出已存入文章库的那些 ID，按选题 ID 反查而不按 userId 关联 | keywords: 已入库子选题, 文章库来源, stored-topic-ids, article-library-source
-- `XhsTopicRepositoryService.listWorkspace(scope,options?)` — 聚合当前用户的真实母题、固定配图标签与按需保留的已入库子题，`idleCleanupAt` / `draftCleanupAt` 按租户清理设置计算、关闭时为空 | keywords: 读取选题工作台, 母子聚合, 保留已入库子题, list-topic-workspace, parent-child-aggregation, include-stored-topics
+- `XhsTopicRepositoryService.listWorkspace(scope,options?)` — 聚合当前用户的真实母题、固定配图标签与按需保留的已入库子题，`idleCleanupAt` / `draftCleanupAt` 按租户清理设置计算、关闭时为空；先不带文章读全部母子题，只为要展示的子题补读文章，`withArticles: false` 时完全不读文章 | keywords: 读取选题工作台, 母子聚合, 保留已入库子题, 按需读取文章, list-topic-workspace, parent-child-aggregation, include-stored-topics, lazy-article-load
+- `XhsTopicRepositoryService.listArticleLocations(scope, topicIds)` — 先按选题集合确认归属，再按 `meta.xhsTopicId` 一次查出子选题所在文章库与库内文章，同一子选题取最早入库那篇 | keywords: 查询文章所在库, 保存转移动, locate-topic-articles, save-as-move
+- `XhsTopicRepositoryService.describeChildTopic(entity, scope)` — 把一条子选题实体转成与工作台列表相同的接口视图，供只回传改动那篇的接口使用 | keywords: 单篇子选题视图, 只回改动选题, single-child-topic-view, changed-topic-response
 - `XhsTopicRepositoryService.createMany(input, scope)` — 批量保存候选及子题文章风格并校验父题归属 | keywords: 批量创建选题, 父题校验, 文章生成风格, create-topics, parent-validation, article-writing-style
 - `XhsTopicRepositoryService.getOwnedTopic(id, scope)` — 按作用域读取文章生成所需真实选题 | keywords: 读取真实选题, 文章生成上下文, get-owned-topic, article-generation-context
 - `XhsTopicRepositoryService.saveGeneratedArticle(id, article, scope)` — 将完整内存文章写入子选题 | keywords: 保存生成文章, 文章落库, save-generated-article, persist-article
@@ -134,7 +142,7 @@
 - `XHS_ARTICLE_QUEUE_LANE` — 文章生成在 AI 生成排队服务里的通道名 `xhs-article` | keywords: 文章生成排队通道, 并发槽位, article-generation-lane, concurrency-slot
 - `XhsArticleGenerationService.launchQueuedGeneration(job)` — 拿到通道名额后切换 Todo 为执行中并跑完整个生成，返回即释放名额；切换失败时退点并置失败 | keywords: 启动排队任务, 释放并发槽位, launch-queued-generation, release-concurrency-slot
 - `XhsArticleGenerationService.runGeneration(params)` — 后台执行文章全流程，按请求保留或重新生成配图，正文与配图谁先好谁先写进 Todo 阶段产出，并把结果回写 Todo | keywords: 后台生成文章, 待办回写, run-article-generation, todo-writeback
-- `XhsArticleGenerationService.listGenerations(scope)` — 汇总等待、执行、完成与失败状态，并通过持久化 Todo 与排队登记簿（覆盖全部进程）双重确认 | keywords: 文章生成状态, 逐条进度, 异步存活确认, article-generation-state, per-topic-progress, async-liveness-confirmation
+- `XhsArticleGenerationService.listGenerations(scope)` — 汇总等待、执行、完成与失败状态，并通过持久化 Todo 与排队登记簿（覆盖全部进程）双重确认；每个子选题最新一条由 `TodoService.listLatestByResource` 在数据库里分组取出，已完成的不带整篇结果 | keywords: 文章生成状态, 逐条进度, 异步存活确认, article-generation-state, per-topic-progress, async-liveness-confirmation
 - `XhsArticleGenerationService.readRuntimeState(scope,topicId)` — 确认子选题生成是否还活着：先看本进程排队 / 执行集合，再查排队登记簿（多进程时覆盖全部 worker） | keywords: 运行实例确认, 等待队列确认, 异步存活确认, runtime-instance-check, waiting-queue-check, async-liveness-confirmation
 - `XhsArticleGenerationService.buildRuntimeConfirmationKey(scope,topicId)` — 构造租户用户及子选题隔离的连续存活确认键 | keywords: 存活确认键, 租户隔离, liveness-confirmation-key, tenant-isolation
 - `XhsArticleGenerationService.readTodoTopicId(todo)` — 从 Todo 关联资源读取对应子选题 ID | keywords: 生成任务关联资源, 子选题归位, generation-todo-resource, topic-binding
@@ -180,7 +188,8 @@
 - `XhsTopicController.listArticleGenerations(req)` — 返回每个子选题最近一次文章生成进度与失败原因 | keywords: 文章生成状态接口, 逐条进度, article-generation-state-api, per-topic-progress
 - `XhsTopicController.recommendArticleRequirements(req, id, dto)` — 为当前作用域内的子选题一键推荐文章生成需求 | keywords: 生成需求推荐接口, 子题上下文, requirement-recommendation-api, child-topic-context
 - `XhsTopicController.generateArticle(req, id, dto)` — 异步排队文章生成并立即返回等待中的 Todo | keywords: 生成真实文章接口, 异步生成文章, 并发生成, generate-persisted-article-api, start-article-generation, concurrent-generation
-- `XhsTopicController.updateArticle(req, id, dto)` — 修改已生成文章与真实配图 | keywords: 更新真实文章接口, 文章配图, update-persisted-article-api, article-images
+- `XhsTopicController.updateArticle(req, id, dto, view?)` — 修改已生成文章与真实配图；`?view=topic` 只回改动的那篇（`{ topic }`），不带时回整个工作台兼容旧客户端 | keywords: 更新真实文章接口, 文章配图, 只回改动选题, update-persisted-article-api, article-images, changed-topic-response
+- `XhsTopicController.listArticleLocations(req, ids?)` — `GET /api/xhs-topic/article-locations?ids=` 返回当前用户子选题所在文章库与库内文章 | keywords: 查询文章所在库接口, 保存转移动, article-locations-api, save-as-move
 - `XhsTopicController.touchDraft(req, id)` — 文章从文章库回到草稿后重置草稿保留时钟，租户关闭草稿清理时 `draftCleanupAt` 为 null | keywords: 重置草稿接口, 草稿保留期限, touch-draft-api, draft-retention
 - `XhsTopicController.getCleanupSettings(req)` — 返回当前租户清理设置与平台默认值 | keywords: 读取清理设置接口, 租户清理设置, get-cleanup-settings-api, tenant-cleanup-settings
 - `XhsTopicController.updateCleanupSettings(req, dto)` — 保存当前租户清理设置，租户内成员都可修改 | keywords: 保存清理设置接口, 租户清理设置, update-cleanup-settings-api, tenant-cleanup-settings
@@ -194,11 +203,29 @@
 | ---------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
 | 小红书选题       | xhs-topic                         | 模块入口、控制器与业务服务                                                                  |
 | 生成选题候选     | generate-topic-candidates         | Agent 生成与 Todo 返回主流程                                                                |
-| 内存候选         | in-memory-candidates              | Agent 工具逐项写入的运行态集合                                                              |
-| 追加候选工具     | candidate-append-tool             | 标题和题目类型写入工具                                                                      |
+| 内存候选         | in-memory-candidates              | Agent 交付工具一次写入、补跑时追加的运行态集合                                              |
+| 批量交付候选工具 | batch-submit-candidates-tool      | `xhs_topic_submit_candidates` 一次提交全部标题与题目类型，交付即结束本轮                    |
+| 批量交付参数结构 | batch-submit-tool-schema          | 交付工具的宽松参数校验，`candidates` 接受数组或 JSON 字符串                                  |
+| 批量写入候选     | record-topic-candidates           | 逐条清洗、去重、限量写入内存候选                                                            |
+| 逐条判定         | per-item-validation               | 单条不合格只跳过该条并给出原因，不连累整批                                                  |
+| 轻量Agent        | lightweight-agent                 | 选题 Agent 不挂 DeepAgent 的待办 / 文件 / 子代理工具                                        |
 | 提示词数量       | prompt-quantity                   | 显式数量及“生成 20 个”“给我来 20 条”等自然语言数量解析                                      |
 | 子选题提示词推荐 | child-topic-prompt-recommendation | 根据当前母题生成可编辑的子选题创作提示词                                                    |
+| 按需读取文章 | lazy-article-load | 工作台先不带文章读母子题，只为要展示的子题补读文章 |
+| 只回改动选题 | changed-topic-response | 文章编辑接口 `?view=topic` 只回改动的那篇 |
+| 单篇子选题视图 | single-child-topic-view | 单条子选题实体转成与列表相同的接口视图 |
+| 查询文章所在库 | locate-topic-articles | 按子选题 ID 一次查出所在文章库与库内文章 |
+| 查询文章所在库接口 | article-locations-api | `GET /api/xhs-topic/article-locations` |
+| 保存转移动 | save-as-move | 已在其他库的来源选题再次保存时改走移动 |
 | 生成需求推荐 | requirement-recommendation | 根据子题、母题和已有文章风格从请求候选项中推荐文章生成需求 |
+| 一次结构化交付 | single-structured-submit | 推荐类调用经一个交付工具一次提交，不走 Agent、不解析最终文本 |
+| 强制函数调用 | forced-function-call | `withStructuredOutput` 的 functionCalling 模式，模型必须调用交付工具 |
+| 归一生成需求推荐 | normalize-requirement-recommendation | 模型提交的需求宽松归一并列出仍不合格的字段 |
+| 宽松匹配候选 | lenient-option-match | 单选值精确匹配失败时按互相包含做唯一近似匹配 |
+| 生成需求候选项 | requirement-options | 前端传入的目的、人设、风格、字数四组候选 |
+| 推荐约束 | recommendation-constraint | 候选项同时写进交付工具参数的 enum 与提示词 |
+| 生成需求推荐结果 | requirement-recommendation-result | 回填表单的六个字段 |
+| 表单回填 | form-fill | 前端一次回填全部需求字段 |
 | 选项安全过滤 | option-safe-normalization | 服务端限制枚举值、数量与文本长度，阻止模型越过请求候选范围 |
 | 文章失败退点     | article-failure-refund            | 生成失败、启动失败与进程中断时退回生文服务扣点                                              |
 | 合规提示词       | compliance-prompt                 | 默认法律和平台安全边界                                                                      |
@@ -326,11 +353,11 @@
 
 子选题上的 `crawl` 子文档只在本模块存取（开关状态、最后抓取时间、最后调度时间），真正按频率建抓取任务、聚合看板指标和做舆论分析都在 [xhs-topic-data 模块](../xhs-topic-data/module.md)。放在这里是因为「这个子选题还抓不抓」属于选题自身的属性，跟着选题一起删；抓取任务和抓取数据则是另一份生命周期，单独成表。
 
-`POST /api/xhs-topic/generate` 以 `create XhsTopic` 权限接收选题层级、提示词、可选母选题、子题 `articleStyle`、可选数量和搜索开关。子题配置风格后，服务把它同时写进候选结果，并要求 Agent 生成适合沿该风格继续写作的标题、叙事视角和内容结构。服务从显式参数或提示词解析目标数量，创建运行 Todo 后将内存追加工具与 DuckDuckGo 检索工具交给 Agent。每条候选都必须通过 `xhs_topic_add_candidate` 写入，包含题目和题目类型；最终回答被忽略。服务最多补跑一次缺失候选，数量准确时将最终内存集合序列化到 Todo `taskResult`，更新状态为 `done` 并只返回 Todo；仍不足或运行异常时将已有候选与错误写入 `failed` Todo 并同样返回。
+`POST /api/xhs-topic/generate` 以 `create XhsTopic` 权限接收选题层级、提示词、可选母选题、子题 `articleStyle`、可选数量和搜索开关。子题配置风格后，服务把它同时写进候选结果，并要求 Agent 生成适合沿该风格继续写作的标题、叙事视角和内容结构。服务从显式参数或提示词解析目标数量，创建运行 Todo 后将批量交付工具与 DuckDuckGo 检索工具交给轻量 Agent（不挂 DeepAgent 的待办 / 文件 / 子代理）。全部候选通过一次 `xhs_topic_submit_candidates` 调用交付（`candidates` 数组，每项题目和题目类型），工具 `returnDirect` 交付即结束本轮；提示词写明了工具用法、提交前自查项和搜索上限（合计最多 2 次、只看摘要、不抓正文、不按候选逐个搜），成功路径只需一轮模型往返，以前逐条调用工具时 8 条就要 8 轮以上。单条不合格只跳过该条并记下原因，不连累整批；最终回答被忽略。服务最多补跑一次缺失候选，补跑提示词带上已有题目和上次的未记录原因，数量准确时将最终内存集合序列化到 Todo `taskResult`，更新状态为 `done` 并只返回 Todo；仍不足或运行异常时将已有候选与错误写入 `failed` Todo 并同样返回。
 
-`POST /api/xhs-topic/prompt/recommend` 根据当前母题调用 AI 返回一条可编辑的子选题生成提示词，失败时使用包含数量、差异化角度、内容价值和标题风格的稳定模板回退。入口与选题生成一样声明 `create XhsTopic` 权限。
+`POST /api/xhs-topic/prompt/recommend` 根据当前母题调用 AI 返回一条可编辑的子选题生成提示词：模型经 `xhs_topic_prompt_submit` 一次提交（强制函数调用，参数只有 `prompt`），提示词写明要包含的建议数量、3-4 个具体角度、目标读者、内容价值和标题风格，以及只提交一次、不分点不加引号；失败或交了空内容时使用包含数量、差异化角度、内容价值和标题风格的稳定模板回退。入口与选题生成一样声明 `create XhsTopic` 权限。
 
-`POST /api/xhs-topic/:id/article/requirements/recommend` 以 `create XhsTopic` 权限接收 `{ options: { purposes, personas, styles, lengths } }`，四组数组各需 1 至 50 项、单项 1 至 20 字。服务只读取当前租户用户拥有的子选题及所属母题，把母题标题、子题标题与已有 `articleStyle` 交给 `xhs-article/topic` 节点，并沿用提示词推荐的流式计费配置。模型必须返回严格 JSON；解析失败会重试一次，仍失败返回 HTTP 503 与 `XHS_REQUIREMENT_RECOMMEND_FAILED`（“生成需求推荐失败，请稍后重试”）。响应为 `{ purpose, persona, styleTags, keywords, length, idea }`：purpose/persona 越界时置空，length 越界时回落到 `不限` 或首项，styleTags 仅保留 styles 内最多 8 项，keywords 最多 6 项且每项截到 12 字，idea 截到 120 字。当前作用域找不到选题返回 `XHS_TOPIC_NOT_FOUND`，传入母题返回 `XHS_TOPIC_CHILD_REQUIRED`，所属母题缺失返回 `XHS_TOPIC_PARENT_NOT_FOUND`。
+`POST /api/xhs-topic/:id/article/requirements/recommend` 以 `create XhsTopic` 权限接收 `{ options: { purposes, personas, styles, lengths } }`，四组数组各需 1 至 50 项、单项 1 至 20 字。服务只读取当前租户用户拥有的子选题及所属母题，把母题标题、子题标题与已有 `articleStyle` 交给 `xhs-article/topic` 节点，并沿用提示词推荐的流式计费配置。以前是完整 DeepAgent 跑完后把最终文本当严格 JSON 解析，模型多写一句话、带代码围栏或先去写待办都会失败；现在经 `submitStructured` 一次调用：模型被强制调用 `xhs_requirement_submit`，参数结构里 purpose / persona / length / styleTags 用 enum 限定为本次请求的候选，提示词逐字段说明怎么选（逐字复制候选、风格 3-6 项、关键词 3-6 个具体词、idea 一句话、已有 articleStyle 时保持一致、只提交一次）。参数按 JSON Schema 传、不做 zod 严格校验，由 `normalizeRequirementRecommendation` 宽松归一：单选值精确匹配不到时按互相包含做唯一近似匹配，风格与关键词也接受分隔符串、去掉 #。仍有字段不合格或参数不是合法 JSON 时带着问题重试一次；两次都不完整时返回问题最少的那次归一结果（至少有目的、人设或风格之一），一项都没有才返回 HTTP 503 与 `XHS_REQUIREMENT_RECOMMEND_FAILED`（“生成需求推荐失败，请稍后重试”）。响应为 `{ purpose, persona, styleTags, keywords, length, idea }`：purpose/persona 越界时置空，length 越界时回落到 `不限` 或首项，styleTags 仅保留 styles 内最多 8 项，keywords 最多 6 项且每项截到 12 字，idea 截到 120 字。当前作用域找不到选题返回 `XHS_TOPIC_NOT_FOUND`，传入母题返回 `XHS_TOPIC_CHILD_REQUIRED`，所属母题缺失返回 `XHS_TOPIC_PARENT_NOT_FOUND`。
 
 `POST /api/xhs-topic/:id/article/generate` 同时承担首次生成与已有文章改写。服务从子选题实体读取 `articleStyle`，把它作为标题、叙事视角、语气、节奏和结构的持续约束注入文章 Agent，因此首次生文、批量生文与重新生成都会自动沿用关联风格。接口创建 `in_progress` Todo 后立即返回，Agent、配图和落库流程在后台继续执行；不同子选题互不阻塞并可同时生成，同一子选题在全部进程范围内拒绝重复启动（本进程集合 + 排队登记簿）。服务把已保存文章（标题、正文、标签、配图张数和发布形式）直接写进提示词，模型据此按用户提示词做局部修改或完全重写，再用 `xhs_article_submit` 一次交付整篇（没要求改动的部分照原文带上）。改写默认保留现有图片和画板数据，因此不再依赖图库标签；首次生成、没有现有图组或显式重新生成图片时，服务会读取所属母题的 `imageTags`：非空配置先与当前真实图库标签校验，然后直接作为本篇配图标签；空数组则由配图决策（节点 `xhs-article/image-decision`，关闭思考）从最多 300 个图库标签里选 2-5 个，失败按字面重合兜底，仍选不出返回 `XHS_ARTICLE_IMAGE_TAGS_NOT_SELECTED`。配置标签已全部从图库移除时返回 `XHS_ARTICLE_MOTHER_IMAGE_TAGS_UNAVAILABLE`，避免静默换用其他标签。Canvas 生文图片阶段生成一张封面和五张内页，版式由母题 `imageRule` 经 `XHS_MOTHER_IMAGE_RULE_LAYOUTS` 决定：`default` 为 5 拼图 + 末页 1 竖图，`collage-first` 为全拼图，`portrait-first` 为全竖图；凑不齐时**不换版式**，横图缺口优先报 `XHS_ARTICLE_LANDSCAPE_INSUFFICIENT`，否则竖图缺口报 `XHS_ARTICLE_PORTRAIT_INSUFFICIENT`，明细带需要与可用张数和图库标签。前端的子选题错误条据此给出「改用竖图 / 改用拼图」（重试时带 `imageRule` 仅本次覆盖，不改母题设置）和「允许重复」（重试时带 `allowImageRepeat`：忽略严格去重，未用图不够补已用图，仍不够在本篇内轮换复用，拼图至少 2 张横图、单图至少 1 张竖图即可）。母题锁定了配图标签且本次需要生成图片时，`start` 在扣费前先校验标签并试分配源图，不够直接以 400 返回同样的错误码；未锁定标签时由配图决策选标签并分配源图，这一步与写正文同时进行，图不够会在正文写完前就返回失败（已扣的生文费照常退）。取图去重模式为「优先不重复」：先采未用图、不够再补已用图，未用图总是先被分配，生成后标记已用，让下一篇继续避开；前端设置里打开「配图严格去重」时请求带 `dedup: true`，改为只取未用图。租户开启 AI 封面时走 `ai-overlay`：模型生成纯绿实底、指定主副标题与波普装饰融合的文字海报素材，真实照片不传给模型；sharp 输出合成预览和透明 PNG 素材，`canvasBoards` 另外保存 `baseSrc` 原照片以及带 `includesText` 标记的 `materials` 素材原图/去底图/特效参数。文章预览与发布继续使用合成封面，进入灵感画布后则还原成照片和含字图片素材两个独立图层；素材可移动、缩放、隐藏或重开图片特效。完整文章落库后状态才变为 `generated`。后台失败会把失败码写进 Todo `taskResult.error`，把中文原因写进 `taskResult.errorMessage` 与 `abnormalReason`。前端通过 `GET /api/xhs-topic/article/generations` 轮询每个子选题最近一次任务；查询同时读取 Todo 持久化状态并核对本进程排队 / 执行集合与 [排队登记簿](../generation-queue/module.md)（多进程时登记簿在主进程，能看到全部 worker 上的任务），若数据库仍显示运行但任何进程里都已不存在，第一次仅记录疑似中断，连续第二次确认仍缺失后才将 Todo 改为 `failed`，错误码为 `XHS_ARTICLE_GENERATION_INTERRUPTED`。正常运行任务每次都能通过运行实例确认，不会被误清理；服务重启遗留的陈旧状态也不会永久显示“生成中”。配图阶段的 `XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT` 会附带本次使用的图库标签，便于用户判断该补哪些标签的图。
 
@@ -356,6 +383,8 @@
 | `POST /api/xhs-topic/:id/article/requirements/recommend` | `create XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；仅允许读取当前作用域内子题及其母题 |
 | `GET /api/xhs-topic/cleanup-settings` | `read XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；只返回当前租户设置 |
 | `PUT /api/xhs-topic/cleanup-settings` | `update XhsTopic` | 同方法声明 `AdminAuthGuard`、`AdminPoliciesGuard` 与 `RequirePermission`；租户内成员（含操作员）都可修改，只写当前租户 |
+
+**性能（大字段按需读取）**：文章（含画板与图层）是 `xhs_topics` 里最大的字段。`GET /api/xhs-topic` 先不带文章读出全部母子题，剔除已存入文章库的子题后只为剩下的补读文章；数据看板与闲置母题清理传 `withArticles: false` 完全不读文章。`PATCH /api/xhs-topic/:id/article?view=topic` 只回 `{ topic }`（与列表同结构的那篇子选题），工作台的图片修改队列与文字编辑都走它，不再每次编辑都重读、回传整个工作台；不带 `view` 的旧客户端仍拿到 `{ groups }`。`GET /api/xhs-topic/article-locations?ids=1,2` 以 `read XhsTopic` 权限返回 `{ locations: [{ topicId, libraryId, articleId }] }`：先按选题集合确认这些子选题属于当前用户，再按 `meta.xhsTopicId` 一次查文章集合（索引 `{ source, meta.xhsTopicId }`，见文章库模块），代替「保存到」弹窗逐个文章库拉取文章比对。生文状态轮询（前端运行中每 3 秒一次）经 `TodoService.listLatestByResource` 在数据库里按子选题取最新一条、已完成的不带 `taskResult`，不再把用户历史上所有生文 Todo 整批读出。
 
 `PATCH /api/xhs-topic/:id/article` 同时接受生成阶段的 `cover/inner` 画板和灵感画布保存的 `edited` 画板。编辑态使用版本化 `editorState` 保存模板、120~1600 像素画板尺寸及最多 200 个有序图层，重新进入灵感画布时可恢复上次编辑结果；原有封面素材、拼图与文章图片结构继续兼容。
 

@@ -28,7 +28,10 @@ import {
   listShuyanVideoResolutionChoices,
   resolveShuyanVideoRoute,
 } from './douyin-shuyan-video.service.js';
-import { DouyinStoreVisitService } from './douyin-store-visit.service.js';
+import {
+  DouyinStoreVisitService,
+  resolveStoreVisitPresenterEngine,
+} from './douyin-store-visit.service.js';
 import { DASHSCOPE_PROVIDER_CODE } from './douyin-cosyvoice.service.js';
 import { DouyinShotConcatService } from './douyin-shot-concat.service.js';
 import { WorkflowModelService } from '../../workflow-model/services/workflow-model.service.js';
@@ -39,6 +42,7 @@ import {
   listPixmaxResolutionChoices,
 } from '../../pixmax/services/pixmax-video-params.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
+import { toStoreVisitLipSyncView } from './douyin-store-visit-lip-sync.js';
 
 type DouyinOperation = 'generate' | 'publish' | 'crawl';
 type DouyinScope = { tenantId?: string; userId: string };
@@ -324,7 +328,7 @@ export class DouyinOperationService {
   /**
    * @description 读取整片与分镜两个视频节点当前走的通道、模型、可选时长与可选清晰度，供视频栏展示「生成时长」「清晰度」选项。
    *   未指定模型时走直连服务（时长不限、清晰度由直连服务自己决定）；节点配置不可用时返回中文原因。
-   *   另带探店模式两个节点（音色克隆与配音、探店画面视频）是否已在后台指定可用的提供商与画面可选秒数，探店工作区据此提前提示。
+   *   另带探店模式三个节点（音色克隆与配音、探店画面视频、探店人物对口型）是否已在后台指定可用的提供商，以及画面可选秒数，探店工作区据此提前提示。
    * @keyword-cn 视频生成选项, 可选时长, 可选清晰度
    * @keyword-en video-generation-options, duration-choices, resolution-choices
    * @returns 整片与分镜两个节点的选项，以及探店两个节点的配置状态。
@@ -342,13 +346,19 @@ export class DouyinOperationService {
       }
     > & {
       storeVisit: Record<
-        'voiceClone' | 'video',
+        'voiceClone' | 'video' | 'avatar',
         {
           configured: boolean;
           model?: string;
           providerName?: string;
           /** 探店画面视频型号可选的整数秒数，前端据此提示单段台词别太长 */
           durations?: number[];
+          /** 探店人物对口型节点：可灵数字人型号为 true，视频型号为 false */
+          lipSync?: boolean;
+          /** 探店人物对口型节点是 Seedance / MiniMax-H3 时为 true：画面出片后再交给可灵按配音对口型，人物段配音不能超过型号最长秒数 */
+          postLipSync?: boolean;
+          /** 探店人物对口型节点是 wan2.7-i2v 时为 true：配音作驱动音频一次生成画面与口型，人物段配音 2 秒到型号最长秒数 */
+          audioDriven?: boolean;
           error?: string;
         }
       >;
@@ -383,13 +393,41 @@ export class DouyinOperationService {
           return {
             configured: false,
             ...base,
-            error: '探店画面视频要选数眼智能提供商',
+            error:
+              nodeKey === WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar
+                ? '探店人物对口型要选数眼智能提供商'
+                : '探店画面视频要选数眼智能提供商',
           };
+        if (nodeKey === WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar) {
+          const engine = resolveStoreVisitPresenterEngine(runtime.model);
+          if (!engine)
+            return {
+              configured: false,
+              ...base,
+              error: `模型「${runtime.model}」还不能用，请填 kling-avatar-std / kling-avatar-pro（数字人对口型）、wan2.7-i2v（按配音生成画面与口型），或 Seedance / MiniMax-H3 视频型号（出片后再对口型）`,
+            };
+          if (!String(runtime.apiKey ?? '').trim())
+            return {
+              configured: false,
+              ...base,
+              error: '数眼智能没有填 API Key',
+            };
+          return engine.engine === 'kling-avatar'
+            ? { configured: true, ...base, lipSync: true }
+            : {
+                configured: true,
+                ...base,
+                lipSync: false,
+                postLipSync: engine.route !== 'wan',
+                audioDriven: engine.route === 'wan',
+                durations: listShuyanVideoDurationChoices(runtime.model),
+              };
+        }
         if (!resolveShuyanVideoRoute(runtime.model))
           return {
             configured: false,
             ...base,
-            error: `模型「${runtime.model}」还没接入，请改选 Seedance 或 MiniMax-H3 型号`,
+            error: `模型「${runtime.model}」还没接入，请改选 Seedance、MiniMax-H3 或 wan2.7-i2v 型号`,
           };
         return {
           configured: true,
@@ -445,16 +483,22 @@ export class DouyinOperationService {
         };
       }
     };
-    const [full, shot, voiceClone, storeVisitVideo] = await Promise.all([
-      read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
-      read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
-      readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceClone),
-      readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
-    ]);
+    const [full, shot, voiceClone, storeVisitVideo, storeVisitAvatar] =
+      await Promise.all([
+        read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
+        read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
+        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceClone),
+        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar),
+      ]);
     return {
       full,
       shot,
-      storeVisit: { voiceClone, video: storeVisitVideo },
+      storeVisit: {
+        voiceClone,
+        video: storeVisitVideo,
+        avatar: storeVisitAvatar,
+      },
     };
   }
 
@@ -869,6 +913,8 @@ export class DouyinOperationService {
           : undefined,
       status: row.status,
       externalId: row.externalId,
+      continuity: row.continuity,
+      lipSync: toStoreVisitLipSyncView(row.lipSync),
       result: row.result,
       ...presentDouyinVideoError(row),
       createdAt: row.createdAt,

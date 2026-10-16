@@ -2,12 +2,7 @@ import { ObjectId } from 'mongodb';
 
 /** @description ZIP 导入任务状态机:pending → extracting → importing → done|failed|cancelled */
 export type GalleryZipImportStatus =
-  | 'pending'
-  | 'extracting'
-  | 'importing'
-  | 'done'
-  | 'failed'
-  | 'cancelled';
+  'pending' | 'extracting' | 'importing' | 'done' | 'failed' | 'cancelled';
 
 /** @description 实时进度:total=zip 内可识别图片张数,processed=已落盘 */
 export interface GalleryZipImportProgress {
@@ -49,6 +44,10 @@ export interface GalleryZipImportEntity {
   imageIds: number[];
   /** @description 取消标记:置 true 后处理循环下一次检查时中断 */
   cancelRequested?: boolean;
+  /** @description 负责处理该任务的进程标识；进程重启后换新标识，旧任务靠心跳过期被接手或判失败 */
+  ownerId?: string;
+  /** @description 负责进程最近一次心跳时间（排队与处理中每 30 秒刷新一次） */
+  heartbeatAt?: Date;
   startedAt?: Date;
   finishedAt?: Date;
   createdAt: Date;

@@ -49,6 +49,9 @@ export class ArticleService {
       source: 1,
       'meta.xhsTopicId': 1,
     });
+    // 按子选题反查入库文章（选题页剔除已入库子题、「保存到」查所在库）不带 userId：两个集合的 userId 口径不同，
+    // 上面那条索引的前缀用不上
+    await this.articles.createIndex({ source: 1, 'meta.xhsTopicId': 1 });
     await this.articles.createIndex({
       libraryId: 1,
       publishStatus: 1,
