@@ -7,6 +7,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
+import { storeVisitVisualSource } from './douyin-store-visit-continuity.js';
 import {
   DOUYIN_SCRIPT_STYLES,
   DOUYIN_STORE_VISIT_TEMPLATES,
@@ -172,7 +173,11 @@ export function normalizeStoreVisitSceneImages(
     const tags = Array.from(
       new Set(
         (Array.isArray(item?.tags) ? item.tags : [])
-          .map((tag) => String(tag ?? '').trim().slice(0, 30))
+          .map((tag) =>
+            String(tag ?? '')
+              .trim()
+              .slice(0, 30),
+          )
           .filter(Boolean),
       ),
     ).slice(0, 10);
@@ -244,7 +249,14 @@ export function normalizeStoreVisitSegments(
       lines,
       ...(sceneImageIds.includes(sceneImageId) ? { sceneImageId } : {}),
       ...(action ? { action } : {}),
-      ...(item?.shot === 'presenter' ? { shot: 'presenter' as const } : {}),
+      ...(['presenter', 'experience'].includes(item?.shot || '')
+        ? { shot: item.shot }
+        : {}),
+      ...(['original', 'references', 'generated'].includes(
+        item?.visualSource || '',
+      )
+        ? { visualSource: item.visualSource }
+        : {}),
     });
     if (list.length >= DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count) break;
   }
@@ -268,12 +280,23 @@ export function mergeStoreVisitSegments(
   let chainChanged = false;
   return next.map((segment, index) => {
     const previous = byId.get(segment.id);
-    if (!previous) { chainChanged = true; return segment; }
+    if (!previous) {
+      chainChanged = true;
+      return segment;
+    }
     const sameScene = previous.sceneImageId === segment.sceneImageId;
+    const sameVisual =
+      storeVisitVisualSource(previous) === storeVisitVisualSource(segment);
     const keyframe =
-      sameScene && previous.keyframe ? { keyframe: previous.keyframe } : {};
+      sameScene &&
+      sameVisual &&
+      previous.shot === segment.shot &&
+      previous.keyframe
+        ? { keyframe: previous.keyframe }
+        : {};
     const unchanged =
       sameScene &&
+      sameVisual &&
       previous.lines === segment.lines &&
       (previous.action ?? '') === (segment.action ?? '') &&
       (previous.shot ?? 'broll') === (segment.shot ?? 'broll');
@@ -863,10 +886,14 @@ export class DouyinWorkbenchRepositoryService {
     scope: DouyinScope,
   ): Promise<DouyinTopicEntity | null> {
     const topic = await this.get(topicId, scope);
-    const segment = topic?.storeVisit?.segments?.find((item) => item.id === segmentId);
+    const segment = topic?.storeVisit?.segments?.find(
+      (item) => item.id === segmentId,
+    );
     if (!segment) return null;
     const all = topic?.storeVisit?.segments || [];
-    const start = all.findIndex((item) => item.sceneImageId === segment.sceneImageId);
+    const start = all.findIndex(
+      (item) => item.sceneImageId === segment.sceneImageId,
+    );
     const dependentIds = all.slice(start).map((item) => item.id);
     const $unset: Record<string, ''> = {};
     for (const field of ['videoId', 'audioUrl', 'audioSeconds', 'voiceId']) {
@@ -887,7 +914,13 @@ export class DouyinWorkbenchRepositoryService {
       },
       {
         returnDocument: 'after',
-        arrayFilters: [{ 'scene.sceneImageId': segment.sceneImageId }, { 'dependent.id': { $in: dependentIds } }],
+        arrayFilters: [
+          {
+            'scene.sceneImageId': segment.sceneImageId,
+            'scene.shot': segment.shot,
+          },
+          { 'dependent.id': { $in: dependentIds } },
+        ],
       },
     );
   }
@@ -985,10 +1018,22 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /** @description 读取并验证当前租户的尾帧图片，使用数据库中的真实地址，拒绝客户端伪造 URL。 @keyword-cn 校验尾帧素材, 图库归属 @keyword-en require-tail-image, gallery-ownership */
-  async requireImage(id: number, scope: DouyinScope): Promise<DouyinMediaReference> {
-    const row = await this.gallery.findOne({ id, ...this.tenantFilter(scope.tenantId) });
-    if (!row || !row.url) throw new NotFoundException('尾帧图片不存在或不属于当前租户');
-    return { type: 'image', id, url: String(row.url), name: String(row.originalName || `尾帧 #${id}`) };
+  async requireImage(
+    id: number,
+    scope: DouyinScope,
+  ): Promise<DouyinMediaReference> {
+    const row = await this.gallery.findOne({
+      id,
+      ...this.tenantFilter(scope.tenantId),
+    });
+    if (!row || !row.url)
+      throw new NotFoundException('尾帧图片不存在或不属于当前租户');
+    return {
+      type: 'image',
+      id,
+      url: String(row.url),
+      name: String(row.originalName || `尾帧 #${id}`),
+    };
   }
 
   /**

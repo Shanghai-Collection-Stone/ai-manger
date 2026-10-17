@@ -18,17 +18,23 @@
 
 ### TenantMcpPanel.jsx
 
-- `TenantMcpPanel({currentRole,tenants,onNotice,onError})` — 租户 MCP 链接、密钥、权限与一次性明文展示页面 | keywords: tenant-mcp-panel, key-management
+文件清单补充：`TenantMcpPanel.jsx`（链接与密钥管理界面）、`tenantMcpPrompt.js`（带协议说明和授权工具用途的可复制接入提示词）。
+
+- `TenantMcpPanel({currentRole,tenants,onNotice,onError})` — 租户 MCP 链接、完整密钥、权限与接入提示词复制页面 | keywords: tenant-mcp-panel, key-management
 - `PermissionPicker({tools,selected,onChange,disabled})` — 勾选单把密钥可用的工具 | keywords: mcp-permission-picker, tool-permission
-- `KeyEditor({item,tools,busy,onSave,onDelete})` — 修改密钥名称、过期时间、权限和启用状态并撤销密钥 | keywords: mcp-key-editor, key-management
-- `EndpointEditor({endpoint,tools,busy,mutate,onSecret})` — 修改或删除链接并创建独立密钥 | keywords: mcp-endpoint-editor, key-management
-- `EndpointEditor.createKey(event)` — 创建密钥并交回一次性明文与客户端配置 | keywords: mcp-create-key, one-time-secret
+- `KeyEditor({item,tools,busy,onSave,onDelete,onCopyPrompt,onCopySecret,onRotate})` — 常显完整密钥并复制密钥与提示词，支持修改配置和显式重新生成 | keywords: mcp-key-editor, key-management
+- `EndpointEditor({endpoint,tools,busy,mutate,onSecret,onCopyPrompt})` — 修改或删除链接并创建独立密钥与传递提示词复制操作 | keywords: mcp-endpoint-editor, key-management
+- `EndpointEditor.createKey(event)` — 创建密钥并交回可恢复的完整密钥与客户端配置 | keywords: mcp-create-key, recoverable-secret
 - `TenantMcpPanel.reload()` — 刷新当前租户的链接和密钥 | keywords: mcp-reload, key-management
 - `TenantMcpPanel.mutate(path,method,body)` — 提交配置变更并刷新列表 | keywords: mcp-mutation, key-management
 - `TenantMcpPanel.createEndpoint(event)` — 创建新的租户 MCP 链接 | keywords: mcp-create-endpoint, key-management
+- `TenantMcpPanel.copyPrompt(connection)` — 复制包含连接配置、已授权工具用途和排障信息的接入提示词并反馈结果 | keywords: 复制接入提示词, 工具说明, copy-mcp-prompt, tool-description
+- `buildTenantMcpPrompt({url,secret?,permissions?,tools?})` — 生成标准 MCP 接入提示词并仅列出当前密钥已授权工具说明 | keywords: MCP接入提示词, 工具说明, mcp-connection-prompt, tool-description
 - `adminApi.tenantMcp(path,options,tenantId)` — 调用 MCP 管理接口并携带超管选择的租户参数 | keywords: tenant-mcp-api, key-management
 
-“MCP 接入”Tab 只对超管、租户管理员开放；超管选择目标租户，租户管理员自动锁定本租户。密钥明文只保留在组件状态，关闭后不再读取。中文/英文索引：租户MCP / tenant-mcp-panel，工具权限 / tool-permission，密钥管理 / key-management，一次性密钥 / one-time-secret。后端索引见 `../../../../src/modules/tenant-mcp/module.md`。
+“MCP 接入”Tab 只对超管、租户管理员开放；超管选择目标租户，租户管理员自动锁定本租户。完整密钥由有权限的后台列表返回，刷新后仍可查看；每行默认展示密钥、复制密钥、复制含密钥的接入提示词，权限与有效期编辑区折叠。历史仅有哈希的密钥成功调用一次后会自动补存，或经显式确认重新生成；重新生成不改权限、有效期或启用状态。中文/英文索引：租户MCP / tenant-mcp-panel，工具权限 / tool-permission，密钥管理 / key-management，可恢复密钥 / recoverable-secret。后端索引见 `../../../../src/modules/tenant-mcp/module.md`。
+
+复制接入提示词（copy-mcp-prompt / mcp-connection-prompt）包含 Streamable HTTP 连接地址、Bearer 鉴权、初始化与协议版本协商、标准 tools/list 与 tools/call 用法、请求头、当前密钥已授权工具的用途说明（工具说明 / tool-description）、文章入库和二维码含义、异步抓取轮询和常见错误排查。创建密钥提示区及已有密钥行都可随时复制含完整密钥的提示词；密钥尚不可恢复时禁用复制按钮，不把前缀或占位符当作完整密钥。工具说明来自后端工具目录，不列出未授权能力；原有纯 JSON“复制客户端配置”保留。
 
 ### AdminApp.jsx
 

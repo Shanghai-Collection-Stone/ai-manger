@@ -29,15 +29,16 @@ import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.en
 /** @type {string[]} 允许的脚本风格键名，取自实体登记表，前后端同源。 */
 const SCRIPT_STYLE_KEYS = Object.keys(DOUYIN_SCRIPT_STYLES);
 
-/** @description 续接探店待生成片段，只收真实前段视频与已入图库的尾帧编号。 @keyword-cn 续段生成参数, 尾帧编号 @keyword-en continue-segment-dto, tail-image-id */
+/** @description 续接探店待生成片段，收真实前段视频，同镜头续段必须带已入图库的尾帧，新镜头可省略。 @keyword-cn 续段生成参数, 尾帧编号 @keyword-en continue-segment-dto, tail-image-id */
 export class ContinueDouyinStoreVisitDto {
   @IsInt()
   @Min(1)
   previousVideoId!: number;
 
+  @IsOptional()
   @IsInt()
   @Min(1)
-  tailImageId!: number;
+  tailImageId?: number;
 }
 
 /** @description 截帧失败的可持久化原因，不接受状态或视频输出字段。 @keyword-cn 续段失败参数, 截帧错误 @keyword-en continuation-failure-dto, frame-extraction-error */
@@ -302,15 +303,19 @@ export class DouyinPublishCopyDto {
 }
 
 /**
- * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图 ID、画面描述与镜头类型（人物出镜 / 门店空镜）；
+ * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图 ID、画面描述、镜头用途（实景 / 体验 / 讲解）与画面来源；
  *   人物首帧、成片与配音只由服务端写入。
  * @keyword-cn 探店分段参数, 分段台词
  * @keyword-en store-visit-segment-dto, segment-lines
  */
 export class DouyinStoreVisitSegmentDto {
   @IsOptional()
-  @IsIn(['presenter', 'broll'])
-  shot?: 'presenter' | 'broll';
+  @IsIn(['presenter', 'broll', 'experience'])
+  shot?: 'presenter' | 'broll' | 'experience';
+
+  @IsOptional()
+  @IsIn(['original', 'references', 'generated'])
+  visualSource?: 'original' | 'references' | 'generated';
 
   @IsOptional()
   @IsString()

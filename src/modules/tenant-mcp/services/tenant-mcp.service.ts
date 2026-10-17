@@ -8,13 +8,19 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from 'node:crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
 import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 import type {
   TenantMcpEndpoint,
   TenantMcpKey,
   TenantMcpPrincipal,
+  TenantMcpSecretEnvelope,
 } from '../entities/tenant-mcp.entity.js';
 import { TENANT_MCP_TOOLS } from '../tenant-mcp.tools.js';
 
@@ -91,6 +97,85 @@ export class TenantMcpService implements OnModuleInit {
     };
   }
 
+  /** @keyword-en mcp-secret-key, encryption-config */
+  private secretEncryptionKey(): Buffer | null {
+    const configured = [
+      'TENANT_MCP_ENCRYPTION_KEY',
+      'BROWSER_AUTH_ENCRYPTION_KEY',
+      'ADMIN_JWT_SECRET',
+    ]
+      .map((name) => String(this.config.get<string>(name) || '').trim())
+      .find(Boolean);
+    if (!configured) return null;
+    if (/^[a-f\d]{64}$/i.test(configured))
+      return Buffer.from(configured, 'hex');
+    const decoded = Buffer.from(configured, 'base64');
+    if (decoded.length === 32 && decoded.toString('base64') === configured)
+      return decoded;
+    return createHash('sha256').update(configured).digest();
+  }
+
+  /** @keyword-en mcp-secret-storage, recoverable-secret */
+  private sealSecret(
+    secret: string,
+    scope: { tenantId: string; endpointId: string; _id: ObjectId },
+  ): TenantMcpSecretEnvelope {
+    const key = this.secretEncryptionKey();
+    if (!key) return { algorithm: 'plain', value: secret };
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(
+      Buffer.from(
+        `${scope.tenantId}:${scope.endpointId}:${scope._id.toHexString()}`,
+      ),
+    );
+    const ciphertext = Buffer.concat([
+      cipher.update(secret, 'utf8'),
+      cipher.final(),
+    ]);
+    return {
+      algorithm: 'aes-256-gcm',
+      iv: iv.toString('base64'),
+      authTag: cipher.getAuthTag().toString('base64'),
+      ciphertext: ciphertext.toString('base64'),
+    };
+  }
+
+  /** @keyword-en mcp-secret-recovery, hash-verification */
+  private revealSecret(key: TenantMcpKey): string | null {
+    const envelope = key.secretEnvelope;
+    if (!envelope) return null;
+    try {
+      let secret: string;
+      if (envelope.algorithm === 'plain') secret = envelope.value;
+      else {
+        const encryptionKey = this.secretEncryptionKey();
+        if (!encryptionKey) return null;
+        const decipher = createDecipheriv(
+          'aes-256-gcm',
+          encryptionKey,
+          Buffer.from(envelope.iv, 'base64'),
+        );
+        decipher.setAAD(
+          Buffer.from(
+            `${key.tenantId}:${key.endpointId}:${key._id.toHexString()}`,
+          ),
+        );
+        decipher.setAuthTag(Buffer.from(envelope.authTag, 'base64'));
+        secret = Buffer.concat([
+          decipher.update(Buffer.from(envelope.ciphertext, 'base64')),
+          decipher.final(),
+        ]).toString('utf8');
+      }
+      return createHash('sha256').update(secret).digest('hex') ===
+        key.secretHash
+        ? secret
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** @keyword-en mcp-key-view, secret-redaction */
   private keyView(key: TenantMcpKey) {
     return {
@@ -98,6 +183,7 @@ export class TenantMcpService implements OnModuleInit {
       endpointId: key.endpointId,
       name: key.name,
       prefix: key.prefix,
+      secret: this.revealSecret(key),
       permissions: key.permissions,
       enabled: key.enabled,
       expiresAt: key.expiresAt,
@@ -208,7 +294,7 @@ export class TenantMcpService implements OnModuleInit {
     return date;
   }
 
-  /** @keyword-en mcp-create-key, one-time-secret */
+  /** @keyword-en mcp-create-key, recoverable-secret */
   async createKey(
     tenantId: string,
     endpointId: string,
@@ -234,7 +320,33 @@ export class TenantMcpService implements OnModuleInit {
       createdAt: now,
       updatedAt: now,
     };
+    key.secretEnvelope = this.sealSecret(secret, key);
     await this.keys.insertOne(key);
+    return { key: this.keyView(key), secret };
+  }
+
+  /** @keyword-en mcp-rotate-key, recoverable-secret */
+  async rotateKey(tenantId: string, endpointId: string, keyId: string) {
+    await this.requireEndpoint(tenantId, endpointId);
+    const _id = this.objectId(keyId);
+    const secret = `tmcp_${randomBytes(32).toString('base64url')}`;
+    const key = await this.keys.findOneAndUpdate(
+      { _id, tenantId, endpointId },
+      {
+        $set: {
+          secretHash: createHash('sha256').update(secret).digest('hex'),
+          prefix: secret.slice(0, 13),
+          secretEnvelope: this.sealSecret(secret, {
+            _id,
+            tenantId,
+            endpointId,
+          }),
+          updatedAt: new Date(),
+        },
+      },
+      { returnDocument: 'after' },
+    );
+    if (!key) throw new NotFoundException('MCP_KEY_NOT_FOUND');
     return { key: this.keyView(key), secret };
   }
 
@@ -331,8 +443,15 @@ export class TenantMcpService implements OnModuleInit {
     )
       throw new UnauthorizedException('INVALID_MCP_CREDENTIALS');
     await this.keys.updateOne(
-      { _id: key._id },
-      { $set: { lastUsedAt: new Date() } },
+      { _id: key._id, secretHash: key.secretHash },
+      {
+        $set: {
+          lastUsedAt: new Date(),
+          ...(this.revealSecret(key)
+            ? {}
+            : { secretEnvelope: this.sealSecret(secret, key) }),
+        },
+      },
     );
     return {
       tenantId: key.tenantId,

@@ -181,8 +181,10 @@ export interface DouyinStoreVisitSegment {
   sceneImageId?: number;
   /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
   action?: string;
-  /** @description 镜头类型：`presenter` 人物出镜对口型，缺省为门店空镜 */
-  shot?: 'presenter' | 'broll';
+  /** @description 镜头用途：presenter 人物讲解、experience 人物体验配画外音，缺省为实景展示 */
+  shot?: 'presenter' | 'broll' | 'experience';
+  /** @description 画面来源：原图直接出片、多图直接参考或主动合成首帧；旧人物讲解段缺省沿用合成首帧。 */
+  visualSource?: 'original' | 'references' | 'generated';
   /** @description 人物出镜段的首帧（人物在这一段场景里），服务端生成写入 */
   keyframe?: DouyinMediaReference;
   /** @description 本段最近一次生成成功的视频（空镜或对口型） */

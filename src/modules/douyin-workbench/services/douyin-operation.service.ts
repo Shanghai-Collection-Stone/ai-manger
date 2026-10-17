@@ -43,6 +43,7 @@ import {
 } from '../../pixmax/services/pixmax-video-params.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
 import { toStoreVisitLipSyncView } from './douyin-store-visit-lip-sync.js';
+import { supportsStoreVisitReferences } from './douyin-store-visit-continuity.js';
 
 type DouyinOperation = 'generate' | 'publish' | 'crawl';
 type DouyinScope = { tenantId?: string; userId: string };
@@ -359,6 +360,8 @@ export class DouyinOperationService {
           postLipSync?: boolean;
           /** 探店人物对口型节点是 wan2.7-i2v 时为 true：配音作驱动音频一次生成画面与口型，人物段配音 2 秒到型号最长秒数 */
           audioDriven?: boolean;
+          /** 人物与实景可分开作为多图参考，直接生成视频。 */
+          multiReference?: boolean;
           error?: string;
         }
       >;
@@ -374,6 +377,7 @@ export class DouyinOperationService {
         const base = {
           model: runtime.model,
           providerName: runtime.providerName,
+          multiReference: supportsStoreVisitReferences(runtime.model),
         };
         if (nodeKey === WORKFLOW_NODES.douyinWorkbench.voiceClone) {
           if (

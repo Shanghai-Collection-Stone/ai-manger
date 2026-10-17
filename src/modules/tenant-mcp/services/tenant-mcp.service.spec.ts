@@ -4,7 +4,7 @@ import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 import { TenantMcpService } from './tenant-mcp.service.js';
 
 /** @keyword-en mcp-test-fixture, key-management */
-function fixture() {
+function fixture(settings: Record<string, string> = {}) {
   const tenantId = new ObjectId().toHexString();
   const endpointId = new ObjectId().toHexString();
   const owner = {
@@ -15,18 +15,18 @@ function fixture() {
     role: 'tenant_admin',
   } as AdminUserEntity;
   const endpoints = {
-    findOne: jest
-      .fn()
-      .mockResolvedValue({
-        _id: new ObjectId(endpointId),
-        tenantId,
-        enabled: true,
-      }),
+    find: jest.fn(),
+    findOne: jest.fn().mockResolvedValue({
+      _id: new ObjectId(endpointId),
+      tenantId,
+      enabled: true,
+    }),
     insertOne: jest.fn(),
     deleteOne: jest.fn(),
     updateOne: jest.fn(),
   };
   const keys = {
+    find: jest.fn(),
     insertOne: jest.fn(),
     findOne: jest.fn(),
     findOneAndUpdate: jest
@@ -45,11 +45,23 @@ function fixture() {
           ? keys
           : users,
   } as unknown as Db;
-  const service = new TenantMcpService(
+  const config = new ConfigService({
+    APP_URL: 'https://example.test',
+    TENANT_MCP_ENCRYPTION_KEY: 'test-only-mcp-encryption-key',
+    ...settings,
+  });
+  const service = new TenantMcpService(db, config);
+  return {
+    service,
+    tenantId,
+    endpointId,
+    owner,
+    endpoints,
+    keys,
+    users,
     db,
-    new ConfigService({ APP_URL: 'https://example.test' }),
-  );
-  return { service, tenantId, endpointId, owner, endpoints, keys, users };
+    config,
+  };
 }
 
 describe('租户 MCP 密钥和隔离', () => {
@@ -67,7 +79,7 @@ describe('租户 MCP 密钥和隔离', () => {
     ).toThrow('MCP_TENANT_REQUIRED');
   });
 
-  it('生成 256 位随机密钥，数据库与公开视图均不保存明文', async () => {
+  it('生成随机密钥并加密存储，后台视图可恢复完整密钥且不泄露哈希和信封', async () => {
     const { service, tenantId, endpointId, owner, keys } = fixture();
     const result = await service.createKey(tenantId, endpointId, owner, {
       name: 'writer',
@@ -78,6 +90,9 @@ describe('租户 MCP 密钥和隔离', () => {
     expect(document.secretHash).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(document)).not.toContain(result.secret);
     expect(result.key).not.toHaveProperty('secretHash');
+    expect(result.key).not.toHaveProperty('secretEnvelope');
+    expect(result.key.secret).toBe(result.secret);
+    expect(document.secretEnvelope.algorithm).toBe('aes-256-gcm');
     expect(result.key.permissions).toEqual(['article_publish']);
   });
 
@@ -197,6 +212,179 @@ describe('租户 MCP 密钥和隔离', () => {
     expect(f.endpoints.updateOne.mock.calls[0][1].$set).toEqual({
       enabled: false,
       updatedAt: expect.any(Date),
+    });
+  });
+
+  it('模拟刷新后从持久化记录恢复密钥，列表仍受租户过滤', async () => {
+    const f = fixture();
+    const created = await f.service.createKey(
+      f.tenantId,
+      f.endpointId,
+      f.owner,
+      { name: 'reader', permissions: ['library_list'] },
+    );
+    const stored = f.keys.insertOne.mock.calls[0][0];
+    f.endpoints.find.mockReturnValue({
+      sort: () => ({
+        toArray: async () => [
+          {
+            _id: new ObjectId(f.endpointId),
+            tenantId: f.tenantId,
+            name: 'link',
+            enabled: true,
+          },
+        ],
+      }),
+    });
+    f.keys.find.mockReturnValue({
+      sort: () => ({ toArray: async () => [stored] }),
+    });
+    const reloaded = new TenantMcpService(f.db, f.config);
+    const result = await reloaded.list(f.tenantId);
+    expect(result.endpoints[0].keys[0].secret).toBe(created.secret);
+    expect(result.endpoints[0].keys[0]).not.toHaveProperty('secretEnvelope');
+    expect(f.keys.find).toHaveBeenCalledWith({ tenantId: f.tenantId });
+    expect(f.endpoints.find).toHaveBeenCalledWith({ tenantId: f.tenantId });
+  });
+
+  it('没有加密配置时沿用可恢复信封，后台刷新仍可复制密钥', async () => {
+    const f = fixture({
+      TENANT_MCP_ENCRYPTION_KEY: '',
+      BROWSER_AUTH_ENCRYPTION_KEY: '',
+      ADMIN_JWT_SECRET: '',
+    });
+    const created = await f.service.createKey(
+      f.tenantId,
+      f.endpointId,
+      f.owner,
+      { name: 'local', permissions: [] },
+    );
+    expect(f.keys.insertOne.mock.calls[0][0].secretEnvelope).toEqual({
+      algorithm: 'plain',
+      value: created.secret,
+    });
+    expect(created.key.secret).toBe(created.secret);
+  });
+
+  it('旧哈希密钥成功认证后补存可恢复值，运行时认证结果不暴露密钥', async () => {
+    const f = fixture();
+    const created = await f.service.createKey(
+      f.tenantId,
+      f.endpointId,
+      f.owner,
+      { name: 'legacy', permissions: [] },
+    );
+    const stored = { ...f.keys.insertOne.mock.calls[0][0] };
+    delete stored.secretEnvelope;
+    f.keys.findOne.mockResolvedValue(stored);
+    const principal = await f.service.authenticate(
+      f.endpointId,
+      `Bearer ${created.secret}`,
+    );
+    expect(JSON.stringify(principal)).not.toContain(created.secret);
+    const update = f.keys.updateOne.mock.calls[0];
+    expect(update[0]).toEqual({
+      _id: stored._id,
+      secretHash: stored.secretHash,
+    });
+    expect(update[1].$set.secretEnvelope.algorithm).toBe('aes-256-gcm');
+    f.keys.find.mockReturnValue({
+      sort: () => ({
+        toArray: async () => [
+          { ...stored, secretEnvelope: update[1].$set.secretEnvelope },
+        ],
+      }),
+    });
+    f.endpoints.find.mockReturnValue({
+      sort: () => ({
+        toArray: async () => [
+          { _id: new ObjectId(f.endpointId), tenantId: f.tenantId },
+        ],
+      }),
+    });
+    expect((await f.service.list(f.tenantId)).endpoints[0].keys[0].secret).toBe(
+      created.secret,
+    );
+  });
+
+  it('信封被复制到其他密钥或内容被篡改时不会显示错误的明文', async () => {
+    const f = fixture();
+    await f.service.createKey(f.tenantId, f.endpointId, f.owner, {
+      name: 'secure',
+      permissions: [],
+    });
+    const stored = f.keys.insertOne.mock.calls[0][0];
+    f.endpoints.find.mockReturnValue({
+      sort: () => ({
+        toArray: async () => [
+          { _id: new ObjectId(f.endpointId), tenantId: f.tenantId },
+        ],
+      }),
+    });
+    f.keys.find.mockReturnValue({
+      sort: () => ({
+        toArray: async () => [{ ...stored, _id: new ObjectId() }],
+      }),
+    });
+    expect(
+      (await f.service.list(f.tenantId)).endpoints[0].keys[0].secret,
+    ).toBeNull();
+    f.keys.find.mockReturnValue({
+      sort: () => ({
+        toArray: async () => [
+          {
+            ...stored,
+            secretEnvelope: {
+              ...stored.secretEnvelope,
+              authTag: Buffer.alloc(16).toString('base64'),
+            },
+          },
+        ],
+      }),
+    });
+    expect(
+      (await f.service.list(f.tenantId)).endpoints[0].keys[0].secret,
+    ).toBeNull();
+  });
+
+  it('手动重新生成保存完整新密钥，保留权限和状态并使旧密钥失效', async () => {
+    const f = fixture();
+    const original = await f.service.createKey(
+      f.tenantId,
+      f.endpointId,
+      f.owner,
+      { name: 'rotate', permissions: ['library_list'] },
+    );
+    const stored = f.keys.insertOne.mock.calls[0][0];
+    f.keys.findOneAndUpdate.mockImplementation(async (_filter, update) => ({
+      ...stored,
+      ...update.$set,
+    }));
+    const rotated = await f.service.rotateKey(
+      f.tenantId,
+      f.endpointId,
+      stored._id.toHexString(),
+    );
+    expect(rotated.secret).not.toBe(original.secret);
+    expect(rotated.key.secret).toBe(rotated.secret);
+    expect(rotated.key.permissions).toEqual(['library_list']);
+    expect(rotated.key.enabled).toBe(true);
+    const newHash = f.keys.findOneAndUpdate.mock.calls[0][1].$set.secretHash;
+    f.keys.findOne.mockImplementation(async (filter) =>
+      filter.secretHash === newHash
+        ? { ...stored, ...f.keys.findOneAndUpdate.mock.calls[0][1].$set }
+        : null,
+    );
+    await expect(
+      f.service.authenticate(f.endpointId, `Bearer ${original.secret}`),
+    ).rejects.toThrow('INVALID_MCP_CREDENTIALS');
+    await expect(
+      f.service.authenticate(f.endpointId, `Bearer ${rotated.secret}`),
+    ).resolves.toMatchObject({ tenantId: f.tenantId });
+    expect(f.keys.findOneAndUpdate.mock.calls[0][0]).toEqual({
+      _id: stored._id,
+      tenantId: f.tenantId,
+      endpointId: f.endpointId,
     });
   });
 });

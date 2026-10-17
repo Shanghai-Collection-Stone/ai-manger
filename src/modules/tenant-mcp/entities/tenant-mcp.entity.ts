@@ -1,5 +1,15 @@
 import type { ObjectId } from 'mongodb';
 
+/** @keyword-en mcp-secret-envelope, recoverable-secret */
+export type TenantMcpSecretEnvelope =
+  | { algorithm: 'plain'; value: string }
+  | {
+      algorithm: 'aes-256-gcm';
+      iv: string;
+      authTag: string;
+      ciphertext: string;
+    };
+
 /** @keyword-en mcp-endpoint, tenant-isolation */
 export interface TenantMcpEndpoint {
   _id: ObjectId;
@@ -18,6 +28,7 @@ export interface TenantMcpKey {
   endpointId: string;
   name: string;
   secretHash: string;
+  secretEnvelope?: TenantMcpSecretEnvelope;
   prefix: string;
   permissions: string[];
   enabled: boolean;

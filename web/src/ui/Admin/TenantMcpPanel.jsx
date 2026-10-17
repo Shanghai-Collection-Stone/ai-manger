@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { adminApi } from './adminApi';
+import { buildTenantMcpPrompt } from './tenantMcpPrompt';
 
 /** @keyword-en mcp-permission-picker, tool-permission */
 function PermissionPicker({ tools, selected, onChange, disabled }) {
@@ -34,92 +35,146 @@ function PermissionPicker({ tools, selected, onChange, disabled }) {
 }
 
 /** @keyword-en mcp-key-editor, key-management */
-function KeyEditor({ item, tools, busy, onSave, onDelete }) {
+function KeyEditor({
+  item,
+  tools,
+  busy,
+  onSave,
+  onDelete,
+  onCopyPrompt,
+  onCopySecret,
+  onRotate,
+}) {
   const [permissions, setPermissions] = useState(item.permissions);
   const [name, setName] = useState(item.name);
   const [expiry, setExpiry] = useState(
     item.expiresAt ? new Date(item.expiresAt).toISOString().slice(0, 16) : '',
   );
   return (
-    <details className="rounded border border-slate-200 bg-white p-3">
-      <summary className="cursor-pointer text-sm">
+    <div className="rounded border border-slate-200 bg-white p-3">
+      <div className="text-sm">
         {item.name} · {item.prefix}… · {item.enabled ? '启用' : '停用'} ·{' '}
         {item.permissions.length} 项权限
         {item.expiresAt
           ? ` · 到期 ${new Date(item.expiresAt).toLocaleString()}`
           : ''}
-      </summary>
-      <div className="mt-3 space-y-3">
-        <input
-          aria-label="密钥名称"
-          className="rounded border p-2 text-sm"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          maxLength={100}
-        />
-        <label className="ml-3 text-xs">
-          过期时间（UTC，留空永久）{' '}
-          <input
-            type="datetime-local"
-            value={expiry}
-            onChange={(event) => setExpiry(event.target.value)}
-            className="rounded border p-2"
-          />
-        </label>
-        <PermissionPicker
-          tools={tools}
-          selected={permissions}
-          onChange={setPermissions}
-          disabled={busy}
-        />
-        <div className="flex gap-3 text-xs">
-          <button
-            disabled={busy || !name.trim()}
-            onClick={() =>
-              onSave(item.id, {
-                name: name.trim(),
-                permissions,
-                expiresAt: expiry ? `${expiry}:00.000Z` : null,
-              })
-            }
-            className="rounded bg-slate-900 px-3 py-2 text-white"
-          >
-            保存名称与权限
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => onSave(item.id, { enabled: !item.enabled })}
-          >
-            {item.enabled ? '停用密钥' : '启用密钥'}
-          </button>
-          <button
-            disabled={busy}
-            onClick={() => {
-              if (
-                window.confirm(
-                  `撤销密钥「${item.name}」？此操作将立即禁止后续调用。`,
-                )
-              )
-                onDelete(item.id);
-            }}
-            className="text-red-600"
-          >
-            撤销密钥
-          </button>
-        </div>
-        <p className="text-xs text-slate-400">
-          最近调用：
-          {item.lastUsedAt
-            ? new Date(item.lastUsedAt).toLocaleString()
-            : '尚无调用'}
-        </p>
       </div>
-    </details>
+      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+        <code className="break-all select-all">
+          {item.secret ||
+            '此密钥暂时无法显示，可成功调用一次后刷新，或重新生成。'}
+        </code>
+        <button
+          disabled={busy || !item.secret}
+          onClick={onCopySecret}
+          className="text-blue-600"
+        >
+          复制密钥
+        </button>
+        <button
+          disabled={busy || !item.secret}
+          onClick={onCopyPrompt}
+          className="text-blue-600"
+        >
+          复制接入提示词（含密钥）
+        </button>
+      </div>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs text-slate-500">
+          编辑权限和有效期
+        </summary>
+        <div className="mt-3 space-y-3">
+          <input
+            aria-label="密钥名称"
+            className="rounded border p-2 text-sm"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={100}
+          />
+          <label className="ml-3 text-xs">
+            过期时间（UTC，留空永久）{' '}
+            <input
+              type="datetime-local"
+              value={expiry}
+              onChange={(event) => setExpiry(event.target.value)}
+              className="rounded border p-2"
+            />
+          </label>
+          <PermissionPicker
+            tools={tools}
+            selected={permissions}
+            onChange={setPermissions}
+            disabled={busy}
+          />
+          <div className="flex gap-3 text-xs">
+            <button
+              disabled={busy}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `重新生成「${item.name}」的密钥后，旧密钥立即失效，需要更新已连接的客户端。继续？`,
+                  )
+                )
+                  onRotate();
+              }}
+            >
+              重新生成密钥
+            </button>
+            <button
+              disabled={busy || !name.trim()}
+              onClick={() =>
+                onSave(item.id, {
+                  name: name.trim(),
+                  permissions,
+                  expiresAt: expiry ? `${expiry}:00.000Z` : null,
+                })
+              }
+              className="rounded bg-slate-900 px-3 py-2 text-white"
+            >
+              保存名称与权限
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => onSave(item.id, { enabled: !item.enabled })}
+            >
+              {item.enabled ? '停用密钥' : '启用密钥'}
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `撤销密钥「${item.name}」？此操作将立即禁止后续调用。`,
+                  )
+                )
+                  onDelete(item.id);
+              }}
+              className="text-red-600"
+            >
+              撤销密钥
+            </button>
+          </div>
+          <p className="text-xs text-slate-400">
+            最近调用：
+            {item.lastUsedAt
+              ? new Date(item.lastUsedAt).toLocaleString()
+              : '尚无调用'}
+          </p>
+        </div>
+      </details>
+    </div>
   );
 }
 
 /** @keyword-en mcp-endpoint-editor, key-management */
-function EndpointEditor({ endpoint, tools, busy, mutate, onSecret }) {
+function EndpointEditor({
+  endpoint,
+  tools,
+  busy,
+  mutate,
+  onSecret,
+  onCopyPrompt,
+}) {
   const [name, setName] = useState(endpoint.name);
   const [keyName, setKeyName] = useState('');
   const [permissions, setPermissions] = useState([]);
@@ -129,7 +184,7 @@ function EndpointEditor({ endpoint, tools, busy, mutate, onSecret }) {
     ? endpoint.url
     : `${window.location.origin}${endpoint.path}`;
 
-  /** @keyword-en mcp-create-key, one-time-secret */
+  /** @keyword-en mcp-create-key, recoverable-secret */
   async function createKey(event) {
     event.preventDefault();
     const result = await mutate(`${path}/keys`, 'POST', {
@@ -138,7 +193,11 @@ function EndpointEditor({ endpoint, tools, busy, mutate, onSecret }) {
       ...(expiresAt ? { expiresAt: new Date(expiresAt).toISOString() } : {}),
     });
     if (result) {
-      onSecret({ secret: result.secret, url });
+      onSecret({
+        secret: result.secret,
+        url,
+        permissions: result.key.permissions,
+      });
       setKeyName('');
       setPermissions([]);
     }
@@ -202,6 +261,17 @@ function EndpointEditor({ endpoint, tools, busy, mutate, onSecret }) {
             busy={busy}
             onSave={(id, data) => mutate(`${path}/keys/${id}`, 'PATCH', data)}
             onDelete={(id) => mutate(`${path}/keys/${id}`, 'DELETE')}
+            onCopyPrompt={() =>
+              onCopyPrompt({
+                url,
+                secret: item.secret,
+                permissions: item.permissions,
+              })
+            }
+            onCopySecret={() =>
+              onCopyPrompt({ secretOnly: true, secret: item.secret })
+            }
+            onRotate={() => mutate(`${path}/keys/${item.id}/rotate`, 'POST')}
           />
         ))}
       </div>
@@ -303,11 +373,12 @@ export default function TenantMcpPanel({
         { method, ...(body ? { body: JSON.stringify(body) } : {}) },
         tenantId,
       );
-      // 先把明文交回创建方，后续刷新失败也不会丢失唯一一次展示机会。
+      // 先展示创建或重新生成的密钥，刷新失败时仍可复制。
       if (result?.secret)
         setSecret({
           secret: result.secret,
           url: data.endpoints.find((item) => path.includes(item.id))?.url || '',
+          permissions: result.key.permissions,
         });
       try {
         await reload();
@@ -328,6 +399,25 @@ export default function TenantMcpPanel({
   async function createEndpoint(event) {
     event.preventDefault();
     if (await mutate('/endpoints', 'POST', { name: name.trim() })) setName('');
+  }
+
+  /** @keyword-cn 复制接入提示词, 工具说明
+   * @keyword-en copy-mcp-prompt, tool-description */
+  async function copyPrompt(connection) {
+    try {
+      await navigator.clipboard.writeText(
+        connection.secretOnly
+          ? connection.secret
+          : buildTenantMcpPrompt({ ...connection, tools: data.tools }),
+      );
+      onNotice(
+        connection.secretOnly
+          ? 'MCP 密钥已复制'
+          : 'MCP 接入提示词已复制，包含完整密钥、连接步骤、已授权工具说明和排障信息',
+      );
+    } catch {
+      onError('复制失败，请检查浏览器剪贴板权限后重试');
+    }
   }
 
   return (
@@ -360,13 +450,21 @@ export default function TenantMcpPanel({
       ) : null}
       {secret ? (
         <div className="space-y-2 rounded border border-amber-300 bg-amber-50 p-4 text-sm">
-          <p className="font-medium">密钥仅展示这一次，请妥善保存。</p>
+          <p className="font-medium">
+            密钥已保存，可随时在下方查看并复制接入提示词。
+          </p>
           <code className="block break-all select-all">{secret.secret}</code>
           <button
             onClick={() => navigator.clipboard.writeText(secret.secret)}
             className="mr-4 text-blue-600"
           >
             复制密钥
+          </button>
+          <button
+            onClick={() => copyPrompt(secret)}
+            className="mr-4 text-blue-600"
+          >
+            复制接入提示词（含密钥）
           </button>
           <button
             onClick={() =>
@@ -389,7 +487,7 @@ export default function TenantMcpPanel({
           >
             复制客户端配置
           </button>
-          <button onClick={() => setSecret(null)}>已保存，关闭</button>
+          <button onClick={() => setSecret(null)}>关闭提示</button>
         </div>
       ) : null}
       {ready ? (
@@ -430,6 +528,7 @@ export default function TenantMcpPanel({
                 busy={busy}
                 mutate={mutate}
                 onSecret={setSecret}
+                onCopyPrompt={copyPrompt}
               />
             ))
           ) : (

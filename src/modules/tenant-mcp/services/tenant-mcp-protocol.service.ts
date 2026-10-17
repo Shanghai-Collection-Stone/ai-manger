@@ -3,6 +3,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ErrorCode,
+  McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { Response } from 'express';
@@ -26,7 +28,11 @@ export class TenantMcpProtocolService {
   createServer(principal: TenantMcpPrincipal, authorization: string): Server {
     const server = new Server(
       { name: 'tenant-article-mcp', version: '1.0.0' },
-      { capabilities: { tools: {} } },
+      {
+        capabilities: { tools: {} },
+        instructions:
+          '使用 tools/list 获取当前密钥已授权工具的 description 和 inputSchema，再通过 tools/call 调用。工具列表为空时需要管理员为此密钥分配工具权限。文章发布表示存入文章库；异步采集使用返回的 taskId 查询结果。',
+      },
     );
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       const current = await this.service.authenticate(
@@ -67,6 +73,15 @@ export class TenantMcpProtocolService {
           principal.endpointId,
           authorization,
         );
+        if (
+          !Object.hasOwn(TENANT_MCP_TOOLS, request.params.name) ||
+          !current.permissions.includes(request.params.name)
+        ) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            'Unknown or unavailable tool',
+          );
+        }
         const result = await this.tools.execute(
           current,
           request.params.name,
@@ -78,6 +93,7 @@ export class TenantMcpProtocolService {
           structuredContent: JSON.parse(serialized) as Record<string, unknown>,
         };
       } catch (error) {
+        if (error instanceof McpError) throw error;
         const message =
           error instanceof ZodError
             ? 'INVALID_TOOL_ARGUMENTS'

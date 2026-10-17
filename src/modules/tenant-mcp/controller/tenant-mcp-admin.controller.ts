@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -47,6 +48,7 @@ export class TenantMcpAdminController {
 
   /** @keyword-en mcp-list, key-management */
   @Get()
+  @Header('Cache-Control', 'no-store')
   @RequirePermission('read', 'TenantMcp')
   list(@Req() req: AdminRequest, @Query('tenantId') tenantId?: string) {
     return this.service.list(this.service.scope(this.user(req), tenantId));
@@ -97,8 +99,9 @@ export class TenantMcpAdminController {
     );
   }
 
-  /** @keyword-en mcp-create-key, one-time-secret */
+  /** @keyword-en mcp-create-key, recoverable-secret */
   @Post('endpoints/:endpointId/keys')
+  @Header('Cache-Control', 'no-store')
   @RequirePermission('create', 'TenantMcp')
   createKey(
     @Req() req: AdminRequest,
@@ -116,6 +119,7 @@ export class TenantMcpAdminController {
 
   /** @keyword-en mcp-update-key, tool-permission */
   @Patch('endpoints/:endpointId/keys/:keyId')
+  @Header('Cache-Control', 'no-store')
   @RequirePermission('update', 'TenantMcp')
   updateKey(
     @Req() req: AdminRequest,
@@ -142,6 +146,23 @@ export class TenantMcpAdminController {
     @Query('tenantId') tenantId?: string,
   ) {
     return this.service.deleteKey(
+      this.service.scope(this.user(req), tenantId),
+      endpointId,
+      keyId,
+    );
+  }
+
+  /** @keyword-en mcp-rotate-key, recoverable-secret */
+  @Post('endpoints/:endpointId/keys/:keyId/rotate')
+  @Header('Cache-Control', 'no-store')
+  @RequirePermission('update', 'TenantMcp')
+  rotateKey(
+    @Req() req: AdminRequest,
+    @Param('endpointId') endpointId: string,
+    @Param('keyId') keyId: string,
+    @Query('tenantId') tenantId?: string,
+  ) {
+    return this.service.rotateKey(
       this.service.scope(this.user(req), tenantId),
       endpointId,
       keyId,

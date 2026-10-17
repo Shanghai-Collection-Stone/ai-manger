@@ -6,6 +6,7 @@ import {
   clearPresenterKeyframes,
   DouyinWorkbenchRepositoryService,
   mergeStoreVisitSegments,
+  normalizeStoreVisitSegments,
 } from './douyin-workbench-repository.service.js';
 import {
   buildStoreVisitSceneBrief,
@@ -14,6 +15,9 @@ import {
 import {
   buildStoreVisitContinuityBrief,
   isStoreVisitSceneStart,
+  isStoreVisitVisualStart,
+  storeVisitVisualSource,
+  supportsStoreVisitReferences,
   parseStoreVisitContinuityPlan,
 } from './douyin-store-visit-continuity.js';
 import {
@@ -320,7 +324,8 @@ describe('探店真实尾帧连续生成', () => {
         segment: segments[1],
         sceneChanged: false,
       }),
-    ).toContain('人物自然入画');
+    ).toContain('不生成让人物自动进出画面的过渡');
+    expect(isStoreVisitVisualStart(segments, 1)).toBe(true);
     expect(() =>
       parseStoreVisitContinuityPlan('{"videoPrompt":"重开镜"}'),
     ).toThrow('缺少');
@@ -354,6 +359,33 @@ describe('探店真实尾帧连续生成', () => {
     expect(payload.content[0].text).toContain('严格从尾帧的吧台左侧画面接续');
     expect(payload.generate_audio).toBe(false);
     expect(service.billing.chargeService).toHaveBeenCalledTimes(1);
+  });
+  it('更换实景图时无需截尾帧或视觉规划，直接使用新图，不生成空间过渡', async () => {
+    const { service, row, topic } = buildContinuityService();
+    topic.storeVisit.sceneImages.push({
+      ...topic.storeVisit.sceneImages[0],
+      id: 18,
+      url: 'https://cdn/food.jpg',
+    });
+    topic.storeVisit.segments[1].sceneImageId = 18;
+    row.request.sceneImageId = 18;
+    expect(
+      (await service.readContinuationInput(row.id, scope)).requiresTailFrame,
+    ).toBe(false);
+    await service.continueOperation(row.id, { previousVideoId: 41 }, scope);
+    expect(service.repository.requireImage).not.toHaveBeenCalled();
+    expect(service.agentService.runWithMessages).not.toHaveBeenCalled();
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
+    expect(payload.content[1].image_url.url).toBe('https://cdn/food.jpg');
+    expect(payload.content[0].text).toContain('单段只有一个连续镜头');
+  });
+  it('同镜头续段缺少尾帧时在认领和扣费前拒绝', async () => {
+    const { service, row } = buildContinuityService();
+    await expect(
+      service.continueOperation(row.id, { previousVideoId: 41 }, scope),
+    ).rejects.toThrow('必须提供');
+    expect(service.operations.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(service.billing.chargeService).not.toHaveBeenCalled();
   });
   it('重复续段只认领一次，不重复扣费和请求供应商', async () => {
     const { service } = buildContinuityService();
@@ -964,7 +996,7 @@ describe('独立探店制作流程（画外音）', () => {
       role: 'first_frame',
       image_url: { url: 'https://cdn/scene.jpg' },
     });
-    expect(payload.content[0].text).toContain('不要出现任何文字');
+    expect(payload.content[0].text).toContain('保留原图招牌');
     const inserted = service.operations.insertOne.mock.calls[0][0];
     expect(inserted).toMatchObject({
       provider: 'shuyan',
@@ -1041,10 +1073,12 @@ describe('独立探店制作流程（画外音）', () => {
     const request = agent.runWithMessages.mock.calls[0][0];
     expect(request.config.system).toContain('画外音');
     expect(request.messages[0].content).toContain('木质吧台，招牌拿铁');
-    expect(request.messages[0].content).toContain('场景1：门头招牌（标签：门头）');
+    expect(request.messages[0].content).toContain(
+      '场景1：门头招牌（标签：门头）',
+    );
     expect(request.messages[0].content).toContain('语气像朋友推荐');
   });
-  it('场景没变时保留人物首帧；改了镜头类型时作废这段成片但首帧还在', () => {
+  it('改变镜头用途后不沿用不匹配的人物首帧，场景变化也作废首帧', () => {
     const keyframe = {
       type: 'image' as const,
       id: 91,
@@ -1074,9 +1108,242 @@ describe('独立探店制作流程（画外音）', () => {
       id: 'a',
       lines: '开场',
       sceneImageId: 17,
-      keyframe,
     });
     expect(merged[1]).toEqual({ id: 'b', lines: '吧台', sceneImageId: 18 });
+  });
+
+  it('人物体验直接用原图，无需人物参考照或首帧，不进入对口型通道', async () => {
+    const topic = {
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        segments: [
+          {
+            ...readyTopic.storeVisit.segments[0],
+            shot: 'experience',
+            visualSource: 'original',
+            action: '拿起图中的杯子轻尝一口',
+          },
+        ],
+      },
+    };
+    const service = buildVoiceoverService(topic);
+    await service.start(2, scope);
+    const [url, init] = service.fetchShuyan.mock.calls[0];
+    const payload = JSON.parse(init.body);
+    expect(url).toContain('/seedance/');
+    expect(payload.content[1]).toMatchObject({
+      role: 'first_frame',
+      image_url: { url: 'https://cdn/scene.jpg' },
+    });
+    expect(payload.content[0].text).toContain('拿起图中的杯子轻尝一口');
+    expect(payload.content[0].text).toContain('不说话、不对口型');
+    expect(payload.content[0].text).toContain('如果没有人物或手部，不生成新人');
+    expect(
+      service.workflowModels.resolveNodeRuntime.mock.calls.map(
+        (call: string[]) => call[1],
+      ),
+    ).not.toContain('store-visit-avatar');
+    expect(service.operations.insertOne.mock.calls[0][0].request).toMatchObject(
+      { shot: 'experience', visualSource: 'original' },
+    );
+  });
+  it('体验与画面来源通过嵌套校验并持久化，拒绝未知来源和客户端输出字段', async () => {
+    const segment = {
+      id: 'exp',
+      lines: '重点介绍图中的咖啡',
+      sceneImageId: 17,
+      shot: 'experience' as const,
+      visualSource: 'references' as const,
+      action: '轻拿杯子',
+    };
+    const dto = plainToInstance(DouyinStoreVisitDto, { segments: [segment] });
+    expect(
+      await validate(dto, { whitelist: true, forbidNonWhitelisted: true }),
+    ).toHaveLength(0);
+    expect(normalizeStoreVisitSegments(dto.segments, [17])).toEqual([segment]);
+    const invalid = plainToInstance(DouyinStoreVisitDto, {
+      segments: [{ ...segment, visualSource: 'magic', keyframe: { id: 99 } }],
+    });
+    expect(
+      (await validate(invalid, { whitelist: true, forbidNonWhitelisted: true }))
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('人物与实景分开给图，直接以多图参考出视频，不调用生图', async () => {
+    const topic = {
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        faceImage: {
+          type: 'image',
+          id: 11,
+          name: '人物',
+          url: 'https://cdn/person.jpg',
+        },
+        segments: [
+          {
+            ...readyTopic.storeVisit.segments[0],
+            shot: 'experience',
+            visualSource: 'references',
+            action: '拿起图中的杯子',
+          },
+        ],
+      },
+    };
+    const service = buildVoiceoverService(topic);
+    await service.start(2, scope);
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
+    expect(payload.content.slice(1)).toEqual([
+      {
+        type: 'image_url',
+        role: 'reference_image',
+        image_url: { url: 'https://cdn/scene.jpg' },
+      },
+      {
+        type: 'image_url',
+        role: 'reference_image',
+        image_url: { url: 'https://cdn/person.jpg' },
+      },
+    ]);
+    expect(payload.ratio).toBe('9:16');
+    expect(payload.content[0].text).toContain('不复制人物照的背景');
+    expect(service.billing.chargeService).toHaveBeenCalledTimes(1);
+    await expect(
+      service.generateKeyframe(2, 'seg-1', '', scope),
+    ).rejects.toThrow('无需生图');
+  });
+  it('主动合成也必须绑定真实场景，不能凭描述补出新空间', async () => {
+    const topic = {
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        faceImage: {
+          type: 'image',
+          id: 11,
+          name: '人物',
+          url: 'https://cdn/person.jpg',
+        },
+        segments: [
+          {
+            ...readyTopic.storeVisit.segments[0],
+            shot: 'experience',
+            visualSource: 'generated',
+            sceneImageId: 999,
+          },
+        ],
+      },
+    };
+    const service = buildVoiceoverService(topic);
+    service.agentService = { sendPrompt: jest.fn() };
+    await expect(
+      service.generateKeyframe(2, 'seg-1', '', scope),
+    ).rejects.toThrow('选择真实场景图');
+    expect(service.agentService.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('缺人物照或型号不支持分图参考时在扣费前拒绝，不暗中合成图片', async () => {
+    const topic = {
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        segments: [
+          {
+            ...readyTopic.storeVisit.segments[0],
+            shot: 'experience',
+            visualSource: 'references',
+          },
+        ],
+      },
+    };
+    const service = buildVoiceoverService(topic);
+    await expect(service.start(2, scope)).rejects.toThrow('选好出镜人物');
+    expect(service.billing.chargeService).not.toHaveBeenCalled();
+    const unsupported = buildVoiceoverService({
+      ...topic,
+      storeVisit: {
+        ...topic.storeVisit,
+        faceImage: {
+          type: 'image',
+          id: 11,
+          name: '人物',
+          url: 'https://cdn/person.jpg',
+        },
+      },
+    });
+    unsupported.workflowModels.resolveNodeRuntime.mockResolvedValue({
+      providerId: 'sy-1',
+      providerCode: 'shuyan',
+      providerName: '数眼',
+      model: 'wan2.7-i2v',
+      apiKey: 'test',
+    });
+    await expect(unsupported.start(2, scope)).rejects.toThrow(
+      '不支持人物和场景分图参考',
+    );
+    expect(unsupported.billing.chargeService).not.toHaveBeenCalled();
+    expect(unsupported.cosyVoice.synthesize).not.toHaveBeenCalled();
+    expect(supportsStoreVisitReferences('wan2.7-i2v')).toBe(false);
+    expect(supportsStoreVisitReferences('doubao-seedance-2-0-260128')).toBe(
+      true,
+    );
+    expect(supportsStoreVisitReferences('MiniMax-H3')).toBe(true);
+    expect(
+      storeVisitVisualSource({ id: 'old', lines: '介绍', shot: 'presenter' }),
+    ).toBe('generated');
+    expect(
+      storeVisitVisualSource({ id: 'new', lines: '推荐', shot: 'experience' }),
+    ).toBe('original');
+  });
+
+  it('只修改台词保留已合成的人物图；切换画面来源作废后续成片', () => {
+    const keyframe = {
+      type: 'image' as const,
+      id: 91,
+      name: '人物场景',
+      url: 'https://cdn/k.jpg',
+    };
+    const current = [
+      {
+        id: 'a',
+        lines: '原台词',
+        sceneImageId: 17,
+        shot: 'experience' as const,
+        visualSource: 'generated' as const,
+        keyframe,
+        videoId: 5,
+        audioUrl: 'https://a.wav',
+      },
+    ];
+    const changedLines = mergeStoreVisitSegments(
+      [
+        {
+          ...current[0],
+          lines: '新台词',
+          keyframe: undefined,
+          videoId: undefined,
+          audioUrl: undefined,
+        },
+      ],
+      current,
+    );
+    expect(changedLines[0].keyframe).toEqual(keyframe);
+    expect(changedLines[0].videoId).toBeUndefined();
+    const changedSource = mergeStoreVisitSegments(
+      [
+        {
+          id: 'a',
+          lines: '原台词',
+          sceneImageId: 17,
+          shot: 'experience',
+          visualSource: 'original',
+        },
+      ],
+      current,
+    );
+    expect(changedSource[0].keyframe).toBeUndefined();
+    expect(changedSource[0].videoId).toBeUndefined();
   });
 
   it('换出镜人物时清掉全部首帧及依赖旧尾帧的后续成片', () => {
@@ -1303,7 +1570,8 @@ describe('独立探店制作流程（画外音）', () => {
       role: 'first_frame',
       image_url: { url: 'https://cdn/keyframe.jpg' },
     });
-    expect(payload.content[0].text).toContain('带着镜头介绍门店');
+    expect(payload.content[0].text).toContain('原图可见范围内介绍门店');
+    expect(payload.content[0].text).toContain('固定机位');
     const inserted = service.operations.insertOne.mock.calls[0][0];
     expect(inserted).toMatchObject({
       model: 'MiniMax-H3',
@@ -1993,7 +2261,9 @@ describe('人物段用 wan2.7-i2v 按配音生成', () => {
     failing.storage.publishImage.mockRejectedValue(
       new Error('DOUYIN_PUBLIC_STORAGE_MISSING'),
     );
-    await expect(failing.start(2, scope)).rejects.toThrow('配好后会自动上传首帧');
+    await expect(failing.start(2, scope)).rejects.toThrow(
+      '配好后会自动上传首帧',
+    );
     expect(failing.billing.refundService).toHaveBeenCalledTimes(1);
     expect(failing.fetchShuyan).not.toHaveBeenCalled();
   });
