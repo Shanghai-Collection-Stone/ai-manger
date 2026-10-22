@@ -55,6 +55,11 @@ function build(topic: Row, rows: Row[] = []) {
       url: `https://cdn/v${id}.mp4`,
       durationMs: 9000,
     })),
+    requireImage: jest.fn(async (id: number) => ({
+      type: 'image',
+      id,
+      url: `https://gallery/i${id}.jpg`,
+    })),
     update: jest.fn(async () => topic),
     claimAutoConcat: jest.fn(async () => {
       const had = Boolean(topic.autoConcatShots);
@@ -81,6 +86,69 @@ const readyTopic = () => ({
 });
 
 describe('DouyinShotConcatService（客户端合成）', () => {
+  it('全部探店片段必须先生成视频，只用生成的视频与字幕拼接', async () => {
+    const topic = {
+      id: 7,
+      kind: 'child',
+      productionMode: 'store-visit',
+      storyboard: [],
+      storeVisit: {
+        segments: [
+          {
+            id: 'g1',
+            lines: '门头',
+            sceneVideoId: 5,
+            videoId: 41,
+            nativeAudio: true,
+            audioUrl: 'https://must-not-merge.wav',
+          },
+          {
+            id: 'g2',
+            lines: '拿铁',
+            sceneImageId: 17,
+            visualSource: 'local',
+            videoId: 42,
+            nativeAudio: true,
+          },
+        ],
+      },
+    };
+    const { service } = build(topic);
+    const { clips } = await service.prepare(7, scope);
+    expect(clips.map((clip) => clip.videoId)).toEqual([41, 42]);
+    expect(
+      clips.every((clip) => !clip.audioUrl && !clip.kind && !clip.start),
+    ).toBe(true);
+    expect(clips.map((clip) => clip.subtitle)).toEqual(['门头', '拿铁']);
+    topic.storeVisit.segments[1].nativeAudio = false;
+    await expect(build(topic).service.prepare(7, scope)).rejects.toThrow(
+      '第 2 段',
+    );
+  });
+
+  it('探店本机素材段还没配音、AI 段只有配音没有成片时都不能合成', async () => {
+    const topic = {
+      id: 7,
+      kind: 'child',
+      title: '探店',
+      productionMode: 'store-visit',
+      storyboard: [],
+      storeVisit: {
+        segments: [
+          { id: 'g1', lines: '门头', sceneVideoId: 5 },
+          {
+            id: 'g2',
+            lines: 'AI 段',
+            sceneImageId: 17,
+            audioUrl: 'https://cdn/a2.wav',
+          },
+        ],
+      },
+    };
+    const { service } = build(topic);
+    await expect(service.prepare(7, scope)).rejects.toThrow('第 1、2 段');
+  });
+
   it('还有分镜没出片时拒绝', async () => {
     const topic = readyTopic();
     topic.storyboard[1].videoId = undefined as unknown as number;
@@ -127,6 +195,7 @@ describe('DouyinShotConcatService（客户端合成）', () => {
             id: 'g1',
             lines: '今天带大家来到这家咖啡店',
             videoId: 21,
+            nativeAudio: true,
             audioUrl: 'https://cdn/a21.wav',
             audioSeconds: 5.2,
           },
@@ -134,6 +203,7 @@ describe('DouyinShotConcatService（客户端合成）', () => {
             id: 'g2',
             lines: '招牌拿铁',
             videoId: 22,
+            nativeAudio: true,
             audioUrl: 'https://cdn/a22.wav',
             audioSeconds: 2.4,
           },
@@ -164,12 +234,50 @@ describe('DouyinShotConcatService（客户端合成）', () => {
         clip.subtitle,
       ]),
     ).toEqual([
-      ['g1', 21, 5.2, 'https://cdn/a21.wav', '今天带大家来到这家咖啡店'],
-      ['g2', 22, 2.4, 'https://cdn/a22.wav', '招牌拿铁'],
+      ['g1', 21, 5.2, undefined, '今天带大家来到这家咖啡店'],
+      ['g2', 22, 2.4, undefined, '招牌拿铁'],
     ]);
     expect(operations.rows[0].request).toMatchObject({
       segmentIds: ['g1', 'g2'],
     });
+  });
+
+  it('人物与画面段都保留视频原声，只交付字幕、不传配音', async () => {
+    const topic = {
+      id: 7,
+      kind: 'child',
+      title: '探店',
+      productionMode: 'store-visit',
+      storyboard: [],
+      storeVisit: {
+        segments: [
+          {
+            id: 'g1',
+            lines: '老铁们，今天我们来到了街角咖啡店',
+            videoId: 21,
+            nativeAudio: true,
+            audioUrl: 'https://cdn/a21.wav',
+            audioSeconds: 4.8,
+          },
+          {
+            id: 'g2',
+            lines: '招牌拿铁',
+            videoId: 22,
+            nativeAudio: true,
+            audioUrl: 'https://cdn/a22.wav',
+            audioSeconds: 2.4,
+          },
+        ],
+      },
+    };
+    const { service } = build(topic);
+    const result = await service.prepare(7, scope);
+    expect(
+      result.clips.map((clip) => [clip.shotId, clip.audioUrl, clip.subtitle]),
+    ).toEqual([
+      ['g1', undefined, '老铁们，今天我们来到了街角咖啡店'],
+      ['g2', undefined, '招牌拿铁'],
+    ]);
   });
 
   it('探店分段没出片时按段提示', async () => {

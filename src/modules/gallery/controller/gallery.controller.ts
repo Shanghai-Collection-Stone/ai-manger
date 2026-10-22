@@ -910,17 +910,18 @@ export class GalleryController {
   }
 
   /**
-   * @description 列出图库图片，支持游标兼容、多标签、收藏、随机和收藏优先排序；用户取 token。
+   * @description 列出图库图片，支持游标兼容、多标签、收藏、关键词、随机和收藏优先排序；用户取 token。
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [groupId] - 查询参数：图库组ID。
    * @param {string} [tag] - 查询参数：标签。
-   * @param {string} [cursorId] - 查询参数：游标；降序取 id 更小项，升序取 id 更大项。
+   * @param {string} [cursorId] - 查询参数：游标（上一页最后一张图片 ID）；按该图的创建时间与 ID 复合定位下一页。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @param {Request} [req] - 当前 HTTP 请求。
    * @param {'asc'|'desc'} [sortOrder] - 查询参数：创建时间排序方向，默认 desc。
+   * @param {string} [keyword] - 查询参数：按原文件名、文件名、描述与备注不区分大小写包含匹配，最长 64 字。
    * @returns {Promise<{ images: Array<GalleryPublicImage> }>} 图片列表。
-   * @keyword-cn 图库多条件排序, 多标签筛选
-   * @keyword-en gallery-multi-sort, multi-tag-filter
+   * @keyword-cn 图库多条件排序, 多标签筛选, 关键词搜索
+   * @keyword-en gallery-multi-sort, multi-tag-filter, keyword-search
    * @since 2026-02-04
    */
   @Get()
@@ -938,6 +939,7 @@ export class GalleryController {
     @Query('tags') tags?: string,
     @Query('favoriteOnly') favoriteOnly?: string,
     @Query('offset') offset?: string,
+    @Query('keyword') keyword?: string,
   ): Promise<{ images: Array<GalleryPublicImage> }> {
     // 优先从请求token解析tenantId，其次使用query参数
     const authScope = await this.requireUserScope(req);
@@ -990,6 +992,7 @@ export class GalleryController {
         tags: resolvedTags,
         favoriteOnly: favoriteOnly === '1',
         offset: resolvedOffset,
+        keyword,
       },
     );
     return { images: rows.map((row) => this.gallery.toPublicImage(row)) };

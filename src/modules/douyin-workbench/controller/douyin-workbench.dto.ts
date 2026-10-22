@@ -20,8 +20,10 @@ import {
 import {
   DOUYIN_FACE_MASK_STYLES,
   DOUYIN_SCRIPT_STYLES,
+  DOUYIN_STORE_VISIT_MOTIONS,
   DOUYIN_STORE_VISIT_TEMPLATES,
   type DouyinFaceMaskStyle,
+  type DouyinStoreVisitMotion,
   type DouyinStoreVisitTemplate,
 } from '../entities/douyin-workbench.entity.js';
 import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.entity.js';
@@ -269,6 +271,69 @@ export class DouyinStoreVisitSceneImageDto extends DouyinReferenceImageDto {
 }
 
 /**
+ * @description 校验探店实拍视频素材：视频库视频引用，另带素材说明（最多 500 字，团购价、份量等写在这里）、标签（最多 10 个、每个 30 字内）与时长。
+ *   生成前由服务端要求说明补齐。
+ * @keyword-cn 探店视频素材参数, 素材说明
+ * @keyword-en store-visit-scene-video-dto, material-description
+ */
+export class DouyinStoreVisitSceneVideoDto {
+  @IsIn(['video'])
+  type!: 'video';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  id!: number;
+
+  @IsString()
+  @MaxLength(200)
+  name!: string;
+
+  @IsString()
+  @MaxLength(2000)
+  url!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  coverUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  @MaxLength(30, { each: true })
+  tags?: string[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(36000)
+  durationSeconds?: number;
+}
+
+/**
+ * @description 校验探店开场素材：指向场景图（image）或视频素材（video）里的一项。
+ * @keyword-cn 开场素材参数, 门头招牌
+ * @keyword-en opening-scene-dto, storefront-sign
+ */
+export class DouyinStoreVisitOpeningSceneDto {
+  @IsIn(['image', 'video'])
+  type!: 'image' | 'video';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  id!: number;
+}
+
+/**
  * @description 校验视频声音设置：配音 / 仅音乐 / 静音，与配音语言。
  * @keyword-cn 声音设置参数, 配音语言
  * @keyword-en video-audio-dto, voiceover-language
@@ -303,8 +368,8 @@ export class DouyinPublishCopyDto {
 }
 
 /**
- * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图 ID、画面描述、镜头用途（实景 / 体验 / 讲解）与画面来源；
- *   人物首帧、成片与配音只由服务端写入。
+ * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图或视频素材 ID、视频入点、本机运镜、画面描述、
+ *   镜头用途（实景 / 体验 / 讲解）与画面来源；人物首帧、成片与配音只由服务端写入。
  * @keyword-cn 探店分段参数, 分段台词
  * @keyword-en store-visit-segment-dto, segment-lines
  */
@@ -314,8 +379,25 @@ export class DouyinStoreVisitSegmentDto {
   shot?: 'presenter' | 'broll' | 'experience';
 
   @IsOptional()
-  @IsIn(['original', 'references', 'generated'])
-  visualSource?: 'original' | 'references' | 'generated';
+  @IsIn(['local', 'original', 'references', 'generated'])
+  visualSource?: 'local' | 'original' | 'references' | 'generated';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sceneVideoId?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(36000)
+  clipStart?: number;
+
+  @IsOptional()
+  @IsIn(DOUYIN_STORE_VISIT_MOTIONS)
+  motion?: DouyinStoreVisitMotion;
 
   @IsOptional()
   @IsString()
@@ -339,11 +421,22 @@ export class DouyinStoreVisitSegmentDto {
 }
 
 /**
- * @description 校验探店出镜人物（图库图片，传 null 清掉）、出镜模板、场景、场景说明、台词与分段；音色只由克隆和选用接口写入，这里不收。
+ * @description 校验门店、素材、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入。
+ *
  * @keyword-cn 探店设置参数, 场景台词
  * @keyword-en store-visit-setting-dto, scene-lines
  */
 export class DouyinStoreVisitDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  voicePrompt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  storeName?: string;
+
   @IsOptional()
   @ValidateNested()
   @Type(() => DouyinReferenceImageDto)
@@ -355,10 +448,22 @@ export class DouyinStoreVisitDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(4)
+  @ArrayMaxSize(8)
   @ValidateNested({ each: true })
   @Type(() => DouyinStoreVisitSceneImageDto)
   sceneImages?: DouyinStoreVisitSceneImageDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinStoreVisitSceneVideoDto)
+  sceneVideos?: DouyinStoreVisitSceneVideoDto[];
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinStoreVisitOpeningSceneDto)
+  openingScene?: DouyinStoreVisitOpeningSceneDto | null;
 
   @IsOptional()
   @IsString()

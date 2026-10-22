@@ -7,9 +7,14 @@ import {
 import { randomUUID } from 'node:crypto';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
-import { storeVisitVisualSource } from './douyin-store-visit-continuity.js';
+import {
+  isStoreVisitLocalSegment,
+  isStoreVisitVisualStart,
+  storeVisitVisualSource,
+} from './douyin-store-visit-continuity.js';
 import {
   DOUYIN_SCRIPT_STYLES,
+  DOUYIN_STORE_VISIT_MOTIONS,
   DOUYIN_STORE_VISIT_TEMPLATES,
   type DouyinFaceMaskStyle,
   type DouyinMediaReference,
@@ -17,7 +22,10 @@ import {
   type DouyinScriptStyle,
   type DouyinStoryboardPreference,
   type DouyinStoryboardShot,
+  type DouyinStoreVisitMotion,
+  type DouyinStoreVisitOpeningScene,
   type DouyinStoreVisitSceneImage,
+  type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
   type DouyinStoreVisitTemplate,
   type DouyinStoreVisitVoiceSample,
@@ -123,14 +131,16 @@ export function normalizeScriptStyle(
 }
 
 /**
- * @description 规整脚本参考图引用：只保留图片、去重、最多 4 张，越权与伪造由 `validateMediaReferences` 另行拦截。
+ * @description 规整脚本参考图引用：只保留图片、去重、默认最多 4 张，越权与伪造由 `validateMediaReferences` 另行拦截。
  * @keyword-cn 规整脚本参考图, 参考图去重
  * @keyword-en normalize-reference-images, reference-dedupe
  * @param input 前端传入的参考图列表。
+ * @param {number} [max=4] 最多保留几张。
  * @returns {DouyinMediaReference[]} 规整后的参考图。
  */
 export function normalizeReferenceImages(
   input?: Array<Partial<DouyinMediaReference>> | null,
+  max = 4,
 ): DouyinMediaReference[] {
   const seen = new Set<number>();
   const list: DouyinMediaReference[] = [];
@@ -147,13 +157,50 @@ export function normalizeReferenceImages(
         ? { coverUrl: String(item.coverUrl).slice(0, 2000) }
         : {}),
     });
-    if (list.length >= 4) break;
+    if (list.length >= max) break;
   }
   return list;
 }
 
 /**
- * @description 规整探店场景图：沿用图库引用规整（去重、最多 4 张），另保留每张的说明（去首尾空白、最多 500 字）与标签（去空去重、最多 10 个、每个 30 字）。
+ * @description 探店素材上限：场景图与实拍视频素材合计最多 8 个（与分段上限一致）。
+ * @keyword-cn 探店素材上限, 图片视频合计
+ * @keyword-en store-visit-material-limit, image-video-total
+ */
+export const DOUYIN_STORE_VISIT_MATERIAL_LIMIT = 8;
+
+/**
+ * @description 规整一个探店素材的说明（去首尾空白、最多 500 字）与标签（去空去重、最多 10 个、每个 30 字），空的不带。
+ * @keyword-cn 规整素材说明, 素材标签
+ * @keyword-en normalize-material-meta, material-tags
+ * @param item 前端传入的素材。
+ * @returns {{description?: string, tags?: string[]}} 说明与标签。
+ */
+function normalizeStoreVisitMaterialMeta(
+  item?: { description?: string; tags?: string[] } | null,
+): { description?: string; tags?: string[] } {
+  const description = String(item?.description ?? '')
+    .trim()
+    .slice(0, 500);
+  const tags = Array.from(
+    new Set(
+      (Array.isArray(item?.tags) ? item.tags : [])
+        .map((tag) =>
+          String(tag ?? '')
+            .trim()
+            .slice(0, 30),
+        )
+        .filter(Boolean),
+    ),
+  ).slice(0, 10);
+  return {
+    ...(description ? { description } : {}),
+    ...(tags.length ? { tags } : {}),
+  };
+}
+
+/**
+ * @description 规整探店场景图：沿用图库引用规整（去重、最多 8 张），另保留每张的说明（去首尾空白、最多 500 字）与标签（去空去重、最多 10 个、每个 30 字）。
  * @keyword-cn 规整探店场景图, 场景说明标签
  * @keyword-en normalize-store-visit-scenes, scene-description-tags
  * @param input 前端传入的场景图。
@@ -165,28 +212,67 @@ export function normalizeStoreVisitSceneImages(
   const source = new Map(
     (Array.isArray(input) ? input : []).map((item) => [Number(item?.id), item]),
   );
-  return normalizeReferenceImages(input).map((image) => {
-    const item = source.get(image.id);
-    const description = String(item?.description ?? '')
-      .trim()
-      .slice(0, 500);
-    const tags = Array.from(
-      new Set(
-        (Array.isArray(item?.tags) ? item.tags : [])
-          .map((tag) =>
-            String(tag ?? '')
-              .trim()
-              .slice(0, 30),
-          )
-          .filter(Boolean),
-      ),
-    ).slice(0, 10);
-    return {
+  return normalizeReferenceImages(input, DOUYIN_STORE_VISIT_MATERIAL_LIMIT).map(
+    (image) => ({
       ...image,
-      ...(description ? { description } : {}),
-      ...(tags.length ? { tags } : {}),
-    };
-  });
+      ...normalizeStoreVisitMaterialMeta(source.get(image.id)),
+    }),
+  );
+}
+
+/**
+ * @description 规整探店实拍视频素材：去重、最多 8 段，只保留视频引用字段、说明、标签与时长（秒，保留一位小数）；越权与伪造由 `validateMediaReferences` 另行拦截。
+ * @keyword-cn 规整探店视频素材, 视频素材说明
+ * @keyword-en normalize-store-visit-videos, video-material-meta
+ * @param input 前端传入的视频素材。
+ * @returns {DouyinStoreVisitSceneVideo[]} 规整后的视频素材。
+ */
+export function normalizeStoreVisitSceneVideos(
+  input?: Array<Partial<DouyinStoreVisitSceneVideo>> | null,
+): DouyinStoreVisitSceneVideo[] {
+  const seen = new Set<number>();
+  const list: DouyinStoreVisitSceneVideo[] = [];
+  for (const item of Array.isArray(input) ? input : []) {
+    const id = Number(item?.id);
+    if (!Number.isInteger(id) || id < 1 || seen.has(id)) continue;
+    seen.add(id);
+    const seconds = Math.round(Number(item?.durationSeconds) * 10) / 10;
+    list.push({
+      type: 'video',
+      id,
+      name: String(item?.name ?? `视频 #${id}`).slice(0, 200),
+      url: String(item?.url ?? '').slice(0, 2000),
+      ...(item?.coverUrl
+        ? { coverUrl: String(item.coverUrl).slice(0, 2000) }
+        : {}),
+      ...normalizeStoreVisitMaterialMeta(item),
+      ...(seconds > 0 ? { durationSeconds: Math.min(36000, seconds) } : {}),
+    });
+    if (list.length >= DOUYIN_STORE_VISIT_MATERIAL_LIMIT) break;
+  }
+  return list;
+}
+
+/**
+ * @description 规整开场素材：只认指向当前场景图或视频素材里的一项，否则返回 undefined（清掉）。
+ * @keyword-cn 规整开场素材, 门头招牌
+ * @keyword-en normalize-opening-scene, storefront-sign
+ * @param input 前端传入的开场素材。
+ * @param images 当前场景图。
+ * @param videos 当前视频素材。
+ * @returns {DouyinStoreVisitOpeningScene|undefined} 开场素材。
+ */
+export function normalizeStoreVisitOpeningScene(
+  input: Partial<DouyinStoreVisitOpeningScene> | null | undefined,
+  images: DouyinStoreVisitSceneImage[],
+  videos: DouyinStoreVisitSceneVideo[],
+): DouyinStoreVisitOpeningScene | undefined {
+  const id = Number(input?.id);
+  if (input?.type === 'image' && images.some((image) => image.id === id))
+    return { type: 'image', id };
+  if (input?.type === 'video' && videos.some((video) => video.id === id))
+    return { type: 'video', id };
+  return undefined;
 }
 
 /**
@@ -215,17 +301,19 @@ export const DOUYIN_STORE_VISIT_SEGMENT_LIMITS = {
 } as const;
 
 /**
- * @description 规整探店分段（只收台词、场景图 ID、画面描述、镜头类型与段 ID，人物首帧、成片与配音由服务端写）：去掉空台词段，
- *   段 ID 不合法或重复时换新，场景图不在本选题场景里时清空，最多 8 段。
+ * @description 规整探店分段（只收台词、场景图或视频素材 ID、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
+ *   去掉空台词段，段 ID 不合法或重复时换新，素材不在本选题素材里时清空；视频素材段不收人物镜头类型（人物出镜要用图片），最多 8 段。
  * @keyword-cn 规整探店分段, 分段校验
  * @keyword-en normalize-store-visit-segments, segment-validation
  * @param input 前端传入的分段。
  * @param sceneImageIds 本选题当前的场景图 ID。
+ * @param {number[]} [sceneVideoIds=[]] 本选题当前的视频素材 ID。
  * @returns {DouyinStoreVisitSegment[]} 规整后的分段（不含成片与配音）。
  */
 export function normalizeStoreVisitSegments(
   input: Array<Partial<DouyinStoreVisitSegment>> | null | undefined,
   sceneImageIds: number[],
+  sceneVideoIds: number[] = [],
 ): DouyinStoreVisitSegment[] {
   const seen = new Set<string>();
   const list: DouyinStoreVisitSegment[] = [];
@@ -240,6 +328,17 @@ export function normalizeStoreVisitSegments(
       id = randomUUID().slice(0, 12);
     seen.add(id);
     const sceneImageId = Number(item?.sceneImageId);
+    const sceneVideoId = Number(item?.sceneVideoId);
+    const video = sceneVideoIds.includes(sceneVideoId);
+    const clipStart = Math.min(
+      36000,
+      Math.round(Math.max(0, Number(item?.clipStart) || 0) * 10) / 10,
+    );
+    const motion = DOUYIN_STORE_VISIT_MOTIONS.includes(
+      item?.motion as DouyinStoreVisitMotion,
+    )
+      ? item?.motion
+      : undefined;
     const action = String(item?.action ?? '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -247,15 +346,24 @@ export function normalizeStoreVisitSegments(
     list.push({
       id,
       lines,
-      ...(sceneImageIds.includes(sceneImageId) ? { sceneImageId } : {}),
+      ...(video
+        ? { sceneVideoId, ...(clipStart > 0 ? { clipStart } : {}) }
+        : sceneImageIds.includes(sceneImageId)
+          ? { sceneImageId }
+          : {}),
+      ...(!video && motion ? { motion } : {}),
       ...(action ? { action } : {}),
-      ...(['presenter', 'experience'].includes(item?.shot || '')
+      ...(!video && ['presenter', 'experience'].includes(item?.shot || '')
         ? { shot: item.shot }
         : {}),
-      ...(['original', 'references', 'generated'].includes(
+      ...(!video &&
+      ['local', 'original', 'references', 'generated'].includes(
         item?.visualSource || '',
       )
-        ? { visualSource: item.visualSource }
+        ? {
+            visualSource:
+              item.visualSource === 'local' ? 'original' : item.visualSource,
+          }
         : {}),
     });
     if (list.length >= DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count) break;
@@ -264,8 +372,9 @@ export function normalizeStoreVisitSegments(
 }
 
 /**
- * @description 保存分段时接上服务端写入的字段：场景没变时保留人物首帧；台词、场景、画面描述与镜头类型都没变时，
- *   再保留这段的视频、配音与所用音色，任一改了就作废。
+ * @description 保存分段时接上服务端写入的字段：场景没变时保留人物首帧；台词、场景、画面描述与镜头类型都没变、且没有依赖的前段改动时，
+ *   再保留这段的视频、配音与所用音色，任一改了就作废。新镜头（换素材、换用途或紧跟本机素材段）不依赖前段尾帧，前段改动不连带作废它；
+ *   本机素材段的产出只有配音，台词没变就保留，换素材、入点或运镜都不用重新配音。
  * @keyword-cn 合并探店分段, 保留分段成片
  * @keyword-en merge-store-visit-segments, keep-segment-output
  * @param next 规整后的新分段。
@@ -280,11 +389,31 @@ export function mergeStoreVisitSegments(
   let chainChanged = false;
   return next.map((segment, index) => {
     const previous = byId.get(segment.id);
+    // 新镜头从自己的素材起步，前面的改动不会传到它
+    if (index > 0 && isStoreVisitVisualStart(next, index)) chainChanged = false;
     if (!previous) {
       chainChanged = true;
       return segment;
     }
-    const sameScene = previous.sceneImageId === segment.sceneImageId;
+    if (isStoreVisitLocalSegment(segment)) {
+      chainChanged = true;
+      return isStoreVisitLocalSegment(previous) &&
+        previous.lines === segment.lines &&
+        previous.audioUrl
+        ? {
+            ...segment,
+            audioUrl: previous.audioUrl,
+            ...(previous.audioSeconds
+              ? { audioSeconds: previous.audioSeconds }
+              : {}),
+            ...(previous.voiceId ? { voiceId: previous.voiceId } : {}),
+          }
+        : segment;
+    }
+    const sameScene =
+      previous.sceneImageId === segment.sceneImageId &&
+      previous.sceneVideoId === segment.sceneVideoId &&
+      (previous.clipStart || 0) === (segment.clipStart || 0);
     const sameVisual =
       storeVisitVisualSource(previous) === storeVisitVisualSource(segment);
     const keyframe =
@@ -301,7 +430,7 @@ export function mergeStoreVisitSegments(
       (previous.action ?? '') === (segment.action ?? '') &&
       (previous.shot ?? 'broll') === (segment.shot ?? 'broll');
     if (!unchanged || current?.[index]?.id !== segment.id) chainChanged = true;
-    if (chainChanged || !previous.videoId || !previous.audioUrl)
+    if (chainChanged || !previous.videoId || previous.nativeAudio !== true)
       return { ...segment, ...keyframe };
     return {
       ...segment,
@@ -310,12 +439,13 @@ export function mergeStoreVisitSegments(
       audioUrl: previous.audioUrl,
       ...(previous.audioSeconds ? { audioSeconds: previous.audioSeconds } : {}),
       ...(previous.voiceId ? { voiceId: previous.voiceId } : {}),
+      ...(previous.nativeAudio ? { nativeAudio: true } : {}),
     };
   });
 }
 
 /**
- * @description 换了出镜人物后清掉各场景人物首帧及依赖旧人物尾帧的全部成片、配音与音色。
+ * @description 换了出镜人物后清掉各场景人物首帧及依赖旧人物尾帧的全部成片、配音与音色；本机素材段与人物无关，保留配音。
  * @keyword-cn 换人物作废首帧, 人物出镜成片作废
  * @keyword-en reset-presenter-keyframes, invalidate-presenter-output
  * @param segments 分段。
@@ -327,10 +457,12 @@ export function clearPresenterKeyframes(
   return segments.map((segment) => {
     const next: DouyinStoreVisitSegment = { ...segment };
     delete next.keyframe;
+    if (isStoreVisitLocalSegment(segment)) return next;
     delete next.videoId;
     delete next.audioUrl;
     delete next.audioSeconds;
     delete next.voiceId;
+    delete next.nativeAudio;
     return next;
   });
 }
@@ -574,9 +706,13 @@ export class DouyinWorkbenchRepositoryService {
       shotVideoResolution?: string;
       publishCopy?: Partial<DouyinPublishCopy>;
       storeVisit?: {
+        voicePrompt?: string;
+        storeName?: string;
         faceImage?: Partial<DouyinMediaReference> | null;
         template?: DouyinStoreVisitTemplate;
         sceneImages?: Array<Partial<DouyinStoreVisitSceneImage>>;
+        sceneVideos?: Array<Partial<DouyinStoreVisitSceneVideo>>;
+        openingScene?: Partial<DouyinStoreVisitOpeningScene> | null;
         sceneDescription?: string;
         lines?: string;
         segments?: Array<Partial<DouyinStoreVisitSegment>>;
@@ -670,6 +806,46 @@ export class DouyinWorkbenchRepositoryService {
       nested['storeVisit.sceneImages'] = images;
       sceneImages = images;
     }
+    let sceneVideos = current.storeVisit?.sceneVideos ?? [];
+    if (input.storeVisit?.sceneVideos !== undefined) {
+      const videos = normalizeStoreVisitSceneVideos(
+        input.storeVisit.sceneVideos,
+      );
+      await this.validateMediaReferences(videos, scope);
+      nested['storeVisit.sceneVideos'] = videos;
+      sceneVideos = videos;
+    }
+    if (
+      sceneImages.length + sceneVideos.length >
+      DOUYIN_STORE_VISIT_MATERIAL_LIMIT
+    )
+      throw new BadRequestException(
+        `图片和视频素材合计最多 ${DOUYIN_STORE_VISIT_MATERIAL_LIMIT} 个`,
+      );
+    if (input.storeVisit?.storeName !== undefined) {
+      const storeName = String(input.storeVisit.storeName ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+      if (storeName) nested['storeVisit.storeName'] = storeName;
+      else unset['storeVisit.storeName'] = '';
+    }
+    // 开场素材跟着素材走：显式传入或素材变了都重新核对，指向已移除的素材时清掉
+    if (
+      input.storeVisit?.openingScene !== undefined ||
+      input.storeVisit?.sceneImages !== undefined ||
+      input.storeVisit?.sceneVideos !== undefined
+    ) {
+      const opening = normalizeStoreVisitOpeningScene(
+        input.storeVisit.openingScene !== undefined
+          ? input.storeVisit.openingScene
+          : current.storeVisit?.openingScene,
+        sceneImages,
+        sceneVideos,
+      );
+      if (opening) nested['storeVisit.openingScene'] = opening;
+      else unset['storeVisit.openingScene'] = '';
+    }
     // 出镜人物按租户图库校验，传 null 清掉；换了人物后各段首帧与人物出镜段成片都作废
     let faceChanged = false;
     if (input.storeVisit?.faceImage !== undefined) {
@@ -697,6 +873,7 @@ export class DouyinWorkbenchRepositoryService {
         normalizeStoreVisitSegments(
           input.storeVisit.segments,
           sceneImages.map((image) => image.id),
+          sceneVideos.map((video) => video.id),
         ),
         current.storeVisit?.segments,
       );
@@ -720,6 +897,35 @@ export class DouyinWorkbenchRepositoryService {
       nested['storeVisit.segments'] = clearPresenterKeyframes(
         current.storeVisit.segments,
       );
+    }
+    if (input.storeVisit?.voicePrompt !== undefined) {
+      const prompt = String(input.storeVisit.voicePrompt).trim().slice(0, 1000);
+      if (prompt !== (current.storeVisit?.voicePrompt || '')) {
+        nested['storeVisit.voicePrompt'] = prompt;
+        // 手改音色提示词不复用旧音色 ID，也不保留旧声音生成的成片。
+        for (const field of [
+          'voiceId',
+          'voiceModel',
+          'voiceProviderId',
+          'voiceSource',
+          'voiceName',
+          'voiceSample',
+        ])
+          unset[`storeVisit.${field}`] = '';
+        const segments = (nested['storeVisit.segments'] ||
+          current.storeVisit?.segments ||
+          []) as DouyinStoreVisitSegment[];
+        nested['storeVisit.segments'] = segments.map((segment) => {
+          const next = { ...segment };
+          delete next.videoId;
+          delete next.audioUrl;
+          delete next.audioSeconds;
+          delete next.voiceId;
+          delete next.nativeAudio;
+          return next;
+        });
+        unset.generatedVideoId = '';
+      }
     }
     if (input.storeVisit?.sceneDescription !== undefined) {
       nested['storeVisit.sceneDescription'] = String(
@@ -824,13 +1030,13 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
-   * @description 只更新探店某一段的服务端字段：传 `output` 时一次绑定空镜视频（先校验视频库归属）、配音地址与时长、所用音色；
-   *   传 `null` 时把这四项一起清掉。按段 ID 定位写入，多段同时出片时互不覆盖；段已被删掉时返回 null。
+   * @description 只更新探店某一段的服务端字段：传 `output` 时一次绑定空镜视频（先校验视频库归属）、配音地址与时长、所用音色，
+   *   本机素材段不带视频时只写配音并清掉旧视频；传 `null` 时把这四项一起清掉。按段 ID 定位写入，多段同时出片时互不覆盖；段已被删掉时返回 null。
    * @keyword-cn 更新探店分段, 分段局部写入
    * @keyword-en update-store-visit-segment, partial-segment-write
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string} segmentId 分段 ID。
-   * @param {{videoId: number, audioUrl: string, audioSeconds: number, voiceId: string}|null} output 本段成片，`null` 表示清掉。
+   * @param {{videoId?: number, audioUrl: string, audioSeconds: number, voiceId: string}|null} output 本段成片（本机素材段没有 videoId），`null` 表示清掉。
    * @param {DouyinScope} scope 租户用户作用域。
    * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，选题或分段不存在时为 null。
    */
@@ -838,22 +1044,28 @@ export class DouyinWorkbenchRepositoryService {
     topicId: number,
     segmentId: string,
     output: {
-      videoId: number;
+      videoId?: number;
       audioUrl: string;
       audioSeconds: number;
       voiceId: string;
+      nativeAudio?: boolean;
     } | null,
     scope: DouyinScope,
   ): Promise<DouyinTopicEntity | null> {
-    if (output) await this.requireVideo(output.videoId, scope);
+    if (output?.videoId) await this.requireVideo(output.videoId, scope);
     const $set: Record<string, unknown> = { updatedAt: new Date() };
     const $unset: Record<string, ''> = {};
     const fields = ['videoId', 'audioUrl', 'audioSeconds', 'voiceId'] as const;
+    // 本机素材段只写配音，不带 videoId 时清掉旧的 AI 成片
     for (const field of fields) {
       const path = `storeVisit.segments.$[segment].${field}`;
-      if (output) $set[path] = output[field];
+      if (output && output[field] !== undefined) $set[path] = output[field];
       else $unset[path] = '';
     }
+    // 只有模型参考音色出声的人物段才标保留原声，其余一律清掉
+    if (output?.nativeAudio)
+      $set['storeVisit.segments.$[segment].nativeAudio'] = true;
+    else $unset['storeVisit.segments.$[segment].nativeAudio'] = '';
     return await this.topics.findOneAndUpdate(
       {
         ...this.scopeFilter(scope),
@@ -896,7 +1108,13 @@ export class DouyinWorkbenchRepositoryService {
     );
     const dependentIds = all.slice(start).map((item) => item.id);
     const $unset: Record<string, ''> = {};
-    for (const field of ['videoId', 'audioUrl', 'audioSeconds', 'voiceId']) {
+    for (const field of [
+      'videoId',
+      'audioUrl',
+      'audioSeconds',
+      'voiceId',
+      'nativeAudio',
+    ]) {
       $unset[`storeVisit.segments.$[dependent].${field}`] = '';
     }
     return await this.topics.findOneAndUpdate(

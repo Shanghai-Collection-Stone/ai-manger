@@ -1,24 +1,48 @@
 import type { DouyinStoreVisitSegment } from '../entities/douyin-workbench.entity.js';
 
-/** @description 所有探店视频共享的实景与稳定镜头约束，追加在模型规划之后。 @keyword-cn 实景保真约束, 稳定镜头 @keyword-en real-scene-constraints, stable-camera */
+/** @description 所有探店视频共享的实景与稳定镜头约束，追加在模型规划之后：不新增、不改变画面里的东西，但画面里本来就有的东西要自然地动起来，不能像一张照片往前推。 @keyword-cn 实景保真约束, 稳定镜头 @keyword-en real-scene-constraints, stable-camera */
 export const STORE_VISIT_REAL_SCENE_RULES =
-  '【实景硬约束】原始场景图是环境、产品和设施的唯一画面依据；说明和台词不授权扩展画面。保持原图布局、产品身份、招牌和可见文字，不新增图外空间、菜品、设施或路人；只在所给图片可见范围内拍摄。单段只有一个连续镜头，固定机位或极轻微缓慢推近，不切镜、不环绕、不快速摇移、不突然拉远、不穿门、不模拟走向图外区域；不得改变陈设布局、产品身份和设施结构，仅允许指定交互产生的自然动作和位移。不添加字幕、水印或新文字。';
+  '【实景硬约束】原始场景图是环境、产品和设施的唯一画面依据；说明和台词不授权扩展画面。保持原图布局、产品身份、招牌和可见文字，不新增图外空间、菜品、设施或路人；只在所给图片可见范围内拍摄。单段只有一个连续镜头，缓慢推近或小幅平移，不切镜、不环绕、不快速摇移、不突然拉远、不穿门、不模拟走向图外区域；不得改变陈设布局、产品身份和设施结构。画面要像实拍视频而不是一张照片往前推：原图里本来就有的东西自然地动起来，例如灯光与霓虹流动闪烁、屏幕和投影在播放、布帘和旗子轻轻晃动、热气和水汽飘动、原图里已有的人轻微活动。不添加字幕、水印或新文字。';
 
-/** @description 读取画面来源，兼容旧人物讲解段的合成首帧，其余默认原图。 @keyword-cn 探店画面来源, 旧数据兼容 @keyword-en store-visit-visual-source, legacy-visual-source */
+/** @description 读取生成素材来源，旧 local 照片统一按 original 生成动态声画。
+ * @keyword-cn 探店画面来源, 旧数据兼容 @keyword-en store-visit-visual-source, legacy-visual-source */
 export function storeVisitVisualSource(
   segment: DouyinStoreVisitSegment,
-): 'original' | 'references' | 'generated' {
+): 'material' | 'local' | 'original' | 'references' | 'generated' {
+  if (segment.sceneVideoId) return 'material';
   if (segment.shot !== 'presenter' && segment.shot !== 'experience')
     return 'original';
-  return (
-    segment.visualSource ||
-    (segment.shot === 'presenter' ? 'generated' : 'original')
-  );
+  const source =
+    segment.visualSource === 'local' ? undefined : segment.visualSource;
+  return source || (segment.shot === 'presenter' ? 'generated' : 'original');
+}
+
+/** @description 兼容旧调用的本机素材判定，始终返回 false，所有分段都生成视频。
+ * @keyword-cn 本机素材段, 免AI画面 @keyword-en local-material-segment, no-ai-footage */
+export function isStoreVisitLocalSegment(
+  segment: DouyinStoreVisitSegment | undefined,
+): boolean {
+  if (!segment) return false;
+  return false;
+}
+
+/** @description Seedance 2.0 与 MiniMax-H3 支持参考音频，参考模式不能与 first_frame 混用。
+ * @keyword-cn 参考音色能力, 参考音频 @keyword-en reference-voice-support, reference-audio */
+export function supportsStoreVisitReferenceAudio(model: string): boolean {
+  return /seedance[-_.]?2|(?:minimax[-_.]?)?h3/i.test(model);
 }
 
 /** @description 仅原生支持多图参考的已接入型号允许分开传人物和场景。 @keyword-cn 探店多图能力, 人物场景分图 @keyword-en store-visit-multi-reference, separate-person-scene */
 export function supportsStoreVisitReferences(model: string): boolean {
   return /seedance[-_.]?2|(?:minimax[-_.]?)?h3/i.test(model);
+}
+
+/** @description 仅已生成视频且 nativeAudio 为真才可拼接，旧的仅配音或替换音轨版本必须重做。
+ * @keyword-cn 分段就绪判断, 可拼接分段 @keyword-en segment-ready-check, mergeable-segment */
+export function isStoreVisitSegmentReady(
+  segment: DouyinStoreVisitSegment | undefined,
+): boolean {
+  return Boolean(segment?.videoId && segment.nativeAudio === true);
 }
 
 /** @description 场景、镜头用途或画面来源变化时直接切入所选素材，禁止人物自动出入画或虚构空间过渡。 @keyword-cn 实景镜头起点, 人物体验切换 @keyword-en real-scene-shot-start, experience-shot-boundary */
@@ -28,8 +52,11 @@ export function isStoreVisitVisualStart(
 ): boolean {
   const current = segments[index];
   const previous = segments[index - 1];
+  // 本机素材段不接尾帧，紧跟它的 AI 段也只能从自己的素材起步
   return (
     !previous ||
+    isStoreVisitLocalSegment(current) ||
+    isStoreVisitLocalSegment(previous) ||
     isStoreVisitSceneStart(segments, index) ||
     (current?.shot || 'broll') !== (previous.shot || 'broll') ||
     storeVisitVisualSource(current) !== storeVisitVisualSource(previous)
@@ -43,7 +70,8 @@ export function isStoreVisitSceneStart(
 ): boolean {
   return (
     index === 0 ||
-    segments[index]?.sceneImageId !== segments[index - 1]?.sceneImageId
+    segments[index]?.sceneImageId !== segments[index - 1]?.sceneImageId ||
+    segments[index]?.sceneVideoId !== segments[index - 1]?.sceneVideoId
   );
 }
 
@@ -115,7 +143,7 @@ export function buildStoreVisitContinuityBrief(input: {
     input.previous.shot !== input.segment.shot
       ? '镜头用途改变时直接切入所选素材，不生成让人物自动进出画面的过渡。'
       : '不要在段落边界突然改变人物、机位、景别或镜头类型。',
-    '先描述图片1的可见画面，再决定衔接动作，最后结合下一段台词写实际生视频提示词。生成提示词要写可执行的镜头、动作和结束状态，明确第一帧的连续关系；台词只指导内容，禁止生成字幕、文字、水印、人声或音乐。',
+    '先描述图片1的可见画面，再决定衔接动作，最后结合下一段台词写实际生视频提示词。生成提示词要写可执行的镜头、动作和结束状态，明确第一帧的连续关系；台词由视频模型直接说出，声音和画面一起生成，禁止生成字幕、文字或水印。',
     input.segment.shot === 'experience'
       ? '本段是人物体验：仅执行用户明确指定、原图可支持的一项轻微动作，配画外音；不要求正脸讲解或对口型，不擅自连续品尝、拿取和游玩。'
       : '',

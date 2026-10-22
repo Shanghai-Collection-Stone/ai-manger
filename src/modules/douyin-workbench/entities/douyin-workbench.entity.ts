@@ -167,10 +167,8 @@ export type DouyinStoreVisitTemplate =
   (typeof DOUYIN_STORE_VISIT_TEMPLATES)[number];
 
 /**
- * @description 探店分段：一段台词配一张场景图。生成时先用选定音色把台词配成音；`shot=presenter`（人物出镜）的段以「人物在场景里」的
- *   首帧 `keyframe` 加这段配音用可灵数字人对口型，其余（门店空镜）以场景图为首帧生成同样长的空镜视频；
- *   各段出片后由桌面端按顺序把画面、配音与字幕拼成成片。`keyframe`、`videoId`、`audioUrl`、`audioSeconds`、`voiceId` 由服务端写入：
- *   场景改了首帧作废，台词、场景、画面描述或镜头类型改了成片作废。
+ * @description 探店分段：照片或视频作为参考，每段生成动态视频与台词声音，nativeAudio 标记原声，audioUrl 仅保留旧数据兼容。
+ *
  * @keyword-cn 探店分段, 画外音配音, 分段成片
  * @keyword-en store-visit-segment, segment-voiceover, segment-video
  */
@@ -179,22 +177,31 @@ export interface DouyinStoreVisitSegment {
   lines: string;
   /** @description 本段对应的场景图（`sceneImages` 里的图库 ID），空镜以它为首帧，人物首帧以它为场景参考 */
   sceneImageId?: number;
+  /** @description 本段对应的实拍视频素材（`sceneVideos` 里的视频库 ID），与 `sceneImageId` 二选一；视频素材作为生成参考，不直接剪入成片 */
+  sceneVideoId?: number;
+  /** @description 视频素材从第几秒开始用（入点，秒），缺省从头 */
+  clipStart?: number;
+  /** @description 图片素材在本机做的运镜（`visualSource=local` 时生效），缺省缓慢推近 */
+  motion?: DouyinStoreVisitMotion;
   /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
   action?: string;
   /** @description 镜头用途：presenter 人物讲解、experience 人物体验配画外音，缺省为实景展示 */
   shot?: 'presenter' | 'broll' | 'experience';
-  /** @description 画面来源：原图直接出片、多图直接参考或主动合成首帧；旧人物讲解段缺省沿用合成首帧。 */
-  visualSource?: 'original' | 'references' | 'generated';
+  /** @description 画面来源：`local` 图片在本机缓推（不调用 AI，只配音）、原图交给 AI 生成动态画面、多图直接参考或主动合成首帧；
+   *   实景图片段缺省为 AI 生成（旧数据），旧人物讲解段缺省沿用合成首帧。 */
+  visualSource?: 'local' | 'original' | 'references' | 'generated';
   /** @description 人物出镜段的首帧（人物在这一段场景里），服务端生成写入 */
   keyframe?: DouyinMediaReference;
-  /** @description 本段最近一次生成成功的视频（空镜或对口型） */
+  /** @description 本段最近一次生成成功的声画视频，所有分段都必须生成这一项 */
   videoId?: number;
-  /** @description 本段配音（WAV）的地址，与 `videoId` 同一次生成写入 */
+  /** @description 旧配音文件地址，仅保留兼容，不再用于新探店视频合成 */
   audioUrl?: string;
-  /** @description 本段配音时长（秒），合成时以它为本段时长 */
+  /** @description 分段视频时长（秒）；旧数据为配音时长，合成以真实视频时长为准 */
   audioSeconds?: number;
   /** @description 配音用的音色 ID，换了音色后前端据此提示重新生成 */
   voiceId?: string;
+  /** @description 为 true 时画面和声音由模型共同生成，所有新分段均写入，合成时保留视频原声 */
+  nativeAudio?: boolean;
 }
 
 /**
@@ -211,8 +218,47 @@ export interface DouyinStoreVisitSceneImage extends DouyinMediaReference {
 }
 
 /**
- * @description 探店设置：出镜人物与出镜模板、场景图（各带说明与标签）与门店整体说明、音色（录音克隆、音色库或提示词定制）、台词与分段。
- *   各段视频 + 配音由桌面端拼接后绑定到脚本的 `generatedVideoId`。旧版数字人流程留下的声音设计等字段不再读取。
+ * @description 探店图片素材在本机的运镜：缓慢推近、缓慢拉远、左右平移或静止，由桌面端 ffmpeg 生成，不调用 AI。
+ * @keyword-cn 本机运镜, 图片缓推
+ * @keyword-en local-motion, image-ken-burns
+ */
+export const DOUYIN_STORE_VISIT_MOTIONS = [
+  'zoom-in',
+  'zoom-out',
+  'pan',
+  'static',
+] as const;
+export type DouyinStoreVisitMotion =
+  (typeof DOUYIN_STORE_VISIT_MOTIONS)[number];
+
+/**
+ * @description 探店实拍视频参考素材，说明提供事实依据，交给模型重新生成声画。
+ *
+ * @keyword-cn 探店视频素材, 实拍素材
+ * @keyword-en store-visit-scene-video, real-footage
+ */
+export interface DouyinStoreVisitSceneVideo extends DouyinMediaReference {
+  /** @description 这段视频拍的是什么，团购价、份量、可玩项目等事实也写在这里 */
+  description?: string;
+  /** @description 素材标签，例如「门头」「招牌菜」「游玩项目」 */
+  tags?: string[];
+  /** @description 视频时长（秒），用来提示配音比素材长时会定格 */
+  durationSeconds?: number;
+}
+
+/**
+ * @description 探店开场用的素材（门头 / 招牌）：指向 `sceneImages` 或 `sceneVideos` 里的一项，AI 写台词时开场段固定用它。
+ * @keyword-cn 开场素材, 门头招牌
+ * @keyword-en opening-scene, storefront-sign
+ */
+export interface DouyinStoreVisitOpeningScene {
+  type: 'image' | 'video';
+  id: number;
+}
+
+/**
+ * @description 探店设置：门店名称、出镜人物与出镜模板、场景图与实拍视频素材（各带说明与标签）、开场素材与门店整体说明、音色（录音克隆、音色库或提示词定制）、台词与分段。
+ *   各段视频保留原声由桌面端拼接后绑定到脚本的 `generatedVideoId`。旧版数字人流程留下的声音设计等字段不再读取。
  * @keyword-cn 探店模式设置, 画外音设置, 克隆音色
  * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
@@ -221,15 +267,21 @@ export interface DouyinStoreVisitSetting {
   faceImage?: DouyinMediaReference;
   /** @description 出镜模板，决定新分段默认是人物出镜还是门店空镜 */
   template?: DouyinStoreVisitTemplate;
-  /** @description 独立选择的探店场景图，最多四张，不依赖分镜；每张带自己的说明与标签。 */
+  /** @description 门店名称，AI 写开场「今天我们来到了 xxx」时逐字使用 */
+  storeName?: string;
+  /** @description 独立选择的探店场景图，与视频素材合计最多八个，不依赖分镜；每张带自己的说明与标签。 */
   sceneImages?: DouyinStoreVisitSceneImage[];
+  /** @description 实拍视频素材（视频库），与场景图合计最多八个；每段带自己的说明、标签与时长。 */
+  sceneVideos?: DouyinStoreVisitSceneVideo[];
+  /** @description 开场用的门头 / 招牌素材，为空时由 AI 按说明挑选 */
+  openingScene?: DouyinStoreVisitOpeningScene;
   /** @description 门店整体的补充说明（选填），每张场景各自的说明写在 `sceneImages[].description`。 */
   sceneDescription?: string;
   voiceSample?: DouyinStoreVisitVoiceSample;
   /** @description 音色来源：`clone` 为录音克隆，`preset` 为音色库里的百炼预置音色，`design` 为按提示词设计的音色 */
   voiceSource?: 'clone' | 'preset' | 'design';
   voiceName?: string;
-  /** @description 提示词定制音色用的声音描述，只有 `voiceSource=design` 时有值 */
+  /** @description 视频生成使用的声音描述，可直接填写，也可来自提示词定制音色 */
   voicePrompt?: string;
   voiceCreatedAt?: Date;
   voiceId?: string;
@@ -395,7 +447,7 @@ export interface DouyinOperationView {
   /** @description 探店分段生成才有：对应 `DouyinStoreVisitSegment.id` */
   segmentId?: string;
   /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` / `shuyan` 为后台节点指定的供应商，
-   *   `client` 为桌面客户端用内置 ffmpeg 合成分镜视频，`dashscope` 为百炼音色克隆审计；
+   *   `client` 为桌面客户端用内置 ffmpeg 合成分镜视频，`dashscope` 为百炼音色克隆审计与探店本机素材段的配音（不产出视频）；
    *   `digital-human` 只出现在通用数字人通道下线前的历史记录里 */
   provider?:
     'direct' | 'pixmax' | 'shuyan' | 'client' | 'dashscope' | 'digital-human';

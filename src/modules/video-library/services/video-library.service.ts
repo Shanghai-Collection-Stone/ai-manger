@@ -1,10 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { OssStorageService } from './oss-storage.service.js';
-import type {
-  VideoCreateInput,
-  VideoEntity,
-  VideoUpdateInput,
+import {
+  VIDEO_NOTE_MAX_LENGTH,
+  type VideoCreateInput,
+  type VideoEntity,
+  type VideoUpdateInput,
 } from '../entities/video.entity.js';
 
 /**
@@ -149,6 +150,9 @@ export class VideoLibraryService {
       width: this.toNullableNumber(input.width),
       height: this.toNullableNumber(input.height),
       tags: Array.isArray(input.tags) ? input.tags : [],
+      ...(this.normalizeNote(input.note)
+        ? { note: this.normalizeNote(input.note) }
+        : {}),
       groupId:
         typeof input.groupId === 'number' && Number.isFinite(input.groupId)
           ? input.groupId
@@ -247,7 +251,7 @@ export class VideoLibraryService {
   }
 
   /**
-   * @description 更新视频的名称、标签或分组。对象键与地址不开放修改。
+   * @description 更新视频的名称、标签、备注或分组。对象键与地址不开放修改；备注传空串表示清掉。
    * @keyword-cn 更新视频
    * @keyword-en update-video
    * @param {number} id - 视频 ID。
@@ -261,6 +265,7 @@ export class VideoLibraryService {
     tenantId?: string,
   ): Promise<Omit<VideoEntity, '_id'> | null> {
     const patch: Record<string, unknown> = { updatedAt: new Date() };
+    const unset: Record<string, ''> = {};
     if (typeof input.name === 'string' && input.name.trim()) {
       patch.name = input.name.trim();
     }
@@ -268,6 +273,11 @@ export class VideoLibraryService {
       patch.tags = input.tags
         .map((tag) => String(tag ?? '').trim())
         .filter(Boolean);
+    }
+    if (typeof input.note === 'string') {
+      const note = this.normalizeNote(input.note);
+      if (note) patch.note = note;
+      else unset.note = '';
     }
     if (input.groupId === null) patch.groupId = null;
     else if (
@@ -278,10 +288,25 @@ export class VideoLibraryService {
     }
     const res = await this.videos.findOneAndUpdate(
       { $and: [{ id }, this.buildTenantFilter(tenantId)] },
-      { $set: patch },
+      Object.keys(unset).length
+        ? { $set: patch, $unset: unset }
+        : { $set: patch },
       { returnDocument: 'after', projection: { _id: 0 } },
     );
     return res ?? null;
+  }
+
+  /**
+   * @description 规整视频备注：去首尾空白，最多 500 字；不是字符串时为空串。
+   * @keyword-cn 规整视频备注, 素材说明
+   * @keyword-en normalize-video-note, material-note
+   * @param {unknown} value - 原始备注。
+   * @returns {string} 备注。
+   */
+  private normalizeNote(value: unknown): string {
+    return typeof value === 'string'
+      ? value.trim().slice(0, VIDEO_NOTE_MAX_LENGTH)
+      : '';
   }
 
   /**

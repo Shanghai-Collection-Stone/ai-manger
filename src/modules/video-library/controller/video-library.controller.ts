@@ -307,17 +307,18 @@ export class VideoLibraryController {
       width: parseOptionalNumber(body?.width) ?? null,
       height: parseOptionalNumber(body?.height) ?? null,
       tags: normalizeTags(body?.tags),
+      note: readString(body?.note) || undefined,
       groupId: groupId ?? null,
     });
     return { video };
   }
 
   /**
-   * @description 更新视频名称、标签或分组。
+   * @description 更新视频名称、标签、备注或分组；备注传空串表示清掉。
    * @keyword-cn 更新视频端点
    * @keyword-en update-video-endpoint
    * @param {string} id - 路径参数：视频 ID。
-   * @param {{name?: string, tags?: unknown, groupId?: unknown}} body - 待更新字段。
+   * @param {{name?: string, tags?: unknown, note?: unknown, groupId?: unknown}} body - 待更新字段。
    * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{video: Omit<VideoEntity, '_id'>|null}>} 更新后的记录。
    * @throws {BadRequestException} ID 非法时抛出 `INVALID_ID`。
@@ -325,7 +326,8 @@ export class VideoLibraryController {
   @Post('videos/:id')
   async updateVideo(
     @Param('id') id: string,
-    @Body() body: { name?: string; tags?: unknown; groupId?: unknown },
+    @Body()
+    body: { name?: string; tags?: unknown; note?: unknown; groupId?: unknown },
     @Req() req: Request,
   ): Promise<{ video: Omit<VideoEntity, '_id'> | null }> {
     const scope = await this.resolveAuthScope(req);
@@ -336,6 +338,7 @@ export class VideoLibraryController {
       {
         name: typeof body?.name === 'string' ? body.name : undefined,
         tags: body?.tags === undefined ? undefined : normalizeTags(body.tags),
+        note: typeof body?.note === 'string' ? body.note : undefined,
         groupId:
           body?.groupId === null
             ? null

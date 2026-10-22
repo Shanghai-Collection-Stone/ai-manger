@@ -26,7 +26,7 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 - `services/oss-storage.service.ts` — OSS 配置解析（后台优先、环境变量兜底）、直传票据签发、对象键生成、可访问地址、服务端上传、对象删除与写入自检。
 - `services/oss-storage.service.spec.ts` — 签名、对象键与后台配置优先的回归测试。
 - `controller/video-library.controller.spec.ts` — HTTP 契约测试：路由、鉴权、入参归一与响应形状（两个测试跑法：`npx jest src/modules/video-library`）。
-- `entities/video.entity.ts` — 视频记录实体与出入参类型。
+- `entities/video.entity.ts` — 视频记录实体（含备注 `note`）、备注上限与出入参类型。
 - `entities/video-group.entity.ts` — 视频分组实体与出入参类型。
 
 ## 函数清单 (Function List)
@@ -43,8 +43,8 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 - `deleteGroup(id, req)` — `POST groups/:id/delete` 删除分组，组内视频转未分组 | keywords: 删除分组端点, delete-video-group-endpoint
 - `listTags(req, limit?)` — `GET tags` 列出已用标签 | keywords: 标签列表端点, list-video-tags-endpoint
 - `listVideos(req, groupId?, tag?, cursorId?, limit?)` — `GET videos` 游标分页列表 | keywords: 视频列表端点, 游标分页, list-videos-endpoint, cursor-pagination
-- `registerVideo(body, req)` — `POST videos` 直传后登记记录 | keywords: 登记视频端点, 直传回执, register-video-endpoint, upload-receipt
-- `updateVideo(id, body, req)` — `POST videos/:id` 改名称 / 标签 / 分组 | keywords: 更新视频端点, update-video-endpoint
+- `registerVideo(body, req)` — `POST videos` 直传后登记记录，可带备注 `note` | keywords: 登记视频端点, 直传回执, register-video-endpoint, upload-receipt
+- `updateVideo(id, body, req)` — `POST videos/:id` 改名称 / 标签 / 备注 / 分组，备注传空串清掉 | keywords: 更新视频端点, update-video-endpoint
 - `deleteVideo(id, req)` — `POST videos/:id/delete` 删记录并清 OSS | keywords: 删除视频端点, delete-video-endpoint
 - `deleteVideosBatch(body, req)` — `POST videos/batch-delete` 批量删除 | keywords: 批量删除端点, batch-delete-videos-endpoint
 - `createUploadTicket(body, req)` — `POST oss/signature` 签发直传票据 | keywords: 直传票据端点, OSS签名, upload-ticket-endpoint, oss-signature
@@ -54,12 +54,14 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 - `ensureIndexes()` — 建索引与自增计数器 | keywords: 视频索引, ensure-video-indexes
 - `nextId()` — 取视频自增 ID | keywords: 视频自增ID, next-video-id
 - `buildTenantFilter(tenantId?)` — 租户可见性过滤，与图库同口径 | keywords: 租户过滤, build-tenant-filter
-- `register(input)` — 登记记录，`url` 按对象键重算不采信前端 | keywords: 登记视频, 直传回执, register-video, upload-receipt
+- `register(input)` — 登记记录，`url` 按对象键重算不采信前端，备注规整后写入 | keywords: 登记视频, 直传回执, register-video, upload-receipt
 - `registerExternal(input)` — 仅供后端内部：登记站外地址的视频（对象键为空，删除时不清 OSS），用于 OSS 未配置时保存 AI 生成的成片 | keywords: 登记外部视频, 生成成片兜底, register-external-video, generated-video-fallback
 - `toNullableNumber(value)` — 数值字段收敛为 number 或 null | keywords: 数值归一, nullable-number
+- `normalizeNote(value)` — 规整视频备注：去首尾空白，最多 500 字，不是字符串时为空串 | keywords: 规整视频备注, 素材说明, normalize-video-note, material-note
+- `VIDEO_NOTE_MAX_LENGTH` — 视频备注上限 500 字，与图库备注一致 | keywords: 视频备注上限, 素材说明上限, video-note-limit, material-note-limit
 - `list(options?)` — 游标分页查询，`cursorId` 与 `/gallery` 同语义 | keywords: 视频列表, 游标分页, list-videos, cursor-pagination
 - `listTags(options?)` — 租户内标签 distinct | keywords: 视频标签, list-video-tags
-- `update(id, input, tenantId?)` — 改名称 / 标签 / 分组 | keywords: 更新视频, update-video
+- `update(id, input, tenantId?)` — 改名称 / 标签 / 备注 / 分组，备注传空串清掉 | keywords: 更新视频, update-video
 - `remove(input)` — 先删库记录再清 OSS，返回未清理的 `orphanKeys` | keywords: 删除视频, 清理OSS, 残留对象, delete-videos, cleanup-oss, orphan-objects
 
 ### services/video-group.service.ts
@@ -110,6 +112,10 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 | 租户隔离 | tenant-isolation |
 | 分组计数 | group-video-count |
 | 路径穿越防护 | path-traversal-guard |
+| 规整视频备注 | normalize-video-note |
+| 素材说明 | material-note |
+| 视频备注上限 | video-note-limit |
+| 素材说明上限 | material-note-limit |
 
 ## 类型导出 (Type Exports)
 
@@ -129,8 +135,8 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 | POST | `groups/:id/delete` | 删除分组，组内视频转未分组 |
 | GET | `tags` | 已用标签 |
 | GET | `videos` | 游标分页列表（`groupId` / `tag` / `cursorId` / `limit`） |
-| POST | `videos` | 直传后登记记录 |
-| POST | `videos/:id` | 改名称 / 标签 / 分组 |
+| POST | `videos` | 直传后登记记录（可带备注） |
+| POST | `videos/:id` | 改名称 / 标签 / 备注 / 分组 |
 | POST | `videos/:id/delete` | 删记录 + 清 OSS |
 | POST | `videos/batch-delete` | 批量删除 |
 | POST | `oss/signature` | 签发直传票据 |
@@ -144,3 +150,5 @@ OSS 配置来源: 优先后台「阿里云配置」（[aliyun-config 模块](../
 **不引 ali-oss SDK**：这里只需要签一张 PostObject 策略（`base64(policyJSON)` + `HMAC-SHA1`）和发一个带签名头的 DELETE，加起来不到 60 行 `node:crypto`。要上分片续传时再换 SDK 也不迟，届时改的只有 `oss-storage.service.ts`。策略里逐条锁死 `key`、`content-length-range`、`success_action_status` 与 `Content-Type`：OSS 会拒收策略没覆盖的表单字段，而覆盖得越死，票据被拿去传别的东西的空间越小。
 
 **部署前提**：桌面端页面的 origin 是 `app://workbench`（自定义协议注册时开了 `corsEnabled`）。OSS 存储桶的跨域规则必须放行这个来源、允许 `POST` 与 `PUT` 并暴露 `ETag`，否则直传请求会在响应阶段被浏览器拦掉，表现为"没有任何报错的失败"。跨域规则再放行 `GET` / `HEAD` 时，桌面端下载成片可以直连 OSS，否则会退回后端代理下载（能用但占服务器带宽）。环境变量 `OSS_REGION` 要写带 `oss-` 前缀的形式（如 `oss-cn-shanghai`），因为默认 endpoint 是 `<region>.aliyuncs.com`；后台配置会自动补前缀。服务端转存（PixMax / 数眼成片 `putObject`）走全局代理 dispatcher，compose 的 `NO_PROXY` 默认已含 `.aliyuncs.com` 直连；配了 CDN 自定义域名时对 OSS 的写入仍走 `<bucket>.<endpoint>`，不受影响。`publicUrl` 拼的是不带签名的地址，所以存储桶需要公共读，或私有桶 + CDN 回源鉴权并把 CDN 域名配进 `OSS_PUBLIC_BASE_URL`；抖音发布小程序会下载这个地址，其域名还要加进小程序的 downloadFile 合法域名。后台配置与 `OSS_*` 环境变量都不齐全时，`oss/signature` 返回 503 `OSS_NOT_CONFIGURED`——**故意不降级到本地磁盘**：静默落盘会让"视频已入库"在没有对象存储的环境里也成立，等真正配好 OSS 时数据已经散在两处，对不上账。
+
+**视频备注（探店素材说明）**：视频记录可带备注 `note`（最多 500 字），登记与 `POST videos/:id` 都能写，更新时传空串清掉。抖音探店把实拍视频素材的说明（拍的是什么、团购价与份量或可玩项目）写在这里，并给这些视频打上「探店素材」标签方便筛选；探店选题保存的是说明与标签的快照，AI 写台词只读快照。

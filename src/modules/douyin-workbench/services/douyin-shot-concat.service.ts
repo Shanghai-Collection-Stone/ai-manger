@@ -10,7 +10,9 @@ import { Collection, Db, ObjectId } from 'mongodb';
 import type {
   DouyinOperationEntity,
   DouyinOperationView,
+  DouyinStoreVisitMotion,
 } from '../entities/douyin-workbench.entity.js';
+import { isStoreVisitSegmentReady } from './douyin-store-visit-continuity.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -40,18 +42,25 @@ export const DOUYIN_RUNNING_OPERATION_STATUSES = [
 /**
  * @description 交给客户端合成的一段视频：镜号（探店为段号）、视频库 ID、下载地址与时长（探测不到时长时兜底）；
  *   探店画外音的段还带配音地址与字幕文字，客户端以配音时长为准，画面短了定格补齐、长了截断，并把字幕烧进画面。
+ *   探店本机素材段：视频素材带入点 `start`，图片素材带 `kind=image` 与运镜 `motion`（没有视频库 ID），由客户端本机做缓推。
  * @keyword-cn 合成片段, 分镜视频地址, 画外音片段
  * @keyword-en concat-clip, shot-video-url, voiceover-clip
  */
 export interface DouyinConcatClip {
   shotId: string;
   shotIndex: number;
-  videoId: number;
+  /** 视频库 ID；探店本机缓推的图片段没有 */
+  videoId?: number;
   url: string;
   fallbackSeconds: number;
+  /** 探店本机素材：`image` 表示 `url` 是图片，客户端按 `motion` 做缓推 */
+  kind?: 'image';
+  motion?: DouyinStoreVisitMotion;
+  /** 探店视频素材的入点（秒） */
+  start?: number;
   /** 探店画外音：这一段的配音地址，有它时客户端用配音替换画面原声 */
   audioUrl?: string;
-  /** 探店画外音：这一段要烧进画面的字幕（就是本段台词） */
+  /** 探店：这一段要烧进画面的字幕（就是本段台词）；参考音色出声的人物段只带字幕不带配音，客户端保留视频原声 */
   subtitle?: string;
 }
 
@@ -92,8 +101,8 @@ export class DouyinShotConcatService {
   }
 
   /**
-   * @description 准备一次客户端合成：每一镜（探店模式按分段）都要已出片、同一脚本没有正在进行的合成；`auto` 时先原子领走「全部出片后自动合成」标记
-   *   （领不到说明已被别的客户端处理或已取消），手动合成顺带清掉标记。写运行中的调用记录并返回按顺序的片段。
+   * @description 准备一次客户端合成：每一镜（探店模式按分段，本机素材段配好音即可）都要已出片、同一脚本没有正在进行的合成；`auto` 时先原子领走「全部出片后自动合成」标记
+   *   （领不到说明已被别的客户端处理或已取消），手动合成顺带清掉标记。写运行中的调用记录并返回按顺序的片段，素材地址取图库 / 视频库的真实记录。
    * @keyword-cn 准备客户端合成, 合成前校验
    * @keyword-en prepare-client-concat, concat-precheck
    * @param {number} topicId 子选题（脚本）ID。
@@ -117,28 +126,37 @@ export class DouyinShotConcatService {
         : [];
     const bySegments = segments.length > 0;
     const unit = bySegments ? '段' : '镜';
-    // 探店分段以配音时长为准，没有配音时按台词字数估（约 4.5 字/秒）
+    // 探店分段以配音时长为准，没有配音时按台词字数估（约 4.5 字/秒）；本机素材段配好音即就绪：
+    // 视频素材直接用视频库里的那段（带入点），图片素材交给客户端本机缓推
     const shots: Array<{
       id: string;
       videoId?: number;
+      imageId?: number;
+      motion?: DouyinStoreVisitMotion;
+      start?: number;
+      ready?: boolean;
+      nativeAudio?: boolean;
       duration: number;
       audioUrl?: string;
       subtitle?: string;
     }> = bySegments
       ? segments.map((segment) => ({
           id: segment.id,
-          videoId: segment.audioUrl ? segment.videoId : undefined,
+          ready: isStoreVisitSegmentReady(segment),
+          videoId: segment.videoId,
+          nativeAudio: true,
           duration:
             Number(segment.audioSeconds) ||
             Math.max(2, Math.round(segment.lines.length / 4.5)),
-          audioUrl: segment.audioUrl,
           subtitle: segment.lines,
         }))
       : (topic.storyboard ?? []);
     if (!shots.length)
       throw new BadRequestException('DOUYIN_STORYBOARD_REQUIRED');
     const missing = shots
-      .map((shot, index) => (shot.videoId ? 0 : index + 1))
+      .map((shot, index) =>
+        (bySegments ? shot.ready : shot.videoId) ? 0 : index + 1,
+      )
       .filter(Boolean);
     if (missing.length) {
       throw new BadRequestException(
@@ -176,6 +194,32 @@ export class DouyinShotConcatService {
       );
     const clips: DouyinConcatClip[] = [];
     for (const [index, shot] of shots.entries()) {
+      // 参考音色出声的人物段保留视频原声，只烧字幕；其余探店段用配音替换画面原声
+      const voice = shot.nativeAudio
+        ? { subtitle: shot.subtitle ?? '' }
+        : shot.audioUrl
+          ? { audioUrl: shot.audioUrl, subtitle: shot.subtitle ?? '' }
+          : {};
+      // 素材地址一律取图库 / 视频库里的真实记录，不用选题快照里前端传来的地址
+      if (shot.imageId) {
+        const image = await this.repository
+          .requireImage(shot.imageId, scope)
+          .catch(() => {
+            throw new BadRequestException(
+              `第 ${index + 1} 段的图片素材已从图库删除，请重新选择素材`,
+            );
+          });
+        clips.push({
+          shotId: shot.id,
+          shotIndex: index + 1,
+          kind: 'image',
+          url: image.url,
+          motion: shot.motion,
+          fallbackSeconds: Number(shot.duration) || 5,
+          ...voice,
+        });
+        continue;
+      }
       const video = await this.repository.requireVideo(
         Number(shot.videoId),
         scope,
@@ -189,9 +233,8 @@ export class DouyinShotConcatService {
         videoId: Number(shot.videoId),
         url,
         fallbackSeconds: Number(shot.duration) || 5,
-        ...(shot.audioUrl
-          ? { audioUrl: shot.audioUrl, subtitle: shot.subtitle ?? '' }
-          : {}),
+        ...(Number(shot.start) > 0 ? { start: Number(shot.start) } : {}),
+        ...voice,
       });
     }
     // 自动合成要先领到标记；手动合成也清掉标记，免得之后重生成某一镜又自动合成一次

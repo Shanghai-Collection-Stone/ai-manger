@@ -20,6 +20,7 @@
 - `services/gallery-ai-image.service.ts`
 - `services/gallery-group.service.ts`
 - `services/gallery-public-image.spec.ts`
+- `services/gallery-list-query.spec.ts`
 - `services/gallery-tag-library.service.ts`
 - `services/gallery.service.ts`
 - `material-styles/` — 子模块索引见 `material-styles/module.md`。
@@ -30,7 +31,7 @@
 - `GalleryGroupService.listAccessibleGroups(userId,tenantId?,tag?,limit?)` — 查询租户可见分组并在数据库投影中去除向量 | keywords: 租户分组列表, 不返回向量, tenant-group-list, omit-embedding
 
 - `GalleryController.upload(files, body, req)` — 上传图片并写入图库记录，先修正 multipart 中文原文件名乱码，支持批量写入备注与 AI 人脸保护状态；`clientPreprocess` 仍按文件下标和原名校验，命中后跳过重复压缩与尺寸读取 | keywords: 图库上传, 图片元数据, 上传文件名, gallery-upload, image-metadata, upload-filename
-- `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset? })` — 返回图库图片，兼容旧游标并支持多标签、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, gallery-multi-sort, multi-tag-filter
+- `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset?, keyword? })` — 返回图库图片，游标按创建时间与 ID 复合定位，支持多标签、关键词、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, 关键词搜索, gallery-multi-sort, multi-tag-filter, keyword-search
 - `GalleryController.stats(req)` — 精确统计当前作用域图片、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
 - `GalleryController.updateImagesMetaBatch(body, req)` — 批量更新可见图片的备注、收藏、人脸保护和标签 | keywords: 批量图片元数据, 作用域鉴权, batch-image-metadata, scope-authorization
 - `GalleryController.updateImageMeta(id, body, req)` — 更新单张可见图片的备注、收藏、人脸保护和标签 | keywords: 单图图片元数据, 作用域鉴权, single-image-metadata, scope-authorization
@@ -58,9 +59,13 @@
 - `readDimensions(absPath)` — jimp 读取像素尺寸，失败返回 null | keywords: 读取图片尺寸, 竖图判定, read-image-dimensions, portrait-detection
 - `isJimpLike(value)` — 判断动态导入的 jimp 可读图 | keywords: 判断jimp可用, 动态导入, detect-jimp-like, dynamic-import
 - `createCollection()` — 创建记录 Mongo 查询与聚合投影的测试集合 | keywords: 公开投影测试, 查询记录, public-projection-test, query-recording
+- `createListCollection(cursorImage)` — 创建记录列表查询条件、可指定游标图片的集合替身 | keywords: 列表查询替身, 游标图片, list-query-double, cursor-image
+- `listClauses(images, options)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
 - `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖租户标签去重与创建时间分页；收藏排序只保留含创建时间与业务 ID 的完整键，并删除较短前缀索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
 - `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
-- `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，兼容旧游标并支持多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, tenant-image-query, gallery-multi-sort
+- `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
+- `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
+- `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
 - `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
 - `GalleryService.updateImageMeta(input)` — 更新单张可见图片的元数据 | keywords: 单图元数据更新, 图片可见范围, single-image-metadata, image-visibility
 - `GalleryService.updateImagesMetaBatch(input)` — 批量更新可见图片并按行去重追加备注 | keywords: 批量元数据更新, 备注按行去重, batch-image-metadata, deduplicate-note-lines
@@ -149,6 +154,14 @@
 | 动态导入 | dynamic-import |
 | 公开投影测试 | public-projection-test |
 | 查询记录 | query-recording |
+| 复合游标 | keyset-cursor |
+| 创建时间分页 | created-at-pagination |
+| 关键词搜索 | keyword-search |
+| 文件名备注匹配 | name-note-match |
+| 列表查询替身 | list-query-double |
+| 游标图片 | cursor-image |
+| 执行列表查询 | run-list-query |
+| 查询子条件 | query-clauses |
 | 图库索引 | gallery-indexes |
 | 收藏排序 | favorite-sorting |
 | 图片批量创建 | batch-image-create |
@@ -217,7 +230,7 @@
 
 该模块基于MongoDB存储图片与图库组的元数据及向量Embedding，支持批量上传、按用户/标签/分组查询、按创建时间升降序分页，并提供向量相似度检索（优先Atlas Vector Search，失败回退本地余弦相似度）。
 
-图库重构支持：图片统一返回收藏、备注与 AI 人脸保护字段；列表支持新旧排序、多标签且筛选、收藏筛选、随机换批与收藏 offset 分页；统计使用当前可见作用域精确计数；相似图优先复用图片向量并以共同标签兜底；标签库按租户作用域保存分类并统计未分类标签；标签转备注会批量移除标签并按行去重追加备注。
+图库重构支持：图片统一返回收藏、备注与 AI 人脸保护字段；列表支持新旧排序、多标签且筛选、收藏筛选、随机换批与收藏 offset 分页；统计使用当前可见作用域精确计数；相似图优先复用图片向量并以共同标签兜底；标签库按租户作用域保存分类并统计未分类标签；标签转备注会批量移除标签并按行去重追加备注。列表 `keyword` 对原文件名、文件名、描述与备注做不区分大小写包含匹配（最长 64 字，正则字符按字面量）；最新/最早的 `cursorId` 先查游标图片的 `createdAt`，再按 `createdAt + id` 复合条件从索引中的游标位置起扫，游标图片已删除时回退为只比较 ID；收藏优先仍按 offset。缩略图目录 `/static/uploads_thumbs` 文件名为「时间戳-UUID」不会覆盖，由 `main.ts` 以 30 天 immutable 缓存下发。
 文件路径: `src/modules/gallery`
 
 **子模块**
@@ -237,7 +250,7 @@
   - `listGroups`: 自动确保并置顶「场景图库」固定分组与默认分组“动态封面/动态拼图”（顺序：场景图库、动态封面、动态拼图），分组带 `system` 时前端只读
   - `updateGroup`: `POST groups/:id` 改名或改描述标签；系统固定分组（如场景图库）拒绝改名
   - `deleteGroup`: `POST groups/:id/delete` 删除分组；系统固定分组（如场景图库）拒绝删除
-  - `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset? })` — 返回图库图片，兼容旧游标并支持多标签、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, gallery-multi-sort, multi-tag-filter
+  - `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset?, keyword? })` — 返回图库图片，游标按创建时间与 ID 复合定位，支持多标签、关键词、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, 关键词搜索, gallery-multi-sort, multi-tag-filter, keyword-search
   - `GalleryController.stats(req)` — 精确统计当前作用域图片、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
   - `GalleryController.updateImagesMetaBatch(body, req)` — 批量更新可见图片的备注、收藏、人脸保护和标签 | keywords: 批量图片元数据, 作用域鉴权, batch-image-metadata, scope-authorization
   - `GalleryController.updateImageMeta(id, body, req)` — 更新单张可见图片的备注、收藏、人脸保护和标签 | keywords: 单图图片元数据, 作用域鉴权, single-image-metadata, scope-authorization
@@ -308,9 +321,11 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 
 **gallery.service.ts**
 
-公开响应回归文件 `services/gallery-public-image.spec.ts` 验证图片公开字段过滤、内部向量保留以及普通、随机、分组列表的查询投影。
+公开响应回归文件 `services/gallery-public-image.spec.ts` 验证图片公开字段过滤、内部向量保留以及普通、随机、分组列表的查询投影。`services/gallery-list-query.spec.ts` 验证复合游标正反向、游标图片缺失回退、收藏优先 offset 与关键词转义。
 
 - `createCollection()` — 创建记录 Mongo 查询与聚合投影的测试集合 | keywords: 公开投影测试, 查询记录, public-projection-test, query-recording
+- `createListCollection(cursorImage)` — 创建记录列表查询条件、可指定游标图片的集合替身 | keywords: 列表查询替身, 游标图片, list-query-double, cursor-image
+- `listClauses(images, options)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
 
 图片服务。
 
@@ -319,7 +334,9 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 - `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖租户标签去重与创建时间分页；收藏排序只保留含创建时间与业务 ID 的完整键，并删除较短前缀索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
   - `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
   - `list`: 图片列表/list images
-  - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，兼容旧游标并支持多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, tenant-image-query, gallery-multi-sort
+  - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
+  - `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
+  - `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
   - `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
   - `GalleryService.updateImageMeta(input)` — 更新单张可见图片的元数据 | keywords: 单图元数据更新, 图片可见范围, single-image-metadata, image-visibility
   - `GalleryService.updateImagesMetaBatch(input)` — 批量更新可见图片并按行去重追加备注 | keywords: 批量元数据更新, 备注按行去重, batch-image-metadata, deduplicate-note-lines

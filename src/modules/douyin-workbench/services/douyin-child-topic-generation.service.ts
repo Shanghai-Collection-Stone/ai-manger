@@ -23,6 +23,7 @@ import {
   type DouyinGenerationJobProgress,
   type DouyinScriptDraft,
   type DouyinScriptStyle,
+  type DouyinStoreVisitSetting,
 } from '../entities/douyin-workbench.entity.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -39,32 +40,252 @@ type ScriptPersona = Parameters<typeof buildPersonaScriptBrief>[0];
 export const DOUYIN_SCRIPT_WRITE_CONCURRENCY = 6;
 
 /**
- * @description 解析按场景分段写出的探店台词：每段以单独一行的「【场景k】」开头，k 对应第 k 张场景图；
- *   标记缺失、序号越界或某段为空时返回空数组（调用方退回整段台词）。
- * @keyword-cn 解析分场景台词, 场景标记
- * @keyword-en parse-scene-segments, scene-marker
- * @param {string} text 模型输出。
- * @param {number[]} sceneImageIds 按顺序的场景图 ID。
- * @returns {Array<{sceneImageId: number, lines: string}>} 分段台词。
+ * @description 探店写台词用的一项素材：序号即台词里「【素材k】」的 k，开场素材排第一。
+ * @keyword-cn 探店素材目录项, 素材序号
+ * @keyword-en store-visit-material-entry, material-index
  */
-export function parseStoreVisitSceneSegments(
+export interface StoreVisitMaterialEntry {
+  type: 'image' | 'video';
+  id: number;
+  name: string;
+  description: string;
+  tags: string[];
+  durationSeconds?: number;
+  opening: boolean;
+}
+
+/**
+ * @description 按台词序号排好探店素材：开场素材（门头 / 招牌）排第一，其余按图片在前、视频在后的选择顺序。
+ * @keyword-cn 探店素材目录, 开场素材排序
+ * @keyword-en store-visit-material-catalog, opening-first
+ * @param {DouyinStoreVisitSetting|undefined} setting 探店设置。
+ * @returns {StoreVisitMaterialEntry[]} 排好序的素材。
+ */
+export function listStoreVisitMaterials(
+  setting: DouyinStoreVisitSetting | undefined,
+): StoreVisitMaterialEntry[] {
+  const opening = setting?.openingScene;
+  const all: StoreVisitMaterialEntry[] = [
+    ...(setting?.sceneImages ?? []).map((image) => ({
+      type: 'image' as const,
+      id: image.id,
+      name: image.name,
+      description: String(image.description ?? '').trim(),
+      tags: image.tags ?? [],
+      opening: opening?.type === 'image' && opening.id === image.id,
+    })),
+    ...(setting?.sceneVideos ?? []).map((video) => ({
+      type: 'video' as const,
+      id: video.id,
+      name: video.name,
+      description: String(video.description ?? '').trim(),
+      tags: video.tags ?? [],
+      ...(video.durationSeconds
+        ? { durationSeconds: video.durationSeconds }
+        : {}),
+      opening: opening?.type === 'video' && opening.id === video.id,
+    })),
+  ];
+  return [
+    ...all.filter((item) => item.opening),
+    ...all.filter((item) => !item.opening),
+  ];
+}
+
+/**
+ * @description 把排好序的素材写成提示词里的素材清单：每行「素材k（开场·门头，图片 / 视频 N 秒）：说明（标签：…）」。
+ * @keyword-cn 素材清单提示词, 素材说明
+ * @keyword-en material-catalog-prompt, material-description
+ * @param {StoreVisitMaterialEntry[]} materials 排好序的素材。
+ * @returns {string} 素材清单。
+ */
+export function describeStoreVisitMaterials(
+  materials: StoreVisitMaterialEntry[],
+): string {
+  return materials
+    .map((item, index) => {
+      const kind =
+        item.type === 'video'
+          ? `视频${item.durationSeconds ? ` ${Math.round(item.durationSeconds)} 秒` : ''}`
+          : '图片';
+      const tags = item.tags.join('、');
+      return `素材${index + 1}（${item.opening ? '开场·门头，' : ''}${kind}）：${item.description || item.name}${tags ? `（标签：${tags}）` : ''}`;
+    })
+    .join('\n');
+}
+
+/**
+ * @description 解析按素材分段写出的探店台词：每段以单独一行的「【素材k】」（兼容旧的「【场景k】」）开头，k 对应排好序的第 k 个素材；
+ *   标记缺失、序号越界或某段为空时返回空数组（调用方退回整段台词）。
+ * @keyword-cn 解析分素材台词, 素材标记
+ * @keyword-en parse-material-segments, material-marker
+ * @param {string} text 模型输出。
+ * @param {StoreVisitMaterialEntry[]} materials 排好序的素材。
+ * @returns {Array<{sceneImageId?: number, sceneVideoId?: number, lines: string}>} 分段台词。
+ */
+export function parseStoreVisitMaterialSegments(
   text: string,
-  sceneImageIds: number[],
-): Array<{ sceneImageId: number; lines: string }> {
+  materials: StoreVisitMaterialEntry[],
+): Array<{ sceneImageId?: number; sceneVideoId?: number; lines: string }> {
   const parts = String(text ?? '')
     .replace(/\r\n?/g, '\n')
-    .split(/^\s*【场景\s*(\d+)\s*】\s*$/m);
+    .split(/^\s*【(?:素材|场景)\s*(\d+)\s*】\s*$/m);
   if (parts.length < 3) return [];
-  const segments: Array<{ sceneImageId: number; lines: string }> = [];
+  const segments: Array<{
+    sceneImageId?: number;
+    sceneVideoId?: number;
+    lines: string;
+  }> = [];
   for (let index = 1; index < parts.length; index += 2) {
-    const sceneImageId = sceneImageIds[Number(parts[index]) - 1];
+    const material = materials[Number(parts[index]) - 1];
     const lines = String(parts[index + 1] ?? '')
       .trim()
       .slice(0, 1000);
-    if (!sceneImageId || !lines) return [];
-    segments.push({ sceneImageId, lines });
+    if (!material || !lines) return [];
+    segments.push(
+      material.type === 'video'
+        ? { sceneVideoId: material.id, lines }
+        : { sceneImageId: material.id, lines },
+    );
   }
   return segments.slice(0, 8);
+}
+
+/**
+ * @description 找出台词里资料没写过的数字（价格、份量、人数等）：资料里的每个阿拉伯数字及其整数部分都算已知，台词里出现别的数字就是编的。
+ * @keyword-cn 台词数字核对, 防编造价格
+ * @keyword-en verify-lines-numbers, prevent-fabricated-price
+ * @param {string} lines 台词。
+ * @param {string} facts 门店名称、说明、素材说明与补充要求拼成的资料。
+ * @returns {string[]} 资料里没有的数字（去重）。
+ */
+export function findStoreVisitUnknownNumbers(
+  lines: string,
+  facts: string,
+): string[] {
+  /** @description 去掉小数末尾的 0，让 99.0 与 99 算同一个数。 @keyword-cn 数字规整, 小数去零 @keyword-en normalize-number, trim-decimal-zero */
+  const normalize = (value: string) =>
+    value.includes('.') ? value.replace(/\.?0+$/, '') : value;
+  const known = new Set<string>();
+  for (const match of String(facts ?? '').matchAll(/\d+(?:\.\d+)?/g)) {
+    known.add(normalize(match[0]));
+    known.add(match[0].split('.')[0]);
+  }
+  const unknown = new Set<string>();
+  for (const match of String(lines ?? '').matchAll(/\d+(?:\.\d+)?/g)) {
+    const value = normalize(match[0]);
+    if (!known.has(value)) unknown.add(match[0]);
+  }
+  return [...unknown];
+}
+
+/**
+ * @description 探店台词整条的最少字数（约 20 秒），少于它时提醒用户把素材说明写具体些再重写。
+ * @keyword-cn 台词最少字数, 台词偏短提醒
+ * @keyword-en lines-min-characters, short-lines-warning
+ */
+export const STORE_VISIT_LINES_MIN_CHARACTERS = 90;
+
+/**
+ * @description 配音和视频模型容易念错或念得别扭的字眼：方言词、方言音译字与网络谐音字。写探店台词时一律避开，店名或素材说明里本来就有的除外。
+ * @keyword-cn 难念字眼, 方言词
+ * @keyword-en hard-to-voice-words, dialect-words
+ */
+export const STORE_VISIT_HARD_TO_VOICE_WORDS = [
+  '嘎哈',
+  '干哈',
+  '咋整',
+  '咋地',
+  '整挺好',
+  '嘎嘎',
+  '嗷嗷',
+  '杠杠的',
+  '贼拉',
+  '老鼻子',
+  '得劲',
+  '埋汰',
+  '嘚瑟',
+  '唠嗑',
+  '磕碜',
+  '俺',
+  '恁',
+  '巴适',
+  '靓仔',
+  '侬',
+  '酱紫',
+  '肿么',
+  '木有',
+  '神马',
+  '港真',
+] as const;
+
+/**
+ * @description 探店台词「好念」规则：只用普通话常用词，人物设定或补充要求偏方言风格时只在语气节奏上体现；优先于人物设定和补充要求。
+ * @keyword-cn 台词好念规则, 普通话用词
+ * @keyword-en plain-speech-rule, mandarin-wording
+ */
+const STORE_VISIT_PLAIN_SPEECH_RULE =
+  '【好念】台词要让配音和视频模型一次念准：只用普通话常用词，不用方言词、方言音译字（如「嘎哈」「咋整」「贼拉」「杠杠的」「得劲」「埋汰」）和网络谐音字（如「酱紫」「木有」「神马」）。人物设定或补充要求偏东北话、方言风格时，只在语气和节奏上体现豪爽、接地气，用词仍是普通话；这一条优先于人物设定和补充要求。';
+
+/**
+ * @description 找出台词里的方言词、方言音译字和网络谐音字；资料（店名、门店说明、素材说明）里本来就有的不算。
+ * @keyword-cn 难念字眼核对, 方言词核对
+ * @keyword-en find-hard-to-voice-words, dialect-word-check
+ * @param {string} lines 台词。
+ * @param {string} facts 门店名称、说明、素材说明与补充要求拼成的资料。
+ * @returns {string[]} 台词里出现的难念字眼。
+ */
+export function findStoreVisitHardToVoiceWords(
+  lines: string,
+  facts: string,
+): string[] {
+  const text = String(lines ?? '');
+  const known = String(facts ?? '');
+  return STORE_VISIT_HARD_TO_VOICE_WORDS.filter(
+    (word) => text.includes(word) && !known.includes(word),
+  );
+}
+
+/**
+ * @description 核对 AI 写的探店台词：资料里没有的数字、方言或谐音字眼、用中文数字写的价格、开场段没点出门店名称、整条太短（不到约 20 秒），都写成给用户看的提醒。
+ * @keyword-cn 探店台词核对, 台词提醒
+ * @keyword-en verify-store-visit-lines, lines-warnings
+ * @param input 分段台词、拼好的资料与门店名称。
+ * @returns {string[]} 提醒，空数组表示没发现问题。
+ */
+export function reviewStoreVisitLines(input: {
+  segments: Array<{ lines: string }>;
+  facts: string;
+  storeName?: string;
+}): string[] {
+  const text = input.segments.map((segment) => segment.lines).join('\n');
+  const warnings: string[] = [];
+  const unknown = findStoreVisitUnknownNumbers(text, input.facts);
+  if (unknown.length)
+    warnings.push(
+      `台词里的「${unknown.join('」「')}」在素材说明里找不到，请核对价格和份量`,
+    );
+  const hard = findStoreVisitHardToVoiceWords(text, input.facts);
+  if (hard.length)
+    warnings.push(
+      `台词里的「${hard.join('」「')}」是方言或谐音字，配音和视频模型可能念不准，建议改成普通话说法`,
+    );
+  if (
+    /[一二两三四五六七八九十百千万]*[十百千万][一二两三四五六七八九十百千万]*\s*(?:元|块)/.test(
+      text,
+    )
+  )
+    warnings.push('台词里有用中文数字写的价格，请改成素材说明里的数字');
+  const storeName = String(input.storeName ?? '').trim();
+  if (storeName && !String(input.segments[0]?.lines ?? '').includes(storeName))
+    warnings.push(`开场段没有说出门店名称「${storeName}」`);
+  // 约 4.5 字一秒，不到 90 字（约 20 秒）多半是素材说明写得太少
+  const characters = Array.from(text.replace(/\s+/g, '')).length;
+  if (characters < STORE_VISIT_LINES_MIN_CHARACTERS)
+    warnings.push(
+      `台词总共只有约 ${Math.max(1, Math.round(characters / 4.5))} 秒，偏短；把素材说明写具体些（套餐包含什么、怎么玩、适合谁）再让 AI 重写，内容会更饱满`,
+    );
+  return warnings;
 }
 
 /**
@@ -369,15 +590,18 @@ export class DouyinChildTopicGenerationService {
   }
 
   /**
-   * @description 探店模式写画外音台词：独立探店可按选题标题与场景说明写作，旧脚本按正文或分镜口播改写成第一人称、有现场感的探店旁白，
-   *   约 30～60 秒；选了预设人物或风格时保持人称与调性。独立探店有场景图时按场景分段（每段对应一张场景图、约 60 字内，配音不超过单段画面时长），
-   *   解析不出分段时只返回整段。只返回台词，不落库，由前端放进台词框再随生成保存。
+   * @description 探店模式写画外音台词。独立探店按素材说明写一条完整的口播（约 30～60 秒，附一段示例示范写法与节奏）：开场用门头素材点出门店名称和这家店最吸引人的一点，
+   *   后面每段讲一个素材、照说明介绍是什么有什么（两三句短句），说明里有团购价时连同套餐或项目一起报价（只是写法之一，不必每段都报、不套固定句式），
+   *   结尾引导下单；语气口语自然，不用江湖口吻（预设人物另有要求时按人物）；用词只用普通话常用词、不用方言和谐音字，这条优先于人物设定。
+   *   只能用门店名称、门店整体说明与素材说明里的事实，不描述说明里没有的口感、体验或图外空间。台词出现资料里没有的数字、方言谐音字或分段格式不对时，
+   *   让模型按资料重写一次，仍有问题就带上核对提醒返回。旧脚本（非探店选题）按正文或分镜口播改写成第一人称探店旁白。
+   *   选了预设人物或风格时保持人称与调性；只返回台词，不落库，由前端放进台词框再随生成保存。
    * @keyword-cn 探店台词生成, 画外音台词
    * @keyword-en store-visit-lines, voiceover-lines
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string|undefined} prompt 一句话补充要求。
    * @param {DouyinScope} scope 租户用户作用域。
-   * @returns {Promise<{lines: string, segments?: Array<{sceneImageId: number, lines: string}>}>} 台词与按场景的分段。
+   * @returns {Promise<{lines: string, segments?: Array<{sceneImageId?: number, sceneVideoId?: number, lines: string}>, warnings?: string[]}>} 台词、按素材的分段与核对提醒。
    * @throws {NotFoundException} 脚本不存在。
    * @throws {BadRequestException} 没有写作资料，或模型没写出台词。
    */
@@ -387,37 +611,33 @@ export class DouyinChildTopicGenerationService {
     scope: DouyinScope,
   ): Promise<{
     lines: string;
-    segments?: Array<{ sceneImageId: number; lines: string }>;
+    segments?: Array<{
+      sceneImageId?: number;
+      sceneVideoId?: number;
+      lines: string;
+    }>;
+    warnings?: string[];
   }> {
     const topic = await this.repository.get(topicId, scope);
     if (!topic || topic.kind !== 'child') {
       throw new NotFoundException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
     }
-    // 独立探店按场景分段，每段配一张场景图生成空镜；每张场景的说明与标签告诉 AI 这个场景是什么
-    const sceneImages =
-      topic.productionMode === 'store-visit'
-        ? (topic.storeVisit?.sceneImages ?? [])
-        : [];
-    const sceneCatalog = sceneImages
-      .map((image, index) => {
-        const tags = (image.tags ?? []).join('、');
-        return `场景${index + 1}：${String(image.description ?? '').trim() || image.name}${tags ? `（标签：${tags}）` : ''}`;
-      })
-      .join('\n');
+    const storeVisit = topic.productionMode === 'store-visit';
+    // 独立探店按素材分段；每个素材的说明与标签告诉 AI 它拍的是什么、团购价多少
+    const materials = storeVisit
+      ? listStoreVisitMaterials(topic.storeVisit)
+      : [];
     const source =
       String(topic.script ?? '').trim() ||
       (topic.storyboard ?? [])
         .map((shot) => String(shot.narration ?? '').trim())
         .filter(Boolean)
-        .join('\n') ||
-      (topic.productionMode === 'store-visit'
-        ? [topic.title, topic.storeVisit?.sceneDescription, sceneCatalog]
-            .filter(Boolean)
-            .join('\n')
-        : '');
-    if (!source) {
+        .join('\n');
+    if (storeVisit ? !materials.length : !source) {
       throw new BadRequestException(
-        '先写好脚本正文或生成分镜，AI 才能据此写探店台词',
+        storeVisit
+          ? '先在「素材」步骤选好素材并写好说明，AI 才能据此写探店台词'
+          : '先写好脚本正文或生成分镜，AI 才能据此写探店台词',
       );
     }
     const mother = topic.parentId
@@ -435,79 +655,202 @@ export class DouyinChildTopicGenerationService {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 500);
-    // 配音不能超过单段画面时长
-    const sceneImageIds = sceneImages.map((image) => image.id);
-
-    const result = await this.agentService.runWithMessages({
-      config: {
-        ...toWorkflowLlmConfig(
-          await this.workflowModels.resolveNodeRuntime(
-            WORKFLOW_NODES.douyinWorkbench.key,
-            WORKFLOW_NODES.douyinWorkbench.script,
-          ),
+    const config = {
+      ...toWorkflowLlmConfig(
+        await this.workflowModels.resolveNodeRuntime(
+          WORKFLOW_NODES.douyinWorkbench.key,
+          WORKFLOW_NODES.douyinWorkbench.script,
         ),
+      ),
+      tenantId: scope.tenantId,
+      // 探店只许复述资料，调低随机性减少联想
+      temperature: storeVisit ? 0.4 : 0.7,
+      noPostHook: true,
+      nonStreaming: true,
+      billingContext: {
         tenantId: scope.tenantId,
-        temperature: 0.7,
-        noPostHook: true,
-        nonStreaming: true,
-        billingContext: {
-          tenantId: scope.tenantId,
-          userId: scope.userId,
-          source: 'douyin-workbench.store-visit-lines',
-          platformScope: !scope.tenantId,
-        },
-        system: [
-          '你负责根据选题、场景资料或现有脚本写出「探店」画外音旁白：画面是门店环境、产品与细节的空镜，旁白由配音念出来，配合画面讲述探店体验。',
-          '用口语、自然推荐的语气，围绕已提供的环境、产品、食物和游玩资料讲解，句子短，方便念。没有明确体验记录时，不写已经品尝、购买或游玩的第一人称经历，不编口感、效果或图外空间。',
-          '时长约 30～60 秒（150～300 字），按说话的停顿分行；不要写镜头号、动作提示、括号说明、标题、Markdown 或任何解释。',
-          '只用资料里给出的店名、产品、价格等事实，不编造；不写违法、危险、歧视、低俗、侵权或效果承诺类内容。',
-          personaBrief
-            ? '出镜人是固定的预设人物，台词必须是这个人物的第一人称、语气一致：\n' +
-              personaBrief
-            : '',
-          style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
-          sceneImageIds.length
-            ? `门店提供了 ${sceneImageIds.length} 张实景、产品或游玩图片。优先选 2～3 个相关主画面，不要求用完图片，素材少可只用一个画面；同一图片尽量集中连续使用，不来回切换。台词只按说话时长拆为 1～8 段，每段 15～60 个字（单段画面最长约 15 秒）。台词分段不代表换镜头：同一推荐对象可连续多段使用相同场景编号，不为了换段轮流切图、重新开场或补出新空间。更换图片只是直接切入另一真实画面，不编走路、穿门等过渡。每段第一行只写「【场景k】」（k 是场景序号，从 1 开始），下一行起写台词，除标记外不写别的说明。`
-            : '',
-          '只输出台词本身。',
-        ]
-          .filter(Boolean)
-          .join('\n'),
+        userId: scope.userId,
+        source: 'douyin-workbench.store-visit-lines',
+        platformScope: !scope.tenantId,
       },
-      messages: [
-        {
-          role: 'user',
-          content: [
-            mother?.title ? `母选题：${mother.title}` : '',
-            `脚本标题：${topic.title}`,
-            `脚本内容：<script>${source.slice(0, 8000)}</script>`,
-            sceneCatalog
-              ? `门店场景（序号即【场景k】的 k）：<scenes>\n${sceneCatalog}\n</scenes>`
-              : '',
-            requirement
-              ? `补充要求：<requirement>${requirement}</requirement>`
-              : '',
-            '请输出探店台词。',
+    };
+    const voiceRules = [
+      personaBrief
+        ? '出镜人是固定的预设人物，台词必须是这个人物的第一人称、语气一致：\n' +
+          personaBrief
+        : '',
+      style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
+    ];
+
+    if (!storeVisit) {
+      const result = await this.agentService.runWithMessages({
+        config: {
+          ...config,
+          system: [
+            '你负责根据现有脚本写出「探店」画外音旁白：画面是门店环境、产品与细节的空镜，旁白由配音念出来，配合画面讲述探店体验。',
+            '用口语、自然推荐的语气，句子短，方便念。没有明确体验记录时，不写已经品尝、购买或游玩的第一人称经历，不编口感、效果或图外空间。',
+            '时长约 30～60 秒（150～300 字），按说话的停顿分行；不要写镜头号、动作提示、括号说明、标题、Markdown 或任何解释。',
+            '只用资料里给出的店名、产品、价格等事实，不编造；不写违法、危险、歧视、低俗、侵权或效果承诺类内容。',
+            STORE_VISIT_PLAIN_SPEECH_RULE,
+            ...voiceRules,
+            '只输出台词本身。',
           ]
             .filter(Boolean)
             .join('\n'),
         },
-      ],
-    });
+        messages: [
+          {
+            role: 'user',
+            content: [
+              mother?.title ? `母选题：${mother.title}` : '',
+              `脚本标题：${topic.title}`,
+              `脚本内容：<script>${source.slice(0, 8000)}</script>`,
+              requirement
+                ? `补充要求：<requirement>${requirement}</requirement>`
+                : '',
+              '请输出探店台词。',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          },
+        ],
+      });
+      const lines = this.readAgentText(result).trim().slice(0, 2000);
+      if (lines.length < 10) {
+        throw new BadRequestException('DOUYIN_STORE_VISIT_LINES_FAILED');
+      }
+      return { lines };
+    }
 
-    const text = this.readAgentText(result);
-    const segments = sceneImageIds.length
-      ? parseStoreVisitSceneSegments(text, sceneImageIds)
-      : [];
+    const setting = topic.storeVisit ?? {};
+    const storeName = String(setting.storeName ?? '').trim();
+    const overall = String(setting.sceneDescription ?? '').trim();
+    const catalog = describeStoreVisitMaterials(materials);
+    // 旧模板里首尾出镜、全程讲解也都是开场有人物
+    const presenterOpening = ['opening', 'bookend', 'presenter-all'].includes(
+      setting.template ?? '',
+    );
+    // 台词里的数字只能来自这些资料
+    const facts = [
+      mother?.title,
+      topic.title,
+      storeName,
+      overall,
+      catalog,
+      requirement,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const system = [
+      '你是抖音探店短视频的口播撰稿人。门店给了一组真实素材（照片或视频），每段台词配一个素材播放。请按素材说明写一条完整、自然、让人想去的探店画外音口播，像真人博主带朋友逛店。',
+      '【结构】',
+      `1. 第 1 段开场：用开场素材（标了「开场·门头」的素材；没有标时选说明里是门头、招牌或店外的素材）。先点出门店名称，例如「今天我们来到了${storeName || 'XX店'}」，再用一句话说清这是一家什么店、最吸引人的一点（只从门店整体说明和素材说明里挑，例如位置、人均、主打项目）。${presenterOpening ? '这一段由出镜人物站在门头前对着镜头说，用第一人称。' : ''}`,
+      '2. 后面每段介绍一个素材：先说这是什么，再说说明里写到的具体内容（套餐里有什么、份量、怎么玩、适合谁），两三句短句；写法跟着说明内容走，不套固定句式。',
+      '3. 说明里写了团购价的，报价时要连同对象一起说，例如「这份双人套餐，抖音团购只要 99 元」「卡丁车加射箭，抖音团购价 68 元就能玩」，不能单独甩出一个价格。报价只是写法之一，不必每段都报价，同一种句式不要反复用；说明里没写价格就不提价格，没写份量、项目就不编。',
+      '4. 最后用一句话引导下单，例如「想去的直接点视频下方的团购链接」；不再加新的事实。',
+      '【语气】口语、热情、自然，有画面感；可以用「家人们」「姐妹们」这类常见称呼，但不要油腻，不用「老铁」「兄弟」「整」这类江湖口吻（预设人物另有要求时按人物来）。段与段之间可以用「再来看看」「还有」这类口头衔接，但不编走路、推门之类画面里没有的动作。',
+      STORE_VISIT_PLAIN_SPEECH_RULE,
+      '【不许编造】',
+      '- 只写门店名称、门店整体说明、素材说明和标签里出现的店名、菜品、项目、价格、份量、人数；没写的一律不写。',
+      '- 不描述口感、味道、服务、氛围等说明里没写的感受；不写「我吃过」「我玩了」这类亲身体验；不推测画面里看不到的东西，不写图外空间。',
+      '- 价格、份量、人数一律用阿拉伯数字，且必须和说明里写的数字一模一样。',
+      '【长度与格式】',
+      '- 整条约 30～60 秒（150～300 字）；段数跟着素材走，共 3～8 段，每段 20～60 个字；素材少时同一素材可以用在多段。',
+      '- 每段第一行只写「【素材k】」（k 是素材序号），下一行起写这一段的台词。',
+      '- 不写镜头号、动作提示、括号说明、标题、Markdown 或任何解释；不写违法、危险、歧视、低俗、侵权或效果承诺类内容。',
+      '【示例】只示范写法和节奏，内容必须换成本店资料，不要照抄示例里的店名、菜品和价格：',
+      '【素材1】\n家人们，今天我们来到了 XX 烤肉！就在地铁站旁边，人均 60 左右就能吃饱。\n【素材2】\n先看这份双人套餐，牛五花、肥牛再加两份拌饭，抖音团购只要 99 元。\n【素材3】\n店里还有独立包间，朋友聚会、过生日都很合适。\n【素材1】\n想去的直接点视频下方的团购链接，先囤上再说。',
+      ...voiceRules,
+      '只输出台词本身。',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      {
+        role: 'user',
+        content: [
+          mother?.title ? `母选题：${mother.title}` : '',
+          `选题：${topic.title}`,
+          storeName
+            ? `门店名称：<store_name>${storeName}</store_name>`
+            : '门店名称：未填写，开场用「这家店」代替，不要编店名',
+          overall
+            ? `门店整体说明：<store>${overall.slice(0, 2000)}</store>`
+            : '',
+          `门店素材（序号即【素材k】的 k）：<materials>\n${catalog}\n</materials>`,
+          requirement
+            ? `补充要求：<requirement>${requirement}</requirement>`
+            : '',
+          '请输出探店台词。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      },
+    ];
+    let text = this.readAgentText(
+      await this.agentService.runWithMessages({
+        config: { ...config, system },
+        messages,
+      }),
+    );
+    let segments = parseStoreVisitMaterialSegments(text, materials);
+    const written = segments.length
+      ? segments.map((segment) => segment.lines).join('\n')
+      : text;
+    const unknown = findStoreVisitUnknownNumbers(written, facts);
+    const hard = findStoreVisitHardToVoiceWords(written, facts);
+    // 格式不对、编了资料里没有的数字或用了方言谐音字时，按资料重写一次
+    if (!segments.length || unknown.length || hard.length) {
+      const retried = this.readAgentText(
+        await this.agentService.runWithMessages({
+          config: { ...config, system },
+          messages: [
+            ...messages,
+            { role: 'assistant', content: text },
+            {
+              role: 'user',
+              content: [
+                segments.length
+                  ? ''
+                  : '格式不对：每段第一行必须单独写「【素材k】」。',
+                unknown.length
+                  ? `台词里的「${unknown.join('」「')}」在资料里找不到，不能编造数字；只用素材说明和门店整体说明里的数字，没写价格就不提价格。`
+                  : '',
+                hard.length
+                  ? `台词里的「${hard.join('」「')}」是方言或谐音字，配音和视频模型念不准；意思不变，改用普通话常用说法。`
+                  : '',
+                '请按同样的要求重写全部台词。',
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            },
+          ],
+        }),
+      );
+      const parsed = parseStoreVisitMaterialSegments(retried, materials);
+      if (parsed.length || !segments.length) {
+        text = retried;
+        segments = parsed;
+      }
+    }
     const lines = (
       segments.length
         ? segments.map((segment) => segment.lines).join('\n')
-        : text.replace(/^\s*【场景\s*\d+\s*】\s*$/gm, '').trim()
+        : text.replace(/^\s*【(?:素材|场景)\s*\d+\s*】\s*$/gm, '').trim()
     ).slice(0, 2000);
     if (lines.length < 10) {
       throw new BadRequestException('DOUYIN_STORE_VISIT_LINES_FAILED');
     }
-    return segments.length ? { lines, segments } : { lines };
+    const warnings = reviewStoreVisitLines({
+      segments: segments.length ? segments : [{ lines }],
+      facts,
+      storeName,
+    });
+    return {
+      lines,
+      ...(segments.length ? { segments } : {}),
+      ...(warnings.length ? { warnings } : {}),
+    };
   }
 
   /**

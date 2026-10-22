@@ -30,11 +30,20 @@ export interface VideoEntity {
   width?: number | null;
   height?: number | null;
   tags: string[];
+  /** @description 视频备注（最多 500 字），探店素材的说明（拍的是什么、团购价、份量等）写在这里。 */
+  note?: string;
   /** @description 所属分组 ID，null 表示未分组。 */
   groupId?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * @description 视频备注上限（字），与图库备注一致。
+ * @keyword-cn 视频备注上限, 素材说明上限
+ * @keyword-en video-note-limit, material-note-limit
+ */
+export const VIDEO_NOTE_MAX_LENGTH = 500;
 
 /**
  * @description 直传完成后的登记入参。
@@ -55,16 +64,19 @@ export interface VideoCreateInput {
   width?: number | null;
   height?: number | null;
   tags?: string[];
+  note?: string;
   groupId?: number | null;
 }
 
 /**
- * @description 视频可改字段：名称、标签、分组。对象键与地址不可改——改了就对不上 OSS 里的实体。
+ * @description 视频可改字段：名称、标签、备注、分组。对象键与地址不可改——改了就对不上 OSS 里的实体。
  * @keyword-cn 视频更新入参
  * @keyword-en video-update-input
  */
 export interface VideoUpdateInput {
   name?: string;
   tags?: string[];
+  /** @description 备注，空串表示清掉 */
+  note?: string;
   groupId?: number | null;
 }

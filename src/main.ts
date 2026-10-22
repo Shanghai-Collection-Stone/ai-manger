@@ -147,6 +147,14 @@ async function bootstrap() {
     res.status(204).end();
   });
 
+  // 缩略图文件名是「时间戳-UUID」、生成后不会覆盖，可长期缓存，图库滚动和切换筛选时不再逐张回源校验。
+  app.use(
+    '/static/uploads_thumbs',
+    express.static(join(process.cwd(), 'public', 'uploads_thumbs'), {
+      maxAge: '30d',
+      immutable: true,
+    }),
+  );
   app.use('/static', express.static(join(process.cwd(), 'public')));
   await app.startAllMicroservices();
   await app.listen(process.env.PORT ?? 3011);

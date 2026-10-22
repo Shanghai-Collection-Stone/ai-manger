@@ -394,18 +394,20 @@ export class GalleryService {
   }
 
   /**
-   * @description 按租户可见性查找图片，兼容旧游标分页并支持多标签、收藏、随机与收藏优先排序。
+   * @description 按租户可见性查找图片，兼容旧游标分页并支持多标签、收藏、关键词、随机与收藏优先排序；
+   *   最新/最早排序的游标按游标图片的 `createdAt + id` 复合比较，与排序键一致且能直接从索引定位起点。
    * @param {string} userId - 用户ID
    * @param {string} [tenantId] - 租户ID
    * @param {Object} [options] - 查询选项
    * @param {number} [options.groupId] - 图库组ID
    * @param {string} [options.tag] - 标签
-   * @param {number} [options.cursorId] - 游标
+   * @param {number} [options.cursorId] - 游标（上一页最后一张图片 ID）
    * @param {number} [options.limit=50] - 返回条数
    * @param {'asc'|'desc'} [options.sortOrder='desc'] - 旧创建时间排序方向
+   * @param {string} [options.keyword] - 文件名、描述与备注的包含搜索词
    * @returns {Promise<GalleryImageEntity[]>} 图片列表
-   * @keyword-cn 租户图片查询, 图库多条件排序
-   * @keyword-en tenant-image-query, gallery-multi-sort
+   * @keyword-cn 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索
+   * @keyword-en tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
    * @since 2026-03-23
    */
   async findAccessibleImages(
@@ -423,6 +425,7 @@ export class GalleryService {
       tags?: string[];
       favoriteOnly?: boolean;
       offset?: number;
+      keyword?: string;
     },
   ): Promise<GalleryImageEntity[]> {
     const {
@@ -437,12 +440,12 @@ export class GalleryService {
       tags,
       favoriteOnly = false,
       offset = 0,
+      keyword,
     } = options ?? {};
     const resolvedSort = sort ?? (sortOrder === 'asc' ? 'oldest' : 'newest');
     const sortDirection = resolvedSort === 'oldest' ? 1 : -1;
-    const clauses: Record<string, unknown>[] = [
-      this.buildTenantFilter(userId, tenantId),
-    ];
+    const scope = this.buildTenantFilter(userId, tenantId);
+    const clauses: Record<string, unknown>[] = [scope];
     if (imageType && imageType !== 'all') {
       clauses.push(this.buildImageTypeFilter(imageType));
     } else if (!includeCollage) {
@@ -455,14 +458,20 @@ export class GalleryService {
     }
     if (tag) clauses.push({ tags: tag });
     if (favoriteOnly) clauses.push({ favorite: true });
+    const normalizedKeyword = String(keyword ?? '')
+      .trim()
+      .slice(0, 64);
+    if (normalizedKeyword) {
+      clauses.push(this.buildKeywordClause(normalizedKeyword));
+    }
     if (
       (resolvedSort === 'newest' || resolvedSort === 'oldest') &&
       typeof cursorId === 'number' &&
       Number.isFinite(cursorId)
     ) {
-      clauses.push({
-        id: sortDirection === 1 ? { $gt: cursorId } : { $lt: cursorId },
-      });
+      clauses.push(
+        await this.buildCreatedAtCursorClause(scope, cursorId, sortDirection),
+      );
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
@@ -488,6 +497,54 @@ export class GalleryService {
     }
     const rows = await query.limit(lim).toArray();
     return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+  }
+
+  /**
+   * @description 按游标图片的创建时间与业务 ID 构造复合游标条件，与 `createdAt, id` 排序一致；
+   *   `createdAt` 的范围让索引从游标位置起扫，不必每页从头跳过已读条目。游标图片已删除或缺创建时间时回退为只比较业务 ID。
+   * @param {Record<string, unknown>} scope - 当前租户可见范围条件。
+   * @param {number} cursorId - 上一页最后一张图片 ID。
+   * @param {1 | -1} direction - 排序方向，1 为最早优先。
+   * @returns {Promise<Record<string, unknown>>} 游标过滤条件。
+   * @keyword-cn 复合游标, 创建时间分页
+   * @keyword-en keyset-cursor, created-at-pagination
+   */
+  private async buildCreatedAtCursorClause(
+    scope: Record<string, unknown>,
+    cursorId: number,
+    direction: 1 | -1,
+  ): Promise<Record<string, unknown>> {
+    const beyond = direction === 1 ? '$gt' : '$lt';
+    const cursor = await this.images.findOne(
+      { $and: [scope, { id: cursorId }] },
+      { projection: { _id: 0, createdAt: 1 } },
+    );
+    const createdAt = cursor?.createdAt;
+    if (!(createdAt instanceof Date)) return { id: { [beyond]: cursorId } };
+    return {
+      createdAt: { [direction === 1 ? '$gte' : '$lte']: createdAt },
+      $or: [
+        { createdAt: { [beyond]: createdAt } },
+        { id: { [beyond]: cursorId } },
+      ],
+    };
+  }
+
+  /**
+   * @description 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配，正则特殊字符按字面量处理。
+   * @param {string} keyword - 已去空白并截断的搜索词。
+   * @returns {Record<string, unknown>} 关键词过滤条件。
+   * @keyword-cn 关键词搜索, 文件名备注匹配
+   * @keyword-en keyword-search, name-note-match
+   */
+  private buildKeywordClause(keyword: string): Record<string, unknown> {
+    const pattern = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = { $regex: pattern, $options: 'i' };
+    return {
+      $or: ['originalName', 'fileName', 'description', 'note'].map((field) => ({
+        [field]: match,
+      })),
+    };
   }
 
   /**

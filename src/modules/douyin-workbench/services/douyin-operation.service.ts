@@ -43,7 +43,10 @@ import {
 } from '../../pixmax/services/pixmax-video-params.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
 import { toStoreVisitLipSyncView } from './douyin-store-visit-lip-sync.js';
-import { supportsStoreVisitReferences } from './douyin-store-visit-continuity.js';
+import {
+  supportsStoreVisitReferenceAudio,
+  supportsStoreVisitReferences,
+} from './douyin-store-visit-continuity.js';
 
 type DouyinOperation = 'generate' | 'publish' | 'crawl';
 type DouyinScope = { tenantId?: string; userId: string };
@@ -362,6 +365,8 @@ export class DouyinOperationService {
           audioDriven?: boolean;
           /** 人物与实景可分开作为多图参考，直接生成视频。 */
           multiReference?: boolean;
+          /** 收参考音频（数眼 Seedance 2.0）：人物段可参考音色直接开口说话，合成时保留原声。 */
+          referenceAudio?: boolean;
           error?: string;
         }
       >;
@@ -369,15 +374,33 @@ export class DouyinOperationService {
   > {
     const readStoreVisitNode = async (nodeKey: string) => {
       try {
-        const runtime = await this.workflowModels.resolveNodeRuntime(
+        let runtime = await this.workflowModels.resolveNodeRuntime(
           WORKFLOW_NODES.douyinWorkbench.key,
           nodeKey,
         );
+        if (
+          nodeKey === WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar &&
+          (!runtime || !supportsStoreVisitReferences(runtime.model))
+        )
+          runtime = await this.workflowModels.resolveNodeRuntime(
+            WORKFLOW_NODES.douyinWorkbench.key,
+            WORKFLOW_NODES.douyinWorkbench.storeVisitVideo,
+          );
         if (!runtime) return { configured: false };
+        if (
+          nodeKey !== WORKFLOW_NODES.douyinWorkbench.voiceClone &&
+          !supportsStoreVisitReferences(runtime.model)
+        )
+          return {
+            configured: false,
+            model: runtime.model,
+            error: '探店每段都生成原生声画，请选择 Seedance 2.0 或 MiniMax-H3',
+          };
         const base = {
           model: runtime.model,
           providerName: runtime.providerName,
           multiReference: supportsStoreVisitReferences(runtime.model),
+          referenceAudio: supportsStoreVisitReferenceAudio(runtime.model),
         };
         if (nodeKey === WORKFLOW_NODES.douyinWorkbench.voiceClone) {
           if (
@@ -422,8 +445,8 @@ export class DouyinOperationService {
                 configured: true,
                 ...base,
                 lipSync: false,
-                postLipSync: engine.route !== 'wan',
-                audioDriven: engine.route === 'wan',
+                postLipSync: false,
+                audioDriven: false,
                 durations: listShuyanVideoDurationChoices(runtime.model),
               };
         }
@@ -592,7 +615,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进，探店分段交给探店服务，客户端合成、音色审计与通用数字人历史记录直接返回当前记录；
+   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进，探店分段交给探店服务，客户端合成、音色审计、探店本机素材段配音与通用数字人历史记录直接返回当前记录；
    *   直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
    * @keyword-cn 同步抖音调用状态, 异步任务查询
    * @keyword-en sync-douyin-operation, async-job-status
@@ -610,9 +633,10 @@ export class DouyinOperationService {
     if (row.provider === 'shuyan' && row.mode === 'store-visit')
       return this.storeVisit.refresh(row.id);
     if (row.provider === 'shuyan') return this.shuyanVideos.refresh(row.id);
-    // 音色审计、客户端合成，以及通用数字人通道下线前的历史记录都没有可查询的远端任务
+    // 音色审计、探店本机素材段配音、客户端合成，以及通用数字人通道下线前的历史记录都没有可查询的远端任务
     if (
       row.provider === 'client' ||
+      row.provider === 'dashscope' ||
       row.provider === 'digital-human' ||
       row.operation === 'voice-clone' ||
       row.operation === 'voice-design'

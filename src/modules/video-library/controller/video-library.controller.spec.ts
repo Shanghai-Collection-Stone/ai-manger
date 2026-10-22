@@ -127,6 +127,29 @@ describe('VideoLibraryController (HTTP)', () => {
     expect(body.video.id).toBe(9);
   });
 
+  it('登记与更新都透传视频备注（探店素材说明），更新时空串表示清掉', async () => {
+    videos.register.mockResolvedValue({ id: 9 });
+    videos.update.mockResolvedValue({ id: 9 });
+    await auth(
+      request(server).post('/api/video-library/videos').send({
+        key: 'video-library/video/tenant-1/2026/10/door.mp4',
+        note: '门头招牌，团购价 99 元',
+      }),
+    ).expect(201);
+    expect(videos.register.mock.calls[0][0]).toMatchObject({
+      note: '门头招牌，团购价 99 元',
+    });
+    await auth(
+      request(server)
+        .post('/api/video-library/videos/9')
+        .send({ note: '', tags: ['门头'] }),
+    ).expect(201);
+    expect(videos.update.mock.calls[0][1]).toMatchObject({
+      note: '',
+      tags: ['门头'],
+    });
+  });
+
   it('缺 key 的登记请求 400', async () => {
     await auth(
       request(server).post('/api/video-library/videos').send({ name: 'a.mp4' }),

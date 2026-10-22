@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import type { Db } from 'mongodb';
+import { BSON, type Db } from 'mongodb';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import {
@@ -10,6 +10,9 @@ import {
 } from './douyin-workbench-repository.service.js';
 import {
   buildStoreVisitSceneBrief,
+  describeStoreVisitVoice,
+  describeStoreVisitSegmentFailure,
+  matchesStoreVisitRequest,
   DouyinStoreVisitService,
 } from './douyin-store-visit.service.js';
 import {
@@ -309,6 +312,71 @@ function buildContinuityService() {
 
 describe('探店真实尾帧连续生成', () => {
   const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+  it('Mongo 把未填写字段保存成 null 后，图片段仍匹配原任务，真实修改仍能拦下', () => {
+    const segment = { id: 'a', lines: '介绍门店', sceneImageId: 17 };
+    const topic = { storeVisit: { voicePrompt: '自然男声' } };
+    const request = BSON.deserialize(
+      BSON.serialize(
+        {
+          lines: segment.lines,
+          sceneImageId: 17,
+          sceneVideoId: undefined,
+          action: '',
+          shot: 'broll',
+          visualSource: 'original',
+          voiceId: '',
+          voicePrompt: '自然男声',
+          faceImageId: null,
+        },
+        { ignoreUndefined: false },
+      ),
+    );
+    expect(request.sceneVideoId).toBeNull();
+    expect(matchesStoreVisitRequest(topic, segment, request)).toBe(true);
+    expect(
+      matchesStoreVisitRequest(
+        topic,
+        { ...segment, sceneImageId: 18 },
+        request,
+      ),
+    ).toBe(false);
+    expect(
+      matchesStoreVisitRequest(
+        { storeVisit: { voicePrompt: '自然女声' } },
+        segment,
+        request,
+      ),
+    ).toBe(false);
+  });
+  it('数据库读取后的图片段不会被轮询误判为已修改，并能继续提交', async () => {
+    const { service, row } = buildContinuityService();
+    Object.assign(
+      row.request,
+      BSON.deserialize(
+        BSON.serialize({ sceneVideoId: undefined }, { ignoreUndefined: false }),
+      ),
+    );
+    await service.refreshRow(row);
+    expect(row.status).toBe('queued');
+    await service.continueOperation(
+      'pending-2',
+      { previousVideoId: 41, tailImageId: 92 },
+      scope,
+    );
+    expect(service.fetchShuyan).toHaveBeenCalledTimes(1);
+  });
+  it('数眼五分钟超时显示等待超时，连接错误仍有独立说明', () => {
+    expect(
+      describeStoreVisitSegmentFailure(
+        'SHUYAN_VIDEO_NETWORK_ERROR:TimeoutError: The operation was aborted due to timeout',
+      ),
+    ).toContain('超过 5 分钟');
+    expect(
+      describeStoreVisitSegmentFailure(
+        'SHUYAN_VIDEO_NETWORK_ERROR:TypeError: fetch failed',
+      ),
+    ).toContain('连接数眼');
+  });
   it('台词或人物空镜切换不算换场景，真正换场景才切起始图', () => {
     const segments = [
       { id: 'a', lines: '开场', sceneImageId: 17 },
@@ -352,12 +420,12 @@ describe('探店真实尾帧连续生成', () => {
     ).toEqual([
       {
         type: 'image_url',
-        role: 'first_frame',
+        role: 'reference_image',
         image_url: { url: 'https://cdn.example/actual-tail.jpg' },
       },
     ]);
     expect(payload.content[0].text).toContain('严格从尾帧的吧台左侧画面接续');
-    expect(payload.generate_audio).toBe(false);
+    expect(payload.generate_audio).toBe(true);
     expect(service.billing.chargeService).toHaveBeenCalledTimes(1);
   });
   it('更换实景图时无需截尾帧或视觉规划，直接使用新图，不生成空间过渡', async () => {
@@ -583,7 +651,7 @@ describe('独立探店制作流程（画外音）', () => {
         ],
       },
     });
-    await expect(service.start(2, scope)).rejects.toThrow('场景说明');
+    await expect(service.start(2, scope)).rejects.toThrow('还没写说明');
     expect(service.billing.chargeService).not.toHaveBeenCalled();
   });
 
@@ -709,6 +777,7 @@ describe('独立探店制作流程（画外音）', () => {
         lines: '第一段',
         sceneImageId: 17,
         videoId: 31,
+        nativeAudio: true,
         audioUrl: 'https://oss/a.wav',
         audioSeconds: 8.2,
         voiceId: 'v1',
@@ -721,6 +790,7 @@ describe('独立探店制作流程（画外音）', () => {
       )[0],
     ).toMatchObject({
       videoId: 31,
+      nativeAudio: true,
       audioUrl: 'https://oss/a.wav',
       voiceId: 'v1',
     });
@@ -742,6 +812,7 @@ describe('独立探店制作流程（画外音）', () => {
       'seg-1',
       {
         videoId: 31,
+        nativeAudio: true,
         audioUrl: 'https://oss/a.wav',
         audioSeconds: 8.2,
         voiceId: 'v1',
@@ -953,7 +1024,7 @@ describe('独立探店制作流程（画外音）', () => {
         ...readyTopic.storeVisit,
         segments: [{ id: 'seg-1', lines: '今天带大家来看看' }],
       },
-      '第 1 段还没选场景图',
+      '第 1 段还没选素材',
     ],
     ['没选音色', { ...readyTopic.storeVisit, voiceId: undefined }, '音色'],
   ])('%s时在配音、提交和扣费之前拒绝', async (_label, storeVisit, message) => {
@@ -964,66 +1035,37 @@ describe('独立探店制作流程（画外音）', () => {
     expect(service.fetchShuyan).not.toHaveBeenCalled();
   });
 
-  it('逐段配音后以场景图为首帧提交与配音等长的静音空镜', async () => {
+  it('所有画面段生成原生声音，音色样本只作参考不写成合成配音', async () => {
     const service = buildVoiceoverService(readyTopic);
-    const result = await service.start(2, scope);
-    expect(result.operations).toHaveLength(1);
-    expect(service.repository.updateStoreVisitSegment).toHaveBeenCalledWith(
-      2,
-      'seg-1',
-      null,
-      scope,
-    );
-    expect(service.repository.update).toHaveBeenCalledWith(
-      2,
-      { autoConcatShots: true },
-      scope,
-    );
-    expect(service.cosyVoice.synthesize.mock.calls[0][1]).toEqual({
-      model: 'cosyvoice-v3.5-plus',
-      voice: 'cosyvoice-v3.5-plus-aim2-x',
-      text: '今天带大家来看看这家街角咖啡店',
+    await service.start(2, scope);
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
+    expect(payload.generate_audio).toBe(true);
+    expect(
+      payload.content.some((item: any) => item.role === 'reference_audio'),
+    ).toBe(true);
+    expect(payload.content[0].text).toContain('同时生成画外解说');
+    expect(payload.content[0].text).not.toMatch(/静音|不生成人声/);
+    const request = service.operations.insertOne.mock.calls[0][0].request;
+    expect(request).toMatchObject({
+      nativeAudio: true,
+      voiceMode: 'reference',
+      referenceAudioUrl: 'https://oss.example/a.wav',
     });
-    const [url, init] = service.fetchShuyan.mock.calls[0];
-    expect(url).toContain('/seedance/api/v3/contents/generations/tasks');
-    const payload = JSON.parse(init.body);
-    expect(payload).toMatchObject({
-      duration: 10,
-      generate_audio: false,
-      ratio: 'adaptive',
-    });
-    expect(payload.content[1]).toMatchObject({
-      role: 'first_frame',
-      image_url: { url: 'https://cdn/scene.jpg' },
-    });
-    expect(payload.content[0].text).toContain('保留原图招牌');
-    const inserted = service.operations.insertOne.mock.calls[0][0];
-    expect(inserted).toMatchObject({
-      provider: 'shuyan',
-      mode: 'store-visit',
-      segmentId: 'seg-1',
-      status: 'queued',
-      externalId: 'task-1',
-    });
-    expect(inserted.request).toMatchObject({
-      audioUrl: 'https://oss.example/a.wav',
-      audioSeconds: 9.6,
-      voiceId: 'cosyvoice-v3.5-plus-aim2-x',
-    });
+    expect(request.audioUrl).toBeUndefined();
   });
 
-  it('配音超过画面上限加定格容差时退回扣费并提示拆短', async () => {
-    const service = buildVoiceoverService(readyTopic);
-    service.cosyVoice.synthesize.mockResolvedValue({
-      buffer: Buffer.from('wav'),
-      seconds: 21,
-      characters: 200,
-      url: 'https://dashscope.example/t.wav',
+  it('台词预计时长超过视频模型上限时退费并要求拆段', async () => {
+    const service = buildVoiceoverService({
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        segments: [
+          { id: 'seg-1', lines: '这段台词太长'.repeat(30), sceneImageId: 17 },
+        ],
+      },
     });
     await expect(service.start(2, scope)).rejects.toThrow('拆短');
     expect(service.billing.refundService).toHaveBeenCalledTimes(1);
     expect(service.fetchShuyan).not.toHaveBeenCalled();
-    expect(service.operations.insertOne.mock.calls[0][0].status).toBe('failed');
   });
 
   it('仅凭新建探店的标题和场景写画外音台词，无需脚本或分镜', async () => {
@@ -1074,7 +1116,7 @@ describe('独立探店制作流程（画外音）', () => {
     expect(request.config.system).toContain('画外音');
     expect(request.messages[0].content).toContain('木质吧台，招牌拿铁');
     expect(request.messages[0].content).toContain(
-      '场景1：门头招牌（标签：门头）',
+      '素材1（图片）：门头招牌（标签：门头）',
     );
     expect(request.messages[0].content).toContain('语气像朋友推荐');
   });
@@ -1133,7 +1175,7 @@ describe('独立探店制作流程（画外音）', () => {
     const payload = JSON.parse(init.body);
     expect(url).toContain('/seedance/');
     expect(payload.content[1]).toMatchObject({
-      role: 'first_frame',
+      role: 'reference_image',
       image_url: { url: 'https://cdn/scene.jpg' },
     });
     expect(payload.content[0].text).toContain('拿起图中的杯子轻尝一口');
@@ -1195,7 +1237,9 @@ describe('独立探店制作流程（画外音）', () => {
     const service = buildVoiceoverService(topic);
     await service.start(2, scope);
     const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
-    expect(payload.content.slice(1)).toEqual([
+    expect(
+      payload.content.filter((item: any) => item.type === 'image_url'),
+    ).toEqual([
       {
         type: 'image_url',
         role: 'reference_image',
@@ -1279,9 +1323,7 @@ describe('独立探店制作流程（画外音）', () => {
       model: 'wan2.7-i2v',
       apiKey: 'test',
     });
-    await expect(unsupported.start(2, scope)).rejects.toThrow(
-      '不支持人物和场景分图参考',
-    );
+    await expect(unsupported.start(2, scope)).rejects.toThrow('原生声音');
     expect(unsupported.billing.chargeService).not.toHaveBeenCalled();
     expect(unsupported.cosyVoice.synthesize).not.toHaveBeenCalled();
     expect(supportsStoreVisitReferences('wan2.7-i2v')).toBe(false);
@@ -1413,107 +1455,56 @@ describe('独立探店制作流程（画外音）', () => {
     expect(noKeyframe.billing.chargeService).not.toHaveBeenCalled();
   });
 
-  it('首尾出镜：先提交开场人物段，后续空镜等待实际尾帧且不提前扣费', async () => {
-    const keyframe = {
-      type: 'image',
-      id: 91,
-      name: '首帧',
-      url: 'https://cdn/keyframe.jpg',
-    };
+  it('旧可灵人物节点改由视频节点生成原声人物片段，后段仍按顺序排队', async () => {
     const service = buildVoiceoverService({
       storeVisit: {
         ...readyTopic.storeVisit,
-        faceImage: {
-          type: 'image',
-          id: 33,
-          name: '人物',
-          url: 'https://cdn/face.jpg',
-        },
-        template: 'bookend',
+        faceImage: { type: 'image', id: 33, url: 'https://cdn/face.jpg' },
         segments: [
           {
             id: 'seg-1',
-            lines: '大家好，今天带你们来这家咖啡店',
+            lines: '大家好，今天带大家来这家咖啡店',
             sceneImageId: 17,
             shot: 'presenter',
-            keyframe,
-            action: '站在门口挥手',
+            visualSource: 'references',
           },
-          { id: 'seg-2', lines: '吧台的拉花很漂亮', sceneImageId: 17 },
+          { id: 'seg-2', lines: '看看这里的招牌咖啡', sceneImageId: 17 },
         ],
       },
     });
+    service.personas = { get: jest.fn().mockResolvedValue(null) };
     const result = await service.start(2, scope);
     expect(result.operations).toHaveLength(2);
-    const [avatarUrl, avatarInit] = service.fetchShuyan.mock.calls[0];
-    expect(avatarUrl).toMatch(/\/kling\/v1\/videos\/avatar\/image2video$/);
-    expect(JSON.parse(avatarInit.body)).toMatchObject({
-      image: 'https://cdn/keyframe.jpg',
-      sound_file: 'https://oss.example/a.wav',
-      mode: 'pro',
-    });
-    expect(JSON.parse(avatarInit.body).prompt).toContain('站在门口挥手');
-    expect(service.fetchShuyan).toHaveBeenCalledTimes(1);
-    expect(service.billing.chargeService).toHaveBeenCalledTimes(1);
-    const [presenter, broll] = service.operations.insertOne.mock.calls.map(
-      (call: unknown[]) => call[0],
+    expect(service.fetchShuyan.mock.calls[0][0]).toContain('/seedance/');
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
+    expect(payload.generate_audio).toBe(true);
+    expect(payload.sound_file).toBeUndefined();
+    const rows = service.operations.insertOne.mock.calls.map(
+      (call: any[]) => call[0],
     );
-    expect(presenter).toMatchObject({
-      segmentId: 'seg-1',
-      model: 'kling-avatar-pro',
-      externalId: 'kling-1',
-      request: {
-        engine: 'kling-avatar',
-        shot: 'presenter',
-        keyframeImageId: 91,
-        mode: 'pro',
-      },
+    expect(rows[0].request).toMatchObject({
+      engine: 'shuyan-video',
+      nativeAudio: true,
     });
-    expect(broll).toMatchObject({
-      segmentId: 'seg-2',
-      status: 'queued',
-      continuity: { stage: 'waiting', previousSegmentId: 'seg-1' },
-      request: { shot: 'broll' },
-    });
-    expect(broll.externalId).toBeUndefined();
-    expect(broll.request.engine).toBeUndefined();
+    expect(rows[1].continuity.stage).toBe('waiting');
+    expect(service.billing.chargeService).toHaveBeenCalledTimes(1);
   });
 
-  it('人物出镜段配音不足 2 秒时退回扣费并提示多写几句', async () => {
-    const service = buildVoiceoverService({
-      storeVisit: {
-        ...readyTopic.storeVisit,
-        faceImage: {
-          type: 'image',
-          id: 33,
-          name: '人物',
-          url: 'https://cdn/face.jpg',
-        },
-        segments: [
-          {
-            id: 'seg-1',
-            lines: '嗨',
-            sceneImageId: 17,
-            shot: 'presenter',
-            keyframe: {
-              type: 'image',
-              id: 91,
-              name: '首帧',
-              url: 'https://cdn/k.jpg',
-            },
-          },
-        ],
-      },
-    });
+  it('没有可用音色样本也按文字音色直接生成声音', async () => {
+    const service = buildVoiceoverService(readyTopic);
     service.cosyVoice.synthesize.mockResolvedValue({
       buffer: Buffer.from('wav'),
       seconds: 0.8,
-      characters: 1,
-      url: 'https://dashscope.example/t.wav',
     });
-    await expect(service.start(2, scope)).rejects.toThrow('多写几句');
-    expect(service.billing.refundService).toHaveBeenCalledTimes(1);
-    expect(service.fetchShuyan).not.toHaveBeenCalled();
+    await service.start(2, scope);
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
+    expect(payload.generate_audio).toBe(true);
+    expect(payload.content.some((item: any) => item.type === 'audio_url')).toBe(
+      false,
+    );
+    expect(
+      service.operations.insertOne.mock.calls[0][0].request.voiceMode,
+    ).toBe('prompt');
   });
   it('对口型节点先填视频型号时，人物段以人物首帧为第一帧走数眼图生视频，不对口型', async () => {
     const keyframe = {
@@ -1563,15 +1554,15 @@ describe('独立探店制作流程（画外音）', () => {
     const payload = JSON.parse(init.body);
     expect(payload).toMatchObject({
       model: 'MiniMax-H3',
-      ratio: 'adaptive',
-      duration: 10,
+      ratio: '9:16',
+      duration: 4,
     });
     expect(payload.content[1]).toMatchObject({
-      role: 'first_frame',
+      role: 'reference_image',
       image_url: { url: 'https://cdn/keyframe.jpg' },
     });
-    expect(payload.content[0].text).toContain('原图可见范围内介绍门店');
-    expect(payload.content[0].text).toContain('固定机位');
+    expect(payload.content[0].text).toContain('只在所给图片可见范围内拍摄');
+    expect(payload.content[0].text).toContain('人物亲口说话');
     const inserted = service.operations.insertOne.mock.calls[0][0];
     expect(inserted).toMatchObject({
       model: 'MiniMax-H3',
@@ -1585,57 +1576,27 @@ describe('独立探店制作流程（画外音）', () => {
     expect(inserted.request.mode).toBeUndefined();
   });
 
-  it('对口型节点是视频型号时，人物段配音超过型号上限同样退费并提示拆短', async () => {
-    const service = buildVoiceoverService({
+  it('手改音色描述会清除旧音色编号和旧成片，保存文本即可用于新视频', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    topics.findOne.mockResolvedValue({
+      id: 2,
+      kind: 'child',
       storeVisit: {
-        ...readyTopic.storeVisit,
-        faceImage: {
-          type: 'image',
-          id: 33,
-          name: '人物',
-          url: 'https://cdn/face.jpg',
-        },
-        segments: [
-          {
-            id: 'seg-1',
-            lines: '很长的一段讲解',
-            sceneImageId: 17,
-            shot: 'presenter',
-            keyframe: {
-              type: 'image',
-              id: 91,
-              name: '首帧',
-              url: 'https://cdn/k.jpg',
-            },
-          },
-        ],
+        voiceId: 'old',
+        voicePrompt: '女声',
+        segments: [{ id: 'a', lines: '门头', videoId: 31, nativeAudio: true }],
       },
     });
-    const original =
-      service.workflowModels.resolveNodeRuntime.getMockImplementation();
-    service.workflowModels.resolveNodeRuntime.mockImplementation(
-      async (workflow: string, node: string) =>
-        node === 'store-visit-avatar'
-          ? {
-              providerId: 'sy-3',
-              providerCode: 'shuyan',
-              providerName: '数眼',
-              model: 'MiniMax-H3',
-              apiKey: 'sk-shuyan',
-            }
-          : original(workflow, node),
+    await repository.update(
+      2,
+      { storeVisit: { voicePrompt: '低沉男声，东北口音' } },
+      scope,
     );
-    service.cosyVoice.synthesize.mockResolvedValue({
-      buffer: Buffer.from('wav'),
-      seconds: 25,
-      characters: 120,
-      url: 'https://dashscope.example/t.wav',
-    });
-    await expect(service.start(2, scope)).rejects.toThrow(
-      '人物出镜视频型号单段画面上限',
-    );
-    expect(service.billing.refundService).toHaveBeenCalledTimes(1);
-    expect(service.fetchShuyan).not.toHaveBeenCalled();
+    const update = topics.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set['storeVisit.voicePrompt']).toBe('低沉男声，东北口音');
+    expect(update.$unset['storeVisit.voiceId']).toBe('');
+    expect(update.$set['storeVisit.segments'][0].videoId).toBeUndefined();
+    expect(update.$unset.generatedVideoId).toBe('');
   });
 });
 
@@ -2013,56 +1974,36 @@ describe('人物段视频型号出片后对口型', () => {
     });
   });
 
-  it('要对口型的人物段不给定格容差，配音超过型号最长秒数就退费拆短', async () => {
-    const service = buildVoiceoverService({
-      storeVisit: {
-        ...readyTopic.storeVisit,
-        faceImage: {
-          type: 'image',
-          id: 33,
-          name: '人物',
-          url: 'https://cdn/face.jpg',
-        },
-        segments: [
-          {
-            id: 'seg-1',
-            lines: '讲解',
-            sceneImageId: 17,
-            shot: 'presenter',
-            keyframe: {
-              type: 'image',
-              id: 91,
-              name: '首帧',
-              url: 'https://cdn/k.jpg',
-            },
-          },
-        ],
-      },
-    });
-    const original =
-      service.workflowModels.resolveNodeRuntime.getMockImplementation();
-    service.workflowModels.resolveNodeRuntime.mockImplementation(
-      (workflow: string, node: string) =>
-        node === 'store-visit-avatar'
-          ? Promise.resolve({
-              providerId: 'sy-3',
-              providerCode: 'shuyan',
-              providerName: '数眼',
-              model: 'MiniMax-H3',
-              apiKey: 'sk-shuyan',
-            })
-          : (original(workflow, node) as Promise<unknown>),
+  it('原声人物视频完成后直接入库，缺少配音文件也不追加对口型', async () => {
+    const { service, row } = buildLipSyncService();
+    row.request.nativeAudio = true;
+    row.request.voicePrompt = describeStoreVisitVoice(
+      readyTopic.storeVisit as any,
     );
-    service.cosyVoice.synthesize.mockResolvedValue({
-      buffer: Buffer.from('wav'),
-      seconds: 15.5,
-      characters: 70,
-      url: 'https://dashscope.example/t.wav',
-    });
-    await expect(
-      service.start(2, { tenantId: 'tenant-1', userId: 'user-1' }),
-    ).rejects.toThrow('要对口型，不能定格补齐');
-    expect(service.billing.refundService).toHaveBeenCalledTimes(1);
+    delete row.request.audioUrl;
+    row.request.sceneVideoId = undefined;
+    await service.refreshRow(
+      BSON.deserialize(BSON.serialize(row, { ignoreUndefined: false })),
+    );
+    expect(
+      service.fetchShuyan.mock.calls.some(([url]: [string]) =>
+        /identify-face|advanced-lip-sync/.test(url),
+      ),
+    ).toBe(false);
+    expect(service.storage.saveRemote).toHaveBeenCalledWith(
+      'https://shuyan.example/h3.mp4',
+      expect.anything(),
+    );
+    expect(service.repository.updateStoreVisitSegment).toHaveBeenCalledWith(
+      2,
+      'seg-1',
+      expect.objectContaining({
+        videoId: 501,
+        nativeAudio: true,
+        audioUrl: '',
+      }),
+      expect.anything(),
+    );
   });
 });
 
@@ -2139,32 +2080,17 @@ function buildWanService() {
 describe('人物段用 wan2.7-i2v 按配音生成', () => {
   const scope = { tenantId: 'tenant-1', userId: 'user-1' };
 
-  it('首帧加这段配音走数眼百炼协议一次生成，带异步请求头且不进后期对口型', async () => {
+  it('旧万相人物节点改用原生声画视频节点，不再提交驱动配音', async () => {
     const { service } = buildWanService();
+    service.fetchShuyan.mockResolvedValue({ id: 'new-task' });
     await service.start(2, scope);
     const [url, init] = service.fetchShuyan.mock.calls[0];
-    expect(url).toBe(
-      'https://platform.shuyanai.com/ali/api/v1/services/aigc/video-generation/video-synthesis',
-    );
-    expect(init.headers).toEqual({ 'X-DashScope-Async': 'enable' });
+    expect(url).toContain('/seedance/');
     const payload = JSON.parse(init.body);
-    expect(payload.model).toBe('wan2.7-i2v');
-    expect(payload.input.media).toEqual([
-      { type: 'first_frame', url: 'https://cdn/keyframe.jpg' },
-      { type: 'driving_audio', url: 'https://oss.example/a.wav' },
-    ]);
-    expect(payload.parameters).toMatchObject({
-      duration: 10,
-      resolution: '720P',
-      prompt_extend: false,
-      watermark: false,
-    });
-    expect(payload.input.prompt).toContain('人物按传入的配音说话');
-    const inserted = service.operations.insertOne.mock.calls[0][0];
-    expect(inserted).toMatchObject({
-      externalId: 'wan-1',
-      request: { shot: 'presenter', engine: 'shuyan-video', audioDriven: true },
-    });
+    expect(payload.generate_audio).toBe(true);
+    expect(
+      payload.input?.media?.some((item: any) => item.type === 'driving_audio'),
+    ).not.toBe(true);
   });
 
   it('万相出片后直接入库，不识别人脸也不提交可灵对口型', async () => {
@@ -2220,51 +2146,39 @@ describe('人物段用 wan2.7-i2v 按配音生成', () => {
     expect(completed['lipSync.stage']).toBeUndefined();
   });
 
-  it('没配 OSS 时在建队列和扣费之前拒绝，配音太短时退费提示多写几句', async () => {
-    const { service: offline } = buildWanService();
-    offline.storage.hasPublicStorage.mockReturnValue(false);
-    await expect(offline.start(2, scope)).rejects.toThrow('配置 OSS');
-    expect(offline.billing.chargeService).not.toHaveBeenCalled();
-
-    const { service: short } = buildWanService();
-    short.cosyVoice.synthesize.mockResolvedValue({
-      buffer: Buffer.from('wav'),
-      seconds: 1.4,
-      characters: 4,
-      url: 'https://dashscope.example/t.wav',
+  it('纯文字音色不依赖 OSS 配音存储或百炼节点', async () => {
+    const service = buildVoiceoverService({
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        voiceId: undefined,
+        voiceModel: undefined,
+        voiceSource: undefined,
+        voicePrompt: '温柔自然的女声',
+      },
     });
-    await expect(short.start(2, scope)).rejects.toThrow('至少要 2 秒');
-    expect(short.billing.refundService).toHaveBeenCalledTimes(1);
-    expect(short.fetchShuyan).not.toHaveBeenCalled();
+    service.storage.hasPublicStorage.mockReturnValue(false);
+    await service.start(2, scope);
+    expect(service.cosyVoice.synthesize).not.toHaveBeenCalled();
+    expect(service.storage.saveAudio).not.toHaveBeenCalled();
+    expect(service.operations.insertOne.mock.calls[0][0].request).toMatchObject(
+      { nativeAudio: true, voiceMode: 'prompt' },
+    );
   });
 
-  it('图库里的站内首帧先传 OSS 换公网地址再交给万相；上传不了时退费并说明原因', async () => {
-    const { service } = buildWanService();
-    const topic = await service.repository.get();
-    topic.storeVisit.segments[0].keyframe.url = '/static/uploads/keyframe.png';
-    service.repository.get.mockResolvedValue(topic);
+  it('音色服务暂不可用时使用音色描述，不改为静音或在合成时替换声音', async () => {
+    const service = buildVoiceoverService(readyTopic);
+    service.cosyVoice.synthesize.mockRejectedValue(
+      new Error('voice unavailable'),
+    );
     await service.start(2, scope);
-    expect(service.storage.publishImage).toHaveBeenCalledWith(
-      '/static/uploads/keyframe.png',
-      scope,
-    );
     const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
-    expect(payload.input.media[0]).toEqual({
-      type: 'first_frame',
-      url: 'https://oss.example/first-frame.png',
-    });
-
-    const { service: failing } = buildWanService();
-    const local = await failing.repository.get();
-    local.storeVisit.segments[0].keyframe.url = '/static/uploads/keyframe.png';
-    failing.repository.get.mockResolvedValue(local);
-    failing.storage.publishImage.mockRejectedValue(
-      new Error('DOUYIN_PUBLIC_STORAGE_MISSING'),
+    expect(payload.generate_audio).toBe(true);
+    expect(payload.content[0].text).toContain('音色描述');
+    expect(payload.content.some((item: any) => item.type === 'audio_url')).toBe(
+      false,
     );
-    await expect(failing.start(2, scope)).rejects.toThrow(
-      '配好后会自动上传首帧',
-    );
-    expect(failing.billing.refundService).toHaveBeenCalledTimes(1);
-    expect(failing.fetchShuyan).not.toHaveBeenCalled();
+    expect(
+      service.operations.insertOne.mock.calls[0][0].request.audioUrl,
+    ).toBeUndefined();
   });
 });
