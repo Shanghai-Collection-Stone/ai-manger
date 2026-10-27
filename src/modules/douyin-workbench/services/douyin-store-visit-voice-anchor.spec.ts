@@ -331,4 +331,146 @@ describe('探店音色锚点', () => {
     );
     expect(service.storage.saveAudio).toHaveBeenCalledTimes(1);
   });
+
+  it('后台轮询不会停掉等第 1 段声音的段（不紧挨也算），它的同镜头续段也照常等', async () => {
+    // 复现：第 1 段还在生成，第 3 段等第 1 段的声音、第 4 段接第 3 段尾帧
+    const service = buildService({
+      segments: segments([{}, {}, { sceneImageId: 19 }]).concat({
+        id: 'seg-4',
+        lines: '抖音左下角可以点击下单',
+        sceneImageId: 19,
+      }),
+    });
+    const waitingRow = (
+      segmentId: string,
+      previousSegmentId: string,
+      lines: string,
+      sceneImageId: number,
+    ) => ({
+      id: `pending-${segmentId}`,
+      topicId: 2,
+      segmentId,
+      status: 'queued',
+      mode: 'store-visit',
+      provider: 'shuyan',
+      userId: scope.userId,
+      tenantId: scope.tenantId,
+      updatedAt: new Date(),
+      continuity: {
+        stage: 'waiting',
+        previousSegmentId,
+        anchorSegmentId: 'seg-1',
+        sequenceId: 's',
+      },
+      request: {
+        lines,
+        action: '',
+        sceneImageId,
+        sceneImageIds: [],
+        shot: 'broll',
+        voiceId: 'cosyvoice-clone-x',
+      },
+    });
+    service.operations.findOne.mockResolvedValue({ status: 'running' });
+    await service.refreshRow(
+      waitingRow('seg-3', 'seg-1', '还有星空打卡墙，拍照超出片', 19),
+    );
+    await service.refreshRow(
+      waitingRow('seg-4', 'seg-3', '抖音左下角可以点击下单', 19),
+    );
+    expect(service.operations.updateOne).not.toHaveBeenCalled();
+    // 真的重排了（第 3 段被删）才停
+    service.topic = {
+      ...service.topic,
+      storeVisit: {
+        ...service.topic.storeVisit,
+        segments: service.topic.storeVisit.segments.filter(
+          (item: { id: string }) => item.id !== 'seg-3',
+        ),
+      },
+    };
+    await service.refreshRow(
+      waitingRow('seg-4', 'seg-3', '抖音左下角可以点击下单', 19),
+    );
+    expect(service.operations.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('单段重做开统一音色时，第 1 段已出片但还没取声音就等第 1 段，取到声音前不提交', async () => {
+    const service = buildService({
+      segments: segments([
+        { videoId: 41, nativeAudio: true },
+        { videoId: 42, nativeAudio: true },
+      ]),
+    });
+    await service.startOne(2, 'seg-3', scope, { voiceAnchor: true });
+    expect(service.fetchShuyan).not.toHaveBeenCalled();
+    const row = service.operations.insertOne.mock.calls[0][0];
+    expect(row.segmentId).toBe('seg-3');
+    expect(row.continuity).toMatchObject({
+      stage: 'waiting',
+      previousSegmentId: 'seg-1',
+      anchorSegmentId: 'seg-1',
+    });
+  });
+
+  it('等锚点的段提交时不记第 1 段的视频，第 1 段以后重做也不会作废它', async () => {
+    const setting = {
+      voiceSource: 'clone' as const,
+      voiceId: 'cosyvoice-clone-x',
+      voiceModel: 'cosyvoice-v3.5-plus',
+      voiceProviderId: 'ds-1',
+    };
+    const service = buildService({
+      segments: segments([{ videoId: 41, nativeAudio: true }]),
+      voiceAnchor: {
+        url: 'https://oss.example/anchor.wav',
+        seconds: 6,
+        segmentId: 'seg-1',
+        videoId: 41,
+        voiceKey: storeVisitVoiceKey(setting),
+        createdAt: new Date(0),
+      },
+    });
+    const row = {
+      id: 'pending-3',
+      topicId: 2,
+      segmentId: 'seg-3',
+      status: 'queued',
+      mode: 'store-visit',
+      userId: scope.userId,
+      tenantId: scope.tenantId,
+      continuity: {
+        stage: 'waiting',
+        previousSegmentId: 'seg-1',
+        anchorSegmentId: 'seg-1',
+        sequenceId: 's',
+      },
+      request: {
+        lines: '还有星空打卡墙，拍照超出片',
+        action: '',
+        sceneImageId: 19,
+        sceneImageIds: [],
+        shot: 'broll',
+        voiceId: 'cosyvoice-clone-x',
+      },
+    };
+    service.operations.findOne.mockResolvedValue(row);
+    service.operations.findOneAndUpdate.mockResolvedValue({
+      ...row,
+      continuity: { ...row.continuity, stage: 'planning' },
+    });
+    await service.continueOperation(row.id, { previousVideoId: 41 }, scope);
+    const submitted =
+      service.operations.insertOne.mock.calls.at(-1)?.[0] ??
+      service.operations.updateOne.mock.calls.at(-1)?.[1]?.$set;
+    expect(service.fetchShuyan).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(submitted)).not.toContain('previousVideoId');
+    expect(
+      JSON.parse(service.fetchShuyan.mock.calls[0][1].body).content,
+    ).toContainEqual({
+      type: 'audio_url',
+      audio_url: { url: 'https://oss.example/anchor.wav' },
+      role: 'reference_audio',
+    });
+  });
 });

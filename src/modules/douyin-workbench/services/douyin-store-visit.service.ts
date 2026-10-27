@@ -1246,12 +1246,14 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string} segmentId 分段 ID。
    * @param {DouyinScope} scope 租户用户作用域。
+   * @param {{voiceAnchor?: boolean}} [options] \`voiceAnchor\` 为真时还没有音色锚点就等第 1 段的声音（第 1 段已出片时直接取）。
    * @returns {Promise<{operations: DouyinOperationView[]}>} 这一段及其续段的调用记录。
    */
   async startOne(
     topicId: number,
     segmentId: string,
     scope: DouyinScope,
+    options: { voiceAnchor?: boolean } = {},
   ): Promise<{ operations: DouyinOperationView[] }> {
     const topic = await this.requireChild(topicId, scope);
     const segment = (topic.storeVisit?.segments ?? []).find(
@@ -1268,7 +1270,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       if (chained || !isStoreVisitSegmentReady(all[index]))
         picked.push(all[index]);
     }
-    return { operations: await this.startSegments(topic, picked, scope) };
+    return {
+      operations: await this.startSegments(topic, picked, scope, options),
+    };
   }
 
   /**
@@ -1338,7 +1342,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * @description 统一校验参考素材与声音描述，按段排队生成视频；音色样本仅作参考，无样本时按文字音色生成。
-   *   有可用的音色锚点时各段都拿它作参考音频；统一音色模式且还没锚点时，本批第 1 段先生成，其余新镜头等它出片取声音后再并行生成，同镜头续段仍等上一段尾帧。
+   *   有可用的音色锚点时各段都拿它作参考音频；统一音色模式且还没锚点时以整条视频的第 1 段为锚点：第 1 段在本批里就先生成，不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等锚点段取声音后再并行生成，同镜头续段仍等上一段尾帧。
    *
    * @keyword-cn 提交探店分段, 分段前置校验
    * @keyword-en submit-store-visit-segment-batch, segment-precheck
@@ -1495,14 +1499,22 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     // 顺序生成，前段失败时后续段不提前扣费。
     const sequenceId = randomUUID();
     const batchIds = new Set(segments.map((segment) => segment.id));
-    // 音色锚点：已有就各段直接参考它；统一音色模式还没有时，本批第 1 段先出片，其余段等桌面端取出它的声音
+    // 音色锚点：已有就各段直接参考它；统一音色模式还没有时以整条视频的第 1 段为锚点——第 1 段在本批里就先出片，
+    // 不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等桌面端取出它的声音后再生成
     const anchor = readStoreVisitVoiceAnchor(setting);
     const anchorCapable = [videoRuntime, avatarRuntime].some(
       (runtime) => runtime && supportsStoreVisitReferenceAudio(runtime.model),
     );
+    const firstSegment = all[0];
     const anchorSegment =
-      options.voiceAnchor && anchorCapable && !anchor && segments.length > 1
-        ? segments[0]
+      options.voiceAnchor && anchorCapable && !anchor && firstSegment
+        ? batchIds.has(firstSegment.id)
+          ? segments.length > 1
+            ? firstSegment
+            : undefined
+          : firstSegment.videoId && firstSegment.nativeAudio === true
+            ? firstSegment
+            : undefined
         : undefined;
     for (const segment of aiSegments) {
       const index = indexOf(segment);
@@ -1899,7 +1911,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         continuity: { ...row.continuity, stage: 'generating' },
         firstFrameUrl: tail?.url,
         continuationPrompt: plan?.videoPrompt,
-        previousVideoId: previous.videoId,
+        // 只等锚点段声音的新镜头和锚点段的画面无关，锚点段以后重做也不作废这一段
+        previousVideoId: anchorWait ? undefined : previous.videoId,
         tailImageId: tail?.id,
         analysis: plan,
         voiceAnchor: anchor,
@@ -2397,7 +2410,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；旧运行中调用按原请求快照完成。
+   * @description 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；等待中的续段只在分段真被改动、删除或重排，或等的那段失败时才停（等第 1 段声音的新镜头不要求紧挨第 1 段）；旧运行中调用按原请求快照完成。
    *
    * @keyword-cn 推进探店分段, 分段转存
    * @keyword-en advance-store-visit-segment, save-segment-video
@@ -2425,9 +2438,15 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         const segments = topic?.storeVisit?.segments || [];
         const index = segments.findIndex((item) => item.id === row.segmentId);
         const segment = segments[index];
+        // 统一音色模式的新镜头等的是锚点段（第 1 段），不要求紧挨着；同镜头续段仍要求等的是上一段
+        const anchorWait =
+          Boolean(row.continuity.anchorSegmentId) &&
+          row.continuity.previousSegmentId === row.continuity.anchorSegmentId &&
+          isStoreVisitVisualStart(segments, index);
         if (
           !matchesStoreVisitRequest(topic || {}, segment, row.request) ||
-          segments[index - 1]?.id !== row.continuity.previousSegmentId
+          (!anchorWait &&
+            segments[index - 1]?.id !== row.continuity.previousSegmentId)
         ) {
           await this.fail(
             row.id,

@@ -868,7 +868,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 重新生成探店某一段（配音 + 人物对口型或门店空镜），按生视频服务扣费，返回这一段的调用记录。
+   * @description 重新生成探店某一段（及接它尾帧的续段），按生视频服务扣费，返回这一段的调用记录；`voiceAnchor` 为真时用第 1 段的声音统一音色。
    * @keyword-cn 重新生成探店分段接口, 单段重做
    * @keyword-en regenerate-store-visit-segment-api, single-segment-retry
    */
@@ -878,11 +878,13 @@ export class DouyinWorkbenchController {
     @Req() req: AdminRequest,
     @Param('id') id: string,
     @Param('segmentId') segmentId: string,
+    @Body() dto: GenerateDouyinStoreVisitVideoDto,
   ) {
     return await this.storeVisit.startOne(
       this.readId(id),
       this.readSegmentId(segmentId),
       this.scopeOf(this.requireUser(req)),
+      { voiceAnchor: dto.voiceAnchor === true },
     );
   }
 
