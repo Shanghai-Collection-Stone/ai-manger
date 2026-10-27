@@ -96,22 +96,25 @@ export type DouyinStoreVisitStoreView = Omit<
 >;
 
 /**
- * @description AI 归类一批图片的结果：每张图归入已有点位（`spotKey` 为点位 ID）或本轮新建的点位（`spotKey` 为 `new-` 开头的草稿键），带描述与打分；
- *   `spots` 是本轮新建点位的建议名称与说明，名称需要使用者确认后才保存。
- * @keyword-cn 点位归类结果, AI看图归类
- * @keyword-en spot-classification-result, vision-classification
+ * @description AI 归类时逐条推给前端的事件（NDJSON 每行一条）：模型每调用一次归类工具就推 `assign`，归入新点位时先推 `spot`（服务端生成 `new-` 草稿键，名称要使用者确认后才保存），
+ *   一批结束推 `done`（归上的与没归上的图片），出错推 `error`。
+ * @keyword-cn 归类推送事件, 实时归类
+ * @keyword-en classify-stream-event, realtime-classification
  */
-export interface DouyinStoreVisitSpotClassification {
-  assignments: Array<{
-    imageId: number;
-    spotKey: string;
-    description: string;
-    score: number;
-  }>;
-  spots: Array<{
-    key: string;
-    name: string;
-    description: string;
-    opening: boolean;
-  }>;
-}
+export type DouyinStoreVisitClassifyEvent =
+  | {
+      type: 'spot';
+      key: string;
+      name: string;
+      description: string;
+      opening: boolean;
+    }
+  | {
+      type: 'assign';
+      imageId: number;
+      spotKey: string;
+      description: string;
+      score: number;
+    }
+  | { type: 'done'; assigned: number[]; missed: number[] }
+  | { type: 'error'; message: string };

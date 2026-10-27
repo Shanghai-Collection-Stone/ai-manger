@@ -734,7 +734,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description AI 归类一批图片到点位，写描述并打分，不落库。
+   * @description AI 归类一批图片到点位，写描述并打分，不落库；按 NDJSON 逐行推送（模型每调用一次归类工具推一行 `spot` / `assign`，结束推 `done`，出错推 `error`），前端断开时中止模型。
    * @keyword-cn AI归类接口, 看图归类
    * @keyword-en classify-spots-api, vision-classification
    */
@@ -744,12 +744,32 @@ export class DouyinWorkbenchController {
     @Req() req: AdminRequest,
     @Param('storeId') storeId: string,
     @Body() dto: ClassifyDouyinStoreVisitSpotsDto,
+    @Res() res: Response,
   ) {
-    return await this.spots.classify(
-      this.readId(storeId),
-      dto,
-      this.scopeOf(this.requireUser(req)),
-    );
+    const scope = this.scopeOf(this.requireUser(req));
+    const id = this.readId(storeId);
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
+    const write = (event: unknown) => {
+      if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+    };
+    try {
+      await this.spots.classify(id, dto, scope, write, abort.signal);
+    } catch (error) {
+      write({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'AI 归类失败，请重试',
+      });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
   }
 
   /**

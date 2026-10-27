@@ -4,10 +4,12 @@ import {
   clampStoreVisitSpotScore,
   clusterStoreVisitSignatures,
   computeStoreVisitImageSignature,
+  createStoreVisitClassifySession,
+  DouyinStoreVisitSpotService,
   normalizeStoreVisitSpotName,
-  parseStoreVisitSpotClassification,
   storeVisitSignatureDistance,
 } from './douyin-store-visit-spot.service.js';
+import type { DouyinStoreVisitClassifyEvent } from '../entities/douyin-store-visit-store.entity.js';
 
 /**
  * @description 生成一张纯色加对角渐变的测试图，`shift` 改变渐变方向，`color` 改变色调。
@@ -60,47 +62,195 @@ describe('store visit spot similarity', () => {
 });
 
 describe('store visit spot classification', () => {
-  it('只收本批图片与已知或本次声明的点位，丢掉没图的新点位并夹紧分数', () => {
-    const result = parseStoreVisitSpotClassification(
-      '```json\n' +
-        JSON.stringify({
-          images: [
-            { id: 11, spot: 'abc123', description: '门头招牌', score: 12 },
-            { id: 12, spot: 'new-ride', description: '旋转木马', score: 8.4 },
-            { id: 12, spot: 'abc123', description: '重复', score: 3 },
-            { id: 99, spot: 'abc123', description: '不在本批', score: 9 },
-            { id: 13, spot: 'unknown', description: '乱填点位', score: 5 },
-          ],
-          newSpots: [
-            { key: 'new-ride', name: '「旋转木马」', description: '亲子项目' },
-            { key: 'new-empty', name: '空点位', description: '没有图' },
-            { key: 'bad key', name: '非法键' },
-          ],
-        }) +
-        '\n```',
-      { imageIds: [11, 12, 13], spotKeys: ['abc123', 'new-old'] },
-    );
-    expect(result.assignments).toEqual([
-      { imageId: 11, spotKey: 'abc123', description: '门头招牌', score: 10 },
-      { imageId: 12, spotKey: 'new-ride', description: '旋转木马', score: 8 },
-    ]);
-    expect(result.spots).toEqual([
+  it('归入已有点位或按名称新建点位（中文名也行），同名只建一次，逐条推事件并把剩下的图片告诉模型', () => {
+    const events: DouyinStoreVisitClassifyEvent[] = [];
+    const session = createStoreVisitClassifySession(
       {
-        key: 'new-ride',
-        name: '旋转木马',
-        description: '亲子项目',
+        imageIds: [901, 902, 903],
+        spots: [{ key: 'abc123', name: '门头招牌' }],
+      },
+      (event) => events.push(event),
+    );
+    const first = JSON.parse(
+      session.assign({
+        image_id: 902,
+        spot_key: 'abc123',
+        description: '红色霓虹门头',
+        score: 12,
+      }),
+    );
+    const second = JSON.parse(
+      session.assign({
+        image_id: 901,
+        new_spot: { name: '「西部斗场」', description: '枪战主题区' },
+        description: '射击大屏',
+        score: 8.4,
+      }),
+    );
+    session.assign({
+      image_id: 903,
+      new_spot: { name: '西部斗场' },
+      description: '吧台侧面',
+      score: 6,
+    });
+    expect(first).toEqual({
+      ok: true,
+      spot_key: 'abc123',
+      remaining: [901, 903],
+    });
+    expect(second.ok).toBe(true);
+    expect(second.spot_key).toMatch(/^new-[0-9a-f]{10}$/);
+    expect(events.filter((event) => event.type === 'spot')).toEqual([
+      {
+        type: 'spot',
+        key: second.spot_key,
+        name: '西部斗场',
+        description: '枪战主题区',
         opening: false,
       },
     ]);
+    expect(events.filter((event) => event.type === 'assign')).toEqual([
+      {
+        type: 'assign',
+        imageId: 902,
+        spotKey: 'abc123',
+        description: '红色霓虹门头',
+        score: 10,
+      },
+      {
+        type: 'assign',
+        imageId: 901,
+        spotKey: second.spot_key,
+        description: '射击大屏',
+        score: 8,
+      },
+      {
+        type: 'assign',
+        imageId: 903,
+        spotKey: second.spot_key,
+        description: '吧台侧面',
+        score: 6,
+      },
+    ]);
+    expect(session.missed()).toEqual([]);
   });
 
-  it('一张都没归上时报错，交给调用方提示重试', () => {
-    expect(() =>
-      parseStoreVisitSpotClassification('{"images":[]}', {
-        imageIds: [1],
-        spotKeys: [],
-      }),
-    ).toThrow('AI 没有把任何图片归入点位');
+  it('不在本批的图片、找不到的点位不推事件，把原因返回给模型重来；点位名当 key 传也能认出来', () => {
+    const events: DouyinStoreVisitClassifyEvent[] = [];
+    const session = createStoreVisitClassifySession(
+      { imageIds: [1, 2], spots: [{ key: 'abc123', name: '旋转木马' }] },
+      (event) => events.push(event),
+    );
+    expect(
+      JSON.parse(
+        session.assign({
+          image_id: 99,
+          spot_key: 'abc123',
+          description: 'x',
+          score: 5,
+        }),
+      ),
+    ).toMatchObject({ ok: false });
+    expect(
+      JSON.parse(
+        session.assign({
+          image_id: 1,
+          spot_key: 'new-nope',
+          description: 'x',
+          score: 5,
+        }),
+      ).error,
+    ).toContain('不存在');
+    expect(events).toEqual([]);
+    expect(
+      JSON.parse(
+        session.assign({
+          image_id: 2,
+          spot_key: '旋转木马',
+          description: '木马顶棚',
+          score: 7,
+        }),
+      ).spot_key,
+    ).toBe('abc123');
+    expect(session.assigned()).toEqual([2]);
+    expect(session.missed()).toEqual([1]);
+  });
+
+  it('classify 用轻量 Agent 只挂归类工具，工具调用即时推送，结束推 done；一张都没归上时报错', async () => {
+    const service = Object.create(DouyinStoreVisitSpotService.prototype);
+    service.stores = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({
+          id: 1,
+          name: '集合石',
+          description: '',
+          spots: [],
+        }),
+    };
+    service.previews = new Map();
+    service.gallery = {
+      findAccessibleImagesByIds: jest
+        .fn()
+        .mockImplementation((_u: string, _t: string, ids: number[]) =>
+          Promise.resolve(
+            ids.map((id) => ({
+              id,
+              url: 'https://cdn.example/' + id + '.jpg',
+            })),
+          ),
+        ),
+    };
+    service.toVisionImage = jest
+      .fn()
+      .mockResolvedValue('data:image/jpeg;base64,AA==');
+    service.workflowModels = {
+      resolveNodeRuntime: jest.fn().mockResolvedValue(null),
+    };
+    const configs: Array<Record<string, any>> = [];
+    service.agentService = {
+      runWithMessages: jest
+        .fn()
+        .mockImplementation(
+          async ({ config }: { config: Record<string, any> }) => {
+            configs.push(config);
+            await config.tools[0].invoke({
+              image_id: 901,
+              new_spot: { name: '大屏射击', opening: false },
+              description: '投影大屏',
+              score: 9,
+            });
+            return {};
+          },
+        ),
+    };
+    service.logger = { warn: jest.fn() };
+    const events: DouyinStoreVisitClassifyEvent[] = [];
+    await service.classify(
+      1,
+      { imageIds: [901, 902] },
+      { userId: 'u1' },
+      (event: DouyinStoreVisitClassifyEvent) => events.push(event),
+    );
+    expect(configs[0].lightweight).toBe(true);
+    expect(configs[0].tools.map((item: { name: string }) => item.name)).toEqual(
+      ['store_visit_assign_image'],
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      'spot',
+      'assign',
+      'done',
+    ]);
+    expect(events[2]).toEqual({ type: 'done', assigned: [901], missed: [902] });
+    service.agentService.runWithMessages = jest.fn().mockResolvedValue({});
+    await expect(
+      service.classify(
+        1,
+        { imageIds: [901] },
+        { userId: 'u1' },
+        () => undefined,
+      ),
+    ).rejects.toThrow('没有把任何图片归入点位');
   });
 
   it('提示词列出已有点位的 key、封面序号与本批图片的预分组', () => {
@@ -114,6 +264,7 @@ describe('store visit spot classification', () => {
       ],
     });
     expect(brief).toContain('key=abc｜门头｜店外｜封面是图3');
+    expect(brief).toContain('store_visit_assign_image');
     expect(brief).toContain('图1：id=7（相似度预分组 A');
     expect(brief).toContain('图2：id=8');
   });
