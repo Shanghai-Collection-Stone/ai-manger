@@ -34,7 +34,7 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-store-visit-spot.service.ts` — 门店与点位管理、场景图库图片的视觉签名（dHash + 网格平均色）相似度预归类、视觉模型用归类工具逐张归入点位写描述打分（每次工具调用校验后立即推送），保存时写回图库备注并自动收藏高分图。
 - `services/douyin-store-visit-spot.service.spec.ts` — 视觉签名距离、单链接聚类、归类工具会话（按 key 或中文名归入、同名只建一次、不合规调用返回原因不推送）、归类走轻量 Agent 只挂归类工具并逐条推送、归类提示词、点位名与分数规整单测。
 - `services/douyin-store-visit-planner.service.ts` — 探店 AI 编排：按门店与重点推荐点位推荐出镜人物与音色（模型失败按规则兜底），按点位写台词并为每段挑同一点位的 1～3 张参考图。
-- `services/douyin-store-visit-planner.service.spec.ts` — 点位目录（开场点位优先、只收已同步参考图）、「【点位k｜图k.a】」分段解析与挑图兜底、人物音色推荐校验与兜底单测。
+- `services/douyin-store-visit-planner.service.spec.ts` — 点位目录（开场点位优先、只收已同步参考图）、「【点位k｜图k.a】」分段解析与挑图兜底、人物音色推荐校验与兜底、点位台词提示词（讲卖点不念画面、附示例）单测。
 - `services/douyin-store-visit-voice-anchor.spec.ts` — 音色锚点单测：音色标识与锚点作废、统一音色模式只先生成第 1 段且其余新镜头等锚点段、不开时照旧逐段排队、已有锚点时各段并行并拿锚点作参考音频、等锚点的续段取声音前不认领、锚点 WAV 时长校验与去重。
 - `services/douyin-video-storage.service.ts` — 成片落库：本地合成文件或供应商临时地址存进视频库（OSS 优先，未配置时落 `public/uploads` 或登记外链），另存探店配音与克隆用的临时录音。
 - `services/douyin-pixmax-video.service.ts` — PixMax 生视频通道：分镜 / 整片提示词、提交任务、后台轮询、成片转存视频库并回填。
@@ -376,7 +376,7 @@ AI 抖音工作台（douyin-workbench）
 - `claimAutoConcat(id,scope)` — 原子清掉「全部出片后自动合成」标记，只有真正清掉的那次返回 true | keywords: 认领自动合成, 防重复合成, claim-auto-concat, dedupe-concat
 - `updateStoreVisitSegment(topicId,segmentId,output,scope)` — 按段 ID 一次绑定空镜视频（先校验视频库归属）、配音地址与时长、所用音色，本机素材段不带视频时只写配音并清掉旧视频，参考音色出声的段同时标记 `nativeAudio`，传 null 一次清掉；段不存在时返回 null | keywords: 更新探店分段, 分段局部写入, update-store-visit-segment, partial-segment-write
 - `setStoreVisitSegmentKeyframe(topicId,segmentId,keyframe,scope)` — 同场景共享人物起始图，并作废依赖旧尾帧的后续输出 | keywords: 写入人物首帧, 首帧作废成片, save-segment-keyframe, keyframe-invalidates-output
-- `writeStoreVisitLines(topicId,prompt,scope)` — 独立探店按素材说明写一条完整的画外音口播（约 30～60 秒，附示例示范写法与节奏）：开场用门头素材报店名和这家店最吸引人的一点，后面每段照一个素材的说明介绍是什么有什么（两三句短句），团购价要连同套餐或项目一起报（不必每段都报、不套固定句式），结尾引导下单，语气口语自然、不用江湖口吻，用词只用普通话常用词、不用方言和谐音字（优先于人物设定）；只用门店名称、整体说明与素材说明（`<materials>` 按【素材k】序号）里的事实，出现资料里没有的数字、方言谐音字或格式不对时让模型重写一次，仍有问题返回 `warnings`；旧脚本按正文或分镜口播改写 | keywords: 探店台词生成, 画外音台词, store-visit-lines, voiceover-lines
+- `writeStoreVisitLines(topicId,prompt,scope)` — 探店模式写画外音台词。独立探店按素材说明写一条简短的口播（约 20～45 秒，附一段示例示范写法与节奏）：开场用门头素材点出门店名称和这家店最吸引人的一点，后面每段讲一个素材的卖点（一句点出是什么、一句说能干嘛和好玩好吃在哪），不复述画面里的颜色、摆设和招牌字，说明里有团购价时连同套餐或项目一起报价（只是写法之一，不必每段都报、不套固定句式），结尾引导下单；语气口语自然，不用江湖口吻（预设人物另有要求时按人物）；用词只用普通话常用词、不用方言和谐音字，这条优先于人物设定。店名、项目、价格等事实只用门店名称、门店整体说明与素材说明里的，可以说好玩、好吃这类评价，但不编资料里没有的卖点、亲身经历或图外空间。台词出现资料里没有的数字、方言谐音字或分段格式不对时，让模型按资料重写一次，仍有问题就带上核对提醒返回。旧脚本（非探店选题）按正文或分镜口播改写成第一人称探店旁白。选了预设人物或风格时保持人称与调性；只返回台词，不落库，由前端放进台词框再随生成保存 | keywords: 探店台词生成, 画外音台词, store-visit-lines, voiceover-lines
 - `StoreVisitMaterialEntry` — 写台词用的一项素材（类型、ID、名称、说明、标签、时长、是否开场），序号即【素材k】的 k | keywords: 探店素材目录项, 素材序号, store-visit-material-entry, material-index
 - `listStoreVisitMaterials(setting)` — 按台词序号排好素材：开场素材排第一，其余照片在前、视频在后 | keywords: 探店素材目录, 开场素材排序, store-visit-material-catalog, opening-first
 - `describeStoreVisitMaterials(materials)` — 把素材写成提示词清单：「素材k（开场·门头，图片 / 视频 N 秒）：说明（标签：…）」 | keywords: 素材清单提示词, 素材说明, material-catalog-prompt, material-description
@@ -387,6 +387,7 @@ AI 抖音工作台（douyin-workbench）
 - `STORE_VISIT_LINES_MIN_CHARACTERS` — 探店台词整条最少 90 字（约 20 秒），少于它时提醒把素材说明写具体些再重写 | keywords: 台词最少字数, 台词偏短提醒, lines-min-characters, short-lines-warning
 - `STORE_VISIT_HARD_TO_VOICE_WORDS` — 配音和视频模型容易念错的方言词、方言音译字与网络谐音字清单（嘎哈、咋整、杠杠的、酱紫、木有等） | keywords: 难念字眼, 方言词, hard-to-voice-words, dialect-words
 - `STORE_VISIT_PLAIN_SPEECH_RULE` — 探店台词「好念」规则：只用普通话常用词，人物设定或补充要求偏方言风格时只在语气节奏上体现；优先于人物设定和补充要求（点位台词也复用） | keywords: 台词好念规则, 普通话用词, plain-speech-rule, mandarin-wording
+- `STORE_VISIT_SELLING_POINT_RULE` — 探店台词「讲卖点，不念画面」规则：观众看得见画面，台词不复述颜色、灯光、摆设、招牌或屏幕上的字，每段只点出这是什么、再说能干嘛和好玩好吃在哪；可以按这是什么说常见玩法和好玩、好吃这类评价，具体事实仍只用资料里的（素材台词与点位台词共用） | keywords: 讲卖点规则, 不念画面, selling-point-rule, no-scene-narration
 - `findStoreVisitHardToVoiceWords(lines,facts)` — 找出台词里的方言谐音字，店名与素材说明里本来就有的不算 | keywords: 难念字眼核对, 方言词核对, find-hard-to-voice-words, dialect-word-check
 - `DouyinOutputVideoMeta` — 成片登记参数（名称、作用域、标签、时长、尺寸） | keywords: 成片登记参数, 视频库登记, output-video-meta, video-library-register
 - `resolveStaticFilePath(url)` — 站内 `/static/...` 地址换成 `public` 下的磁盘路径，拒绝 `..` 穿越 | keywords: 站内地址转磁盘路径, 路径穿越防护, static-url-to-path, path-traversal-guard
@@ -534,7 +535,7 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoreVisitPlannerService()` — 探店 AI 编排：按门店与重点推荐点位先挑出镜人物与音色（用户可再换），再按点位写台词并为每段挑同一点位的 1～3 张参考图；结果都只返回、不落库，由前端应用并保存 | keywords: 探店AI编排, 点位台词, store-visit-ai-planner, spot-lines
 - `DouyinStoreVisitPlannerService.constructor(repository,spots,personas,workflowModels,agentService)` — 注入选题、门店点位、预设人物与模型依赖 | keywords: 初始化编排服务, 编排依赖, init-planner-service, planner-dependencies
 - `DouyinStoreVisitPlannerService.recommend(topicId,options,scope)` — AI 先替用户挑人物与音色：要出镜时从有形象图的预设人物里挑最搭这家店的一个，再从音色库挑一个音色（选了人物时跟人物性别与气质走），并写一句可直接用的声音描述（音色库不可用时前端改用它）。模型失败时按规则兜底，不阻断流程 | keywords: AI推荐人物音色, 编排推荐, ai-recommend-persona-voice, plan-recommendation
-- `DouyinStoreVisitPlannerService.writeSpotLines(topicId,prompt,scope)` — 按重点推荐点位写探店台词：开场用门头点位报店名，之后按用户挑的顺序一段讲一个点位（内容多的点位可分两段），结尾引导下单；每段从该点位的参考图里挑 1～3 张（优先高分图）；只复述门店、点位与图片描述里的事实，编了数字或用了方言字时重写一次，仍有问题带核对提醒返回 | keywords: 按点位写台词, 每段挑参考图, write-spot-lines, pick-segment-images
+- `DouyinStoreVisitPlannerService.writeSpotLines(topicId,prompt,scope)` — 按重点推荐点位写简短的探店台词（约 20～45 秒，附示例）：开场用门头点位报店名和这是家什么店，之后按用户挑的顺序一段讲一个点位的卖点（是什么、能干嘛、好玩好吃在哪，不复述图片描述里的画面），结尾引导下单；每段从该点位的参考图里挑 1～3 张（优先高分图）；店名、项目、价格等事实只用门店、点位与图片描述里的，编了数字或用了方言字时重写一次，仍有问题带核对提醒返回 | keywords: 按点位写台词, 每段挑参考图, write-spot-lines, pick-segment-images
 - `DouyinStoreVisitPlannerService.loadContext(topicId,scope)` — 读取点位模式选题、门店与重点推荐点位目录，缺门店或点位时提示回到对应步骤 | keywords: 读取编排上下文, 点位目录, load-planner-context, spot-catalog
 - `DouyinStoreVisitPlannerService.ask(scope,source,system,user,temperature)` — 用「探店编排推荐」节点（关思考、非流式）问一次模型并取出文本 | keywords: 编排模型调用, 读取文本, planner-llm-call, read-text
 - `DOUYIN_STORE_VISIT_SPOT_LIMITS` — 探店门店与点位的上限：每租户门店不限，每店最多 40 个点位，每个点位最多 40 张图片、6 段实拍视频；点位名 30 字、点位说明 500 字、单张图片描述 300 字 | keywords: 探店点位上限, 点位图片上限, store-visit-spot-limits, spot-image-limit
@@ -907,6 +908,8 @@ AI 抖音工作台（douyin-workbench）
 | 方言词 | dialect-words |
 | 台词好念规则 | plain-speech-rule |
 | 普通话用词 | mandarin-wording |
+| 讲卖点规则 | selling-point-rule |
+| 不念画面 | no-scene-narration |
 | 难念字眼核对 | find-hard-to-voice-words |
 | 方言词核对 | dialect-word-check |
 | 多图参考提示词 | multi-reference-prompt |
@@ -1161,3 +1164,5 @@ AI 抖音工作台（douyin-workbench）
 **一段多张参考图**：分段新增 `spotId` 与 `sceneImageIds`（第一张即 `sceneImageId`，最多 3 张，只收本选题素材里的图）。实景段生成时其余 1～2 张作 `reference_image` 一起交给视频模型（主图也改按参考图传、画幅固定 9:16），提示词说明「图1～图N 是同一个地方，以图1 为主画面，不拼贴不分屏」；人物出镜段与接尾帧的续段不加图。参考图组变化与台词、素材变化一样会作废这段成片，排队快照与续段复核也比较它。
 
 **第 1 段的声音统一音色（音色锚点）**：以前每段都按自己的台词另合成一条参考音频（只填声音描述时干脆没有参考），各段音色容易不一样。现在 `POST topics/:id/store-visit/generate` 带 `voiceAnchor: true`（桌面端能取音频时前端才传）且模型支持参考音频、本批不止一段、还没有可用锚点时：本批第 1 段先提交，其余新镜头记成等待第 1 段的待衔接记录（`continuity.previousSegmentId` 与 `anchorSegmentId` 都是第 1 段），同镜头续段仍等上一段尾帧。第 1 段出片后 `GET operations/:id/store-visit/continuation-input` 返回 `voiceAnchor`（锚点段与视频地址），桌面端取出开头最多 12 秒的声音（24kHz 单声道 WAV）经 `POST topics/:id/store-visit/voice-anchor` 上传：只收 2～15 秒的 WAV，同一段同一个视频已有锚点就直接返回，写进 `storeVisit.voiceAnchor` 并记下当时的音色标识（音色 ID + 声音描述，换音色或改描述后锚点自动不用）。锚点声音上传前续段不认领、不扣费；有了锚点，等待的各段并行提交，提交时都把锚点作 `reference_audio`（本机地址读文件转 data URL），不再按台词另合成。不传 `voiceAnchor` 时照旧逐段排队；已有可用锚点时任何提交（含单段重做）都优先用它。生成接口带 `onlyMissing` 时只补没出片的段（`pickStoreVisitPendingSegments`：没出片的段，加上紧跟其后接它尾帧的同镜头续段），已出片的段不清空、不重做、不重复扣费；第 1 段已出片而还没取声音时，补的段照样等第 1 段的声音。前端在部分段已出片时用它，避免某段失败后点生成把已出片的段（例如开场门头）又生成一遍；各段都已出片时提示改用「全部重新生成」或单段重做。锚点始终是整条视频的第 1 段：单段重做（`POST topics/:id/store-visit/segments/:segmentId/generate` 也收 `voiceAnchor`）时第 1 段已出片但还没取声音，就让重做的段先等第 1 段、客户端取声音后再提交。后台轮询（`refreshRow`）对等第 1 段声音的新镜头不要求它紧挨第 1 段，只在分段真被改动、删除或重排，或等的那段失败时才停；只等声音的段提交时不记第 1 段的视频，第 1 段以后重做也不会作废它。
+
+**台词讲卖点，不念画面**：点位说明和图片描述是 AI 归类时照图写的画面描述，写台词时只用来认出点位是什么和挑图。`writeSpotLines` 与 `writeStoreVisitLines` 共用 `STORE_VISIT_SELLING_POINT_RULE`：不复述颜色、灯光、摆设、招牌或屏幕上的字，每段一句点出是什么、一句说能干嘛和好玩好吃在哪；允许按点位类型说常见玩法和「好玩」「好吃」这类评价，店名、项目、价格、份量等事实仍只用资料里的，不编秘方、排名、活动、赠品和具体亲身经历。整条缩到约 20～45 秒（90～200 字）、每段 15～40 字，点位台词另附一段示例。

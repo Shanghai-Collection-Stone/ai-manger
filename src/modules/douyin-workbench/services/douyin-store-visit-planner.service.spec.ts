@@ -2,6 +2,7 @@ import type { DouyinPersonaView } from '../../douyin-persona/entities/douyin-per
 import type { DouyinStoreVisitSpot } from '../entities/douyin-store-visit-store.entity.js';
 import { COSYVOICE_PRESET_VOICES } from './douyin-cosyvoice.service.js';
 import {
+  DouyinStoreVisitPlannerService,
   buildStoreVisitSpotCatalog,
   describeStoreVisitSpotCatalog,
   parseStoreVisitSpotSegments,
@@ -163,5 +164,59 @@ describe('store visit plan recommendation', () => {
       )?.category,
     ).toBe('lively');
     expect(result.voice.reason).toBe('适合探店种草的口播');
+  });
+});
+
+describe('store visit spot lines', () => {
+  it('提示词要求讲卖点、不念图片描述里的画面，附示例；按点位解析出简短分段', async () => {
+    const spots = [
+      spot('gate', '门头', [[3, 8]], { opening: true }),
+      spot('kart', '卡丁车', [[1, 9]]),
+    ];
+    const runWithMessages = jest.fn().mockResolvedValue({
+      content: [
+        '【点位1｜图1.1】',
+        '今天我们来到了欢乐谷，一家室内游乐场，卡丁车随便开。',
+        '【点位2｜图2.1】',
+        '卡丁车一脚油门就冲出去，约上朋友比比谁快。',
+      ].join('\n'),
+    });
+    const service = new DouyinStoreVisitPlannerService(
+      {
+        get: jest.fn().mockResolvedValue({
+          id: 2,
+          kind: 'child',
+          title: '欢乐谷探店',
+          storeVisit: {
+            storeId: 1,
+            spotIds: ['gate', 'kart'],
+            sceneImages,
+            template: 'voiceover',
+          },
+        }),
+      } as never,
+      {
+        requireStore: jest
+          .fn()
+          .mockResolvedValue({ id: 1, name: '欢乐谷', spots }),
+      } as never,
+      { get: jest.fn() } as never,
+      { resolveNodeRuntime: jest.fn().mockResolvedValue(null) } as never,
+      { runWithMessages } as never,
+    );
+    const result = await service.writeSpotLines(2, undefined, {
+      userId: 'u1',
+    });
+    const request = runWithMessages.mock.calls[0][0];
+    expect(request.config.system).toContain('【讲卖点，不念画面】');
+    expect(request.config.system).toContain('不是逐个讲解画面的说明视频');
+    expect(request.config.system).toContain('【示例】');
+    expect(request.config.system).not.toContain('有画面感');
+    expect(request.messages[0].content).toContain('不要照着念');
+    expect(result.segments.map((segment) => segment.spotId)).toEqual([
+      'gate',
+      'kart',
+    ]);
+    expect(runWithMessages).toHaveBeenCalledTimes(1);
   });
 });
