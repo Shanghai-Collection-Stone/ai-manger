@@ -261,6 +261,24 @@ export interface DouyinStoreVisitOpeningScene {
 }
 
 /**
+ * @description 探店音色锚点：某一段（通常是第 1 段）出片后由桌面端取出的那段声音，后面各段都把它作参考音频，整条视频听起来是同一个人；
+ *   `voiceKey` 记下当时的音色，换了音色或声音描述后锚点自动不用。
+ * @keyword-cn 探店音色锚点, 统一音色
+ * @keyword-en store-visit-voice-anchor, unified-voice
+ */
+export interface DouyinStoreVisitVoiceAnchor {
+  url: string;
+  /** @description 参考音频时长（秒，2～15） */
+  seconds: number;
+  /** @description 取声音的分段与它当时的视频 */
+  segmentId: string;
+  videoId: number;
+  /** @description 取声音时的音色标识（音色 ID + 声音描述） */
+  voiceKey: string;
+  createdAt: Date;
+}
+
+/**
  * @description 探店设置：门店名称、出镜人物与出镜模板、场景图与实拍视频素材（各带说明与标签）、开场素材与门店整体说明、音色（录音克隆、音色库或提示词定制）、台词与分段。
  *   各段视频保留原声由桌面端拼接后绑定到脚本的 `generatedVideoId`。旧版数字人流程留下的声音设计等字段不再读取。
  * @keyword-cn 探店模式设置, 画外音设置, 克隆音色
@@ -300,6 +318,8 @@ export interface DouyinStoreVisitSetting {
   lines?: string;
   /** @description 分段，最多 8 段；`lines` 同步保存各段拼起来的全文 */
   segments?: DouyinStoreVisitSegment[];
+  /** @description 音色锚点：第 1 段出片后取出的声音，后面各段作参考音频统一音色 */
+  voiceAnchor?: DouyinStoreVisitVoiceAnchor;
 }
 
 /**
@@ -492,6 +512,8 @@ export interface DouyinOperationView {
     stage: 'waiting' | 'planning' | 'generating';
     previousSegmentId?: string;
     sequenceId: string;
+    /** @description 统一音色模式：等这一段出片、桌面端取出它的声音作参考音色后再生成 */
+    anchorSegmentId?: string;
   };
   /** @description 探店人物段（视频型号）出片后的对口型阶段：识别人脸、对口型中、完成或跳过（跳过时保留原画面并写原因）。 @keyword-cn 对口型阶段, 口型跳过原因 @keyword-en lip-sync-stage, lip-sync-skip-reason */
   lipSync?: DouyinStoreVisitLipSyncView;

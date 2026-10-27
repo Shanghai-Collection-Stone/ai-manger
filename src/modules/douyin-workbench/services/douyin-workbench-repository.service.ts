@@ -28,6 +28,7 @@ import {
   type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
   type DouyinStoreVisitTemplate,
+  type DouyinStoreVisitVoiceAnchor,
   type DouyinStoreVisitVoiceSample,
   type DouyinTopicEntity,
   type DouyinVideoAudioSetting,
@@ -990,6 +991,27 @@ export class DouyinWorkbenchRepositoryService {
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id },
       Object.keys(unset).length ? { $set, $unset: unset } : { $set },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 写入探店音色锚点（第 1 段出片后取出的声音），后面各段用它作参考音频。
+   * @keyword-cn 保存音色锚点, 统一音色
+   * @keyword-en save-voice-anchor, unified-voice
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinStoreVisitVoiceAnchor} anchor 音色锚点。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，不存在时为 null。
+   */
+  async saveStoreVisitVoiceAnchor(
+    id: number,
+    anchor: DouyinStoreVisitVoiceAnchor,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    return await this.topics.findOneAndUpdate(
+      { ...this.scopeFilter(scope), id, kind: 'child' },
+      { $set: { 'storeVisit.voiceAnchor': anchor, updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
   }

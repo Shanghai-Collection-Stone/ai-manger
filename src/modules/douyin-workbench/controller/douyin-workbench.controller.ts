@@ -47,6 +47,8 @@ import {
   GenerateDouyinStoreVisitKeyframeDto,
   GenerateDouyinStoreVisitLinesDto,
   GenerateDouyinStoryboardDto,
+  GenerateDouyinStoreVisitVideoDto,
+  SaveDouyinStoreVisitVoiceAnchorDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
   RecommendDouyinStoreVisitPlanDto,
@@ -63,6 +65,7 @@ import { DouyinGenerationJobService } from '../services/douyin-generation-job.se
 import { DouyinShotConcatService } from '../services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from '../services/douyin-shot-image.service.js';
 import {
+  DOUYIN_VOICE_ANCHOR_MAX_BYTES,
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
@@ -559,7 +562,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 探店模式生成视频：每段先用选定音色配音，再以场景图为首帧生成空镜视频，按生视频服务逐段扣费，返回各段调用记录。
+   * @description 探店模式生成视频：每段生成原生声画，按生视频服务逐段扣费，返回各段调用记录；`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色。
    * @keyword-cn 探店视频生成接口, 画外音生成
    * @keyword-en store-visit-video-api, voiceover-generation
    */
@@ -568,11 +571,42 @@ export class DouyinWorkbenchController {
   async generateStoreVisitVideo(
     @Req() req: AdminRequest,
     @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitVideoDto,
   ) {
     return await this.storeVisit.start(
       this.readId(id),
       this.scopeOf(this.requireUser(req)),
+      { voiceAnchor: dto.voiceAnchor === true },
     );
+  }
+
+  /**
+   * @description 上传音色锚点：桌面端从第 1 段出片视频取出的 WAV 声音（multipart 字段 `file`，2～15 秒），后面各段拿它作参考音色。
+   * @keyword-cn 音色锚点接口, 统一音色
+   * @keyword-en voice-anchor-api, unified-voice
+   */
+  @Post('topics/:id/store-visit/voice-anchor')
+  @RequirePermission('update', 'DouyinWorkbench')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: DOUYIN_VOICE_ANCHOR_MAX_BYTES },
+    }),
+  )
+  async saveStoreVisitVoiceAnchor(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: SaveDouyinStoreVisitVoiceAnchorDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.storeVisit.saveVoiceAnchor(
+      this.readId(id),
+      dto,
+      file,
+      scope,
+    );
+    return { topic: { ...topic, _id: undefined } };
   }
 
   /**

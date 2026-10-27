@@ -1079,3 +1079,30 @@ export class RecommendDouyinStoreVisitPlanDto {
   @IsBoolean()
   presenter!: boolean;
 }
+
+/**
+ * @description 校验探店生成：`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色。
+ * @keyword-cn 探店生成参数, 统一音色开关
+ * @keyword-en store-visit-generate-dto, voice-anchor-flag
+ */
+export class GenerateDouyinStoreVisitVideoDto {
+  @IsOptional()
+  @IsBoolean()
+  voiceAnchor?: boolean;
+}
+
+/**
+ * @description 校验音色锚点上传（multipart 文件字段 `file`）：取声音的分段 ID 与它当前的视频库 ID。
+ * @keyword-cn 音色锚点参数, 第一段声音
+ * @keyword-en voice-anchor-dto, first-segment-voice
+ */
+export class SaveDouyinStoreVisitVoiceAnchorDto {
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/)
+  segmentId!: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  videoId!: number;
+}
