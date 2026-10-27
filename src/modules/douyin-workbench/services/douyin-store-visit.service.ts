@@ -33,6 +33,7 @@ import {
   buildStoreVisitContinuityBrief,
   isStoreVisitLocalSegment,
   isStoreVisitSegmentReady,
+  pickStoreVisitPendingSegments,
   isStoreVisitVisualStart,
   parseStoreVisitContinuityPlan,
   readStoreVisitSceneKeyframe,
@@ -1214,27 +1215,37 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 生成全部探店分段的动态画面与台词声音，不创建只配音的完成记录。
+   * @description 生成探店分段的动态画面与台词声音，不创建只配音的完成记录；默认全部重新生成，`onlyMissing` 时只补没出片的段（及接它尾帧的续段），
+   *   已出片的段不重做也不重复扣费，第 1 段已出片时其余段照样等它的声音统一音色。
    *
    * @keyword-cn 提交探店视频, 全部分段生成
    * @keyword-en submit-store-visit-video, generate-all-segments
    * @param {number} topicId 子选题（脚本）ID。
    * @param {DouyinScope} scope 租户用户作用域。
-   * @param {{voiceAnchor?: boolean}} [options] `voiceAnchor` 为真（桌面端能取音频）时第 1 段先出片，其余段等它的声音作参考音色。
+   * @param {{voiceAnchor?: boolean, onlyMissing?: boolean}} [options] `voiceAnchor` 为真（桌面端能取音频）时第 1 段先出片，其余段等它的声音作参考音色；`onlyMissing` 为真时只补没出片的段。
    * @returns {Promise<{operations: DouyinOperationView[]}>} 各段调用记录。
-   * @throws {BadRequestException} 还没分段。
+   * @throws {BadRequestException} 还没分段，或只补没出片的段时各段都已出片。
    */
   async start(
     topicId: number,
     scope: DouyinScope,
-    options: { voiceAnchor?: boolean } = {},
+    options: { voiceAnchor?: boolean; onlyMissing?: boolean } = {},
   ): Promise<{ operations: DouyinOperationView[] }> {
     const topic = await this.requireChild(topicId, scope);
-    const segments = topic.storeVisit?.segments ?? [];
-    if (!segments.length)
+    const all = topic.storeVisit?.segments ?? [];
+    if (!all.length)
       throw new BadRequestException('先在「台词」步骤把台词按场景分好段');
+    const segments = options.onlyMissing
+      ? pickStoreVisitPendingSegments(all)
+      : all;
+    if (!segments.length)
+      throw new BadRequestException(
+        '各段都已出片；要重做请点「全部重新生成」或单段重新生成',
+      );
     return {
-      operations: await this.startSegments(topic, segments, scope, options),
+      operations: await this.startSegments(topic, segments, scope, {
+        voiceAnchor: options.voiceAnchor,
+      }),
     };
   }
 
@@ -1246,7 +1257,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string} segmentId 分段 ID。
    * @param {DouyinScope} scope 租户用户作用域。
-   * @param {{voiceAnchor?: boolean}} [options] \`voiceAnchor\` 为真时还没有音色锚点就等第 1 段的声音（第 1 段已出片时直接取）。
+   * @param {{voiceAnchor?: boolean}} [options] `voiceAnchor` 为真时还没有音色锚点就等第 1 段的声音（第 1 段已出片时直接取）。
    * @returns {Promise<{operations: DouyinOperationView[]}>} 这一段及其续段的调用记录。
    */
   async startOne(

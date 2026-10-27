@@ -63,6 +63,22 @@ export function isStoreVisitVisualStart(
   );
 }
 
+/** @description 挑出「只补没出片的段」要生成的段：没出片的段，加上紧跟其后接它尾帧的同镜头续段（前段重做后旧尾帧作废）；已出片的新镜头不重做也不重复扣费。
+ * @keyword-cn 补生成未出片分段, 跳过已出片 @keyword-en pick-pending-segments, skip-ready-segments */
+export function pickStoreVisitPendingSegments(
+  segments: DouyinStoreVisitSegment[],
+): DouyinStoreVisitSegment[] {
+  const picked: DouyinStoreVisitSegment[] = [];
+  segments.forEach((segment, index) => {
+    const chained =
+      index > 0 &&
+      !isStoreVisitVisualStart(segments, index) &&
+      picked.at(-1)?.id === segments[index - 1].id;
+    if (chained || !isStoreVisitSegmentReady(segment)) picked.push(segment);
+  });
+  return picked;
+}
+
 /** @description 判断台词段是否为整条视频开头或真实场景切换，镜头类型变化不等于换场景。 @keyword-cn 场景起始判断, 台词场景分离 @keyword-en scene-start-check, dialogue-scene-separation */
 export function isStoreVisitSceneStart(
   segments: DouyinStoreVisitSegment[],

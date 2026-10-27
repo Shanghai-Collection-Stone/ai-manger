@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { pickStoreVisitPendingSegments } from './douyin-store-visit-continuity.js';
 import {
   DouyinStoreVisitService,
   readStoreVisitVoiceAnchor,
@@ -472,5 +473,66 @@ describe('探店音色锚点', () => {
       audio_url: { url: 'https://oss.example/anchor.wav' },
       role: 'reference_audio',
     });
+  });
+
+  it('只补没出片的段：已出片的新镜头跳过，没出片的段连同接它尾帧的续段一起重做', () => {
+    const ready = { videoId: 40, nativeAudio: true };
+    // 第 4 段与第 3 段同一张图，是接第 3 段尾帧的续段
+    const withTail = (extra: Array<Record<string, unknown>>) =>
+      segments(extra).concat({
+        id: 'seg-4',
+        lines: '抖音左下角可以点击下单',
+        sceneImageId: 19,
+        ...(extra[3] || {}),
+      });
+    const ids = (list: Array<{ id: string }>) => list.map((item) => item.id);
+    expect(
+      ids(pickStoreVisitPendingSegments(withTail([ready, {}, ready, ready]))),
+    ).toEqual(['seg-2']);
+    expect(
+      ids(pickStoreVisitPendingSegments(withTail([ready, ready, {}, ready]))),
+    ).toEqual(['seg-3', 'seg-4']);
+    expect(
+      pickStoreVisitPendingSegments(withTail([ready, ready, ready, ready])),
+    ).toEqual([]);
+  });
+
+  it('只补没出片的段时不动已出片的段，第 1 段已出片就让剩下的段等它的声音', async () => {
+    const service = buildService({
+      segments: segments([
+        { videoId: 41, nativeAudio: true },
+        {},
+        { videoId: 43, nativeAudio: true },
+      ]),
+    });
+    await service.start(2, scope, { voiceAnchor: true, onlyMissing: true });
+    expect(service.fetchShuyan).not.toHaveBeenCalled();
+    expect(
+      service.repository.updateStoreVisitSegment.mock.calls.map(
+        (call: unknown[]) => call[1],
+      ),
+    ).toEqual(['seg-2']);
+    const rows = service.operations.insertOne.mock.calls.map(
+      (call: unknown[]) => call[0],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      segmentId: 'seg-2',
+      continuity: {
+        stage: 'waiting',
+        previousSegmentId: 'seg-1',
+        anchorSegmentId: 'seg-1',
+      },
+    });
+  });
+
+  it('只补没出片的段时各段都已出片就提示，不重复扣费', async () => {
+    const ready = { videoId: 41, nativeAudio: true };
+    const service = buildService({ segments: segments([ready, ready, ready]) });
+    await expect(
+      service.start(2, scope, { voiceAnchor: true, onlyMissing: true }),
+    ).rejects.toThrow('各段都已出片');
+    expect(service.operations.insertOne).not.toHaveBeenCalled();
+    expect(service.billing.chargeService).not.toHaveBeenCalled();
   });
 });

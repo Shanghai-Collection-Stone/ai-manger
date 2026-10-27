@@ -562,7 +562,8 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 探店模式生成视频：每段生成原生声画，按生视频服务逐段扣费，返回各段调用记录；`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色。
+   * @description 探店模式生成视频：每段生成原生声画，按生视频服务逐段扣费，返回各段调用记录；`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色；
+   *   `onlyMissing` 为真时只补没出片的段，已出片的不重做也不重复扣费。
    * @keyword-cn 探店视频生成接口, 画外音生成
    * @keyword-en store-visit-video-api, voiceover-generation
    */
@@ -576,7 +577,10 @@ export class DouyinWorkbenchController {
     return await this.storeVisit.start(
       this.readId(id),
       this.scopeOf(this.requireUser(req)),
-      { voiceAnchor: dto.voiceAnchor === true },
+      {
+        voiceAnchor: dto.voiceAnchor === true,
+        onlyMissing: dto.onlyMissing === true,
+      },
     );
   }
 

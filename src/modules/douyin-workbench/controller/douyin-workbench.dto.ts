@@ -1081,7 +1081,7 @@ export class RecommendDouyinStoreVisitPlanDto {
 }
 
 /**
- * @description 校验探店生成：`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色。
+ * @description 校验探店生成：`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色；`onlyMissing` 为真时只补没出片的段（单段重做不读它）。
  * @keyword-cn 探店生成参数, 统一音色开关
  * @keyword-en store-visit-generate-dto, voice-anchor-flag
  */
@@ -1089,6 +1089,10 @@ export class GenerateDouyinStoreVisitVideoDto {
   @IsOptional()
   @IsBoolean()
   voiceAnchor?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  onlyMissing?: boolean;
 }
 
 /**

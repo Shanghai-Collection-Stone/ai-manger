@@ -210,7 +210,7 @@ export function clampStoreVisitSpotScore(value: unknown): number {
 }
 
 /**
- * @description AI 归类工具的入参：一张图归入已有点位（\`spot_key\`）或新点位（\`new_spot\`，按名称去重，名称可以是中文），带描述与精细度打分。
+ * @description AI 归类工具的入参：一张图归入已有点位（`spot_key`）或新点位（`new_spot`，按名称去重，名称可以是中文），带描述与精细度打分。
  * @keyword-cn 归类工具入参, 归入点位
  * @keyword-en assign-tool-input, assign-to-spot
  */
@@ -223,7 +223,7 @@ export interface StoreVisitAssignInput {
 }
 
 /**
- * @description 一批 AI 归类的会话：模型每调用一次归类工具就在这里校验（图片必须是本批的；点位用已有 key，或按名称找已有点位，找不到就新建并生成 \`new-\` 草稿键），
+ * @description 一批 AI 归类的会话：模型每调用一次归类工具就在这里校验（图片必须是本批的；点位用已有 key，或按名称找已有点位，找不到就新建并生成 `new-` 草稿键），
  *   校验通过立刻推事件给前端，并把剩下没归的图片告诉模型；校验不过返回原因让模型改了再调。同一张图再归一次就是改归到新点位。
  * @keyword-cn 归类工具会话, 逐条校验推送
  * @keyword-en classify-tool-session, per-call-validation
@@ -719,8 +719,8 @@ export class DouyinStoreVisitSpotService {
 
   /**
    * @description AI 归类一批图片：把本批图片（最多 8 张，缩到 768px）连同已有点位与本轮草稿点位的封面交给「探店场景归类」视觉模型（轻量 Agent，只挂归类工具），
-   *   模型每看完一张就调用 \`store_visit_assign_image\` 把它归入点位或新建点位、写描述并打 1～10 分；每次调用校验通过立刻经 \`emit\` 推给前端，
-   *   不合规的调用把原因返回给模型重来；一批结束推 \`done\`。不落库，前端确认点位命名后整体保存。
+   *   模型每看完一张就调用 `store_visit_assign_image` 把它归入点位或新建点位、写描述并打 1～10 分；每次调用校验通过立刻经 `emit` 推给前端，
+   *   不合规的调用把原因返回给模型重来；一批结束推 `done`。不落库，前端确认点位命名后整体保存。
    * @keyword-cn AI归类点位, 看图写描述打分
    * @keyword-en ai-classify-spots, vision-describe-score
    * @param {number} storeId 门店 ID。
