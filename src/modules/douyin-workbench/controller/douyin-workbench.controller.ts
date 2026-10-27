@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Req,
   Res,
   UnauthorizedException,
@@ -25,7 +26,12 @@ import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
 import type { AdminRequest } from '../../admin/types/admin-request.types.js';
 import type { Response } from 'express';
 import {
+  ClassifyDouyinStoreVisitSpotsDto,
   ConcatDouyinShotVideosDto,
+  CreateDouyinStoreVisitStoreDto,
+  DouyinStoreVisitSimilarityDto,
+  SaveDouyinStoreVisitSpotsDto,
+  UpdateDouyinStoreVisitStoreDto,
   ContinueDouyinStoreVisitDto,
   FailDouyinStoreVisitContinuationDto,
   ConfirmDouyinScriptDraftsDto,
@@ -43,6 +49,7 @@ import {
   GenerateDouyinStoryboardDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
+  RecommendDouyinStoreVisitPlanDto,
   RefineDouyinScriptDto,
   UpdateDouyinTopicDto,
 } from './douyin-workbench.dto.js';
@@ -59,6 +66,8 @@ import {
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
+import { DouyinStoreVisitPlannerService } from '../services/douyin-store-visit-planner.service.js';
+import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
 
 /**
@@ -84,6 +93,8 @@ export class DouyinWorkbenchController {
     private readonly shotImages: DouyinShotImageService,
     private readonly shotConcat: DouyinShotConcatService,
     private readonly storeVisit: DouyinStoreVisitService,
+    private readonly spots: DouyinStoreVisitSpotService,
+    private readonly planner: DouyinStoreVisitPlannerService,
   ) {}
 
   /**
@@ -504,7 +515,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库。
+   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库；选了门店的点位模式按重点推荐点位写，并为每段挑同一点位的 1～3 张参考图。
    * @keyword-cn 探店台词接口, 画外音台词
    * @keyword-en store-visit-lines-api, voiceover-lines
    */
@@ -515,9 +526,34 @@ export class DouyinWorkbenchController {
     @Param('id') id: string,
     @Body() dto: GenerateDouyinStoreVisitLinesDto,
   ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topicId = this.readId(id);
+    // 选了门店的点位模式按点位写台词并为每段挑参考图，旧版逐张选素材的选题照旧
+    const topic = await this.repository.get(topicId, scope);
+    if (topic?.storeVisit?.storeId)
+      return await this.planner.writeSpotLines(topicId, dto.prompt, scope);
     return await this.childTopics.writeStoreVisitLines(
-      this.readId(id),
+      topicId,
       dto.prompt,
+      scope,
+    );
+  }
+
+  /**
+   * @description 探店 AI 编排推荐：按门店与重点推荐点位挑出镜人物（要出镜时）与音色，只返回不落库。
+   * @keyword-cn 编排推荐接口, 推荐人物音色
+   * @keyword-en plan-recommend-api, recommend-persona-voice
+   */
+  @Post('topics/:id/store-visit/plan/recommend')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async recommendStoreVisitPlan(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: RecommendDouyinStoreVisitPlanDto,
+  ) {
+    return await this.planner.recommend(
+      this.readId(id),
+      { presenter: dto.presenter },
       this.scopeOf(this.requireUser(req)),
     );
   }
@@ -551,6 +587,135 @@ export class DouyinWorkbenchController {
       voices: this.storeVisit.listPresetVoices(),
       categories: this.storeVisit.listPresetCategories(),
     };
+  }
+
+  /**
+   * @description 列出当前租户的探店门店与点位。
+   * @keyword-cn 门店列表接口, 探店点位
+   * @keyword-en store-list-api, store-visit-spots
+   */
+  @Get('store-visit/stores')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async listStoreVisitStores(@Req() req: AdminRequest) {
+    return {
+      stores: await this.spots.listStores(this.scopeOf(this.requireUser(req))),
+    };
+  }
+
+  /**
+   * @description 新建探店门店（同租户同名直接返回已有门店）。
+   * @keyword-cn 新建门店接口, 同名去重
+   * @keyword-en create-store-api, dedupe-store-name
+   */
+  @Post('store-visit/stores')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async createStoreVisitStore(
+    @Req() req: AdminRequest,
+    @Body() dto: CreateDouyinStoreVisitStoreDto,
+  ) {
+    return {
+      store: await this.spots.createStore(
+        dto,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 修改探店门店名称或整体说明。
+   * @keyword-cn 修改门店接口, 门店改名
+   * @keyword-en update-store-api, rename-store
+   */
+  @Patch('store-visit/stores/:storeId')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async updateStoreVisitStore(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: UpdateDouyinStoreVisitStoreDto,
+  ) {
+    return {
+      store: await this.spots.updateStore(
+        this.readId(storeId),
+        dto,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 删除探店门店与它的点位（图库图片保留）。
+   * @keyword-cn 删除门店接口, 保留图库
+   * @keyword-en delete-store-api, keep-gallery
+   */
+  @Delete('store-visit/stores/:storeId')
+  @RequirePermission('delete', 'DouyinWorkbench')
+  async deleteStoreVisitStore(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+  ) {
+    return await this.spots.deleteStore(
+      this.readId(storeId),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 整体保存门店点位，描述写回图库备注，高分图自动收藏。
+   * @keyword-cn 保存点位接口, 图库备注收藏
+   * @keyword-en save-spots-api, gallery-note-favorite
+   */
+  @Put('store-visit/stores/:storeId/spots')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async saveStoreVisitSpots(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: SaveDouyinStoreVisitSpotsDto,
+  ) {
+    return {
+      store: await this.spots.saveSpots(
+        this.readId(storeId),
+        dto.spots,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 相似度预归类：按图片视觉签名把相似的图先分到一组。
+   * @keyword-cn 相似度预归类接口, 图片相似度
+   * @keyword-en similarity-api, image-similarity
+   */
+  @Post('store-visit/stores/:storeId/similarity')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async storeVisitSpotSimilarity(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: DouyinStoreVisitSimilarityDto,
+  ) {
+    return await this.spots.similarity(
+      this.readId(storeId),
+      dto.imageIds,
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description AI 归类一批图片到点位，写描述并打分，不落库。
+   * @keyword-cn AI归类接口, 看图归类
+   * @keyword-en classify-spots-api, vision-classification
+   */
+  @Post('store-visit/stores/:storeId/classify')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async classifyStoreVisitSpots(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: ClassifyDouyinStoreVisitSpotsDto,
+  ) {
+    return await this.spots.classify(
+      this.readId(storeId),
+      dto,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /**

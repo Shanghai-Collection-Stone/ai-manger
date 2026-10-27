@@ -20,6 +20,8 @@ import { DouyinGenerationJobService } from './services/douyin-generation-job.ser
 import { DouyinShotConcatService } from './services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from './services/douyin-shot-image.service.js';
 import { DouyinStoreVisitService } from './services/douyin-store-visit.service.js';
+import { DouyinStoreVisitPlannerService } from './services/douyin-store-visit-planner.service.js';
+import { DouyinStoreVisitSpotService } from './services/douyin-store-visit-spot.service.js';
 import { DouyinStoryboardGenerationService } from './services/douyin-storyboard-generation.service.js';
 import { DouyinStoryboardImageService } from './services/douyin-storyboard-image.service.js';
 import { DouyinVideoStorageService } from './services/douyin-video-storage.service.js';
@@ -55,6 +57,8 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     DouyinShotConcatService,
     DouyinShotImageService,
     DouyinStoreVisitService,
+    DouyinStoreVisitPlannerService,
+    DouyinStoreVisitSpotService,
     DouyinStoryboardGenerationService,
     DouyinStoryboardImageService,
     DouyinVideoStorageService,

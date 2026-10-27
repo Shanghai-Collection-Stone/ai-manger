@@ -181,6 +181,10 @@ export interface DouyinStoreVisitSegment {
   sceneVideoId?: number;
   /** @description 视频素材从第几秒开始用（入点，秒），缺省从头 */
   clipStart?: number;
+  /** @description 点位模式：本段介绍的点位（门店点位 ID） */
+  spotId?: string;
+  /** @description 点位模式：本段的全部参考图（同一点位的 1～3 张，第一张即 `sceneImageId`），多张时都作参考图交给视频模型 */
+  sceneImageIds?: number[];
   /** @description 图片素材在本机做的运镜（`visualSource=local` 时生效），缺省缓慢推近 */
   motion?: DouyinStoreVisitMotion;
   /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
@@ -269,6 +273,10 @@ export interface DouyinStoreVisitSetting {
   template?: DouyinStoreVisitTemplate;
   /** @description 门店名称，AI 写开场「今天我们来到了 xxx」时逐字使用 */
   storeName?: string;
+  /** @description 点位模式：选用的门店（`douyin_store_visit_stores` 的 ID），为空表示旧版逐张选素材 */
+  storeId?: number;
+  /** @description 点位模式：重点推荐的点位 ID，按介绍顺序排列，最多 8 个 */
+  spotIds?: string[];
   /** @description 独立选择的探店场景图，与视频素材合计最多八个，不依赖分镜；每张带自己的说明与标签。 */
   sceneImages?: DouyinStoreVisitSceneImage[];
   /** @description 实拍视频素材（视频库），与场景图合计最多八个；每段带自己的说明、标签与时长。 */

@@ -5,6 +5,7 @@ AI 抖音工作台（douyin-workbench）
 ## 概述 (Overview)
 
 提供租户隔离的抖音母选题、LLM 子选题、逐段分镜持久化，以及生成视频（整片 / 分镜 / 分镜合成 / 探店人物出镜与画外音）、发布视频和作品数据抓取直连接口。母题由用户创建；子题综合母题、租户或母平台 AI 提示词与用户补充要求生成，生成数量由 LLM 自主规划，内容类型在服务端固定为短视频。支持由 LLM 推荐一条可编辑的生成要求。分镜使用项目现有 LLM 并按 `text-generation` 服务一次扣费；其他三类操作只调用显式配置的 HTTP 服务，不会隐式使用 SuperClaw，也不会产生模拟结果。
+探店另有租户共享的门店与点位（场景图库 AI 归类：视觉签名预分组 + 视觉模型归入点位、写描述打分），以及按门店与重点推荐点位推荐人物音色、按点位写台词并为每段挑参考图的 AI 编排。
 每条脚本可选一个 [预设人物](../douyin-persona/module.md)（决定出镜人物的长相、叙事视角与成片音色）、一种脚本风格（决定口播调性与画面质感），以及最多 4 张来自租户图库的参考图。AI 出图偏向下逐镜出图为线性串行：第 N 镜以第 N-1 镜刚生成的画面为底图，叠加人物形象图与脚本参考图，换取镜头之间场景、色调与人物状态的连贯。
 
 ## 文件清单 (File List)
@@ -29,6 +30,11 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-cosyvoice.service.spec.ts` — 服务域名解析、克隆前缀、WAV 时长、音色库目录（每个分类男女声都有）、声音设计请求、报错翻译、合成配音请求与下载、错误保留单测。
 - `services/douyin-store-visit-workflow.spec.ts` — 独立探店流程测试：新建探店草稿、场景租户校验、音色字段只由克隆、选用与提示词定制接口写入、场景说明标签保存与生成前必填、提示词定制音色、出镜人物与模板参数校验、分段成片与人物首帧的保留与作废、换人物作废首帧、百炼克隆（OSS 前置、删录音与旧音色、审核失败清理、格式校验）、系统音色选用与试听缓存、逐段配音与静音空镜提交、人物出镜段前置校验与首尾出镜混合提交（可灵对口型 + 数眼空镜）、配音超长 / 过短退费、仅凭标题与场景写台词。
 - `services/douyin-store-visit-material.spec.ts` — 照片与视频参考、旧缓推转 AI、原生声画就绪、参考音色与文字音色回退、素材说明与台词事实校验回归。
+- `entities/douyin-store-visit-store.entity.ts` — 探店门店与点位实体：门店（租户共享，名称、整体说明）、点位（名称、说明、开场标记、图片描述与精细度打分、补充实拍视频）、上限与自动收藏分数线、AI 归类结果结构。
+- `services/douyin-store-visit-spot.service.ts` — 门店与点位管理、场景图库图片的视觉签名（dHash + 网格平均色）相似度预归类、视觉模型逐批归入点位写描述打分，保存时写回图库备注并自动收藏高分图。
+- `services/douyin-store-visit-spot.service.spec.ts` — 视觉签名距离、单链接聚类、归类 JSON 解析（只认本批图片与已知 / 声明的点位）、归类提示词、点位名与分数规整单测。
+- `services/douyin-store-visit-planner.service.ts` — 探店 AI 编排：按门店与重点推荐点位推荐出镜人物与音色（模型失败按规则兜底），按点位写台词并为每段挑同一点位的 1～3 张参考图。
+- `services/douyin-store-visit-planner.service.spec.ts` — 点位目录（开场点位优先、只收已同步参考图）、「【点位k｜图k.a】」分段解析与挑图兜底、人物音色推荐校验与兜底单测。
 - `services/douyin-video-storage.service.ts` — 成片落库：本地合成文件或供应商临时地址存进视频库（OSS 优先，未配置时落 `public/uploads` 或登记外链），另存探店配音与克隆用的临时录音。
 - `services/douyin-pixmax-video.service.ts` — PixMax 生视频通道：分镜 / 整片提示词、提交任务、后台轮询、成片转存视频库并回填。
 - `services/douyin-pixmax-video.service.spec.ts` — 分镜与整片提示词单测。
@@ -39,8 +45,8 @@ AI 抖音工作台（douyin-workbench）
 ## 函数清单 (Function List)
 
 - `describeStoreVisitVoice(setting)` — 从定制提示词或音色库特征提取全片统一的声音描述 | keywords: 探店音色描述, 原生声音, store-visit-voice-description, native-sound
-- `matchesStoreVisitRequest(topic, segment, request)` — 对齐 Mongo 空值（null / 未填写）后比较分段与任务快照，排队、续段和成片绑定统一用它判断分段是否改过 | keywords: 分段快照校验, 数据库空值兼容, segment-request-match, mongo-null-compatibility
-- `buildStoreVisitNativePrompt(input)` — 逐段设计动态画面与原生台词，支持时参考音色样本，否则使用文字音色 | keywords: 探店原生声画, 台词音色提示, store-visit-native-video, dialogue-voice-prompt
+- `matchesStoreVisitRequest(topic, segment, request)` — 对齐 Mongo 空值后比较分段与任务快照（含点位模式的多张参考图），供排队、续段及成片绑定统一判断是否修改 | keywords: 分段快照校验, 数据库空值兼容, segment-request-match, mongo-null-compatibility
+- `buildStoreVisitNativePrompt(input)` — 逐段生成动态画面与原生台词：支持时参考音色样本，否则使用文字音色；点位模式带同一点位的多张参考图时说明以图1 为主画面；不生成供合成替换的配音 | keywords: 探店原生声画, 台词音色提示, store-visit-native-video, dialogue-voice-prompt
 
 - `STORE_VISIT_REAL_SCENE_RULES` — 所有探店视频最终追加的实景约束：不新增、不改变画面里的东西，缓慢推近或小幅平移，但原图里本来就有的灯光、屏幕、投影、布帘、热气等要自然动起来，不能像一张照片往前推 | keywords: 实景保真约束, 稳定镜头, real-scene-constraints, stable-camera
 - `storeVisitVisualSource(segment)` — 读取生成素材来源，旧 local 照片统一按 original 生成动态声画。 | keywords: 探店画面来源, 旧数据兼容, store-visit-visual-source, legacy-visual-source
@@ -130,7 +136,7 @@ AI 抖音工作台（douyin-workbench）
 - `normalizeScriptStyle(input?)` — 规整脚本风格，未登记回退为不指定 | keywords: 规整脚本风格, 默认不指定风格, normalize-script-style, default-no-style
 - `normalizeReferenceImages(input?,max=4)` — 规整脚本参考图：只留图片、去重、默认最多 4 张 | keywords: 规整脚本参考图, 参考图去重, normalize-reference-images, reference-dedupe
 - `normalizeStoreVisitSceneImages(input?)` — 规整探店场景图：沿用图库引用规整（去重、最多 8 张），另保留每张的说明（500 字）与标签（去空去重、最多 10 个、每个 30 字） | keywords: 规整探店场景图, 场景说明标签, normalize-store-visit-scenes, scene-description-tags
-- `DOUYIN_STORE_VISIT_MATERIAL_LIMIT` — 探店素材上限：场景图与实拍视频素材合计最多 8 个 | keywords: 探店素材上限, 图片视频合计, store-visit-material-limit, image-video-total
+- `DOUYIN_STORE_VISIT_MATERIAL_LIMIT` — 探店素材上限：场景图与实拍视频素材合计最多 32 个（点位模式每个点位带最多 4 张参考图、最多 8 个点位；旧版逐张选素材的界面仍限 8 个） | keywords: 探店素材上限, 图片视频合计, store-visit-material-limit, image-video-total
 - `normalizeStoreVisitMaterialMeta(item?)` — 规整一个素材的说明（500 字）与标签（去空去重、最多 10 个、每个 30 字），空的不带 | keywords: 规整素材说明, 素材标签, normalize-material-meta, material-tags
 - `normalizeStoreVisitSceneVideos(input?)` — 规整实拍视频素材：去重、最多 8 段，只留视频引用字段、说明、标签与时长（秒，一位小数），越权由 `validateMediaReferences` 拦截 | keywords: 规整探店视频素材, 视频素材说明, normalize-store-visit-videos, video-material-meta
 - `normalizeStoreVisitOpeningScene(input,images,videos)` — 规整开场素材：只认指向当前场景图或视频素材的一项，否则清掉 | keywords: 规整开场素材, 门头招牌, normalize-opening-scene, storefront-sign
@@ -343,14 +349,17 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoreVisitVoiceSample` — 克隆音色用过的录音信息（文件名、类型、大小）；录音只为克隆临时传到对象存储、克隆完即删 | keywords: 克隆音色录音, 探店音色样本, voice-clone-sample, store-visit-voice-sample
 - `DouyinStoreVisitSetting` — 探店设置：门店名称、出镜人物照、出镜模板、独立场景图与实拍视频素材（各带说明与标签）、开场素材与选填的门店整体说明、音色（来源 clone / preset / design、ID、名称、模型、提供商、录音样本与克隆时间、提示词定制的声音描述 `voicePrompt`）、台词与分段；旧版数字人的声音设计字段不再读取 | keywords: 探店模式设置, 画外音设置, 克隆音色, store-visit-setting, voiceover-setting, cloned-voice
 - `DouyinStoreVisitSceneImage` — 探店场景图：图库「场景图库」图片引用，另带这张场景的说明与标签（与图库备注、标签同步），生成前每张都必须写好说明 | keywords: 探店场景图, 场景说明, store-visit-scene-image, scene-description
+- `DouyinStoreVisitStoreEntity` / `DouyinStoreVisitStoreView` / `DouyinStoreVisitSpot` / `DouyinStoreVisitSpotImage` / `DouyinStoreVisitSpotVideo` — 探店门店（租户共享）与点位（名称、说明、开场标记 `opening`、图片描述与精细度打分 `score`、补充实拍视频）；`DouyinStoreVisitSpotClassification` — AI 归类一批图片的结果（每张图的点位键、描述与打分，本轮新建点位的建议名称）。
+- `StoreVisitImageSignature` — 相似度预归类用的视觉签名（16 位十六进制 dHash + 4×4 网格 48 个颜色值）；`StoreVisitSpotCatalogEntry` — 写台词用的点位目录项（序号、点位、选题里的参考图与视频）。
+- `DouyinStoreVisitSetting` 新增 `storeId` / `spotIds`（点位模式的门店与重点推荐点位），`DouyinStoreVisitSegment` 新增 `spotId` / `sceneImageIds`（本段点位与 1～3 张参考图）；`CreateDouyinStoreVisitStoreDto` / `UpdateDouyinStoreVisitStoreDto` / `DouyinStoreVisitSpotDto` / `DouyinStoreVisitSpotImageDto` / `DouyinStoreVisitSpotVideoDto` / `SaveDouyinStoreVisitSpotsDto` / `DouyinStoreVisitSimilarityDto` / `DouyinStoreVisitDraftSpotDto` / `ClassifyDouyinStoreVisitSpotsDto` / `RecommendDouyinStoreVisitPlanDto`。
 - `DOUYIN_STORE_VISIT_MOTIONS` — 照片在本机的运镜：缓慢推近、缓慢拉远、左右平移、静止，由桌面端 ffmpeg 生成，不调用 AI | keywords: 本机运镜, 图片缓推, local-motion, image-ken-burns
 - `DouyinStoreVisitSceneVideo` — 探店实拍视频参考素材，说明提供事实依据，交给模型重新生成声画。 | keywords: 探店视频素材, 实拍素材, store-visit-scene-video, real-footage
 - `DouyinStoreVisitOpeningScene` — 开场素材（门头 / 招牌）：指向场景图或视频素材里的一项，AI 写台词时开场段固定用它 | keywords: 开场素材, 门头招牌, opening-scene, storefront-sign
 - `DOUYIN_STORE_VISIT_TEMPLATES` — 出镜模板取值：`presenter-all` 一镜到底、`bookend` 首尾出镜、`opening` 只开场出镜、`voiceover` 纯画外音、`custom` 逐段自定义 | keywords: 探店出镜模板, 镜头编排, store-visit-template, shot-arrangement
 - `DouyinStoreVisitSegment` — 探店分段：照片或视频作为参考，每段生成动态视频与台词声音，nativeAudio 标记原声，audioUrl 仅保留旧数据兼容。 | keywords: 探店分段, 画外音配音, 分段成片, store-visit-segment, segment-voiceover, segment-video
 - `DOUYIN_STORE_VISIT_LINES_MAX` — 探店台词最长 2000 字，前端台词框同上限 | keywords: 探店台词上限, 台词字数, store-visit-lines-limit, lines-length
-- `DouyinStoreVisitSegmentDto()` — 校验镜头用途、local / original / references / generated 来源、视频素材 ID、入点与本机运镜，输出字段只由服务端写入 | keywords: 探店分段参数, 分段台词, store-visit-segment-dto, segment-lines
-- `DouyinStoreVisitDto()` — 校验门店、素材、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入。 | keywords: 探店设置参数, 场景台词, store-visit-setting-dto, scene-lines
+- `DouyinStoreVisitSegmentDto()` — 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图或视频素材 ID、点位模式的点位 ID 与 1～3 张参考图、视频入点、本机运镜、画面描述、镜头用途（实景 / 体验 / 讲解）与画面来源；人物首帧、成片与配音只由服务端写入 | keywords: 探店分段参数, 分段台词, store-visit-segment-dto, segment-lines
+- `DouyinStoreVisitDto()` — 校验门店（点位模式另带门店 ID 与最多 8 个重点推荐点位）、素材（合计最多 32 个）、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入 | keywords: 探店设置参数, 场景台词, store-visit-setting-dto, scene-lines
 - `DouyinStoreVisitSceneImageDto()` — 校验探店场景图：图库图片引用另带说明（最多 500 字）与标签（最多 10 个、每个 30 字内），旧数据没有说明时保存不拦 | keywords: 探店场景图参数, 场景说明标签, store-visit-scene-image-dto, scene-description-tags
 - `DouyinStoreVisitSceneVideoDto()` — 校验探店实拍视频素材：视频库引用另带说明（最多 500 字）、标签（最多 10 个、每个 30 字内）与时长 | keywords: 探店视频素材参数, 素材说明, store-visit-scene-video-dto, material-description
 - `DouyinStoreVisitOpeningSceneDto()` — 校验开场素材：指向场景图（image）或视频素材（video）里的一项 | keywords: 开场素材参数, 门头招牌, opening-scene-dto, storefront-sign
@@ -361,8 +370,8 @@ AI 抖音工作台（douyin-workbench）
 - `GenerateDouyinStoreVisitKeyframeDto()` — 校验生成人物首帧的可选补充描述（最多 500 字） | keywords: 人物首帧参数, 首帧补充描述, keyframe-dto, keyframe-requirement
 - `normalizeStoreVisitLines(input?)` — 规整探店台词：统一换行、去首尾空白、最多 2000 字 | keywords: 规整探店台词, 台词字数, normalize-store-visit-lines, lines-length
 - `DOUYIN_STORE_VISIT_SEGMENT_LIMITS` — 分段上限：最多 8 段、单段台词 1000 字（实际按单段视频时长控制在约 60 字内）、画面描述 300 字 | keywords: 探店分段上限, 单段台词上限, store-visit-segment-limit, segment-lines-limit
-- `normalizeStoreVisitSegments(input,sceneImageIds,sceneVideoIds?)` — 规整分段（只收台词、场景图或视频素材 ID、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID）：去空段、非法或重复段 ID 换新、清掉不在本选题素材里的引用，视频素材段不收人物镜头类型 | keywords: 规整探店分段, 分段校验, normalize-store-visit-segments, segment-validation
-- `mergeStoreVisitSegments(next,current)` — 同场景保留起始图，前段编辑或重排后作废依赖它尾帧的后续成片；新镜头（换素材、换用途或紧跟本机素材段）不受前段改动连带，本机素材段台词没变就保留配音 | keywords: 合并探店分段, 保留分段成片, merge-store-visit-segments, keep-segment-output
+- `normalizeStoreVisitSegments(input,sceneImageIds,sceneVideoIds?)` — 规整探店分段（只收台词、场景图或视频素材 ID、点位模式的点位 ID 与同一点位 1～3 张参考图、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：去掉空台词段，段 ID 不合法或重复时换新，素材不在本选题素材里时清空；视频素材段不收人物镜头类型（人物出镜要用图片），最多 8 段 | keywords: 规整探店分段, 分段校验, normalize-store-visit-segments, segment-validation
+- `mergeStoreVisitSegments(next,current)` — 保存分段时接上服务端写入的字段：场景（含参考图组）没变时保留人物首帧；台词、场景、画面描述与镜头类型都没变、且没有依赖的前段改动时，再保留这段的视频、配音与所用音色，任一改了就作废。新镜头（换素材、换用途或紧跟本机素材段）不依赖前段尾帧，前段改动不连带作废它；本机素材段的产出只有配音，台词没变就保留，换素材、入点或运镜都不用重新配音 | keywords: 合并探店分段, 保留分段成片, merge-store-visit-segments, keep-segment-output
 - `clearPresenterKeyframes(segments)` — 换人物后清除所有场景起始图及依赖旧尾帧的成片，本机素材段与人物无关、保留配音 | keywords: 换人物作废首帧, 人物出镜成片作废, reset-presenter-keyframes, invalidate-presenter-output
 - `saveStoreVisitVoice(id,voice,scope)` — 写入录音克隆、音色库预置音色或提示词定制的音色：克隆带录音样本与克隆时间，提示词定制带声音描述 `voicePrompt`，其余来源清掉它们；同时清掉旧版数字人的声音设计、试听与语种字段，场景与台词不动 | keywords: 保存探店音色, 克隆音色, save-store-visit-voice, save-cloned-voice
 - `claimAutoConcat(id,scope)` — 原子清掉「全部出片后自动合成」标记，只有真正清掉的那次返回 true | keywords: 认领自动合成, 防重复合成, claim-auto-concat, dedupe-concat
@@ -378,7 +387,7 @@ AI 抖音工作台（douyin-workbench）
 - `reviewStoreVisitLines({segments,facts,storeName?})` — 核对台词：资料里没有的数字、方言谐音字、中文数字价格、开场没报店名、整条不到约 20 秒都写成提醒 | keywords: 探店台词核对, 台词提醒, verify-store-visit-lines, lines-warnings
 - `STORE_VISIT_LINES_MIN_CHARACTERS` — 探店台词整条最少 90 字（约 20 秒），少于它时提醒把素材说明写具体些再重写 | keywords: 台词最少字数, 台词偏短提醒, lines-min-characters, short-lines-warning
 - `STORE_VISIT_HARD_TO_VOICE_WORDS` — 配音和视频模型容易念错的方言词、方言音译字与网络谐音字清单（嘎哈、咋整、杠杠的、酱紫、木有等） | keywords: 难念字眼, 方言词, hard-to-voice-words, dialect-words
-- `STORE_VISIT_PLAIN_SPEECH_RULE` — 写台词的「好念」规则：只用普通话常用词，人物或要求偏方言风格时只在语气节奏上体现，优先于人物设定和补充要求 | keywords: 台词好念规则, 普通话用词, plain-speech-rule, mandarin-wording
+- `STORE_VISIT_PLAIN_SPEECH_RULE` — 探店台词「好念」规则：只用普通话常用词，人物设定或补充要求偏方言风格时只在语气节奏上体现；优先于人物设定和补充要求（点位台词也复用） | keywords: 台词好念规则, 普通话用词, plain-speech-rule, mandarin-wording
 - `findStoreVisitHardToVoiceWords(lines,facts)` — 找出台词里的方言谐音字，店名与素材说明里本来就有的不算 | keywords: 难念字眼核对, 方言词核对, find-hard-to-voice-words, dialect-word-check
 - `DouyinOutputVideoMeta` — 成片登记参数（名称、作用域、标签、时长、尺寸） | keywords: 成片登记参数, 视频库登记, output-video-meta, video-library-register
 - `resolveStaticFilePath(url)` — 站内 `/static/...` 地址换成 `public` 下的磁盘路径，拒绝 `..` 穿越 | keywords: 站内地址转磁盘路径, 路径穿越防护, static-url-to-path, path-traversal-guard
@@ -439,7 +448,7 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoreVisitService.refresh(id)` — 手动同步一条分段调用 | keywords: 同步探店分段, 手动刷新, sync-store-visit-segment, manual-refresh
 - `DouyinStoreVisitService.pollOnce()` — 跟进一轮未结束的分段任务，同一进程内不重入 | keywords: 轮询探店分段, 防重入, poll-store-visit-segments, reentry-guard
 - `DouyinStoreVisitService.startSegments(topic,segments,scope)` — 统一校验参考素材与声音描述，按段排队生成视频；音色样本仅作参考，无样本时按文字音色生成。 | keywords: 提交探店分段, 分段前置校验, submit-store-visit-segment-batch, segment-precheck
-- `DouyinStoreVisitService.submitSegment(input)` — 按视频生成计费并提交原生声画，有样本时参考音色，否则按文字音色生成，不追加对口型或产出供合成替换的配音。 | keywords: 提交单段画外音, 分段配音, submit-segment-voiceover, segment-broll
+- `DouyinStoreVisitService.submitSegment(input)` — 按视频生成计费并提交原生声画，有样本时参考音色，否则按文字音色生成；点位模式的实景段把同一点位其余 1～2 张图作参考图一起交给模型；不追加对口型或产出供合成替换的配音 | keywords: 提交单段画外音, 分段配音, submit-segment-voiceover, segment-broll
 - `DouyinStoreVisitService.refreshRow(row)` — 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；旧运行中调用按原请求快照完成。 | keywords: 推进探店分段, 分段转存, advance-store-visit-segment, save-segment-video
 - `DouyinStoreVisitService.startLipSync(row,{gateway,apiKey?,videoUrl,videoSeconds?})` — 原子认领对口型：识别人脸 → 挑主播的脸 → 配音按出现时间提交可灵对口型，任何一步失败记原因并返回跳过 | keywords: 发起人物对口型, 识别比对人脸, start-presenter-lip-sync, identify-and-match-face
 - `DouyinStoreVisitService.matchPresenterFaces(row,faces,videoMs)` — 一张脸出现超过半段直接用，否则用「探店尾帧衔接」视觉模型拿出镜人物照比对，失败退回出现最久的那张 | keywords: 比对主播人脸, 视觉模型认人, match-presenter-face, vision-face-match
@@ -457,7 +466,7 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoreVisitService.toView(row)` — 去掉数据库字段与请求正文后的分段调用视图，对口型只给阶段与跳过原因 | keywords: 分段调用视图, 隐藏请求, segment-operation-view, hide-request
 - `concatShotVideos(req,id,dto)` — 校验并领取客户端合成，返回调用记录与有序片段，权限为 create DouyinWorkbench | keywords: 准备客户端合成接口, 分镜视频地址, prepare-client-concat-api, shot-video-urls
 - `cloneStoreVisitVoice(req,id,file)` — `POST topics/:id/store-visit/voice`（`create DouyinWorkbench`，multipart `file` ≤10MB），录音临时传 OSS 交给百炼声音复刻、克隆完即删，音色 ID 写进脚本 | keywords: 克隆探店音色接口, 上传录音, clone-store-visit-voice-api, upload-voice-sample
-- `generateStoreVisitLines(req,id,dto)` — `POST topics/:id/store-visit/lines`（`create DouyinWorkbench`），按场景分段写探店画外音台词，只返回台词 | keywords: 探店台词接口, 画外音台词, store-visit-lines-api, voiceover-lines
+- `generateStoreVisitLines(req,id,dto)` — `POST topics/:id/store-visit/lines`（`create DouyinWorkbench`），按场景与台词让 AI 写一版探店画外音台词，只返回不落库；选了门店的点位模式按重点推荐点位写，并为每段挑同一点位的 1～3 张参考图 | keywords: 探店台词接口, 画外音台词, store-visit-lines-api, voiceover-lines
 - `generateStoreVisitVideo(req,id)` — `POST topics/:id/store-visit/generate`（`create DouyinWorkbench`），逐段配音并以场景图为首帧生成空镜视频，按生视频服务逐段扣费，返回各段调用记录 | keywords: 探店视频生成接口, 画外音生成, store-visit-video-api, voiceover-generation
 - `listStoreVisitPresetVoices()` — `GET store-visit/voices`（`read DouyinWorkbench`），返回音色库 `voices`（名称、特质、性别、风格分类与方言）与分类目录 `categories` | keywords: 音色库接口, 探店音色库, preset-voices-api, store-visit-voice-library
 - `designStoreVisitVoice(req,id,dto)` — `POST topics/:id/store-visit/voice/design`（`create DouyinWorkbench`），按声音描述定制音色并返回当前租户工作台 | keywords: 提示词定制音色接口, 声音设计, design-voice-api, voice-design
@@ -490,6 +499,63 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinCosyVoiceService.synthesize(runtime,input)` — 按音色把一段文字合成 24kHz 单声道 WAV，下载回来并算出时长（百炼地址 24 小时有效，调用方自行转存） | keywords: 合成配音, 画外音配音, synthesize-voiceover, cosyvoice-tts
 - `DouyinCosyVoiceService.synthesizePreview(runtime,input)` — 合成一句试听，只返回百炼 https 临时地址不下载 | keywords: 合成试听, 音色试听, synthesize-preview, voice-trial
 - `DouyinCosyVoiceService.post(runtime,path,body)` — 调一次百炼语音接口（Bearer、1 分钟超时），非 2xx 或响应带 `code` 时抛 `DASHSCOPE_HTTP_<状态码>:<响应体>` | keywords: 百炼语音请求, 错误体保留, dashscope-speech-request, preserve-error-body
+- `DOUYIN_STORE_VISIT_CLASSIFY_BATCH` — 一次 AI 归类最多交给视觉模型的图片数，另附最多 6 个已有点位的封面作对照 | keywords: 单批归类图片数, 视觉模型批量, classify-batch-size, vision-batch
+- `DOUYIN_STORE_VISIT_SIMILARITY_LIMIT` — 一次相似度预归类最多处理的图片数 | keywords: 相似度预归类上限, 批量哈希, similarity-batch-limit, batch-hash
+- `DOUYIN_STORE_VISIT_SIMILARITY_THRESHOLD` — 两张图的相似距离低于这个值（0～1）就预先归到一组，再交给 AI 判断 | keywords: 相似度阈值, 预归类阈值, similarity-threshold, pre-cluster-threshold
+- `computeStoreVisitImageSignature(buffer)` — 用 sharp 算一张图的视觉签名：缩成 9×8 灰度比较相邻像素得 64 位 dHash，再缩成 4×4 取每格 RGB 平均色 | keywords: 计算视觉签名, 感知哈希, compute-visual-signature, perceptual-hash
+- `storeVisitSignatureDistance(a,b)` — 两个视觉签名的距离（0 完全一样～1 完全不同）：dHash 汉明距离占 6 成、平均色差占 4 成 | keywords: 签名距离, 汉明距离, signature-distance, hamming-distance
+- `clusterStoreVisitSignatures(items,threshold?)` — 按视觉签名做单链接聚类：任意两张距离低于阈值就并到同一组，返回按组大小降序、组内保持原顺序的 ID 分组（单张也成一组） | keywords: 相似图预归类, 单链接聚类, similar-image-clustering, single-linkage
+- `clusterStoreVisitSignatures.find(index)` — 找到并压缩并查集的根 | keywords: 并查集根, 路径压缩, union-find-root, path-compression
+- `readStoreVisitText(value)` — 把不可信的字段读成字符串：只认字符串与数字，其余（对象、空值）返回空串，避免把对象拼成「[object Object]」 | keywords: 读取文本字段, 不可信输入, read-text-field, untrusted-input
+- `normalizeStoreVisitSpotName(value)` — 规整点位名称：压掉空白、去掉书名号引号，最多 30 字 | keywords: 规整点位名称, 点位命名, normalize-spot-name, spot-naming
+- `clampStoreVisitSpotScore(value)` — 把精细度打分夹到 1～10 的整数，读不出时给 5 | keywords: 规整精细度分数, 分数范围, clamp-fineness-score, score-range
+- `parseStoreVisitSpotClassification(text,context)` — 解析视觉模型的归类 JSON：图片只认本批里的、点位只认已有点位 ID、前几批的草稿键或本次声明的新点位；模型漏掉的图片不出现在结果里（前端留在待归类池），新点位没有图片归入时丢掉 | keywords: 解析点位归类, 归类结果校验, parse-spot-classification, classification-validation
+- `buildStoreVisitSpotClassificationBrief(input)` — 给视觉模型写归类任务：门店资料、已有点位（含本轮草稿）清单与封面对照、本批图片序号与相似度预分组，要求按 JSON 返回 | keywords: 点位归类提示词, 视觉归类任务, spot-classification-brief, vision-classification-task
+- `DouyinStoreVisitSpotService()` — 探店门店与点位：门店在租户内共享，点位由使用者确认命名；场景图库图片可先按视觉签名预归类，再交给视觉模型归入点位、写描述并打分，保存时把描述写回图库备注，高分图自动收藏 | keywords: 探店点位服务, 场景图库归类, store-visit-spot-service, scene-library-classification
+- `DouyinStoreVisitSpotService.constructor(db,gallery,repository,workflowModels,agentService)` — 初始化门店集合与图库、视频库、模型依赖 | keywords: 初始化点位服务, 门店集合, init-spot-service, store-collection
+- `DouyinStoreVisitSpotService.listStores(scope)` — 列出当前租户的门店与点位，最近改过的在前 | keywords: 查询探店门店, 门店列表, list-store-visit-stores, store-list
+- `DouyinStoreVisitSpotService.requireStore(id,scope)` — 读取一家门店，不属于当前租户时报不存在 | keywords: 读取探店门店, 租户校验, get-store-visit-store, tenant-check
+- `DouyinStoreVisitSpotService.createStore(input,scope)` — 新建门店：同租户里同名门店直接返回已有的那家，避免重复建店把点位拆散 | keywords: 新建探店门店, 同名去重, create-store-visit-store, dedupe-store-name
+- `DouyinStoreVisitSpotService.updateStore(id,input,scope)` — 改门店名称或整体说明，改名撞上同租户另一家门店时拒绝 | keywords: 修改探店门店, 门店改名, update-store-visit-store, rename-store
+- `DouyinStoreVisitSpotService.deleteStore(id,scope)` — 删除门店与它的点位记录（图库图片保留） | keywords: 删除探店门店, 保留图库, delete-store-visit-store, keep-gallery
+- `DouyinStoreVisitSpotService.saveSpots(id,input,scope)` — 整体保存一家门店的点位：名称必填且店内不重名，图片与视频按租户校验并以库里的真实地址为准，一张图只归一个点位；描述有变化的图片写回图库备注，打分达到收藏线的图片在图库里自动收藏（不会取消用户自己的收藏） | keywords: 保存门店点位, 同步图库备注收藏, save-store-spots, sync-gallery-note-favorite
+- `DouyinStoreVisitSpotService.similarity(storeId,imageIds,scope)` — 相似度预归类：逐张算视觉签名（dHash + 网格平均色）后单链接聚类；读不出的图片单独列出，不影响其余 | keywords: 相似图预归类, 图片相似度, pre-cluster-similar-images, image-similarity
+- `DouyinStoreVisitSpotService.classify(storeId,input,scope)` — AI 归类一批图片：把本批图片（最多 8 张，缩到 768px）连同已有点位与本轮草稿点位的封面交给「探店场景归类」视觉模型，让它把每张图归入点位或新建点位、写一句描述并打 1～10 分；不落库，前端确认点位命名后整体保存 | keywords: AI归类点位, 看图写描述打分, ai-classify-spots, vision-describe-score
+- `DouyinStoreVisitSpotService.readImage(url)` — 读一张图库图片的文件内容：公网地址带 30 秒超时下载，站内地址读本地文件 | keywords: 读取图库图片, 本地或公网, read-gallery-image, local-or-remote
+- `DouyinStoreVisitSpotService.toVisionImage(row)` — 把图片缩到长边 768px 的 JPEG data URL 交给视觉模型（本地与公网图片一样处理，省 token 也避免模型读不到站内地址），结果缓存 10 分钟 | keywords: 视觉模型入图, 缩图缓存, vision-image-input, preview-cache
+- `DouyinStoreVisitSpotService.nextId()` — 生成全局递增的门店 ID | keywords: 门店自增ID, 计数器, next-store-id, counter
+- `DouyinStoreVisitSpotService.tenantFilter(tenantId?)` — 构造租户过滤，母平台只访问无 tenantId 的平台数据 | keywords: 门店租户过滤, 母平台边界, store-tenant-filter, platform-boundary
+- `DouyinStoreVisitSpotService.toView(row)` — 去掉 Mongo 主键生成门店视图 | keywords: 门店视图, 隐藏数据库ID, store-view, hide-database-id
+- `buildStoreVisitSpotCatalog(spots,spotIds,sceneImages,sceneVideos?)` — 按重点推荐顺序整理点位目录：只收选题里已同步的参考图（打分高的在前），点位说明为空时用图片描述补；开场门头点位排第一 | keywords: 整理点位目录, 开场点位优先, build-spot-catalog, opening-spot-first
+- `describeStoreVisitSpotCatalog(catalog)` — 把点位目录写成给模型看的资料：点位名、开场标记、说明，每张图的编号、打分与描述，实拍视频说明 | keywords: 点位目录文本, 图片编号打分, spot-catalog-text, image-number-score
+- `parseStoreVisitSpotSegments(text,catalog)` — 解析按点位写的台词：每段第一行「【点位k｜图k.a,k.b】」，图片只认这个点位的编号（最多 3 张），没写或写错时按打分挑，同一点位分成几段时主图轮换；只有实拍视频的点位用它的第一段视频。最多 8 段 | keywords: 解析点位台词, 每段挑图, parse-spot-segments, per-segment-images
+- `pickStoreVisitRecommendation(raw,context)` — 校验模型的人物与音色推荐：人物只认候选里的（要出镜时必须有形象图），音色只认音色库里的；不合规时按人物性别或「活力种草」兜底，声音描述优先用人物设定的音色 | keywords: 校验编排推荐, 推荐兜底, validate-plan-recommendation, recommendation-fallback
+- `DouyinStoreVisitPlannerService()` — 探店 AI 编排：按门店与重点推荐点位先挑出镜人物与音色（用户可再换），再按点位写台词并为每段挑同一点位的 1～3 张参考图；结果都只返回、不落库，由前端应用并保存 | keywords: 探店AI编排, 点位台词, store-visit-ai-planner, spot-lines
+- `DouyinStoreVisitPlannerService.constructor(repository,spots,personas,workflowModels,agentService)` — 注入选题、门店点位、预设人物与模型依赖 | keywords: 初始化编排服务, 编排依赖, init-planner-service, planner-dependencies
+- `DouyinStoreVisitPlannerService.recommend(topicId,options,scope)` — AI 先替用户挑人物与音色：要出镜时从有形象图的预设人物里挑最搭这家店的一个，再从音色库挑一个音色（选了人物时跟人物性别与气质走），并写一句可直接用的声音描述（音色库不可用时前端改用它）。模型失败时按规则兜底，不阻断流程 | keywords: AI推荐人物音色, 编排推荐, ai-recommend-persona-voice, plan-recommendation
+- `DouyinStoreVisitPlannerService.writeSpotLines(topicId,prompt,scope)` — 按重点推荐点位写探店台词：开场用门头点位报店名，之后按用户挑的顺序一段讲一个点位（内容多的点位可分两段），结尾引导下单；每段从该点位的参考图里挑 1～3 张（优先高分图）；只复述门店、点位与图片描述里的事实，编了数字或用了方言字时重写一次，仍有问题带核对提醒返回 | keywords: 按点位写台词, 每段挑参考图, write-spot-lines, pick-segment-images
+- `DouyinStoreVisitPlannerService.loadContext(topicId,scope)` — 读取点位模式选题、门店与重点推荐点位目录，缺门店或点位时提示回到对应步骤 | keywords: 读取编排上下文, 点位目录, load-planner-context, spot-catalog
+- `DouyinStoreVisitPlannerService.ask(scope,source,system,user,temperature)` — 用「探店编排推荐」节点（关思考、非流式）问一次模型并取出文本 | keywords: 编排模型调用, 读取文本, planner-llm-call, read-text
+- `DOUYIN_STORE_VISIT_SPOT_LIMITS` — 探店门店与点位的上限：每租户门店不限，每店最多 40 个点位，每个点位最多 40 张图片、6 段实拍视频；点位名 30 字、点位说明 500 字、单张图片描述 300 字 | keywords: 探店点位上限, 点位图片上限, store-visit-spot-limits, spot-image-limit
+- `DOUYIN_STORE_VISIT_SPOT_FAVORITE_SCORE` — AI 给图片打的精细度分数达到这一档（满分 10）就自动收藏，下次写台词、挑参考图时优先选用 | keywords: 自动收藏分数线, 精细度打分, auto-favorite-score, fineness-score
+- `CreateDouyinStoreVisitStoreDto()` — 校验新建探店门店：名称必填（60 字内），整体说明选填（位置、人均、营业时间，2000 字内） | keywords: 新建门店参数, 门店名称, create-store-dto, store-name
+- `UpdateDouyinStoreVisitStoreDto()` — 校验修改探店门店：可单独改名称或整体说明 | keywords: 修改门店参数, 门店说明, update-store-dto, store-description
+- `DouyinStoreVisitSpotImageDto()` — 校验点位里的一张图片：图库图片 ID、AI 或用户写的描述（300 字内）与精细度打分（1～10） | keywords: 点位图片参数, 精细度打分, spot-image-dto, fineness-score
+- `DouyinStoreVisitSpotVideoDto()` — 校验点位的一段补充实拍视频：视频库视频 ID 与说明（500 字内） | keywords: 点位视频参数, 补充素材, spot-video-dto, supplemental-footage
+- `DouyinStoreVisitSpotDto()` — 校验一个点位：已有点位带 ID，名称必填（30 字内），说明 500 字内，最多 40 张图片、6 段视频 | keywords: 点位参数, 点位命名, spot-dto, spot-naming
+- `SaveDouyinStoreVisitSpotsDto()` — 校验整体保存门店点位：最多 40 个点位 | keywords: 保存点位参数, 点位整体保存, save-spots-dto, replace-spots
+- `DouyinStoreVisitSimilarityDto()` — 校验相似度预归类：1～60 张图库图片 ID | keywords: 相似度预归类参数, 图片ID列表, similarity-dto, image-id-list
+- `DouyinStoreVisitDraftSpotDto()` — 校验 AI 归类时带上的本轮草稿点位：`new-` 开头的草稿键、建议名称、说明与封面图 | keywords: 草稿点位参数, 本轮新建点位, draft-spot-dto, round-new-spot
+- `ClassifyDouyinStoreVisitSpotsDto()` — 校验一批 AI 归类：1～8 张图片、可选的相似度预分组与本轮草稿点位 | keywords: AI归类参数, 批量归类, classify-spots-dto, batch-classification
+- `RecommendDouyinStoreVisitPlanDto()` — 校验 AI 编排推荐：视频开头是否有人出镜（决定要不要挑人物） | keywords: 编排推荐参数, 是否出镜, plan-recommend-dto, presenter-flag
+- `listStoreVisitStores(req)` — `GET store-visit/stores`（`read DouyinWorkbench`），列出当前租户的探店门店与点位 | keywords: 门店列表接口, 探店点位, store-list-api, store-visit-spots
+- `createStoreVisitStore(req,dto)` — `POST store-visit/stores`（`create DouyinWorkbench`），新建探店门店（同租户同名直接返回已有门店） | keywords: 新建门店接口, 同名去重, create-store-api, dedupe-store-name
+- `updateStoreVisitStore(req,storeId,dto)` — `PATCH store-visit/stores/:storeId`（`update DouyinWorkbench`），修改探店门店名称或整体说明 | keywords: 修改门店接口, 门店改名, update-store-api, rename-store
+- `deleteStoreVisitStore(req,storeId)` — `DELETE store-visit/stores/:storeId`（`delete DouyinWorkbench`），删除探店门店与它的点位（图库图片保留） | keywords: 删除门店接口, 保留图库, delete-store-api, keep-gallery
+- `saveStoreVisitSpots(req,storeId,dto)` — `PUT store-visit/stores/:storeId/spots`（`update DouyinWorkbench`），整体保存门店点位，描述写回图库备注，高分图自动收藏 | keywords: 保存点位接口, 图库备注收藏, save-spots-api, gallery-note-favorite
+- `storeVisitSpotSimilarity(req,storeId,dto)` — `POST store-visit/stores/:storeId/similarity`（`read DouyinWorkbench`），相似度预归类：按图片视觉签名把相似的图先分到一组 | keywords: 相似度预归类接口, 图片相似度, similarity-api, image-similarity
+- `classifyStoreVisitSpots(req,storeId,dto)` — `POST store-visit/stores/:storeId/classify`（`create DouyinWorkbench`），AI 归类一批图片到点位，写描述并打分，不落库 | keywords: AI归类接口, 看图归类, classify-spots-api, vision-classification
+- `recommendStoreVisitPlan(req,id,dto)` — `POST topics/:id/store-visit/plan/recommend`（`create DouyinWorkbench`），探店 AI 编排推荐：按门店与重点推荐点位挑出镜人物（要出镜时）与音色，只返回不落库 | keywords: 编排推荐接口, 推荐人物音色, plan-recommend-api, recommend-persona-voice
 
 ## 关键词索引 (Keyword Index)
 
@@ -846,6 +912,113 @@ AI 抖音工作台（douyin-workbench）
 | 原生声音 | native-sound |
 | 探店原生声画 | store-visit-native-video |
 | 台词音色提示 | dialogue-voice-prompt |
+| 单批归类图片数 | classify-batch-size |
+| 视觉模型批量 | vision-batch |
+| 相似度预归类上限 | similarity-batch-limit |
+| 批量哈希 | batch-hash |
+| 相似度阈值 | similarity-threshold |
+| 预归类阈值 | pre-cluster-threshold |
+| 计算视觉签名 | compute-visual-signature |
+| 感知哈希 | perceptual-hash |
+| 签名距离 | signature-distance |
+| 汉明距离 | hamming-distance |
+| 相似图预归类 | similar-image-clustering |
+| 单链接聚类 | single-linkage |
+| 并查集根 | union-find-root |
+| 路径压缩 | path-compression |
+| 读取文本字段 | read-text-field |
+| 不可信输入 | untrusted-input |
+| 规整点位名称 | normalize-spot-name |
+| 点位命名 | spot-naming |
+| 规整精细度分数 | clamp-fineness-score |
+| 分数范围 | score-range |
+| 解析点位归类 | parse-spot-classification |
+| 归类结果校验 | classification-validation |
+| 点位归类提示词 | spot-classification-brief |
+| 视觉归类任务 | vision-classification-task |
+| 探店点位服务 | store-visit-spot-service |
+| 场景图库归类 | scene-library-classification |
+| 初始化点位服务 | init-spot-service |
+| 门店集合 | store-collection |
+| 查询探店门店 | list-store-visit-stores |
+| 门店列表 | store-list |
+| 读取探店门店 | get-store-visit-store |
+| 租户校验 | tenant-check |
+| 新建探店门店 | create-store-visit-store |
+| 同名去重 | dedupe-store-name |
+| 修改探店门店 | update-store-visit-store |
+| 门店改名 | rename-store |
+| 删除探店门店 | delete-store-visit-store |
+| 保留图库 | keep-gallery |
+| 保存门店点位 | save-store-spots |
+| 同步图库备注收藏 | sync-gallery-note-favorite |
+| 图片相似度 | image-similarity |
+| AI归类点位 | ai-classify-spots |
+| 看图写描述打分 | vision-describe-score |
+| 读取图库图片 | read-gallery-image |
+| 本地或公网 | local-or-remote |
+| 视觉模型入图 | vision-image-input |
+| 缩图缓存 | preview-cache |
+| 门店自增ID | next-store-id |
+| 计数器 | counter |
+| 门店租户过滤 | store-tenant-filter |
+| 母平台边界 | platform-boundary |
+| 门店视图 | store-view |
+| 隐藏数据库ID | hide-database-id |
+| 整理点位目录 | build-spot-catalog |
+| 开场点位优先 | opening-spot-first |
+| 点位目录文本 | spot-catalog-text |
+| 图片编号打分 | image-number-score |
+| 解析点位台词 | parse-spot-segments |
+| 每段挑图 | per-segment-images |
+| 校验编排推荐 | validate-plan-recommendation |
+| 推荐兜底 | recommendation-fallback |
+| 探店AI编排 | store-visit-ai-planner |
+| 点位台词 | spot-lines |
+| 初始化编排服务 | init-planner-service |
+| 编排依赖 | planner-dependencies |
+| AI推荐人物音色 | ai-recommend-persona-voice |
+| 编排推荐 | plan-recommendation |
+| 按点位写台词 | write-spot-lines |
+| 每段挑参考图 | pick-segment-images |
+| 读取编排上下文 | load-planner-context |
+| 点位目录 | spot-catalog |
+| 编排模型调用 | planner-llm-call |
+| 读取文本 | read-text |
+| 探店点位上限 | store-visit-spot-limits |
+| 点位图片上限 | spot-image-limit |
+| 自动收藏分数线 | auto-favorite-score |
+| 精细度打分 | fineness-score |
+| 新建门店参数 | create-store-dto |
+| 门店名称 | store-name |
+| 修改门店参数 | update-store-dto |
+| 门店说明 | store-description |
+| 点位图片参数 | spot-image-dto |
+| 点位视频参数 | spot-video-dto |
+| 补充素材 | supplemental-footage |
+| 点位参数 | spot-dto |
+| 保存点位参数 | save-spots-dto |
+| 点位整体保存 | replace-spots |
+| 相似度预归类参数 | similarity-dto |
+| 图片ID列表 | image-id-list |
+| 草稿点位参数 | draft-spot-dto |
+| 本轮新建点位 | round-new-spot |
+| AI归类参数 | classify-spots-dto |
+| 批量归类 | batch-classification |
+| 编排推荐参数 | plan-recommend-dto |
+| 是否出镜 | presenter-flag |
+| 门店列表接口 | store-list-api |
+| 探店点位 | store-visit-spots |
+| 新建门店接口 | create-store-api |
+| 修改门店接口 | update-store-api |
+| 删除门店接口 | delete-store-api |
+| 保存点位接口 | save-spots-api |
+| 图库备注收藏 | gallery-note-favorite |
+| 相似度预归类接口 | similarity-api |
+| AI归类接口 | classify-spots-api |
+| 看图归类 | vision-classification |
+| 编排推荐接口 | plan-recommend-api |
+| 推荐人物音色 | recommend-persona-voice |
 
 ## 类型导出 (Type Exports)
 
@@ -948,3 +1121,9 @@ AI 抖音工作台（douyin-workbench）
 **画面动起来、人物站进场景**：实景约束不再要求固定机位、只许指定动作，改成「不新增、不改变画面里的东西，但原图里本来就有的灯光、屏幕、投影、布帘、热气要自然动起来」，实景画面默认镜头缓慢推近（`STORE_VISIT_SCENE_MOTION`）。人物首帧与多图参考提示词都加中景构图（`STORE_VISIT_PERSON_IN_SCENE`）：人物站在场景地面上、约占画面一半、和场景同光同影、脚下有影子，避免拍成大头贴贴在背景前；门店照片和人物照一起给时，图2 优先取人设的正面全身形象（面部特写会把人拍成大头）。
 
 **人物参考音色亲口说（Seedance 2.0）**：所有画面段和人物段都由模型直接生成台词声音。Seedance 2.0、MiniMax-H3 可用音色样本时传 reference_audio，图片相应使用 reference_image，避免与 first_frame 冲突；样本只能作为音色参考，生成记录不写供合成替换的 audioUrl。没有样本或使用直接声音描述时用提示词生成声音。新记录统一 nativeAudio=true，完成后不追加对口型，按视频实际时长绑定分段。
+
+**探店门店与点位（场景图库归类）**：探店素材改成「门店 → 点位」两层。门店存在 `douyin_store_visit_stores`，租户内共享、同名去重；点位是一个具体场景（一个游乐设备、一个打卡点、一道菜或门头），由多张场景图库图片（可加补充实拍视频）组成，每张图带描述与 1～10 的精细度打分。归类分两步：`POST store-visit/stores/:storeId/similarity` 用 sharp 给每张图算视觉签名（9×8 灰度差值哈希 + 4×4 网格平均色），距离低于 0.2 的单链接聚成一组；`POST store-visit/stores/:storeId/classify` 把一批最多 8 张图（缩到 768px 的 JPEG data URL）连同已有点位与本轮草稿点位的封面交给「探店场景归类」视觉节点，返回每张图的点位、描述与分数和新点位的建议名，不落库。前端确认点位命名后 `PUT store-visit/stores/:storeId/spots` 整体保存：图片地址以图库记录为准、一张图只归一个点位，描述变化的写回图库备注，打分 ≥8 的在图库里自动收藏（不取消用户自己的收藏）。
+
+**探店 AI 编排与点位台词**：选题的 `storeVisit` 新增 `storeId` 与最多 8 个 `spotIds`；前端把重点推荐点位按分数各取最多 4 张图同步成 `sceneImages`（说明写成「点位名：图片描述」），素材合计上限因此从 8 放宽到 32。`POST topics/:id/store-visit/plan/recommend` 用「探店编排推荐」节点按门店与点位挑出镜人物（只在要出镜时、且只挑有形象图的预设人物）和音色库音色，并写一句声音描述；模型失败或乱填时按人物性别 / 活力种草兜底。点位模式下 `POST topics/:id/store-visit/lines` 改走 `writeSpotLines`：开场用门头点位报店名，之后按用户挑的顺序一段讲一个点位，每段第一行写「【点位k｜图k.a,k.b】」挑 1～3 张同一点位的图（没写或写错按分数轮换兜底），编了数字或用了方言字时重写一次，仍有问题带核对提醒返回。
+
+**一段多张参考图**：分段新增 `spotId` 与 `sceneImageIds`（第一张即 `sceneImageId`，最多 3 张，只收本选题素材里的图）。实景段生成时其余 1～2 张作 `reference_image` 一起交给视频模型（主图也改按参考图传、画幅固定 9:16），提示词说明「图1～图N 是同一个地方，以图1 为主画面，不拼贴不分屏」；人物出镜段与接尾帧的续段不加图。参考图组变化与台词、素材变化一样会作废这段成片，排队快照与续段复核也比较它。

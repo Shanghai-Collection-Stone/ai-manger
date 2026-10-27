@@ -368,7 +368,7 @@ export class DouyinPublishCopyDto {
 }
 
 /**
- * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图或视频素材 ID、视频入点、本机运镜、画面描述、
+ * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图或视频素材 ID、点位模式的点位 ID 与 1～3 张参考图、视频入点、本机运镜、画面描述、
  *   镜头用途（实景 / 体验 / 讲解）与画面来源；人物首帧、成片与配音只由服务端写入。
  * @keyword-cn 探店分段参数, 分段台词
  * @keyword-en store-visit-segment-dto, segment-lines
@@ -415,13 +415,26 @@ export class DouyinStoreVisitSegmentDto {
   sceneImageId?: number;
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @Type(() => Number)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  sceneImageIds?: number[];
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/)
+  spotId?: string;
+
+  @IsOptional()
   @IsString()
   @MaxLength(300)
   action?: string;
 }
 
 /**
- * @description 校验门店、素材、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入。
+ * @description 校验门店（点位模式另带门店 ID 与最多 8 个重点推荐点位）、素材（合计最多 32 个）、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入。
  *
  * @keyword-cn 探店设置参数, 场景台词
  * @keyword-en store-visit-setting-dto, scene-lines
@@ -438,6 +451,19 @@ export class DouyinStoreVisitDto {
   storeName?: string;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  storeId?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8)
+  @IsString({ each: true })
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/, { each: true })
+  spotIds?: string[];
+
+  @IsOptional()
   @ValidateNested()
   @Type(() => DouyinReferenceImageDto)
   faceImage?: DouyinReferenceImageDto | null;
@@ -448,14 +474,14 @@ export class DouyinStoreVisitDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(8)
+  @ArrayMaxSize(32)
   @ValidateNested({ each: true })
   @Type(() => DouyinStoreVisitSceneImageDto)
   sceneImages?: DouyinStoreVisitSceneImageDto[];
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(8)
+  @ArrayMaxSize(32)
   @ValidateNested({ each: true })
   @Type(() => DouyinStoreVisitSceneVideoDto)
   sceneVideos?: DouyinStoreVisitSceneVideoDto[];
@@ -845,4 +871,211 @@ export class CrawlDouyinDataDto {
   @MinLength(1)
   @MaxLength(200)
   platformVideoId!: string;
+}
+
+/**
+ * @description 校验新建探店门店：名称必填（60 字内），整体说明选填（位置、人均、营业时间，2000 字内）。
+ * @keyword-cn 新建门店参数, 门店名称
+ * @keyword-en create-store-dto, store-name
+ */
+export class CreateDouyinStoreVisitStoreDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+}
+
+/**
+ * @description 校验修改探店门店：可单独改名称或整体说明。
+ * @keyword-cn 修改门店参数, 门店说明
+ * @keyword-en update-store-dto, store-description
+ */
+export class UpdateDouyinStoreVisitStoreDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(60)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+}
+
+/**
+ * @description 校验点位里的一张图片：图库图片 ID、AI 或用户写的描述（300 字内）与精细度打分（1～10）。
+ * @keyword-cn 点位图片参数, 精细度打分
+ * @keyword-en spot-image-dto, fineness-score
+ */
+export class DouyinStoreVisitSpotImageDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  imageId!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  description?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(10)
+  score?: number;
+}
+
+/**
+ * @description 校验点位的一段补充实拍视频：视频库视频 ID 与说明（500 字内）。
+ * @keyword-cn 点位视频参数, 补充素材
+ * @keyword-en spot-video-dto, supplemental-footage
+ */
+export class DouyinStoreVisitSpotVideoDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  videoId!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+}
+
+/**
+ * @description 校验一个点位：已有点位带 ID，名称必填（30 字内），说明 500 字内，最多 40 张图片、6 段视频。
+ * @keyword-cn 点位参数, 点位命名
+ * @keyword-en spot-dto, spot-naming
+ */
+export class DouyinStoreVisitSpotDto {
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/)
+  id?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(30)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  opening?: boolean;
+
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinStoreVisitSpotImageDto)
+  images!: DouyinStoreVisitSpotImageDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinStoreVisitSpotVideoDto)
+  videos?: DouyinStoreVisitSpotVideoDto[];
+}
+
+/**
+ * @description 校验整体保存门店点位：最多 40 个点位。
+ * @keyword-cn 保存点位参数, 点位整体保存
+ * @keyword-en save-spots-dto, replace-spots
+ */
+export class SaveDouyinStoreVisitSpotsDto {
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinStoreVisitSpotDto)
+  spots!: DouyinStoreVisitSpotDto[];
+}
+
+/**
+ * @description 校验相似度预归类：1～60 张图库图片 ID。
+ * @keyword-cn 相似度预归类参数, 图片ID列表
+ * @keyword-en similarity-dto, image-id-list
+ */
+export class DouyinStoreVisitSimilarityDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(60)
+  @Type(() => Number)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  imageIds!: number[];
+}
+
+/**
+ * @description 校验 AI 归类时带上的本轮草稿点位：`new-` 开头的草稿键、建议名称、说明与封面图。
+ * @keyword-cn 草稿点位参数, 本轮新建点位
+ * @keyword-en draft-spot-dto, round-new-spot
+ */
+export class DouyinStoreVisitDraftSpotDto {
+  @IsString()
+  @Matches(/^new-[A-Za-z0-9_-]{1,30}$/)
+  key!: string;
+
+  @IsString()
+  @MaxLength(30)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  coverImageId?: number;
+}
+
+/**
+ * @description 校验一批 AI 归类：1～8 张图片、可选的相似度预分组与本轮草稿点位。
+ * @keyword-cn AI归类参数, 批量归类
+ * @keyword-en classify-spots-dto, batch-classification
+ */
+export class ClassifyDouyinStoreVisitSpotsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(8)
+  @Type(() => Number)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  imageIds!: number[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(60)
+  @IsArray({ each: true })
+  groups?: number[][];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinStoreVisitDraftSpotDto)
+  drafts?: DouyinStoreVisitDraftSpotDto[];
+}
+
+/**
+ * @description 校验 AI 编排推荐：视频开头是否有人出镜（决定要不要挑人物）。
+ * @keyword-cn 编排推荐参数, 是否出镜
+ * @keyword-en plan-recommend-dto, presenter-flag
+ */
+export class RecommendDouyinStoreVisitPlanDto {
+  @IsBoolean()
+  presenter!: boolean;
 }

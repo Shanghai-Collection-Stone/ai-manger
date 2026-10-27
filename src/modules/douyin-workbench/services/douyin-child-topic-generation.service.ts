@@ -224,7 +224,7 @@ export const STORE_VISIT_HARD_TO_VOICE_WORDS = [
  * @keyword-cn 台词好念规则, 普通话用词
  * @keyword-en plain-speech-rule, mandarin-wording
  */
-const STORE_VISIT_PLAIN_SPEECH_RULE =
+export const STORE_VISIT_PLAIN_SPEECH_RULE =
   '【好念】台词要让配音和视频模型一次念准：只用普通话常用词，不用方言词、方言音译字（如「嘎哈」「咋整」「贼拉」「杠杠的」「得劲」「埋汰」）和网络谐音字（如「酱紫」「木有」「神马」）。人物设定或补充要求偏东北话、方言风格时，只在语气和节奏上体现豪爽、接地气，用词仍是普通话；这一条优先于人物设定和补充要求。';
 
 /**
