@@ -22,7 +22,7 @@
 - `WorkflowNodeDefinition` — 代码固定的节点定义，可带 `runtimeProviders`（节点只接受的提供商代码）与 `unsetHint`（未指定时的后台说明） | keywords: 预设工作流节点, 节点定义, preset-workflow-node, node-definition
 - `WorkflowDefinition` — 代码固定的工作流定义 | keywords: 预设工作流, 工作流定义, preset-workflow, workflow-definition
 - `WORKFLOW_NODES` — 工作流与节点 key 常量，业务调用处统一从这里取 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
-- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video / voice-clone / store-visit-video / store-visit-avatar / store-visit-continuity） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
+- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video / voice-clone / store-visit-video / store-visit-avatar / store-visit-continuity / store-visit-scene / store-visit-planner） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
 - `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax 与 shuyan/shuyanai；音色只支持阿里云百炼 dashscope），节点登记了 `runtimeProviders` 时再按节点收窄 | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
 - `WorkflowNodeModelEntity` — 节点设置持久化实体（`workflow_node_models`） | keywords: 节点模型设置, 平台级配置, node-model-binding, platform-setting
 - `WorkflowNodeRuntime` — 节点调用时的提供商运行配置 | keywords: 节点运行配置, 提供商密钥, node-runtime, provider-credential
@@ -108,3 +108,5 @@
 **后台页面**：「工作流节点模型」Tab 左侧是工作流子菜单（显示节点数与已指定数，记住上次选择），右侧是选中工作流的全部模型节点设置。单测 `workflow-model.service.spec.ts` 校验 `WORKFLOW_NODES` 与目录逐项一致。
 
 **音色类型与节点级提供商**：WorkflowNodeCategory.audio 对应 Ai 提供商的 modelCategory=audio（后台「音色模型」类别），当前只有阿里云百炼。默认回退、模型查询与保存校验都按它处理（PixMax 映射 GENERATE_AUDIO，数眼目录不出 audio 模型）。节点 runtimeProviders 白名单优先于类型矩阵，list 与 resolveNodeRuntime 都传节点白名单：voice-clone 只收 dashscope，store-visit-video 与 store-visit-avatar 只收 shuyan / shuyanai。unsetHint 在探店三个节点未指定时分别显示不可用说明。
+
+**探店场景归类与编排推荐节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitScene` 登记为 `store-visit-scene`（后台显示「探店场景归类」，`llm`），场景图库 AI 归类用它看图把同一点位的图片归在一起、写描述并打精细度分，应指定支持看图的视觉语言模型；`storeVisitPlanner` 登记为 `store-visit-planner`（「探店编排推荐」，`llm`），探店脚本先行用它看引用知识写分段脚本并定出镜人物与音色、对照引用知识自检、按脚本从门店点位配图，以及按脚本推荐人物音色。两者未单独配置时都按文本节点规则回退默认 LLM。

@@ -56,6 +56,8 @@ export const WORKFLOW_NODES = {
     storeVisitVideo: 'store-visit-video',
     storeVisitAvatar: 'store-visit-avatar',
     storeVisitContinuity: 'store-visit-continuity',
+    storeVisitScene: 'store-visit-scene',
+    storeVisitPlanner: 'store-visit-planner',
   },
   xhsArticle: {
     key: 'xhs-article',
@@ -143,6 +145,20 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
         label: '探店尾帧衔接',
         description:
           '使用支持看图的视觉语言模型理解实际尾帧、原始场景和下一段台词，规划连续运镜与出镜切换',
+        category: 'llm',
+      },
+      {
+        key: 'store-visit-scene',
+        label: '探店场景归类',
+        description:
+          '场景图库 AI 归类：使用支持看图的视觉语言模型理解门店照片，把同一点位的图片归在一起、写图片描述并打精细度分',
+        category: 'llm',
+      },
+      {
+        key: 'store-visit-planner',
+        label: '探店编排推荐',
+        description:
+          '按门店与重点推荐点位挑选出镜人物与音色，并按点位写台词、为每段挑参考图（关闭思考，建议指定响应快的模型）',
         category: 'llm',
       },
       {

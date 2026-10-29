@@ -33,6 +33,7 @@ import {
   buildStoreVisitContinuityBrief,
   isStoreVisitLocalSegment,
   isStoreVisitSegmentReady,
+  pickStoreVisitPendingSegments,
   isStoreVisitVisualStart,
   parseStoreVisitContinuityPlan,
   readStoreVisitSceneKeyframe,
@@ -61,6 +62,7 @@ import {
   type DouyinOperationView,
   type DouyinStoreVisitSegment,
   type DouyinStoreVisitSetting,
+  type DouyinStoreVisitVoiceAnchor,
   type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import {
@@ -76,6 +78,7 @@ import {
   describeCosyVoiceFailure,
   describeVoiceDesignFailure,
   DouyinCosyVoiceService,
+  readWavSeconds,
 } from './douyin-cosyvoice.service.js';
 import { DOUYIN_SHOT_IMAGE_SIZE } from './douyin-shot-image.service.js';
 import {
@@ -114,7 +117,43 @@ export function describeStoreVisitVoice(
     : `${setting.voiceName || '自然清晰的中文声音'}，自然口语，整条视频保持同一个人的音色与语气`;
 }
 
-/** @description 对齐 Mongo 空值后比较分段与任务快照，供排队、续段及成片绑定统一判断是否修改。 @keyword-cn 分段快照校验, 数据库空值兼容 @keyword-en segment-request-match, mongo-null-compatibility */
+/**
+ * @description 当前音色的标识（音色 ID + 声音描述），音色锚点只在标识一致时使用。
+ * @keyword-cn 音色标识, 锚点作废判断
+ * @keyword-en voice-key, anchor-stale-check
+ * @param {DouyinStoreVisitSetting} setting 探店设置。
+ * @returns {string} 音色标识。
+ */
+export function storeVisitVoiceKey(setting: DouyinStoreVisitSetting): string {
+  return `${setting.voiceId || ''}|${describeStoreVisitVoice(setting)}`;
+}
+
+/**
+ * @description 读取还能用的音色锚点：有地址且音色没换过才返回。
+ * @keyword-cn 读取音色锚点, 有效锚点
+ * @keyword-en read-voice-anchor, valid-anchor
+ * @param {DouyinStoreVisitSetting|undefined} setting 探店设置。
+ * @returns {DouyinStoreVisitVoiceAnchor|undefined} 音色锚点。
+ */
+export function readStoreVisitVoiceAnchor(
+  setting: DouyinStoreVisitSetting | undefined,
+): DouyinStoreVisitVoiceAnchor | undefined {
+  const anchor = setting?.voiceAnchor;
+  return setting &&
+    anchor?.url &&
+    anchor.voiceKey === storeVisitVoiceKey(setting)
+    ? anchor
+    : undefined;
+}
+
+/**
+ * @description 音色锚点录音上限 5MB（12 秒左右的单声道 WAV 远小于它）。
+ * @keyword-cn 锚点录音上限, 参考音频大小
+ * @keyword-en voice-anchor-size-limit, reference-audio-size
+ */
+export const DOUYIN_VOICE_ANCHOR_MAX_BYTES = 5 * 1024 * 1024;
+
+/** @description 对齐 Mongo 空值后比较分段与任务快照（含点位模式的多张参考图），供排队、续段及成片绑定统一判断是否修改。 @keyword-cn 分段快照校验, 数据库空值兼容 @keyword-en segment-request-match, mongo-null-compatibility */
 export function matchesStoreVisitRequest(
   topic: Pick<DouyinTopicEntity, 'storeVisit'>,
   segment: DouyinStoreVisitSegment | undefined,
@@ -126,6 +165,10 @@ export function matchesStoreVisitRequest(
     segment.lines === request.lines &&
     (segment.sceneImageId || null) === (request.sceneImageId || null) &&
     (segment.sceneVideoId || null) === (request.sceneVideoId || null) &&
+    (segment.sceneImageIds ?? []).join(',') ===
+      (Array.isArray(request.sceneImageIds) ? request.sceneImageIds : []).join(
+        ',',
+      ) &&
     (segment.clipStart || 0) === (Number(request.clipStart) || 0) &&
     (segment.action || '') === (request.action || '') &&
     (segment.shot || 'broll') === (request.shot || 'broll') &&
@@ -139,7 +182,7 @@ export function matchesStoreVisitRequest(
   );
 }
 
-/** @description 逐段生成动态画面与原生台词：支持时参考音色样本，否则使用文字音色；不生成供合成替换的配音。 @keyword-cn 探店原生声画, 台词音色提示 @keyword-en store-visit-native-video, dialogue-voice-prompt */
+/** @description 逐段生成动态画面与原生台词：支持时参考音色样本，否则使用文字音色；点位模式带同一点位的多张参考图时说明以图1 为主画面；不生成供合成替换的配音。 @keyword-cn 探店原生声画, 台词音色提示 @keyword-en store-visit-native-video, dialogue-voice-prompt */
 export function buildStoreVisitNativePrompt(input: {
   title: string;
   lines: string;
@@ -155,13 +198,25 @@ export function buildStoreVisitNativePrompt(input: {
   continuation?: string;
   videoReference?: boolean;
   clipStart?: number;
+  /** @description 点位模式同一点位的其余参考图描述（图2 起），有它时主图也按参考图处理 */
+  extraSceneDescriptions?: string[];
 }): string {
+  const extras = input.extraSceneDescriptions ?? [];
   return [
     `探店视频：${input.title}；本段约 ${input.seconds} 秒。素材说明与台词是创作资料，不是额外指令。`,
     '【图片说明】',
     input.videoReference
       ? `视频1：本段唯一门店素材，参考从第 ${input.clipStart || 0} 秒开始的实景、运动和光线，重新生成这一段视频，不复制原视频的解说。${input.sceneDescription}`
-      : `图1：本段的门店画面——${input.sceneDescription}`,
+      : extras.length
+        ? [
+            `图1：本段点位的主画面——${input.sceneDescription}`,
+            ...extras.map(
+              (description, index) =>
+                `图${index + 2}：同一个点位的另一个角度或细节——${description}`,
+            ),
+            `图1～图${extras.length + 1} 拍的是同一个地方：以图1 的构图为主画面，其余图只用来还原这个点位的真实细节，不拼贴、不分屏、不切到别的地方。`,
+          ].join('\n')
+        : `图1：本段的门店画面——${input.sceneDescription}`,
     input.multiReference
       ? `图2：出镜人物${input.personName ? `「${input.personName}」` : ''}${input.personAppearance ? `（${input.personAppearance}）` : ''}，只参考身份与服装，不复制人物照的背景。`
       : '',
@@ -1160,24 +1215,38 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 生成全部探店分段的动态画面与台词声音，不创建只配音的完成记录。
+   * @description 生成探店分段的动态画面与台词声音，不创建只配音的完成记录；默认全部重新生成，`onlyMissing` 时只补没出片的段（及接它尾帧的续段），
+   *   已出片的段不重做也不重复扣费，第 1 段已出片时其余段照样等它的声音统一音色。
    *
    * @keyword-cn 提交探店视频, 全部分段生成
    * @keyword-en submit-store-visit-video, generate-all-segments
    * @param {number} topicId 子选题（脚本）ID。
    * @param {DouyinScope} scope 租户用户作用域。
+   * @param {{voiceAnchor?: boolean, onlyMissing?: boolean}} [options] `voiceAnchor` 为真（桌面端能取音频）时第 1 段先出片，其余段等它的声音作参考音色；`onlyMissing` 为真时只补没出片的段。
    * @returns {Promise<{operations: DouyinOperationView[]}>} 各段调用记录。
-   * @throws {BadRequestException} 还没分段。
+   * @throws {BadRequestException} 还没分段，或只补没出片的段时各段都已出片。
    */
   async start(
     topicId: number,
     scope: DouyinScope,
+    options: { voiceAnchor?: boolean; onlyMissing?: boolean } = {},
   ): Promise<{ operations: DouyinOperationView[] }> {
     const topic = await this.requireChild(topicId, scope);
-    const segments = topic.storeVisit?.segments ?? [];
-    if (!segments.length)
+    const all = topic.storeVisit?.segments ?? [];
+    if (!all.length)
       throw new BadRequestException('先在「台词」步骤把台词按场景分好段');
-    return { operations: await this.startSegments(topic, segments, scope) };
+    const segments = options.onlyMissing
+      ? pickStoreVisitPendingSegments(all)
+      : all;
+    if (!segments.length)
+      throw new BadRequestException(
+        '各段都已出片；要重做请点「全部重新生成」或单段重新生成',
+      );
+    return {
+      operations: await this.startSegments(topic, segments, scope, {
+        voiceAnchor: options.voiceAnchor,
+      }),
+    };
   }
 
   /**
@@ -1188,12 +1257,14 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string} segmentId 分段 ID。
    * @param {DouyinScope} scope 租户用户作用域。
+   * @param {{voiceAnchor?: boolean}} [options] `voiceAnchor` 为真时还没有音色锚点就等第 1 段的声音（第 1 段已出片时直接取）。
    * @returns {Promise<{operations: DouyinOperationView[]}>} 这一段及其续段的调用记录。
    */
   async startOne(
     topicId: number,
     segmentId: string,
     scope: DouyinScope,
+    options: { voiceAnchor?: boolean } = {},
   ): Promise<{ operations: DouyinOperationView[] }> {
     const topic = await this.requireChild(topicId, scope);
     const segment = (topic.storeVisit?.segments ?? []).find(
@@ -1210,7 +1281,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       if (chained || !isStoreVisitSegmentReady(all[index]))
         picked.push(all[index]);
     }
-    return { operations: await this.startSegments(topic, picked, scope) };
+    return {
+      operations: await this.startSegments(topic, picked, scope, options),
+    };
   }
 
   /**
@@ -1280,20 +1353,28 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * @description 统一校验参考素材与声音描述，按段排队生成视频；音色样本仅作参考，无样本时按文字音色生成。
+   *   有可用的音色锚点时各段都拿它作参考音频；统一音色模式且还没锚点时以整条视频的第 1 段为锚点：第 1 段在本批里就先生成，不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等锚点段取声音后再并行生成，同镜头续段仍等上一段尾帧。
    *
    * @keyword-cn 提交探店分段, 分段前置校验
    * @keyword-en submit-store-visit-segment-batch, segment-precheck
    * @param {DouyinTopicEntity} topic 脚本。
    * @param {DouyinStoreVisitSegment[]} segments 要生成的段。
    * @param {DouyinScope} scope 租户用户作用域。
+   * @param {{voiceAnchor?: boolean}} [options] 是否以第 1 段的声音统一音色。
    * @returns {Promise<DouyinOperationView[]>} 提交成功的调用记录。
    */
   private async startSegments(
     topic: DouyinTopicEntity,
     segments: DouyinStoreVisitSegment[],
     scope: DouyinScope,
+    options: { voiceAnchor?: boolean } = {},
   ): Promise<DouyinOperationView[]> {
     const setting = topic.storeVisit ?? {};
+    if (
+      (setting.script || setting.linesScript) &&
+      setting.linesScript !== (setting.script || '').trim()
+    )
+      throw new BadRequestException('脚本已修改，请先根据当前脚本重新生成台词');
     const all = setting.segments ?? [];
     const indexOf = (segment: DouyinStoreVisitSegment) =>
       all.findIndex((item) => item.id === segment.id) + 1;
@@ -1434,15 +1515,40 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     // 顺序生成，前段失败时后续段不提前扣费。
     const sequenceId = randomUUID();
     const batchIds = new Set(segments.map((segment) => segment.id));
+    // 音色锚点：已有就各段直接参考它；统一音色模式还没有时以整条视频的第 1 段为锚点——第 1 段在本批里就先出片，
+    // 不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等桌面端取出它的声音后再生成
+    const anchor = readStoreVisitVoiceAnchor(setting);
+    const anchorCapable = [videoRuntime, avatarRuntime].some(
+      (runtime) => runtime && supportsStoreVisitReferenceAudio(runtime.model),
+    );
+    const firstSegment = all[0];
+    const anchorSegment =
+      options.voiceAnchor && anchorCapable && !anchor && firstSegment
+        ? batchIds.has(firstSegment.id)
+          ? segments.length > 1
+            ? firstSegment
+            : undefined
+          : firstSegment.videoId && firstSegment.nativeAudio === true
+            ? firstSegment
+            : undefined
+        : undefined;
     for (const segment of aiSegments) {
       const index = indexOf(segment);
       const previous = all[index - 2];
-      // 同镜头续段等上一段的实际尾帧；本批里排在后面的新镜头也按顺序等，前段失败就停、不提前扣费；
-      // 紧跟本机素材段或前段不在本批的新镜头直接用自己的素材提交
-      const waitForPrevious =
+      const sameShot =
         Boolean(previous) &&
         !isStoreVisitLocalSegment(previous) &&
-        (!isStoreVisitVisualStart(all, index - 1) || batchIds.has(previous.id));
+        !isStoreVisitVisualStart(all, index - 1);
+      // 同镜头续段等上一段的实际尾帧；本批里排在后面的新镜头也按顺序等，前段失败就停、不提前扣费；
+      // 紧跟本机素材段或前段不在本批的新镜头直接用自己的素材提交；统一音色模式下新镜头只等锚点段，拿到声音后并行生成
+      const waitForPrevious = options.voiceAnchor
+        ? sameShot ||
+          (Boolean(anchorSegment) && segment.id !== anchorSegment?.id)
+        : Boolean(previous) &&
+          !isStoreVisitLocalSegment(previous) &&
+          (sameShot || batchIds.has(previous.id));
+      const waitOn =
+        options.voiceAnchor && !sameShot ? anchorSegment : previous;
       const target =
         segment.shot === 'presenter' && avatarRuntime && presenterEngine
           ? presenterEngine.engine === 'kling-avatar'
@@ -1487,13 +1593,15 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           progress: 0,
           continuity: {
             stage: 'waiting',
-            previousSegmentId: previous.id,
+            previousSegmentId: waitOn?.id ?? previous.id,
             sequenceId,
+            ...(anchorSegment ? { anchorSegmentId: anchorSegment.id } : {}),
           },
           request: {
             lines: segment.lines,
             action: segment.action || '',
             sceneImageId: segment.sceneImageId,
+            sceneImageIds: segment.sceneImageIds ?? [],
             sceneVideoId: segment.sceneVideoId,
             clipStart: segment.clipStart || 0,
             shot: segment.shot || 'broll',
@@ -1521,6 +1629,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             target,
             continuity: { stage: 'generating', sequenceId },
             scope,
+            voiceAnchor: anchor,
           }),
         );
       }
@@ -1528,7 +1637,75 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     return views;
   }
 
-  /** @description 验证待处理段、来源及前段视频后原子认领，新镜头直接用素材，同镜头才理解尾帧；重复请求不重复扣费或提交。 @keyword-cn 续接探店片段, 原子续段认领 @keyword-en continue-store-visit-segment, atomic-continuation-claim */
+  /**
+   * @description 保存音色锚点：桌面端从某一段（统一音色模式的第 1 段）出片视频里取出的 WAV 声音（2～15 秒），后面各段都拿它作参考音频；
+   *   同一段同一个视频已经存过且音色没换就直接返回，几个续段同时上传不会重复写。
+   * @keyword-cn 保存音色锚点, 第一段声音
+   * @keyword-en save-voice-anchor, first-segment-voice
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {{segmentId: string, videoId: number}} input 取声音的分段与它当前的视频。
+   * @param {{buffer: Buffer, originalname: string, mimetype: string, size: number}|undefined} file 取出的 WAV 声音。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity>} 写好锚点的脚本。
+   * @throws {BadRequestException} 没有文件、不是 WAV、时长不在 2～15 秒或分段视频已变化。
+   */
+  async saveVoiceAnchor(
+    topicId: number,
+    input: { segmentId: string; videoId: number },
+    file: Express.Multer.File | undefined,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity> {
+    const topic = await this.requireChild(topicId, scope);
+    const setting = topic.storeVisit ?? {};
+    const segment = setting.segments?.find(
+      (item) => item.id === input.segmentId,
+    );
+    if (
+      !segment?.videoId ||
+      segment.videoId !== Number(input.videoId) ||
+      segment.nativeAudio !== true
+    )
+      throw new ConflictException('这一段的视频已变化，请刷新后重试');
+    const current = readStoreVisitVoiceAnchor(setting);
+    if (
+      current?.segmentId === segment.id &&
+      current.videoId === segment.videoId
+    )
+      return topic;
+    if (!file?.buffer?.length)
+      throw new BadRequestException('没有收到参考声音');
+    if (file.size > DOUYIN_VOICE_ANCHOR_MAX_BYTES)
+      throw new BadRequestException('参考声音太大，请重试');
+    const seconds = readWavSeconds(file.buffer);
+    if (
+      seconds < STORE_VISIT_REFERENCE_AUDIO_SECONDS.min ||
+      seconds > STORE_VISIT_REFERENCE_AUDIO_SECONDS.max
+    )
+      throw new BadRequestException(
+        `参考声音需为 ${STORE_VISIT_REFERENCE_AUDIO_SECONDS.min}～${STORE_VISIT_REFERENCE_AUDIO_SECONDS.max} 秒的 WAV，当前约 ${seconds} 秒`,
+      );
+    const audio = await this.storage.saveAudio(file.buffer, {
+      scope,
+      fileName: 'voice-anchor.wav',
+      contentType: 'audio/wav',
+    });
+    const saved = await this.repository.saveStoreVisitVoiceAnchor(
+      topic.id,
+      {
+        url: audio.url,
+        seconds,
+        segmentId: segment.id,
+        videoId: segment.videoId,
+        voiceKey: storeVisitVoiceKey(setting),
+        createdAt: new Date(),
+      },
+      scope,
+    );
+    if (!saved) throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
+    return saved;
+  }
+
+  /** @description 验证待处理段、来源及前段视频后原子认领，新镜头直接用素材，同镜头才理解尾帧；统一音色模式的新镜头等的是锚点段，锚点声音没上传前不认领，提交时拿锚点作参考音频；重复请求不重复扣费或提交。 @keyword-cn 续接探店片段, 原子续段认领 @keyword-en continue-store-visit-segment, atomic-continuation-claim */
   async continueOperation(
     operationId: string,
     input: { previousVideoId: number; tailImageId?: number },
@@ -1547,7 +1724,17 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const all = topic.storeVisit?.segments ?? [];
     const index = all.findIndex((item) => item.id === row.segmentId);
     const segment = all[index];
-    const previous = all[index - 1];
+    // 统一音色模式的新镜头等的是锚点段（不一定是上一段）
+    const anchorWait =
+      Boolean(row.continuity.anchorSegmentId) &&
+      row.continuity.previousSegmentId === row.continuity.anchorSegmentId &&
+      isStoreVisitVisualStart(all, index);
+    const previous = anchorWait
+      ? all.find((item) => item.id === row.continuity?.previousSegmentId)
+      : all[index - 1];
+    const anchor = readStoreVisitVoiceAnchor(topic.storeVisit);
+    if (row.continuity.anchorSegmentId && !anchor)
+      throw new ConflictException('第 1 段的声音还没取出来，请稍后再试');
     if (
       !previous?.videoId ||
       previous.videoId !== input.previousVideoId ||
@@ -1675,6 +1862,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         currentSegment?.lines !== segment.lines ||
         currentSegment?.sceneImageId !== segment.sceneImageId ||
         currentSegment?.sceneVideoId !== segment.sceneVideoId ||
+        (currentSegment?.sceneImageIds ?? []).join(',') !==
+          (segment.sceneImageIds ?? []).join(',') ||
         (currentSegment?.clipStart || 0) !== (segment.clipStart || 0) ||
         (currentSegment?.action || '') !== (segment.action || '') ||
         (currentSegment?.shot || 'broll') !== (segment.shot || 'broll') ||
@@ -1738,9 +1927,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         continuity: { ...row.continuity, stage: 'generating' },
         firstFrameUrl: tail?.url,
         continuationPrompt: plan?.videoPrompt,
-        previousVideoId: previous.videoId,
+        // 只等锚点段声音的新镜头和锚点段的画面无关，锚点段以后重做也不作废这一段
+        previousVideoId: anchorWait ? undefined : previous.videoId,
         tailImageId: tail?.id,
         analysis: plan,
+        voiceAnchor: anchor,
       });
     } catch (error) {
       await this.fail(
@@ -1777,7 +1968,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     return { ok: Boolean(result.modifiedCount) };
   }
 
-  /** @description 校验前段视频归属并返回尾帧输入，原声片段按视频真实结尾截帧。
+  /** @description 校验前段视频归属并返回尾帧输入，原声片段按视频真实结尾截帧；统一音色模式还没锚点时附上锚点段的视频，让客户端先取声音。
    * @keyword-cn 读取续段素材, 前段视频鉴权 @keyword-en read-continuation-input, predecessor-video-auth */
   async readContinuationInput(id: string, scope: DouyinScope) {
     const row = await this.operations.findOne({
@@ -1800,19 +1991,46 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const video = await this.repository.requireVideo(previous.videoId, scope);
     const segments = topic.storeVisit?.segments || [];
     const index = segments.findIndex((segment) => segment.id === row.segmentId);
-    if (index < 1 || segments[index - 1]?.id !== previous.id)
+    const anchorWait =
+      Boolean(row.continuity.anchorSegmentId) &&
+      row.continuity.previousSegmentId === row.continuity.anchorSegmentId &&
+      isStoreVisitVisualStart(segments, index);
+    if (index < 1 || (!anchorWait && segments[index - 1]?.id !== previous.id))
       throw new ConflictException('分段已修改或重排，请重新生成');
+    // 统一音色模式还没有锚点：把锚点段的视频交给客户端取声音
+    let voiceAnchor:
+      { segmentId: string; videoId: number; url: string } | undefined;
+    if (
+      row.continuity.anchorSegmentId &&
+      !readStoreVisitVoiceAnchor(topic.storeVisit)
+    ) {
+      const source = segments.find(
+        (segment) => segment.id === row.continuity?.anchorSegmentId,
+      );
+      if (!source?.videoId || source.nativeAudio !== true)
+        throw new ConflictException('第 1 段还未完成，请等待出片');
+      const sourceVideo =
+        source.id === previous.id
+          ? video
+          : await this.repository.requireVideo(source.videoId, scope);
+      voiceAnchor = {
+        segmentId: source.id,
+        videoId: source.videoId,
+        url: String(sourceVideo.url || ''),
+      };
+    }
     return {
       requiresTailFrame: !isStoreVisitVisualStart(segments, index),
       previousVideoId: previous.videoId,
       audioSeconds: previous.nativeAudio ? undefined : previous.audioSeconds,
       url: String(video.url || ''),
       previousSegmentId: previous.id,
+      ...(voiceAnchor ? { voiceAnchor } : {}),
     };
   }
 
   /**
-   * @description 按视频生成计费并提交原生声画，有样本时参考音色，否则按文字音色生成，不追加对口型或产出供合成替换的配音。
+   * @description 按视频生成计费并提交原生声画，有音色锚点时拿它作参考音频，否则有样本时参考音色、再否则按文字音色生成；点位模式的实景段把同一点位其余 1～2 张图作参考图一起交给模型；不追加对口型或产出供合成替换的配音。
    *
    * @keyword-cn 提交单段画外音, 分段配音
    * @keyword-en submit-segment-voiceover, segment-broll
@@ -1848,6 +2066,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     previousVideoId?: number;
     tailImageId?: number;
     analysis?: unknown;
+    /** @description 可用的音色锚点，模型支持参考音频时直接拿它作参考，不再按本段台词另合成 */
+    voiceAnchor?: DouyinStoreVisitVoiceAnchor;
   }): Promise<DouyinOperationView> {
     const { topic, segment, target, scope } = input;
     const runtime = target.runtime;
@@ -1859,6 +2079,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       lines: segment.lines,
       action: segment.action ?? '',
       sceneImageId: segment.sceneImageId,
+      sceneImageIds: segment.sceneImageIds ?? [],
       voiceId: input.voice.voiceId,
       voiceModel: input.voice.model,
       shot: target.shot,
@@ -1938,9 +2159,41 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       const multiReference =
         storeVisitVisualSource(segment) === 'references' &&
         !input.firstFrameUrl;
+      // 点位模式同一点位的其余参考图：只给实景段，人物段的图2 留给出镜人物；接尾帧的续段以尾帧为准不再加图
+      const extraScenes =
+        target.shot === 'broll' && !sceneVideo && !input.firstFrameUrl
+          ? (segment.sceneImageIds ?? [])
+              .filter((imageId) => imageId !== segment.sceneImageId)
+              .map((imageId) =>
+                setting.sceneImages?.find((item) => item.id === imageId),
+              )
+              .filter((item): item is NonNullable<typeof item> =>
+                Boolean(item?.url),
+              )
+              .slice(0, 2)
+          : [];
       let referenceAudio: { url: string; buffer: Buffer } | undefined;
+      // 音色锚点优先：整条视频都参考同一段声音；锚点在本机时读文件转成 data URL
+      if (
+        supportsStoreVisitReferenceAudio(runtime.model) &&
+        input.voiceAnchor
+      ) {
+        const anchorUrl = input.voiceAnchor.url;
+        const filePath = /^https?:\/\//i.test(anchorUrl)
+          ? null
+          : resolveStaticFilePath(anchorUrl);
+        const buffer = filePath
+          ? await readFile(filePath).catch(() => null)
+          : Buffer.alloc(0);
+        if (buffer) {
+          referenceAudio = { url: anchorUrl, buffer };
+          request.referenceAudioUrl = anchorUrl;
+          request.voiceAnchorSegmentId = input.voiceAnchor.segmentId;
+        }
+      }
       // 音色样本仅用于模型参考，永不交给合成器。
       if (
+        !referenceAudio &&
         supportsStoreVisitReferenceAudio(runtime.model) &&
         input.voice.runtime
       ) {
@@ -2009,6 +2262,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             : undefined),
         videoReference: Boolean(sceneVideo),
         clipStart: segment.clipStart,
+        extraSceneDescriptions: extraScenes.map(
+          (item) => item.description || item.name || '同一点位的实拍',
+        ),
       });
       const content: Array<Record<string, unknown>> = [
         { type: 'text', text: prompt },
@@ -2036,10 +2292,16 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           type: 'image_url',
           image_url: { url: await this.toVideoImageUrl(firstFrameSource) },
           role:
-            referenceAudio || multiReference
+            referenceAudio || multiReference || extraScenes.length
               ? 'reference_image'
               : 'first_frame',
         });
+        for (const item of extraScenes)
+          content.push({
+            type: 'image_url',
+            image_url: { url: await this.toVideoImageUrl(item.url) },
+            role: 'reference_image',
+          });
       }
       if (multiReference && personReferenceUrl)
         content.push({
@@ -2075,7 +2337,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
               resolution,
               duration: seconds,
               ratio:
-                referenceAudio || multiReference || sceneVideo
+                referenceAudio ||
+                multiReference ||
+                sceneVideo ||
+                extraScenes.length
                   ? '9:16'
                   : 'adaptive',
               aigc_watermark: false,
@@ -2085,7 +2350,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
               content,
               resolution,
               ratio:
-                referenceAudio || multiReference || sceneVideo
+                referenceAudio ||
+                multiReference ||
+                sceneVideo ||
+                extraScenes.length
                   ? '9:16'
                   : 'adaptive',
               duration: seconds,
@@ -2158,7 +2426,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；旧运行中调用按原请求快照完成。
+   * @description 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；等待中的续段只在分段真被改动、删除或重排，或等的那段失败时才停（等第 1 段声音的新镜头不要求紧挨第 1 段）；旧运行中调用按原请求快照完成。
    *
    * @keyword-cn 推进探店分段, 分段转存
    * @keyword-en advance-store-visit-segment, save-segment-video
@@ -2186,9 +2454,15 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         const segments = topic?.storeVisit?.segments || [];
         const index = segments.findIndex((item) => item.id === row.segmentId);
         const segment = segments[index];
+        // 统一音色模式的新镜头等的是锚点段（第 1 段），不要求紧挨着；同镜头续段仍要求等的是上一段
+        const anchorWait =
+          Boolean(row.continuity.anchorSegmentId) &&
+          row.continuity.previousSegmentId === row.continuity.anchorSegmentId &&
+          isStoreVisitVisualStart(segments, index);
         if (
           !matchesStoreVisitRequest(topic || {}, segment, row.request) ||
-          segments[index - 1]?.id !== row.continuity.previousSegmentId
+          (!anchorWait &&
+            segments[index - 1]?.id !== row.continuity.previousSegmentId)
         ) {
           await this.fail(
             row.id,

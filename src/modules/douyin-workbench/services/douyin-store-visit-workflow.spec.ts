@@ -613,6 +613,35 @@ describe('独立探店制作流程（画外音）', () => {
     expect(update.$set['storeVisit.voiceId']).toBeUndefined();
   });
 
+  it('脚本正文和台词来源快照独立保存，不覆盖旧台词与音色，支持多行和清空正文', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    const script =
+      '主题：周末亲子探店\n开场：门头引入\n中段：介绍套餐，保留事实依据\n结尾：引导查看团购';
+    const dto = plainToInstance(DouyinStoreVisitDto, {
+      script,
+      linesScript: '上一版脚本',
+    });
+    expect(
+      await validate(dto, { whitelist: true, forbidNonWhitelisted: true }),
+    ).toEqual([]);
+    await repository.update(2, { storeVisit: dto }, scope);
+    const update = topics.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set['storeVisit.script']).toBe(script);
+    expect(update.$set['storeVisit.linesScript']).toBe('上一版脚本');
+    expect(update.$set['storeVisit.lines']).toBeUndefined();
+    expect(update.$set['storeVisit.segments']).toBeUndefined();
+    expect(update.$set['storeVisit.voiceId']).toBeUndefined();
+    await repository.update(2, { storeVisit: { script: '  ' } }, scope);
+    expect(
+      topics.findOneAndUpdate.mock.calls[1][1].$unset['storeVisit.script'],
+    ).toBe('');
+    expect(
+      await validate(
+        plainToInstance(DouyinStoreVisitDto, { script: '字'.repeat(8001) }),
+      ),
+    ).not.toEqual([]);
+  });
+
   it('场景图的说明最多 500 字、标签最多 10 个，超出时校验不通过', async () => {
     const errors = await validate(
       plainToInstance(DouyinStoreVisitDto, {
@@ -653,6 +682,56 @@ describe('独立探店制作流程（画外音）', () => {
     });
     await expect(service.start(2, scope)).rejects.toThrow('还没写说明');
     expect(service.billing.chargeService).not.toHaveBeenCalled();
+  });
+
+  it('脚本修改但台词来源过期时，整条和单段生成都在扣费前拒绝', async () => {
+    const service = buildVoiceoverService({
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        script: '修改后的脚本',
+        linesScript: '修改前的脚本',
+      },
+    });
+    await expect(service.start(2, scope)).rejects.toThrow(
+      '请先根据当前脚本重新生成台词',
+    );
+    await expect(
+      service.startOne(2, readyTopic.storeVisit.segments[0].id, scope),
+    ).rejects.toThrow('请先根据当前脚本重新生成台词');
+    expect(service.billing.chargeService).not.toHaveBeenCalled();
+  });
+
+  it('台词生成期间正文被另一个窗口修改后，不允许保存旧脚本生成的分段', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    topics.findOne.mockResolvedValue({
+      id: 2,
+      kind: 'child',
+      storeVisit: { script: '修改后的脚本' },
+    } as never);
+    await expect(
+      repository.update(
+        2,
+        {
+          storeVisit: {
+            linesScript: '修改前的脚本',
+            segments: [{ id: 'new', lines: '旧脚本生成的台词' }],
+          },
+        },
+        scope,
+      ),
+    ).rejects.toThrow('本次台词基于旧脚本');
+    expect(topics.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('换店可主动清空台词来源快照并清场景，保留脚本原稿供修改', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    topics.findOne.mockResolvedValue({ id: 2, kind: 'child', storeVisit: { script: '原门店脚本' } } as never);
+    await repository.update(2, { storeVisit: { linesScript: '', segments: [] } }, scope);
+    const update = topics.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$unset['storeVisit.linesScript']).toBe('');
+    expect(update.$set['storeVisit.script']).toBeUndefined();
+    expect(update.$set['storeVisit.segments']).toEqual([]);
   });
 
   it('拒绝保存其他租户或不存在的场景素材', async () => {

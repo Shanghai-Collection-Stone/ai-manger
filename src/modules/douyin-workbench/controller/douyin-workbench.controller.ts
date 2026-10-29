@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Req,
   Res,
   UnauthorizedException,
@@ -25,7 +26,12 @@ import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
 import type { AdminRequest } from '../../admin/types/admin-request.types.js';
 import type { Response } from 'express';
 import {
+  ClassifyDouyinStoreVisitSpotsDto,
   ConcatDouyinShotVideosDto,
+  CreateDouyinStoreVisitStoreDto,
+  DouyinStoreVisitSimilarityDto,
+  SaveDouyinStoreVisitSpotsDto,
+  UpdateDouyinStoreVisitStoreDto,
   ContinueDouyinStoreVisitDto,
   FailDouyinStoreVisitContinuationDto,
   ConfirmDouyinScriptDraftsDto,
@@ -41,8 +47,12 @@ import {
   GenerateDouyinStoreVisitKeyframeDto,
   GenerateDouyinStoreVisitLinesDto,
   GenerateDouyinStoryboardDto,
+  GenerateDouyinStoreVisitVideoDto,
+  SaveDouyinStoreVisitVoiceAnchorDto,
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
+  RecommendDouyinStoreVisitPlanDto,
+  WriteDouyinStoreVisitScriptDto,
   RefineDouyinScriptDto,
   UpdateDouyinTopicDto,
 } from './douyin-workbench.dto.js';
@@ -56,9 +66,12 @@ import { DouyinGenerationJobService } from '../services/douyin-generation-job.se
 import { DouyinShotConcatService } from '../services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from '../services/douyin-shot-image.service.js';
 import {
+  DOUYIN_VOICE_ANCHOR_MAX_BYTES,
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
+import { DouyinStoreVisitPlannerService } from '../services/douyin-store-visit-planner.service.js';
+import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
 
 /**
@@ -84,6 +97,8 @@ export class DouyinWorkbenchController {
     private readonly shotImages: DouyinShotImageService,
     private readonly shotConcat: DouyinShotConcatService,
     private readonly storeVisit: DouyinStoreVisitService,
+    private readonly spots: DouyinStoreVisitSpotService,
+    private readonly planner: DouyinStoreVisitPlannerService,
   ) {}
 
   /**
@@ -504,7 +519,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库。
+   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库；只给旧版客户端用，新版探店走脚本先行（`store-visit/script`）。
    * @keyword-cn 探店台词接口, 画外音台词
    * @keyword-en store-visit-lines-api, voiceover-lines
    */
@@ -523,7 +538,100 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 探店模式生成视频：每段先用选定音色配音，再以场景图为首帧生成空镜视频，按生视频服务逐段扣费，返回各段调用记录。
+   * @description 探店脚本先行：门店未定时先返回 AI 确认问题，确定后看引用知识写独立创作脚本正文，`keepCast` 为假时一并定出镜、人物与音色；带 `issues` 时按自检意见改。
+   *   写完对照引用知识自检并一起返回，只返回不落库。
+   * @keyword-cn 探店脚本接口, 引用知识写脚本
+   * @keyword-en store-visit-script-api, knowledge-script
+   */
+  @Post('topics/:id/store-visit/script')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async writeStoreVisitScript(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: WriteDouyinStoreVisitScriptDto,
+  ) {
+    return await this.planner.writeScript(
+      this.readId(id),
+      { prompt: dto.prompt, keepCast: dto.keepCast, issues: dto.issues },
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 根据已保存并经用户编辑的脚本正文生成分段画面与台词，沿用人物音色，只返回不落库。
+   * @keyword-cn 按脚本生成台词接口, 分段台词
+   * @keyword-en script-lines-api, segment-dialogue
+   */
+  @Post('topics/:id/store-visit/script/lines')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitScriptLines(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitLinesDto,
+  ) {
+    return await this.planner.generateLines(
+      this.readId(id),
+      { prompt: dto.prompt },
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 对照引用知识自检已保存的探店脚本，只列出问题不改。
+   * @keyword-cn 脚本自检接口, 引用知识核对
+   * @keyword-en script-review-api, knowledge-check
+   */
+  @Post('topics/:id/store-visit/script/review')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async reviewStoreVisitScript(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    return await this.planner.reviewScript(
+      this.readId(id),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 按脚本从门店场景图库给每段配点位与 1～3 张实拍图，只返回不落库。
+   * @keyword-cn 配场景接口, 按脚本挑图
+   * @keyword-en scene-match-api, script-image-pick
+   */
+  @Post('topics/:id/store-visit/scenes')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async matchStoreVisitScenes(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    return await this.planner.matchScenes(
+      this.readId(id),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 探店人物音色推荐：按脚本（与选过的门店）挑出镜人物（要出镜时）与音色，只返回不落库。
+   * @keyword-cn 编排推荐接口, 推荐人物音色
+   * @keyword-en plan-recommend-api, recommend-persona-voice
+   */
+  @Post('topics/:id/store-visit/plan/recommend')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async recommendStoreVisitPlan(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: RecommendDouyinStoreVisitPlanDto,
+  ) {
+    return await this.planner.recommend(
+      this.readId(id),
+      { presenter: dto.presenter },
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 探店模式生成视频：每段生成原生声画，按生视频服务逐段扣费，返回各段调用记录；`voiceAnchor` 为真时第 1 段先出片，其余段等桌面端取出它的声音作参考音色；
+   *   `onlyMissing` 为真时只补没出片的段，已出片的不重做也不重复扣费。
    * @keyword-cn 探店视频生成接口, 画外音生成
    * @keyword-en store-visit-video-api, voiceover-generation
    */
@@ -532,11 +640,45 @@ export class DouyinWorkbenchController {
   async generateStoreVisitVideo(
     @Req() req: AdminRequest,
     @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitVideoDto,
   ) {
     return await this.storeVisit.start(
       this.readId(id),
       this.scopeOf(this.requireUser(req)),
+      {
+        voiceAnchor: dto.voiceAnchor === true,
+        onlyMissing: dto.onlyMissing === true,
+      },
     );
+  }
+
+  /**
+   * @description 上传音色锚点：桌面端从第 1 段出片视频取出的 WAV 声音（multipart 字段 `file`，2～15 秒），后面各段拿它作参考音色。
+   * @keyword-cn 音色锚点接口, 统一音色
+   * @keyword-en voice-anchor-api, unified-voice
+   */
+  @Post('topics/:id/store-visit/voice-anchor')
+  @RequirePermission('update', 'DouyinWorkbench')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: DOUYIN_VOICE_ANCHOR_MAX_BYTES },
+    }),
+  )
+  async saveStoreVisitVoiceAnchor(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: SaveDouyinStoreVisitVoiceAnchorDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.storeVisit.saveVoiceAnchor(
+      this.readId(id),
+      dto,
+      file,
+      scope,
+    );
+    return { topic: { ...topic, _id: undefined } };
   }
 
   /**
@@ -551,6 +693,155 @@ export class DouyinWorkbenchController {
       voices: this.storeVisit.listPresetVoices(),
       categories: this.storeVisit.listPresetCategories(),
     };
+  }
+
+  /**
+   * @description 列出当前租户的探店门店与点位。
+   * @keyword-cn 门店列表接口, 探店点位
+   * @keyword-en store-list-api, store-visit-spots
+   */
+  @Get('store-visit/stores')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async listStoreVisitStores(@Req() req: AdminRequest) {
+    return {
+      stores: await this.spots.listStores(this.scopeOf(this.requireUser(req))),
+    };
+  }
+
+  /**
+   * @description 新建探店门店（同租户同名直接返回已有门店）。
+   * @keyword-cn 新建门店接口, 同名去重
+   * @keyword-en create-store-api, dedupe-store-name
+   */
+  @Post('store-visit/stores')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async createStoreVisitStore(
+    @Req() req: AdminRequest,
+    @Body() dto: CreateDouyinStoreVisitStoreDto,
+  ) {
+    return {
+      store: await this.spots.createStore(
+        dto,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 修改探店门店名称或整体说明。
+   * @keyword-cn 修改门店接口, 门店改名
+   * @keyword-en update-store-api, rename-store
+   */
+  @Patch('store-visit/stores/:storeId')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async updateStoreVisitStore(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: UpdateDouyinStoreVisitStoreDto,
+  ) {
+    return {
+      store: await this.spots.updateStore(
+        this.readId(storeId),
+        dto,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 删除探店门店与它的点位（图库图片保留）。
+   * @keyword-cn 删除门店接口, 保留图库
+   * @keyword-en delete-store-api, keep-gallery
+   */
+  @Delete('store-visit/stores/:storeId')
+  @RequirePermission('delete', 'DouyinWorkbench')
+  async deleteStoreVisitStore(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+  ) {
+    return await this.spots.deleteStore(
+      this.readId(storeId),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 整体保存门店点位，描述写回图库备注，高分图自动收藏。
+   * @keyword-cn 保存点位接口, 图库备注收藏
+   * @keyword-en save-spots-api, gallery-note-favorite
+   */
+  @Put('store-visit/stores/:storeId/spots')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async saveStoreVisitSpots(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: SaveDouyinStoreVisitSpotsDto,
+  ) {
+    return {
+      store: await this.spots.saveSpots(
+        this.readId(storeId),
+        dto.spots,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 相似度预归类：按图片视觉签名把相似的图先分到一组。
+   * @keyword-cn 相似度预归类接口, 图片相似度
+   * @keyword-en similarity-api, image-similarity
+   */
+  @Post('store-visit/stores/:storeId/similarity')
+  @RequirePermission('read', 'DouyinWorkbench')
+  async storeVisitSpotSimilarity(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: DouyinStoreVisitSimilarityDto,
+  ) {
+    return await this.spots.similarity(
+      this.readId(storeId),
+      dto.imageIds,
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description AI 归类一批图片到点位，写描述并打分，不落库；按 NDJSON 逐行推送（模型每调用一次归类工具推一行 `spot` / `assign`，结束推 `done`，出错推 `error`），前端断开时中止模型。
+   * @keyword-cn AI归类接口, 看图归类
+   * @keyword-en classify-spots-api, vision-classification
+   */
+  @Post('store-visit/stores/:storeId/classify')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async classifyStoreVisitSpots(
+    @Req() req: AdminRequest,
+    @Param('storeId') storeId: string,
+    @Body() dto: ClassifyDouyinStoreVisitSpotsDto,
+    @Res() res: Response,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const id = this.readId(storeId);
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
+    const write = (event: unknown) => {
+      if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+    };
+    try {
+      await this.spots.classify(id, dto, scope, write, abort.signal);
+    } catch (error) {
+      write({
+        type: 'error',
+        message: error instanceof Error ? error.message : 'AI 归类失败，请重试',
+      });
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
   }
 
   /**
@@ -649,7 +940,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 重新生成探店某一段（配音 + 人物对口型或门店空镜），按生视频服务扣费，返回这一段的调用记录。
+   * @description 重新生成探店某一段（及接它尾帧的续段），按生视频服务扣费，返回这一段的调用记录；`voiceAnchor` 为真时用第 1 段的声音统一音色。
    * @keyword-cn 重新生成探店分段接口, 单段重做
    * @keyword-en regenerate-store-visit-segment-api, single-segment-retry
    */
@@ -659,33 +950,57 @@ export class DouyinWorkbenchController {
     @Req() req: AdminRequest,
     @Param('id') id: string,
     @Param('segmentId') segmentId: string,
+    @Body() dto: GenerateDouyinStoreVisitVideoDto,
   ) {
     return await this.storeVisit.startOne(
       this.readId(id),
       this.readSegmentId(segmentId),
       this.scopeOf(this.requireUser(req)),
+      { voiceAnchor: dto.voiceAnchor === true },
     );
   }
 
   /** @description 校验当前用户权限并用上一段实际尾帧继续生成待处理片段。 @keyword-cn 续段生成接口, 尾帧衔接 @keyword-en continue-segment-api, tail-frame-continuity */
   @Post('operations/:operationId/store-visit/continue')
   @RequirePermission('create', 'DouyinWorkbench')
-  async continueStoreVisitSegment(@Req() req: AdminRequest, @Param('operationId') operationId: string, @Body() dto: ContinueDouyinStoreVisitDto) {
-    return this.storeVisit.continueOperation(operationId, dto, this.scopeOf(this.requireUser(req)));
+  async continueStoreVisitSegment(
+    @Req() req: AdminRequest,
+    @Param('operationId') operationId: string,
+    @Body() dto: ContinueDouyinStoreVisitDto,
+  ) {
+    return this.storeVisit.continueOperation(
+      operationId,
+      dto,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /** @description 截取尾帧或上传失败时，只终止当前用户尚在等待的调用，不覆盖已开始生成的任务。 @keyword-cn 续段失败接口, 等待状态保护 @keyword-en continuation-failure-api, waiting-state-guard */
   @Post('operations/:operationId/store-visit/continuation-failure')
   @RequirePermission('update', 'DouyinWorkbench')
-  async failStoreVisitContinuation(@Req() req: AdminRequest, @Param('operationId') operationId: string, @Body() dto: FailDouyinStoreVisitContinuationDto) {
-    return this.storeVisit.failPendingContinuation(operationId, dto.error, this.scopeOf(this.requireUser(req)));
+  async failStoreVisitContinuation(
+    @Req() req: AdminRequest,
+    @Param('operationId') operationId: string,
+    @Body() dto: FailDouyinStoreVisitContinuationDto,
+  ) {
+    return this.storeVisit.failPendingContinuation(
+      operationId,
+      dto.error,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /** @description 读取待衔接片段的真实前段素材，权限和素材归属同时校验。 @keyword-cn 续段素材接口, 前段视频鉴权 @keyword-en continuation-input-api, predecessor-video-auth */
   @Get('operations/:operationId/store-visit/continuation-input')
   @RequirePermission('read', 'DouyinWorkbench')
-  async readStoreVisitContinuationInput(@Req() req: AdminRequest, @Param('operationId') operationId: string) {
-    return this.storeVisit.readContinuationInput(operationId, this.scopeOf(this.requireUser(req)));
+  async readStoreVisitContinuationInput(
+    @Req() req: AdminRequest,
+    @Param('operationId') operationId: string,
+  ) {
+    return this.storeVisit.readContinuationInput(
+      operationId,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /**

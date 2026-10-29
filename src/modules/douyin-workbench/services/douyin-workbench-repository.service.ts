@@ -28,6 +28,7 @@ import {
   type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
   type DouyinStoreVisitTemplate,
+  type DouyinStoreVisitVoiceAnchor,
   type DouyinStoreVisitVoiceSample,
   type DouyinTopicEntity,
   type DouyinVideoAudioSetting,
@@ -163,11 +164,11 @@ export function normalizeReferenceImages(
 }
 
 /**
- * @description 探店素材上限：场景图与实拍视频素材合计最多 8 个（与分段上限一致）。
+ * @description 探店素材上限：场景图与实拍视频素材合计最多 32 个（点位模式每个点位带最多 4 张参考图、最多 8 个点位；旧版逐张选素材的界面仍限 8 个）。
  * @keyword-cn 探店素材上限, 图片视频合计
  * @keyword-en store-visit-material-limit, image-video-total
  */
-export const DOUYIN_STORE_VISIT_MATERIAL_LIMIT = 8;
+export const DOUYIN_STORE_VISIT_MATERIAL_LIMIT = 32;
 
 /**
  * @description 规整一个探店素材的说明（去首尾空白、最多 500 字）与标签（去空去重、最多 10 个、每个 30 字），空的不带。
@@ -290,7 +291,7 @@ export function normalizeStoreVisitLines(input?: string | null): string {
 }
 
 /**
- * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（实际按单段视频时长控制在约 60 字内），画面描述最多 300 字。
+ * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（实际按单段视频时长控制在约 60 字内），画面描述最多 300 字，脚本里的配图画面最多 60 字。
  * @keyword-cn 探店分段上限, 单段台词上限
  * @keyword-en store-visit-segment-limit, segment-lines-limit
  */
@@ -298,10 +299,11 @@ export const DOUYIN_STORE_VISIT_SEGMENT_LIMITS = {
   count: 8,
   lines: 1000,
   action: 300,
+  scene: 60,
 } as const;
 
 /**
- * @description 规整探店分段（只收台词、场景图或视频素材 ID、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
+ * @description 规整探店分段（只收台词、场景图或视频素材 ID、点位模式的点位 ID 与同一点位 1～3 张参考图、脚本里的配图画面、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
  *   去掉空台词段，段 ID 不合法或重复时换新，素材不在本选题素材里时清空；视频素材段不收人物镜头类型（人物出镜要用图片），最多 8 段。
  * @keyword-cn 规整探店分段, 分段校验
  * @keyword-en normalize-store-visit-segments, segment-validation
@@ -343,14 +345,42 @@ export function normalizeStoreVisitSegments(
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.action);
+    // 点位模式一段可带同一点位的 1～3 张参考图，第一张就是 sceneImageId
+    const extraImageIds = video
+      ? []
+      : [
+          ...new Set(
+            (Array.isArray(item?.sceneImageIds) ? item.sceneImageIds : [])
+              .map(Number)
+              .filter((imageId) => sceneImageIds.includes(imageId)),
+          ),
+        ].slice(0, 3);
+    const primaryImageId = sceneImageIds.includes(sceneImageId)
+      ? sceneImageId
+      : extraImageIds[0];
+    const spotId = String(item?.spotId ?? '').trim();
+    const scene = String(item?.scene ?? '')
+      .replace(/s+/g, ' ')
+      .trim()
+      .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.scene);
     list.push({
       id,
       lines,
       ...(video
         ? { sceneVideoId, ...(clipStart > 0 ? { clipStart } : {}) }
-        : sceneImageIds.includes(sceneImageId)
-          ? { sceneImageId }
+        : primaryImageId
+          ? { sceneImageId: primaryImageId }
           : {}),
+      ...(!video && extraImageIds.length > 1
+        ? {
+            sceneImageIds: [
+              primaryImageId,
+              ...extraImageIds.filter((imageId) => imageId !== primaryImageId),
+            ].slice(0, 3),
+          }
+        : {}),
+      ...(/^[A-Za-z0-9_-]{1,40}$/.test(spotId) ? { spotId } : {}),
+      ...(scene ? { scene } : {}),
       ...(!video && motion ? { motion } : {}),
       ...(action ? { action } : {}),
       ...(!video && ['presenter', 'experience'].includes(item?.shot || '')
@@ -372,7 +402,7 @@ export function normalizeStoreVisitSegments(
 }
 
 /**
- * @description 保存分段时接上服务端写入的字段：场景没变时保留人物首帧；台词、场景、画面描述与镜头类型都没变、且没有依赖的前段改动时，
+ * @description 保存分段时接上服务端写入的字段：场景（含参考图组）没变时保留人物首帧；台词、场景、画面描述与镜头类型都没变、且没有依赖的前段改动时，
  *   再保留这段的视频、配音与所用音色，任一改了就作废。新镜头（换素材、换用途或紧跟本机素材段）不依赖前段尾帧，前段改动不连带作废它；
  *   本机素材段的产出只有配音，台词没变就保留，换素材、入点或运镜都不用重新配音。
  * @keyword-cn 合并探店分段, 保留分段成片
@@ -413,7 +443,9 @@ export function mergeStoreVisitSegments(
     const sameScene =
       previous.sceneImageId === segment.sceneImageId &&
       previous.sceneVideoId === segment.sceneVideoId &&
-      (previous.clipStart || 0) === (segment.clipStart || 0);
+      (previous.clipStart || 0) === (segment.clipStart || 0) &&
+      (previous.sceneImageIds ?? []).join(',') ===
+        (segment.sceneImageIds ?? []).join(',');
     const sameVisual =
       storeVisitVisualSource(previous) === storeVisitVisualSource(segment);
     const keyframe =
@@ -706,8 +738,12 @@ export class DouyinWorkbenchRepositoryService {
       shotVideoResolution?: string;
       publishCopy?: Partial<DouyinPublishCopy>;
       storeVisit?: {
+        script?: string;
+        linesScript?: string;
         voicePrompt?: string;
         storeName?: string;
+        storeId?: number;
+        spotIds?: string[];
         faceImage?: Partial<DouyinMediaReference> | null;
         template?: DouyinStoreVisitTemplate;
         sceneImages?: Array<Partial<DouyinStoreVisitSceneImage>>;
@@ -725,6 +761,18 @@ export class DouyinWorkbenchRepositoryService {
   ): Promise<DouyinTopicEntity | null> {
     const current = await this.get(id, scope);
     if (!current) return null;
+    if (
+      input.storeVisit?.segments !== undefined &&
+      input.storeVisit.linesScript?.trim()
+    ) {
+      const script = String(
+        input.storeVisit.script ?? current.storeVisit?.script ?? '',
+      ).trim();
+      if (input.storeVisit.linesScript.trim() !== script)
+        throw new BadRequestException(
+          '脚本已修改，本次台词基于旧脚本，请重新生成',
+        );
+    }
     if (input.storyboard)
       await this.validateStoryboardMedia(input.storyboard, scope);
     if (input.generatedVideoId)
@@ -788,6 +836,14 @@ export class DouyinWorkbenchRepositoryService {
       if (publishCopy) updates.publishCopy = publishCopy;
       else unset.publishCopy = '';
     }
+    for (const field of ['script', 'linesScript'] as const) {
+      if (input.storeVisit?.[field] === undefined) continue;
+      const text = String(input.storeVisit[field] ?? '')
+        .trim()
+        .slice(0, 8000);
+      if (text) nested[`storeVisit.${field}`] = text;
+      else unset[`storeVisit.${field}`] = '';
+    }
     if (input.storeVisit?.lines !== undefined) {
       const lines = normalizeStoreVisitLines(input.storeVisit.lines);
       if (lines) nested['storeVisit.lines'] = lines;
@@ -829,6 +885,23 @@ export class DouyinWorkbenchRepositoryService {
         .slice(0, 60);
       if (storeName) nested['storeVisit.storeName'] = storeName;
       else unset['storeVisit.storeName'] = '';
+    }
+    // 门店与分段用到的点位只记 ID，点位内容在门店里，生成时以选题里同步好的场景图为准
+    if (input.storeVisit?.storeId !== undefined) {
+      const storeId = Math.round(Number(input.storeVisit.storeId) || 0);
+      if (storeId > 0) nested['storeVisit.storeId'] = storeId;
+      else unset['storeVisit.storeId'] = '';
+    }
+    if (input.storeVisit?.spotIds !== undefined) {
+      const spotIds = [
+        ...new Set(
+          (input.storeVisit.spotIds ?? [])
+            .map((spotId) => String(spotId ?? '').trim())
+            .filter((spotId) => /^[A-Za-z0-9_-]{1,40}$/.test(spotId)),
+        ),
+      ].slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count);
+      if (spotIds.length) nested['storeVisit.spotIds'] = spotIds;
+      else unset['storeVisit.spotIds'] = '';
     }
     // 开场素材跟着素材走：显式传入或素材变了都重新核对，指向已移除的素材时清掉
     if (
@@ -946,6 +1019,27 @@ export class DouyinWorkbenchRepositoryService {
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id },
       Object.keys(unset).length ? { $set, $unset: unset } : { $set },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 写入探店音色锚点（第 1 段出片后取出的声音），后面各段用它作参考音频。
+   * @keyword-cn 保存音色锚点, 统一音色
+   * @keyword-en save-voice-anchor, unified-voice
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinStoreVisitVoiceAnchor} anchor 音色锚点。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，不存在时为 null。
+   */
+  async saveStoreVisitVoiceAnchor(
+    id: number,
+    anchor: DouyinStoreVisitVoiceAnchor,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    return await this.topics.findOneAndUpdate(
+      { ...this.scopeFilter(scope), id, kind: 'child' },
+      { $set: { 'storeVisit.voiceAnchor': anchor, updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
   }

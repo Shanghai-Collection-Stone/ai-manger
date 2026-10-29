@@ -181,6 +181,12 @@ export interface DouyinStoreVisitSegment {
   sceneVideoId?: number;
   /** @description 视频素材从第几秒开始用（入点，秒），缺省从头 */
   clipStart?: number;
+  /** @description 点位模式：本段介绍的点位（门店点位 ID） */
+  spotId?: string;
+  /** @description 点位模式：本段的全部参考图（同一点位的 1～3 张，第一张即 `sceneImageId`），多张时都作参考图交给视频模型 */
+  sceneImageIds?: number[];
+  /** @description 脚本先行：脚本里这段要配的实拍画面（如「门头招牌」），按它从门店图库配图，不写进生成提示词 */
+  scene?: string;
   /** @description 图片素材在本机做的运镜（`visualSource=local` 时生效），缺省缓慢推近 */
   motion?: DouyinStoreVisitMotion;
   /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
@@ -257,18 +263,44 @@ export interface DouyinStoreVisitOpeningScene {
 }
 
 /**
+ * @description 探店音色锚点：某一段（通常是第 1 段）出片后由桌面端取出的那段声音，后面各段都把它作参考音频，整条视频听起来是同一个人；
+ *   `voiceKey` 记下当时的音色，换了音色或声音描述后锚点自动不用。
+ * @keyword-cn 探店音色锚点, 统一音色
+ * @keyword-en store-visit-voice-anchor, unified-voice
+ */
+export interface DouyinStoreVisitVoiceAnchor {
+  url: string;
+  /** @description 参考音频时长（秒，2～15） */
+  seconds: number;
+  /** @description 取声音的分段与它当时的视频 */
+  segmentId: string;
+  videoId: number;
+  /** @description 取声音时的音色标识（音色 ID + 声音描述） */
+  voiceKey: string;
+  createdAt: Date;
+}
+
+/**
  * @description 探店设置：门店名称、出镜人物与出镜模板、场景图与实拍视频素材（各带说明与标签）、开场素材与门店整体说明、音色（录音克隆、音色库或提示词定制）、台词与分段。
  *   各段视频保留原声由桌面端拼接后绑定到脚本的 `generatedVideoId`。旧版数字人流程留下的声音设计等字段不再读取。
  * @keyword-cn 探店模式设置, 画外音设置, 克隆音色
  * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
 export interface DouyinStoreVisitSetting {
+  /** @description 独立的探店创作脚本正文，包含主题、叙事结构、画面安排与卖点依据，可先编辑再生成台词 */
+  script?: string;
+  /** @description 本版分段台词采用的脚本正文快照，用于识别脚本修改后台词是否需要更新 */
+  linesScript?: string;
   /** @description 出镜人物照（租户图库图片），人物出镜段的首帧以它为底图；换人物会作废各段首帧 */
   faceImage?: DouyinMediaReference;
   /** @description 出镜模板，决定新分段默认是人物出镜还是门店空镜 */
   template?: DouyinStoreVisitTemplate;
   /** @description 门店名称，AI 写开场「今天我们来到了 xxx」时逐字使用 */
   storeName?: string;
+  /** @description 点位模式：选用的门店（`douyin_store_visit_stores` 的 ID），为空表示旧版逐张选素材 */
+  storeId?: number;
+  /** @description 点位模式：重点推荐的点位 ID，按介绍顺序排列，最多 8 个 */
+  spotIds?: string[];
   /** @description 独立选择的探店场景图，与视频素材合计最多八个，不依赖分镜；每张带自己的说明与标签。 */
   sceneImages?: DouyinStoreVisitSceneImage[];
   /** @description 实拍视频素材（视频库），与场景图合计最多八个；每段带自己的说明、标签与时长。 */
@@ -292,6 +324,8 @@ export interface DouyinStoreVisitSetting {
   lines?: string;
   /** @description 分段，最多 8 段；`lines` 同步保存各段拼起来的全文 */
   segments?: DouyinStoreVisitSegment[];
+  /** @description 音色锚点：第 1 段出片后取出的声音，后面各段作参考音频统一音色 */
+  voiceAnchor?: DouyinStoreVisitVoiceAnchor;
 }
 
 /**
@@ -484,6 +518,8 @@ export interface DouyinOperationView {
     stage: 'waiting' | 'planning' | 'generating';
     previousSegmentId?: string;
     sequenceId: string;
+    /** @description 统一音色模式：等这一段出片、桌面端取出它的声音作参考音色后再生成 */
+    anchorSegmentId?: string;
   };
   /** @description 探店人物段（视频型号）出片后的对口型阶段：识别人脸、对口型中、完成或跳过（跳过时保留原画面并写原因）。 @keyword-cn 对口型阶段, 口型跳过原因 @keyword-en lip-sync-stage, lip-sync-skip-reason */
   lipSync?: DouyinStoreVisitLipSyncView;
