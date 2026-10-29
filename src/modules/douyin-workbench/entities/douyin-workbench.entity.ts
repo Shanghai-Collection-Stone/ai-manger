@@ -185,6 +185,8 @@ export interface DouyinStoreVisitSegment {
   spotId?: string;
   /** @description 点位模式：本段的全部参考图（同一点位的 1～3 张，第一张即 `sceneImageId`），多张时都作参考图交给视频模型 */
   sceneImageIds?: number[];
+  /** @description 脚本先行：脚本里这段要配的实拍画面（如「门头招牌」），按它从门店图库配图，不写进生成提示词 */
+  scene?: string;
   /** @description 图片素材在本机做的运镜（`visualSource=local` 时生效），缺省缓慢推近 */
   motion?: DouyinStoreVisitMotion;
   /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
@@ -285,6 +287,10 @@ export interface DouyinStoreVisitVoiceAnchor {
  * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
 export interface DouyinStoreVisitSetting {
+  /** @description 独立的探店创作脚本正文，包含主题、叙事结构、画面安排与卖点依据，可先编辑再生成台词 */
+  script?: string;
+  /** @description 本版分段台词采用的脚本正文快照，用于识别脚本修改后台词是否需要更新 */
+  linesScript?: string;
   /** @description 出镜人物照（租户图库图片），人物出镜段的首帧以它为底图；换人物会作废各段首帧 */
   faceImage?: DouyinMediaReference;
   /** @description 出镜模板，决定新分段默认是人物出镜还是门店空镜 */

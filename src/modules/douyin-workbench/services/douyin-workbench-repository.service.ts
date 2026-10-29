@@ -291,7 +291,7 @@ export function normalizeStoreVisitLines(input?: string | null): string {
 }
 
 /**
- * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（实际按单段视频时长控制在约 60 字内），画面描述最多 300 字。
+ * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（实际按单段视频时长控制在约 60 字内），画面描述最多 300 字，脚本里的配图画面最多 60 字。
  * @keyword-cn 探店分段上限, 单段台词上限
  * @keyword-en store-visit-segment-limit, segment-lines-limit
  */
@@ -299,10 +299,11 @@ export const DOUYIN_STORE_VISIT_SEGMENT_LIMITS = {
   count: 8,
   lines: 1000,
   action: 300,
+  scene: 60,
 } as const;
 
 /**
- * @description 规整探店分段（只收台词、场景图或视频素材 ID、点位模式的点位 ID 与同一点位 1～3 张参考图、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
+ * @description 规整探店分段（只收台词、场景图或视频素材 ID、点位模式的点位 ID 与同一点位 1～3 张参考图、脚本里的配图画面、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
  *   去掉空台词段，段 ID 不合法或重复时换新，素材不在本选题素材里时清空；视频素材段不收人物镜头类型（人物出镜要用图片），最多 8 段。
  * @keyword-cn 规整探店分段, 分段校验
  * @keyword-en normalize-store-visit-segments, segment-validation
@@ -358,6 +359,10 @@ export function normalizeStoreVisitSegments(
       ? sceneImageId
       : extraImageIds[0];
     const spotId = String(item?.spotId ?? '').trim();
+    const scene = String(item?.scene ?? '')
+      .replace(/s+/g, ' ')
+      .trim()
+      .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.scene);
     list.push({
       id,
       lines,
@@ -375,6 +380,7 @@ export function normalizeStoreVisitSegments(
           }
         : {}),
       ...(/^[A-Za-z0-9_-]{1,40}$/.test(spotId) ? { spotId } : {}),
+      ...(scene ? { scene } : {}),
       ...(!video && motion ? { motion } : {}),
       ...(action ? { action } : {}),
       ...(!video && ['presenter', 'experience'].includes(item?.shot || '')
@@ -732,6 +738,8 @@ export class DouyinWorkbenchRepositoryService {
       shotVideoResolution?: string;
       publishCopy?: Partial<DouyinPublishCopy>;
       storeVisit?: {
+        script?: string;
+        linesScript?: string;
         voicePrompt?: string;
         storeName?: string;
         storeId?: number;
@@ -753,6 +761,18 @@ export class DouyinWorkbenchRepositoryService {
   ): Promise<DouyinTopicEntity | null> {
     const current = await this.get(id, scope);
     if (!current) return null;
+    if (
+      input.storeVisit?.segments !== undefined &&
+      input.storeVisit.linesScript?.trim()
+    ) {
+      const script = String(
+        input.storeVisit.script ?? current.storeVisit?.script ?? '',
+      ).trim();
+      if (input.storeVisit.linesScript.trim() !== script)
+        throw new BadRequestException(
+          '脚本已修改，本次台词基于旧脚本，请重新生成',
+        );
+    }
     if (input.storyboard)
       await this.validateStoryboardMedia(input.storyboard, scope);
     if (input.generatedVideoId)
@@ -816,6 +836,14 @@ export class DouyinWorkbenchRepositoryService {
       if (publishCopy) updates.publishCopy = publishCopy;
       else unset.publishCopy = '';
     }
+    for (const field of ['script', 'linesScript'] as const) {
+      if (input.storeVisit?.[field] === undefined) continue;
+      const text = String(input.storeVisit[field] ?? '')
+        .trim()
+        .slice(0, 8000);
+      if (text) nested[`storeVisit.${field}`] = text;
+      else unset[`storeVisit.${field}`] = '';
+    }
     if (input.storeVisit?.lines !== undefined) {
       const lines = normalizeStoreVisitLines(input.storeVisit.lines);
       if (lines) nested['storeVisit.lines'] = lines;
@@ -858,7 +886,7 @@ export class DouyinWorkbenchRepositoryService {
       if (storeName) nested['storeVisit.storeName'] = storeName;
       else unset['storeVisit.storeName'] = '';
     }
-    // 门店与重点推荐点位只记 ID，点位内容在门店里，生成时以选题里同步好的场景图为准
+    // 门店与分段用到的点位只记 ID，点位内容在门店里，生成时以选题里同步好的场景图为准
     if (input.storeVisit?.storeId !== undefined) {
       const storeId = Math.round(Number(input.storeVisit.storeId) || 0);
       if (storeId > 0) nested['storeVisit.storeId'] = storeId;

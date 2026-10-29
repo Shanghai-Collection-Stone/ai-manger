@@ -52,6 +52,7 @@ import {
   GenerateDouyinVideoDto,
   PublishDouyinVideoDto,
   RecommendDouyinStoreVisitPlanDto,
+  WriteDouyinStoreVisitScriptDto,
   RefineDouyinScriptDto,
   UpdateDouyinTopicDto,
 } from './douyin-workbench.dto.js';
@@ -518,7 +519,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库；选了门店的点位模式按重点推荐点位写，并为每段挑同一点位的 1～3 张参考图。
+   * @description 按场景与台词让 AI 写一版探店画外音台词（按场景分段，每段约 60 字内），只返回台词、不落库；只给旧版客户端用，新版探店走脚本先行（`store-visit/script`）。
    * @keyword-cn 探店台词接口, 画外音台词
    * @keyword-en store-visit-lines-api, voiceover-lines
    */
@@ -529,21 +530,88 @@ export class DouyinWorkbenchController {
     @Param('id') id: string,
     @Body() dto: GenerateDouyinStoreVisitLinesDto,
   ) {
-    const scope = this.scopeOf(this.requireUser(req));
-    const topicId = this.readId(id);
-    // 选了门店的点位模式按点位写台词并为每段挑参考图，旧版逐张选素材的选题照旧
-    const topic = await this.repository.get(topicId, scope);
-    if (topic?.storeVisit?.storeId)
-      return await this.planner.writeSpotLines(topicId, dto.prompt, scope);
     return await this.childTopics.writeStoreVisitLines(
-      topicId,
+      this.readId(id),
       dto.prompt,
-      scope,
+      this.scopeOf(this.requireUser(req)),
     );
   }
 
   /**
-   * @description 探店 AI 编排推荐：按门店与重点推荐点位挑出镜人物（要出镜时）与音色，只返回不落库。
+   * @description 探店脚本先行：门店未定时先返回 AI 确认问题，确定后看引用知识写独立创作脚本正文，`keepCast` 为假时一并定出镜、人物与音色；带 `issues` 时按自检意见改。
+   *   写完对照引用知识自检并一起返回，只返回不落库。
+   * @keyword-cn 探店脚本接口, 引用知识写脚本
+   * @keyword-en store-visit-script-api, knowledge-script
+   */
+  @Post('topics/:id/store-visit/script')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async writeStoreVisitScript(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: WriteDouyinStoreVisitScriptDto,
+  ) {
+    return await this.planner.writeScript(
+      this.readId(id),
+      { prompt: dto.prompt, keepCast: dto.keepCast, issues: dto.issues },
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 根据已保存并经用户编辑的脚本正文生成分段画面与台词，沿用人物音色，只返回不落库。
+   * @keyword-cn 按脚本生成台词接口, 分段台词
+   * @keyword-en script-lines-api, segment-dialogue
+   */
+  @Post('topics/:id/store-visit/script/lines')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitScriptLines(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitLinesDto,
+  ) {
+    return await this.planner.generateLines(
+      this.readId(id),
+      { prompt: dto.prompt },
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 对照引用知识自检已保存的探店脚本，只列出问题不改。
+   * @keyword-cn 脚本自检接口, 引用知识核对
+   * @keyword-en script-review-api, knowledge-check
+   */
+  @Post('topics/:id/store-visit/script/review')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async reviewStoreVisitScript(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    return await this.planner.reviewScript(
+      this.readId(id),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 按脚本从门店场景图库给每段配点位与 1～3 张实拍图，只返回不落库。
+   * @keyword-cn 配场景接口, 按脚本挑图
+   * @keyword-en scene-match-api, script-image-pick
+   */
+  @Post('topics/:id/store-visit/scenes')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async matchStoreVisitScenes(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    return await this.planner.matchScenes(
+      this.readId(id),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 探店人物音色推荐：按脚本（与选过的门店）挑出镜人物（要出镜时）与音色，只返回不落库。
    * @keyword-cn 编排推荐接口, 推荐人物音色
    * @keyword-en plan-recommend-api, recommend-persona-voice
    */
@@ -895,22 +963,44 @@ export class DouyinWorkbenchController {
   /** @description 校验当前用户权限并用上一段实际尾帧继续生成待处理片段。 @keyword-cn 续段生成接口, 尾帧衔接 @keyword-en continue-segment-api, tail-frame-continuity */
   @Post('operations/:operationId/store-visit/continue')
   @RequirePermission('create', 'DouyinWorkbench')
-  async continueStoreVisitSegment(@Req() req: AdminRequest, @Param('operationId') operationId: string, @Body() dto: ContinueDouyinStoreVisitDto) {
-    return this.storeVisit.continueOperation(operationId, dto, this.scopeOf(this.requireUser(req)));
+  async continueStoreVisitSegment(
+    @Req() req: AdminRequest,
+    @Param('operationId') operationId: string,
+    @Body() dto: ContinueDouyinStoreVisitDto,
+  ) {
+    return this.storeVisit.continueOperation(
+      operationId,
+      dto,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /** @description 截取尾帧或上传失败时，只终止当前用户尚在等待的调用，不覆盖已开始生成的任务。 @keyword-cn 续段失败接口, 等待状态保护 @keyword-en continuation-failure-api, waiting-state-guard */
   @Post('operations/:operationId/store-visit/continuation-failure')
   @RequirePermission('update', 'DouyinWorkbench')
-  async failStoreVisitContinuation(@Req() req: AdminRequest, @Param('operationId') operationId: string, @Body() dto: FailDouyinStoreVisitContinuationDto) {
-    return this.storeVisit.failPendingContinuation(operationId, dto.error, this.scopeOf(this.requireUser(req)));
+  async failStoreVisitContinuation(
+    @Req() req: AdminRequest,
+    @Param('operationId') operationId: string,
+    @Body() dto: FailDouyinStoreVisitContinuationDto,
+  ) {
+    return this.storeVisit.failPendingContinuation(
+      operationId,
+      dto.error,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /** @description 读取待衔接片段的真实前段素材，权限和素材归属同时校验。 @keyword-cn 续段素材接口, 前段视频鉴权 @keyword-en continuation-input-api, predecessor-video-auth */
   @Get('operations/:operationId/store-visit/continuation-input')
   @RequirePermission('read', 'DouyinWorkbench')
-  async readStoreVisitContinuationInput(@Req() req: AdminRequest, @Param('operationId') operationId: string) {
-    return this.storeVisit.readContinuationInput(operationId, this.scopeOf(this.requireUser(req)));
+  async readStoreVisitContinuationInput(
+    @Req() req: AdminRequest,
+    @Param('operationId') operationId: string,
+  ) {
+    return this.storeVisit.readContinuationInput(
+      operationId,
+      this.scopeOf(this.requireUser(req)),
+    );
   }
 
   /**

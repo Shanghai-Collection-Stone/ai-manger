@@ -109,4 +109,4 @@
 
 **音色类型与节点级提供商**：WorkflowNodeCategory.audio 对应 Ai 提供商的 modelCategory=audio（后台「音色模型」类别），当前只有阿里云百炼。默认回退、模型查询与保存校验都按它处理（PixMax 映射 GENERATE_AUDIO，数眼目录不出 audio 模型）。节点 runtimeProviders 白名单优先于类型矩阵，list 与 resolveNodeRuntime 都传节点白名单：voice-clone 只收 dashscope，store-visit-video 与 store-visit-avatar 只收 shuyan / shuyanai。unsetHint 在探店三个节点未指定时分别显示不可用说明。
 
-**探店场景归类与编排推荐节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitScene` 登记为 `store-visit-scene`（后台显示「探店场景归类」，`llm`），场景图库 AI 归类用它看图把同一点位的图片归在一起、写描述并打精细度分，应指定支持看图的视觉语言模型；`storeVisitPlanner` 登记为 `store-visit-planner`（「探店编排推荐」，`llm`），按门店与重点推荐点位挑出镜人物与音色、按点位写台词并挑参考图。两者未单独配置时都按文本节点规则回退默认 LLM。
+**探店场景归类与编排推荐节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitScene` 登记为 `store-visit-scene`（后台显示「探店场景归类」，`llm`），场景图库 AI 归类用它看图把同一点位的图片归在一起、写描述并打精细度分，应指定支持看图的视觉语言模型；`storeVisitPlanner` 登记为 `store-visit-planner`（「探店编排推荐」，`llm`），探店脚本先行用它看引用知识写分段脚本并定出镜人物与音色、对照引用知识自检、按脚本从门店点位配图，以及按脚本推荐人物音色。两者未单独配置时都按文本节点规则回退默认 LLM。

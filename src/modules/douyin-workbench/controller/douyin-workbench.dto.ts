@@ -368,7 +368,7 @@ export class DouyinPublishCopyDto {
 }
 
 /**
- * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图或视频素材 ID、点位模式的点位 ID 与 1～3 张参考图、视频入点、本机运镜、画面描述、
+ * @description 校验一段探店分段：段 ID、本段台词（最多 1000 字）、对应场景图或视频素材 ID、点位模式的点位 ID 与 1～3 张参考图、脚本里的配图画面（最多 60 字）、视频入点、本机运镜、画面描述、
  *   镜头用途（实景 / 体验 / 讲解）与画面来源；人物首帧、成片与配音只由服务端写入。
  * @keyword-cn 探店分段参数, 分段台词
  * @keyword-en store-visit-segment-dto, segment-lines
@@ -429,17 +429,32 @@ export class DouyinStoreVisitSegmentDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(60)
+  scene?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(300)
   action?: string;
 }
 
 /**
- * @description 校验门店（点位模式另带门店 ID 与最多 8 个重点推荐点位）、素材（合计最多 32 个）、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入。
+ * @description 校验门店（点位模式另带门店 ID 与分段用到的最多 8 个点位）、素材（合计最多 32 个）、台词、分段与可编辑的声音提示词，音色 ID 等受保护字段仍由音色接口写入。
  *
  * @keyword-cn 探店设置参数, 场景台词
  * @keyword-en store-visit-setting-dto, scene-lines
  */
 export class DouyinStoreVisitDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(8000)
+  script?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(8000)
+  linesScript?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)
@@ -1068,6 +1083,29 @@ export class ClassifyDouyinStoreVisitSpotsDto {
   @ValidateNested({ each: true })
   @Type(() => DouyinStoreVisitDraftSpotDto)
   drafts?: DouyinStoreVisitDraftSpotDto[];
+}
+
+/**
+ * @description 校验 AI 写探店脚本：一句话补充要求、是否沿用当前的出镜人物与音色只重写台词，以及按自检意见改时带上的问题（最多 20 条、每条 300 字内）。
+ * @keyword-cn 探店脚本参数, 自检意见
+ * @keyword-en store-visit-script-dto, review-issues
+ */
+export class WriteDouyinStoreVisitScriptDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  prompt?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  keepCast?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsString({ each: true })
+  @MaxLength(300, { each: true })
+  issues?: string[];
 }
 
 /**

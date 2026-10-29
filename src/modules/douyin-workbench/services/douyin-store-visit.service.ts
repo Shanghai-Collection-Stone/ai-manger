@@ -1370,6 +1370,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     options: { voiceAnchor?: boolean } = {},
   ): Promise<DouyinOperationView[]> {
     const setting = topic.storeVisit ?? {};
+    if (
+      (setting.script || setting.linesScript) &&
+      setting.linesScript !== (setting.script || '').trim()
+    )
+      throw new BadRequestException('脚本已修改，请先根据当前脚本重新生成台词');
     const all = setting.segments ?? [];
     const indexOf = (segment: DouyinStoreVisitSegment) =>
       all.findIndex((item) => item.id === segment.id) + 1;
