@@ -89,6 +89,15 @@ function buildStoreVisitRepository() {
 function buildVoiceoverService(topic: Record<string, unknown> = {}) {
   const service = Object.create(DouyinStoreVisitService.prototype);
   service.previews = new Map();
+  // 模型并发不限：直接放行，不排队
+  service.videoQueue = {
+    admit: jest.fn().mockResolvedValue(true),
+    release: jest.fn().mockResolvedValue(undefined),
+    releaseAndThrow: jest.fn(async (_id: string, error: unknown) => {
+      throw error;
+    }),
+    enqueue: jest.fn(),
+  };
   service.repository = {
     get: jest.fn().mockResolvedValue({
       id: 2,
@@ -133,7 +142,7 @@ function buildVoiceoverService(topic: Record<string, unknown> = {}) {
     resolveNodeRuntime: jest
       .fn()
       .mockImplementation(async (_workflow: string, node: string) =>
-        node === 'voice-clone'
+        node === 'voice'
           ? {
               providerId: 'ds-1',
               providerCode: 'dashscope',
@@ -141,21 +150,13 @@ function buildVoiceoverService(topic: Record<string, unknown> = {}) {
               model: 'cosyvoice-v3.5-plus',
               apiKey: 'sk-test',
             }
-          : node === 'store-visit-avatar'
-            ? {
-                providerId: 'sy-2',
-                providerCode: 'shuyan',
-                providerName: '数眼',
-                model: 'kling-avatar-pro',
-                apiKey: 'sk-shuyan',
-              }
-            : {
-                providerId: 'sy-1',
-                providerCode: 'shuyan',
-                providerName: '数眼',
-                model: 'doubao-seedance-2-0-260128',
-                apiKey: 'sk-shuyan',
-              },
+          : {
+              providerId: 'sy-1',
+              providerCode: 'shuyan',
+              providerName: '数眼',
+              model: 'doubao-seedance-2-0-260128',
+              apiKey: 'sk-shuyan',
+            },
       ),
   };
   service.adminService = {
@@ -169,6 +170,7 @@ function buildVoiceoverService(topic: Record<string, unknown> = {}) {
   };
   service.operations = {
     insertOne: jest.fn().mockResolvedValue({}),
+    find: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
     findOne: jest.fn().mockResolvedValue(null),
     updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     findOneAndUpdate: jest.fn().mockResolvedValue(null),
@@ -726,8 +728,16 @@ describe('独立探店制作流程（画外音）', () => {
 
   it('换店可主动清空台词来源快照并清场景，保留脚本原稿供修改', async () => {
     const { repository, topics } = buildStoreVisitRepository();
-    topics.findOne.mockResolvedValue({ id: 2, kind: 'child', storeVisit: { script: '原门店脚本' } } as never);
-    await repository.update(2, { storeVisit: { linesScript: '', segments: [] } }, scope);
+    topics.findOne.mockResolvedValue({
+      id: 2,
+      kind: 'child',
+      storeVisit: { script: '原门店脚本' },
+    } as never);
+    await repository.update(
+      2,
+      { storeVisit: { linesScript: '', segments: [] } },
+      scope,
+    );
     const update = topics.findOneAndUpdate.mock.calls[0][1];
     expect(update.$unset['storeVisit.linesScript']).toBe('');
     expect(update.$set['storeVisit.script']).toBeUndefined();
@@ -1616,7 +1626,7 @@ describe('独立探店制作流程（画外音）', () => {
       service.workflowModels.resolveNodeRuntime.getMockImplementation();
     service.workflowModels.resolveNodeRuntime.mockImplementation(
       async (workflow: string, node: string) =>
-        node === 'store-visit-avatar'
+        node === 'video'
           ? {
               providerId: 'sy-3',
               providerCode: 'shuyan',
@@ -2087,7 +2097,7 @@ describe('人物段视频型号出片后对口型', () => {
 });
 
 /**
- * @description 构造「探店人物对口型」节点填 wan2.7-i2v 的探店测试服务：数眼万相接口按百炼协议返回任务 ID 与成片。
+ * @description 构造「生视频」节点填 wan2.7-i2v 的探店测试服务：数眼万相接口按百炼协议返回任务 ID 与成片。
  * @keyword-cn 万相测试服务, 配音驱动人物段
  * @keyword-en wan-test-service, audio-driven-presenter
  */
@@ -2117,20 +2127,6 @@ function buildWanService() {
       ],
     },
   });
-  const original =
-    service.workflowModels.resolveNodeRuntime.getMockImplementation();
-  service.workflowModels.resolveNodeRuntime.mockImplementation(
-    (workflow: string, node: string) =>
-      node === 'store-visit-avatar'
-        ? Promise.resolve({
-            providerId: 'sy-4',
-            providerCode: 'shuyan',
-            providerName: '数眼',
-            model: 'wan2.7-i2v',
-            apiKey: 'sk-shuyan',
-          })
-        : (original(workflow, node) as Promise<unknown>),
-  );
   /** @description 按地址模拟数眼万相的创建与查询响应。 @keyword-cn 测试万相替身, 百炼协议响应 @keyword-en test-wan-double, dashscope-protocol-response */
   service.fetchShuyan = jest.fn().mockImplementation(function fakeWan(
     url: string,

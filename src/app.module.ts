@@ -46,6 +46,7 @@ import { DouyinPublishModule } from './modules/douyin-publish/douyin-publish.mod
 import { DouyinDataModule } from './modules/douyin-data/douyin-data.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { WorkflowModelModule } from './modules/workflow-model/workflow-model.module.js';
+import { ModelConcurrencyModule } from './modules/model-concurrency/model-concurrency.module.js';
 import { SmsVerificationModule } from './modules/sms-verification/sms-verification.module.js';
 import { AliyunConfigModule } from './modules/aliyun-config/aliyun-config.module.js';
 import { MailModule } from './modules/mail/mail.module.js';
@@ -111,6 +112,7 @@ import { TenantMcpModule } from './modules/tenant-mcp/tenant-mcp.module.js';
     DouyinDataModule,
     KnowledgeModule,
     WorkflowModelModule,
+    ModelConcurrencyModule,
   ],
   controllers: [AppController],
   providers: [AppService],

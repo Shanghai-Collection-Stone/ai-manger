@@ -3,7 +3,7 @@
 ## 模块描述
 
 后台管理前端:提供用户/租户/API Key/数据源等管理能力,并提供看板配置映射管理页面(租户 -> JSON 配置文件路径)。
-支持 AI 提供商按模型类型管理(llm/em/image/video/audio，video 为生视频、audio 为音色克隆；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)、PixMax(`pixmax`)与阿里云百炼(`dashscope`，选中时类别自动切到「音色模型」，并提示用于探店音色克隆与配音、Key 填 sk- 原始串、服务地址留空默认 https://dashscope.aliyuncs.com/compatible-mode/v1、模型填 cosyvoice-v3.5-plus、系统音色固定 cosyvoice-v3-flash、录音克隆需先配 OSS)；已下线的通用数字人服务(`digital-human`)不再出现在下拉里，编辑旧记录时由 `RETIRED_PROVIDER_CODE_LABELS` 显示为「已下线」并提示改用百炼 + 数眼智能，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
+支持 AI 提供商按模型类型管理(llm/em/image/video/audio，video 为生视频、audio 为音色克隆；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)、PixMax(`pixmax`)、自建 MiniMax-H3 视频服务(`opensource-video`，选中时类别自动切到「生视频模型」，提示服务地址必填 GPU 平台给 6006 的映射地址、Key 填服务器 .env 的 VIDEO_API_KEY、模型 minimax-h3-turbo / minimax-h3-fast / minimax-h3-quality、可用于抖音分镜、整片与探店画面视频、探店人物对口型四个节点)与阿里云百炼(`dashscope`，选中时类别自动切到「音色模型」，并提示用于探店音色克隆与配音、Key 填 sk- 原始串、服务地址留空默认 https://dashscope.aliyuncs.com/compatible-mode/v1、模型填 cosyvoice-v3.5-plus、系统音色固定 cosyvoice-v3-flash、录音克隆需先配 OSS)；已下线的通用数字人服务(`digital-human`)不再出现在下拉里，编辑旧记录时由 `RETIRED_PROVIDER_CODE_LABELS` 显示为「已下线」并提示改用百炼 + 数眼智能，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
@@ -261,7 +261,7 @@
 
 ### WorkflowModelPanel.jsx
 
-后台「工作流节点模型」Tab（platformOnly，仅超管）的独立面板，由 AdminApp.jsx 挂载。左侧工作流菜单显示节点数与已指定数，记住上次选择；右侧列出后端目录的全部节点，抖音含音色克隆、声音设计与探店数字人视频，audio 类型显示「音色」。每个节点选择同类型已启用提供商；PixMax 实时拉取账号模型且只允许列表选择，数眼实时拉取并允许手填纠正分类，其他提供商可手填（留空用提供商默认模型）。节点带 unsetHint 时显示节点自己的说明，探店三个节点未指定即不可用；不支持组合或已失效提供商会提示。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md)。
+后台「工作流节点模型」Tab（platformOnly，仅超管）的独立面板，由 AdminApp.jsx 挂载。左侧工作流菜单显示节点数与已指定数，记住上次选择；右侧列出后端目录的全部节点：节点只按能力分思考 / 生图 / 生视频 / 音色克隆（小红书只有思考与生图），同一类的各步骤共用一个节点，audio 类型显示「音色」。每个节点选择同类型已启用提供商；PixMax 实时拉取账号模型且只允许列表选择，数眼实时拉取并允许手填纠正分类，自建 MiniMax-H3（opensource-video）只能从三个档位模型里选，其他提供商可手填（留空用提供商默认模型）。节点带 unsetHint 时显示节点自己的说明，抖音「生视频」「音色克隆」未指定时探店不可用；不支持组合或已失效提供商会提示。生视频节点指定了模型后多一行「并发上限」：按「提供商 + 模型」全平台共用（所有租户、所有工作流），超出排队，留空不限，旁边显示正在生成与排队的数量。后端见 [workflow-model 模块](../../../../src/modules/workflow-model/module.md) 与 [model-concurrency 模块](../../../../src/modules/model-concurrency/module.md)。
 
 - **关键词**: workflow model panel, per node model, pixmax model list, shuyan model list, default provider fallback
 - **函数**:
@@ -270,11 +270,14 @@
   - `ACTIVE_WORKFLOW_STORAGE_KEY` — 记住上次选中工作流的本地存储 key | keywords: 工作流菜单记忆, active-workflow-storage-key
   - `selectWorkflow(key)` — 切换左侧工作流子菜单并记住选择 | keywords: 切换工作流菜单, 记住选择, select-workflow-tab, remember-selection
   - `describeFallback(node)` — 优先节点 `unsetHint`，未指定时的默认提供商说明 | keywords: 默认回退文案, 未设置说明, fallback-label, unset-hint
-  - `NodeModelRow(props)` — 单个节点的提供商 / 模型选择与保存、恢复默认 | keywords: 节点模型编辑行, 选择模型, node-model-row, pick-model
+  - `NodeModelRow(props)` — 单个节点的提供商 / 模型选择与保存、恢复默认；生视频节点另有模型并发上限 | keywords: 节点模型编辑行, 选择模型, node-model-row, pick-model
+  - `ConcurrencyLimitRow({ binding, usage, onSave })` — 生视频节点当前模型的并发上限输入（1～100，留空不限）与正在生成 / 排队数量 | keywords: 模型并发上限设置, 超出排队, model-concurrency-row, queue-when-full
+  - `ConcurrencyLimitRow.submit()` — 提交上限，空值表示不限 | keywords: 保存并发上限, save-concurrency-limit
   - `onChangeProvider(nextId)` — 切换提供商并预填其默认模型 | keywords: 切换提供商, 预填模型, change-provider, prefill-model
   - `apply(res)` — 回填工作流与提供商 | keywords: 回填节点设置, apply-workflow-models
   - `onSave(workflowKey, node, payload)` — 保存节点模型 | keywords: 保存节点模型, save-node-model
   - `onReset(workflowKey, node)` — 恢复节点默认 | keywords: 恢复节点默认, reset-node-model
+  - `onSaveConcurrency(node, limit)` — 保存生视频节点当前模型的并发上限并刷新数量 | keywords: 保存模型并发上限, save-model-concurrency
 
 ### AdminLoginApp.jsx
 
@@ -326,6 +329,8 @@
   - `adminApi.listWorkflowProviderModels(providerId, category)` — 查询提供商可选模型（PixMax / 数眼智能实时拉取） | keywords: 提供商可选模型, PixMax模型列表, 数眼可选模型, list-provider-models, pixmax-model-list, shuyan-model-list
   - `adminApi.saveWorkflowNodeModel(workflowKey, nodeKey, payload)` — 为节点保存提供商与模型 | keywords: 保存节点模型, 指定模型, save-node-model, assign-model
   - `adminApi.resetWorkflowNodeModel(workflowKey, nodeKey)` — 清除节点设置回到默认 | keywords: 重置节点模型, 回退默认, reset-node-model, fallback-default
+  - `adminApi.listModelConcurrency()` — `GET /model-concurrency` 读取各模型的并发上限、正在跑与排队数量 | keywords: 模型并发列表, 排队数量, list-model-concurrency, waiting-count
+  - `adminApi.saveModelConcurrency(payload)` — `PUT /model-concurrency` 设置或清除模型的全平台并发上限（`limit: null` 不限） | keywords: 设置模型并发上限, 清除上限, set-model-concurrency, clear-limit
   - `adminApi.getSmsSettings()` — 读取平台短信配置(短信专用 Secret 仅掩码) | keywords: 读取短信配置, get-sms-settings
   - `adminApi.saveSmsSettings(payload)` — 保存平台短信接口类型、短信专用 AccessKey、签名与模板 | keywords: 保存短信配置, save-sms-settings
   - `adminApi.testSmsSettings(phone)` — 真实测试发送验证码 | keywords: 测试发送短信, test-sms-settings
@@ -345,7 +350,7 @@
   - `adminApi.listOpsReports(query)` — 分页查询运维上报摘要 | keywords: 运维上报列表, ops-report-list
   - `adminApi.getOpsReport(id)` — 读取单条运维上报及完整日志 | keywords: 运维上报详情, ops-report-detail
   - `adminApi.updateOpsReport(id, payload)` — 更新运维上报状态与处理备注 | keywords: 更新上报状态, update-ops-report
-  - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活;PixMax 改用可用模型接口, 15s 超时, 不消耗配额)/test ai provider
+  - `adminApi.testProvider(id)`: 测试 AI 提供商连通性(POST /admin/ai-providers/:id/test,GET /models 探活;PixMax 改用可用模型接口, 自建 MiniMax-H3 改用 GET /v1/system/health, 15s 超时, 不消耗配额)/test ai provider
   - `adminApi.listAiServices()` — 读取固定服务目录与生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
   - `adminApi.updateAiServiceCredit(code,creditCost)` — 修改固定服务消耗点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code
   - `adminApi.getTenantCreditAccount(id,query)` — 查询余额与流水 | keywords: Credit账户查询, 流水查询, credit-account-query, transaction-list

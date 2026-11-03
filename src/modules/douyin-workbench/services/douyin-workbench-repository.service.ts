@@ -32,6 +32,8 @@ import {
   type DouyinStoreVisitVoiceSample,
   type DouyinTopicEntity,
   type DouyinVideoAudioSetting,
+  type DouyinVideoDirection,
+  type DouyinVideoTemplate,
   type DouyinWorkspaceGroup,
 } from '../entities/douyin-workbench.entity.js';
 
@@ -1040,6 +1042,50 @@ export class DouyinWorkbenchRepositoryService {
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id, kind: 'child' },
       { $set: { 'storeVisit.voiceAnchor': anchor, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 写入或清除子选题的版式模板（传 null 清除），只改模板字段，不动脚本、分镜与探店分段。
+   * @keyword-cn 保存版式模板, 清除模板
+   * @keyword-en save-video-template, clear-video-template
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinVideoTemplate|null} template 模板，null 表示清除。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，不存在时为 null。
+   */
+  async setVideoTemplate(
+    id: number,
+    template: DouyinVideoTemplate | null,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    return await this.topics.findOneAndUpdate(
+      { ...this.scopeFilter(scope), id, kind: 'child' },
+      template
+        ? { $set: { videoTemplate: template, updatedAt: new Date() } }
+        : { $unset: { videoTemplate: '' }, $set: { updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 写入子选题的 AI 导演规划（各段运镜与画面动态、状态与画面指纹），只改 `videoDirection`。
+   * @keyword-cn 保存导演规划, 写入运动设计
+   * @keyword-en save-video-direction, persist-shot-directions
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinVideoDirection} direction 导演规划。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 更新后的选题，不存在时为 null。
+   */
+  async setVideoDirection(
+    id: number,
+    direction: DouyinVideoDirection,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    return await this.topics.findOneAndUpdate(
+      { ...this.scopeFilter(scope), id, kind: 'child' },
+      { $set: { videoDirection: direction, updatedAt: new Date() } },
       { returnDocument: 'after' },
     );
   }

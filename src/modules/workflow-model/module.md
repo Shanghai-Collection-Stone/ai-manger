@@ -21,9 +21,10 @@
 - `WorkflowNodeCategory` — 节点模型类型 llm / image / video / audio（audio 为音色克隆与配音，当前只有阿里云百炼） | keywords: 节点模型类型, 提供商类型, node-model-category, provider-category
 - `WorkflowNodeDefinition` — 代码固定的节点定义，可带 `runtimeProviders`（节点只接受的提供商代码）与 `unsetHint`（未指定时的后台说明） | keywords: 预设工作流节点, 节点定义, preset-workflow-node, node-definition
 - `WorkflowDefinition` — 代码固定的工作流定义 | keywords: 预设工作流, 工作流定义, preset-workflow, workflow-definition
-- `WORKFLOW_NODES` — 工作流与节点 key 常量，业务调用处统一从这里取 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
-- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录（小红书图文：topic / article / image-decision / cover-copy / cover-image / cover-overlay / inner-image；抖音：script / storyboard / image-decision / shot-image / persona-image / shot-video / full-video / voice-clone / store-visit-video / store-visit-avatar / store-visit-continuity / store-visit-scene / store-visit-planner） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
-- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax 与 shuyan/shuyanai；音色只支持阿里云百炼 dashscope），节点登记了 `runtimeProviders` 时再按节点收窄 | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
+- `WORKFLOW_NODES` — 工作流与节点 key 常量，节点只按能力分思考 `think` / 生图 `image` / 生视频 `video` / 音色克隆 `voice`；原来的步骤名（script、storyboard、storeVisitVideo…）保留为别名指向所属那一类，业务代码不用改 | keywords: 工作流节点标识, 节点key常量, workflow-node-keys, node-key-constants
+- `WORKFLOW_LEGACY_NODE_KEYS` — 合并前的旧节点 key 与并入顺序（抖音思考优先尾帧衔接 / 场景归类等看图节点，生视频优先探店节点） | keywords: 旧节点合并, 节点设置迁移, legacy-node-merge, node-binding-migration
+- `WORKFLOW_MODEL_CATALOG` — 预设工作流目录：小红书图文 think / image，抖音 think / image / video / voice（同一类的各步骤共用一个节点） | keywords: 预设工作流目录, 节点登记, preset-workflow-catalog, node-registry
+- `WORKFLOW_RUNTIME_SUPPORT` — 各类型运行时能真正调用的提供商（文本排除 pixmax；生图增加 shuyan/shuyanai；生视频支持 pixmax、shuyan/shuyanai 与自建 MiniMax-H3 opensource-video；音色只支持阿里云百炼 dashscope），节点登记了 `runtimeProviders` 时再按节点收窄 | keywords: 运行时支持范围, 提供商兼容, runtime-support-matrix, provider-compatibility
 - `WorkflowNodeModelEntity` — 节点设置持久化实体（`workflow_node_models`） | keywords: 节点模型设置, 平台级配置, node-model-binding, platform-setting
 - `WorkflowNodeRuntime` — 节点调用时的提供商运行配置 | keywords: 节点运行配置, 提供商密钥, node-runtime, provider-credential
 - `WorkflowProviderOption` — 不含密钥的提供商选项 | keywords: 提供商选项, 隐藏密钥, provider-option, hide-api-key
@@ -34,10 +35,11 @@
 - `toWorkflowLlmConfig(runtime)` — 节点运行配置转成 `runWithMessages` 的 provider/model/apiKey/baseUrl 覆盖字段，未设置返回空对象 | keywords: 节点LLM覆盖参数, 默认回退, node-llm-config-override, default-fallback
 - `WorkflowModelService()` — 节点模型设置服务 | keywords: 工作流节点模型, 节点指定模型, workflow-node-model, per-node-model
 - `WorkflowModelService.ensureIndexes()` — 建立工作流 + 节点唯一索引 | keywords: 节点设置索引, 唯一约束, node-binding-index, unique-constraint
+- `WorkflowModelService.mergeLegacyBindings()` — 启动时把旧节点设置并入新节点：新节点已有设置不动，没有时按 `WORKFLOW_LEGACY_NODE_KEYS` 顺序取第一个有设置的旧节点复制；旧记录保留可回退，可重复执行 | keywords: 旧节点合并, 节点设置迁移, merge-legacy-bindings, node-binding-migration
 - `WorkflowModelService.list(currentUser)` — 列出工作流、节点设置、默认回退与已启用提供商 | keywords: 工作流设置列表, 提供商选项, list-workflow-settings, provider-options
 - `WorkflowModelService.saveNode(currentUser,workflowKey,nodeKey,input)` — 校验提供商已启用且类型一致后保存，模型留空用提供商默认模型 | keywords: 保存节点模型, 类型校验, save-node-model, category-check
 - `WorkflowModelService.resetNode(currentUser,workflowKey,nodeKey)` — 清除设置回到默认提供商 | keywords: 重置节点模型, 回退默认, reset-node-model, fallback-default
-- `WorkflowModelService.listProviderModels(providerId,category)` — PixMax 实时读取可用模型并按类型过滤（只能选），数眼智能实时读取 `/v1/models` 并按分类过滤（可选可填），其他提供商返回自身模型并允许手填 | keywords: 提供商可选模型, PixMax模型列表, 数眼可选模型, list-provider-models, pixmax-model-list, shuyan-model-list
+- `WorkflowModelService.listProviderModels(providerId,category)` — PixMax 实时读取可用模型并按类型过滤（只能选），数眼智能实时读取 `/v1/models` 并按分类过滤（可选可填），自建 MiniMax-H3（opensource-video）返回 minimax-h3-turbo / -fast / -quality 三个档位（只能选），其他提供商返回自身模型并允许手填 | keywords: 提供商可选模型, PixMax模型列表, 数眼可选模型, list-provider-models, pixmax-model-list, shuyan-model-list
 - `SHUYAN_PROVIDER_CODES` — 数眼智能可用的提供商代码 `shuyan` / `shuyanai` | keywords: 数眼智能提供商代码, 中转站, shuyan-provider-codes, openai-compatible-relay
 - `SHUYAN_DEFAULT_BASE_URL` — 数眼智能主节点地址，baseUrl 留空时兜底 | keywords: 数眼智能默认地址, 主节点, shuyan-default-base-url, primary-endpoint
 - `ShuyanModelCategory` — 节点三类之外另出 em / other，按分类过滤时自然排除 | keywords: 数眼模型分类, 向量与其他, shuyan-model-category, embedding-and-other
@@ -67,6 +69,8 @@
 | 工作流节点模型   | workflow-node-model       |
 | 节点指定模型     | per-node-model            |
 | 预设工作流目录   | preset-workflow-catalog   |
+| 旧节点合并       | merge-legacy-bindings     |
+| 节点设置迁移     | node-binding-migration    |
 | 节点模型设置     | node-model-binding        |
 | 解析节点运行配置 | resolve-node-runtime      |
 | 回退默认提供商   | fallback-default-provider |
@@ -89,9 +93,11 @@
 
 ## 模块功能描述 (Module Feature Description)
 
-**探店连续衔接节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitContinuity` 登记为 `store-visit-continuity`，后台显示「探店尾帧衔接」，类型为 `llm`。应指定支持看图的视觉语言模型，用于理解实际播放尾帧、原始场景和人物身份，结合下一段台词规划衔接；未单独配置时按现有文本节点规则回退默认 LLM，默认模型也必须支持图片输入。
+**探店连续衔接节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitContinuity` 登记为 `store-visit-continuity`，后台显示「思考」，类型为 `llm`。应指定支持看图的视觉语言模型，用于理解实际播放尾帧、原始场景和人物身份，结合下一段台词规划衔接；未单独配置时按现有文本节点规则回退默认 LLM，默认模型也必须支持图片输入。
 
-**节点目录写在代码里**：`WORKFLOW_NODES` 定义 key 常量，`WORKFLOW_MODEL_CATALOG` 登记每条预设工作流里会调用模型的节点及其类型（文本 / 生图 / 生视频），后台只能为节点选模型，不能增删节点。新增节点时先在目录里登记，再在业务调用处取节点配置；`workflowKey` / `nodeKey` 上线后不要改名。
+**节点目录写在代码里，只按能力分四类**：`WORKFLOW_MODEL_CATALOG` 每条工作流只登记思考（llm）、生图（image）、生视频（video）、音色克隆（audio）这几类节点，同一类的各个步骤共用一个节点，不再一步一个节点；后台只能为节点选模型，不能增删节点。新业务步骤直接用所属那一类的节点 key 取配置，不新增节点。`WORKFLOW_NODES` 里原来的步骤名保留为别名（例如 `storeVisitVideo`、`shotVideo` 都是 `video`），业务调用处不用改。
+
+**旧节点合并**：合并前每个步骤一个节点（抖音 13 个、小红书 7 个）。服务启动时 `mergeLegacyBindings` 把旧设置并入新节点：新节点没有设置时按 `WORKFLOW_LEGACY_NODE_KEYS` 的顺序取第一个有设置的旧节点复制过去，已有设置不覆盖；旧记录留在 `workflow_node_models` 里（目录不再显示），回退时改回旧目录即可。合并的代价：一条工作流里各步骤只能用同一个模型（例如探店人物段与空镜段不能一个用可灵数字人、一个用 Seedance；分镜选图不能单独配快模型）。
 
 **保存规则**：`PUT admin/workflow-models/:workflowKey/nodes/:nodeKey` 只接受已启用、且 `modelCategory` 与节点类型一致的提供商；模型留空时用该提供商记录里的默认模型，两者都没有则拒绝。同一提供商代码在不同类型下是不同记录（例如 PixMax 生图、PixMax 生视频各一条），与「Ai提供商设置」现有的 `providerCode + modelCategory` 唯一规则一致。`DELETE` 清除设置。四个接口都挂 `AiProvider` 权限（平台 AI 配置，仅超管）。
 
@@ -101,12 +107,12 @@
 
 **运行时解析**：`resolveNodeRuntime` 没有设置时返回 `null`，业务照旧用默认提供商；设置的提供商被删除或停用时记警告并回退默认；类型不符或 `WORKFLOW_RUNTIME_SUPPORT` 判定运行时不支持（例如为生图节点选了 PixMax）时抛 `WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:<类型>:<提供商>`，不静默换模型。后台允许先保存这类组合并标注「运行时暂不支持」，等对应调用接入后再把提供商加入支持矩阵。数眼智能（`shuyan` / `shuyanai`）已接入文本、生图与 Seedance / MiniMax-H3 生视频：生图由 `AgentService.generateImageByRuntime` 调 `/v1/images/generations`；生视频由抖音工作台的 `DouyinShuyanVideoService` 按型号调 `/seedance/api/v3/contents/generations/tasks` 或 `/hailuo/v2/video_generation`。数眼里的 Kling / Vidu / 旧版 Hailuo / 即梦等视频族仍需各自原生路由，当前选择这些型号会明确报 `SHUYAN_VIDEO_MODEL_NOT_SUPPORTED`。
 
-**当前接入情况（小红书图文）**：`topic` 覆盖选题候选生成与子选题提示词推荐（`xhs-topic.service`），`article` 覆盖写文章的首次生文与重写，`image-decision` 覆盖与写正文并行、关闭思考的配图标签决策（二者在 `xhs-article-generation.service`），`cover-copy` 覆盖图组封面主副标题生成（关闭思考），`cover-image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘，`cover-overlay` 覆盖 `ai-overlay` 文字海报素材层，`inner-image` 覆盖灵感画布内页重绘（后四者在 `canvas-image-group.service`）。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
+**当前接入情况（小红书图文）**：`think` 覆盖选题候选与子选题提示词推荐（`xhs-topic.service`）、写文章的首次生文与重写、与写正文并行的配图标签决策（`xhs-article-generation.service`）、图组封面主副标题（`canvas-image-group.service`）；`image` 覆盖 `ai-direct` 封面底图与灵感画布封面重绘、`ai-overlay` 文字海报素材层、灵感画布内页重绘。封面文案、AI 封面原本失败就回退的地方仍按原逻辑回退。
 
-**当前接入情况（抖音视频制作）**：script（候选脚本、生成要求、发布文案）、storyboard（分镜拆解）与 image-decision（图库选图）覆盖 LLM 的节点配置；shot-image 指定后出图失败直接报错。shot-video（分镜）与 full-video（整片）指定 PixMax 后调用 PixMax，未指定时仍走既有直连服务。探店 voice-clone「音色克隆与配音」（audio）只接受阿里云百炼 dashscope（录音克隆模型填 cosyvoice-v3.5-plus，系统音色固定 cosyvoice-v3-flash）；store-visit-video「探店画面视频」（video）只接受数眼智能（shuyan / shuyanai，Seedance、MiniMax-H3 或 wan2.7-i2v 型号，门店空镜段以场景图为首帧生成空镜）；store-visit-avatar「探店人物对口型」（video）只接受数眼智能，模型填 kling-avatar-std / kling-avatar-pro 时人物出镜段以人物首帧加配音对口型，填 wan2.7-i2v 时以首帧加这段配音（驱动音频）一次生成口型跟配音的画面，填 Seedance / MiniMax-H3 视频型号时先以人物首帧图生视频、出片后再交给可灵按配音对口型，没有默认回退，未指定时提示管理员配置。shot-video / full-video 只接受 pixmax / shuyan / shuyanai。原通用数字人服务 digital-human 与声音设计节点 voice-design 已下线。
+**当前接入情况（抖音视频制作）**：`think` 覆盖候选脚本、生成要求、发布文案、分镜拆解、图库选图、探店编排与台词、场景图库归类、尾帧衔接（后两者看图，要选视觉语言模型）；`image` 覆盖分镜画面、人物形象图、探店人物首帧，指定后出图失败直接报错。`video` 覆盖分镜视频、整片视频与探店空镜 / 人物段：分镜 / 整片指定 PixMax 走 PixMax，指定数眼智能或自建 MiniMax-H3（opensource-video，见 [opensource-video 模块](../opensource-video/module.md)）走对应通道，未指定时走既有直连服务；探店只支持数眼智能（Seedance、MiniMax-H3、wan2.7-i2v、kling-avatar）与自建 MiniMax-H3（参考生视频），其他提供商在探店里提示改选。`voice` 只接受阿里云百炼 dashscope（录音克隆模型填 cosyvoice-v3.5-plus，系统音色固定 cosyvoice-v3-flash），未指定时探店不能克隆音色与配音。原通用数字人服务 digital-human 与声音设计节点 voice-design 已下线。
 
 **后台页面**：「工作流节点模型」Tab 左侧是工作流子菜单（显示节点数与已指定数，记住上次选择），右侧是选中工作流的全部模型节点设置。单测 `workflow-model.service.spec.ts` 校验 `WORKFLOW_NODES` 与目录逐项一致。
 
 **音色类型与节点级提供商**：WorkflowNodeCategory.audio 对应 Ai 提供商的 modelCategory=audio（后台「音色模型」类别），当前只有阿里云百炼。默认回退、模型查询与保存校验都按它处理（PixMax 映射 GENERATE_AUDIO，数眼目录不出 audio 模型）。节点 runtimeProviders 白名单优先于类型矩阵，list 与 resolveNodeRuntime 都传节点白名单：voice-clone 只收 dashscope，store-visit-video 与 store-visit-avatar 只收 shuyan / shuyanai。unsetHint 在探店三个节点未指定时分别显示不可用说明。
 
-**探店场景归类与编排推荐节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitScene` 登记为 `store-visit-scene`（后台显示「探店场景归类」，`llm`），场景图库 AI 归类用它看图把同一点位的图片归在一起、写描述并打精细度分，应指定支持看图的视觉语言模型；`storeVisitPlanner` 登记为 `store-visit-planner`（「探店编排推荐」，`llm`），探店脚本先行用它看引用知识写分段脚本并定出镜人物与音色、对照引用知识自检、按脚本从门店点位配图，以及按脚本推荐人物音色。两者未单独配置时都按文本节点规则回退默认 LLM。
+**探店场景归类与编排推荐节点**：`WORKFLOW_NODES.douyinWorkbench.storeVisitScene` 登记为 `store-visit-scene`（后台显示「思考」，`llm`），场景图库 AI 归类用它看图把同一点位的图片归在一起、写描述并打精细度分，应指定支持看图的视觉语言模型；`storeVisitPlanner` 登记为 `store-visit-planner`（「思考」，`llm`），探店脚本先行用它看引用知识写分段脚本并定出镜人物与音色、对照引用知识自检、按脚本从门店点位配图，以及按脚本推荐人物音色。两者未单独配置时都按文本节点规则回退默认 LLM。

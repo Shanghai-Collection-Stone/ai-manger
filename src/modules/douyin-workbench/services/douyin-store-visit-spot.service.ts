@@ -718,7 +718,7 @@ export class DouyinStoreVisitSpotService {
   }
 
   /**
-   * @description AI 归类一批图片：把本批图片（最多 8 张，缩到 768px）连同已有点位与本轮草稿点位的封面交给「探店场景归类」视觉模型（轻量 Agent，只挂归类工具），
+   * @description AI 归类一批图片：把本批图片（最多 8 张，缩到 768px）连同已有点位与本轮草稿点位的封面交给「思考」视觉模型（轻量 Agent，只挂归类工具），
    *   模型每看完一张就调用 `store_visit_assign_image` 把它归入点位或新建点位、写描述并打 1～10 分；每次调用校验通过立刻经 `emit` 推给前端，
    *   不合规的调用把原因返回给模型重来；一批结束推 `done`。不落库，前端确认点位命名后整体保存。
    * @keyword-cn AI归类点位, 看图写描述打分
@@ -915,14 +915,14 @@ export class DouyinStoreVisitSpotService {
       );
       if (!session.assigned().length)
         throw new BadGatewayException(
-          `AI 归类失败：${detail.slice(0, 200)}。请重试；反复失败时检查后台「探店场景归类」节点是否配置了能看图、能调用工具的模型`,
+          `AI 归类失败：${detail.slice(0, 200)}。请重试；反复失败时检查后台「思考」节点是否配置了能看图、能调用工具的模型`,
         );
     } finally {
       clearTimeout(timer);
     }
     if (!session.assigned().length)
       throw new BadGatewayException(
-        'AI 没有把任何图片归入点位，请重试；反复失败时检查后台「探店场景归类」节点是否配置了能看图、能调用工具的模型',
+        'AI 没有把任何图片归入点位，请重试；反复失败时检查后台「思考」节点是否配置了能看图、能调用工具的模型',
       );
     emit({
       type: 'done',

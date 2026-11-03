@@ -36,6 +36,12 @@ import {
   readDouyinVideoPlan,
 } from './douyin-pixmax-video.service.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
+import { freshShotDirection } from './douyin-video-director.js';
+import {
+  DouyinVideoQueueService,
+  readQueuedShotRequest,
+  toVideoQueueView,
+} from './douyin-video-queue.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 type ShuyanVideoMode = 'shot' | 'full';
@@ -529,8 +535,18 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
     private readonly adminService: AdminService,
     private readonly videoLibrary: VideoLibraryService,
     private readonly oss: OssStorageService,
+    private readonly videoQueue: DouyinVideoQueueService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
+    this.videoQueue.register('shuyan', ({ row, topic, runtime, scope }) =>
+      this.start({
+        topic,
+        ...readQueuedShotRequest(row),
+        runtime,
+        scope,
+        operationId: row.id,
+      }),
+    );
   }
 
   /**
@@ -556,9 +572,10 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
   /**
    * @description 提交一次数眼视频生成，按型号走 Seedance、MiniMax-H3 或万相 wan2.7-i2v 路由；分镜带画面时以它为首帧，
    *   整片在 Seedance 2.x 与 MiniMax-H3 下最多带 9 张参考图；万相只能图生视频，必须有公网地址的画面作首帧。
+   *   扣费前按模型申请并发名额，满了存成排队记录直接返回；`operationId` 有值表示从排队里提交（已拿到名额），结果改写那条记录。
    * @keyword-cn 提交数眼视频, Seedance多模态
    * @keyword-en submit-shuyan-video, seedance-multimodal
-   * @param input 脚本、模式、单镜 ID、补充要求、节点运行配置与作用域。
+   * @param input 脚本、模式、单镜 ID、补充要求、节点运行配置、作用域与排队记录 ID。
    * @returns {Promise<DouyinOperationView>} 调用记录。
    */
   async start(input: {
@@ -568,6 +585,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
     prompt?: string;
     runtime: WorkflowNodeRuntime;
     scope: DouyinScope;
+    operationId?: string;
   }): Promise<DouyinOperationView> {
     const { topic, mode, runtime, scope } = input;
     const route = resolveShuyanVideoRoute(runtime.model);
@@ -645,6 +663,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
             audio,
             personaVoice,
             extra,
+            direction: freshShotDirection(topic, shots[0].id),
           })
         : buildFullVideoPrompt({
             title: topic.title,
@@ -657,6 +676,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
             audio,
             personaVoice,
             extra,
+            directions: shots.map((shot) => freshShotDirection(topic, shot.id)),
           });
     const imageContents = await Promise.all(
       usedImages.map(async (image) => ({
@@ -705,7 +725,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
               generate_audio: audio.mode !== 'mute',
               watermark: false,
             };
-    const operationId = randomUUID();
+    const operationId = input.operationId ?? randomUUID();
+    const fromQueue = Boolean(input.operationId);
     const scriptIncluded =
       mode === 'shot'
         ? Boolean(String(shots[0].narration ?? '').trim())
@@ -752,17 +773,27 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       request,
     };
 
-    await this.billing.chargeService({
-      serviceCode: 'video-generation',
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      operationId,
-      source:
-        mode === 'shot'
-          ? 'douyin-workbench.shot-video-generation'
-          : 'douyin-workbench.full-video-generation',
-      platformScope: !scope.tenantId,
-    });
+    // 模型并发满了先排队，轮到时再扣费提交
+    if (!fromQueue && !(await this.videoQueue.admit(runtime, operationId)))
+      return this.toView(
+        await this.videoQueue.enqueue(
+          { id: operationId, ...base },
+          { prompt: input.prompt },
+        ),
+      );
+    await this.billing
+      .chargeService({
+        serviceCode: 'video-generation',
+        tenantId: scope.tenantId,
+        userId: scope.userId,
+        operationId,
+        source:
+          mode === 'shot'
+            ? 'douyin-workbench.shot-video-generation'
+            : 'douyin-workbench.full-video-generation',
+        platformScope: !scope.tenantId,
+      })
+      .catch((error) => this.videoQueue.releaseAndThrow(operationId, error));
     const now = new Date();
     try {
       const task = unwrapShuyanVideoTask(
@@ -790,22 +821,26 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
         createdAt: now,
         updatedAt: now,
       };
-      await this.operations.insertOne(doc);
+      await this.videoQueue.save(doc, fromQueue);
       setTimeout(() => void this.pollOnce(), 10 * 1000).unref?.();
       return this.toView(doc);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       const friendly = describeShuyanVideoFailure(detail);
-      await this.operations.insertOne({
-        _id: new ObjectId(),
-        id: operationId,
-        ...base,
-        status: 'failed',
-        error: friendly,
-        errorDetail: detail,
-        createdAt: now,
-        updatedAt: now,
-      });
+      await this.videoQueue.save(
+        {
+          _id: new ObjectId(),
+          id: operationId,
+          ...base,
+          status: 'failed',
+          error: friendly,
+          errorDetail: detail,
+          createdAt: now,
+          updatedAt: now,
+        },
+        fromQueue,
+      );
+      await this.videoQueue.release(operationId);
       throw new BadGatewayException(friendly);
     }
   }
@@ -842,6 +877,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
         .find({
           provider: 'shuyan',
           mode: { $ne: 'store-visit' },
+          queue: { $exists: false },
           $or: [
             { status: { $in: ['queued', 'running'] } },
             {
@@ -874,6 +910,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
    * @param row 调用记录。
    */
   private async refreshRow(row: DouyinOperationEntity): Promise<void> {
+    // 还在等模型空位，没提交过
+    if (row.queue) return;
     if (!row.externalId) {
       await this.fail(row.id, '数眼智能任务 ID 缺失。');
       return;
@@ -1254,6 +1292,7 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
       plan: readDouyinVideoPlan(row.request),
       status: row.status,
       externalId: row.externalId,
+      queue: toVideoQueueView(row.queue),
       result: row.result,
       error: row.error,
       errorDetail: row.errorDetail,

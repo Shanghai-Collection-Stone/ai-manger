@@ -10,8 +10,9 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { extname } from 'node:path';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { extname, join } from 'node:path';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
@@ -20,6 +21,23 @@ import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js'
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
 import { buildPersonaImageBrief } from '../../douyin-persona/services/douyin-persona-prompt.js';
 import { GalleryAiImageService } from '../../gallery/services/gallery-ai-image.service.js';
+import {
+  OPENSOURCE_VIDEO_PROMPT_MAX,
+  OPENSOURCE_VIDEO_REFERENCE_LIMITS,
+  type OpensourceVideoCreateInput,
+  type OpensourceVideoJob,
+} from '../../opensource-video/entities/opensource-video.entity.js';
+import { OpensourceVideoClientService } from '../../opensource-video/services/opensource-video-client.service.js';
+import {
+  clampOpensourceVideoDuration,
+  clampOpensourceVideoResolution,
+  describeOpensourceVideoFailure,
+  isOpensourceVideoProvider,
+  listOpensourceVideoDurationChoices,
+  mapOpensourceVideoStatus,
+  resolveOpensourceVideoMode,
+  toOpensourceVoiceHint,
+} from '../../opensource-video/services/opensource-video-params.js';
 import {
   WORKFLOW_NODES,
   type WorkflowNodeRuntime,
@@ -63,6 +81,7 @@ import {
   type DouyinStoreVisitSegment,
   type DouyinStoreVisitSetting,
   type DouyinStoreVisitVoiceAnchor,
+  type DouyinTemplateAspect,
   type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import {
@@ -99,8 +118,27 @@ import {
 import {
   DouyinVideoStorageService,
   resolveStaticFilePath,
+  type DouyinOutputVideoMeta,
 } from './douyin-video-storage.service.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
+import {
+  DouyinVideoQueueService,
+  toVideoQueueView,
+} from './douyin-video-queue.service.js';
+import {
+  toOpensourceVideoAudioData,
+  toOpensourceVideoImageData,
+} from './douyin-opensource-video.service.js';
+import {
+  activeTemplateAspect,
+  cropFrameToAspect,
+  describeVideoAspect,
+} from './douyin-video-template.js';
+import {
+  describeDirectionEn,
+  describeDirectionZh,
+  freshShotDirection,
+} from './douyin-video-director.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
@@ -118,14 +156,21 @@ export function describeStoreVisitVoice(
 }
 
 /**
- * @description 当前音色的标识（音色 ID + 声音描述），音色锚点只在标识一致时使用。
+ * @description 锚点生成方式的版本：`v2` 起第 1 段不再照着百炼 TTS 学、只出干净人声。之前取的锚点是「模仿 TTS」的声音，版本对不上就不再用，下次生成会按新方式重取。
+ * @keyword-cn 锚点版本, 旧锚点作废
+ * @keyword-en voice-anchor-version, stale-anchor-reset
+ */
+export const STORE_VISIT_VOICE_ANCHOR_VERSION = 'v2';
+
+/**
+ * @description 当前音色的标识（锚点版本 + 音色 ID + 声音描述），音色锚点只在标识一致时使用。
  * @keyword-cn 音色标识, 锚点作废判断
  * @keyword-en voice-key, anchor-stale-check
  * @param {DouyinStoreVisitSetting} setting 探店设置。
  * @returns {string} 音色标识。
  */
 export function storeVisitVoiceKey(setting: DouyinStoreVisitSetting): string {
-  return `${setting.voiceId || ''}|${describeStoreVisitVoice(setting)}`;
+  return `${STORE_VISIT_VOICE_ANCHOR_VERSION}|${setting.voiceId || ''}|${describeStoreVisitVoice(setting)}`;
 }
 
 /**
@@ -182,7 +227,7 @@ export function matchesStoreVisitRequest(
   );
 }
 
-/** @description 逐段生成动态画面与原生台词：支持时参考音色样本，否则使用文字音色；点位模式带同一点位的多张参考图时说明以图1 为主画面；不生成供合成替换的配音。 @keyword-cn 探店原生声画, 台词音色提示 @keyword-en store-visit-native-video, dialogue-voice-prompt */
+/** @description 逐段生成动态画面与原生台词：支持时参考音色样本，否则使用文字音色；点位模式带同一点位的多张参考图时说明以图1 为主画面；`cleanVoice`（统一音色的锚点段）时只要干净人声、不要环境声；不生成供合成替换的配音。 @keyword-cn 探店原生声画, 台词音色提示 @keyword-en store-visit-native-video, dialogue-voice-prompt */
 export function buildStoreVisitNativePrompt(input: {
   title: string;
   lines: string;
@@ -192,6 +237,8 @@ export function buildStoreVisitNativePrompt(input: {
   sceneDescription: string;
   voiceDescription: string;
   referenceAudio: boolean;
+  /** @description 锚点段只出干净人声（不要环境声），它的声音会被取出来当后面各段的参考 */
+  cleanVoice?: boolean;
   multiReference: boolean;
   personName?: string;
   personAppearance?: string;
@@ -241,8 +288,75 @@ export function buildStoreVisitNativePrompt(input: {
     '直接在本段视频里生成自然的人声，完整、清楚地说完上述台词；台词只说出来，不要出现在画面里。所有分段保持同一个说话人的音色、语速、口音与情绪。',
     input.shot === 'presenter'
       ? '人物亲口说话，口型、表情和说话节奏同步生成。'
-      : '解说自然融入现场，可保留轻微现场环境声。',
+      : input.cleanVoice
+        ? ''
+        : '解说自然融入现场，可保留轻微现场环境声。',
+    input.cleanVoice
+      ? '这一段只要干净清晰的人声：不要环境声、回声和任何其他声音。'
+      : '',
     '不要背景音乐、其他人声、重复台词或额外解说，不要字幕、水印或新文字。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * @description 自建 MiniMax-H3（直连模型、没有数眼那层提示词改写）用的探店分段提示词，按官方模板格式写：风格一句 + 场景（`<Picture 1>`、同点位其余照片、出镜人物 `<Picture K>`）
+ *   + `Timeline: [0s-Ns]` 单镜头描述 + `Audio:` 谁用什么声音（参考音色为 `<Audio 1>`）把台词放在引号里完整说一次。
+ *   提示词里除引号里的台词外不能有中文：直连模型会把标题、「【图片说明】」这类中文指令段，以及场景说明、音色描述里的中文念出来（实测念出「集合石探店」「西部决斗场」「自然口语」），
+ *   开头人声错乱。所以场景只靠参考图，同点位照片说明、人物名字外貌、尾帧衔接方案（LLM 写的中文）都不写，音色描述经 `toOpensourceVoiceHint` 转成英文，
+ *   中文动作描述换成默认英文动作；并写明「<Audio 1> 只是音色样本」「从第一秒开始说、台词前后不说别的」，用轻松自然的聊天语气说（只写 clearly 时容易念成播音腔）；`cleanVoice`（统一音色的锚点段）时只要干净人声、不要环境声，其余段保留轻微环境声。偶尔（实测约 1/6）台词说完后结尾会多出半句或开头多一个语气词，写「说完后只剩环境声」实测无效，缩短时长会让数字多、字数紧的段被截断，所以没再改。图片编号与提交顺序一致：主画面（或上一段尾帧）、同点位其余照片、人物照。
+ * @keyword-cn 自建H3探店提示词, 原生提示词格式
+ * @keyword-en store-visit-h3-prompt, native-prompt-format
+ * @param input 与 `buildStoreVisitNativePrompt` 相同的素材与台词，另加 `continued`（本段从上一段实际尾帧接续）与 `aspect`（套版式模板时的窗口比例，缺省竖屏 9:16）。
+ * @returns {string} 提示词。
+ */
+export function buildStoreVisitH3Prompt(
+  input: Parameters<typeof buildStoreVisitNativePrompt>[0] & {
+    continued?: boolean;
+    aspect?: DouyinTemplateAspect;
+  },
+): string {
+  const extras = input.extraSceneDescriptions ?? [];
+  const personTag = `<Picture ${extras.length + 2}>`;
+  const person = input.multiReference
+    ? `the person from ${personTag}`
+    : 'the person in the scene';
+  const hint = toOpensourceVoiceHint(input.voiceDescription);
+  const voice = input.referenceAudio
+    ? `with exactly the voice, accent and tone of <Audio 1>${hint ? ` (${hint})` : ''}`
+    : hint
+      ? `(${hint})`
+      : '';
+  const lines = JSON.stringify(input.lines);
+  // 中文动作描述同样会被念出来，只用不含中文的动作描述
+  const action = /[㐀-鿿]/.test(input.action ?? '') ? '' : input.action?.trim();
+  const timeline =
+    input.shot === 'presenter'
+      ? `One continuous shot: ${person} stands inside the scene of <Picture 1>, ${action || 'greets the viewers naturally'}, facing the camera.`
+      : input.shot === 'experience'
+        ? `One continuous shot: ${action || 'the person in the scene experiences the place'}. The person only performs the action and does not speak or move their lips.`
+        : `One continuous shot: ${action || 'the camera slowly pushes in; the lights, neon, screens and signs that already exist move naturally'}. Nothing new is added and no person speaks on camera.`;
+  const speech =
+    input.shot === 'presenter'
+      ? `${person.replace(/^the/, 'The')} speaks on camera${voice ? ` ${voice}` : ''} and says in Mandarin Chinese, in a relaxed, natural conversational tone, clearly, completely and only once: ${lines} Lips, expression and rhythm stay in sync.`
+      : `An off-screen narrator${voice ? ` ${voice}` : ''} says in Mandarin Chinese, in a relaxed, natural conversational tone, clearly, completely and only once: ${lines}`;
+  return [
+    `Realistic live-action store-visit vlog, ${describeVideoAspect(input.aspect)}, bright natural lighting, steady camera, real footage texture.`,
+    'Location: exactly the place in <Picture 1>. Keep the layout, products, signs and visible text unchanged; do not add rooms, products, facilities or passers-by, and stay within what the photo shows.',
+    extras.length
+      ? `<Picture 2>${extras.length > 1 ? `-<Picture ${extras.length + 1}>` : ''} show the same spot from other angles: use them only for real details, the framing follows <Picture 1>, no collage or split screen.`
+      : '',
+    input.multiReference
+      ? `The on-camera person is ${personTag}: keep their identity and outfit, not the background of that photo.`
+      : '',
+    input.continued
+      ? 'The video continues seamlessly from <Picture 1>, the actual last frame of the previous shot: keep its composition, lighting, position and motion direction.'
+      : '',
+    'Timeline:',
+    `[0s-${input.seconds}s] ${timeline}`,
+    `Audio: ${speech}${input.referenceAudio ? ' <Audio 1> is only a voice sample for timbre and accent: never speak, imitate or continue any of its words.' : ''} The speech starts right at the beginning and nothing else is said before or after this line. ${input.cleanVoice ? 'Only the clean, dry voice: no ambient sound, no echo, no background music, no other voices.' : 'Light ambient sound of the store underneath, no background music, no other voices.'}`,
+    'No subtitles, captions, watermarks or added text.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -376,7 +490,7 @@ export function readKlingText(value: unknown): string {
 }
 
 /**
- * @description 按「探店人物对口型」节点填的模型名取可灵数字人模式：含 kling 或 avatar 的是可灵数字人，含 pro 为高品质模式，
+ * @description 按「生视频」节点填的模型名取可灵数字人模式：含 kling 或 avatar 的是可灵数字人，含 pro 为高品质模式，
  *   否则标准模式；万相（s2v）与认不出的型号返回 null。
  * @keyword-cn 解析对口型模式, 模型名路由
  * @keyword-en resolve-avatar-mode, model-routing
@@ -394,7 +508,7 @@ export function resolveStoreVisitAvatarMode(
 }
 
 /**
- * @description 按「探店人物对口型」节点的模型名决定人物出镜段怎么生成：kling / avatar 型号走可灵数字人对口型；
+ * @description 按「生视频」节点的模型名决定人物出镜段怎么生成：kling / avatar 型号走可灵数字人对口型；
  *   数眼已接入的视频型号走图生视频（以人物首帧或上段尾帧为第一帧，人物能走动运镜）：wan2.7-i2v 带配音作驱动音频、一次生成口型，
  *   Seedance / MiniMax-H3 出片后再交给可灵按配音对口型；认不出返回 null。
  * @keyword-cn 解析人物出镜引擎, 模型名路由
@@ -412,6 +526,127 @@ export function resolveStoreVisitPresenterEngine(
   if (mode) return { engine: 'kling-avatar', mode };
   const route = resolveShuyanVideoRoute(model);
   return route ? { engine: 'shuyan-video', route } : null;
+}
+
+/**
+ * @description 探店分段（视频型号）的生成目标：自建 MiniMax-H3 走参考生视频，其余走数眼原生路由（带路由名）。
+ * @keyword-cn 探店视频目标, 视频生成目标
+ * @keyword-en store-visit-video-target, video-generation-target
+ */
+export type StoreVisitVideoTarget =
+  | {
+      shot: 'presenter' | 'broll' | 'experience';
+      engine: 'opensource-video';
+      runtime: WorkflowNodeRuntime;
+    }
+  | {
+      shot: 'presenter' | 'broll' | 'experience';
+      engine: 'shuyan-video';
+      runtime: WorkflowNodeRuntime;
+      route: ShuyanVideoRoute;
+    };
+
+/**
+ * @description 按节点提供商定探店分段的视频目标：提供商是自建 MiniMax-H3（opensource-video）时走自建服务，否则按模型名走数眼路由。
+ *   必须先看提供商代码——自建服务的模型名（minimax-h3-turbo 等）也会被数眼路由认成 MiniMax-H3。
+ * @keyword-cn 探店视频分流, 按提供商分流
+ * @keyword-en build-store-visit-video-target, route-by-provider
+ * @param shot 镜头类型。
+ * @param runtime 节点运行配置。
+ * @returns {StoreVisitVideoTarget} 生成目标。
+ */
+export function buildStoreVisitVideoTarget(
+  shot: 'presenter' | 'broll' | 'experience',
+  runtime: WorkflowNodeRuntime,
+): StoreVisitVideoTarget {
+  return isOpensourceVideoProvider(runtime.providerCode)
+    ? { shot, engine: 'opensource-video', runtime }
+    : {
+        shot,
+        engine: 'shuyan-video',
+        runtime,
+        route: resolveShuyanVideoRoute(runtime.model) as ShuyanVideoRoute,
+      };
+}
+
+/**
+ * @description 探店分段排队时存下的重新提交参数：不含模型 Key 与运行配置（轮到时按记录重建），音色锚点只记要不要用。
+ * @keyword-cn 探店排队参数, 重新提交分段
+ * @keyword-en queued-segment-input, resubmit-segment
+ */
+export type StoreVisitQueuedSegmentInput = {
+  segmentIndex: number;
+  sceneUrl: string;
+  voiceId: string;
+  voiceModel: string;
+  /** 排队时是否带了百炼音色运行配置（参考音色要用） */
+  voiceRuntime: boolean;
+  target: { shot: string; engine: string; mode?: string };
+  firstFrameUrl?: string;
+  continuationPrompt?: string;
+  previousVideoId?: number;
+  tailImageId?: number;
+  analysis?: unknown;
+  /** 排队时是否用了音色锚点，轮到时读当前的锚点 */
+  voiceAnchor: boolean;
+  /** 统一音色模式的锚点段，只出干净人声 */
+  cleanVoice: boolean;
+};
+
+/**
+ * @description 把一次分段提交的参数转成可存库的排队参数（去掉运行配置与 Key）。
+ * @keyword-cn 转换探店排队参数, 去掉密钥
+ * @keyword-en to-queued-segment-input, strip-credentials
+ * @param input 分段提交参数。
+ * @returns {StoreVisitQueuedSegmentInput} 排队参数。
+ */
+export function toQueuedSegmentInput(input: {
+  index: number;
+  sceneUrl: string;
+  voice: { voiceId: string; model: string; runtime?: unknown };
+  target: { shot: string; engine: string; mode?: string };
+  firstFrameUrl?: string;
+  continuationPrompt?: string;
+  previousVideoId?: number;
+  tailImageId?: number;
+  analysis?: unknown;
+  voiceAnchor?: unknown;
+  cleanVoice?: boolean;
+}): StoreVisitQueuedSegmentInput {
+  return {
+    segmentIndex: input.index,
+    sceneUrl: input.sceneUrl,
+    voiceId: input.voice.voiceId,
+    voiceModel: input.voice.model,
+    voiceRuntime: Boolean(input.voice.runtime),
+    target: {
+      shot: input.target.shot,
+      engine: input.target.engine,
+      ...(input.target.mode ? { mode: input.target.mode } : {}),
+    },
+    firstFrameUrl: input.firstFrameUrl,
+    continuationPrompt: input.continuationPrompt,
+    previousVideoId: input.previousVideoId,
+    tailImageId: input.tailImageId,
+    analysis: input.analysis,
+    voiceAnchor: Boolean(input.voiceAnchor),
+    cleanVoice: Boolean(input.cleanVoice),
+  };
+}
+
+/**
+ * @description 探店分段调用记录的 `provider`：自建 MiniMax-H3 记 `opensource-video`，数眼（含可灵数字人）记 `shuyan`。
+ * @keyword-cn 探店调用提供商, 调用记录通道
+ * @keyword-en store-visit-operation-provider, operation-channel
+ * @param runtime 节点运行配置。
+ * @returns {'opensource-video'|'shuyan'} 记录里的提供商。
+ */
+export function storeVisitProviderOf(
+  runtime: Pick<WorkflowNodeRuntime, 'providerCode'>,
+): 'opensource-video' | 'shuyan' {
+  return isOpensourceVideoProvider(runtime.providerCode)
+    ? 'opensource-video'
+    : 'shuyan';
 }
 
 /**
@@ -708,8 +943,8 @@ export function describeStoreVisitSegmentFailure(raw: string): string {
  * @description 探店分段视频：音色来自百炼 CosyVoice（录音克隆或系统音色），每段台词先配成音。人物出镜段以「人物在场景里」的首帧
  *   加配音，用数眼的可灵数字人对口型或 wan2.7-i2v 按配音生成（Seedance / MiniMax-H3 出片后再对口型）；门店空镜段以场景图为首帧，
  *   用数眼智能（Seedance / MiniMax-H3 / wan2.7-i2v）生成同样长的空镜视频；
- *   各段出片后桌面端把画面、配音与字幕按顺序拼成成片。音色走「音色克隆与配音」节点（百炼），空镜走「探店画面视频」节点，
- *   对口型走「探店人物对口型」节点，人物首帧走「分镜画面」节点；分段任务后台每 15 秒跟进一次，完成后转存视频库并绑定到分段。
+ *   各段出片后桌面端把画面、配音与字幕按顺序拼成成片。音色走「音色克隆」节点（百炼），空镜走「生视频」节点，
+ *   对口型走「生视频」节点，人物首帧走「生图」节点；分段任务后台每 15 秒跟进一次，完成后转存视频库并绑定到分段。
  * @keyword-cn 探店画外音, 克隆音色, 空镜视频
  * @keyword-en store-visit-voiceover, voice-clone, broll-video
  */
@@ -741,8 +976,13 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     private readonly agentService: AgentService,
     private readonly aiImages: GalleryAiImageService,
     private readonly personas: DouyinPersonaRepositoryService,
+    private readonly opensourceVideos: OpensourceVideoClientService,
+    private readonly videoQueue: DouyinVideoQueueService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
+    this.videoQueue.register('store-visit', (input) =>
+      this.submitQueued(input),
+    );
   }
 
   /**
@@ -1104,7 +1344,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 为人物出镜的一段生成首帧：出镜人物作底图、这段的场景图作第二张参考图，按「分镜画面」节点的生图模型出竖屏图，
+   * @description 为人物出镜的一段生成首帧：出镜人物作底图、这段的场景图作第二张参考图，按「生图」节点的生图模型出竖屏图，
    *   入图库后写进这一段（同时作废这段旧成片）。
    * @keyword-cn 生成人物首帧, 人物进场景
    * @keyword-en generate-segment-keyframe, person-in-scene
@@ -1251,7 +1491,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * @description 重新生成指定段，并重建接它实际尾帧的同镜头续段，避免把旧尾帧续段接到新画面上；
-   *   后面已就绪的新镜头（换素材、换用途或本机素材段）不依赖这一段，不连带重做也不重复扣费，还没就绪的（如前段失败时被停下的）一并补上。
+   *   后面已就绪的新镜头（换素材、换用途或本机素材段）不依赖这一段，不连带重做也不重复扣费，还没就绪的（如前段失败时被停下的）一并补上；
+   *   后面正在生成的新镜头不抢过来重做，让它们接着跑，这一段失败时不用等它们跑完就能重做。
    * @keyword-cn 重新生成探店分段, 单段重做
    * @keyword-en regenerate-store-visit-segment, single-segment-retry
    * @param {number} topicId 子选题（脚本）ID。
@@ -1274,16 +1515,51 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('这一段还没保存或已被删除，请先保存台词');
     const all = topic.storeVisit?.segments ?? [];
     const start = all.findIndex((item) => item.id === segmentId);
+    const generating = await this.generatingSegmentIds(topic.id, scope);
     const picked = [all[start]];
     let chained = true;
     for (let index = start + 1; index < all.length; index += 1) {
       chained = chained && !isStoreVisitVisualStart(all, index);
-      if (chained || !isStoreVisitSegmentReady(all[index]))
+      // 接这一段尾帧的续段必须跟着重做；不相干的新镜头只补没出片、也没在生成的
+      if (
+        chained ||
+        (!isStoreVisitSegmentReady(all[index]) &&
+          !generating.has(all[index].id))
+      )
         picked.push(all[index]);
     }
     return {
       operations: await this.startSegments(topic, picked, scope, options),
     };
+  }
+
+  /**
+   * @description 查出这条脚本当前用户还在排队、等待衔接、生成或保存中的分段 ID。
+   * @keyword-cn 在跑分段查询, 单段重做避让
+   * @keyword-en generating-segment-ids, retry-skip-running
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<Set<string>>} 在跑的分段 ID。
+   */
+  private async generatingSegmentIds(
+    topicId: number,
+    scope: DouyinScope,
+  ): Promise<Set<string>> {
+    const rows = await this.operations
+      .find(
+        {
+          topicId,
+          provider: { $in: ['shuyan', 'opensource-video'] },
+          mode: 'store-visit',
+          status: { $in: ['queued', 'running', 'saving'] },
+          userId: scope.userId,
+        },
+        { projection: { segmentId: 1 } },
+      )
+      .toArray();
+    return new Set(
+      rows.map((row) => String(row.segmentId || '')).filter(Boolean),
+    );
   }
 
   /**
@@ -1296,7 +1572,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   async refresh(id: string): Promise<DouyinOperationView> {
     const row = await this.operations.findOne({
       id,
-      provider: 'shuyan',
+      provider: { $in: ['shuyan', 'opensource-video'] },
       mode: 'store-visit',
     });
     if (!row) throw new BadRequestException('DOUYIN_OPERATION_NOT_FOUND');
@@ -1324,8 +1600,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     try {
       const rows = await this.operations
         .find({
-          provider: 'shuyan',
+          provider: { $in: ['shuyan', 'opensource-video'] },
           mode: 'store-visit',
+          queue: { $exists: false },
           $or: [
             { status: { $in: ['queued', 'running'] } },
             {
@@ -1353,7 +1630,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * @description 统一校验参考素材与声音描述，按段排队生成视频；音色样本仅作参考，无样本时按文字音色生成。
-   *   有可用的音色锚点时各段都拿它作参考音频；统一音色模式且还没锚点时以整条视频的第 1 段为锚点：第 1 段在本批里就先生成，不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等锚点段取声音后再并行生成，同镜头续段仍等上一段尾帧。
+   *   只在会被牵连的分段还在跑时拒绝（要生成的段本身、等着接它们尾帧或声音的段、第 1 段），不相干的段在跑不挡。
+   *   有可用的音色锚点时各段都拿它作参考音频；统一音色模式不用百炼合成参考音频（视频模型照着 TTS 学会带合成味），还没锚点时以整条视频的第 1 段为锚点、按音色描述用视频模型自己的声音说且只出干净人声：第 1 段在本批里就先生成，不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等锚点段取声音后再并行生成，同镜头续段仍等上一段尾帧。
    *
    * @keyword-cn 提交探店分段, 分段前置校验
    * @keyword-en submit-store-visit-segment-batch, segment-precheck
@@ -1437,7 +1715,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const avatarRuntime = presenters.length
       ? await this.readAvatarRuntime()
       : undefined;
+    // 统一音色模式不再用百炼 TTS 合成参考音频（视频模型照着 TTS 学，声音带合成味）：
+    // 第 1 段按音色描述用视频模型自己的声音说，后面各段参考第 1 段取出的声音
     const needsReferenceAudio =
+      !options.voiceAnchor &&
       Boolean(voiceId && voiceModel) &&
       [videoRuntime, avatarRuntime].some(
         (runtime) => runtime && supportsStoreVisitReferenceAudio(runtime.model),
@@ -1450,7 +1731,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         ).catch(() => undefined)
       : undefined;
     const presenterEngine = avatarRuntime
-      ? resolveStoreVisitPresenterEngine(avatarRuntime.model)
+      ? isOpensourceVideoProvider(avatarRuntime.providerCode)
+        ? ({ engine: 'opensource-video' } as const)
+        : resolveStoreVisitPresenterEngine(avatarRuntime.model)
       : null;
     if (
       presenterEngine?.engine === 'kling-avatar' &&
@@ -1461,7 +1744,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       )
     ) {
       throw new BadRequestException(
-        '同场景尾帧连续生成需要视频型号；请将「探店人物对口型」配置为 wan2.7-i2v、Seedance 或 MiniMax-H3。可灵数字人不能从空镜尾帧让人物自然入画。',
+        '同场景尾帧连续生成需要视频型号；请将「生视频」配置为 wan2.7-i2v、Seedance 或 MiniMax-H3。可灵数字人不能从空镜尾帧让人物自然入画。',
       );
     }
     for (const segment of aiSegments) {
@@ -1482,15 +1765,26 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(
         'wan2.7-i2v 按配音生成人物段需要公网配音地址，请先在后台配置 OSS',
       );
-    const running = await this.operations.findOne({
+    // 只拦会被这次重做牵连的在跑分段：要重做的段本身、等着接它们尾帧 / 声音的段，以及第 1 段（音色锚点）；
+    // 不相干的段（例如后面另一个镜头）接着跑，不挡单段重做
+    const batchSegmentIds = segments.map((segment) => segment.id);
+    const blocking = await this.operations.findOne({
       topicId: topic.id,
-      provider: 'shuyan',
+      provider: { $in: ['shuyan', 'opensource-video'] },
       mode: 'store-visit',
       status: { $in: ['queued', 'running', 'saving'] },
       userId: scope.userId,
+      $or: [
+        {
+          segmentId: {
+            $in: [...batchSegmentIds, ...(all[0] ? [all[0].id] : [])],
+          },
+        },
+        { 'continuity.previousSegmentId': { $in: batchSegmentIds } },
+      ],
     });
-    if (running)
-      throw new ConflictException('这条脚本还有分段在生成，完成后再试');
+    if (blocking)
+      throw new ConflictException('这条脚本还有相关分段在生成，完成后再试');
     // 只有接尾帧的同镜头续段才要求上一段已出片；本机素材段与新镜头直接用自己的素材
     const firstIndex = indexOf(segments[0]);
     if (
@@ -1558,23 +1852,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
                 runtime: avatarRuntime,
                 mode: presenterEngine.mode,
               }
-            : {
-                shot: 'presenter' as const,
-                engine: 'shuyan-video' as const,
-                runtime: avatarRuntime,
-                route: presenterEngine.route,
-              }
-          : {
-              shot:
-                segment.shot === 'experience'
-                  ? ('experience' as const)
-                  : ('broll' as const),
-              engine: 'shuyan-video' as const,
-              runtime: videoRuntime as WorkflowNodeRuntime,
-              route: resolveShuyanVideoRoute(
-                (videoRuntime as WorkflowNodeRuntime).model,
-              ) as ShuyanVideoRoute,
-            };
+            : buildStoreVisitVideoTarget('presenter', avatarRuntime)
+          : buildStoreVisitVideoTarget(
+              segment.shot === 'experience' ? 'experience' : 'broll',
+              videoRuntime as WorkflowNodeRuntime,
+            );
       if (waitForPrevious) {
         const now = new Date();
         const row: DouyinOperationEntity = {
@@ -1583,7 +1865,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           operation: 'generate',
           topicId: topic.id,
           segmentId: segment.id,
-          provider: 'shuyan',
+          provider: storeVisitProviderOf(target.runtime),
           mode: 'store-visit',
           model: target.runtime.model,
           providerId: target.runtime.providerId,
@@ -1630,6 +1912,12 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             continuity: { stage: 'generating', sequenceId },
             scope,
             voiceAnchor: anchor,
+            // 统一音色模式还没锚点时，第 1 段的声音要被取出来当后面各段的参考，只出干净人声
+            cleanVoice:
+              Boolean(options.voiceAnchor) &&
+              anchorCapable &&
+              !anchor &&
+              segment.id === firstSegment?.id,
           }),
         );
       }
@@ -1882,12 +2170,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           ? await this.readAvatarRuntime()
           : await this.readVideoRuntime();
       const engine =
-        segment.shot === 'presenter'
+        segment.shot === 'presenter' &&
+        !isOpensourceVideoProvider(runtime.providerCode)
           ? resolveStoreVisitPresenterEngine(runtime.model)
-          : {
-              engine: 'shuyan-video' as const,
-              route: resolveShuyanVideoRoute(runtime.model) as ShuyanVideoRoute,
-            };
+          : buildStoreVisitVideoTarget(segment.shot || 'broll', runtime);
       if (!engine) throw new BadRequestException('当前视频型号不支持连续生成');
       const voiceRuntime =
         topic.storeVisit?.voiceId &&
@@ -1916,12 +2202,18 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
                 runtime,
                 mode: engine.mode,
               }
-            : {
-                shot: segment.shot || 'broll',
-                engine: 'shuyan-video',
-                runtime,
-                route: engine.route,
-              },
+            : engine.engine === 'opensource-video'
+              ? {
+                  shot: segment.shot || 'broll',
+                  engine: 'opensource-video',
+                  runtime,
+                }
+              : {
+                  shot: segment.shot || 'broll',
+                  engine: 'shuyan-video',
+                  runtime,
+                  route: engine.route,
+                },
         scope,
         operationId: row.id,
         continuity: { ...row.continuity, stage: 'generating' },
@@ -1936,7 +2228,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       await this.fail(
         row.id,
-        `连续生成失败：${error instanceof Error ? error.message : String(error)}。请从这一段重新生成；尾帧理解错误时检查「探店尾帧衔接」的视觉模型配置。`,
+        `连续生成失败：${error instanceof Error ? error.message : String(error)}。请从这一段重新生成；尾帧理解错误时检查「思考」的视觉模型配置。`,
       );
       throw error;
     }
@@ -2031,10 +2323,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * @description 按视频生成计费并提交原生声画，有音色锚点时拿它作参考音频，否则有样本时参考音色、再否则按文字音色生成；点位模式的实景段把同一点位其余 1～2 张图作参考图一起交给模型；不追加对口型或产出供合成替换的配音。
+   *   扣费前按模型申请并发名额，满了把这段存成排队记录（续段改写原记录）直接返回；`admitted` 为 true 表示从排队里提交、已拿到名额。
    *
    * @keyword-cn 提交单段画外音, 分段配音
    * @keyword-en submit-segment-voiceover, segment-broll
-   * @param input 脚本、分段及序号、场景图地址、音色、生成目标（人物对口型或门店空镜的节点配置）与作用域。
+   * @param input 脚本、分段及序号、场景图地址、音色、生成目标（人物对口型或门店空镜的节点配置）、作用域与是否已拿到名额。
    * @returns {Promise<DouyinOperationView>} 调用记录。
    * @throws {BadRequestException} 配音太长或太短。
    * @throws {BadGatewayException} 配音、存储或提交失败。
@@ -2052,12 +2345,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           runtime: WorkflowNodeRuntime;
           mode: 'std' | 'pro';
         }
-      | {
-          shot: 'presenter' | 'broll' | 'experience';
-          engine: 'shuyan-video';
-          runtime: WorkflowNodeRuntime;
-          route: ShuyanVideoRoute;
-        };
+      | StoreVisitVideoTarget;
     scope: DouyinScope;
     operationId?: string;
     continuity?: DouyinOperationView['continuity'];
@@ -2068,6 +2356,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     analysis?: unknown;
     /** @description 可用的音色锚点，模型支持参考音频时直接拿它作参考，不再按本段台词另合成 */
     voiceAnchor?: DouyinStoreVisitVoiceAnchor;
+    /** @description 从排队里提交、已拿到模型名额，不再申请 */
+    admitted?: boolean;
+    /** @description 统一音色模式的锚点段：只出干净人声、不要环境声，桌面端从它取出的声音作后面各段的参考 */
+    cleanVoice?: boolean;
   }): Promise<DouyinOperationView> {
     const { topic, segment, target, scope } = input;
     const runtime = target.runtime;
@@ -2105,11 +2397,12 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           }
         : {}),
     };
+    const opensource = target.engine === 'opensource-video';
     const base = {
       operation: 'generate' as const,
       topicId: topic.id,
       segmentId: segment.id,
-      provider: 'shuyan' as const,
+      provider: storeVisitProviderOf(runtime),
       mode: 'store-visit' as const,
       model: runtime.model,
       providerId: runtime.providerId,
@@ -2117,19 +2410,31 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       userId: scope.userId,
       ...(input.continuity ? { continuity: input.continuity } : {}),
     };
-    await this.billing.chargeService({
-      serviceCode: 'video-generation',
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      operationId,
-      source: 'douyin-workbench.store-visit-segment',
-      platformScope: !scope.tenantId,
-    });
+    // 模型并发满了先排队，轮到时按当前脚本重新组装、扣费提交
+    if (!input.admitted && !(await this.videoQueue.admit(runtime, operationId)))
+      return this.toView(
+        await this.videoQueue.enqueue(
+          { id: operationId, ...base, request },
+          toQueuedSegmentInput(input),
+          Boolean(input.operationId),
+        ),
+      );
+    await this.billing
+      .chargeService({
+        serviceCode: 'video-generation',
+        tenantId: scope.tenantId,
+        userId: scope.userId,
+        operationId,
+        source: 'douyin-workbench.store-visit-segment',
+        platformScope: !scope.tenantId,
+      })
+      .catch((error) => this.videoQueue.releaseAndThrow(operationId, error));
     const now = new Date();
     try {
       if (
-        target.engine !== 'shuyan-video' ||
-        !supportsStoreVisitReferences(runtime.model)
+        target.engine === 'kling-avatar' ||
+        (target.engine === 'shuyan-video' &&
+          !supportsStoreVisitReferences(runtime.model))
       )
         throw new BadRequestException(
           '探店每段都需生成带声音的视频，请使用 Seedance 2.0 或 MiniMax-H3',
@@ -2138,17 +2443,27 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         2,
         Math.ceil(Array.from(segment.lines).length / 4.5),
       );
-      const choices = listShuyanVideoDurationChoices(runtime.model);
+      const choices = opensource
+        ? listOpensourceVideoDurationChoices()
+        : listShuyanVideoDurationChoices(runtime.model);
       const maxSeconds = choices[choices.length - 1];
       if (estimatedSeconds > maxSeconds)
         throw new BadRequestException(
           `第 ${input.index} 段台词约 ${estimatedSeconds} 秒，超过单段上限 ${maxSeconds} 秒，请把这段拆短`,
         );
-      const seconds = clampShuyanVideoDuration(runtime.model, estimatedSeconds);
-      const resolution = clampShuyanVideoResolution(
-        runtime.model,
+      const seconds = opensource
+        ? clampOpensourceVideoDuration(estimatedSeconds)
+        : clampShuyanVideoDuration(runtime.model, estimatedSeconds);
+      // 自建服务按 megapixels 出图，720p 就近取 672P（0.8MP）
+      const opensourceResolution = clampOpensourceVideoResolution(
         DOUYIN_STORE_VISIT_VIDEO_RESOLUTION,
       );
+      const resolution = opensource
+        ? opensourceResolution.label
+        : clampShuyanVideoResolution(
+            runtime.model,
+            DOUYIN_STORE_VISIT_VIDEO_RESOLUTION,
+          );
       const setting = topic.storeVisit ?? {};
       const sceneVideo = setting.sceneVideos?.find(
         (item) => item.id === segment.sceneVideoId,
@@ -2156,6 +2471,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       const scene = setting.sceneImages?.find(
         (item) => item.id === segment.sceneImageId,
       );
+      if (opensource && sceneVideo)
+        throw new BadRequestException(
+          `第 ${input.index} 段用的是实拍视频素材，自建 MiniMax-H3 还不支持视频参考，请把这段的素材换成照片`,
+        );
       const multiReference =
         storeVisitVisualSource(segment) === 'references' &&
         !input.firstFrameUrl;
@@ -2243,15 +2562,20 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
                 ?.url ?? '',
             )
           : input.sceneUrl);
-      const prompt = buildStoreVisitNativePrompt({
+      // AI 导演按场景图设计的运动：中文接在动作描述后给数眼，英文单独给自建 H3（中文会被念出来）
+      const direction = freshShotDirection(topic, segment.id);
+      const directionZh = describeDirectionZh(direction);
+      const promptInput = {
         title: topic.title,
         lines: segment.lines,
-        action: segment.action,
+        action:
+          [segment.action, directionZh].filter(Boolean).join('；') || undefined,
         seconds,
         shot: target.shot,
         sceneDescription: `${sceneVideo?.description || scene?.description || scene?.name || ''}${(sceneVideo?.tags || scene?.tags)?.length ? `（${(sceneVideo?.tags || scene?.tags || []).join('、')}）` : ''}`,
         voiceDescription: describeStoreVisitVoice(setting),
         referenceAudio: Boolean(referenceAudio),
+        cleanVoice: Boolean(input.cleanVoice),
         multiReference,
         personName,
         personAppearance,
@@ -2265,7 +2589,17 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         extraSceneDescriptions: extraScenes.map(
           (item) => item.description || item.name || '同一点位的实拍',
         ),
-      });
+      };
+      // 自建 MiniMax-H3 是直连模型，没有数眼那层提示词改写，要用 H3 原生格式，否则会把中文指令段念出来
+      const prompt = opensource
+        ? buildStoreVisitH3Prompt({
+            ...promptInput,
+            action: describeDirectionEn(direction) || segment.action,
+            continuation: input.continuationPrompt,
+            continued: Boolean(input.firstFrameUrl),
+            aspect: activeTemplateAspect(input.topic.videoTemplate),
+          })
+        : buildStoreVisitNativePrompt(promptInput);
       const content: Array<Record<string, unknown>> = [
         { type: 'text', text: prompt },
       ];
@@ -2322,57 +2656,78 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       Object.assign(request, {
         nativeAudio: true,
         voiceMode: referenceAudio ? 'reference' : 'prompt',
+        ...(input.cleanVoice ? { cleanVoice: true } : {}),
         voicePrompt: describeStoreVisitVoice(setting),
         duration: seconds,
         resolution,
         sceneVideoId: segment.sceneVideoId,
         clipStart: segment.clipStart || 0,
-        engine: 'shuyan-video',
+        engine: target.engine,
       });
-      const payload =
-        target.route === 'hailuo-v2'
-          ? {
-              model: normalizeShuyanVideoModel(runtime.model),
-              content,
-              resolution,
-              duration: seconds,
-              ratio:
-                referenceAudio ||
-                multiReference ||
-                sceneVideo ||
-                extraScenes.length
-                  ? '9:16'
-                  : 'adaptive',
-              aigc_watermark: false,
-            }
-          : {
-              model: runtime.model,
-              content,
-              resolution,
-              ratio:
-                referenceAudio ||
-                multiReference ||
-                sceneVideo ||
-                extraScenes.length
-                  ? '9:16'
-                  : 'adaptive',
-              duration: seconds,
-              generate_audio: true,
-              watermark: false,
-            };
-      const task = unwrapShuyanVideoTask(
-        await this.fetchShuyan(
-          resolveShuyanVideoTaskUrl(
-            resolveShuyanVideoGateway(runtime.baseUrl),
-            target.route,
+      let externalId: string;
+      let result: unknown;
+      if (target.engine === 'opensource-video') {
+        const job = await this.opensourceVideos.createVideo(
+          runtime,
+          await this.buildOpensourceSegmentInput({
+            prompt,
+            content,
+            seconds,
+            megapixels: opensourceResolution.megapixels,
+            runtime,
+            referenceAudio,
+            aspect: activeTemplateAspect(input.topic.videoTemplate),
+          }),
+        );
+        externalId = String(job.id ?? '').trim();
+        result = job;
+        if (!externalId) throw new Error('OPENSOURCE_VIDEO_TASK_ID_MISSING');
+      } else {
+        const payload =
+          target.route === 'hailuo-v2'
+            ? {
+                model: normalizeShuyanVideoModel(runtime.model),
+                content,
+                resolution,
+                duration: seconds,
+                ratio:
+                  referenceAudio ||
+                  multiReference ||
+                  sceneVideo ||
+                  extraScenes.length
+                    ? '9:16'
+                    : 'adaptive',
+                aigc_watermark: false,
+              }
+            : {
+                model: runtime.model,
+                content,
+                resolution,
+                ratio:
+                  referenceAudio ||
+                  multiReference ||
+                  sceneVideo ||
+                  extraScenes.length
+                    ? '9:16'
+                    : 'adaptive',
+                duration: seconds,
+                generate_audio: true,
+                watermark: false,
+              };
+        const task = unwrapShuyanVideoTask(
+          await this.fetchShuyan(
+            resolveShuyanVideoTaskUrl(
+              resolveShuyanVideoGateway(runtime.baseUrl),
+              target.route,
+            ),
+            { method: 'POST', body: JSON.stringify(payload) },
+            runtime.apiKey,
           ),
-          { method: 'POST', body: JSON.stringify(payload) },
-          runtime.apiKey,
-        ),
-      );
-      const externalId = String(task.id ?? task.task_id ?? '').trim();
-      const result: unknown = task;
-      if (!externalId) throw new Error('SHUYAN_VIDEO_TASK_ID_MISSING');
+        );
+        externalId = String(task.id ?? task.task_id ?? '').trim();
+        result = task;
+        if (!externalId) throw new Error('SHUYAN_VIDEO_TASK_ID_MISSING');
+      }
       const doc: DouyinOperationEntity = {
         _id: new ObjectId(),
         id: operationId,
@@ -2389,7 +2744,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         const { _id, ...fields } = doc;
         await this.operations.updateOne(
           { id: operationId },
-          { $set: fields, $unset: { error: '', errorDetail: '' } },
+          { $set: fields, $unset: { error: '', errorDetail: '', queue: '' } },
         );
       } else await this.operations.insertOne(doc);
       setTimeout(() => void this.pollOnce(), 10 * 1000).unref?.();
@@ -2399,7 +2754,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       const friendly =
         error instanceof BadRequestException
           ? detail
-          : `第 ${input.index} 段提交失败：${describeStoreVisitSegmentFailure(detail)}`;
+          : `第 ${input.index} 段提交失败：${opensource ? describeOpensourceVideoFailure(detail) : describeStoreVisitSegmentFailure(detail)}`;
       await this.billing
         .refundService({
           operationId,
@@ -2419,10 +2774,83 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       };
       if (input.operationId) {
         const { _id, ...fields } = failedDoc;
-        await this.operations.updateOne({ id: operationId }, { $set: fields });
+        await this.operations.updateOne(
+          { id: operationId },
+          { $set: fields, $unset: { queue: '' } },
+        );
       } else await this.operations.insertOne(failedDoc);
+      await this.videoQueue.release(operationId);
       throw new BadGatewayException(friendly);
     }
+  }
+
+  /**
+   * @description 排队轮到后重新提交一段：按当前脚本找回分段（被改、删除或重排就取消），重建音色运行配置与生成目标，
+   *   带原记录 ID 交给 `submitSegment`（已拿到名额，扣费与写回都在里面）。
+   * @keyword-cn 提交排队分段, 重建分段参数
+   * @keyword-en submit-queued-segment, rebuild-segment-input
+   * @param input 排队记录、当前脚本、按记录重建的运行配置与作用域。
+   * @returns {Promise<DouyinOperationView>} 调用记录。
+   * @throws {Error} 分段已修改或删除。
+   */
+  private async submitQueued(input: {
+    row: DouyinOperationEntity;
+    topic: DouyinTopicEntity;
+    runtime: WorkflowNodeRuntime;
+    scope: DouyinScope;
+  }): Promise<DouyinOperationView> {
+    const { row, topic, runtime, scope } = input;
+    const queued = (row.queue?.input ??
+      {}) as Partial<StoreVisitQueuedSegmentInput>;
+    const setting = topic.storeVisit ?? {};
+    const segments = setting.segments ?? [];
+    const index = segments.findIndex((item) => item.id === row.segmentId);
+    const segment = segments[index];
+    if (!segment || !matchesStoreVisitRequest(topic, segment, row.request))
+      throw new Error('分段已修改或删除，这段已取消，请重新生成');
+    const voiceRuntime = queued.voiceRuntime
+      ? await (
+          setting.voiceSource === 'preset'
+            ? this.readVoiceRuntime()
+            : this.readVoiceRuntimeFor(setting.voiceProviderId)
+        ).catch(() => undefined)
+      : undefined;
+    const shot = (['presenter', 'broll', 'experience'] as const).find(
+      (item) => item === queued.target?.shot,
+    );
+    return this.submitSegment({
+      topic,
+      segment,
+      index: index + 1,
+      sceneUrl: String(queued.sceneUrl ?? ''),
+      voice: {
+        voiceId: String(queued.voiceId ?? ''),
+        model: String(queued.voiceModel ?? ''),
+        runtime: voiceRuntime,
+      },
+      target:
+        queued.target?.engine === 'kling-avatar'
+          ? {
+              shot: 'presenter',
+              engine: 'kling-avatar',
+              runtime,
+              mode: queued.target.mode === 'pro' ? 'pro' : 'std',
+            }
+          : buildStoreVisitVideoTarget(shot ?? 'broll', runtime),
+      scope,
+      operationId: row.id,
+      continuity: row.continuity,
+      firstFrameUrl: queued.firstFrameUrl,
+      continuationPrompt: queued.continuationPrompt,
+      previousVideoId: queued.previousVideoId,
+      tailImageId: queued.tailImageId,
+      analysis: queued.analysis,
+      voiceAnchor: queued.voiceAnchor
+        ? readStoreVisitVoiceAnchor(setting)
+        : undefined,
+      cleanVoice: Boolean(queued.cleanVoice),
+      admitted: true,
+    });
   }
 
   /**
@@ -2434,6 +2862,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
    */
   private async refreshRow(row: DouyinOperationEntity): Promise<void> {
     if (!['queued', 'running', 'saving'].includes(row.status)) return;
+    // 还在等模型空位，没提交过
+    if (row.queue) return;
     if (!row.externalId) {
       if (row.continuity) {
         if (row.continuity.stage === 'planning') {
@@ -2492,16 +2922,17 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           );
         return;
       }
-      await this.fail(row.id, '数眼任务 ID 缺失，无法查询进度。');
+      await this.fail(row.id, '视频任务 ID 缺失，无法查询进度。');
       return;
     }
+    const opensource = row.provider === 'opensource-video';
     const provider = row.providerId
       ? await this.adminService.getAiProviderRuntimeById(row.providerId)
       : null;
     if (!provider) {
       await this.fail(
         row.id,
-        '数眼智能提供商已删除或停用，无法继续查询这段视频。',
+        `${opensource ? '自建视频服务' : '数眼智能'}提供商已删除或停用，无法继续查询这段视频。`,
       );
       return;
     }
@@ -2588,6 +3019,30 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           `${STORE_VISIT_LIP_SYNC_SKIP_PREFIX}${expired && syncStatus !== 'failed' ? '对口型超过 3 小时未完成' : `可灵对口型失败${readKlingText(data.task_status_msg) ? `（${readKlingText(data.task_status_msg).slice(0, 120)}）` : ''}`}`,
         );
       }
+    } else if (opensource) {
+      let job: OpensourceVideoJob;
+      try {
+        job = await this.opensourceVideos.getVideo(provider, row.externalId);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        // 换了服务器或映射地址指错时任务查不到，直接收敛为失败；网络错误留给下一轮重试
+        if (!/OPENSOURCE_VIDEO_HTTP_404/.test(detail)) throw error;
+        await this.fail(
+          row.id,
+          `第 ${index} 段视频查询失败：${describeOpensourceVideoFailure(detail)}`,
+          detail,
+        );
+        return;
+      }
+      status = mapOpensourceVideoStatus(job.status);
+      failure = describeOpensourceVideoFailure(String(job.error ?? '')).replace(
+        /^自建视频服务生成失败：/,
+        '',
+      );
+      failureDetail = String(job.error ?? job.status).slice(0, 2000);
+      videoSeconds =
+        Number(job.duration) || Number(row.request?.duration) || undefined;
+      raw = job as unknown as Record<string, unknown>;
     } else if (kling) {
       const response = await this.fetchKling(
         buildStoreVisitAvatarUrl(gateway, row.externalId),
@@ -2694,16 +3149,23 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     if (!claimed) return;
     const scope = { tenantId: row.tenantId, userId: row.userId };
     try {
-      if (!videoUrl) throw new Error('SHUYAN_VIDEO_RESULT_URL_MISSING');
+      if (!videoUrl && !opensource)
+        throw new Error('SHUYAN_VIDEO_RESULT_URL_MISSING');
       const topic = await this.repository.get(row.topicId, scope);
-      const saved = await this.storage.saveRemote(videoUrl, {
+      const meta = {
         name: `${topic?.title ?? `脚本 ${row.topicId}`} 探店第 ${index} 段`,
         scope,
-        tags: presenter
-          ? ['抖音探店出镜', 'AI生成', '数眼智能']
-          : ['抖音探店空镜', 'AI生成', '数眼智能'],
+        tags: [
+          presenter ? '抖音探店出镜' : '抖音探店空镜',
+          'AI生成',
+          opensource ? '自建MiniMax-H3' : '数眼智能',
+        ],
         durationSeconds: videoSeconds,
-      });
+      };
+      // 自建服务的成片下载要带 Key，不能登记外链，先下载到本机再入库
+      const saved = opensource
+        ? await this.saveOpensourceSegmentVideo(provider, row.externalId, meta)
+        : await this.storage.saveRemote(videoUrl, meta);
       const segment = (topic?.storeVisit?.segments ?? []).find(
         (item) => item.id === row.segmentId,
       );
@@ -2913,7 +3375,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 挑出视频里的主播：只有一张脸出现超过半段时直接用；否则把候选脸截图和出镜人物照交给「探店尾帧衔接」节点的视觉模型比对，
+   * @description 挑出视频里的主播：只有一张脸出现超过半段时直接用；否则把候选脸截图和出镜人物照交给「思考」节点的视觉模型比对，
    *   同一人被拆成多张时全部选中；没有人物照或比对失败时退回出现超过半段的最长那张，都没有就返回空。
    * @keyword-cn 比对主播人脸, 视觉模型认人
    * @keyword-en match-presenter-face, vision-face-match
@@ -2999,7 +3461,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 读取「音色克隆与配音」节点的百炼运行配置：没指定、不是百炼或没填 Key 时用中文说明拒绝。
+   * @description 读取「音色克隆」节点的百炼运行配置：没指定、不是百炼或没填 Key 时用中文说明拒绝。
    * @keyword-cn 读取百炼节点配置, 缺配置拒绝
    * @keyword-en read-dashscope-runtime, reject-unconfigured
    * @returns {Promise<WorkflowNodeRuntime>} 运行配置。
@@ -3020,7 +3482,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       String(runtime.providerCode).toLowerCase() !== DASHSCOPE_PROVIDER_CODE
     )
       throw new ServiceUnavailableException(
-        '后台「工作流节点模型 · 抖音视频制作 · 音色克隆与配音」还没有选阿里云百炼（dashscope）提供商',
+        '后台「工作流节点模型 · 抖音视频制作 · 音色克隆」还没有选阿里云百炼（dashscope）提供商',
       );
     if (!String(runtime.apiKey ?? '').trim())
       throw new ServiceUnavailableException(
@@ -3047,7 +3509,28 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 读取 Seedance 2.0 或 MiniMax-H3 原生声画配置，缺少配置时拒绝生成。
+   * @description 自建 MiniMax-H3 节点的可用性检查：模型必须是三个档位之一，服务地址与 Key 必须填了；不可用时返回中文原因，可用返回空串。
+   * @keyword-cn 自建节点检查, 缺配置拒绝
+   * @keyword-en check-opensource-runtime, reject-unconfigured
+   * @param {WorkflowNodeRuntime} runtime 节点运行配置。
+   * @param {string} nodeLabel 节点中文名（报错用）。
+   * @returns {string} 不可用原因，可用为空串。
+   */
+  private checkOpensourceRuntime(
+    runtime: WorkflowNodeRuntime,
+    nodeLabel: string,
+  ): string {
+    if (!resolveOpensourceVideoMode(runtime.model))
+      return `「${nodeLabel}」节点的模型「${runtime.model}」不是自建 MiniMax-H3 的档位，请改选 minimax-h3-turbo、minimax-h3-fast 或 minimax-h3-quality`;
+    if (!String(runtime.baseUrl ?? '').trim())
+      return '自建视频服务的服务地址还没有配置，请到后台「Ai提供商设置」里填写 GPU 服务器的映射地址';
+    if (!String(runtime.apiKey ?? '').trim())
+      return '自建视频服务的 API Key 还没有配置，请到后台「Ai提供商设置」里填写';
+    return '';
+  }
+
+  /**
+   * @description 读取探店画面节点的原生声画配置（数眼 Seedance 2.0 / MiniMax-H3，或自建 MiniMax-H3），缺少配置时拒绝生成。
    *
    * @keyword-cn 读取探店画面节点, 缺配置拒绝
    * @keyword-en read-broll-runtime, reject-unconfigured
@@ -3064,13 +3547,18 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     } catch {
       runtime = null;
     }
+    if (runtime && isOpensourceVideoProvider(runtime.providerCode)) {
+      const problem = this.checkOpensourceRuntime(runtime, '生视频');
+      if (problem) throw new ServiceUnavailableException(problem);
+      return runtime;
+    }
     if (!runtime || !isShuyanProvider(runtime.providerCode))
       throw new ServiceUnavailableException(
-        '后台「工作流节点模型 · 抖音视频制作 · 探店画面视频」还没有选数眼智能',
+        '后台「工作流节点模型 · 抖音视频制作 · 生视频」还没有选数眼智能或自建 MiniMax-H3',
       );
     if (!supportsStoreVisitReferences(runtime.model))
       throw new ServiceUnavailableException(
-        `「探店画面视频」节点的模型「${runtime.model}」还没接入，请改选支持原生声音的 Seedance 2.0 或 MiniMax-H3 型号`,
+        `「生视频」节点的模型「${runtime.model}」还没接入，请改选支持原生声音的 Seedance 2.0 或 MiniMax-H3 型号`,
       );
     if (!String(runtime.apiKey ?? '').trim())
       throw new ServiceUnavailableException(
@@ -3080,7 +3568,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 读取人物声画生成节点，旧数字人或驱动配音型号改用画面视频节点。
+   * @description 读取人物声画生成节点（数眼或自建 MiniMax-H3），旧数字人或驱动配音型号改用画面视频节点。
    *
    * @keyword-cn 读取对口型节点, 缺配置拒绝
    * @keyword-en read-avatar-runtime, reject-unconfigured
@@ -3096,6 +3584,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       );
     } catch {
       runtime = null;
+    }
+    if (runtime && isOpensourceVideoProvider(runtime.providerCode)) {
+      const problem = this.checkOpensourceRuntime(runtime, '生视频');
+      if (problem) throw new ServiceUnavailableException(problem);
+      return runtime;
     }
     if (!runtime || !isShuyanProvider(runtime.providerCode))
       return await this.readVideoRuntime();
@@ -3177,6 +3670,102 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             ? `第 ${index} 段的首帧图地址无效，请重新准备这一段的场景画面`
             : `第 ${index} 段的首帧图上传 OSS 失败，请稍后重试（${detail.slice(0, 120)}）`,
       );
+    }
+  }
+
+  /**
+   * @description 把探店分段已组好的素材（与数眼同一份 content）转成自建 MiniMax-H3 的请求：只有一张首帧（role=first_frame）时走首帧图生视频、画幅跟随首帧；
+   *   有参考图（人物照 / 同点位其余照片）或参考声音时走参考生视频，图片按 content 顺序作 `<Picture 1>…`，声音作 `<Audio 1>`，竖屏 9:16。
+   *   套了版式模板时两种都按窗口比例出片，首帧先居中裁成同一比例。提示词须已按 `buildStoreVisitH3Prompt` 用同样的编号写好标签，这里不再改写。
+   * @keyword-cn 组装自建分段请求, 参考生视频
+   * @keyword-en build-opensource-segment-input, reference-to-video
+   * @param input 提示词、素材 content、秒数、像素量、节点运行配置、可选的参考声音与模板窗口比例。
+   * @returns {Promise<OpensourceVideoCreateInput>} 自建服务请求体。
+   * @throws {BadRequestException} 节点模型不是自建服务的档位。
+   */
+  private async buildOpensourceSegmentInput(input: {
+    prompt: string;
+    content: Array<Record<string, unknown>>;
+    seconds: number;
+    megapixels: number;
+    runtime: WorkflowNodeRuntime;
+    referenceAudio?: { url: string; buffer: Buffer };
+    aspect?: DouyinTemplateAspect;
+  }): Promise<OpensourceVideoCreateInput> {
+    const mode = resolveOpensourceVideoMode(input.runtime.model);
+    if (!mode)
+      throw new BadRequestException(
+        describeOpensourceVideoFailure(
+          `OPENSOURCE_VIDEO_MODEL_NOT_SUPPORTED:${input.runtime.model}`,
+        ),
+      );
+    const images = input.content
+      .filter((item) => item.type === 'image_url')
+      .map((item) => ({
+        url: String(
+          (item.image_url as { url?: string } | undefined)?.url ?? '',
+        ),
+        role: typeof item.role === 'string' ? item.role : '',
+      }))
+      .filter((item) => item.url);
+    const reference =
+      Boolean(input.referenceAudio) ||
+      images.some((item) => item.role === 'reference_image');
+    if (!reference)
+      return {
+        prompt: input.prompt.slice(0, OPENSOURCE_VIDEO_PROMPT_MAX),
+        duration: input.seconds,
+        aspect_ratio: input.aspect ?? (images.length ? 'auto' : '9:16'),
+        megapixels: input.megapixels,
+        mode,
+        first_frame: images[0]
+          ? input.aspect
+            ? await cropFrameToAspect(
+                await toOpensourceVideoImageData(images[0].url),
+                input.aspect,
+              )
+            : await toOpensourceVideoImageData(images[0].url)
+          : undefined,
+      };
+    const referenceImages = await Promise.all(
+      images
+        .slice(0, OPENSOURCE_VIDEO_REFERENCE_LIMITS.images)
+        .map((item) => toOpensourceVideoImageData(item.url)),
+    );
+    const referenceAudios = input.referenceAudio
+      ? [await toOpensourceVideoAudioData(input.referenceAudio)]
+      : [];
+    return {
+      prompt: input.prompt.slice(0, OPENSOURCE_VIDEO_PROMPT_MAX),
+      duration: input.seconds,
+      aspect_ratio: input.aspect ?? '9:16',
+      megapixels: input.megapixels,
+      mode,
+      reference_images: referenceImages,
+      reference_audios: referenceAudios,
+    };
+  }
+
+  /**
+   * @description 自建 MiniMax-H3 的分段成片带 Key 下载到临时文件，再经 `saveFile` 存进视频库（OSS 优先，否则落站内），临时文件用完即删。
+   * @keyword-cn 转存自建分段成片, 带Key下载
+   * @keyword-en save-opensource-segment-video, keyed-download
+   * @param runtime 提供商连接信息。
+   * @param jobId 自建服务任务 ID。
+   * @param meta 视频库登记参数。
+   * @returns {Promise<{id: number, url: string}>} 视频库记录。
+   */
+  private async saveOpensourceSegmentVideo(
+    runtime: { baseUrl?: string; apiKey?: string },
+    jobId: string,
+    meta: DouyinOutputVideoMeta,
+  ): Promise<{ id: number; url: string }> {
+    const target = join(tmpdir(), `store-visit-${randomUUID()}.mp4`);
+    try {
+      await this.opensourceVideos.downloadVideo(runtime, jobId, target);
+      return await this.storage.saveFile(target, meta);
+    } finally {
+      await unlink(target).catch(() => undefined);
     }
   }
 
@@ -3313,6 +3902,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       externalId: row.externalId,
       continuity: row.continuity,
       lipSync: toStoreVisitLipSyncView(row.lipSync),
+      queue: toVideoQueueView(row.queue),
       result: row.result,
       error: row.error,
       errorDetail: row.errorDetail,

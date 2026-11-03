@@ -184,6 +184,10 @@ const PROVIDER_CODE_OPTIONS = [
   { value: 'shuyan', label: '数眼智能 ShuyanAI（OpenAI 兼容中转）' },
   { value: 'pixmax', label: 'PixMax（生视频 / 多模型中转）' },
   {
+    value: 'opensource-video',
+    label: '自建 MiniMax-H3 视频服务（opensource-video · GPU 服务器）',
+  },
+  {
     value: 'dashscope',
     label: '阿里云百炼 DashScope（探店音色克隆与配音 · CosyVoice）',
   },
@@ -3016,6 +3020,13 @@ const AdminApp = () => {
                   ) {
                     updateForm('provider', 'modelCategory', 'video');
                   }
+                  // 自建 MiniMax-H3 视频服务只能生视频
+                  if (
+                    e.target.value === 'opensource-video' &&
+                    forms.provider.modelCategory !== 'video'
+                  ) {
+                    updateForm('provider', 'modelCategory', 'video');
+                  }
                   // 阿里云百炼在这里主要用于探店音色克隆与配音，默认切到音色类别（也可改回文本类别接通义千问）
                   if (
                     e.target.value === 'dashscope' &&
@@ -3056,6 +3067,17 @@ const AdminApp = () => {
                   Key 可以相同；服务地址留空默认
                   https://app.pixmax.cn；模型可留空，到「工作流节点模型」里为每个节点从账号可用模型中选择。目前业务侧接入了
                   PixMax 生视频。
+                </p>
+              ) : null}
+              {forms.provider.providerCode === 'opensource-video' ? (
+                <p className="rounded bg-teal-50 px-3 py-2 text-xs leading-5 text-teal-700">
+                  自建 MiniMax-H3 视频服务（opensource-video 项目部署在 GPU
+                  服务器上的接口）：类别选「生视频模型」；服务地址必填，填 GPU
+                  平台给 6006 端口的映射地址（换实例后地址会变，记得回来改）；API
+                  Key 填服务器 .env 里的 VIDEO_API_KEY（本机 api.env
+                  里也有）。模型填 minimax-h3-turbo（默认），到「工作流节点模型」里还可改选
+                  minimax-h3-fast / minimax-h3-quality。可用于抖音「分镜视频」「整片视频」与探店「探店画面视频」「探店人物对口型」节点（探店走参考生视频：场景图、人物照与参考音色，不支持实拍视频素材），单段
+                  1～15 秒，清晰度 544P / 672P。
                 </p>
               ) : null}
               {forms.provider.providerCode === 'dashscope' ? (

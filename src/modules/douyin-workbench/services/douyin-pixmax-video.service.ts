@@ -39,14 +39,24 @@ import type { WorkflowNodeRuntime } from '../../workflow-model/entities/workflow
 import type {
   DouyinOperationEntity,
   DouyinOperationView,
+  DouyinShotDirection,
   DouyinStoryboardShot,
   DouyinTopicEntity,
   DouyinVideoAudioSetting,
 } from '../entities/douyin-workbench.entity.js';
 import {
+  describeDirectionZh,
+  freshShotDirection,
+} from './douyin-video-director.js';
+import {
   DouyinWorkbenchRepositoryService,
   normalizeVideoAudio,
 } from './douyin-workbench-repository.service.js';
+import {
+  DouyinVideoQueueService,
+  readQueuedShotRequest,
+  toVideoQueueView,
+} from './douyin-video-queue.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
@@ -198,10 +208,10 @@ interface ShotReferenceImage {
 }
 
 /**
- * @description 生成一段分镜视频的结构化提示词：【视频】【画面】【口播稿】【声音】【参考图】【限制】【补充要求】。
+ * @description 生成一段分镜视频的结构化提示词：【视频】【画面】【运镜与画面动态】（AI 导演看首帧设计的，有才写）【口播稿】【声音】【参考图】【限制】【补充要求】。
  * @keyword-cn 分镜视频提示词, 首帧参考, 结构化提示词
  * @keyword-en shot-video-prompt, first-frame-reference, structured-prompt
- * @param input 标题、分镜、序号、是否带参考图、声音设置与补充要求。
+ * @param input 标题、分镜、序号、是否带参考图、声音设置、补充要求与 AI 导演的运动设计。
  * @returns {string} 提示词。
  */
 export function buildShotVideoPrompt(input: {
@@ -212,12 +222,15 @@ export function buildShotVideoPrompt(input: {
   audio: DouyinVideoAudioSetting;
   personaVoice?: string;
   extra?: string;
+  direction?: DouyinShotDirection;
 }): string {
+  const direction = describeDirectionZh(input.direction);
   const { shot } = input;
   const narration = String(shot.narration ?? '').trim();
   return [
     `【视频】竖屏 9:16 抖音短视频《${input.title}》的第 ${input.index + 1} 个镜头，景别${shot.shotType || '中景'}，时长约 ${shot.duration} 秒。`,
     `【画面】${shot.visual}`,
+    direction ? `【运镜与画面动态】${direction}` : '',
     narration ? `【口播稿】${narration}` : '【口播稿】本镜没有口播。',
     buildVideoAudioSection(input.audio, false, input.personaVoice),
     input.hasImage
@@ -236,7 +249,7 @@ export function buildShotVideoPrompt(input: {
  *   每镜时长按「实际时长 / 分镜总时长」等比缩放：更短时压缩并保证所有镜头都出现，更长时放缓节奏。
  * @keyword-cn 整片视频提示词, 多镜头时间轴, 结构化提示词
  * @keyword-en full-video-prompt, multi-shot-timeline, structured-prompt
- * @param input 标题、脚本正文、全部分镜、参考图、实际时长、生成方式、声音设置与补充要求。
+ * @param input 标题、脚本正文、全部分镜、参考图、实际时长、生成方式、声音设置、补充要求与各镜的 AI 导演运动设计（与分镜一一对应）。
  * @returns {string} 提示词。
  */
 export function buildFullVideoPrompt(input: {
@@ -249,6 +262,7 @@ export function buildFullVideoPrompt(input: {
   audio: DouyinVideoAudioSetting;
   personaVoice?: string;
   extra?: string;
+  directions?: Array<DouyinShotDirection | undefined>;
 }): string {
   const { shots, images } = input;
   const planned = shots.reduce(
@@ -275,6 +289,7 @@ export function buildFullVideoPrompt(input: {
     return [
       `镜头${index + 1}（${start}-${end} 秒，${shot.shotType || '中景'}）：${shot.visual}`,
       ref ? `画面参考图${ref}` : '',
+      describeDirectionZh(input.directions?.[index]),
       shot.narration ? `口播：${shot.narration}` : '',
       shot.transition ? `转场：${shot.transition}` : '',
     ]
@@ -336,8 +351,18 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
     private readonly pixmax: PixmaxClientService,
     private readonly videoLibrary: VideoLibraryService,
     private readonly oss: OssStorageService,
+    private readonly videoQueue: DouyinVideoQueueService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
+    this.videoQueue.register('pixmax', ({ row, topic, runtime, scope }) =>
+      this.start({
+        topic,
+        ...readQueuedShotRequest(row),
+        runtime,
+        scope,
+        operationId: row.id,
+      }),
+    );
   }
 
   /**
@@ -363,9 +388,10 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
   /**
    * @description 提交一次 PixMax 视频生成：单镜用该镜画面做首帧（没图则文生视频）；整片把所有分镜写进时间轴提示词、
    *   按模型上限带入各镜画面作参考，一次生成一条完整视频。提交前按生视频服务扣费，提交失败也留一条失败记录。
+   *   扣费前按模型申请并发名额，满了存成排队记录直接返回；`operationId` 有值表示从排队里提交（已拿到名额），结果改写那条记录。
    * @keyword-cn 提交PixMax视频, 整片或单镜
    * @keyword-en submit-pixmax-video, full-or-shot
-   * @param input 脚本、模式、单镜 ID、补充要求、节点运行配置与作用域。
+   * @param input 脚本、模式、单镜 ID、补充要求、节点运行配置、作用域与排队记录 ID。
    * @returns {Promise<DouyinOperationView>} 调用记录。
    * @throws {BadRequestException} DOUYIN_STORYBOARD_REQUIRED / DOUYIN_STORYBOARD_SHOT_NOT_FOUND / PIXMAX_MODEL_*。
    */
@@ -376,6 +402,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
     prompt?: string;
     runtime: WorkflowNodeRuntime;
     scope: DouyinScope;
+    operationId?: string;
   }): Promise<DouyinOperationView> {
     const { topic, mode, runtime, scope } = input;
     const extra =
@@ -443,6 +470,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
             audio,
             personaVoice,
             extra,
+            direction: freshShotDirection(topic, shots[0].id),
           })
         : buildFullVideoPrompt({
             title: topic.title,
@@ -454,6 +482,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
             audio,
             personaVoice,
             extra,
+            directions: shots.map((shot) => freshShotDirection(topic, shot.id)),
           });
     const scriptIncluded =
       mode === 'shot'
@@ -463,7 +492,8 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
             shots.some((shot) => String(shot.narration ?? '').trim()),
           );
     const params = { ...plan.params, prompt };
-    const operationId = randomUUID();
+    const operationId = input.operationId ?? randomUUID();
+    const fromQueue = Boolean(input.operationId);
     const request = {
       mode,
       model: runtime.model,
@@ -495,17 +525,27 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
       request,
     };
 
-    await this.billing.chargeService({
-      serviceCode: 'video-generation',
-      tenantId: scope.tenantId,
-      userId: scope.userId,
-      operationId,
-      source:
-        mode === 'shot'
-          ? 'douyin-workbench.shot-video-generation'
-          : 'douyin-workbench.full-video-generation',
-      platformScope: !scope.tenantId,
-    });
+    // 模型并发满了先排队，轮到时再扣费提交
+    if (!fromQueue && !(await this.videoQueue.admit(runtime, operationId)))
+      return this.toView(
+        await this.videoQueue.enqueue(
+          { id: operationId, ...base },
+          { prompt: input.prompt },
+        ),
+      );
+    await this.billing
+      .chargeService({
+        serviceCode: 'video-generation',
+        tenantId: scope.tenantId,
+        userId: scope.userId,
+        operationId,
+        source:
+          mode === 'shot'
+            ? 'douyin-workbench.shot-video-generation'
+            : 'douyin-workbench.full-video-generation',
+        platformScope: !scope.tenantId,
+      })
+      .catch((error) => this.videoQueue.releaseAndThrow(operationId, error));
     const now = new Date();
     try {
       const pixmaxRuntime = this.toPixmaxRuntime(runtime);
@@ -556,21 +596,25 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
         createdAt: now,
         updatedAt: now,
       };
-      await this.operations.insertOne(doc);
+      await this.videoQueue.save(doc, fromQueue);
       setTimeout(() => void this.pollOnce(), 3000).unref?.();
       return this.toView(doc);
     } catch (error) {
       const friendly = toPixmaxFriendlyError(error);
-      await this.operations.insertOne({
-        _id: new ObjectId(),
-        id: operationId,
-        ...base,
-        status: 'failed',
-        error: friendly.message,
-        errorDetail: friendly.detail,
-        createdAt: now,
-        updatedAt: now,
-      });
+      await this.videoQueue.save(
+        {
+          _id: new ObjectId(),
+          id: operationId,
+          ...base,
+          status: 'failed',
+          error: friendly.message,
+          errorDetail: friendly.detail,
+          createdAt: now,
+          updatedAt: now,
+        },
+        fromQueue,
+      );
+      await this.videoQueue.release(operationId);
       this.logger.warn(
         `[start] 提交失败 operation=${operationId}: ${friendly.detail}`,
       );
@@ -610,6 +654,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
       const rows = await this.operations
         .find({
           provider: 'pixmax',
+          queue: { $exists: false },
           $or: [
             { status: { $in: ['queued', 'running'] } },
             {
@@ -642,6 +687,8 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
    * @keyword-en advance-pixmax-operation, save-on-complete
    */
   private async refreshRow(row: DouyinOperationEntity): Promise<void> {
+    // 还在等模型空位，没提交过
+    if (row.queue) return;
     if (!row.externalId) {
       await this.fail(row.id, 'PIXMAX_TASK_ID_MISSING');
       return;
@@ -979,6 +1026,7 @@ export class DouyinPixmaxVideoService implements OnModuleInit, OnModuleDestroy {
       plan: readDouyinVideoPlan(row.request),
       status: row.status,
       externalId: row.externalId,
+      queue: toVideoQueueView(row.queue),
       result: row.result,
       ...presentDouyinVideoError(row),
       createdAt: row.createdAt,

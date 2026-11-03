@@ -89,6 +89,15 @@ function buildService(storeVisit: DouyinStoreVisitSetting) {
     any
   >;
   service.previews = new Map();
+  // 模型并发不限：直接放行，不排队
+  service.videoQueue = {
+    admit: jest.fn().mockResolvedValue(true),
+    release: jest.fn().mockResolvedValue(undefined),
+    releaseAndThrow: jest.fn(async (_id: string, error: unknown) => {
+      throw error;
+    }),
+    enqueue: jest.fn(),
+  };
   service.repository = {
     get: jest.fn().mockResolvedValue({
       id: 2,
@@ -123,7 +132,7 @@ function buildService(storeVisit: DouyinStoreVisitSetting) {
       .fn()
       .mockImplementation((_workflow: string, node: string) =>
         Promise.resolve(
-          node === 'voice-clone'
+          node === 'voice'
             ? {
                 providerId: 'ds-1',
                 providerCode: 'dashscope',
@@ -152,6 +161,7 @@ function buildService(storeVisit: DouyinStoreVisitSetting) {
   };
   service.operations = {
     insertOne: jest.fn().mockResolvedValue({}),
+    find: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
     findOne: jest.fn().mockResolvedValue(null),
     updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
   };
@@ -355,7 +365,7 @@ describe('探店实拍素材与本机缓推', () => {
     await service.start(2, scope);
     expect(
       service.workflowModels.resolveNodeRuntime.mock.calls.some(
-        (call: string[]) => call[1] === 'store-visit-video',
+        (call: string[]) => call[1] === 'video',
       ),
     ).toBe(true);
     expect(service.fetchShuyan).toHaveBeenCalledTimes(1);

@@ -28,6 +28,7 @@ import {
   listShuyanVideoResolutionChoices,
   resolveShuyanVideoRoute,
 } from './douyin-shuyan-video.service.js';
+import { DouyinOpensourceVideoService } from './douyin-opensource-video.service.js';
 import {
   DouyinStoreVisitService,
   resolveStoreVisitPresenterEngine,
@@ -42,11 +43,22 @@ import {
   listPixmaxResolutionChoices,
 } from '../../pixmax/services/pixmax-video-params.js';
 import { describePixmaxError } from '../../pixmax/services/pixmax-error.js';
+import {
+  describeOpensourceVideoFailure,
+  isOpensourceVideoProvider,
+  listOpensourceVideoDurationChoices,
+  listOpensourceVideoResolutionChoices,
+  resolveOpensourceVideoMode,
+} from '../../opensource-video/services/opensource-video-params.js';
 import { toStoreVisitLipSyncView } from './douyin-store-visit-lip-sync.js';
 import {
   supportsStoreVisitReferenceAudio,
   supportsStoreVisitReferences,
 } from './douyin-store-visit-continuity.js';
+import {
+  DouyinVideoQueueService,
+  toVideoQueueView,
+} from './douyin-video-queue.service.js';
 
 type DouyinOperation = 'generate' | 'publish' | 'crawl';
 type DouyinScope = { tenantId?: string; userId: string };
@@ -77,8 +89,10 @@ export class DouyinOperationService {
     private readonly workflowModels: WorkflowModelService,
     private readonly pixmaxVideos: DouyinPixmaxVideoService,
     private readonly shuyanVideos: DouyinShuyanVideoService,
+    private readonly opensourceVideos: DouyinOpensourceVideoService,
     private readonly storeVisit: DouyinStoreVisitService,
     private readonly shotConcat: DouyinShotConcatService,
+    private readonly videoQueue: DouyinVideoQueueService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
     void this.ensureIndexes();
@@ -117,7 +131,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 整片模式：所有分镜一次生成一条完整视频。后台为节点 `douyin-workbench/full-video` 指定了模型时走 PixMax 或数眼智能，
+   * @description 整片模式：所有分镜一次生成一条完整视频。后台为节点 `douyin-workbench/full-video` 指定了模型时走 PixMax、数眼智能或自建 MiniMax-H3，
    *   否则把整条分镜提交给环境变量配置的视频生成服务；成功受理后记录响应并扣除生视频服务 Credit。
    * @keyword-cn 直连视频生成, 合成总片, 生视频扣费, 整片生成
    * @keyword-en direct-video-generation, composite-video, video-service-charge, full-video
@@ -138,6 +152,15 @@ export class DouyinOperationService {
     if (nodeRuntime) {
       if (isShuyanProvider(nodeRuntime.providerCode)) {
         return this.shuyanVideos.start({
+          topic,
+          mode: 'full',
+          prompt,
+          runtime: nodeRuntime,
+          scope,
+        });
+      }
+      if (isOpensourceVideoProvider(nodeRuntime.providerCode)) {
+        return this.opensourceVideos.start({
           topic,
           mode: 'full',
           prompt,
@@ -185,7 +208,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 分镜模式：只把一段分镜提交生成，产出这一镜的分镜视频；节点 `douyin-workbench/shot-video` 指定了模型时走 PixMax 或数眼智能，
+   * @description 分镜模式：只把一段分镜提交生成，产出这一镜的分镜视频；节点 `douyin-workbench/shot-video` 指定了模型时走 PixMax、数眼智能或自建 MiniMax-H3，
    *   否则提交给环境变量配置的视频生成服务。调用记录带 `shotId`，
    *   前端据此按镜头展示生成历史。成功直接拿到视频时绑定到该段分镜的 `videoId`。
    * @keyword-cn 单镜头视频生成, 分镜视频历史
@@ -215,6 +238,16 @@ export class DouyinOperationService {
     if (nodeRuntime) {
       if (isShuyanProvider(nodeRuntime.providerCode)) {
         return this.shuyanVideos.start({
+          topic,
+          mode: 'shot',
+          shotId,
+          prompt,
+          runtime: nodeRuntime,
+          scope,
+        });
+      }
+      if (isOpensourceVideoProvider(nodeRuntime.providerCode)) {
+        return this.opensourceVideos.start({
           topic,
           mode: 'shot',
           shotId,
@@ -341,7 +374,8 @@ export class DouyinOperationService {
     Record<
       'full' | 'shot',
       {
-        channel: 'pixmax' | 'shuyan' | 'direct' | 'unavailable';
+        channel:
+          'pixmax' | 'shuyan' | 'opensource-video' | 'direct' | 'unavailable';
         model?: string;
         providerName?: string;
         durations: number[];
@@ -372,25 +406,17 @@ export class DouyinOperationService {
       >;
     }
   > {
-    const readStoreVisitNode = async (nodeKey: string) => {
+    // 按用途读探店要用的节点：音色走「音色克隆」节点，画面段与人物段都走「生视频」节点（节点合并后两者是同一个）
+    const readStoreVisitNode = async (role: 'voice' | 'video' | 'avatar') => {
       try {
-        let runtime = await this.workflowModels.resolveNodeRuntime(
+        const runtime = await this.workflowModels.resolveNodeRuntime(
           WORKFLOW_NODES.douyinWorkbench.key,
-          nodeKey,
+          role === 'voice'
+            ? WORKFLOW_NODES.douyinWorkbench.voice
+            : WORKFLOW_NODES.douyinWorkbench.video,
         );
-        if (
-          nodeKey === WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar &&
-          (!runtime || !supportsStoreVisitReferences(runtime.model))
-        )
-          runtime = await this.workflowModels.resolveNodeRuntime(
-            WORKFLOW_NODES.douyinWorkbench.key,
-            WORKFLOW_NODES.douyinWorkbench.storeVisitVideo,
-          );
         if (!runtime) return { configured: false };
-        if (
-          nodeKey !== WORKFLOW_NODES.douyinWorkbench.voiceClone &&
-          !supportsStoreVisitReferences(runtime.model)
-        )
+        if (role !== 'voice' && !supportsStoreVisitReferences(runtime.model))
           return {
             configured: false,
             model: runtime.model,
@@ -402,7 +428,7 @@ export class DouyinOperationService {
           multiReference: supportsStoreVisitReferences(runtime.model),
           referenceAudio: supportsStoreVisitReferenceAudio(runtime.model),
         };
-        if (nodeKey === WORKFLOW_NODES.douyinWorkbench.voiceClone) {
+        if (role === 'voice') {
           if (
             String(runtime.providerCode).toLowerCase() !==
             DASHSCOPE_PROVIDER_CODE
@@ -410,22 +436,49 @@ export class DouyinOperationService {
             return {
               configured: false,
               ...base,
-              error: '音色克隆与配音要选阿里云百炼（dashscope）提供商',
+              error: '「音色克隆」节点要选阿里云百炼（dashscope）提供商',
             };
           return String(runtime.apiKey ?? '').trim()
             ? { configured: true, ...base }
             : { configured: false, ...base, error: '百炼提供商没有填 API Key' };
         }
+        if (isOpensourceVideoProvider(runtime.providerCode)) {
+          // 自建 MiniMax-H3：参考生视频一次出声画，人物段不再对口型
+          if (!resolveOpensourceVideoMode(runtime.model))
+            return {
+              configured: false,
+              ...base,
+              error: describeOpensourceVideoFailure(
+                `OPENSOURCE_VIDEO_MODEL_NOT_SUPPORTED:${runtime.model}`,
+              ),
+            };
+          if (
+            !String(runtime.baseUrl ?? '').trim() ||
+            !String(runtime.apiKey ?? '').trim()
+          )
+            return {
+              configured: false,
+              ...base,
+              error: '自建视频服务没有填服务地址或 API Key',
+            };
+          return {
+            configured: true,
+            ...base,
+            multiReference: true,
+            referenceAudio: true,
+            ...(role === 'avatar'
+              ? { lipSync: false, postLipSync: false, audioDriven: false }
+              : {}),
+            durations: listOpensourceVideoDurationChoices(),
+          };
+        }
         if (!isShuyanProvider(runtime.providerCode))
           return {
             configured: false,
             ...base,
-            error:
-              nodeKey === WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar
-                ? '探店人物对口型要选数眼智能提供商'
-                : '探店画面视频要选数眼智能提供商',
+            error: '探店要在「生视频」节点选数眼智能或自建 MiniMax-H3 提供商',
           };
-        if (nodeKey === WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar) {
+        if (role === 'avatar') {
           const engine = resolveStoreVisitPresenterEngine(runtime.model);
           if (!engine)
             return {
@@ -494,6 +547,24 @@ export class DouyinOperationService {
             resolutions: listShuyanVideoResolutionChoices(runtime.model),
           };
         }
+        if (isOpensourceVideoProvider(runtime.providerCode)) {
+          if (!resolveOpensourceVideoMode(runtime.model))
+            return {
+              channel: 'unavailable' as const,
+              durations: [],
+              resolutions: [],
+              error: describeOpensourceVideoFailure(
+                `OPENSOURCE_VIDEO_MODEL_NOT_SUPPORTED:${runtime.model}`,
+              ),
+            };
+          return {
+            channel: 'opensource-video' as const,
+            model: runtime.model,
+            providerName: runtime.providerName,
+            durations: listOpensourceVideoDurationChoices(),
+            resolutions: listOpensourceVideoResolutionChoices(),
+          };
+        }
         return {
           channel: 'pixmax' as const,
           model: runtime.model,
@@ -514,9 +585,9 @@ export class DouyinOperationService {
       await Promise.all([
         read(WORKFLOW_NODES.douyinWorkbench.fullVideo),
         read(WORKFLOW_NODES.douyinWorkbench.shotVideo),
-        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.voiceClone),
-        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
-        readStoreVisitNode(WORKFLOW_NODES.douyinWorkbench.storeVisitAvatar),
+        readStoreVisitNode('voice'),
+        readStoreVisitNode('video'),
+        readStoreVisitNode('avatar'),
       ]);
     return {
       full,
@@ -600,7 +671,7 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 收敛超过 30 分钟无回报的客户端合成，并查询当前用户调用的真实状态与业务结果。
+   * @description 收敛超过 30 分钟无回报的客户端合成，并查询当前用户调用的真实状态与业务结果；等模型空位的记录补上前面还有几个。
    * @keyword-cn 查询抖音调用, 真实接口结果
    * @keyword-en list-douyin-operations, real-api-result
    */
@@ -611,11 +682,11 @@ export class DouyinOperationService {
       .sort({ updatedAt: -1 })
       .limit(200)
       .toArray();
-    return rows.map((row) => this.toView(row));
+    return this.videoQueue.attachPositions(rows.map((row) => this.toView(row)));
   }
 
   /**
-   * @description 同步异步供应商任务：PixMax / 数眼通道直接查询任务并推进，探店分段交给探店服务，客户端合成、音色审计、探店本机素材段配音与通用数字人历史记录直接返回当前记录；
+   * @description 同步异步供应商任务：PixMax / 数眼 / 自建 MiniMax-H3 通道直接查询任务并推进，探店分段交给探店服务，客户端合成、音色审计、探店本机素材段配音与通用数字人历史记录直接返回当前记录；
    *   直连通道使用配置的状态地址，不存在状态模板时明确拒绝。
    * @keyword-cn 同步抖音调用状态, 异步任务查询
    * @keyword-en sync-douyin-operation, async-job-status
@@ -630,9 +701,14 @@ export class DouyinOperationService {
     });
     if (!row) throw new BadRequestException('DOUYIN_OPERATION_NOT_FOUND');
     if (row.provider === 'pixmax') return this.pixmaxVideos.refresh(row.id);
-    if (row.provider === 'shuyan' && row.mode === 'store-visit')
+    if (
+      (row.provider === 'shuyan' || row.provider === 'opensource-video') &&
+      row.mode === 'store-visit'
+    )
       return this.storeVisit.refresh(row.id);
     if (row.provider === 'shuyan') return this.shuyanVideos.refresh(row.id);
+    if (row.provider === 'opensource-video')
+      return this.opensourceVideos.refresh(row.id);
     // 音色审计、探店本机素材段配音、客户端合成，以及通用数字人通道下线前的历史记录都没有可查询的远端任务
     if (
       row.provider === 'client' ||
@@ -935,7 +1011,9 @@ export class DouyinOperationService {
       model: row.model,
       progress: row.progress,
       plan:
-        (row.provider === 'pixmax' || row.provider === 'shuyan') &&
+        (row.provider === 'pixmax' ||
+          row.provider === 'shuyan' ||
+          row.provider === 'opensource-video') &&
         row.mode !== 'store-visit'
           ? readDouyinVideoPlan(row.request)
           : undefined,
@@ -943,6 +1021,7 @@ export class DouyinOperationService {
       externalId: row.externalId,
       continuity: row.continuity,
       lipSync: toStoreVisitLipSyncView(row.lipSync),
+      queue: toVideoQueueView(row.queue),
       result: row.result,
       ...presentDouyinVideoError(row),
       createdAt: row.createdAt,

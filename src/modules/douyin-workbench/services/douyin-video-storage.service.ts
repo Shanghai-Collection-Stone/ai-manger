@@ -169,6 +169,38 @@ export class DouyinVideoStorageService {
   }
 
   /**
+   * @description 保存一张生成图（版式模板 PNG、模板封面 JPEG）：OSS 配好时上传到 `poster` 场景返回公网地址；
+   *   没配 OSS 时落到 `public/uploads/douyin-template`，返回站内地址。
+   * @keyword-cn 保存模板图片, 图片入存储
+   * @keyword-en save-template-image, store-generated-image
+   * @param {Buffer} buffer 图片内容。
+   * @param {{scope: DouyinScope, fileName: string, contentType: string}} meta 作用域、带扩展名的文件名与媒体类型。
+   * @returns {Promise<string>} 图片地址。
+   */
+  async saveImage(
+    buffer: Buffer,
+    meta: { scope: DouyinScope; fileName: string; contentType: string },
+  ): Promise<string> {
+    if (this.oss.isConfigured()) {
+      const key = this.oss.buildObjectKey({
+        scene: 'poster',
+        fileName: meta.fileName,
+        tenantId: meta.scope.tenantId,
+      });
+      return await this.oss.putObject(key, buffer, meta.contentType);
+    }
+    const tenant =
+      String(meta.scope.tenantId ?? '').replace(/[^A-Za-z0-9_-]/g, '') ||
+      'platform';
+    const extension = /\.[a-z0-9]{1,8}$/i.exec(meta.fileName)?.[0] ?? '';
+    const relative = `uploads/douyin-template/${tenant}/${randomUUID()}${extension.toLowerCase()}`;
+    const target = join(process.cwd(), 'public', relative);
+    await fsPromises.mkdir(dirname(target), { recursive: true });
+    await fsPromises.writeFile(target, buffer);
+    return `/static/${relative}`;
+  }
+
+  /**
    * @description 把一张首帧图（图库里的站内图片或 Base64）传到 OSS 的 `poster` 场景，换成外部服务能读的公网地址；
    *   已经是 http(s) 地址时原样返回。给只认公网地址的视频型号（万相 wan2.7-i2v）用。
    * @keyword-cn 首帧图转公网地址, 图片传OSS
