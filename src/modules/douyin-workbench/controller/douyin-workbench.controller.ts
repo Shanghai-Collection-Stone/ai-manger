@@ -50,15 +50,20 @@ import {
   GenerateDouyinStoreVisitVideoDto,
   SaveDouyinStoreVisitVoiceAnchorDto,
   GenerateDouyinVideoDto,
+  PlanDouyinVideoDirectionDto,
+  PlanDouyinVideoEditDto,
   PublishDouyinVideoDto,
   RecommendDouyinStoreVisitPlanDto,
   WriteDouyinStoreVisitScriptDto,
   RefineDouyinScriptDto,
+  RenderDouyinVideoTemplateDto,
   UpdateDouyinTopicDto,
+  UpdateDouyinVideoTemplateDto,
 } from './douyin-workbench.dto.js';
 import {
   DOUYIN_SCRIPT_STYLES,
   type DouyinScriptStyle,
+  type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import { DouyinOperationService } from '../services/douyin-operation.service.js';
 import { DouyinChildTopicGenerationService } from '../services/douyin-child-topic-generation.service.js';
@@ -72,6 +77,8 @@ import {
 } from '../services/douyin-store-visit.service.js';
 import { DouyinStoreVisitPlannerService } from '../services/douyin-store-visit-planner.service.js';
 import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot.service.js';
+import { DouyinVideoDirectorService } from '../services/douyin-video-director.service.js';
+import { DouyinVideoTemplateService } from '../services/douyin-video-template.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
 
 /**
@@ -99,6 +106,8 @@ export class DouyinWorkbenchController {
     private readonly storeVisit: DouyinStoreVisitService,
     private readonly spots: DouyinStoreVisitSpotService,
     private readonly planner: DouyinStoreVisitPlannerService,
+    private readonly videoTemplates: DouyinVideoTemplateService,
+    private readonly director: DouyinVideoDirectorService,
   ) {}
 
   /**
@@ -277,8 +286,10 @@ export class DouyinWorkbenchController {
     @Body() dto: UpdateDouyinTopicDto,
   ) {
     const scope = this.scopeOf(this.requireUser(req));
-    const topic = await this.repository.update(this.readId(id), dto, scope);
-    if (!topic) throw new BadRequestException('DOUYIN_TOPIC_NOT_FOUND');
+    const saved = await this.repository.update(this.readId(id), dto, scope);
+    if (!saved) throw new BadRequestException('DOUYIN_TOPIC_NOT_FOUND');
+    // 换了分镜配图或探店场景时，AI 导演在后台重新规划
+    const topic = await this.afterFrameChange(saved, scope);
     return {
       topic: { ...topic, _id: undefined },
       groups: await this.repository.listWorkspace(scope),
@@ -362,7 +373,10 @@ export class DouyinWorkbenchController {
       scope,
     );
     return {
-      topic: { ...result.topic, _id: undefined },
+      topic: {
+        ...(await this.afterFrameChange(result.topic, scope)),
+        _id: undefined,
+      },
       shotId: result.shotId,
       imageId: result.imageId,
       groups: await this.repository.listWorkspace(scope),
@@ -391,7 +405,10 @@ export class DouyinWorkbenchController {
       dto.style,
     );
     return {
-      topic: { ...result.topic, _id: undefined },
+      topic: {
+        ...(await this.afterFrameChange(result.topic, scope)),
+        _id: undefined,
+      },
       shotId: result.shotId,
       imageId: result.imageId,
       groups: await this.repository.listWorkspace(scope),
@@ -417,8 +434,112 @@ export class DouyinWorkbenchController {
       scope,
     );
     return {
-      topic: { ...result.topic, _id: undefined },
+      topic: {
+        ...(await this.afterFrameChange(result.topic, scope)),
+        _id: undefined,
+      },
       shotId: result.shotId,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description AI 导演立刻按当前画面重新规划：看各段首帧决定要不要套版式模板（要套时用「生图」节点出模板图）与每段的运镜和画面动态。分镜 / 整片 / 探店通用。
+   * @keyword-cn AI导演规划接口, 读图规划版式
+   * @keyword-en plan-video-direction-api, vision-layout-plan
+   */
+  @Post('topics/:id/video-direction/plan')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async planVideoDirection(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: PlanDouyinVideoDirectionDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.director.plan(this.readId(id), dto.prompt, scope);
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 出片后的 AI 剪辑规划：桌面端交来各段抽帧与人声区间，返回掐头去尾、段间转场、字幕位置大小与封面帧，并记到合成记录上。
+   * @keyword-cn AI剪辑规划接口, 看片定剪辑点
+   * @keyword-en plan-video-edit-api, review-clips-for-edit
+   */
+  @Post('topics/:id/video/edit-plan')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async planVideoEdit(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: PlanDouyinVideoEditDto,
+  ) {
+    return {
+      plan: await this.director.planEdit(
+        this.readId(id),
+        dto,
+        this.scopeOf(this.requireUser(req)),
+      ),
+    };
+  }
+
+  /**
+   * @description 按改过的文案、风格或窗口比例重新生成模板图与封面。
+   * @keyword-cn 重新生成模板接口, 修改模板文案
+   * @keyword-en render-video-template-api, edit-template-copy
+   */
+  @Post('topics/:id/video-template/render')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async renderVideoTemplate(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: RenderDouyinVideoTemplateDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.videoTemplates.render(this.readId(id), dto, scope);
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 开关版式模板，关闭后出片与合成回到满屏竖屏。
+   * @keyword-cn 开关模板接口, 启用版式模板
+   * @keyword-en toggle-video-template-api, enable-layout-template
+   */
+  @Patch('topics/:id/video-template')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async updateVideoTemplate(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: UpdateDouyinVideoTemplateDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.videoTemplates.setEnabled(
+      this.readId(id),
+      dto.enabled,
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 删除选题的版式模板。
+   * @keyword-cn 删除模板接口, 清除版式
+   * @keyword-en remove-video-template-api, clear-layout
+   */
+  @Delete('topics/:id/video-template')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async removeVideoTemplate(@Req() req: AdminRequest, @Param('id') id: string) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.videoTemplates.remove(this.readId(id), scope);
+    return {
+      topic: { ...topic, _id: undefined },
       groups: await this.repository.listWorkspace(scope),
     };
   }
@@ -912,7 +1033,7 @@ export class DouyinWorkbenchController {
   }
 
   /**
-   * @description 为人物出镜的一段生成首帧（出镜人物放进这段场景，按「分镜画面」节点生图计费），写进分段并返回脚本、首帧与工作台。
+   * @description 为人物出镜的一段生成首帧（出镜人物放进这段场景，按「生图」节点生图计费），写进分段并返回脚本、首帧与工作台。
    * @keyword-cn 人物首帧接口, 人物进场景
    * @keyword-en segment-keyframe-api, person-in-scene
    */
@@ -1167,6 +1288,22 @@ export class DouyinWorkbenchController {
    * @keyword-cn 构造抖音作用域, 用户边界
    * @keyword-en build-douyin-scope, user-boundary
    */
+  /**
+   * @description 分镜配图或探店场景可能变了之后触发 AI 导演规划，返回带最新规划状态的选题（触发失败不影响接口本身）。
+   * @keyword-cn 画面变更后规划, 返回最新选题
+   * @keyword-en after-frame-change, latest-topic
+   * @param topic 刚保存的选题。
+   * @param scope 租户用户作用域。
+   * @returns 最新选题。
+   */
+  private async afterFrameChange(
+    topic: DouyinTopicEntity,
+    scope: { tenantId?: string; userId: string },
+  ): Promise<DouyinTopicEntity> {
+    await this.director.schedule(topic.id, scope);
+    return (await this.repository.get(topic.id, scope)) ?? topic;
+  }
+
   private scopeOf(user: AdminUserEntity) {
     return { tenantId: user.tenantId, userId: String(user._id) };
   }

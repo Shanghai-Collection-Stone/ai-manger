@@ -36,6 +36,7 @@ import {
   type AiServiceCreditConfigEntity,
 } from '../../ai-billing/entities/ai-service-credit.entity.js';
 import type { AiCreditTransactionEntity } from '../../ai-billing/entities/ai-credit-transaction.entity.js';
+import { isOpensourceVideoProvider } from '../../opensource-video/services/opensource-video-params.js';
 import {
   ROLE_CATALOG,
   type RoleCatalogEntry,
@@ -1592,6 +1593,7 @@ export class AdminService {
    *   - openai 兼容(openai/glm/deepseek/nvidia/minimax/doubao/kimi/...): GET ${baseUrl}/models, Bearer
    *   - gemini: GET ${baseUrl}/models?key=${apiKey}(baseUrl 已含 /v1beta)
    *   - anthropic: GET ${baseUrl}/v1/models, x-api-key
+   *   - opensource-video(自建 MiniMax-H3): GET ${baseUrl}/v1/system/health, Bearer
    *   返回 { ok, status, latencyMs, message, modelCount?, sample? }
    * @keyword-en test ai provider connectivity, get models probe
    */
@@ -1648,6 +1650,10 @@ export class AdminService {
       method = 'POST';
       headers['Authorization'] = `Bearer ${apiKey}`;
       headers['Content-Type'] = 'application/json';
+    } else if (isOpensourceVideoProvider(code)) {
+      // 自建 MiniMax-H3 视频服务没有 /models，用健康检查探活（带 Key，返回 ComfyUI 与显卡状态，不占 GPU）
+      endpoint = `${baseUrl.replace(/\/$/, '')}/v1/system/health`;
+      headers['Authorization'] = `Bearer ${apiKey}`;
     } else if (code === 'gemini' || code === 'google-genai') {
       endpoint = `${baseUrl.replace(/\/$/, '')}/models?key=${encodeURIComponent(apiKey)}`;
     } else if (code === 'anthropic' || code === 'claude') {

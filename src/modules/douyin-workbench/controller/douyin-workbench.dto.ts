@@ -22,9 +22,11 @@ import {
   DOUYIN_SCRIPT_STYLES,
   DOUYIN_STORE_VISIT_MOTIONS,
   DOUYIN_STORE_VISIT_TEMPLATES,
+  DOUYIN_TEMPLATE_ASPECT_RATIOS,
   type DouyinFaceMaskStyle,
   type DouyinStoreVisitMotion,
   type DouyinStoreVisitTemplate,
+  type DouyinTemplateAspect,
 } from '../entities/douyin-workbench.entity.js';
 import { KNOWLEDGE_REFERENCE_LIMIT } from '../../knowledge/entities/knowledge.entity.js';
 
@@ -747,6 +749,149 @@ export class GenerateDouyinShotImageDto {
   @IsString()
   @MaxLength(1000)
   prompt?: string;
+}
+
+/**
+ * @description 校验 AI 导演重新规划的补充要求（选填），例如「突出生日派对套餐」。
+ * @keyword-cn 导演规划参数, 规划补充要求
+ * @keyword-en plan-video-direction-dto, direction-plan-prompt
+ */
+export class PlanDouyinVideoDirectionDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  prompt?: string;
+}
+
+/**
+ * @description 校验重新生成模板时改过的文案、风格与窗口比例，不传的项沿用当前模板；字数上限与服务端整理规则一致。
+ * @keyword-cn 模板重绘参数, 修改模板文案
+ * @keyword-en render-video-template-dto, edit-template-copy
+ */
+export class RenderDouyinVideoTemplateDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(24)
+  subtitle?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(4)
+  @IsString({ each: true })
+  @MaxLength(10, { each: true })
+  sellingPoints?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  cta?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  style?: string;
+
+  @IsOptional()
+  @IsIn(DOUYIN_TEMPLATE_ASPECT_RATIOS)
+  aspectRatio?: DouyinTemplateAspect;
+}
+
+/**
+ * @description 校验一段人声区间（秒）。
+ * @keyword-cn 人声区间参数, 剪辑人声
+ * @keyword-en speech-interval-dto, edit-speech
+ */
+export class DouyinSpeechIntervalDto {
+  @IsNumber()
+  @Min(0)
+  @Max(600)
+  start!: number;
+
+  @IsNumber()
+  @Min(0)
+  @Max(600)
+  end!: number;
+}
+
+/**
+ * @description 校验一张抽帧：在原片第几秒、JPEG / PNG / WebP 的 data URL（单张不超过约 300KB）。
+ * @keyword-cn 抽帧参数, 剪辑抽帧
+ * @keyword-en edit-frame-dto, clip-frame
+ */
+export class DouyinEditFrameDto {
+  @IsNumber()
+  @Min(0)
+  @Max(600)
+  time!: number;
+
+  @IsString()
+  @MaxLength(400000)
+  @Matches(/^data:image\/(jpeg|png|webp);base64,/)
+  image!: string;
+}
+
+/**
+ * @description 校验一段成片分析：段 ID、时长、有无音轨、人声区间（最多 60 段）与抽帧（最多 8 张）。
+ * @keyword-cn 成片分析参数, 剪辑分段
+ * @keyword-en edit-clip-dto, clip-analysis
+ */
+export class DouyinEditClipDto {
+  @IsString()
+  @MaxLength(80)
+  shotId!: string;
+
+  @IsNumber()
+  @Min(0)
+  @Max(600)
+  duration!: number;
+
+  @IsBoolean()
+  hasAudio!: boolean;
+
+  @IsArray()
+  @ArrayMaxSize(60)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinSpeechIntervalDto)
+  speech!: DouyinSpeechIntervalDto[];
+
+  @IsArray()
+  @ArrayMaxSize(8)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinEditFrameDto)
+  frames!: DouyinEditFrameDto[];
+}
+
+/**
+ * @description 校验出片后的剪辑规划请求：进行中的客户端合成记录 ID 与按成片顺序的各段分析（1～40 段）。
+ * @keyword-cn 剪辑规划参数, 看片剪辑
+ * @keyword-en plan-video-edit-dto, review-clips-for-edit
+ */
+export class PlanDouyinVideoEditDto {
+  @IsString()
+  @MaxLength(80)
+  operationId!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(40)
+  @ValidateNested({ each: true })
+  @Type(() => DouyinEditClipDto)
+  clips!: DouyinEditClipDto[];
+}
+
+/**
+ * @description 校验开关版式模板。
+ * @keyword-cn 模板开关参数, 启用模板
+ * @keyword-en toggle-video-template-dto, enable-template
+ */
+export class UpdateDouyinVideoTemplateDto {
+  @IsBoolean()
+  enabled!: boolean;
 }
 
 /**

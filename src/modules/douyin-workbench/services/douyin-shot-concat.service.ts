@@ -10,9 +10,12 @@ import { Collection, Db, ObjectId } from 'mongodb';
 import type {
   DouyinOperationEntity,
   DouyinOperationView,
+  DouyinEditPlan,
   DouyinStoreVisitMotion,
+  DouyinVideoTemplate,
 } from '../entities/douyin-workbench.entity.js';
 import { isStoreVisitSegmentReady } from './douyin-store-visit-continuity.js';
+import { activeTemplateAspect } from './douyin-video-template.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -65,6 +68,16 @@ export interface DouyinConcatClip {
 }
 
 /**
+ * @description 交给客户端合成的版式模板：窗口透明的模板 PNG、窗口在 1080×1920 画布上的像素位置与比例；客户端把每段视频按 cover 铺满窗口、叠上模板，字幕放在窗口里。
+ * @keyword-cn 合成版式模板, 模板合成参数
+ * @keyword-en concat-template, template-merge-input
+ */
+export type DouyinConcatTemplate = Pick<
+  DouyinVideoTemplate,
+  'window' | 'aspectRatio'
+> & { imageUrl: string };
+
+/**
  * @description 客户端回报的合成结果：进行中（进度）、完成（已上传登记的视频库 ID）或失败（中文原因与原始信息）。
  * @keyword-cn 合成结果回报, 客户端回报
  * @keyword-en concat-result-report, client-report
@@ -102,13 +115,14 @@ export class DouyinShotConcatService {
 
   /**
    * @description 准备一次客户端合成：每一镜（探店模式按分段，本机素材段配好音即可）都要已出片、同一脚本没有正在进行的合成；`auto` 时先原子领走「全部出片后自动合成」标记
-   *   （领不到说明已被别的客户端处理或已取消），手动合成顺带清掉标记。写运行中的调用记录并返回按顺序的片段，素材地址取图库 / 视频库的真实记录。
+   *   （领不到说明已被别的客户端处理或已取消），手动合成顺带清掉标记。写运行中的调用记录并返回按顺序的片段，素材地址取图库 / 视频库的真实记录；
+   *   脚本启用了版式模板时一并返回模板（客户端按模板合成）。
    * @keyword-cn 准备客户端合成, 合成前校验
    * @keyword-en prepare-client-concat, concat-precheck
    * @param {number} topicId 子选题（脚本）ID。
    * @param {DouyinScope} scope 租户用户作用域。
    * @param {{auto?: boolean}} [options] `auto` 表示客户端发现条件满足后自动发起。
-   * @returns {Promise<{operation: DouyinOperationView, clips: DouyinConcatClip[]}>} 调用记录与片段。
+   * @returns {Promise<{operation: DouyinOperationView, clips: DouyinConcatClip[], template?: DouyinConcatTemplate}>} 调用记录、片段与生效的版式模板。
    * @throws {BadRequestException} 脚本不存在、没有分镜或还有分镜（分段）没出片。
    * @throws {ConflictException} 正在合成，或自动合成标记已被领走。
    */
@@ -116,7 +130,11 @@ export class DouyinShotConcatService {
     topicId: number,
     scope: DouyinScope,
     options: { auto?: boolean } = {},
-  ): Promise<{ operation: DouyinOperationView; clips: DouyinConcatClip[] }> {
+  ): Promise<{
+    operation: DouyinOperationView;
+    clips: DouyinConcatClip[];
+    template?: DouyinConcatTemplate;
+  }> {
     const topic = await this.repository.get(topicId, scope);
     if (!topic || topic.kind !== 'child')
       throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
@@ -258,13 +276,59 @@ export class DouyinShotConcatService {
         ),
         videoIds: clips.map((clip) => clip.videoId),
         auto: Boolean(options.auto),
+        template: Boolean(activeTemplateAspect(topic.videoTemplate)),
       },
       status: 'running',
       createdAt: now,
       updatedAt: now,
     };
     await this.operations.insertOne(doc);
-    return { operation: this.toView(doc), clips };
+    const template =
+      activeTemplateAspect(topic.videoTemplate) && topic.videoTemplate?.imageUrl
+        ? {
+            imageUrl: topic.videoTemplate.imageUrl,
+            window: topic.videoTemplate.window,
+            aspectRatio: topic.videoTemplate.aspectRatio,
+          }
+        : undefined;
+    return {
+      operation: this.toView(doc),
+      clips,
+      ...(template ? { template } : {}),
+    };
+  }
+
+  /**
+   * @description 把 AI 剪辑方案记到本人进行中的客户端合成记录上（`request.editPlan`），便于排查成片为什么这么剪；记录不存在时报错。
+   * @keyword-cn 记录剪辑方案, 合成记录留痕
+   * @keyword-en attach-edit-plan, concat-trace
+   * @param {string} operationId 合成调用记录 ID。
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {DouyinEditPlan} plan 剪辑方案。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<void>}
+   * @throws {NotFoundException} 记录不存在、不是本人的客户端合成或已经结束。
+   */
+  async attachEditPlan(
+    operationId: string,
+    topicId: number,
+    plan: DouyinEditPlan,
+    scope: DouyinScope,
+  ): Promise<void> {
+    const result = await this.operations.updateOne(
+      {
+        id: operationId,
+        topicId,
+        provider: 'client',
+        mode: 'concat',
+        status: 'running',
+        userId: scope.userId,
+        ...this.tenantFilter(scope.tenantId),
+      },
+      { $set: { 'request.editPlan': plan, updatedAt: new Date() } },
+    );
+    if (!result.matchedCount)
+      throw new NotFoundException('DOUYIN_CONCAT_OPERATION_NOT_FOUND');
   }
 
   /**

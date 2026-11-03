@@ -74,6 +74,15 @@ function buildService(storeVisit: Record<string, unknown>) {
   };
   service.topic = topic;
   service.previews = new Map();
+  // 模型并发不限：直接放行，不排队
+  service.videoQueue = {
+    admit: jest.fn().mockResolvedValue(true),
+    release: jest.fn().mockResolvedValue(undefined),
+    releaseAndThrow: jest.fn(async (_id: string, error: unknown) => {
+      throw error;
+    }),
+    enqueue: jest.fn(),
+  };
   service.repository = {
     get: jest.fn().mockImplementation(() => Promise.resolve(service.topic)),
     updateStoreVisitSegment: jest.fn().mockResolvedValue({}),
@@ -126,6 +135,7 @@ function buildService(storeVisit: Record<string, unknown>) {
   };
   service.operations = {
     insertOne: jest.fn().mockResolvedValue({}),
+    find: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
     findOne: jest.fn().mockResolvedValue(null),
     updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     findOneAndUpdate: jest.fn().mockResolvedValue(null),
@@ -145,7 +155,7 @@ describe('探店音色锚点', () => {
       voiceKey: storeVisitVoiceKey(setting),
       createdAt: new Date(0),
     };
-    expect(storeVisitVoiceKey(setting)).toBe('v1|年轻女声');
+    expect(storeVisitVoiceKey(setting)).toBe('v2|v1|年轻女声');
     expect(readStoreVisitVoiceAnchor({ ...setting, voiceAnchor: anchor })).toBe(
       anchor,
     );
@@ -154,6 +164,13 @@ describe('探店音色锚点', () => {
         ...setting,
         voicePrompt: '沉稳男声',
         voiceAnchor: anchor,
+      }),
+    ).toBeUndefined();
+    // 改版前（第 1 段照着 TTS 学）取的锚点不再用
+    expect(
+      readStoreVisitVoiceAnchor({
+        ...setting,
+        voiceAnchor: { ...anchor, voiceKey: 'v1|年轻女声' },
       }),
     ).toBeUndefined();
   });
@@ -180,6 +197,21 @@ describe('探店音色锚点', () => {
       ['seg-2', 'seg-1', 'seg-1'],
       ['seg-3', 'seg-1', 'seg-1'],
     ]);
+  });
+
+  it('统一音色模式还没锚点时第 1 段不用百炼合成参考音频，按音色描述用模型自己的声音、只出干净人声', async () => {
+    const service = buildService({ segments: segments() });
+    await service.start(2, scope, { voiceAnchor: true });
+    expect(service.cosyVoice.synthesize).not.toHaveBeenCalled();
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body);
+    expect(
+      payload.content.some(
+        (item: { type: string }) => item.type === 'audio_url',
+      ),
+    ).toBe(false);
+    const prompt = payload.content[0].text as string;
+    expect(prompt).toContain('这一段只要干净清晰的人声');
+    expect(prompt).not.toContain('可保留轻微现场环境声');
   });
 
   it('不开统一音色时照旧逐段排队，等的是上一段', async () => {
@@ -412,6 +444,39 @@ describe('探店音色锚点', () => {
       previousSegmentId: 'seg-1',
       anchorSegmentId: 'seg-1',
     });
+  });
+
+  it('单段重做时后面正在生成的新镜头不连带重做，只拦会被牵连的在跑分段', async () => {
+    const service = buildService({
+      segments: segments([{ videoId: 41, nativeAudio: true }]),
+    });
+    // 第 2 段失败要重做，第 3 段（另一个镜头）还在生成
+    service.operations.find.mockReturnValue({
+      toArray: jest.fn().mockResolvedValue([{ segmentId: 'seg-3' }]),
+    });
+    await service.startOne(2, 'seg-2', scope);
+    const cleared = service.repository.updateStoreVisitSegment.mock.calls
+      .filter((call: unknown[]) => call[2] === null)
+      .map((call: unknown[]) => call[1]);
+    expect(cleared).toEqual(['seg-2']);
+    const lock = service.operations.findOne.mock.calls
+      .map((call: unknown[]) => call[0] as Record<string, unknown>)
+      .find((query: Record<string, unknown>) => Array.isArray(query.$or));
+    expect(lock.$or).toEqual([
+      { segmentId: { $in: ['seg-2', 'seg-1'] } },
+      { 'continuity.previousSegmentId': { $in: ['seg-2'] } },
+    ]);
+  });
+
+  it('要重做的段或第 1 段还在生成时拒绝重做', async () => {
+    const service = buildService({
+      segments: segments([{ videoId: 41, nativeAudio: true }]),
+    });
+    service.operations.findOne.mockResolvedValue({ status: 'running' });
+    await expect(service.startOne(2, 'seg-2', scope)).rejects.toThrow(
+      '这条脚本还有相关分段在生成，完成后再试',
+    );
+    expect(service.repository.updateStoreVisitSegment).not.toHaveBeenCalled();
   });
 
   it('等锚点的段提交时不记第 1 段的视频，第 1 段以后重做也不会作废它', async () => {

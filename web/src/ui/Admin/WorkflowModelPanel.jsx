@@ -39,18 +39,88 @@ function describeFallback(node) {
 }
 
 /**
- * @description 单个节点的编辑行：选提供商 → 选（或填写）模型 → 保存 / 恢复默认
+ * @description 生视频节点已指定模型时的并发上限设置：按「提供商 + 模型」全平台共用，所有租户、工作流都算在里面，超出排队；留空不限
+ * @keyword-cn 模型并发上限设置, 超出排队
+ * @keyword-en model-concurrency-row, queue-when-full
+ * @param {{ binding: object, usage?: object, onSave: (limit: number|null) => Promise<void> }} props
+ */
+function ConcurrencyLimitRow({ binding, usage, onSave }) {
+  const saved = usage?.limit ? String(usage.limit) : '';
+  const [value, setValue] = useState(saved);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setValue(saved), [saved]);
+  const parsed = value.trim() ? Math.floor(Number(value)) : null;
+  const invalid = parsed !== null && !(parsed >= 1 && parsed <= 100);
+
+  /**
+   * @description 提交上限，空值表示不限
+   * @keyword-cn 保存并发上限
+   * @keyword-en save-concurrency-limit
+   */
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await onSave(parsed);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      data-model-concurrency={`${binding.providerId}:${binding.model}`}
+      className="rounded border border-slate-100 bg-slate-50 px-3 py-2"
+    >
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-slate-700">并发上限</span>
+        <input
+          type="number"
+          min={1}
+          max={100}
+          className="w-20 rounded border px-2 py-1 text-sm"
+          placeholder="不限"
+          value={value}
+          disabled={saving}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <span className="text-slate-500">个</span>
+        <button
+          type="button"
+          disabled={saving || invalid || value.trim() === saved}
+          onClick={submit}
+          className="rounded bg-slate-900 px-3 py-1 text-xs text-white disabled:bg-slate-300"
+        >
+          保存上限
+        </button>
+        <span className="text-xs text-slate-500">
+          正在生成 {usage?.running ?? 0} 个 · 排队 {usage?.waiting ?? 0} 个
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-slate-400">
+        {`「${binding.model}」全平台共用这个上限（所有租户、所有工作流），超出的任务排队，有空位按先后自动提交；留空不限。`}
+      </p>
+      {invalid ? (
+        <p className="mt-1 text-xs text-red-600">请填 1～100 的整数</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * @description 单个节点的编辑行：选提供商 → 选（或填写）模型 → 保存 / 恢复默认；生视频节点另有模型并发上限
  * @keyword-cn 节点模型编辑行, 选择模型
  * @keyword-en node-model-row, pick-model
- * @param {{ workflowKey: string, node: object, providers: object[], busy: boolean, onSave: Function, onReset: Function, onError: Function }} props
+ * @param {{ workflowKey: string, node: object, providers: object[], busy: boolean, concurrency: object[], onSave: Function, onReset: Function, onSaveConcurrency: Function, onError: Function }} props
  */
 function NodeModelRow({
   workflowKey,
   node,
   providers,
   busy,
+  concurrency,
   onSave,
   onReset,
+  onSaveConcurrency,
   onError,
 }) {
   const candidates = providers.filter(
@@ -199,6 +269,19 @@ function NodeModelRow({
             之前指定的提供商已删除、停用或类型不符，当前实际回退默认提供商，请重新选择。
           </p>
         ) : null}
+        {node.category === 'video' &&
+        node.binding?.providerAvailable &&
+        node.binding.model ? (
+          <ConcurrencyLimitRow
+            binding={node.binding}
+            usage={concurrency.find(
+              (item) =>
+                item.providerId === node.binding.providerId &&
+                item.model === node.binding.model,
+            )}
+            onSave={(limit) => onSaveConcurrency(node, limit)}
+          />
+        ) : null}
       </div>
 
       <div className="flex gap-2 lg:flex-col">
@@ -234,6 +317,7 @@ function NodeModelRow({
 export default function WorkflowModelPanel({ onNotice, onError }) {
   const [workflows, setWorkflows] = useState([]);
   const [providers, setProviders] = useState([]);
+  const [concurrency, setConcurrency] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busyNode, setBusyNode] = useState('');
   const [activeKey, setActiveKey] = useState(() => {
@@ -276,7 +360,36 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
       .then(apply)
       .catch((err) => onError(`读取工作流节点模型失败：${err.message}`))
       .finally(() => setLoading(false));
+    adminApi
+      .listModelConcurrency()
+      .then((res) => setConcurrency(res?.items || []))
+      .catch((err) => onError(`读取模型并发上限失败：${err.message}`));
   }, []);
+
+  /**
+   * @description 保存生视频节点当前模型的并发上限（全平台共用），null 表示不限
+   * @keyword-cn 保存模型并发上限
+   * @keyword-en save-model-concurrency
+   * @param {object} node 节点视图（已指定模型）。
+   * @param {number|null} limit 新上限。
+   */
+  const onSaveConcurrency = async (node, limit) => {
+    try {
+      const res = await adminApi.saveModelConcurrency({
+        providerId: node.binding.providerId,
+        model: node.binding.model,
+        limit,
+      });
+      setConcurrency(res?.items || []);
+      onNotice(
+        limit
+          ? `「${node.binding.model}」并发上限已设为 ${limit} 个`
+          : `「${node.binding.model}」已改为不限并发`,
+      );
+    } catch (err) {
+      onError(`保存并发上限失败：${err.message}`);
+    }
+  };
 
   /**
    * @description 保存节点的提供商与模型
@@ -373,10 +486,12 @@ export default function WorkflowModelPanel({ onNotice, onError }) {
                 node={node}
                 providers={providers}
                 busy={busyNode === `${active.key}/${node.key}`}
+                concurrency={concurrency}
                 onSave={(target, payload) =>
                   onSave(active.key, target, payload)
                 }
                 onReset={(target) => onReset(active.key, target)}
+                onSaveConcurrency={onSaveConcurrency}
                 onError={onError}
               />
             ))}

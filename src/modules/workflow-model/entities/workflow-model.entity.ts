@@ -37,43 +37,85 @@ export interface WorkflowDefinition {
 }
 
 /**
- * @description 预设工作流与节点的 key，业务调用 `resolveNodeRuntime` 时从这里取，避免各处手写字符串；
- *   上线后不要改名，否则已保存的设置会失效。
+ * @description 预设工作流与节点的 key，业务调用 `resolveNodeRuntime` 时从这里取，避免各处手写字符串。
+ *   节点按能力只分四类：思考 `think`、生图 `image`、生视频 `video`、音色克隆 `voice`（小红书只有前两类）。
+ *   原来按步骤拆开的节点名（脚本、分镜、选图、探店画面视频……）保留为别名，都指向所属的那一类，业务代码不用改；
+ *   旧节点上保存过的设置由 `WORKFLOW_LEGACY_NODE_KEYS` 在启动时并入新节点。
  * @keyword-cn 工作流节点标识, 节点key常量
  * @keyword-en workflow-node-keys, node-key-constants
  */
 export const WORKFLOW_NODES = {
   douyinWorkbench: {
     key: 'douyin-workbench',
-    script: 'script',
-    storyboard: 'storyboard',
-    imageDecision: 'image-decision',
-    shotImage: 'shot-image',
-    personaImage: 'persona-image',
-    shotVideo: 'shot-video',
-    fullVideo: 'full-video',
-    voiceClone: 'voice-clone',
-    storeVisitVideo: 'store-visit-video',
-    storeVisitAvatar: 'store-visit-avatar',
-    storeVisitContinuity: 'store-visit-continuity',
-    storeVisitScene: 'store-visit-scene',
-    storeVisitPlanner: 'store-visit-planner',
+    think: 'think',
+    image: 'image',
+    video: 'video',
+    voice: 'voice',
+    script: 'think',
+    storyboard: 'think',
+    imageDecision: 'think',
+    storeVisitContinuity: 'think',
+    storeVisitScene: 'think',
+    storeVisitPlanner: 'think',
+    shotImage: 'image',
+    personaImage: 'image',
+    shotVideo: 'video',
+    fullVideo: 'video',
+    storeVisitVideo: 'video',
+    storeVisitAvatar: 'video',
+    voiceClone: 'voice',
   },
   xhsArticle: {
     key: 'xhs-article',
-    topic: 'topic',
-    article: 'article',
-    imageDecision: 'image-decision',
-    coverCopy: 'cover-copy',
-    coverImage: 'cover-image',
-    coverOverlay: 'cover-overlay',
-    innerImage: 'inner-image',
+    think: 'think',
+    image: 'image',
+    topic: 'think',
+    article: 'think',
+    imageDecision: 'think',
+    coverCopy: 'think',
+    coverImage: 'image',
+    coverOverlay: 'image',
+    innerImage: 'image',
   },
 } as const;
 
 /**
- * @description 预设工作流目录。新增会调用模型的业务节点时先在 `WORKFLOW_NODES` 与这里登记，再在调用处用
- *   `WorkflowModelService.resolveNodeRuntime(workflowKey, nodeKey)` 取模型。
+ * @description 合并前按步骤拆开的旧节点 key：新节点还没有设置时，按这里的顺序取第一个有设置的旧节点并入（旧记录保留不删，可回退）。
+ *   抖音「思考」优先取探店尾帧衔接 / 场景归类（要看图，并入的模型得是视觉语言模型），「生视频」优先取探店画面 / 人物节点（探店只收数眼与自建 MiniMax-H3）。
+ * @keyword-cn 旧节点合并, 节点设置迁移
+ * @keyword-en legacy-node-merge, node-binding-migration
+ */
+export const WORKFLOW_LEGACY_NODE_KEYS: Record<
+  string,
+  Record<string, readonly string[]>
+> = {
+  'douyin-workbench': {
+    think: [
+      'store-visit-continuity',
+      'store-visit-scene',
+      'script',
+      'storyboard',
+      'store-visit-planner',
+      'image-decision',
+    ],
+    image: ['shot-image', 'persona-image'],
+    video: [
+      'store-visit-video',
+      'store-visit-avatar',
+      'shot-video',
+      'full-video',
+    ],
+    voice: ['voice-clone'],
+  },
+  'xhs-article': {
+    think: ['article', 'topic', 'cover-copy', 'image-decision'],
+    image: ['cover-image', 'inner-image', 'cover-overlay'],
+  },
+};
+
+/**
+ * @description 预设工作流目录。节点按能力只分思考 / 生图 / 生视频 / 音色克隆四类，同一类的各个步骤共用一个节点，
+ *   不再一步一个节点；新业务步骤直接用所属那一类的节点 key 调 `WorkflowModelService.resolveNodeRuntime(workflowKey, nodeKey)`。
  * @keyword-cn 预设工作流目录, 节点登记
  * @keyword-en preset-workflow-catalog, node-registry
  */
@@ -84,47 +126,16 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
     description: '母选题 → 子选题 → 文章 → 封面与内页配图（含灵感画布重绘）',
     nodes: [
       {
-        key: 'topic',
-        label: '选题生成',
-        description: '生成母 / 子选题候选，并推荐子选题提示词',
-        category: 'llm',
-      },
-      {
-        key: 'article',
-        label: '文章生成',
+        key: 'think',
+        label: '思考',
         description:
-          '按子选题写标题、正文与文章标签（首次生文与重写，可按需联网搜索）',
+          '选题生成、文章生成（可按需联网搜索）、配图决策、封面文案都用这个模型',
         category: 'llm',
       },
       {
-        key: 'image-decision',
-        label: '配图决策',
-        description:
-          '从真实图库标签里挑出本篇配图标签，关闭思考并与写正文同时进行；建议指定响应快的模型',
-        category: 'llm',
-      },
-      {
-        key: 'cover-copy',
-        label: '封面文案',
-        description: '为图组封面生成主标题与副标题（关闭思考）',
-        category: 'llm',
-      },
-      {
-        key: 'cover-image',
-        label: '封面底图',
-        description: 'AI 封面的无字底图，含灵感画布里的封面重绘',
-        category: 'image',
-      },
-      {
-        key: 'cover-overlay',
-        label: '封面文字海报',
-        description: '「AI 素材」封面策略里文字与装饰融合的海报素材层',
-        category: 'image',
-      },
-      {
-        key: 'inner-image',
-        label: '内页重绘',
-        description: '灵感画布里基于所选图片重新生成内页图',
+        key: 'image',
+        label: '生图',
+        description: '封面底图、封面文字海报、灵感画布内页重绘都用这个模型',
         category: 'image',
       },
     ],
@@ -132,102 +143,40 @@ export const WORKFLOW_MODEL_CATALOG: readonly WorkflowDefinition[] = [
   {
     key: 'douyin-workbench',
     label: '抖音视频制作',
-    description: '分镜制作，或按场景、音色与台词制作探店画外音视频',
+    description: '分镜制作，或按场景、音色与台词制作探店视频',
     nodes: [
       {
-        key: 'script',
-        label: '脚本生成',
-        description: '按母选题写候选脚本，并推荐生成要求',
-        category: 'llm',
-      },
-      {
-        key: 'store-visit-continuity',
-        label: '探店尾帧衔接',
+        key: 'think',
+        label: '思考',
         description:
-          '使用支持看图的视觉语言模型理解实际尾帧、原始场景和下一段台词，规划连续运镜与出镜切换',
+          '写脚本、拆分镜、分镜选图、探店编排与台词、场景图库归类、尾帧衔接、模板规划都用这个模型；场景归类、尾帧衔接和读模板图要看图，请选支持看图的视觉语言模型',
         category: 'llm',
       },
       {
-        key: 'store-visit-scene',
-        label: '探店场景归类',
+        key: 'image',
+        label: '生图',
         description:
-          '场景图库 AI 归类：使用支持看图的视觉语言模型理解门店照片，把同一点位的图片归在一起、写图片描述并打精细度分',
-        category: 'llm',
-      },
-      {
-        key: 'store-visit-planner',
-        label: '探店编排推荐',
-        description:
-          '按门店与重点推荐点位挑选出镜人物与音色，并按点位写台词、为每段挑参考图（关闭思考，建议指定响应快的模型）',
-        category: 'llm',
-      },
-      {
-        key: 'storyboard',
-        label: '分镜拆解',
-        description: '把脚本正文拆成逐段分镜与配图提示词',
-        category: 'llm',
-      },
-      {
-        key: 'image-decision',
-        label: '分镜选图',
-        description:
-          '图库自找配图时为每段分镜挑选图库图片，关闭思考；建议指定响应快的模型',
-        category: 'llm',
-      },
-      {
-        key: 'shot-image',
-        label: '分镜画面',
-        description: '按分镜的配图提示词文生图',
+          '分镜画面、人物形象图、探店人物首帧、视频模板图都用这个模型',
         category: 'image',
       },
       {
-        key: 'persona-image',
-        label: '人物形象图',
-        description: '为预设人物生成正面 / 侧身 / 特写三视图形象图',
-        category: 'image',
-      },
-      {
-        key: 'shot-video',
-        label: '分镜视频',
+        key: 'video',
+        label: '生视频',
         description:
-          '分镜模式：每段分镜单独生成一段视频（有画面时以画面为首帧）',
+          '分镜视频、整片视频、探店空镜与人物段都用这个模型。可选 PixMax、数眼智能（Seedance、MiniMax-H3、wan2.7-i2v、可灵数字人）或自建 MiniMax-H3（opensource-video）；探店只支持数眼智能与自建 MiniMax-H3',
         category: 'video',
-        runtimeProviders: ['pixmax', 'shuyan', 'shuyanai'],
+        runtimeProviders: ['pixmax', 'shuyan', 'shuyanai', 'opensource-video'],
+        unsetHint:
+          '未指定时分镜 / 整片走环境变量配置的直连视频服务，探店不能生成视频',
       },
       {
-        key: 'full-video',
-        label: '整片视频',
+        key: 'voice',
+        label: '音色克隆',
         description:
-          '整片模式：所有分镜写进一条提示词、带上各镜画面作参考，一次生成一条完整视频；建议选单次时长长的模型',
-        category: 'video',
-        runtimeProviders: ['pixmax', 'shuyan', 'shuyanai'],
-      },
-      {
-        key: 'voice-clone',
-        label: '音色克隆与配音',
-        description:
-          '探店模式：选阿里云百炼（dashscope）。用户录音克隆音色（模型填 cosyvoice-v3.5-plus，克隆音色只能用它配音），或选系统音色（固定用 cosyvoice-v3-flash），再给每段台词配画外音',
+          '探店的录音克隆音色与配音：选阿里云百炼（dashscope），克隆音色模型填 cosyvoice-v3.5-plus，系统音色固定用 cosyvoice-v3-flash',
         category: 'audio',
         runtimeProviders: ['dashscope'],
-        unsetHint: '未指定时探店模式不能克隆音色、也不能配音',
-      },
-      {
-        key: 'store-visit-video',
-        label: '探店画面视频',
-        description:
-          '探店模式的门店空镜段：选数眼智能（Seedance、MiniMax-H3 或 wan2.7-i2v 型号），以场景图为首帧生成与配音等长的空镜视频，再在客户端加配音与字幕拼成一条',
-        category: 'video',
-        runtimeProviders: ['shuyan', 'shuyanai'],
-        unsetHint: '未指定时探店模式不能生成门店空镜段',
-      },
-      {
-        key: 'store-visit-avatar',
-        label: '探店人物对口型',
-        description:
-          '探店模式的人物出镜段：选数眼智能。填 wan2.7-i2v 时以首帧（场景人物画面或上一段尾帧）加这段配音一次生成会动、口型跟配音的视频（需配置 OSS）；填 kling-avatar-std（标准）或 kling-avatar-pro（高品质）时生成基本站着讲解的数字人；填 Seedance / MiniMax-H3 时先生成画面，再交给可灵按配音对口型',
-        category: 'video',
-        runtimeProviders: ['shuyan', 'shuyanai'],
-        unsetHint: '未指定时探店模式不能生成人物出镜的段（纯画外音不受影响）',
+        unsetHint: '未指定时探店不能克隆音色、也不能配音',
       },
     ],
   },
@@ -250,7 +199,7 @@ export const WORKFLOW_RUNTIME_SUPPORT: Record<
     excluded: [],
   },
   video: {
-    allowed: ['pixmax', 'shuyan', 'shuyanai'],
+    allowed: ['pixmax', 'shuyan', 'shuyanai', 'opensource-video'],
     excluded: [],
   },
   audio: { allowed: ['dashscope'], excluded: [] },

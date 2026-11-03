@@ -127,6 +127,106 @@ export interface DouyinVideoAudioSetting {
 }
 
 /**
+ * @description 视频模板的画面比例：视频窗口按它生成画面（自建 MiniMax-H3 支持这几种）。
+ * @keyword-cn 模板画面比例, 视频窗口比例
+ * @keyword-en template-aspect-ratio, window-aspect
+ */
+export const DOUYIN_TEMPLATE_ASPECT_RATIOS = [
+  '16:9',
+  '4:3',
+  '1:1',
+  '3:4',
+  '9:16',
+] as const;
+export type DouyinTemplateAspect =
+  (typeof DOUYIN_TEMPLATE_ASPECT_RATIOS)[number];
+
+/**
+ * @description 视频版式模板：AI 读图规划后生成的一张 1080×1920 竖版模板图，上下是标题、副标题、卖点与行动按钮，中间按 `window` 抠出透明视频窗口；
+ *   成片时桌面端把视频缩放进窗口再叠上模板。`enabled=false` 表示 AI 判断不需要模板或用户关掉了（保留规划结果）。
+ * @keyword-cn 视频版式模板, 视频窗口
+ * @keyword-en video-layout-template, video-window
+ */
+export interface DouyinVideoTemplate {
+  enabled: boolean;
+  /** 视频窗口在 1080×1920 画布上的像素位置，宽高比与 `aspectRatio` 一致 */
+  window: { x: number; y: number; width: number; height: number };
+  aspectRatio: DouyinTemplateAspect;
+  title: string;
+  subtitle?: string;
+  sellingPoints: string[];
+  cta?: string;
+  /** 模板的配色、字体与文字底板风格（给改图模型，只管配色字体，不画新东西），例如「蓝白配色，圆润粗体字」 */
+  style: string;
+  /** AI 的规划理由（为什么套 / 不套、窗口为什么这么放） */
+  reason?: string;
+  /** 窗口透明的模板 PNG */
+  imageUrl?: string;
+  /** 模板 + 首帧拼合的预览图（也可作封面） */
+  coverUrl?: string;
+  /** 谁定的：`ai` 是 AI 导演自动规划的（画面变了会被重新规划覆盖），`user` 是用户改过文案、比例或开关的（AI 不再覆盖） */
+  source?: 'ai' | 'user';
+  updatedAt: Date;
+}
+
+/**
+ * @description AI 导演看首帧为一段（分镜或探店分段）设计的运动：镜头怎么走、画面里什么在动；英文给自建 MiniMax-H3（台词以外的中文会被念出来），
+ *   中文给数眼 / PixMax。`sourceKey` 记下按哪张图设计的，画面换了就不再使用。
+ * @keyword-cn 分段运动设计, 运镜与画面动态
+ * @keyword-en shot-direction, camera-and-motion
+ */
+export interface DouyinShotDirection {
+  sourceKey: string;
+  camera: string;
+  motion: string;
+  cameraZh: string;
+  motionZh: string;
+}
+
+/**
+ * @description AI 导演的出片前规划：状态、按哪组画面规划的指纹、各段（分镜 ID 或探店分段 ID）的运动设计与 AI 的整体思路；模板写在 `videoTemplate`。
+ * @keyword-cn 导演规划, 出片前规划
+ * @keyword-en video-direction, pre-production-plan
+ */
+export interface DouyinVideoDirection {
+  status: 'planning' | 'ready' | 'failed';
+  fingerprint: string;
+  shots: Record<string, DouyinShotDirection>;
+  note?: string;
+  error?: string;
+  updatedAt: Date;
+}
+
+/**
+ * @description 段间转场：硬切、叠化、闪白、闪黑。
+ * @keyword-cn 段间转场, 转场类型
+ * @keyword-en clip-transitions, transition-types
+ */
+export const DOUYIN_EDIT_TRANSITIONS = [
+  'cut',
+  'fade',
+  'fadewhite',
+  'fadeblack',
+] as const;
+export type DouyinEditTransition = (typeof DOUYIN_EDIT_TRANSITIONS)[number];
+
+/**
+ * @description AI 剪辑方案（出片后看抽帧与人声区间定）：每段掐头去尾的入点出点（秒，相对原片）、段间转场与时长、字幕位置与大小、封面取第几段的第几秒。
+ * @keyword-cn 剪辑方案, 掐头去尾
+ * @keyword-en edit-plan, trim-clips
+ */
+export interface DouyinEditPlan {
+  clips: Array<{ shotId: string; trimStart: number; trimEnd: number }>;
+  transitions: Array<{ type: DouyinEditTransition; duration: number }>;
+  subtitle: {
+    position: 'bottom' | 'middle' | 'top';
+    size: 'small' | 'medium' | 'large';
+  };
+  cover: { clipIndex: number; time: number };
+  note?: string;
+}
+
+/**
  * @description 脚本的发布文案（按脚本保存）：发布标题、正文与话题，生成分镜时由 AI 同步写好，用户可随时修改；
  *   保存到视频发布库时作为默认值带入。上限与视频发布库一致：标题 60 字、正文 1000 字、话题 5 个且每个 20 字。
  * @keyword-cn 脚本发布文案, 发布标题话题
@@ -377,6 +477,10 @@ export interface DouyinTopicEntity {
   shotVideoResolution?: string;
   /** @description 脚本的发布文案，生成分镜时由 AI 同步写好，保存到发布库时作为默认值；为空表示还没写 */
   publishCopy?: DouyinPublishCopy;
+  /** @description 视频版式模板（上下是标题、卖点与按钮，中间是视频窗口）；为空表示没规划过，`enabled=false` 表示规划过但不套用 */
+  videoTemplate?: DouyinVideoTemplate;
+  /** @description AI 导演的出片前规划（各段运镜与画面动态），配图 / 配场景完成后自动生成，画面变了自动重做 */
+  videoDirection?: DouyinVideoDirection;
   /** @description 探店模式的场景、音色、台词与分段，为空表示没用过探店模式 */
   storeVisit?: DouyinStoreVisitSetting;
   /** @description 为 true 时，桌面客户端发现全部分镜出片后自动把它们合成为一条成片，客户端领走合成后清掉 */
@@ -480,11 +584,17 @@ export interface DouyinOperationView {
   shotId?: string;
   /** @description 探店分段生成才有：对应 `DouyinStoreVisitSegment.id` */
   segmentId?: string;
-  /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` / `shuyan` 为后台节点指定的供应商，
+  /** @description 视频生成走的通道：`direct` 为环境变量直连服务，`pixmax` / `shuyan` / `opensource-video`（自建 MiniMax-H3）为后台节点指定的供应商，
    *   `client` 为桌面客户端用内置 ffmpeg 合成分镜视频，`dashscope` 为百炼音色克隆审计与探店本机素材段的配音（不产出视频）；
    *   `digital-human` 只出现在通用数字人通道下线前的历史记录里 */
   provider?:
-    'direct' | 'pixmax' | 'shuyan' | 'client' | 'dashscope' | 'digital-human';
+    | 'direct'
+    | 'pixmax'
+    | 'shuyan'
+    | 'opensource-video'
+    | 'client'
+    | 'dashscope'
+    | 'digital-human';
   /** @description 视频生成模式：`shot` 单镜，`full` 所有分镜一次生成整片，`concat` 把已出片的分镜（或探店分段）视频合成一条，
    *   `store-visit` 探店画外音的单段空镜视频（带 `segmentId`） */
   mode?: 'shot' | 'full' | 'concat' | 'store-visit';
@@ -523,6 +633,8 @@ export interface DouyinOperationView {
   };
   /** @description 探店人物段（视频型号）出片后的对口型阶段：识别人脸、对口型中、完成或跳过（跳过时保留原画面并写原因）。 @keyword-cn 对口型阶段, 口型跳过原因 @keyword-en lip-sync-stage, lip-sync-skip-reason */
   lipSync?: DouyinStoreVisitLipSyncView;
+  /** @description 模型并发已满时的排队状态；有这个字段时任务还没提交给模型，`status` 仍为 `queued`。 @keyword-cn 视频排队状态, 等模型空位 @keyword-en video-queue-state, wait-for-model-slot */
+  queue?: DouyinVideoQueueView;
   result?: unknown;
   /** @description 给用户看的失败说明（中文） */
   error?: string;
@@ -530,6 +642,27 @@ export interface DouyinOperationView {
   errorDetail?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * @description 视频排队的公开状态：`waiting` 等模型空位（`ahead` 为同一模型前面还有几个），`submitting` 已拿到名额正在提交。
+ * @keyword-cn 视频排队公开状态, 前面还有几个
+ * @keyword-en video-queue-view, waiting-ahead
+ */
+export interface DouyinVideoQueueView {
+  stage: 'waiting' | 'submitting';
+  ahead?: number;
+}
+
+/**
+ * @description 视频排队的服务端状态：在公开状态外记排队时间、开始提交时间与重新提交需要的参数（不含模型 Key），不外发。
+ * @keyword-cn 视频排队内部状态, 重新提交参数
+ * @keyword-en video-queue-state, resubmit-input
+ */
+export interface DouyinVideoQueueState extends DouyinVideoQueueView {
+  enqueuedAt: Date;
+  submittingAt?: Date;
+  input: Record<string, unknown>;
 }
 
 /**
@@ -566,6 +699,7 @@ export interface DouyinStoreVisitLipSyncState extends DouyinStoreVisitLipSyncVie
 export interface DouyinOperationEntity extends DouyinOperationView {
   _id: ObjectId;
   lipSync?: DouyinStoreVisitLipSyncState;
+  queue?: DouyinVideoQueueState;
   tenantId?: string;
   userId: string;
   request: Record<string, unknown>;

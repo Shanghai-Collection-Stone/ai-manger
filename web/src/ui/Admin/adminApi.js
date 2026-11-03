@@ -957,6 +957,27 @@ export const adminApi = {
     );
   },
 
+  /**
+   * @description 读取各模型的并发上限、正在跑与排队的数量
+   * @keyword-cn 模型并发列表, 排队数量
+   * @keyword-en list-model-concurrency, waiting-count
+   */
+  async listModelConcurrency() {
+    return request('/model-concurrency');
+  },
+
+  /**
+   * @description 设置或清除一个模型的全平台并发上限（limit 为 null 表示不限）
+   * @keyword-cn 设置模型并发上限, 清除上限
+   * @keyword-en set-model-concurrency, clear-limit
+   */
+  async saveModelConcurrency(payload) {
+    return request('/model-concurrency', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
   // ─── 热点采集榜 ─────────────────────────────────────────────────────────────
 
   /**

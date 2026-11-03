@@ -1206,7 +1206,7 @@ export class DouyinStoreVisitPlannerService {
   }
 
   /**
-   * @description 用「探店编排推荐」节点（关思考、非流式）问一次模型并取出文本。
+   * @description 用「思考」节点（关思考、非流式）问一次模型并取出文本。
    * @keyword-cn 编排模型调用, 读取文本
    * @keyword-en planner-llm-call, read-text
    * @param {DouyinScope} scope 租户用户作用域。

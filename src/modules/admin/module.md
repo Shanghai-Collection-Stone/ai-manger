@@ -32,7 +32,7 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
-  - `testAiProvider`: 测试提供商连通性(POST /admin/ai-providers/:id/test, GET /models 探活, PixMax 用 POST /openapi/model/available, 15s 超时, 不消耗配额)/test ai provider
+  - `testAiProvider`: 测试提供商连通性(POST /admin/ai-providers/:id/test, GET /models 探活, PixMax 用 POST /openapi/model/available, opensource-video 用 GET /v1/system/health, 15s 超时, 不消耗配额)/test ai provider
   - `listAiServices()` — 列出固定服务目录与当前生效点数 | keywords: 服务管理列表, 生效点数, service-management-list, effective-credit
   - `updateAiServiceCredit(code,body)` — 修改固定服务的 Credit 点数 | keywords: 更新服务点数, 固定服务编码, update-service-credit, immutable-service-code
   - `getTenantCreditAccount(id,limit?,before?)` — 查询当前余额与倒序追加式流水 | keywords: Credit账户查询, 流水查询, credit-account-query, transaction-list
@@ -114,7 +114,7 @@
   - `upsertAiProvider`: 创建或更新提供商/upsert provider
   - `updateAiProvider`: 更新提供商/update provider
   - `deleteAiProvider`: 删除提供商/delete provider
-  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot/shuyan 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode, 15s 超时)/test ai provider
+  - `testAiProvider`: 测试提供商连通性(GET /models 探活, openai-compat 含 kimi/moonshot/shuyan 用 Bearer、gemini 走 ?key、anthropic 走 x-api-key、pixmax 走 POST /openapi/model/available 并读 modelCode、opensource-video(自建 MiniMax-H3)走 GET /v1/system/health(Bearer), 15s 超时)/test ai provider
   - `resolveDefaultProviderBaseUrl`: 厂商默认 baseUrl 兜底(openai/deepseek/nvidia/minimax/glm/gemini/anthropic/doubao/kimi/shuyan/pixmax, 与 AgentService 对齐; shuyan=数眼智能 https://platform.shuyanai.com/v1)/resolve default provider base url
   - `formatFetchCauseShort`: 简短序列化 fetch error.cause 给测试连接返回 message/format fetch cause short
   - `listClawConfigs`: Claw配置列表/list claw configs

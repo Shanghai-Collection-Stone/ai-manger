@@ -32,11 +32,12 @@ function memoryCollection(rows: Row[]) {
       rows.find((row) => match(row, filter)) ?? null,
     updateOne: async (
       filter: Row,
-      update: { $set: Row; $setOnInsert: Row },
+      update: { $set?: Row; $setOnInsert?: Row },
     ) => {
       const existing = rows.find((row) => match(row, filter));
       if (existing) Object.assign(existing, update.$set);
       else rows.push({ ...filter, ...update.$setOnInsert, ...update.$set });
+      return { upsertedCount: existing ? 0 : 1 };
     },
     deleteOne: async (filter: Row) => {
       const index = rows.findIndex((row) => match(row, filter));
@@ -102,19 +103,19 @@ describe('workflow model service', () => {
   it('没设置时返回 null，业务回退默认提供商', async () => {
     const { service } = buildService();
     await expect(
-      service.resolveNodeRuntime('douyin-workbench', 'shot-image'),
+      service.resolveNodeRuntime('douyin-workbench', 'image'),
     ).resolves.toBeNull();
     expect(toWorkflowLlmConfig(null)).toEqual({});
   });
 
   it('保存后按节点返回指定提供商与模型，模型留空用提供商默认模型', async () => {
     const { service } = buildService();
-    await service.saveNode(user, 'douyin-workbench', 'shot-image', {
+    await service.saveNode(user, 'douyin-workbench', 'image', {
       providerId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
     });
     const runtime = await service.resolveNodeRuntime(
       'douyin-workbench',
-      'shot-image',
+      'image',
     );
     expect(runtime).toMatchObject({
       providerCode: 'doubao',
@@ -126,7 +127,7 @@ describe('workflow model service', () => {
   it('提供商类型与节点不一致时拒绝保存', async () => {
     const { service } = buildService();
     await expect(
-      service.saveNode(user, 'douyin-workbench', 'shot-image', {
+      service.saveNode(user, 'douyin-workbench', 'image', {
         providerId: 'cccccccccccccccccccccccc',
       }),
     ).rejects.toThrow('WORKFLOW_PROVIDER_CATEGORY_MISMATCH');
@@ -135,7 +136,7 @@ describe('workflow model service', () => {
   it('没有默认模型且未填写模型时拒绝保存', async () => {
     const { service } = buildService();
     await expect(
-      service.saveNode(user, 'douyin-workbench', 'shot-image', {
+      service.saveNode(user, 'douyin-workbench', 'image', {
         providerId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       }),
     ).rejects.toThrow('WORKFLOW_MODEL_REQUIRED');
@@ -143,12 +144,12 @@ describe('workflow model service', () => {
 
   it('运行时暂不支持的组合可以保存，但调用时报错而不是静默降级', async () => {
     const { service } = buildService();
-    await service.saveNode(user, 'douyin-workbench', 'shot-image', {
+    await service.saveNode(user, 'douyin-workbench', 'image', {
       providerId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       model: 'DOUBAO_SEEDREAM_5_PRO',
     });
     await expect(
-      service.resolveNodeRuntime('douyin-workbench', 'shot-image'),
+      service.resolveNodeRuntime('douyin-workbench', 'image'),
     ).rejects.toThrow('WORKFLOW_NODE_PROVIDER_NOT_SUPPORTED:image:pixmax');
   });
 
@@ -156,23 +157,23 @@ describe('workflow model service', () => {
     const { service } = buildService([
       {
         workflowKey: 'douyin-workbench',
-        nodeKey: 'script',
+        nodeKey: 'think',
         providerId: 'dddddddddddddddddddddddd',
         model: 'x',
       },
     ]);
     await expect(
-      service.resolveNodeRuntime('douyin-workbench', 'script'),
+      service.resolveNodeRuntime('douyin-workbench', 'think'),
     ).resolves.toBeNull();
   });
 
   it('恢复默认后节点不再有设置；未知节点报错', async () => {
     const { service, rows } = buildService();
-    await service.saveNode(user, 'douyin-workbench', 'script', {
+    await service.saveNode(user, 'douyin-workbench', 'think', {
       providerId: 'cccccccccccccccccccccccc',
     });
     expect(rows).toHaveLength(1);
-    await service.resetNode(user, 'douyin-workbench', 'script');
+    await service.resetNode(user, 'douyin-workbench', 'think');
     expect(rows).toHaveLength(0);
     await expect(
       service.resolveNodeRuntime('douyin-workbench', 'unknown'),
@@ -191,7 +192,7 @@ describe('workflow model service', () => {
     expect(isWorkflowRuntimeSupported('video', 'openai')).toBe(false);
   });
 
-  it('节点登记了可用提供商时按节点收窄：探店音色只收百炼，探店画面只收数眼智能', () => {
+  it('节点登记了可用提供商时按节点收窄：生视频收 PixMax / 数眼 / 自建 MiniMax-H3，音色克隆只收百炼', () => {
     const nodes = WORKFLOW_MODEL_CATALOG.find(
       (workflow) => workflow.key === WORKFLOW_NODES.douyinWorkbench.key,
     )!.nodes;
@@ -208,9 +209,16 @@ describe('workflow model service', () => {
       isWorkflowRuntimeSupported(
         'video',
         'pixmax',
-        providersOf(WORKFLOW_NODES.douyinWorkbench.storeVisitVideo),
+        providersOf(WORKFLOW_NODES.douyinWorkbench.video),
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isWorkflowRuntimeSupported(
+        'video',
+        'opensource-video',
+        providersOf(WORKFLOW_NODES.douyinWorkbench.video),
+      ),
+    ).toBe(true);
     expect(
       isWorkflowRuntimeSupported(
         'video',
@@ -236,15 +244,69 @@ describe('workflow model service', () => {
     expect(isWorkflowRuntimeSupported('llm', 'dashscope')).toBe(true);
   });
 
-  it('节点 key 常量与工作流目录一一对应', () => {
-    const fromConstants = Object.values(WORKFLOW_NODES)
-      .flatMap(({ key, ...nodes }) =>
-        Object.values(nodes).map((node) => `${key}/${node}`),
-      )
-      .sort();
+  it('节点只按能力分四类，常量（含旧步骤别名）去重后与工作流目录一一对应', () => {
+    const fromConstants = [
+      ...new Set(
+        Object.values(WORKFLOW_NODES).flatMap(({ key, ...nodes }) =>
+          Object.values(nodes).map((node) => `${key}/${node}`),
+        ),
+      ),
+    ].sort();
     const fromCatalog = WORKFLOW_MODEL_CATALOG.flatMap((workflow) =>
       workflow.nodes.map((node) => `${workflow.key}/${node.key}`),
     ).sort();
     expect(fromConstants).toEqual(fromCatalog);
+  });
+  it('旧节点设置并入新节点：按顺序取第一个有设置的旧节点，新节点已有设置不动，可重复执行', async () => {
+    const rows: Row[] = [
+      {
+        workflowKey: 'douyin-workbench',
+        nodeKey: 'script',
+        providerId: 'cccccccccccccccccccccccc',
+        model: 'deepseek-chat',
+      },
+      {
+        workflowKey: 'douyin-workbench',
+        nodeKey: 'store-visit-continuity',
+        providerId: 'cccccccccccccccccccccccc',
+        model: 'deepseek-vl',
+      },
+      {
+        workflowKey: 'douyin-workbench',
+        nodeKey: 'shot-image',
+        providerId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+        model: 'seedream-4',
+      },
+      {
+        workflowKey: 'douyin-workbench',
+        nodeKey: 'image',
+        providerId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+        model: 'already-set',
+      },
+      {
+        workflowKey: 'xhs-article',
+        nodeKey: 'image-decision',
+        providerId: 'cccccccccccccccccccccccc',
+        model: 'xhs-fast',
+      },
+    ];
+    const { service } = buildService(rows);
+    await service.ensureIndexes();
+    await service.mergeLegacyBindings();
+    const pick = (workflowKey: string, nodeKey: string) =>
+      rows.filter(
+        (row) => row.workflowKey === workflowKey && row.nodeKey === nodeKey,
+      );
+    expect(pick('douyin-workbench', 'think').map((row) => row.model)).toEqual([
+      'deepseek-vl',
+    ]);
+    expect(pick('douyin-workbench', 'image').map((row) => row.model)).toEqual([
+      'already-set',
+    ]);
+    expect(pick('douyin-workbench', 'video')).toHaveLength(0);
+    expect(pick('xhs-article', 'think').map((row) => row.model)).toEqual([
+      'xhs-fast',
+    ]);
+    expect(pick('douyin-workbench', 'script')).toHaveLength(1);
   });
 });

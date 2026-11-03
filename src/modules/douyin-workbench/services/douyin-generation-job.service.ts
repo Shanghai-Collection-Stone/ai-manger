@@ -22,6 +22,7 @@ import { AdminService } from '../../admin/services/admin.service.js';
 import { GenerationQueueService } from '../../generation-queue/services/generation-queue.service.js';
 import { DouyinChildTopicGenerationService } from './douyin-child-topic-generation.service.js';
 import { DouyinStoryboardGenerationService } from './douyin-storyboard-generation.service.js';
+import { DouyinVideoDirectorService } from './douyin-video-director.service.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -87,6 +88,7 @@ export class DouyinGenerationJobService {
     private readonly childTopics: DouyinChildTopicGenerationService,
     private readonly queue: GenerationQueueService,
     adminService: AdminService,
+    private readonly director: DouyinVideoDirectorService,
   ) {
     this.jobs = db.collection<DouyinGenerationJobEntity>(
       'douyin_generation_jobs',
@@ -240,6 +242,8 @@ export class DouyinGenerationJobService {
         if (output.imageFailedCount > 0 && output.imageCount === 0) {
           throw new Error('DOUYIN_SHOT_IMAGES_ALL_FAILED');
         }
+        // 分镜配好图后 AI 导演在后台看图规划模板与每镜运动
+        await this.director.schedule(job.topicId, scope);
         result = {
           shotCount: output.storyboard.length,
           imageCount: output.imageCount,

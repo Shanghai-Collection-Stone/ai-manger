@@ -12,6 +12,7 @@ import type {
 } from '../../admin/entities/admin.entity.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import {
+  WORKFLOW_LEGACY_NODE_KEYS,
   WORKFLOW_MODEL_CATALOG,
   WORKFLOW_RUNTIME_SUPPORT,
   type WorkflowNodeCategory,
@@ -26,6 +27,8 @@ import {
   isShuyanProvider,
   listShuyanModelsByCategory,
 } from './shuyan-model-catalog.js';
+import { OPENSOURCE_VIDEO_MODELS } from '../../opensource-video/entities/opensource-video.entity.js';
+import { isOpensourceVideoProvider } from '../../opensource-video/services/opensource-video-params.js';
 
 /**
  * @description PixMax 模型类型与节点类型的对照。
@@ -114,6 +117,64 @@ export class WorkflowModelService {
       { workflowKey: 1, nodeKey: 1 },
       { unique: true },
     );
+    await this.mergeLegacyBindings().catch((error: unknown) =>
+      this.logger.warn(
+        `[mergeLegacyBindings] 旧节点设置合并失败: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+  }
+
+  /**
+   * @description 节点合并成思考 / 生图 / 生视频 / 音色克隆四类后，把旧节点上的设置并入新节点：新节点已有设置不动，
+   *   没有时按 `WORKFLOW_LEGACY_NODE_KEYS` 的顺序取第一个有设置的旧节点复制过来；旧记录保留（目录里已不显示），可回退。启动时执行，可重复执行。
+   * @keyword-cn 旧节点合并, 节点设置迁移
+   * @keyword-en merge-legacy-bindings, node-binding-migration
+   * @returns {Promise<number>} 本次并入的节点数。
+   */
+  async mergeLegacyBindings(): Promise<number> {
+    let merged = 0;
+    for (const [workflowKey, nodes] of Object.entries(
+      WORKFLOW_LEGACY_NODE_KEYS,
+    )) {
+      for (const [nodeKey, legacyKeys] of Object.entries(nodes)) {
+        if (await this.bindings.findOne({ workflowKey, nodeKey })) continue;
+        const rows = await this.bindings
+          .find({ workflowKey, nodeKey: { $in: [...legacyKeys] } })
+          .toArray();
+        const source = legacyKeys
+          .map((key) =>
+            rows.find(
+              (row) => row.workflowKey === workflowKey && row.nodeKey === key,
+            ),
+          )
+          .find(Boolean);
+        if (!source) continue;
+        const now = new Date();
+        const result = await this.bindings.updateOne(
+          { workflowKey, nodeKey },
+          {
+            $setOnInsert: {
+              _id: new ObjectId(),
+              workflowKey,
+              nodeKey,
+              providerId: source.providerId,
+              model: source.model,
+              updatedBy: source.updatedBy,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          { upsert: true },
+        );
+        if (result.upsertedCount) {
+          merged += 1;
+          this.logger.log(
+            `[mergeLegacyBindings] ${workflowKey}/${nodeKey} 沿用旧节点 ${source.nodeKey} 的设置（${source.model}）`,
+          );
+        }
+      }
+    }
+    return merged;
   }
 
   /**
@@ -250,6 +311,7 @@ export class WorkflowModelService {
   /**
    * @description 列出某提供商在指定类型下可选的模型：PixMax 实时读取「可用模型」接口并按节点类型过滤（只能选）；
    *   数眼智能实时读取 OpenAI 兼容 `GET /v1/models` 并按分类过滤（可选可填）；
+   *   自建 MiniMax-H3（opensource-video）返回固定的三个档位模型（只能选）；
    *   其他提供商只返回它自己配置的模型，页面允许手填。
    * @keyword-cn 提供商可选模型, PixMax模型列表, 数眼可选模型
    * @keyword-en list-provider-models, pixmax-model-list, shuyan-model-list
@@ -281,6 +343,16 @@ export class WorkflowModelService {
         category,
       });
       return { models, allowCustom: true };
+    }
+    if (isOpensourceVideoProvider(providerCode)) {
+      // 自建 MiniMax-H3 服务的模型编码对应服务端生成档位，只能从固定目录里选
+      return {
+        models: OPENSOURCE_VIDEO_MODELS.map(({ code, name }) => ({
+          code,
+          name,
+        })),
+        allowCustom: false,
+      };
     }
     if (providerCode !== 'pixmax') {
       return {
