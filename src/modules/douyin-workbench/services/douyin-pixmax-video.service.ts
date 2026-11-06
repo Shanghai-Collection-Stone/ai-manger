@@ -81,7 +81,7 @@ const DOUYIN_PIXMAX_SAVING_STALE_MS = 10 * 60 * 1000;
  * @keyword-en pixmax-failure-reason, credit-insufficient
  */
 const PIXMAX_STATUS_MESSAGES: Record<string, string> = {
-  RESOURCE_INSUFFICIENT: 'PixMax 积分不足，请充值后重新生成。',
+  RESOURCE_INSUFFICIENT: 'PixMax 账号积分不足，视频暂时无法生成，请联系平台管理员处理后重新生成。',
   ABORTED: 'PixMax 任务已被中止。',
 };
 

@@ -65,7 +65,7 @@ export const DOUYIN_GENERATION_ERROR_MESSAGES: Record<string, string> = {
   DOUYIN_GENERATION_INTERRUPTED: '服务端生成任务已中断，请重新生成。',
   DOUYIN_SHOT_IMAGES_ALL_FAILED:
     '文字分镜已保存，但 AI 画面全部生成失败，可在分镜上逐镜重新生成画面。',
-  CREDIT_EXHAUSTED: 'Credit 点数不足，请充值后再生成。',
+  CREDIT_EXHAUSTED: 'Credit 点数不足，暂时无法生成，请联系企业管理员。',
 };
 
 /**

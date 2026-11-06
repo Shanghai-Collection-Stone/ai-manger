@@ -367,7 +367,7 @@ export function describeCosyVoiceFailure(raw: string): string {
   if (/Throttling|HTTP_429|RateQuota/i.test(text))
     return '百炼语音请求太频繁，请稍后重试';
   if (/Arrearage|Overdue|欠费/i.test(text))
-    return '百炼账号欠费，请管理员充值后重试';
+    return '百炼账号欠费，语音暂时无法使用，请联系平台管理员处理后重试';
   if (/error code: 418|voice.*not.*(found|exist)|InvalidVoice/i.test(text))
     return '音色不可用（音色已删除，或与合成模型不匹配），请重新选择或克隆音色';
   if (/DASHSCOPE_VOICE_REJECTED/.test(text))

@@ -39,7 +39,7 @@ describe('pixmax error translation', () => {
       ),
     ).toContain('脚本或分镜描述里有平台不允许的敏感内容');
     expect(describePixmaxError('PIXMAX_TASK_RESOURCE_INSUFFICIENT')).toBe(
-      'PixMax 积分不足，请充值后重新生成。',
+      'PixMax 账号积分不足，视频暂时无法生成，请联系平台管理员处理后重新生成。',
     );
     expect(
       describePixmaxError(

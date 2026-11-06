@@ -57,7 +57,7 @@ export const PIXMAX_ERROR_RULES: readonly PixmaxErrorRule[] = [
   {
     pattern:
       /RESOURCE_INSUFFICIENT|insufficient (balance|credit|points)|积分不足|余额不足/i,
-    message: 'PixMax 积分不足，请充值后重新生成。',
+    message: 'PixMax 账号积分不足，视频暂时无法生成，请联系平台管理员处理后重新生成。',
   },
   {
     pattern: /RateLimit|HTTP_429|too many requests/i,
