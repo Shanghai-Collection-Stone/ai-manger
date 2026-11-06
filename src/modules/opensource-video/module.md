@@ -30,7 +30,7 @@
 - `OPENSOURCE_VIDEO_DURATION_RANGE` — 单条 1～15 秒 | keywords: 自建视频时长范围, 最长时长, opensource-video-duration-range, max-duration
 - `OPENSOURCE_VIDEO_PROMPT_MAX` — 提示词上限 8000 字 | keywords: 自建视频提示词上限, 提示词截断, opensource-video-prompt-max, prompt-truncate
 - `OPENSOURCE_VIDEO_REFERENCE_LIMITS` — 参考生视频最多 9 张参考图、3 段参考音频 | keywords: 参考素材上限, 参考生视频, opensource-video-reference-limits, reference-to-video
-- `OpensourceVideoCreateInput` — `POST /v1/videos` 请求体（首尾帧或参考图 / 参考音频二选一） | keywords: 自建视频提交参数, 首尾帧, opensource-video-create-input, first-last-frame
+- `OpensourceVideoCreateInput` — `POST /v1/videos` 请求体（首尾帧或参考素材二选一，都可另带完整 guide_audio） | keywords: 自建视频提交参数, 首尾帧, opensource-video-create-input, first-last-frame
 - `OpensourceVideoJobStatus` — 任务状态原值 | keywords: 自建视频任务状态, 状态枚举, opensource-video-job-status, status-enum
 - `OpensourceVideoJob` — 任务视图 | keywords: 自建视频任务, 任务详情, opensource-video-job, job-detail
 - `OpensourceVideoClientService()` — HTTP 客户端 | keywords: 自建视频客户端, 视频接口调用, opensource-video-client, video-api-call
@@ -48,6 +48,9 @@
 - `mapOpensourceVideoStatus(status?)` — 服务端状态映射成工作台状态 | keywords: 自建视频状态映射, 工作台状态, map-opensource-video-status, workbench-status
 - `OPENSOURCE_VIDEO_ERROR_RULES` — 错误说明对照 | keywords: 自建视频错误对照, 通道错误, opensource-video-error-rules, channel-error
 - `describeOpensourceVideoFailure(raw)` — 原始报错翻译成中文，规则外附原文 | keywords: 翻译自建视频报错, 友好错误提示, describe-opensource-video-error, friendly-error-message
+
+- `speechDispatcher` — 允许配音排队时延长响应头等待 | keywords: 配音请求连接, 排队超时, speech-http-dispatcher, queue-timeout
+- `OpensourceVideoClientService.synthesizeSpeech(runtime,input)` — 用自建 Qwen3-TTS 合成完整台词 | keywords: 自建台词配音, 配音先行, synthesize-opensource-speech, speech-first-generation
 
 ## 关键词索引 (Keyword Index)
 
@@ -71,6 +74,10 @@
 | 翻译自建视频报错 | describe-opensource-video-error |
 | 音色英文提示 | voice-hint-english |
 | 参考素材上限 | opensource-video-reference-limits |
+| 自建台词配音 | synthesize-opensource-speech |
+| 配音先行 | speech-first-generation |
+| 配音请求连接 | speech-http-dispatcher |
+| 排队超时 | queue-timeout |
 
 ## 类型导出 (Type Exports)
 
@@ -89,3 +96,5 @@
 **参考生视频**：请求带 `reference_images` / `reference_audios`（data URL 数组）时服务端换 ref2va 模型，参考按顺序对应 `<Picture i>` / `<Audio j>`。服务是直连模型、没有提示词改写，ref2va 对措辞非常敏感：调用方要按 H3 官方模板格式写（英文骨架 + 引号里的中文台词，参考标签就地写），而且**除引号里的台词外不能有中文**——标题、指令段、场景说明、音色描述里的中文都会被模型念出来，开头人声错乱（语音识别实测念出「集合石探店」「西部决斗场」「自然口语」）。音色用 `toOpensourceVoiceHint` 转成英文；带参考音频时写明「<Audio 1> 只是音色样本，不要说出它的词」。探店见 douyin-workbench 的 `buildStoreVisitH3Prompt`，分镜 / 整片见 `buildOpensourceShotPrompt` / `buildOpensourceFullPrompt`。
 
 **后台测试连接**：`admin` 模块的「测试」按钮对这个提供商调 `GET /v1/system/health`（带 Key，返回 ComfyUI 与显卡状态，不占 GPU）。
+
+**锚定配音**：视频请求的 `guide_audio` 为完整 WAV 台词，首帧模式和参考图模式都可使用。自建配音走 `POST /v1/audio/speech`，使用同一提供商地址和 Key，返回 PCM WAV；最长等候九分钟。后端视频队列先返回任务，后台才配音和提交，避免界面阻塞。

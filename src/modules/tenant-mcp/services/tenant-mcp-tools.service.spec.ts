@@ -21,6 +21,9 @@ jest.mock('../../xhs-topic-data/services/xhs-topic-crawl.service.js', () => ({
 jest.mock('../../xhs-topic/services/xhs-topic-repository.service.js', () => ({
   XhsTopicRepositoryService: class {},
 }));
+jest.mock('./tenant-mcp-douyin-tools.service.js', () => ({
+  TenantMcpDouyinToolsService: class {},
+}));
 
 /** @keyword-en mcp-tools-fixture, tenant-isolation */
 function toolsFixture() {
@@ -115,6 +118,7 @@ function toolsFixture() {
           ? rawArticles
           : tasks,
   };
+  const douyin = { execute: jest.fn().mockResolvedValue({ ok: true }) };
   const service = new TenantMcpToolsService(
     db as never,
     libraries as never,
@@ -123,9 +127,11 @@ function toolsFixture() {
     crawl as never,
     topics as never,
     new ConfigService({ APP_URL: 'https://example.test' }),
+    douyin as never,
   );
   return {
     service,
+    douyin,
     principal,
     libraries,
     articles,
@@ -148,6 +154,25 @@ describe('MCP 业务工具', () => {
       }),
     ).rejects.toThrow('MCP_TOOL_NOT_ALLOWED');
     expect(f.articles.get).not.toHaveBeenCalled();
+  });
+  it('抖音工具同样先查授权，授权后连同密钥身份交给抖音工具服务', async () => {
+    const f = toolsFixture();
+    await expect(
+      f.service.execute(
+        { ...f.principal, permissions: ['douyin_workspace'] },
+        'douyin_topic_get',
+        { topicId: 5 },
+      ),
+    ).rejects.toThrow('MCP_TOOL_NOT_ALLOWED');
+    expect(f.douyin.execute).not.toHaveBeenCalled();
+    await expect(
+      f.service.execute(f.principal, 'douyin_topic_get', { topicId: 5 }),
+    ).resolves.toEqual({ ok: true });
+    expect(f.douyin.execute).toHaveBeenCalledWith(
+      f.principal,
+      'douyin_topic_get',
+      { topicId: 5 },
+    );
   });
   it('所有参数 schema 拒绝外部注入租户身份，拒绝越界分页', () => {
     expect(() =>

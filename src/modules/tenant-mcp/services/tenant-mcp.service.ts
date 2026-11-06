@@ -22,7 +22,11 @@ import type {
   TenantMcpPrincipal,
   TenantMcpSecretEnvelope,
 } from '../entities/tenant-mcp.entity.js';
-import { TENANT_MCP_TOOLS } from '../tenant-mcp.tools.js';
+import {
+  TENANT_MCP_TOOL_META,
+  TENANT_MCP_TOOLS,
+  type TenantMcpToolName,
+} from '../tenant-mcp.tools.js';
 
 /** @keyword-en tenant-mcp, key-management */
 @Injectable()
@@ -209,6 +213,7 @@ export class TenantMcpService implements OnModuleInit {
         name,
         title: tool.title,
         description: tool.description,
+        group: TENANT_MCP_TOOL_META[name as TenantMcpToolName].group,
       })),
     };
   }

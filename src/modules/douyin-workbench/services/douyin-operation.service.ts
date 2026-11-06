@@ -139,7 +139,7 @@ export class DouyinOperationService {
   async createGeneration(
     topicId: number,
     prompt: string | undefined,
-    user: AdminUserEntity,
+    user: AdminUserEntity | DouyinScope,
   ): Promise<DouyinOperationView> {
     const scope = this.scopeOf(user);
     const topic = await this.requireChild(topicId, scope);
@@ -216,7 +216,7 @@ export class DouyinOperationService {
    * @param {number} topicId 子选题（脚本）ID。
    * @param {string} shotId 分镜段落 ID。
    * @param {string|undefined} prompt 本次补充提示。
-   * @param {AdminUserEntity} user 当前后台用户。
+   * @param {AdminUserEntity|DouyinScope} user 当前后台用户，或 MCP 等已定好的租户用户作用域。
    * @returns {Promise<DouyinOperationView>} 调用记录。
    * @throws {BadRequestException} 分镜不存在时抛出。
    */
@@ -224,7 +224,7 @@ export class DouyinOperationService {
     topicId: number,
     shotId: string,
     prompt: string | undefined,
-    user: AdminUserEntity,
+    user: AdminUserEntity | DouyinScope,
   ): Promise<DouyinOperationView> {
     const scope = this.scopeOf(user);
     const topic = await this.requireChild(topicId, scope);
@@ -401,6 +401,8 @@ export class DouyinOperationService {
           multiReference?: boolean;
           /** 收参考音频（数眼 Seedance 2.0）：人物段可参考音色直接开口说话，合成时保留原声。 */
           referenceAudio?: boolean;
+          /** 自建 H3 先合成完整台词，再锚定口型并输出配音音轨。 */
+          speechFirst?: boolean;
           error?: string;
         }
       >;
@@ -466,8 +468,9 @@ export class DouyinOperationService {
             ...base,
             multiReference: true,
             referenceAudio: true,
+            speechFirst: true,
             ...(role === 'avatar'
-              ? { lipSync: false, postLipSync: false, audioDriven: false }
+              ? { lipSync: false, postLipSync: false, audioDriven: true }
               : {}),
             durations: listOpensourceVideoDurationChoices(),
           };
@@ -969,11 +972,12 @@ export class DouyinOperationService {
   }
 
   /**
-   * @description 从后台用户生成租户用户作用域。
+   * @description 从后台用户生成租户用户作用域；传进来的已经是作用域（MCP 按密钥定好租户与用户）时原样用。
    * @keyword-cn 抖音用户作用域, 租户身份
    * @keyword-en douyin-user-scope, tenant-identity
    */
-  private scopeOf(user: AdminUserEntity): DouyinScope {
+  private scopeOf(user: AdminUserEntity | DouyinScope): DouyinScope {
+    if (!('_id' in user)) return user;
     return { tenantId: user.tenantId, userId: String(user._id) };
   }
 

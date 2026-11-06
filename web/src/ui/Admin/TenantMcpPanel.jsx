@@ -2,34 +2,73 @@ import React, { useEffect, useState } from 'react';
 import { adminApi } from './adminApi';
 import { buildTenantMcpPrompt } from './tenantMcpPrompt';
 
-/** @keyword-en mcp-permission-picker, tool-permission */
+/**
+ * @description 按工具分组（图库与文章、抖音 · 通用 / 探店 / 门店点位 / 分镜）勾选密钥权限，每组可一键全选或清空；旧后端没有分组时归到「其他」。
+ * @keyword-cn MCP权限勾选, 工具分组
+ * @keyword-en mcp-permission-picker, tool-permission
+ */
 function PermissionPicker({ tools, selected, onChange, disabled }) {
+  const groups = tools.reduce((map, tool) => {
+    const key = tool.group || '其他';
+    map.set(key, [...(map.get(key) || []), tool]);
+    return map;
+  }, new Map());
   return (
-    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-      {tools.map((tool) => (
-        <label
-          key={tool.name}
-          className="flex items-start gap-2 rounded border border-slate-200 p-2 text-xs"
-          title={tool.description}
-        >
-          <input
-            type="checkbox"
-            disabled={disabled}
-            checked={selected.includes(tool.name)}
-            onChange={(event) =>
-              onChange(
-                event.target.checked
-                  ? [...selected, tool.name]
-                  : selected.filter((name) => name !== tool.name),
-              )
-            }
-          />
-          <span>
-            {tool.title}
-            <span className="block text-slate-400">{tool.name}</span>
-          </span>
-        </label>
-      ))}
+    <div className="space-y-3">
+      {[...groups.entries()].map(([group, items]) => {
+        const names = items.map((tool) => tool.name);
+        const allOn = names.every((name) => selected.includes(name));
+        return (
+          <div key={group} data-mcp-tool-group={group}>
+            <div className="mb-1.5 flex items-center gap-2 text-xs">
+              <span className="font-semibold text-slate-600">{group}</span>
+              <span className="text-slate-400">
+                {names.filter((name) => selected.includes(name)).length}/{names.length}
+              </span>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  onChange(
+                    allOn
+                      ? selected.filter((name) => !names.includes(name))
+                      : [...new Set([...selected, ...names])],
+                  )
+                }
+                className="text-indigo-600 hover:underline disabled:opacity-40"
+              >
+                {allOn ? '清空本组' : '全选本组'}
+              </button>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {items.map((tool) => (
+                <label
+                  key={tool.name}
+                  className="flex items-start gap-2 rounded border border-slate-200 p-2 text-xs"
+                  title={tool.description}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={disabled}
+                    checked={selected.includes(tool.name)}
+                    onChange={(event) =>
+                      onChange(
+                        event.target.checked
+                          ? [...selected, tool.name]
+                          : selected.filter((name) => name !== tool.name),
+                      )
+                    }
+                  />
+                  <span>
+                    {tool.title}
+                    <span className="block text-slate-400">{tool.name}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

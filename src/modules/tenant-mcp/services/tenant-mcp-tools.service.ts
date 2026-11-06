@@ -7,10 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Db, ObjectId } from 'mongodb';
-import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
-import sharp from 'sharp';
 import type { z } from 'zod';
 import { ArticleLibraryService } from '../../article-library/services/article-library.service.js';
 import { ArticleService } from '../../article-library/services/article.service.js';
@@ -27,8 +24,11 @@ import {
   decodeMcpBase64,
   MCP_ARTICLE_CONTENT_SCHEMA,
   TENANT_MCP_TOOLS,
+  type TenantMcpDouyinToolName,
   type TenantMcpToolName,
 } from '../tenant-mcp.tools.js';
+import { TenantMcpDouyinToolsService } from './tenant-mcp-douyin-tools.service.js';
+import { saveMcpImageFile } from './tenant-mcp-image.js';
 
 /** @keyword-en mcp-tool-execution, tenant-isolation */
 @Injectable()
@@ -42,6 +42,7 @@ export class TenantMcpToolsService {
     private readonly crawl: XhsTopicCrawlService,
     private readonly topics: XhsTopicRepositoryService,
     private readonly config: ConfigService,
+    private readonly douyin: TenantMcpDouyinToolsService,
   ) {}
 
   /** @keyword-en mcp-library-check, tenant-isolation */
@@ -126,29 +127,7 @@ export class TenantMcpToolsService {
     principal: TenantMcpPrincipal,
     input: z.infer<typeof TENANT_MCP_TOOLS.image_upload.schema>,
   ) {
-    const buffer = decodeMcpBase64(input.base64, 10 * 1024 * 1024);
-    const processor = sharp(buffer, {
-      limitInputPixels: 40000000,
-      animated: false,
-    });
-    const metadata = await processor.metadata();
-    if (!['jpeg', 'png', 'webp'].includes(metadata.format || ''))
-      throw new BadRequestException('UNSUPPORTED_IMAGE_FORMAT');
-    const output = await processor
-      .rotate()
-      .resize({
-        width: 2400,
-        height: 2400,
-        fit: 'inside',
-        withoutEnlargement: true,
-      })
-      .jpeg({ quality: 88 })
-      .toBuffer({ resolveWithObject: true });
-    const fileName = `mcp-${randomUUID()}.jpg`;
-    const directory = join(process.cwd(), 'public', 'uploads');
-    const absPath = join(directory, fileName);
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(absPath, output.data, { flag: 'wx' });
+    const file = await saveMcpImageFile(input.base64);
     try {
       const [image] = await this.gallery.createMany([
         {
@@ -156,20 +135,14 @@ export class TenantMcpToolsService {
           tenantId: principal.tenantId,
           scope: 'tenant',
           originalName: input.originalName,
-          fileName,
-          absPath,
-          url: `/static/uploads/${fileName}`,
-          mimeType: 'image/jpeg',
-          size: output.data.length,
-          width: output.info.width,
-          height: output.info.height,
+          ...file,
           tags: input.tags,
           description: input.description,
         },
       ]);
       return { image: this.imageView(image) };
     } catch (error) {
-      await fs.unlink(absPath).catch(() => undefined);
+      await fs.unlink(file.absPath).catch(() => undefined);
       throw error;
     }
   }
@@ -323,7 +296,16 @@ export class TenantMcpToolsService {
       !principal.permissions.includes(name)
     )
       throw new ForbiddenException('MCP_TOOL_NOT_ALLOWED');
-    const toolName = name as TenantMcpToolName;
+    if (name.startsWith('douyin_'))
+      return this.douyin.execute(
+        principal,
+        name as TenantMcpDouyinToolName,
+        raw,
+      );
+    const toolName = name as Exclude<
+      TenantMcpToolName,
+      TenantMcpDouyinToolName
+    >;
     // 每个分支以自己的严格 schema 解析，不能通过附带 tenantId/userId 覆盖调用身份。
     switch (toolName) {
       case 'gallery_search': {

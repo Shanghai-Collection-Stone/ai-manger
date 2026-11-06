@@ -7,6 +7,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
+import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
 import {
   isStoreVisitLocalSegment,
   isStoreVisitVisualStart,
@@ -24,6 +25,7 @@ import {
   type DouyinStoryboardShot,
   type DouyinStoreVisitMotion,
   type DouyinStoreVisitOpeningScene,
+  type DouyinStoreVisitPipeline,
   type DouyinStoreVisitSceneImage,
   type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
@@ -293,7 +295,7 @@ export function normalizeStoreVisitLines(input?: string | null): string {
 }
 
 /**
- * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（实际按单段视频时长控制在约 60 字内），画面描述最多 300 字，脚本里的配图画面最多 60 字。
+ * @description 探店分段上限：最多 8 段；单段台词最多 1000 字（实际按单段视频时长控制在约 60 字内），画面描述最多 300 字，脚本里的配图画面最多 60 字，念法最多 40 字。
  * @keyword-cn 探店分段上限, 单段台词上限
  * @keyword-en store-visit-segment-limit, segment-lines-limit
  */
@@ -302,10 +304,11 @@ export const DOUYIN_STORE_VISIT_SEGMENT_LIMITS = {
   lines: 1000,
   action: 300,
   scene: 60,
+  delivery: 40,
 } as const;
 
 /**
- * @description 规整探店分段（只收台词、场景图或视频素材 ID、点位模式的点位 ID 与同一点位 1～3 张参考图、脚本里的配图画面、视频入点、本机运镜、画面描述、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
+ * @description 规整探店分段（只收台词、场景图或视频素材 ID、点位模式的点位 ID 与同一点位 1～3 张参考图、脚本里的配图画面、视频入点、本机运镜、画面描述、念法、镜头类型、画面来源与段 ID，人物首帧、成片与配音由服务端写）：
  *   去掉空台词段，段 ID 不合法或重复时换新，素材不在本选题素材里时清空；视频素材段不收人物镜头类型（人物出镜要用图片），最多 8 段。
  * @keyword-cn 规整探店分段, 分段校验
  * @keyword-en normalize-store-visit-segments, segment-validation
@@ -362,9 +365,13 @@ export function normalizeStoreVisitSegments(
       : extraImageIds[0];
     const spotId = String(item?.spotId ?? '').trim();
     const scene = String(item?.scene ?? '')
-      .replace(/s+/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim()
       .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.scene);
+    const delivery = String(item?.delivery ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.delivery);
     list.push({
       id,
       lines,
@@ -385,6 +392,7 @@ export function normalizeStoreVisitSegments(
       ...(scene ? { scene } : {}),
       ...(!video && motion ? { motion } : {}),
       ...(action ? { action } : {}),
+      ...(delivery ? { delivery } : {}),
       ...(!video && ['presenter', 'experience'].includes(item?.shot || '')
         ? { shot: item.shot }
         : {}),
@@ -404,7 +412,7 @@ export function normalizeStoreVisitSegments(
 }
 
 /**
- * @description 保存分段时接上服务端写入的字段：场景（含参考图组）没变时保留人物首帧；台词、场景、画面描述与镜头类型都没变、且没有依赖的前段改动时，
+ * @description 保存分段时接上服务端写入的字段：场景（含参考图组）没变时保留人物首帧；台词、场景、画面描述、念法与镜头类型都没变、且没有依赖的前段改动时，
  *   再保留这段的视频、配音与所用音色，任一改了就作废。新镜头（换素材、换用途或紧跟本机素材段）不依赖前段尾帧，前段改动不连带作废它；
  *   本机素材段的产出只有配音，台词没变就保留，换素材、入点或运镜都不用重新配音。
  * @keyword-cn 合并探店分段, 保留分段成片
@@ -462,6 +470,7 @@ export function mergeStoreVisitSegments(
       sameVisual &&
       previous.lines === segment.lines &&
       (previous.action ?? '') === (segment.action ?? '') &&
+      (previous.delivery ?? '') === (segment.delivery ?? '') &&
       (previous.shot ?? 'broll') === (segment.shot ?? 'broll');
     if (!unchanged || current?.[index]?.id !== segment.id) chainChanged = true;
     if (chainChanged || !previous.videoId || previous.nativeAudio !== true)
@@ -513,7 +522,10 @@ export class DouyinWorkbenchRepositoryService {
   private readonly gallery: Collection<Record<string, unknown>>;
   private readonly videos: Collection<Record<string, unknown>>;
 
-  constructor(@Inject('DS_MONGO_DB') private readonly db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') private readonly db: Db,
+    private readonly personas: DouyinPersonaRepositoryService,
+  ) {
     this.topics = db.collection<DouyinTopicEntity>('douyin_topics');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     this.gallery = db.collection('gallery_images');
@@ -621,8 +633,9 @@ export class DouyinWorkbenchRepositoryService {
 
   /**
    * @description 校验母选题归属后批量保存用户挑中的脚本（子选题），标题、口播正文与配图偏向一并入库，内容类型固定为短视频。
-   * @keyword-cn 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向
-   * @keyword-en persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference
+   *   探店脚本记下制作方式，正文写进 `storeVisit.script`（探店工作区按它定门店、生成台词），不带配图偏向与参考图。
+   * @keyword-cn 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向, 探店脚本
+   * @keyword-en persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference, store-visit-script
    */
   async createChildren(
     parentId: number,
@@ -633,6 +646,7 @@ export class DouyinWorkbenchRepositoryService {
       personaId?: number;
       scriptStyle?: string;
       referenceImages?: Array<Partial<DouyinMediaReference>>;
+      productionMode?: 'storyboard' | 'store-visit';
     }>,
     scope: DouyinScope,
   ): Promise<Array<Omit<DouyinTopicEntity, '_id'>>> {
@@ -661,7 +675,11 @@ export class DouyinWorkbenchRepositoryService {
             ? Number(candidate?.personaId)
             : undefined,
         scriptStyle: normalizeScriptStyle(candidate?.scriptStyle),
-        referenceImages: normalizeReferenceImages(candidate?.referenceImages),
+        storeVisit: candidate?.productionMode === 'store-visit',
+        referenceImages:
+          candidate?.productionMode === 'store-visit'
+            ? []
+            : normalizeReferenceImages(candidate?.referenceImages),
       }))
       .filter((candidate) => candidate.title.length > 0);
     if (!normalized.length) {
@@ -689,9 +707,16 @@ export class DouyinWorkbenchRepositoryService {
         kind: 'child',
         parentId,
         title: candidate.title,
-        script: candidate.script || undefined,
+        ...(candidate.storeVisit
+          ? {
+              productionMode: 'store-visit' as const,
+              storeVisit: candidate.script ? { script: candidate.script } : {},
+            }
+          : {
+              script: candidate.script || undefined,
+              storyboardPreference: candidate.storyboardPreference,
+            }),
         topicType: '短视频',
-        storyboardPreference: candidate.storyboardPreference,
         personaId: candidate.personaId,
         scriptStyle: candidate.scriptStyle,
         ...(candidate.referenceImages.length
@@ -743,6 +768,7 @@ export class DouyinWorkbenchRepositoryService {
         script?: string;
         linesScript?: string;
         voicePrompt?: string;
+        speechEngine?: 'cosyvoice' | 'qwen3-tts';
         storeName?: string;
         storeId?: number;
         spotIds?: string[];
@@ -921,15 +947,19 @@ export class DouyinWorkbenchRepositoryService {
       if (opening) nested['storeVisit.openingScene'] = opening;
       else unset['storeVisit.openingScene'] = '';
     }
-    // 出镜人物按租户图库校验，传 null 清掉；换了人物后各段首帧与人物出镜段成片都作废
+    // 出镜人物：是所选人物的形象图时按人物校验（平台公开人物的图不在租户图库里），否则按租户图库校验；
+    // 传 null 清掉；换了人物后各段首帧与人物出镜段成片都作废
     let faceChanged = false;
     if (input.storeVisit?.faceImage !== undefined) {
       const face = input.storeVisit.faceImage
         ? normalizeReferenceImages([input.storeVisit.faceImage])[0]
         : undefined;
       if (face) {
-        await this.validateMediaReferences([face], scope);
-        nested['storeVisit.faceImage'] = face;
+        const personaId =
+          input.personaId !== undefined ? input.personaId : current.personaId;
+        const personaFace = await this.readPersonaFace(face, personaId, scope);
+        if (!personaFace) await this.validateMediaReferences([face], scope);
+        nested['storeVisit.faceImage'] = personaFace ?? face;
       } else unset['storeVisit.faceImage'] = '';
       faceChanged =
         (face?.id ?? 0) !== (current.storeVisit?.faceImage?.id ?? 0);
@@ -972,6 +1002,32 @@ export class DouyinWorkbenchRepositoryService {
       nested['storeVisit.segments'] = clearPresenterKeyframes(
         current.storeVisit.segments,
       );
+    }
+    if (input.storeVisit?.speechEngine !== undefined) {
+      const engine = input.storeVisit.speechEngine;
+      if (!['cosyvoice', 'qwen3-tts'].includes(engine))
+        throw new BadRequestException('不支持的探店配音引擎');
+      const previous =
+        current.storeVisit?.speechEngine ||
+        (current.storeVisit?.voiceId ? 'cosyvoice' : 'qwen3-tts');
+      nested['storeVisit.speechEngine'] = engine;
+      if (engine !== previous) {
+        const segments = (nested['storeVisit.segments'] ||
+          current.storeVisit?.segments ||
+          []) as DouyinStoreVisitSegment[];
+        nested['storeVisit.segments'] = segments.map(
+          ({
+            videoId,
+            audioUrl,
+            audioSeconds,
+            voiceId,
+            nativeAudio,
+            ...segment
+          }) => segment,
+        );
+        unset['storeVisit.voiceAnchor'] = '';
+        unset.generatedVideoId = '';
+      }
     }
     if (input.storeVisit?.voicePrompt !== undefined) {
       const prompt = String(input.storeVisit.voicePrompt).trim().slice(0, 1000);
@@ -1221,6 +1277,69 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
+   * @description 写 AI 导演流水线状态（服务端字段，不走用户 DTO）：`patch` 里值为 `undefined` 的字段清掉；带 `expect` 时只在选题当前满足这个条件时写入（原子认领）；
+   *   只改认领时间 `advancingAt` 时不动选题与流水线的更新时间，免得巡检让桌面端反复刷新。
+   * @keyword-cn 写流水线状态, 原子认领
+   * @keyword-en save-pipeline-state, atomic-claim
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {Partial<DouyinStoreVisitPipeline>} patch 要写的字段。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @param {Filter<DouyinTopicEntity>} [expect] 写入前要满足的条件。
+   * @returns {Promise<DouyinTopicEntity|null>} 写入后的选题；选题不存在或条件不满足时为 null。
+   */
+  async setStoreVisitPipeline(
+    topicId: number,
+    patch: Partial<DouyinStoreVisitPipeline>,
+    scope: DouyinScope,
+    expect?: Filter<DouyinTopicEntity>,
+  ): Promise<DouyinTopicEntity | null> {
+    const now = new Date();
+    const touches = Object.keys(patch).some(
+      (key) => key !== 'advancingAt' && key !== 'updatedAt',
+    );
+    const $set: Record<string, unknown> = touches
+      ? { updatedAt: now, 'storeVisit.pipeline.updatedAt': now }
+      : {};
+    const $unset: Record<string, ''> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (key === 'updatedAt') continue;
+      if (value === undefined) $unset[`storeVisit.pipeline.${key}`] = '';
+      else $set[`storeVisit.pipeline.${key}`] = value;
+    }
+    return await this.topics.findOneAndUpdate(
+      {
+        $and: [
+          this.scopeFilter(scope),
+          { id: topicId, kind: 'child' },
+          ...(expect ? [expect] : []),
+        ],
+      },
+      {
+        ...(Object.keys($set).length ? { $set } : {}),
+        ...(Object.keys($unset).length ? { $unset } : {}),
+      },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 列出所有在跑的 AI 导演流水线（不分租户，给后台巡检推进用），最久没动的排在前面。
+   * @keyword-cn 在跑的流水线, 巡检推进
+   * @keyword-en running-pipelines, patrol-advance
+   * @param {number} [limit] 最多条数。
+   * @returns {Promise<DouyinTopicEntity[]>} 选题。
+   */
+  async listRunningStoreVisitPipelines(
+    limit = 50,
+  ): Promise<DouyinTopicEntity[]> {
+    return await this.topics
+      .find({ kind: 'child', 'storeVisit.pipeline.state': 'running' })
+      .sort({ 'storeVisit.pipeline.updatedAt': 1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  /**
    * @description 将人物起始画面共享到同场景段落，从最早使用该场景的位置起作废依赖旧尾帧的成片、配音与音色；
    *   选题或分段不存在时返回 null。
    * @keyword-cn 写入人物首帧, 首帧作废成片
@@ -1437,6 +1556,37 @@ export class DouyinWorkbenchRepositoryService {
       if (!row)
         throw new BadRequestException('DOUYIN_REFERENCE_MEDIA_NOT_FOUND');
     }
+  }
+
+  /**
+   * @description 出镜人物图是所选人物的形象图时，按人物记录放行：本租户人物与平台公开人物都算（平台公开人物的形象图在平台图库，
+   *   不在租户图库里）；地址用人物记录里的，不信前端传的。不是该人物的形象图或人物用不了时返回 null，交回租户图库校验。
+   * @keyword-cn 人物形象图出镜, 平台公开人物
+   * @keyword-en persona-face-image, platform-public-persona
+   * @param face 规整后的出镜人物图引用。
+   * @param personaId 选题选用的人物 ID（本次传入的优先，否则用已保存的）。
+   * @param scope 租户用户作用域。
+   * @returns {Promise<DouyinMediaReference|null>} 按人物记录校正后的引用，或 null。
+   */
+  private async readPersonaFace(
+    face: DouyinMediaReference,
+    personaId: number | undefined,
+    scope: DouyinScope,
+  ): Promise<DouyinMediaReference | null> {
+    const id = Math.round(Number(personaId) || 0);
+    if (id < 1) return null;
+    const persona = await this.personas.get(id, scope);
+    const image = persona?.referenceImages?.find(
+      (item) => Number(item.imageId) === face.id && item.url,
+    );
+    if (!image) return null;
+    return {
+      type: 'image',
+      id: face.id,
+      name: face.name,
+      url: image.url,
+      ...(image.coverUrl ? { coverUrl: image.coverUrl } : {}),
+    };
   }
 
   /**

@@ -1,12 +1,18 @@
 import {
+  buildCosyVoiceInstruction,
   buildCosyVoicePrefix,
+  cleanDelivery,
+  COSYVOICE_DEFAULT_DELIVERY,
+  cosyVoiceInstructionLength,
   COSYVOICE_PRESET_CATEGORIES,
   COSYVOICE_PRESET_VOICES,
+  COSYVOICE_STORE_VISIT_RATE,
   describeCosyVoiceFailure,
   describeVoiceDesignFailure,
   DouyinCosyVoiceService,
   readWavSeconds,
   resolveDashScopeOrigin,
+  tightenSpeechPauses,
 } from './douyin-cosyvoice.service.js';
 
 /**
@@ -36,6 +42,24 @@ function buildWav(seconds: number, sampleRate: number, dataSize?: number): Buffe
   header.write('data', 36, 'ascii');
   header.writeUInt32LE(dataSize ?? pcm.length, 40);
   return Buffer.concat([header, pcm]);
+}
+
+/**
+ * @description 按片段拼一段 24kHz 16bit 单声道 WAV：每段给秒数与振幅，振幅为 0 是静音，否则是 440Hz 正弦波（模拟人声）。
+ * @keyword-cn 拼接测试WAV, 模拟人声
+ * @keyword-en build-pieced-wav, fake-speech
+ * @param {Array<[number, number]>} pieces 片段：[秒数, 振幅]。
+ * @returns {Buffer} WAV 文件内容。
+ */
+function piecedWav(pieces: Array<[number, number]>): Buffer {
+  const samples = pieces.flatMap(([seconds, amplitude]) =>
+    Array.from({ length: Math.round(seconds * 24000) }, (_, index) =>
+      Math.round(amplitude * Math.sin((2 * Math.PI * 440 * index) / 24000)),
+    ),
+  );
+  const wav = buildWav(samples.length / 24000, 24000);
+  samples.forEach((value, index) => wav.writeInt16LE(value, 44 + index * 2));
+  return wav;
 }
 
 describe('百炼 CosyVoice 客户端', () => {
@@ -182,6 +206,111 @@ describe('百炼 CosyVoice 客户端', () => {
     expect(fetchMock.mock.calls[1][0]).toBe(
       'https://dashscope-result-bj.example/a.wav',
     );
+  });
+
+  it('念法转合成指令：复刻 / 设计音色在支持的模型上用自然语言，音色库只有支持情感的系统音色用固定格式，其余不传', () => {
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3.5-plus', voiceId: 'c1', voiceSource: 'clone', delivery: ' 热情打招呼，语调上扬 ' }),
+    ).toBe('热情打招呼，语调上扬');
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3-flash', voiceId: 'd1', voiceSource: 'design' }),
+    ).toBe(COSYVOICE_DEFAULT_DELIVERY);
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3-plus', voiceId: 'c1', voiceSource: 'clone', delivery: '兴奋' }),
+    ).toBeUndefined();
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3-flash', voiceId: 'longlaotie_v3', voiceSource: 'preset', delivery: '兴奋' }),
+    ).toBeUndefined();
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3-flash', voiceId: 'longanyang', voiceSource: 'preset' }),
+    ).toBe('你正在进行广告促销，你说话的情感是happy。');
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3-plus', voiceId: 'longanhuan', voiceSource: 'preset', delivery: '惊喜地报价格' }),
+    ).toBe('你正在进行产品推广，你说话的情感是surprised。');
+    const long = buildCosyVoiceInstruction({ model: 'cosyvoice-v3.5-flash', voiceId: 'c1', voiceSource: 'clone', delivery: '很'.repeat(60) });
+    expect(cosyVoiceInstructionLength(long!)).toBeLessThanOrEqual(100);
+    expect(cosyVoiceInstructionLength('热情a1，')).toBe(7);
+  });
+
+  it('念法只管声音：带推门、走进、指着、边走边说、镜头这类动作或画面说法的小句整句去掉', () => {
+    expect(cleanDelivery(' 边推门边说，热络招呼，语调上扬 ')).toBe('热络招呼，语调上扬');
+    expect(cleanDelivery('走进店里；指着屏幕，语速稍快。重音在小丑竞技场')).toBe('语速稍快，重音在小丑竞技场');
+    expect(cleanDelivery('对着镜头挥手')).toBe('');
+    expect(cleanDelivery('热情打招呼，语调上扬')).toBe('热情打招呼，语调上扬');
+    expect(cleanDelivery(undefined)).toBe('');
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3.5-plus', voiceId: 'c1', voiceSource: 'clone', delivery: '边推门边说，热络招呼' }),
+    ).toBe('热络招呼');
+    expect(
+      buildCosyVoiceInstruction({ model: 'cosyvoice-v3.5-plus', voiceId: 'c1', voiceSource: 'clone', delivery: '推门进去' }),
+    ).toBe(COSYVOICE_DEFAULT_DELIVERY);
+  });
+
+  it('合成时把念法指令放进 input.instruction；百炼拒绝指令时退回不带指令再合成一次', async () => {
+    const wav = buildWav(2, 24000);
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: 'InvalidParameter', message: 'instruction not supported' }), { status: 400 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ output: { audio: { url: 'https://a/b.wav' } } })),
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array(wav)));
+    const result = await new DouyinCosyVoiceService().synthesize(
+      { apiKey: 'sk-test' },
+      { model: 'cosyvoice-v3.5-plus', voice: 'v1', text: '你好', instruction: '热情地说' },
+    );
+    expect(result.seconds).toBe(2);
+    const first = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)) as { input: Record<string, unknown> };
+    const second = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)) as { input: Record<string, unknown> };
+    expect(first.input.instruction).toBe('热情地说');
+    expect(second.input.instruction).toBeUndefined();
+  });
+
+  it('带语速时写进 input.rate，退回不带念法指令重试时语速照带；原速不传', async () => {
+    const wav = buildWav(2, 24000);
+    const fetchMock = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'InvalidParameter' }), { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { audio: { url: 'https://a/b.wav' } } })))
+      .mockResolvedValueOnce(new Response(new Uint8Array(wav)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ output: { audio: { url: 'https://a/c.wav' } } })))
+      .mockResolvedValueOnce(new Response(new Uint8Array(wav)));
+    const service = new DouyinCosyVoiceService();
+    await service.synthesize(
+      { apiKey: 'sk-test' },
+      { model: 'cosyvoice-v3.5-plus', voice: 'v1', text: '你好', instruction: '热情地说', rate: COSYVOICE_STORE_VISIT_RATE },
+    );
+    await service.synthesize({ apiKey: 'sk-test' }, { model: 'cosyvoice-v3.5-plus', voice: 'v1', text: '你好', rate: 1 });
+    const bodies = [0, 1, 3].map(
+      (index) => JSON.parse(String((fetchMock.mock.calls[index] as [string, RequestInit])[1].body)) as { input: Record<string, unknown> },
+    );
+    expect(bodies[0].input).toMatchObject({ rate: 1.15, instruction: '热情地说' });
+    expect(bodies[1].input.rate).toBe(1.15);
+    expect(bodies[1].input.instruction).toBeUndefined();
+    expect(bodies[2].input.rate).toBeUndefined();
+  });
+
+  it('收紧配音停顿：开头只留 0.08 秒、结尾留 0.15 秒，长停顿缩到 0.3 秒，开头的咔哒声不算开口', () => {
+    const wav = piecedWav([[0.01, 8000], [0.59, 0], [1, 8000], [0.8, 0], [0.5, 8000], [0.5, 0]]);
+    const tightened = tightenSpeechPauses(wav);
+    expect(readWavSeconds(wav)).toBe(3.4);
+    expect(readWavSeconds(tightened)).toBe(2.03);
+    expect(tightened.readUInt32LE(4)).toBe(tightened.length - 8);
+    expect(tightened.readUInt32LE(40)).toBe(tightened.length - 44);
+  });
+
+  it('收紧配音停顿：短停顿保留，整段静音或不是 16bit PCM 时原样返回', () => {
+    const tight = piecedWav([[0.05, 0], [1, 8000], [0.2, 0], [1, 8000], [0.1, 0]]);
+    expect(tightenSpeechPauses(tight)).toBe(tight);
+    const silent = buildWav(2, 24000);
+    expect(tightenSpeechPauses(silent)).toBe(silent);
+    const float = piecedWav([[0.6, 0], [1, 8000]]);
+    float.writeUInt16LE(3, 20);
+    expect(tightenSpeechPauses(float)).toBe(float);
+    const notWav = Buffer.from('not a wav file at all, just some bytes padding padding');
+    expect(tightenSpeechPauses(notWav)).toBe(notWav);
   });
 
   it('响应带 code 时抛出保留原始信息的错误；没有 Key 时不发请求', async () => {

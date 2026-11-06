@@ -85,11 +85,15 @@ import {
   type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import {
+  buildCosyVoiceInstruction,
   buildCosyVoicePrefix,
+  cleanDelivery,
   COSYVOICE_CLONE_MODEL,
+  COSYVOICE_DEFAULT_DELIVERY,
   COSYVOICE_PRESET_CATEGORIES,
   COSYVOICE_PRESET_MODEL,
   COSYVOICE_PRESET_VOICES,
+  COSYVOICE_STORE_VISIT_RATE,
   type CosyVoicePresetCategory,
   type CosyVoicePresetVoice,
   DASHSCOPE_PROVIDER_CODE,
@@ -98,6 +102,7 @@ import {
   describeVoiceDesignFailure,
   DouyinCosyVoiceService,
   readWavSeconds,
+  tightenSpeechPauses,
 } from './douyin-cosyvoice.service.js';
 import { DOUYIN_SHOT_IMAGE_SIZE } from './douyin-shot-image.service.js';
 import {
@@ -156,21 +161,21 @@ export function describeStoreVisitVoice(
 }
 
 /**
- * @description 锚点生成方式的版本：`v2` 起第 1 段不再照着百炼 TTS 学、只出干净人声。之前取的锚点是「模仿 TTS」的声音，版本对不上就不再用，下次生成会按新方式重取。
+ * @description 锚点生成方式的版本：v3 引入自建 H3 配音先行，旧的模型自由出声锚点不再复用；标识还包含配音引擎，换引擎后重新定音色。
  * @keyword-cn 锚点版本, 旧锚点作废
  * @keyword-en voice-anchor-version, stale-anchor-reset
  */
-export const STORE_VISIT_VOICE_ANCHOR_VERSION = 'v2';
+export const STORE_VISIT_VOICE_ANCHOR_VERSION = 'v3';
 
 /**
- * @description 当前音色的标识（锚点版本 + 音色 ID + 声音描述），音色锚点只在标识一致时使用。
+ * @description 当前音色的标识（锚点版本 + 配音引擎 + 音色 ID + 声音描述），音色锚点只在标识一致时使用。
  * @keyword-cn 音色标识, 锚点作废判断
  * @keyword-en voice-key, anchor-stale-check
  * @param {DouyinStoreVisitSetting} setting 探店设置。
  * @returns {string} 音色标识。
  */
 export function storeVisitVoiceKey(setting: DouyinStoreVisitSetting): string {
-  return `${STORE_VISIT_VOICE_ANCHOR_VERSION}|${setting.voiceId || ''}|${describeStoreVisitVoice(setting)}`;
+  return `${STORE_VISIT_VOICE_ANCHOR_VERSION}|${setting.speechEngine || (setting.voiceId ? 'cosyvoice' : 'qwen3-tts')}|${setting.voiceId || ''}|${describeStoreVisitVoice(setting)}`;
 }
 
 /**
@@ -198,7 +203,7 @@ export function readStoreVisitVoiceAnchor(
  */
 export const DOUYIN_VOICE_ANCHOR_MAX_BYTES = 5 * 1024 * 1024;
 
-/** @description 对齐 Mongo 空值后比较分段与任务快照（含点位模式的多张参考图），供排队、续段及成片绑定统一判断是否修改。 @keyword-cn 分段快照校验, 数据库空值兼容 @keyword-en segment-request-match, mongo-null-compatibility */
+/** @description 对齐 Mongo 空值后比较分段与任务快照（含点位模式的多张参考图与念法，旧快照没记念法时不比），供排队、续段及成片绑定统一判断是否修改。 @keyword-cn 分段快照校验, 数据库空值兼容 @keyword-en segment-request-match, mongo-null-compatibility */
 export function matchesStoreVisitRequest(
   topic: Pick<DouyinTopicEntity, 'storeVisit'>,
   segment: DouyinStoreVisitSegment | undefined,
@@ -216,10 +221,16 @@ export function matchesStoreVisitRequest(
       ) &&
     (segment.clipStart || 0) === (Number(request.clipStart) || 0) &&
     (segment.action || '') === (request.action || '') &&
+    (typeof request.delivery !== 'string' ||
+      (segment.delivery || '') === request.delivery) &&
     (segment.shot || 'broll') === (request.shot || 'broll') &&
     (typeof request.visualSource !== 'string' ||
       storeVisitVisualSource(segment) === request.visualSource) &&
     (setting.voiceId || '') === (request.voiceId || '') &&
+    (typeof request.speechEngine !== 'string' ||
+      (setting.speechEngine ||
+        (setting.voiceId ? 'cosyvoice' : 'qwen3-tts')) ===
+        request.speechEngine) &&
     (typeof request.voicePrompt !== 'string' ||
       describeStoreVisitVoice(setting) === request.voicePrompt) &&
     (!('faceImageId' in request) ||
@@ -315,6 +326,7 @@ export function buildStoreVisitH3Prompt(
   input: Parameters<typeof buildStoreVisitNativePrompt>[0] & {
     continued?: boolean;
     aspect?: DouyinTemplateAspect;
+    guideAudio?: boolean;
   },
 ): string {
   const extras = input.extraSceneDescriptions ?? [];
@@ -355,8 +367,12 @@ export function buildStoreVisitH3Prompt(
       : '',
     'Timeline:',
     `[0s-${input.seconds}s] ${timeline}`,
-    `Audio: ${speech}${input.referenceAudio ? ' <Audio 1> is only a voice sample for timbre and accent: never speak, imitate or continue any of its words.' : ''} The speech starts right at the beginning and nothing else is said before or after this line. ${input.cleanVoice ? 'Only the clean, dry voice: no ambient sound, no echo, no background music, no other voices.' : 'Light ambient sound of the store underneath, no background music, no other voices.'}`,
-    'No subtitles, captions, watermarks or added text.',
+    input.guideAudio
+      ? `Audio: ${speech} Follow the provided complete voiceover exactly from frame zero; match mouth shapes, expression and timing to the recording. No additional words, voices or background music.`
+      : `Audio: ${speech}${input.referenceAudio ? ' <Audio 1> is only a voice sample for timbre and accent: never speak, imitate or continue any of its words.' : ''} The speech starts right at the beginning and nothing else is said before or after this line. ${input.cleanVoice ? 'Only the clean, dry voice: no ambient sound, no echo, no background music, no other voices.' : 'Light ambient sound of the store underneath, no background music, no other voices.'}`,
+    input.guideAudio
+      ? 'No watermarks or unrelated added text.'
+      : 'No subtitles, captions, watermarks or added text.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -394,6 +410,16 @@ export const DOUYIN_STORE_VISIT_POLL_MS = 15 * 1000;
  */
 export const DOUYIN_STORE_VISIT_TASK_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 const DOUYIN_STORE_VISIT_SAVING_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * @description 尾帧规划的心跳：规划同步跑在续段请求里，每 30 秒续一次 `updatedAt`；超过 2 分钟没心跳说明规划被掐断（多半是后端重启），
+ *   退回等待让桌面端重新截尾帧再规划，最多重来 2 次。
+ * @keyword-cn 尾帧规划心跳, 规划中断重试
+ * @keyword-en planning-heartbeat, planning-interrupt-retry
+ */
+export const DOUYIN_STORE_VISIT_PLANNING_HEARTBEAT_MS = 30 * 1000;
+export const DOUYIN_STORE_VISIT_PLANNING_STALE_MS = 2 * 60 * 1000;
+export const DOUYIN_STORE_VISIT_PLANNING_RETRIES = 2;
 
 /**
  * @description 配音比画面模型单段最长秒数多出这几秒以内时，合成阶段把画面最后一帧定格补齐；再长就要求拆短。
@@ -1328,6 +1354,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         model,
         voice: voiceId,
         text: DOUYIN_STORE_VISIT_PREVIEW_TEXT,
+        rate: COSYVOICE_STORE_VISIT_RATE,
       });
       this.previews.set(cacheKey, {
         url,
@@ -1534,6 +1561,35 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * @description 只提交指定的这一段（不连带续段），供 AI 导演流水线一段一段地出片；同镜头续段仍等上一段的实际尾帧，
+   *   统一音色模式下第 1 段已出片时其余段等它的声音。
+   * @keyword-cn 提交单个探店分段, 导演逐段出片
+   * @keyword-en submit-single-store-visit-segment, director-step-generate
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string} segmentId 分段 ID。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @param {{voiceAnchor?: boolean}} [options] `voiceAnchor` 为真时以第 1 段的声音统一音色。
+   * @returns {Promise<DouyinOperationView>} 这一段的调用记录。
+   * @throws {BadRequestException} 这一段还没保存或已被删除。
+   */
+  async startSingle(
+    topicId: number,
+    segmentId: string,
+    scope: DouyinScope,
+    options: { voiceAnchor?: boolean } = {},
+  ): Promise<DouyinOperationView> {
+    const topic = await this.requireChild(topicId, scope);
+    const segment = (topic.storeVisit?.segments ?? []).find(
+      (item) => item.id === segmentId,
+    );
+    if (!segment)
+      throw new BadRequestException('这一段还没保存或已被删除，请先保存台词');
+    const [view] = await this.startSegments(topic, [segment], scope, options);
+    if (!view) throw new BadRequestException('这一段没有提交成功，请重试');
+    return view;
+  }
+
+  /**
    * @description 查出这条脚本当前用户还在排队、等待衔接、生成或保存中的分段 ID。
    * @keyword-cn 在跑分段查询, 单段重做避让
    * @keyword-en generating-segment-ids, retry-skip-running
@@ -1647,6 +1703,23 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     scope: DouyinScope,
     options: { voiceAnchor?: boolean } = {},
   ): Promise<DouyinOperationView[]> {
+    if (
+      topic.storeVisit?.speechEngine === 'cosyvoice' &&
+      !topic.storeVisit.voiceId &&
+      topic.storeVisit.voicePrompt?.trim()
+    ) {
+      if ((await this.generatingSegmentIds(topic.id, scope)).size)
+        throw new ConflictException('还有分段在生成，完成后再定制配音音色');
+      topic = await this.designVoice(
+        topic.id,
+        { prompt: topic.storeVisit.voicePrompt },
+        scope,
+      );
+      const ids = new Set(segments.map((segment) => segment.id));
+      segments = (topic.storeVisit?.segments || []).filter((segment) =>
+        ids.has(segment.id),
+      );
+    }
     const setting = topic.storeVisit ?? {};
     if (
       (setting.script || setting.linesScript) &&
@@ -1880,6 +1953,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             ...(anchorSegment ? { anchorSegmentId: anchorSegment.id } : {}),
           },
           request: {
+            speechEngine:
+              setting.speechEngine ||
+              (setting.voiceId ? 'cosyvoice' : 'qwen3-tts'),
             lines: segment.lines,
             action: segment.action || '',
             sceneImageId: segment.sceneImageId,
@@ -1993,7 +2069,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     return saved;
   }
 
-  /** @description 验证待处理段、来源及前段视频后原子认领，新镜头直接用素材，同镜头才理解尾帧；统一音色模式的新镜头等的是锚点段，锚点声音没上传前不认领，提交时拿锚点作参考音频；重复请求不重复扣费或提交。 @keyword-cn 续接探店片段, 原子续段认领 @keyword-en continue-store-visit-segment, atomic-continuation-claim */
+  /** @description 验证待处理段、来源及前段视频后原子认领，新镜头直接用素材，同镜头才理解尾帧；统一音色模式的新镜头等的是锚点段，锚点声音没上传前不认领，提交时拿锚点作参考音频；重复请求不重复扣费或提交；规划期间每 30 秒续心跳，进程被掐断时巡检据此退回等待重来。 @keyword-cn 续接探店片段, 原子续段认领 @keyword-en continue-store-visit-segment, atomic-continuation-claim */
   async continueOperation(
     operationId: string,
     input: { previousVideoId: number; tailImageId?: number },
@@ -2052,6 +2128,18 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       return this.toView(
         (await this.operations.findOne({ id: row.id })) || row,
       );
+    // 进程活着就一直续心跳；被重启掐断时心跳停了，巡检很快退回等待重来
+    const heartbeat = setInterval(
+      () =>
+        void this.operations
+          .updateOne(
+            { id: row.id, status: 'queued', 'continuity.stage': 'planning' },
+            { $set: { updatedAt: new Date() } },
+          )
+          .catch(() => undefined),
+      DOUYIN_STORE_VISIT_PLANNING_HEARTBEAT_MS,
+    );
+    heartbeat.unref?.();
     try {
       const scene = topic.storeVisit?.sceneImages?.find(
         (image) => image.id === segment.sceneImageId,
@@ -2231,6 +2319,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         `连续生成失败：${error instanceof Error ? error.message : String(error)}。请从这一段重新生成；尾帧理解错误时检查「思考」的视觉模型配置。`,
       );
       throw error;
+    } finally {
+      clearInterval(heartbeat);
     }
   }
 
@@ -2366,14 +2456,19 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const operationId = input.operationId || randomUUID();
     // 人物段用万相 wan2.7-i2v 时，配音作驱动音频一次生成画面与口型，出片后不再另做对口型
     const request: Record<string, unknown> = {
+      speechEngine:
+        topic.storeVisit?.speechEngine ||
+        (topic.storeVisit?.voiceId ? 'cosyvoice' : 'qwen3-tts'),
       segmentId: segment.id,
       segmentIndex: input.index,
       lines: segment.lines,
       action: segment.action ?? '',
+      delivery: segment.delivery ?? '',
       sceneImageId: segment.sceneImageId,
       sceneImageIds: segment.sceneImageIds ?? [],
       voiceId: input.voice.voiceId,
       voiceModel: input.voice.model,
+      voicePrompt: describeStoreVisitVoice(topic.storeVisit || {}),
       shot: target.shot,
       visualSource: storeVisitVisualSource(segment),
       faceImageId: topic.storeVisit?.faceImage?.id || null,
@@ -2411,7 +2506,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       ...(input.continuity ? { continuity: input.continuity } : {}),
     };
     // 模型并发满了先排队，轮到时按当前脚本重新组装、扣费提交
-    if (!input.admitted && !(await this.videoQueue.admit(runtime, operationId)))
+    if (
+      !input.admitted &&
+      (opensource || !(await this.videoQueue.admit(runtime, operationId)))
+    )
       return this.toView(
         await this.videoQueue.enqueue(
           { id: operationId, ...base, request },
@@ -2447,11 +2545,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         ? listOpensourceVideoDurationChoices()
         : listShuyanVideoDurationChoices(runtime.model);
       const maxSeconds = choices[choices.length - 1];
-      if (estimatedSeconds > maxSeconds)
+      if (!opensource && estimatedSeconds > maxSeconds)
         throw new BadRequestException(
           `第 ${input.index} 段台词约 ${estimatedSeconds} 秒，超过单段上限 ${maxSeconds} 秒，请把这段拆短`,
         );
-      const seconds = opensource
+      let seconds = opensource
         ? clampOpensourceVideoDuration(estimatedSeconds)
         : clampShuyanVideoDuration(runtime.model, estimatedSeconds);
       // 自建服务按 megapixels 出图，720p 就近取 672P（0.8MP）
@@ -2492,8 +2590,42 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
               .slice(0, 2)
           : [];
       let referenceAudio: { url: string; buffer: Buffer } | undefined;
+      let guideAudio:
+        { buffer: Buffer; seconds: number; engine: string } | undefined;
+      if (opensource) {
+        guideAudio = await this.synthesizeGuideSpeech(
+          topic,
+          segment,
+          runtime,
+          scope,
+          input.voiceAnchor,
+        );
+        if (input.cleanVoice && guideAudio.seconds < 2)
+          throw new BadRequestException(
+            '第 1 段台词太短，请补充开场内容后重试，统一音色至少需要 2 秒声音',
+          );
+        if (
+          !Number.isFinite(guideAudio.seconds) ||
+          guideAudio.seconds < 0.3 ||
+          guideAudio.seconds > maxSeconds
+        )
+          throw new BadRequestException(
+            `第 ${input.index} 段配音时长 ${guideAudio.seconds.toFixed(2)} 秒，不在 0.3～${maxSeconds} 秒内，请调整台词后重试`,
+          );
+        seconds = Math.max(1, Math.ceil(guideAudio.seconds * 24) / 24);
+        const audio = await this.storage.saveAudio(guideAudio.buffer, {
+          scope,
+          fileName: 'voice-guide.wav',
+          contentType: 'audio/wav',
+        });
+        Object.assign(request, {
+          audioUrl: audio.url,
+          audioSeconds: guideAudio.seconds,
+        });
+      }
       // 音色锚点优先：整条视频都参考同一段声音；锚点在本机时读文件转成 data URL
       if (
+        !opensource &&
         supportsStoreVisitReferenceAudio(runtime.model) &&
         input.voiceAnchor
       ) {
@@ -2512,6 +2644,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       }
       // 音色样本仅用于模型参考，永不交给合成器。
       if (
+        !opensource &&
         !referenceAudio &&
         supportsStoreVisitReferenceAudio(runtime.model) &&
         input.voice.runtime
@@ -2524,6 +2657,13 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
               Array.from(segment.lines).length < 12
                 ? '大家好，今天带大家看看这家店，一起感受这里的环境。'
                 : Array.from(segment.lines).slice(0, 48).join(''),
+            rate: COSYVOICE_STORE_VISIT_RATE,
+            instruction: buildCosyVoiceInstruction({
+              model: input.voice.model,
+              voiceId: input.voice.voiceId,
+              voiceSource: topic.storeVisit?.voiceSource ?? 'clone',
+              delivery: segment.delivery,
+            }),
           })
           .catch(() => null);
         if (
@@ -2598,6 +2738,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             continuation: input.continuationPrompt,
             continued: Boolean(input.firstFrameUrl),
             aspect: activeTemplateAspect(input.topic.videoTemplate),
+            guideAudio: Boolean(guideAudio),
           })
         : buildStoreVisitNativePrompt(promptInput);
       const content: Array<Record<string, unknown>> = [
@@ -2655,7 +2796,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         });
       Object.assign(request, {
         nativeAudio: true,
-        voiceMode: referenceAudio ? 'reference' : 'prompt',
+        voiceMode: guideAudio
+          ? 'guide'
+          : referenceAudio
+            ? 'reference'
+            : 'prompt',
         ...(input.cleanVoice ? { cleanVoice: true } : {}),
         voicePrompt: describeStoreVisitVoice(setting),
         duration: seconds,
@@ -2667,6 +2812,14 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       let externalId: string;
       let result: unknown;
       if (target.engine === 'opensource-video') {
+        const latest = await this.requireChild(topic.id, scope);
+        const current = latest.storeVisit?.segments?.find(
+          (item) => item.id === segment.id,
+        );
+        if (!matchesStoreVisitRequest(latest, current, request))
+          throw new BadRequestException(
+            '配音期间台词、场景或音色已修改，本段未提交视频，请重新生成',
+          );
         const job = await this.opensourceVideos.createVideo(
           runtime,
           await this.buildOpensourceSegmentInput({
@@ -2676,9 +2829,14 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             megapixels: opensourceResolution.megapixels,
             runtime,
             referenceAudio,
+            guideAudio,
             aspect: activeTemplateAspect(input.topic.videoTemplate),
           }),
         );
+        if (job.has_guide_audio !== true)
+          throw new BadRequestException(
+            '自建视频服务尚未启用锚定配音，请先升级 GPU 服务',
+          );
         externalId = String(job.id ?? '').trim();
         result = job;
         if (!externalId) throw new Error('OPENSOURCE_VIDEO_TASK_ID_MISSING');
@@ -2854,7 +3012,52 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；等待中的续段只在分段真被改动、删除或重排，或等的那段失败时才停（等第 1 段声音的新镜头不要求紧挨第 1 段）；旧运行中调用按原请求快照完成。
+   * @description 尾帧规划心跳停了（规划被掐断，多半是后端重启）时收尾：先按心跳时间原子改状态，没超过重试次数就退回 `waiting`
+   *   让桌面端重新截尾帧再规划，否则判失败；改成功后退回这条调用可能已扣的视频费并归还模型名额，重来不会重复扣费。
+   * @keyword-cn 规划中断恢复, 退回等待重来
+   * @keyword-en recover-interrupted-planning, back-to-waiting
+   * @param {DouyinOperationEntity} row 停在规划阶段的调用记录。
+   * @returns {Promise<void>}
+   */
+  private async recoverInterruptedPlanning(
+    row: DouyinOperationEntity,
+  ): Promise<void> {
+    const retries = row.continuity?.planningRetries ?? 0;
+    const retry = retries < DOUYIN_STORE_VISIT_PLANNING_RETRIES;
+    const claimed = await this.operations.findOneAndUpdate(
+      {
+        id: row.id,
+        status: 'queued',
+        'continuity.stage': 'planning',
+        updatedAt: row.updatedAt,
+      },
+      {
+        $set: retry
+          ? {
+              'continuity.stage': 'waiting',
+              'continuity.planningRetries': retries + 1,
+              updatedAt: new Date(),
+            }
+          : {
+              status: 'failed',
+              error:
+                '尾帧衔接规划多次中断（后端重启或网络异常），请重新生成这段及后续片段。',
+              updatedAt: new Date(),
+            },
+      },
+    );
+    if (!claimed) return;
+    await this.billing
+      .refundService({
+        operationId: row.id,
+        reason: 'douyin-store-visit-planning-interrupted',
+      })
+      .catch(() => false);
+    await this.videoQueue.release(row.id);
+  }
+
+  /**
+   * @description 跟进排队生成并保存原声视频，复核素材与声音描述防止旧产出绑定；尾帧规划心跳停了超过 2 分钟交给 `recoverInterruptedPlanning` 退回等待重来；等待中的续段只在分段真被改动、删除或重排，或等的那段失败时才停（等第 1 段声音的新镜头不要求紧挨第 1 段）；旧运行中调用按原请求快照完成。
    *
    * @keyword-cn 推进探店分段, 分段转存
    * @keyword-en advance-store-visit-segment, save-segment-video
@@ -2869,12 +3072,9 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         if (row.continuity.stage === 'planning') {
           if (
             Date.now() - new Date(row.updatedAt).getTime() >
-            DOUYIN_STORE_VISIT_SAVING_STALE_MS
+            DOUYIN_STORE_VISIT_PLANNING_STALE_MS
           )
-            await this.fail(
-              row.id,
-              '尾帧衔接规划已中断，请重新生成这段及后续片段。',
-            );
+            await this.recoverInterruptedPlanning(row);
           return;
         }
         const topic = await this.repository.get(row.topicId, {
@@ -3492,6 +3692,78 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * @description 为自建 H3 合成完整台词：百炼沿用音色库或定制音色，按 `COSYVOICE_STORE_VISIT_RATE` 提速，并按这一段的念法带情感指令（`buildCosyVoiceInstruction`，不支持的音色不带）；
+   *   Qwen3-TTS 优先克隆音色锚点，其次用已有音色样本，没有样本时按声音描述设计，指令里同样附上念法（没写用默认念法）。
+   *   两种引擎出的配音都先 `tightenSpeechPauses` 去掉首尾空白、缩短长停顿，再按收紧后的时长生成画面。
+   * @keyword-cn 合成锚定台词, 双引擎配音
+   * @keyword-en synthesize-guide-speech, dual-engine-speech
+   */
+  private async synthesizeGuideSpeech(
+    topic: DouyinTopicEntity,
+    segment: DouyinStoreVisitSegment,
+    runtime: WorkflowNodeRuntime,
+    scope: DouyinScope,
+    anchor?: DouyinStoreVisitVoiceAnchor,
+  ): Promise<{ buffer: Buffer; seconds: number; engine: string }> {
+    const setting = topic.storeVisit || {};
+    const engine =
+      setting.speechEngine || (setting.voiceId ? 'cosyvoice' : 'qwen3-tts');
+    let sample: { buffer: Buffer; seconds: number } | undefined;
+    if (engine === 'cosyvoice' || (!anchor && setting.voiceId)) {
+      if (!setting.voiceId || !setting.voiceModel)
+        throw new BadRequestException('百炼配音需要先选择或定制一个音色');
+      const voiceRuntime =
+        setting.voiceSource === 'preset'
+          ? await this.readVoiceRuntime()
+          : await this.readVoiceRuntimeFor(setting.voiceProviderId);
+      sample = await this.cosyVoice.synthesize(voiceRuntime, {
+        model: setting.voiceModel,
+        voice: setting.voiceId,
+        text:
+          engine === 'cosyvoice'
+            ? segment.lines
+            : DOUYIN_STORE_VISIT_PREVIEW_TEXT,
+        rate: COSYVOICE_STORE_VISIT_RATE,
+        instruction: buildCosyVoiceInstruction({
+          model: setting.voiceModel,
+          voiceId: setting.voiceId,
+          voiceSource: setting.voiceSource ?? 'clone',
+          delivery: segment.delivery,
+        }),
+      });
+      if (engine === 'cosyvoice') {
+        const buffer = tightenSpeechPauses(sample.buffer);
+        return {
+          buffer,
+          seconds:
+            buffer === sample.buffer ? sample.seconds : readWavSeconds(buffer),
+          engine,
+        };
+      }
+    }
+    const reference = anchor
+      ? await toOpensourceVideoAudioData({
+          url: anchor.url,
+          buffer: Buffer.alloc(0),
+        })
+      : sample
+        ? `data:audio/wav;base64,${sample.buffer.toString('base64')}`
+        : undefined;
+    const buffer = await this.opensourceVideos.synthesizeSpeech(runtime, {
+      input: segment.lines,
+      instructions: `${describeStoreVisitVoice(setting)}；念法：${cleanDelivery(segment.delivery) || COSYVOICE_DEFAULT_DELIVERY}`,
+      ...(reference ? { reference_audio: reference } : {}),
+      ...(!anchor && sample
+        ? { reference_text: DOUYIN_STORE_VISIT_PREVIEW_TEXT }
+        : {}),
+    });
+    const tightened = tightenSpeechPauses(buffer);
+    const seconds = readWavSeconds(tightened);
+    if (!seconds) throw new Error('QWEN_TTS_EMPTY_AUDIO');
+    return { buffer: tightened, seconds, engine };
+  }
+
+  /**
    * @description 克隆音色属于克隆时那个百炼账号：优先用音色记录上的提供商取 Key，提供商已删除时退回节点当前的提供商。
    * @keyword-cn 读取音色所属提供商, 克隆音色账号
    * @keyword-en read-voice-owner-runtime, cloned-voice-account
@@ -3690,6 +3962,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     megapixels: number;
     runtime: WorkflowNodeRuntime;
     referenceAudio?: { url: string; buffer: Buffer };
+    guideAudio?: { buffer: Buffer };
     aspect?: DouyinTemplateAspect;
   }): Promise<OpensourceVideoCreateInput> {
     const mode = resolveOpensourceVideoMode(input.runtime.model);
@@ -3718,6 +3991,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         aspect_ratio: input.aspect ?? (images.length ? 'auto' : '9:16'),
         megapixels: input.megapixels,
         mode,
+        ...(input.guideAudio
+          ? {
+              guide_audio: `data:audio/wav;base64,${input.guideAudio.buffer.toString('base64')}`,
+            }
+          : {}),
         first_frame: images[0]
           ? input.aspect
             ? await cropFrameToAspect(
@@ -3743,6 +4021,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       mode,
       reference_images: referenceImages,
       reference_audios: referenceAudios,
+      ...(input.guideAudio
+        ? {
+            guide_audio: `data:audio/wav;base64,${input.guideAudio.buffer.toString('base64')}`,
+          }
+        : {}),
     };
   }
 

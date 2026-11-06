@@ -14,6 +14,9 @@ import {
   describeStoreVisitSegmentFailure,
   matchesStoreVisitRequest,
   DouyinStoreVisitService,
+  DOUYIN_STORE_VISIT_PLANNING_HEARTBEAT_MS,
+  DOUYIN_STORE_VISIT_PLANNING_RETRIES,
+  DOUYIN_STORE_VISIT_PLANNING_STALE_MS,
 } from './douyin-store-visit.service.js';
 import {
   buildStoreVisitContinuityBrief,
@@ -56,6 +59,7 @@ function buildStoreVisitRepository() {
   };
   const gallery = { findOne: jest.fn().mockResolvedValue({ id: 17 }) };
   const videos = { findOne: jest.fn().mockResolvedValue({ id: 31 }) };
+  const personas = { get: jest.fn().mockResolvedValue(null) };
   const counters = {
     findOneAndUpdate: jest
       .fn()
@@ -75,9 +79,13 @@ function buildStoreVisitRepository() {
       ),
   };
   return {
-    repository: new DouyinWorkbenchRepositoryService(db as unknown as Db),
+    repository: new DouyinWorkbenchRepositoryService(
+      db as unknown as Db,
+      personas as never,
+    ),
     topics,
     gallery,
+    personas,
   };
 }
 
@@ -88,6 +96,7 @@ function buildStoreVisitRepository() {
  */
 function buildVoiceoverService(topic: Record<string, unknown> = {}) {
   const service = Object.create(DouyinStoreVisitService.prototype);
+  service.pollOnce = jest.fn().mockResolvedValue(undefined);
   service.previews = new Map();
   // 模型并发不限：直接放行，不排队
   service.videoQueue = {
@@ -170,7 +179,9 @@ function buildVoiceoverService(topic: Record<string, unknown> = {}) {
   };
   service.operations = {
     insertOne: jest.fn().mockResolvedValue({}),
-    find: jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
+    find: jest
+      .fn()
+      .mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) }),
     findOne: jest.fn().mockResolvedValue(null),
     updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     findOneAndUpdate: jest.fn().mockResolvedValue(null),
@@ -514,6 +525,99 @@ describe('探店真实尾帧连续生成', () => {
     expect(row.status).toBe('failed');
     expect(service.billing.chargeService).not.toHaveBeenCalled();
   });
+  it('尾帧规划心跳停了（后端重启掐断）就退回等待重来并退回可能已扣的费用，重来超过上限才判失败', async () => {
+    const { service, row } = buildContinuityService();
+    const stale = new Date(
+      Date.now() - DOUYIN_STORE_VISIT_PLANNING_STALE_MS - 1000,
+    );
+    Object.assign(row, { updatedAt: stale });
+    Object.assign(row.continuity, { stage: 'planning' });
+    /** @description 按心跳时间原子改写规划记录（点号路径写进 continuity）。 @keyword-cn 测试规划恢复, 原子改写 @keyword-en test-planning-recovery, atomic-patch */
+    service.operations.findOneAndUpdate.mockImplementation(
+      async function recoverPlanning(
+        query: Record<string, unknown>,
+        patch: { $set: Record<string, unknown> },
+      ) {
+        const current = row as Record<string, unknown>;
+        if (
+          row.continuity.stage !== query['continuity.stage'] ||
+          current.updatedAt !== query.updatedAt
+        )
+          return null;
+        for (const [key, value] of Object.entries(patch.$set)) {
+          if (key.startsWith('continuity.'))
+            Object.assign(row.continuity, { [key.slice(11)]: value });
+          else current[key] = value;
+        }
+        return row;
+      },
+    );
+    await service.refreshRow({ ...row, continuity: { ...row.continuity } });
+    expect(row).toMatchObject({
+      status: 'queued',
+      continuity: { stage: 'waiting', planningRetries: 1 },
+    });
+    expect(service.billing.refundService).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: 'pending-2' }),
+    );
+    expect(service.videoQueue.release).toHaveBeenCalledWith('pending-2');
+
+    // 心跳还新鲜时说明规划还在跑，不动它
+    const fresh = new Date();
+    Object.assign(row, { updatedAt: fresh });
+    Object.assign(row.continuity, { stage: 'planning' });
+    await service.refreshRow({ ...row, continuity: { ...row.continuity } });
+    expect(row.continuity.stage).toBe('planning');
+
+    Object.assign(row, { updatedAt: stale });
+    Object.assign(row.continuity, {
+      planningRetries: DOUYIN_STORE_VISIT_PLANNING_RETRIES,
+    });
+    await service.refreshRow({ ...row, continuity: { ...row.continuity } });
+    expect(row).toMatchObject({ status: 'failed' });
+    expect((row as Record<string, unknown>).error).toContain('多次中断');
+  });
+  it('规划进行中每 30 秒续一次心跳，规划结束就停', async () => {
+    jest.useFakeTimers();
+    try {
+      const { service } = buildContinuityService();
+      let finishVision: (value: unknown) => void = () => undefined;
+      service.agentService.runWithMessages.mockReturnValue(
+        new Promise((resolve) => {
+          finishVision = resolve;
+        }),
+      );
+      const running = service.continueOperation(
+        'pending-2',
+        { previousVideoId: 41, tailImageId: 92 },
+        scope,
+      );
+      /** @description 数出规划阶段的心跳写入次数。 @keyword-cn 统计心跳, 规划心跳 @keyword-en count-heartbeats, planning-heartbeat */
+      const heartbeats = () =>
+        service.operations.updateOne.mock.calls.filter(
+          ([query]: [Record<string, unknown>]) =>
+            query['continuity.stage'] === 'planning',
+        ).length;
+      await jest.advanceTimersByTimeAsync(
+        DOUYIN_STORE_VISIT_PLANNING_HEARTBEAT_MS * 2 + 1000,
+      );
+      expect(heartbeats()).toBe(2);
+      finishVision({
+        content: JSON.stringify({
+          tailDescription: '镜头位于吧台左侧',
+          transition: '继续右移',
+          videoPrompt: '从尾帧接续，向右平移展示咖啡杯。',
+        }),
+      });
+      await running;
+      await jest.advanceTimersByTimeAsync(
+        DOUYIN_STORE_VISIT_PLANNING_HEARTBEAT_MS * 2,
+      );
+      expect(heartbeats()).toBe(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
   it('修改或重排前段台词使后续旧成片作废，但同场景起始图保留', () => {
     const current = [
       {
@@ -760,6 +864,70 @@ describe('独立探店制作流程（画外音）', () => {
         scope,
       ),
     ).rejects.toThrow(BadRequestException);
+    expect(topics.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('选平台公开人物时它的形象图不在租户图库里，按人物记录放行并用人物里存的地址', async () => {
+    const { repository, topics, gallery, personas } =
+      buildStoreVisitRepository();
+    gallery.findOne.mockResolvedValue(null);
+    personas.get.mockResolvedValue({
+      id: 5,
+      referenceImages: [
+        { view: 'front', imageId: 846, url: 'https://cdn/platform-front.jpg' },
+      ],
+    });
+    await repository.update(
+      2,
+      {
+        personaId: 5,
+        storeVisit: {
+          faceImage: {
+            type: 'image',
+            id: 846,
+            name: '铁山 · 人物形象',
+            url: 'https://forged/face.jpg',
+          },
+        },
+      },
+      { tenantId: 't1', userId: 'u1' },
+    );
+    expect(personas.get).toHaveBeenCalledWith(5, {
+      tenantId: 't1',
+      userId: 'u1',
+    });
+    expect(gallery.findOne).not.toHaveBeenCalled();
+    const update = topics.findOneAndUpdate.mock.calls[0][1];
+    expect(update.$set['storeVisit.faceImage']).toEqual({
+      type: 'image',
+      id: 846,
+      name: '铁山 · 人物形象',
+      url: 'https://cdn/platform-front.jpg',
+    });
+  });
+
+  it('出镜人物图不是所选人物的形象图时，仍按租户图库校验', async () => {
+    const { repository, topics, gallery, personas } =
+      buildStoreVisitRepository();
+    gallery.findOne.mockResolvedValue(null);
+    personas.get.mockResolvedValue({
+      id: 5,
+      referenceImages: [
+        { view: 'front', imageId: 846, url: 'https://cdn/a.jpg' },
+      ],
+    });
+    await expect(
+      repository.update(
+        2,
+        {
+          personaId: 5,
+          storeVisit: {
+            faceImage: { type: 'image', id: 999, url: 'https://cdn/other.jpg' },
+          },
+        },
+        { tenantId: 't1', userId: 'u1' },
+      ),
+    ).rejects.toThrow('DOUYIN_REFERENCE_MEDIA_NOT_FOUND');
     expect(topics.findOneAndUpdate).not.toHaveBeenCalled();
   });
 

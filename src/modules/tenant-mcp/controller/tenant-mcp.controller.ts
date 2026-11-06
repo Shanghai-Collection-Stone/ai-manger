@@ -34,13 +34,11 @@ export class TenantMcpController {
   @RequirePermission('read', 'TenantMcp')
   get(@Res() res: Response) {
     res.setHeader('Allow', 'POST');
-    res
-      .status(405)
-      .json({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32000, message: 'Stateless MCP supports POST only' },
-      });
+    res.status(405).json({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32000, message: 'Stateless MCP supports POST only' },
+    });
   }
 
   /** @keyword-en mcp-http-method, stateless-transport */
@@ -48,15 +46,13 @@ export class TenantMcpController {
   @RequirePermission('read', 'TenantMcp')
   delete(@Res() res: Response) {
     res.setHeader('Allow', 'POST');
-    res
-      .status(405)
-      .json({
-        jsonrpc: '2.0',
-        id: null,
-        error: {
-          code: -32000,
-          message: 'Stateless MCP has no session to terminate',
-        },
-      });
+    res.status(405).json({
+      jsonrpc: '2.0',
+      id: null,
+      error: {
+        code: -32000,
+        message: 'Stateless MCP has no session to terminate',
+      },
+    });
   }
 }

@@ -38,6 +38,7 @@ const topic = {
  */
 function buildService(admitted: boolean) {
   const service = Object.create(DouyinStoreVisitService.prototype);
+  service.pollOnce = jest.fn().mockResolvedValue(undefined);
   service.videoQueue = {
     admit: jest.fn().mockResolvedValue(admitted),
     enqueue: jest.fn(async (doc, input) => ({

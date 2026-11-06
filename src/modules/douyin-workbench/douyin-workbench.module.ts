@@ -26,12 +26,14 @@ import { DouyinVideoDirectorService } from './services/douyin-video-director.ser
 import { DouyinVideoTemplateService } from './services/douyin-video-template.service.js';
 import { DouyinVideoQueueService } from './services/douyin-video-queue.service.js';
 import { DouyinStoreVisitService } from './services/douyin-store-visit.service.js';
+import { DouyinStoreVisitPipelineService } from './services/douyin-store-visit-pipeline.service.js';
 import { DouyinStoreVisitPlannerService } from './services/douyin-store-visit-planner.service.js';
 import { DouyinStoreVisitSpotService } from './services/douyin-store-visit-spot.service.js';
 import { DouyinStoryboardGenerationService } from './services/douyin-storyboard-generation.service.js';
 import { DouyinStoryboardImageService } from './services/douyin-storyboard-image.service.js';
 import { DouyinVideoStorageService } from './services/douyin-video-storage.service.js';
 import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-repository.service.js';
+import { DouyinWorkbenchAgentService } from './services/douyin-workbench-agent.service.js';
 
 /**
  * @description 装配抖音母子选题、分镜、视频生成（整片 / 分镜 / 分镜合成 / 探店画外音）、发布与抓取真实业务能力（含预设人物能力，用于脚本、分镜与出图的人物一致性）。
@@ -66,6 +68,7 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     DouyinShotConcatService,
     DouyinShotImageService,
     DouyinStoreVisitService,
+    DouyinStoreVisitPipelineService,
     DouyinStoreVisitPlannerService,
     DouyinStoreVisitSpotService,
     DouyinStoryboardGenerationService,
@@ -75,7 +78,8 @@ import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-re
     DouyinVideoStorageService,
     DouyinVideoTemplateService,
     DouyinWorkbenchRepositoryService,
+    DouyinWorkbenchAgentService,
   ],
-  exports: [DouyinWorkbenchRepositoryService],
+  exports: [DouyinWorkbenchRepositoryService, DouyinWorkbenchAgentService],
 })
 export class DouyinWorkbenchModule {}

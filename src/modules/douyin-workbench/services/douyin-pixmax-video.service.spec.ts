@@ -192,9 +192,9 @@ describe('douyin pixmax video prompts', () => {
     expect(
       presentDouyinVideoError({
         provider: 'pixmax',
-        error: 'PixMax 积分不足，请充值后重新生成。',
+        error: 'PixMax 账号积分不足，视频暂时无法生成，请联系平台管理员处理后重新生成。',
       }),
-    ).toEqual({ error: 'PixMax 积分不足，请充值后重新生成。' });
+    ).toEqual({ error: 'PixMax 账号积分不足，视频暂时无法生成，请联系平台管理员处理后重新生成。' });
     expect(
       presentDouyinVideoError({ provider: 'direct', error: 'HTTP 500' }),
     ).toEqual({

@@ -142,7 +142,7 @@ export const XHS_MOTHER_IMAGE_RULE_LAYOUT: Record<
  * @keyword-en article-error-code, failure-reason-text
  */
 export const XHS_ARTICLE_ERROR_MESSAGES: Record<string, string> = {
-  CREDIT_EXHAUSTED: 'Credit 点数不足，请充值后再生成文章。',
+  CREDIT_EXHAUSTED: 'Credit 点数不足，暂时无法生成文章，请联系企业管理员。',
   XHS_CHILD_TOPIC_NOT_FOUND: '子选题不存在或无权访问，请刷新选题列表后重试。',
   XHS_ARTICLE_GALLERY_TAGS_EMPTY:
     '图库里还没有任何可用标签，请先上传带标签的图片再生成文章。',

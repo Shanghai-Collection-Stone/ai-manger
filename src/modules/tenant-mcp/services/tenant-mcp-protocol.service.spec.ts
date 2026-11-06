@@ -137,7 +137,7 @@ describe('MCP Streamable HTTP 协议', () => {
       .expect(405);
   });
 
-  it('全部授权时发现 16 个工具，每个都有名称、用途说明和 JSON Schema 参数结构', async () => {
+  it('全部授权时发现 45 个工具（含 29 个抖音工作台工具），每个都有名称、用途说明和 JSON Schema 参数结构', async () => {
     permissions = Object.keys(TENANT_MCP_TOOLS);
     await client.connect(
       new StreamableHTTPClientTransport(new URL(url), {
@@ -147,7 +147,7 @@ describe('MCP Streamable HTTP 协议', () => {
     expect(client.getServerCapabilities()).toEqual({ tools: {} });
     expect(client.getInstructions()).toContain('tools/list');
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(45);
     expect(tools.map((tool) => tool.name)).toEqual(
       Object.keys(TENANT_MCP_TOOLS),
     );
@@ -167,6 +167,17 @@ describe('MCP Streamable HTTP 协议', () => {
     expect(qr?.inputSchema.required).toEqual(['libraryId']);
     const list = tools.find((tool) => tool.name === 'library_list');
     expect(list?.inputSchema.required || []).toEqual([]);
+    expect(client.getInstructions()).toContain('douyin_topic_get');
+    const detail = tools.find((tool) => tool.name === 'douyin_topic_get');
+    expect(detail?.annotations).toMatchObject({
+      readOnlyHint: true,
+      destructiveHint: false,
+    });
+    const remove = tools.find((tool) => tool.name === 'douyin_topic_delete');
+    expect(remove?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+    });
   });
 
   it('未分配工具权限时返回标准空工具列表', async () => {

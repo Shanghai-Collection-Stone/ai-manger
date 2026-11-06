@@ -11,7 +11,11 @@ import type { Response } from 'express';
 import { z, ZodError } from 'zod';
 import type { TenantMcpRequest } from '../controller/tenant-mcp-auth.guard.js';
 import type { TenantMcpPrincipal } from '../entities/tenant-mcp.entity.js';
-import { TENANT_MCP_TOOLS } from '../tenant-mcp.tools.js';
+import {
+  TENANT_MCP_TOOL_META,
+  TENANT_MCP_TOOLS,
+  type TenantMcpToolName,
+} from '../tenant-mcp.tools.js';
 import { TenantMcpService } from './tenant-mcp.service.js';
 import { TenantMcpToolsService } from './tenant-mcp-tools.service.js';
 
@@ -31,7 +35,7 @@ export class TenantMcpProtocolService {
       {
         capabilities: { tools: {} },
         instructions:
-          '使用 tools/list 获取当前密钥已授权工具的 description 和 inputSchema，再通过 tools/call 调用。工具列表为空时需要管理员为此密钥分配工具权限。文章发布表示存入文章库；异步采集使用返回的 taskId 查询结果。',
+          '使用 tools/list 获取当前密钥已授权工具的 description 和 inputSchema，再通过 tools/call 调用。工具列表为空时需要管理员为此密钥分配工具权限。文章发布表示存入文章库；异步采集使用返回的 taskId 查询结果。抖音工作台工具（douyin_ 开头）：先用 douyin_workspace 找脚本，按 douyin_topic_get 返回的 nextStep 一步步做；出片与拼接是异步的，用 douyin_topic_get 轮询；同点位续段、统一音色与拼接成片要密钥创建人的账号在桌面端打开「视频制作」页才会完成；标注会产生费用的工具会扣租户 Credit。',
       },
     );
     server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -51,18 +55,15 @@ export class TenantMcpProtocolService {
               properties: Record<string, unknown>;
             },
             annotations: {
-              readOnlyHint: [
-                'gallery_search',
-                'library_list',
-                'library_get',
-                'article_get',
-                'article_list',
-                'article_list_published',
-                'article_list_unpublished',
-                'article_recent_data',
-              ].includes(name),
-              destructiveHint: name.endsWith('_update'),
-              openWorldHint: name === 'article_crawl',
+              readOnlyHint: Boolean(
+                TENANT_MCP_TOOL_META[name as TenantMcpToolName].readOnly,
+              ),
+              destructiveHint: Boolean(
+                TENANT_MCP_TOOL_META[name as TenantMcpToolName].destructive,
+              ),
+              openWorldHint: Boolean(
+                TENANT_MCP_TOOL_META[name as TenantMcpToolName].openWorld,
+              ),
             },
           })),
       };

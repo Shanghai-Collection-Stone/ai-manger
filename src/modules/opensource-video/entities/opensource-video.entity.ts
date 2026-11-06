@@ -103,6 +103,8 @@ export interface OpensourceVideoCreateInput {
   last_frame?: string;
   reference_images?: string[];
   reference_audios?: string[];
+  /** @description 完整台词配音，从第 0 帧锚定画面与嘴型，并作为成片音轨。 */
+  guide_audio?: string;
 }
 
 /**
@@ -132,6 +134,7 @@ export interface OpensourceVideoJob {
   has_last_frame?: boolean;
   reference_images?: number;
   reference_audios?: number;
+  has_guide_audio?: boolean;
   created_at?: string;
   finished_at?: string | null;
   queue_position?: number | null;
