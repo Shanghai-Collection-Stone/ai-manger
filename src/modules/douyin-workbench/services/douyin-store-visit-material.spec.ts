@@ -88,6 +88,7 @@ function buildService(storeVisit: DouyinStoreVisitSetting) {
     string,
     any
   >;
+  service.pollOnce = jest.fn().mockResolvedValue(undefined);
   service.previews = new Map();
   // 模型并发不限：直接放行，不排队
   service.videoQueue = {
@@ -269,6 +270,33 @@ describe('探店实拍素材与本机缓推', () => {
       visualSource: 'original',
     });
     expect(gone).toEqual({ id: 'c', lines: '素材已删' });
+  });
+
+  it('分段保留念法（去空白、最多 40 字），配图画面里的字母 s 不再被吞掉', () => {
+    const [segment, empty] = normalizeStoreVisitSegments(
+      [
+        {
+          id: 'a',
+          lines: '开场',
+          scene: ' SALOON  saloon 门头 ',
+          delivery: '  热情打招呼，\n语调上扬  ',
+        },
+        { id: 'b', lines: '收尾', delivery: '   ' },
+      ],
+      [],
+    );
+    expect(segment).toEqual({
+      id: 'a',
+      lines: '开场',
+      scene: 'SALOON saloon 门头',
+      delivery: '热情打招呼， 语调上扬',
+    });
+    expect(empty).toEqual({ id: 'b', lines: '收尾' });
+    const [long] = normalizeStoreVisitSegments(
+      [{ id: 'c', lines: '长', delivery: '很'.repeat(60) }],
+      [],
+    );
+    expect(Array.from(long.delivery ?? '')).toHaveLength(40);
   });
 
   it('视频素材只留引用、说明、标签与时长；开场素材必须指向现有素材', () => {

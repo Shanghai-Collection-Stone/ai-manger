@@ -52,6 +52,7 @@ function segments(extra: Array<Record<string, unknown>> = []) {
  */
 function buildService(storeVisit: Record<string, unknown>) {
   const service = Object.create(DouyinStoreVisitService.prototype);
+  service.pollOnce = jest.fn().mockResolvedValue(undefined);
   const topic = {
     id: 2,
     kind: 'child',
@@ -155,7 +156,7 @@ describe('探店音色锚点', () => {
       voiceKey: storeVisitVoiceKey(setting),
       createdAt: new Date(0),
     };
-    expect(storeVisitVoiceKey(setting)).toBe('v2|v1|年轻女声');
+    expect(storeVisitVoiceKey(setting)).toBe('v3|cosyvoice|v1|年轻女声');
     expect(readStoreVisitVoiceAnchor({ ...setting, voiceAnchor: anchor })).toBe(
       anchor,
     );

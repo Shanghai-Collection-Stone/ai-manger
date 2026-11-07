@@ -34,6 +34,7 @@ import {
   STORE_VISIT_SELLING_POINT_RULE,
 } from './douyin-child-topic-generation.service.js';
 import {
+  cleanDelivery,
   COSYVOICE_PRESET_CATEGORIES,
   COSYVOICE_PRESET_VOICES,
   type CosyVoicePresetVoice,
@@ -83,6 +84,8 @@ export interface StoreVisitSpotCatalogEntry {
 export interface StoreVisitScriptSegment {
   scene: string;
   lines: string;
+  /** 念法：这段怎么念（情绪、语速、重音），配音时作为情感指令；模型没给时为空 */
+  delivery?: string;
 }
 
 /**
@@ -139,7 +142,7 @@ export function readStoreVisitJson(text: string): Record<string, unknown> {
 }
 
 /**
- * @description 解析 AI 写的探店脚本 JSON：是否出镜（没写时为 undefined）、原始字段（人物音色推荐用）与最多 8 段「画面 + 台词」，空台词段去掉。
+ * @description 解析 AI 写的探店脚本 JSON：是否出镜（没写时为 undefined）、原始字段（人物音色推荐用）与最多 8 段「画面 + 台词 + 念法」（念法去掉动作与画面说法、最多 40 字，没给时为空），空台词段去掉。
  * @keyword-cn 解析探店脚本, 脚本分段
  * @keyword-en parse-store-visit-script, script-segments
  * @param {string} text 模型输出。
@@ -157,6 +160,10 @@ export function parseStoreVisitScript(text: string): {
         string,
         unknown
       >;
+      const delivery = cleanDelivery(readStoreVisitText(record.delivery)).slice(
+        0,
+        DOUYIN_STORE_VISIT_SEGMENT_LIMITS.delivery,
+      );
       return {
         scene: readStoreVisitText(record.scene)
           .replace(/\s+/g, ' ')
@@ -166,6 +173,7 @@ export function parseStoreVisitScript(text: string): {
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.lines),
+        ...(delivery ? { delivery } : {}),
       };
     })
     .filter((segment) => segment.lines)
@@ -799,7 +807,8 @@ export class DouyinStoreVisitPlannerService {
       '3. 资料里写了团购价的，报价要连同对象一起说，例如「这份双人套餐，抖音团购只要 99 元」；报价只是写法之一，不必每段都报，没写价格就不提价格。',
       '4. 最后一段用一句话引导下单，不再加新的事实。',
       '【画面】每段的 scene 写这段要配的实拍画面（6～20 字，例如「门头招牌」「蹦床区全景」「招牌双人套餐」）：只写门店里实际有、拍得到的东西，之后会按它从门店图库里挑实拍图；第 1 段写门头。',
-      '【语气】口语、热情、自然，像跟朋友推荐；不用「老铁」「兄弟」「整」这类江湖口吻（预设人物另有要求时按人物来）。段与段之间可以用「再来看看」「还有」衔接，但不编走路、推门之类画面里没有的动作。',
+      '【语气】口语、热情、自然，像跟朋友推荐；不用「老铁」「兄弟」「整」这类江湖口吻（预设人物另有要求时按人物来）。段与段之间可以用「再来看看」「还有」衔接，但不编走路、推门之类画面里没有的动作。用好标点帮配音带出语气：惊喜、推荐处用「！」，设问用「？」，该停顿的地方断句，不要整段一个逗号念到底。',
+      '【念法】每段再写一个 delivery：这段台词该怎么念，8～20 个字，只写声音——情绪、语速、语调、重音和停顿，例如「热情打招呼，语调上扬」「惊喜地报价格，重音在数字」「压低声音，像分享小秘密」「干脆有力地催下单」；不写动作、表情、走位和画面（不写推门、走进去、指着、拿起、转身、边走边说这类），配音只听得到声音；整条要有起伏，相邻两段不要写成一样；整条保持短视频口播的紧凑节奏，不写放慢、拖长、慢慢说这类减速的说法。',
       STORE_VISIT_SELLING_POINT_RULE,
       STORE_VISIT_PLAIN_SPEECH_RULE,
       '【不许编造】店名、项目、价格、份量、人数只写引用知识、选题和门店资料里出现的；不编招牌秘方、获奖排名、限时活动、赠品这类资料里没有的卖点，不写「我刚吃了」「我玩了三局」这类具体的亲身经历；价格、份量、人数一律用阿拉伯数字，且和资料里一模一样。',
@@ -811,8 +820,8 @@ export class DouyinStoreVisitPlannerService {
         : '视频不露脸、全程画外音，用统一的第一人称讲。',
       style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
       '【示例】只示范写法和节奏，内容必须换成本店的，不要照抄示例里的店名、项目和价格：',
-      '{"segments":[{"scene":"门头招牌","lines":"今天我们来到了 XX 乐园，一家室内亲子乐园，蹦床、滑梯、海洋球一次玩个够。"},{"scene":"蹦床区全景","lines":"蹦床区怎么蹦都不怕摔，小朋友能玩一下午，大人跟着蹦也特别解压。"},{"scene":"咖啡休息区","lines":"玩累了去咖啡区坐坐，大人喝杯咖啡歇歇脚，孩子就在眼前玩。"},{"scene":"门头招牌","lines":"单人票抖音团购 59 元，周末遛娃就来这儿，点左下角就能下单。"}]}',
-      '只输出 JSON，不要解释：{"segments":[{"scene":"","lines":""}]}',
+      '{"segments":[{"scene":"门头招牌","lines":"今天我们来到了 XX 乐园，一家室内亲子乐园，蹦床、滑梯、海洋球一次玩个够！","delivery":"热情打招呼，语调上扬"},{"scene":"蹦床区全景","lines":"蹦床区怎么蹦都不怕摔，小朋友能玩一下午，大人跟着蹦也特别解压。","delivery":"轻快兴奋，重音在解压"},{"scene":"咖啡休息区","lines":"玩累了去咖啡区坐坐，大人喝杯咖啡歇歇脚，孩子就在眼前玩。","delivery":"语气放松，轻快带笑"},{"scene":"门头招牌","lines":"单人票抖音团购才 59 元！周末遛娃就来这儿，点左下角就能下单。","delivery":"惊喜地报价格，干脆催下单"}]}',
+      '只输出 JSON，不要解释：{"segments":[{"scene":"","lines":"","delivery":""}]}',
     ]
       .filter(Boolean)
       .join('\n');

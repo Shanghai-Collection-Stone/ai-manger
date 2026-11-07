@@ -119,7 +119,7 @@ export class DouyinGenerationJobService {
    * @param topicId 分镜任务传子选题 ID，子选题任务传母选题 ID。
    * @param prompt 可选补充要求。
    * @param scope 当前租户用户作用域。
-   * @param options 候选脚本任务可指定本轮统一的出镜人物与风格。
+   * @param options 候选脚本任务可指定本轮统一的出镜人物、风格与制作方式（分镜 / 探店）。
    * @returns {Promise<DouyinGenerationJobView>} 运行中的任务。
    * @throws {NotFoundException} 选题不存在或类型不对。
    * @throws {ConflictException} DOUYIN_GENERATION_ALREADY_RUNNING。
@@ -129,7 +129,11 @@ export class DouyinGenerationJobService {
     topicId: number,
     prompt: string | undefined,
     scope: DouyinScope,
-    options?: { personaId?: number; scriptStyle?: DouyinScriptStyle },
+    options?: {
+      personaId?: number;
+      scriptStyle?: DouyinScriptStyle;
+      productionMode?: 'storyboard' | 'store-visit';
+    },
   ): Promise<DouyinGenerationJobView> {
     const topic = await this.repository.get(topicId, scope);
     if (kind === 'storyboard' && topic?.kind !== 'child') {
@@ -162,6 +166,9 @@ export class DouyinGenerationJobService {
           .slice(0, 1000) || undefined,
       personaId: options?.personaId,
       scriptStyle: options?.scriptStyle,
+      ...(kind === 'children' && options?.productionMode === 'store-visit'
+        ? { productionMode: 'store-visit' as const }
+        : {}),
       status: 'running',
       progress: { stage: 'preparing', current: 0 },
       startedAt: now,
@@ -258,6 +265,7 @@ export class DouyinGenerationJobService {
             prompt: job.prompt,
             personaId: job.personaId,
             scriptStyle: job.scriptStyle,
+            productionMode: job.productionMode,
           },
           scope,
           report,
@@ -315,7 +323,7 @@ export class DouyinGenerationJobService {
 
   /**
    * @description 保存用户从某次子选题任务里挑中的候选脚本（可改标题 / 正文，带各自配图偏向），
-   *   标记这批候选已处理，然后为每条新脚本启动后台分镜任务。
+   *   标记这批候选已处理；制作方式沿用这批任务（分镜 / 探店），只为分镜脚本启动后台分镜任务，探店脚本由探店工作区继续。
    * @keyword-cn 保存挑选脚本, 启动分镜任务
    * @keyword-en confirm-script-drafts, start-storyboard-jobs
    * @param jobId 子选题生成任务 ID。
@@ -358,6 +366,7 @@ export class DouyinGenerationJobService {
         personaId: item.personaId ?? job.personaId,
         scriptStyle: item.scriptStyle ?? job.scriptStyle,
         referenceImages: item.referenceImages,
+        productionMode: job.productionMode,
       };
     });
     // 先占住这批候选，防止连点重复入库
@@ -387,6 +396,7 @@ export class DouyinGenerationJobService {
     );
     const started: DouyinGenerationJobView[] = [];
     for (const topic of topics) {
+      if (topic.productionMode === 'store-visit') continue;
       started.push(await this.start('storyboard', topic.id, undefined, scope));
     }
     return { topics, jobs: started };
@@ -538,6 +548,7 @@ export class DouyinGenerationJobService {
       id: row.id,
       kind: row.kind,
       topicId: row.topicId,
+      ...(row.productionMode ? { productionMode: row.productionMode } : {}),
       status: row.status,
       progress: row.progress,
       error: row.error,

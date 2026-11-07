@@ -48,7 +48,10 @@ import {
   GenerateDouyinStoreVisitLinesDto,
   GenerateDouyinStoryboardDto,
   GenerateDouyinStoreVisitVideoDto,
+  PauseDouyinStoreVisitPipelineDto,
+  RedoDouyinStoreVisitPipelineSegmentDto,
   SaveDouyinStoreVisitVoiceAnchorDto,
+  StartDouyinStoreVisitPipelineDto,
   GenerateDouyinVideoDto,
   PlanDouyinVideoDirectionDto,
   PlanDouyinVideoEditDto,
@@ -75,6 +78,7 @@ import {
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
+import { DouyinStoreVisitPipelineService } from '../services/douyin-store-visit-pipeline.service.js';
 import { DouyinStoreVisitPlannerService } from '../services/douyin-store-visit-planner.service.js';
 import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot.service.js';
 import { DouyinVideoDirectorService } from '../services/douyin-video-director.service.js';
@@ -108,6 +112,7 @@ export class DouyinWorkbenchController {
     private readonly planner: DouyinStoreVisitPlannerService,
     private readonly videoTemplates: DouyinVideoTemplateService,
     private readonly director: DouyinVideoDirectorService,
+    private readonly pipeline: DouyinStoreVisitPipelineService,
   ) {}
 
   /**
@@ -163,6 +168,7 @@ export class DouyinWorkbenchController {
         {
           personaId: dto.personaId,
           scriptStyle: dto.scriptStyle as DouyinScriptStyle | undefined,
+          productionMode: dto.productionMode,
         },
       ),
     };
@@ -771,6 +777,96 @@ export class DouyinWorkbenchController {
         onlyMissing: dto.onlyMissing === true,
       },
     );
+  }
+
+  /**
+   * @description 开始 AI 导演出片：一段一段地生成，同一时间只提交一段；`restart` 为真时清掉各段结果全部重新生成，返回带流水线状态的脚本与最新工作台。
+   * @keyword-cn 开始导演出片接口, 逐段出片
+   * @keyword-en start-director-pipeline-api, segment-by-segment-generation
+   */
+  @Post('topics/:id/store-visit/pipeline/start')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async startStoreVisitPipeline(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: StartDouyinStoreVisitPipelineDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.pipeline.start(this.readId(id), scope, {
+      voiceAnchor: dto.voiceAnchor === true,
+      restart: dto.restart === true,
+    });
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 暂停 AI 导演出片：不再提交下一段，在跑的那段跑完为止；`reason` 为 `editing` 表示打开了某段编辑。
+   * @keyword-cn 暂停导演出片接口, 编辑时暂停
+   * @keyword-en pause-director-pipeline-api, pause-while-editing
+   */
+  @Post('topics/:id/store-visit/pipeline/pause')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async pauseStoreVisitPipeline(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: PauseDouyinStoreVisitPipelineDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.pipeline.pause(
+      this.readId(id),
+      dto.reason ?? 'user',
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 手动继续 AI 导演出片：清掉失败原因，从第一个没出片的段接着生成。
+   * @keyword-cn 继续导演出片接口, 手动继续
+   * @keyword-en resume-director-pipeline-api, manual-resume
+   */
+  @Post('topics/:id/store-visit/pipeline/resume')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async resumeStoreVisitPipeline(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.pipeline.resume(this.readId(id), scope);
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description AI 导演重做某段：清掉这段及接它尾帧的续段的出片结果，由导演按顺序重做。
+   * @keyword-cn 导演重做分段接口, 排进重做
+   * @keyword-en redo-pipeline-segment-api, queue-segment-redo
+   */
+  @Post('topics/:id/store-visit/pipeline/redo')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async redoStoreVisitPipelineSegment(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: RedoDouyinStoreVisitPipelineSegmentDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.pipeline.redo(
+      this.readId(id),
+      dto.segmentId,
+      scope,
+    );
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
   }
 
   /**

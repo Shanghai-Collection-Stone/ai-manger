@@ -187,11 +187,15 @@ export class CreateDouyinMotherTopicDto {
 }
 
 /**
- * @description 校验基于母选题和平台 AI 提示生成短视频子选题的可选要求，数量由 LLM 判定。
- * @keyword-cn 生成抖音子题, 平台提示词
- * @keyword-en generate-douyin-children, platform-ai-prompt
+ * @description 校验基于母选题和平台 AI 提示生成短视频子选题的可选要求，数量由 LLM 判定；可选这批脚本的制作方式（分镜 / 探店），缺省分镜。
+ * @keyword-cn 生成抖音子题, 平台提示词, 脚本制作方式
+ * @keyword-en generate-douyin-children, platform-ai-prompt, script-production-mode
  */
 export class GenerateDouyinChildrenDto {
+  @IsOptional()
+  @IsIn(['storyboard', 'store-visit'])
+  productionMode?: 'storyboard' | 'store-visit';
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)
@@ -438,6 +442,12 @@ export class DouyinStoreVisitSegmentDto {
   @IsString()
   @MaxLength(300)
   action?: string;
+
+  /** 念法：这段台词怎么念（情绪、语速、重音），配音时作为情感指令 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  delivery?: string;
 }
 
 /**
@@ -447,6 +457,10 @@ export class DouyinStoreVisitSegmentDto {
  * @keyword-en store-visit-setting-dto, scene-lines
  */
 export class DouyinStoreVisitDto {
+  @IsOptional()
+  @IsIn(['cosyvoice', 'qwen3-tts'])
+  speechEngine?: 'cosyvoice' | 'qwen3-tts';
+
   @IsOptional()
   @IsString()
   @MaxLength(8000)
@@ -1276,6 +1290,43 @@ export class GenerateDouyinStoreVisitVideoDto {
   @IsOptional()
   @IsBoolean()
   onlyMissing?: boolean;
+}
+
+/**
+ * @description 校验开始 AI 导演出片：`voiceAnchor` 为真时以第 1 段的声音统一音色；`restart` 为真时清掉各段结果全部重新生成。
+ * @keyword-cn 导演出片参数, 全部重新生成开关
+ * @keyword-en director-pipeline-start-dto, restart-flag
+ */
+export class StartDouyinStoreVisitPipelineDto {
+  @IsOptional()
+  @IsBoolean()
+  voiceAnchor?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  restart?: boolean;
+}
+
+/**
+ * @description 校验暂停 AI 导演出片：`reason` 为 `user`（手动暂停）或 `editing`（打开了某段编辑），默认 `user`。
+ * @keyword-cn 导演暂停参数, 暂停原因
+ * @keyword-en director-pipeline-pause-dto, pause-reason
+ */
+export class PauseDouyinStoreVisitPipelineDto {
+  @IsOptional()
+  @IsIn(['user', 'editing'])
+  reason?: 'user' | 'editing';
+}
+
+/**
+ * @description 校验 AI 导演重做某段：要重做的分段 ID。
+ * @keyword-cn 导演重做参数, 重做分段
+ * @keyword-en director-pipeline-redo-dto, redo-segment
+ */
+export class RedoDouyinStoreVisitPipelineSegmentDto {
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/)
+  segmentId!: string;
 }
 
 /**

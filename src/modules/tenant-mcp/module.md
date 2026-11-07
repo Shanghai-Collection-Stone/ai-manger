@@ -9,23 +9,29 @@
 ## 文件清单 (File List)
 
 - `tenant-mcp.module.ts` — NestJS 业务模块装配。
-- `tenant-mcp.tools.ts` — 16 项工具定义、严格参数 schema、文章文件结构和 base64 校验。
+- `tenant-mcp.tools.ts` — 45 项工具定义（16 项图库与文章 + 29 项抖音工作台）、工具分组与 MCP 提示标记（`TENANT_MCP_TOOL_META`）、严格参数 schema、文章文件结构和 base64 校验。
 - `entities/tenant-mcp.entity.ts` — 链接、密钥和认证作用域类型。
 - `controller/tenant-mcp.dto.ts` — 后台链接和密钥请求校验。
 - `controller/tenant-mcp-admin.controller.ts` — 后台管理 HTTP 入口与 CASL 权限声明。
 - `controller/tenant-mcp-auth.guard.ts` — MCP 专用密钥认证与权限声明检查。
 - `controller/tenant-mcp.controller.ts` — MCP HTTP 入口与无状态方法响应。
 - `services/tenant-mcp.service.ts` — 链接/密钥管理、可恢复凭证保存、认证与租户隔离。
-- `services/tenant-mcp-tools.service.ts` — 图库、文章库、文章和抓取能力适配。
+- `services/tenant-mcp-tools.service.ts` — 图库、文章库、文章和抓取能力适配；`douyin_` 开头的工具转交抖音工具分发服务。
+- `services/tenant-mcp-douyin-tools.service.ts` — 抖音工作台 29 项工具的入参解析与分发（调用 `DouyinWorkbenchAgentService`），返回里站内地址补成完整地址。
+- `services/tenant-mcp-image.ts` — MCP base64 图片严格解码、格式校验、纠正方向与缩放后重新编码为 JPEG 落盘（图片上传与门店照片上传共用）。
+- `services/tenant-mcp-douyin-tools.service.spec.ts` — 抖音工具分组与严格 schema、调用身份固定为密钥、地址补全、导演控制工具分发与动作校验、门店照片登记失败删文件测试。
 - `services/tenant-mcp-protocol.service.ts` — MCP 工具发现、调用、初始化使用说明、参数描述、标准协议错误与 HTTP 传输。
 - `services/tenant-mcp.service.spec.ts` — 密钥生命周期和管理作用域测试。
 - `services/tenant-mcp-tools.service.spec.ts` — 业务权限、租户隔离、上传和采集返回测试。
-- `services/tenant-mcp-protocol.service.spec.ts` — 官方客户端连接、全部 16 项工具说明与参数结构、空权限列表、方法拼写、Accept 请求头、调用及 HTTP 鉴权集成测试。
+- `services/tenant-mcp-protocol.service.spec.ts` — 官方客户端连接、全部 45 项工具说明、参数结构与提示标记（含抖音工具）、空权限列表、方法拼写、Accept 请求头、调用及 HTTP 鉴权集成测试。
 
 ## 函数清单 (Function List)
 
 - `TenantMcpModule()` — 装配 MCP 控制器及依赖服务 | keywords: tenant-mcp-module, mcp-server
-- `TENANT_MCP_TOOLS` — 定义工具名称、说明及严格输入 schema | keywords: mcp-tools, tool-permission
+- `TENANT_MCP_TOOLS` — 定义工具名称、说明及严格输入 schema（图库与文章 16 项、抖音工作台 29 项） | keywords: mcp-tools, tool-permission
+- `TENANT_MCP_TOOL_META` — 每个工具的分组（后台按组勾选权限）与 MCP 提示标记：只读、会改动或删除数据、会访问外部平台。按工具名全覆盖，漏写编译不过 | keywords: 工具分组, 工具提示标记, tool-group, tool-annotations
+- `MCP_IMAGE_MAX_BYTES` — MCP 上传图片的大小上限（10 MiB） | keywords: MCP图片上限, 上传大小, mcp-image-limit, upload-size
+- `saveMcpImageFile(base64)` — 把 MCP 传来的 base64 图片严格解码、校验格式（JPEG / PNG / WebP）、纠正方向并限制在 2400 像素内，重新编码成 JPEG 写进上传目录；返回登记图库需要的文件信息，登记失败时调用方负责删掉文件 | keywords: MCP图片落盘, 图片重编码, save-mcp-image, image-reencode
 - `MCP_ARTICLE_CONTENT_SCHEMA` — 校验上传文章文件内容 | keywords: article-upload, input-validation
 - `decodeMcpBase64(value,maxBytes)` — 严格解码 base64 并限制文件大小 | keywords: base64-validation, upload-limit
 - `TenantMcpService()` — 管理租户 MCP 链接和密钥 | keywords: tenant-mcp, key-management
@@ -51,19 +57,24 @@
 - `TenantMcpService.deleteKey(tenantId,endpointId,keyId)` — 立即撤销密钥 | keywords: mcp-delete-key, key-revocation
 - `TenantMcpService.authenticate(endpointId,authorization?)` — 验证链接、密钥、有效期、租户与创建者身份 | keywords: mcp-auth, tenant-isolation
 - `TenantMcpToolsService()` — 适配现有业务能力为 MCP 工具 | keywords: mcp-tool-execution, tenant-isolation
-- `TenantMcpToolsService.constructor(db,libraries,articles,gallery,crawl,topics,config)` — 注入业务与存储服务 | keywords: mcp-tool-execution, tenant-isolation
+- `TenantMcpToolsService.constructor(db,libraries,articles,gallery,crawl,topics,config,douyin)` — 注入业务与存储服务及抖音工具分发服务 | keywords: mcp-tool-execution, tenant-isolation
 - `TenantMcpToolsService.requireLibrary(principal,id)` — 强制验证文章库租户归属 | keywords: mcp-library-check, tenant-isolation
 - `TenantMcpToolsService.requireArticle(principal,id)` — 验证文章及其所属文章库归属 | keywords: mcp-article-check, tenant-isolation
 - `TenantMcpToolsService.libraryView(library)` — 隐藏文章库扫码 token 与内部字段 | keywords: mcp-library-view, secret-redaction
 - `TenantMcpToolsService.absoluteUrl(value)` — 使用 APP_URL 补齐图片地址 | keywords: mcp-image-url, absolute-url
 - `TenantMcpToolsService.articleView(article)` — 返回文章内容并隐藏租约和内部元数据 | keywords: mcp-article-view, secret-redaction
 - `TenantMcpToolsService.imageView(image)` — 返回图片公开字段及可访问地址 | keywords: mcp-image-view, secret-redaction
-- `TenantMcpToolsService.uploadImage(principal,input)` — 验证图片、重新编码并写入租户图库 | keywords: mcp-image-upload, upload-validation
+- `TenantMcpToolsService.uploadImage(principal,input)` — 用 `saveMcpImageFile` 验证并重新编码图片后写入租户图库，登记失败删文件 | keywords: mcp-image-upload, upload-validation
 - `TenantMcpToolsService.createArticle(principal,libraryId,input)` — 把文章写入租户文章库的未发布队列 | keywords: mcp-article-create, article-intake
 - `TenantMcpToolsService.crawlTarget(principal,articleId)` — 验证已发布文章、笔记标识与选题归属 | keywords: mcp-crawl-target, tenant-isolation
 - `TenantMcpToolsService.prepareCrawlTarget(principal,articleId)` — 为已发布且无选题绑定的文章补建监控并清理并发冗余选题 | keywords: mcp-crawl-binding, published-article
 - `TenantMcpToolsService.recentData(principal,input)` — 查询文章近期数据或指定抓取运行结果 | keywords: mcp-recent-data, crawl-result
-- `TenantMcpToolsService.execute(principal,name,raw)` — 校验工具权限与参数后分发业务调用 | keywords: mcp-tool-execution, tool-permission
+- `TenantMcpToolsService.execute(principal,name,raw)` — 校验工具权限与参数后分发业务调用，`douyin_` 开头的工具转交 `TenantMcpDouyinToolsService` | keywords: mcp-tool-execution, tool-permission
+- `TenantMcpDouyinToolsService()` — 抖音工作台 MCP 工具的分发：每个工具用自己的严格 schema 解析入参，身份只取密钥（租户 + 密钥创建人），交给 `DouyinWorkbenchAgentService` 完成一步并落库；返回里站内相对地址补成可访问的完整地址 | keywords: 抖音MCP工具, 工具分发, douyin-mcp-tools, tool-dispatch
+- `TenantMcpDouyinToolsService.constructor(agent,config)` — 注入抖音工作台编排服务与配置（补完整地址用） | keywords: 抖音MCP工具依赖, 编排服务, douyin-mcp-dependencies, agent-service
+- `TenantMcpDouyinToolsService.absolute(value)` — 把返回里 `url` 字段的站内相对地址补成带 APP_URL 的完整地址，其余原样 | keywords: 补完整地址, 站内地址, absolute-urls, site-relative-url
+- `TenantMcpDouyinToolsService.execute(principal,name,raw)` — 解析入参并执行一个抖音工具；不接受入参里的租户或用户，调用身份固定为密钥的租户与创建人 | keywords: 执行抖音工具, 调用身份, execute-douyin-tool, caller-identity
+- `TenantMcpDouyinToolsService.run(principal,name,raw)` — 按工具名分发到编排服务的对应一步 | keywords: 抖音工具分支, 编排一步, douyin-tool-switch, agent-step
 - `CreateMcpEndpointDto()` — 校验链接创建请求 | keywords: mcp-endpoint-dto, input-validation
 - `UpdateMcpEndpointDto()` — 校验链接更新请求 | keywords: mcp-endpoint-dto, input-validation
 - `CreateMcpKeyDto()` — 校验密钥创建请求 | keywords: mcp-key-dto, input-validation
@@ -127,6 +138,24 @@
 | 流式HTTP     | streamable-http     |
 | 协议集成测试 | mcp-protocol        |
 
+| 工具分组 | tool-group |
+| 工具提示标记 | tool-annotations |
+| 抖音工具名 | douyin-tool-name |
+| 工具分发 | tool-dispatch |
+| MCP图片上限 | mcp-image-limit |
+| 上传大小 | upload-size |
+| MCP图片落盘 | save-mcp-image |
+| 图片重编码 | image-reencode |
+| 抖音MCP工具 | douyin-mcp-tools |
+| 抖音MCP工具依赖 | douyin-mcp-dependencies |
+| 编排服务 | agent-service |
+| 补完整地址 | absolute-urls |
+| 站内地址 | site-relative-url |
+| 执行抖音工具 | execute-douyin-tool |
+| 调用身份 | caller-identity |
+| 抖音工具分支 | douyin-tool-switch |
+| 编排一步 | agent-step |
+
 ## 类型导出 (Type Exports)
 
 - `TenantMcpEndpoint` — 租户 MCP 链接。
@@ -134,6 +163,7 @@
 - `TenantMcpSecretEnvelope` — 可恢复凭证信封，支持 AES-256-GCM 或未配置加密时的明文形式。
 - `TenantMcpPrincipal` — 由密钥认证得到的租户及工具权限。
 - `TenantMcpToolName` — 固定工具名称联合类型。
+- `TenantMcpDouyinToolName` — 抖音工作台工具名（`douyin_` 开头），由 `TenantMcpDouyinToolsService` 分发 | keywords: 抖音工具名, 工具分发, douyin-tool-name, tool-dispatch
 - `TenantMcpRequest` — 注入 MCP 作用域的 HTTP 请求。
 
 ## 模块功能描述 (Module Description)
@@ -162,6 +192,13 @@ MCP 入口 `POST /api/mcp/:endpointId` 使用独立的 `Authorization: Bearer tm
 | library_publish_qr                                | 单独授权后获取扫码发布内容与小红书链接                                  |
 | article_recent_data                               | 获取最近 1–90 天的数据，默认 7 天，可带 taskId 轮询指定批次             |
 | article_crawl                                     | 使用当前采集渠道立即采集并返回数据或运行状态                            |
+| douyin_workspace / douyin_topic_get                | 抖音工作台概览；单条脚本完整状态、成片地址、出片前还差什么与下一步建议  |
+| douyin_topic_create / _update / _delete           | 新建母选题（探店自动带一条脚本）、改标题正文、台词与念法或分镜文案、删除 |
+| douyin_video_options / _personas / _knowledge_list | 节点是否配好、预设出镜人物、引用知识                                    |
+| douyin_store_* （门店点位）                       | 门店列表与新建、照片上传进场景图库、AI 归类保存（每次 ≤16 张）、整体保存 |
+| douyin_store_visit_*（探店）                      | 选门店、AI 写脚本、生成台词、音色库、定出镜人物音色、AI 配场景、启动 AI 导演一段一段出片、单段重做、暂停 / 继续 / 重做（`douyin_store_visit_pipeline`） |
+| douyin_storyboard_* / douyin_generation_jobs（分镜）| 生成候选脚本、查任务、确认候选、重新生成分镜、单镜配图、逐镜或整片出片 |
+| douyin_video_merge                                | 打开全部出片后自动拼接，由桌面端完成                                    |
 
 “发布文章”表示存入文章库待扫码发布，不直接发布到外部平台。普通列表和详情不返回扫码 token、文章租约 token、密钥哈希、图库向量或服务器文件路径；二维码能力必须单独授权。
 
@@ -172,3 +209,5 @@ MCP 入口 `POST /api/mcp/:endpointId` 使用独立的 `Authorization: Bearer tm
 工具发现使用 JSON-RPC 方法 `tools/list`（tools 为复数），调用方法是 `tools/call`，并非名为 tool/list 的业务工具，也不是 GET 路径。请求 POST 到链接自身 `/api/mcp/:endpointId`，携带 `Authorization: Bearer tmcp_…`、`Content-Type: application/json`、`Accept: application/json, text/event-stream`；初始化后携带协商的 `MCP-Protocol-Version`。当前 SDK 支持的最高协议版本为 `2025-11-25`，不承诺覆盖之后的协议版本。每个工具返回 name/title/description/inputSchema/annotations，description 提供用途，inputSchema 定义参数；初始化 instructions 同时说明发现、权限和异步采集用法，无须额外调用说明工具。未知或当前密钥不可见工具返回 JSON-RPC -32602，不泄露工具存在性；业务执行或参数校验失败返回工具结果 isError=true。
 
 排障区分：`result.tools=[]` 表示认证成功但该密钥没有可用工具权限；新建密钥默认不授权。401 检查密钥、启用状态、到期时间和链接是否匹配；403 检查 Origin；404 检查地址与部署版本；406 检查 Accept；JSON-RPC -32601 检查方法是否误拼为 tool/list。GET 返回 405 是无状态 Streamable HTTP 的正常行为，旧式 SSE 客户端不能据此认定工具目录为空。云端 Agent 应使用外部可访问的部署地址，不能使用开发机的 localhost；`APP_URL` 必须配置为对客户端可达的应用根地址。修改权限后如客户端缓存了工具列表，应刷新连接重新发现工具。
+
+抖音工作台工具（`douyin_*`）：作用域固定为密钥的租户与创建人（`principal.userId` 与抖音工作台的 `String(user._id)` 同口径），由 `TenantMcpDouyinToolsService` 解析后交给抖音模块的 `DouyinWorkbenchAgentService`，每一步做完即落库、规则与桌面端一致。出片、AI 写作、归类、配图等工具在说明里写明会产生费用；出片与拼接是异步的，用 `douyin_topic_get` 轮询。同点位尾帧续段、统一音色与拼接成片仍要密钥创建人的账号在桌面端打开「视频制作」页（该页每 20 秒静默刷新并在窗口回到前台时立刻刷新，能接手 MCP 发起的任务）；所以建密钥的租户管理员要和使用桌面端的是同一账号。发布到抖音、抓取数据这类对外动作暂不开放。工具分组与只读 / 破坏性 / 访问外部平台的提示标记统一写在 `TENANT_MCP_TOOL_META`，后台「MCP 接入」按组勾选权限。

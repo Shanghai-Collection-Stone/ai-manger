@@ -291,6 +291,8 @@ export interface DouyinStoreVisitSegment {
   motion?: DouyinStoreVisitMotion;
   /** @description 本段画面的镜头与氛围描述（人物出镜时为动作与神态），写进生成提示词 */
   action?: string;
+  /** @description 念法：这段台词怎么念（情绪、语速、重音，如「热情打招呼，语调上扬」），AI 写台词时给出、可改，配音时作为情感指令；空时用默认念法 */
+  delivery?: string;
   /** @description 镜头用途：presenter 人物讲解、experience 人物体验配画外音，缺省为实景展示 */
   shot?: 'presenter' | 'broll' | 'experience';
   /** @description 画面来源：`local` 图片在本机缓推（不调用 AI，只配音）、原图交给 AI 生成动态画面、多图直接参考或主动合成首帧；
@@ -300,13 +302,13 @@ export interface DouyinStoreVisitSegment {
   keyframe?: DouyinMediaReference;
   /** @description 本段最近一次生成成功的声画视频，所有分段都必须生成这一项 */
   videoId?: number;
-  /** @description 旧配音文件地址，仅保留兼容，不再用于新探店视频合成 */
+  /** @description 完整锚定配音或旧配音地址；最终音轨已包含在视频内，合成时不额外替换 */
   audioUrl?: string;
   /** @description 分段视频时长（秒）；旧数据为配音时长，合成以真实视频时长为准 */
   audioSeconds?: number;
   /** @description 配音用的音色 ID，换了音色后前端据此提示重新生成 */
   voiceId?: string;
-  /** @description 为 true 时画面和声音由模型共同生成，所有新分段均写入，合成时保留视频原声 */
+  /** @description 为 true 时视频已包含最终音轨（原生声音或锚定配音），合成时保留该音轨 */
   nativeAudio?: boolean;
 }
 
@@ -412,6 +414,8 @@ export interface DouyinStoreVisitSetting {
   voiceSample?: DouyinStoreVisitVoiceSample;
   /** @description 音色来源：`clone` 为录音克隆，`preset` 为音色库里的百炼预置音色，`design` 为按提示词设计的音色 */
   voiceSource?: 'clone' | 'preset' | 'design';
+  /** @description 自建 H3 的台词配音引擎；旧脚本有音色 ID 时默认百炼，否则默认 Qwen3-TTS。 */
+  speechEngine?: 'cosyvoice' | 'qwen3-tts';
   voiceName?: string;
   /** @description 视频生成使用的声音描述，可直接填写，也可来自提示词定制音色 */
   voicePrompt?: string;
@@ -426,6 +430,30 @@ export interface DouyinStoreVisitSetting {
   segments?: DouyinStoreVisitSegment[];
   /** @description 音色锚点：第 1 段出片后取出的声音，后面各段作参考音频统一音色 */
   voiceAnchor?: DouyinStoreVisitVoiceAnchor;
+  /** @description AI 导演流水线：一段一段出片的状态，服务端写，用户接口不能直接改 */
+  pipeline?: DouyinStoreVisitPipeline;
+}
+
+/**
+ * @description 探店 AI 导演流水线：同一时间只提交一段，轮到哪段才读哪段的最新内容；`running` 时出完一段自动接下一段，
+ *   `paused`（用户暂停、编辑中或某段失败）时不再提交新段（在跑的那段跑完为止），`done` 时全部出完、交给桌面端自动拼接。
+ * @keyword-cn AI导演流水线, 一段一段出片
+ * @keyword-en director-pipeline, segment-by-segment
+ */
+export interface DouyinStoreVisitPipeline {
+  state: 'idle' | 'running' | 'paused' | 'done';
+  /** @description 暂停原因：用户点暂停、打开某段编辑，或当前段生成失败 */
+  pauseReason?: 'user' | 'editing' | 'failed';
+  /** @description 当前段失败时的原因 */
+  error?: string;
+  /** @description 是否以第 1 段的声音统一后面各段音色（桌面端能取音频时为真） */
+  voiceAnchor?: boolean;
+  /** @description 导演最近提交的段与它的调用记录，用来判断这段是不是失败了 */
+  currentSegmentId?: string;
+  currentOperationId?: string;
+  /** @description 推进时的原子认领时间，避免两个进程同时提交下一段 */
+  advancingAt?: Date;
+  updatedAt: Date;
 }
 
 /**
@@ -450,7 +478,7 @@ export interface DouyinTopicEntity {
   tenantId?: string;
   userId: string;
   kind: 'mother' | 'child';
-  /** @description 新建时确定的制作方式；旧数据缺省使用分镜制作。 */
+  /** @description 脚本（子选题）的制作方式，生成脚本时选择；旧数据缺省使用分镜制作，旧探店母选题也带这个字段。 */
   productionMode?: 'storyboard' | 'store-visit';
   parentId?: number;
   title: string;
@@ -531,6 +559,8 @@ export interface DouyinGenerationJobView {
   kind: DouyinGenerationJobKind;
   /** 分镜任务是子选题 ID，子选题任务是母选题 ID */
   topicId: number;
+  /** 子选题任务专用：这批候选脚本的制作方式（分镜 / 探店），缺省为分镜 */
+  productionMode?: 'storyboard' | 'store-visit';
   status: 'running' | 'done' | 'failed';
   progress: DouyinGenerationJobProgress;
   error?: string;
@@ -630,6 +660,8 @@ export interface DouyinOperationView {
     sequenceId: string;
     /** @description 统一音色模式：等这一段出片、桌面端取出它的声音作参考音色后再生成 */
     anchorSegmentId?: string;
+    /** @description 尾帧规划被掐断后退回等待重来的次数，超过上限判失败 */
+    planningRetries?: number;
   };
   /** @description 探店人物段（视频型号）出片后的对口型阶段：识别人脸、对口型中、完成或跳过（跳过时保留原画面并写原因）。 @keyword-cn 对口型阶段, 口型跳过原因 @keyword-en lip-sync-stage, lip-sync-skip-reason */
   lipSync?: DouyinStoreVisitLipSyncView;

@@ -183,6 +183,21 @@ describe('store visit script parsing and review', () => {
     expect(draft.segments).toEqual([
       { scene: '门头 招牌', lines: '今天来到 欢乐谷' },
     ]);
+    expect(
+      parseStoreVisitScript(
+        '{"segments":[{"scene":"门头","lines":"今天来集合石！","delivery":" 热情打招呼，语调上扬 "}]}',
+      ).segments,
+    ).toEqual([
+      { scene: '门头', lines: '今天来集合石！', delivery: '热情打招呼，语调上扬' },
+    ]);
+    expect(
+      parseStoreVisitScript(
+        '{"segments":[{"scene":"门头","lines":"今天来集合石！","delivery":"边推门边说，热络招呼，语调上扬"},{"scene":"吧台","lines":"来看看吧台","delivery":"推门进去"}]}',
+      ).segments,
+    ).toEqual([
+      { scene: '门头', lines: '今天来集合石！', delivery: '热络招呼，语调上扬' },
+      { scene: '吧台', lines: '来看看吧台' },
+    ]);
     expect(parseStoreVisitScript('不是 JSON')).toEqual({
       presenter: undefined,
       raw: {},

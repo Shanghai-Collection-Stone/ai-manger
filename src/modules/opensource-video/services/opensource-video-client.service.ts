@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Agent, type Dispatcher } from 'undici';
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -9,6 +10,12 @@ import type {
   OpensourceVideoRuntime,
 } from '../entities/opensource-video.entity.js';
 
+/** @description 配音等待显卡期间允许较长响应头等待。 @keyword-cn 配音请求连接, 排队超时 @keyword-en speech-http-dispatcher, queue-timeout */
+const speechDispatcher = new Agent({
+  headersTimeout: 9 * 60 * 1000,
+  bodyTimeout: 60 * 1000,
+});
+
 /**
  * @description 自建 MiniMax-H3 视频服务的 HTTP 客户端：提交任务、查询任务、带 Key 下载成片。连接信息由调用方从后台提供商配置传入；
  *   所有请求带 `Authorization: Bearer <Key>`，非 2xx 抛 `OPENSOURCE_VIDEO_HTTP_<状态码>:<响应体>`，网络错误抛 `OPENSOURCE_VIDEO_NETWORK_ERROR:<原因>`。
@@ -17,6 +24,44 @@ import type {
  */
 @Injectable()
 export class OpensourceVideoClientService {
+  /**
+   * @description 自建 Qwen3-TTS 合成完整台词，支持声音描述或样本；返回 PCM WAV，排队与推理共最多九分钟。
+   * @keyword-cn 自建台词配音, 配音先行
+   * @keyword-en synthesize-opensource-speech, speech-first-generation
+   */
+  async synthesizeSpeech(
+    runtime: OpensourceVideoRuntime,
+    input: {
+      input: string;
+      instructions: string;
+      reference_audio?: string;
+      reference_text?: string;
+    },
+  ): Promise<Buffer> {
+    const response = await this.request(runtime, '/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(9 * 60 * 1000),
+      dispatcher: speechDispatcher,
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('OPENSOURCE_VIDEO_HTTP_404:'))
+        throw new Error('自建配音接口尚未部署，请先更新 GPU 视频服务');
+      if (message.startsWith('OPENSOURCE_VIDEO_HTTP_503:')) {
+        let detail = message.split('OPENSOURCE_VIDEO_HTTP_503:')[1];
+        try {
+          detail = String(
+            (JSON.parse(detail) as { detail?: string }).detail || detail,
+          );
+        } catch {}
+        throw new Error(`自建配音失败：${detail}`);
+      }
+      throw error;
+    });
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   /**
    * @description 提交一个生成任务（`POST /v1/videos`），服务端受理后返回 202 与排队中的任务。
    * @keyword-cn 提交自建视频任务, 生成视频
@@ -95,7 +140,7 @@ export class OpensourceVideoClientService {
   private async request(
     runtime: OpensourceVideoRuntime,
     path: string,
-    init: RequestInit,
+    init: RequestInit & { dispatcher?: Dispatcher },
   ): Promise<Response> {
     const baseUrl = String(runtime.baseUrl ?? '')
       .trim()

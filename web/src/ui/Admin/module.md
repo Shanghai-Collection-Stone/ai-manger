@@ -21,7 +21,7 @@
 文件清单补充：`TenantMcpPanel.jsx`（链接与密钥管理界面）、`tenantMcpPrompt.js`（带协议说明和授权工具用途的可复制接入提示词）。
 
 - `TenantMcpPanel({currentRole,tenants,onNotice,onError})` — 租户 MCP 链接、完整密钥、权限与接入提示词复制页面 | keywords: tenant-mcp-panel, key-management
-- `PermissionPicker({tools,selected,onChange,disabled})` — 勾选单把密钥可用的工具 | keywords: mcp-permission-picker, tool-permission
+- `PermissionPicker({tools,selected,onChange,disabled})` — 按工具分组（图库与文章、抖音 · 通用 / 探店 / 门店点位 / 分镜）勾选单把密钥可用的工具，每组可全选或清空；没有分组的工具归到「其他」 | keywords: MCP权限勾选, 工具分组, mcp-permission-picker, tool-permission
 - `KeyEditor({item,tools,busy,onSave,onDelete,onCopyPrompt,onCopySecret,onRotate})` — 常显完整密钥并复制密钥与提示词，支持修改配置和显式重新生成 | keywords: mcp-key-editor, key-management
 - `EndpointEditor({endpoint,tools,busy,mutate,onSecret,onCopyPrompt})` — 修改或删除链接并创建独立密钥与传递提示词复制操作 | keywords: mcp-endpoint-editor, key-management
 - `EndpointEditor.createKey(event)` — 创建密钥并交回可恢复的完整密钥与客户端配置 | keywords: mcp-create-key, recoverable-secret
