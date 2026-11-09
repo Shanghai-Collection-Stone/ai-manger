@@ -22,7 +22,8 @@
 - `services/xhs-article-generation.service.ts` — 文章 Todo、文章通道排队、一次交付文章（轻量 Agent + 搜索 / 结构化输出）、与写正文并行的配图决策和源图分配、子题文章风格、母题配图约束、母题配图规则版式、扣费前配图预检、生成失败退点、横/竖图太少抛回、优先不重复与允许重复取图、Duck 搜索、生文图组工作流与文章落库。
 - `services/xhs-article-generation-progress.ts` — 生文阶段产出写入器：先写好的正文与逐张就绪的配图合并写进运行中 Todo，关闭后不再写。
 - `services/xhs-topic-cleanup.service.ts` — 历史清理时钟回填，以及每日按各租户设置执行的文章库已发布文章、子题草稿与闲置母题幂等清理。
-- `services/xhs-topic.service.ts` — Todo 生命周期、数量解析、生成需求一键推荐与子选题提示词推荐（一次结构化交付）、轻量 Agent 一次批量交付候选、Duck 搜索筛选与结果持久化。
+- `services/xhs-topic.service.ts` — Todo 生命周期、数量解析、生成需求一键推荐与子选题提示词推荐（工具交付、JSON 正文兼容与空响应诊断）、轻量 Agent 一次批量交付候选、Duck 搜索筛选与结果持久化。
+- `services/xhs-topic.service.spec.ts` — 候选写入、推荐归一与一键推荐回归测试，覆盖空响应切换纯 JSON、真实 LangChain 流式工具交付及两次失败边界。
 
 ## 函数清单 (Function List)
 
@@ -72,10 +73,12 @@
 - `XhsRequirementOptions` — 「AI 一键推荐」的四组候选项 `{ purposes, personas, styles, lengths }`，由前端按自身选项表传入 | keywords: 生成需求候选项, 推荐约束, requirement-options, recommendation-constraint
 - `XhsRequirementRecommendation` — 「AI 一键推荐」回填表单的结果 `{ purpose, persona, styleTags, keywords, length, idea }` | keywords: 生成需求推荐结果, 表单回填, requirement-recommendation-result, form-fill
 - `normalizeRequirementRecommendation(raw, options)` — 宽松归一模型提交的生成需求：单选先精确后唯一近似匹配候选，风格与关键词也接受分隔符串，越界值丢弃并记成问题 | keywords: 归一生成需求推荐, 宽松匹配候选, normalize-requirement-recommendation, lenient-option-match
+- `parseStructuredSubmission(message, name)` — 优先读取指定工具参数，兼容旧式函数调用与完整 JSON 正文，拒绝空内容、损坏 JSON 与非对象并附带停止原因 | keywords: 结构化交付解析, 空响应诊断, structured-submission-parser, empty-response-diagnostics
+- `createRequirementRecommendationHarness()` — 创建隔离模型与数据库的一键推荐测试环境，分别记录工具交付与纯 JSON 调用 | keywords: 推荐回归测试, 空响应重试, recommendation-regression, empty-response-retry
 - `XhsTopicService({ adminService, agentService, mcpAdapters, todoService, workflowModels, repository, knowledge })` — 编排模型推荐、工具写入内存候选并持久化 Todo | keywords: 选题生成服务, 内存候选, topic-generation-service, in-memory-candidates
-- `XhsTopicService.submitStructured(input)` — 让选题节点模型经一个交付工具一次提交结构化结果：强制函数调用、JSON Schema 不做 zod 严格校验、不走 Agent、流式计费 | keywords: 一次结构化交付, 强制函数调用, single-structured-submit, forced-function-call
-- `XhsTopicService.recommendPrompt(parentTopicInput, scope)` — 根据母题经 `xhs_topic_prompt_submit` 一次提交可编辑的子选题提示词，失败或空内容时用稳定回退模板，模型取节点 `xhs-article/topic` | keywords: 推荐子选题提示词, 母题上下文, 一次结构化交付, recommend-child-topic-prompt, parent-topic-context, single-structured-submit
-- `XhsTopicService.recommendArticleRequirements(topicId, options, scope)` — 读取子题、母题与文章风格，经 `xhs_requirement_submit` 一次提交生成需求（单选与风格用 enum 限定为请求候选），宽松归一，不合格带原因重试一次，仍不完整时返回部分结果 | keywords: 生成需求推荐, 选项安全过滤, 一次结构化交付, requirement-recommendation, option-safe-normalization, single-structured-submit
+- `XhsTopicService.submitStructured(input)` — 关闭思考并保留流式计费，默认强制工具交付且保留原始消息，兼容 JSON 正文，解析失败后的补发可切换纯 JSON 请求 | keywords: 一次结构化交付, 强制函数调用, single-structured-submit, forced-function-call
+- `XhsTopicService.recommendPrompt(parentTopicInput, scope)` — 根据母题经 `xhs_topic_prompt_submit` 一次提交可编辑的子选题提示词，失败或空内容时用稳定回退模板，模型取节点 `xhs-article/topic` | keywords: 推荐子选题提示词, 母题上下文, recommend-child-topic-prompt, parent-topic-context
+- `XhsTopicService.recommendArticleRequirements(topicId, options, scope)` — 读取子题、母题与文章风格，经工具提交并宽松归一，字段不合格带原因重试，解析失败则切换纯 JSON 补发，总共最多两次且保留安全部分结果 | keywords: 生成需求推荐, 选项安全过滤, requirement-recommendation, option-safe-normalization
 - `XhsTopicService.generate(input, scope)` — 创建 Todo、按文章风格执行 Agent 并返回写入 taskResult 的候选 | keywords: 生成选题候选, 待办结果, 文章生成风格, generate-topic-candidates, todo-result, article-writing-style
 - `XhsTopicService.createCandidateTool(candidates, requestedCount, articleStyle, submission)` — 创建一次交付全部候选的工具（`xhs_topic_submit_candidates`，`returnDirect` 交付即结束），未记录原因写进 `submission.problems` | keywords: 批量交付候选工具, 内存写入, 文章生成风格, batch-submit-candidates-tool, memory-write, article-writing-style
 - `XhsTopicService.getDuckSearchTools()` — 按 `ddg-search` 服务名隔离读取 DuckDuckGo MCP 工具 | keywords: Duck搜索工具, 搜索筛选, duck-search-tools, tool-filter
@@ -218,8 +221,12 @@
 | 查询文章所在库接口 | article-locations-api | `GET /api/xhs-topic/article-locations` |
 | 保存转移动 | save-as-move | 已在其他库的来源选题再次保存时改走移动 |
 | 生成需求推荐 | requirement-recommendation | 根据子题、母题和已有文章风格从请求候选项中推荐文章生成需求 |
-| 一次结构化交付 | single-structured-submit | 推荐类调用经一个交付工具一次提交，不走 Agent、不解析最终文本 |
+| 一次结构化交付 | single-structured-submit | 推荐类默认经工具一次提交，兼容 JSON 正文，解析失败后的补发可切换纯 JSON，不走 Agent |
 | 强制函数调用 | forced-function-call | `withStructuredOutput` 的 functionCalling 模式，模型必须调用交付工具 |
+| 结构化交付解析 | structured-submission-parser | `parseStructuredSubmission` 读取指定工具参数、旧式函数调用或完整 JSON 正文 |
+| 空响应诊断 | empty-response-diagnostics | 区分空响应、损坏 JSON 与非对象，日志包含停止原因与损坏工具调用数量 |
+| 推荐回归测试 | recommendation-regression | `services/xhs-topic.service.spec.ts` 验证推荐交付、兼容补发与候选安全过滤 |
+| 空响应重试 | empty-response-retry | 工具交付解析失败时剩余一次请求改为纯 JSON，两次均为空则明确失败 |
 | 归一生成需求推荐 | normalize-requirement-recommendation | 模型提交的需求宽松归一并列出仍不合格的字段 |
 | 宽松匹配候选 | lenient-option-match | 单选值精确匹配失败时按互相包含做唯一近似匹配 |
 | 生成需求候选项 | requirement-options | 前端传入的目的、人设、风格、字数四组候选 |
@@ -357,7 +364,7 @@
 
 `POST /api/xhs-topic/prompt/recommend` 根据当前母题调用 AI 返回一条可编辑的子选题生成提示词：模型经 `xhs_topic_prompt_submit` 一次提交（强制函数调用，参数只有 `prompt`），提示词写明要包含的建议数量、3-4 个具体角度、目标读者、内容价值和标题风格，以及只提交一次、不分点不加引号；失败或交了空内容时使用包含数量、差异化角度、内容价值和标题风格的稳定模板回退。入口与选题生成一样声明 `create XhsTopic` 权限。
 
-`POST /api/xhs-topic/:id/article/requirements/recommend` 以 `create XhsTopic` 权限接收 `{ options: { purposes, personas, styles, lengths } }`，四组数组各需 1 至 50 项、单项 1 至 20 字。服务只读取当前租户用户拥有的子选题及所属母题，把母题标题、子题标题与已有 `articleStyle` 交给 `xhs-article/topic` 节点，并沿用提示词推荐的流式计费配置。以前是完整 DeepAgent 跑完后把最终文本当严格 JSON 解析，模型多写一句话、带代码围栏或先去写待办都会失败；现在经 `submitStructured` 一次调用：模型被强制调用 `xhs_requirement_submit`，参数结构里 purpose / persona / length / styleTags 用 enum 限定为本次请求的候选，提示词逐字段说明怎么选（逐字复制候选、风格 3-6 项、关键词 3-6 个具体词、idea 一句话、已有 articleStyle 时保持一致、只提交一次）。参数按 JSON Schema 传、不做 zod 严格校验，由 `normalizeRequirementRecommendation` 宽松归一：单选值精确匹配不到时按互相包含做唯一近似匹配，风格与关键词也接受分隔符串、去掉 #。仍有字段不合格或参数不是合法 JSON 时带着问题重试一次；两次都不完整时返回问题最少的那次归一结果（至少有目的、人设或风格之一），一项都没有才返回 HTTP 503 与 `XHS_REQUIREMENT_RECOMMEND_FAILED`（“生成需求推荐失败，请稍后重试”）。响应为 `{ purpose, persona, styleTags, keywords, length, idea }`：purpose/persona 越界时置空，length 越界时回落到 `不限` 或首项，styleTags 仅保留 styles 内最多 8 项，keywords 最多 6 项且每项截到 12 字，idea 截到 120 字。当前作用域找不到选题返回 `XHS_TOPIC_NOT_FOUND`，传入母题返回 `XHS_TOPIC_CHILD_REQUIRED`，所属母题缺失返回 `XHS_TOPIC_PARENT_NOT_FOUND`。
+`POST /api/xhs-topic/:id/article/requirements/recommend` 以 `create XhsTopic` 权限接收 `{ options: { purposes, personas, styles, lengths } }`，四组数组各需 1 至 50 项、单项 1 至 20 字。服务只读取当前租户用户拥有的子选题及所属母题，把母题标题、子题标题与已有 `articleStyle` 交给 `xhs-article/topic` 节点，关闭思考并保留流式计费配置。`submitStructured` 默认强制调用 `xhs_requirement_submit`，purpose / persona / length / styleTags 用 enum 限定为本次请求候选，提示词要求逐字复制候选、风格 3-6 项、关键词 3-6 个具体词、idea 一句话，并与已有 articleStyle 保持一致。通过 `includeRaw` 保留原始消息：优先使用已解析工具参数，解析器未取得结果时由 `parseStructuredSubmission` 读取指定工具参数、旧式函数调用或完整 JSON 正文（支持文本块与代码围栏）。真正空响应、损坏 JSON 或非对象均抛解析异常，日志包含停止原因与损坏工具调用数量；剩余一次请求切换为不绑定工具的纯 JSON 交付，字段结构和候选 enum 写入提示词，避免重复同一条不兼容路径。字段不合格则保留工具交付并带问题重试，总共最多两次模型请求。两种交付均经 `normalizeRequirementRecommendation` 宽松归一：单选先精确后唯一近似匹配，风格与关键词也接受分隔符串、去掉 #；两次都不完整时返回问题最少的安全部分结果（至少有目的、人设或风格之一），一项都没有才返回 HTTP 503 与 `XHS_REQUIREMENT_RECOMMEND_FAILED`（“生成需求推荐失败，请稍后重试”），不会伪造默认推荐。响应为 `{ purpose, persona, styleTags, keywords, length, idea }`：purpose/persona 越界时置空，length 越界时回落到 `不限` 或首项，styleTags 仅保留 styles 内最多 8 项，keywords 最多 6 项且每项截到 12 字，idea 截到 120 字。当前作用域找不到选题返回 `XHS_TOPIC_NOT_FOUND`，传入母题返回 `XHS_TOPIC_CHILD_REQUIRED`，所属母题缺失返回 `XHS_TOPIC_PARENT_NOT_FOUND`。
 
 `POST /api/xhs-topic/:id/article/generate` 同时承担首次生成与已有文章改写。服务从子选题实体读取 `articleStyle`，把它作为标题、叙事视角、语气、节奏和结构的持续约束注入文章 Agent，因此首次生文、批量生文与重新生成都会自动沿用关联风格。接口创建 `in_progress` Todo 后立即返回，Agent、配图和落库流程在后台继续执行；不同子选题互不阻塞并可同时生成，同一子选题在全部进程范围内拒绝重复启动（本进程集合 + 排队登记簿）。服务把已保存文章（标题、正文、标签、配图张数和发布形式）直接写进提示词，模型据此按用户提示词做局部修改或完全重写，再用 `xhs_article_submit` 一次交付整篇（没要求改动的部分照原文带上）。改写默认保留现有图片和画板数据，因此不再依赖图库标签；首次生成、没有现有图组或显式重新生成图片时，服务会读取所属母题的 `imageTags`：非空配置先与当前真实图库标签校验，然后直接作为本篇配图标签；空数组则由配图决策（节点 `xhs-article/image-decision`，关闭思考）从最多 300 个图库标签里选 2-5 个，失败按字面重合兜底，仍选不出返回 `XHS_ARTICLE_IMAGE_TAGS_NOT_SELECTED`。配置标签已全部从图库移除时返回 `XHS_ARTICLE_MOTHER_IMAGE_TAGS_UNAVAILABLE`，避免静默换用其他标签。Canvas 生文图片阶段生成一张封面和五张内页，版式由母题 `imageRule` 经 `XHS_MOTHER_IMAGE_RULE_LAYOUTS` 决定：`default` 为 5 拼图 + 末页 1 竖图，`collage-first` 为全拼图，`portrait-first` 为全竖图；凑不齐时**不换版式**，横图缺口优先报 `XHS_ARTICLE_LANDSCAPE_INSUFFICIENT`，否则竖图缺口报 `XHS_ARTICLE_PORTRAIT_INSUFFICIENT`，明细带需要与可用张数和图库标签。前端的子选题错误条据此给出「改用竖图 / 改用拼图」（重试时带 `imageRule` 仅本次覆盖，不改母题设置）和「允许重复」（重试时带 `allowImageRepeat`：忽略严格去重，未用图不够补已用图，仍不够在本篇内轮换复用，拼图至少 2 张横图、单图至少 1 张竖图即可）。母题锁定了配图标签且本次需要生成图片时，`start` 在扣费前先校验标签并试分配源图，不够直接以 400 返回同样的错误码；未锁定标签时由配图决策选标签并分配源图，这一步与写正文同时进行，图不够会在正文写完前就返回失败（已扣的生文费照常退）。取图去重模式为「优先不重复」：先采未用图、不够再补已用图，未用图总是先被分配，生成后标记已用，让下一篇继续避开；前端设置里打开「配图严格去重」时请求带 `dedup: true`，改为只取未用图。租户开启 AI 封面时走 `ai-overlay`：模型生成纯绿实底、指定主副标题与波普装饰融合的文字海报素材，真实照片不传给模型；sharp 输出合成预览和透明 PNG 素材，`canvasBoards` 另外保存 `baseSrc` 原照片以及带 `includesText` 标记的 `materials` 素材原图/去底图/特效参数。文章预览与发布继续使用合成封面，进入灵感画布后则还原成照片和含字图片素材两个独立图层；素材可移动、缩放、隐藏或重开图片特效。完整文章落库后状态才变为 `generated`。后台失败会把失败码写进 Todo `taskResult.error`，把中文原因写进 `taskResult.errorMessage` 与 `abnormalReason`。前端通过 `GET /api/xhs-topic/article/generations` 轮询每个子选题最近一次任务；查询同时读取 Todo 持久化状态并核对本进程排队 / 执行集合与 [排队登记簿](../generation-queue/module.md)（多进程时登记簿在主进程，能看到全部 worker 上的任务），若数据库仍显示运行但任何进程里都已不存在，第一次仅记录疑似中断，连续第二次确认仍缺失后才将 Todo 改为 `failed`，错误码为 `XHS_ARTICLE_GENERATION_INTERRUPTED`。正常运行任务每次都能通过运行实例确认，不会被误清理；服务重启遗留的陈旧状态也不会永久显示“生成中”。配图阶段的 `XHS_ARTICLE_IMAGE_WORKFLOW_INSUFFICIENT` 会附带本次使用的图库标签，便于用户判断该补哪些标签的图。
 

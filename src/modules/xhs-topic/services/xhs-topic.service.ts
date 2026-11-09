@@ -5,7 +5,12 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import {
+  HumanMessage,
+  SystemMessage,
+  type AIMessage,
+  type BaseMessage,
+} from '@langchain/core/messages';
 import { OutputParserException } from '@langchain/core/output_parsers';
 import { tool } from '@langchain/core/tools';
 import type { CreateAgentParams } from 'langchain';
@@ -285,6 +290,59 @@ export function normalizeRequirementRecommendation(
 }
 
 /**
+ * @description 优先读取指定交付工具参数，兼容旧式函数调用与 JSON 正文；拒绝空内容、损坏 JSON 和非对象，附带停止原因便于定位。
+ * @keyword-cn 结构化交付解析, 空响应诊断
+ * @keyword-en structured-submission-parser, empty-response-diagnostics
+ */
+export function parseStructuredSubmission(
+  message: BaseMessage,
+  name: string,
+): Record<string, unknown> {
+  const aiMessage = message as AIMessage;
+  const toolCall = aiMessage.tool_calls?.find((call) => call.name === name);
+  const legacyCall = message.additional_kwargs.function_call;
+  let value: unknown = toolCall
+    ? toolCall.args
+    : legacyCall?.name === name
+      ? legacyCall.arguments
+      : typeof message.content === 'string'
+        ? message.content
+        : message.content
+            .filter((block) => block.type === 'text')
+            .map((block) => (typeof block.text === 'string' ? block.text : ''))
+            .join('');
+  const metadata = message.response_metadata as Record<string, unknown>;
+  const finishReason =
+    metadata.finish_reason ?? metadata.stop_reason ?? metadata.finishReason;
+  const diagnostic = `tool=${name} finishReason=${typeof finishReason === 'string' ? finishReason : 'unknown'} invalidToolCalls=${aiMessage.invalid_tool_calls?.length ?? 0}`;
+  if (typeof value === 'string') {
+    const text = value
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '')
+      .trim();
+    if (!text) {
+      throw new OutputParserException(
+        `AI_STRUCTURED_OUTPUT_EMPTY: 模型未返回交付参数或 JSON 正文 (${diagnostic})`,
+      );
+    }
+    try {
+      value = JSON.parse(text) as unknown;
+    } catch {
+      throw new OutputParserException(
+        `AI_STRUCTURED_OUTPUT_INVALID_JSON: 交付内容不是完整 JSON (${diagnostic})`,
+      );
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new OutputParserException(
+      `AI_STRUCTURED_OUTPUT_INVALID_OBJECT: 交付内容必须是 JSON 对象 (${diagnostic})`,
+    );
+  }
+  return value as Record<string, unknown>;
+}
+
+/**
  * @description 小红书选题生成服务，以工具调用累加内存候选，并将最终结果持久化到 Todo。
  * @keyword-cn 选题生成服务, 内存候选
  * @keyword-en topic-generation-service, in-memory-candidates
@@ -293,6 +351,11 @@ export function normalizeRequirementRecommendation(
 export class XhsTopicService {
   private readonly logger = new Logger(XhsTopicService.name);
 
+  /**
+   * @description 注入选题生成、模型计费、数据隔离与知识引用依赖。
+   * @keyword-cn 选题生成服务, 内存候选
+   * @keyword-en topic-generation-service, in-memory-candidates
+   */
   constructor(
     private readonly adminService: AdminService,
     private readonly agentService: AgentService,
@@ -304,8 +367,8 @@ export class XhsTopicService {
   ) {}
 
   /**
-   * @description 让选题节点模型通过一个交付工具一次性提交结构化结果：强制函数调用（模型不能只回文字）、
-   *   传 JSON Schema 不做 zod 严格校验（参数稍有出入也先收下，由调用方归一）；不走 Agent，没有多轮往返。
+   * @description 让选题节点模型一次提交结构化结果：默认强制函数调用并保留原始消息，兼容 JSON 正文；
+   *   解析失败后的补发可改用纯 JSON 请求。关闭思考，参数稍有出入由调用方归一，不走 Agent。
    *   走流式计费：付费 provider 没配 fixedTokensPerCall 时非流式调用会被计费拦下。
    * @keyword-cn 一次结构化交付, 强制函数调用
    * @keyword-en single-structured-submit, forced-function-call
@@ -319,6 +382,7 @@ export class XhsTopicService {
     schema: Record<string, unknown>;
     source: string;
     temperature: number;
+    delivery?: 'tool' | 'json';
     scope: { tenantId?: string; userId: string };
   }): Promise<Record<string, unknown>> {
     const runtime = toWorkflowLlmConfig(
@@ -331,6 +395,7 @@ export class XhsTopicService {
       this.agentService.buildLLM({
         ...runtime,
         temperature: input.temperature,
+        disableThinking: true,
         nonStreaming: false,
         tenantId: input.scope.tenantId,
         billingContext: {
@@ -344,32 +409,42 @@ export class XhsTopicService {
         input.scope.tenantId,
       ),
     ]);
-    const output: unknown = await llm
+    const deliveryInstruction =
+      input.delivery === 'json'
+        ? `交付方式：直接返回一个完整 JSON 对象，不调用工具，不输出解释或 Markdown。字段结构：${JSON.stringify(input.schema)}`
+        : `交付方式：只调用一次 ${input.name} 工具，一次提交全部字段，不另外输出解释文字。`;
+    const messages = [
+      new SystemMessage(
+        `${input.system}${platformPrompt ? `\n\n【平台业务说明】\n${platformPrompt}` : ''}\n\n${deliveryInstruction}`,
+      ),
+      new HumanMessage(input.instruction),
+    ];
+    const invokeOption = this.agentService.buildNoStreamInvokeOption();
+    if (input.delivery === 'json') {
+      return parseStructuredSubmission(
+        await llm.invoke(messages, invokeOption),
+        input.name,
+      );
+    }
+    const output = await llm
       .withStructuredOutput(input.schema, {
         name: input.name,
         method: 'functionCalling',
+        includeRaw: true,
       })
-      .invoke(
-        [
-          new SystemMessage(
-            platformPrompt
-              ? `${input.system}\n\n【平台业务说明】\n${platformPrompt}`
-              : input.system,
-          ),
-          new HumanMessage(input.instruction),
-        ],
-        this.agentService.buildNoStreamInvokeOption(),
-      );
-    return output && typeof output === 'object' && !Array.isArray(output)
-      ? (output as Record<string, unknown>)
-      : {};
+      .invoke(messages, invokeOption);
+    return output.parsed &&
+      typeof output.parsed === 'object' &&
+      !Array.isArray(output.parsed)
+      ? (output.parsed as Record<string, unknown>)
+      : parseStructuredSubmission(output.raw, input.name);
   }
 
   /**
    * @description 调用 AI 根据母题推荐一条可直接用于生成子选题的提示词，经 `xhs_topic_prompt_submit` 一次提交；
    *   失败或交了空内容时返回稳定的母题模板。
-   * @keyword-cn 推荐子选题提示词, 母题上下文, 一次结构化交付
-   * @keyword-en recommend-child-topic-prompt, parent-topic-context, single-structured-submit
+   * @keyword-cn 推荐子选题提示词, 母题上下文
+   * @keyword-en recommend-child-topic-prompt, parent-topic-context
    */
   async recommendPrompt(
     parentTopicInput: string,
@@ -383,13 +458,13 @@ export class XhsTopicService {
     try {
       const output = await this.submitStructured({
         system: `${XHS_TOPIC_COMPLIANCE_PROMPT}
-你负责为“生成子选题”输入框推荐一条中文提示词，结果通过 xhs_topic_prompt_submit 工具一次提交。
+你负责为“生成子选题”输入框推荐一条中文提示词。
 怎么写：
 - 紧扣给定母题，写成一段可直接粘贴使用的话，150-300 字。
 - 依次写清：建议数量（默认 8 个）、3-4 个彼此不同的切入角度、目标读者、内容价值（读者看完能得到什么）、标题风格要求。
 - 角度要具体到场景或人群，不要“多角度”“有价值”这类空话。
-提交规则：只调用一次 xhs_topic_prompt_submit，把整段提示词放进 prompt；不要分点、引号、Markdown，也不要另外输出解释文字。`,
-        instruction: `当前母题：<parent_topic>${parentTopic}</parent_topic>\n请推荐提示词，并调用 xhs_topic_prompt_submit 一次提交。`,
+内容规则：把整段提示词放进 prompt；提示词不要分点、引号或 Markdown。`,
+        instruction: `当前母题：<parent_topic>${parentTopic}</parent_topic>\n请推荐提示词。`,
         name: 'xhs_topic_prompt_submit',
         schema: {
           type: 'object',
@@ -424,9 +499,9 @@ export class XhsTopicService {
   /**
    * @description 读取当前作用域内子题、母题与文章风格，让选题模型通过 `xhs_requirement_submit` 一次提交生成需求：
    *   参数结构把单选与风格限定为请求候选（enum），提示词逐字段说明怎么选；结果宽松归一，仍不合格时带着问题重试一次，
-   *   两次都不完整时返回已归一的部分结果，一项都没有才报错。
-   * @keyword-cn 生成需求推荐, 选项安全过滤, 一次结构化交付
-   * @keyword-en requirement-recommendation, option-safe-normalization, single-structured-submit
+   *   解析失败后改用纯 JSON 补发；两次都不完整时返回已归一的部分结果，一项都没有才报错。
+   * @keyword-cn 生成需求推荐, 选项安全过滤
+   * @keyword-en requirement-recommendation, option-safe-normalization
    */
   async recommendArticleRequirements(
     topicId: number,
@@ -468,7 +543,7 @@ export class XhsTopicService {
       options: candidates,
     };
     const system = `${XHS_TOPIC_COMPLIANCE_PROMPT}
-你负责为一个小红书子选题推荐「文章生成需求」，结果通过 xhs_requirement_submit 工具一次提交。
+你负责为一个小红书子选题推荐「文章生成需求」。
 怎么选：
 - 先读懂子选题和母题想写什么、写给谁，再挑最贴合的选项${articleStyle ? '；上下文里已有文章风格（articleStyle），推荐要与它保持一致，不要推翻' : ''}。
 - purpose、persona、length 各选一项，必须逐字复制 options 里对应数组中的某一项，不改写、不自造、不加标点。
@@ -476,7 +551,7 @@ export class XhsTopicService {
 - keywords 给 3-6 个从选题里提炼的具体词（地点、品类、场景、人群），每个不超过 12 个字，不带 #，不要照抄整句标题。
 - idea 用一句话写清这篇的切入角度或核心看点，不超过 120 个字，不写空话。
 - length 没有明确依据时选“不限”（如果候选里有）。
-提交规则：只调用一次 xhs_requirement_submit，六个字段一次给齐；不要另外输出解释文字。`;
+内容规则：六个字段一次给齐，不要另外输出解释文字。`;
     const schema = {
       type: 'object',
       properties: {
@@ -523,17 +598,19 @@ export class XhsTopicService {
     let best:
       { result: XhsRequirementRecommendation; problems: string[] } | undefined;
     let lastProblem = '';
+    let delivery: 'tool' | 'json' = 'tool';
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const output = await this.submitStructured({
           system: lastProblem
             ? `${system}\n\n上一次提交没有通过：${lastProblem}。请修正后重新提交。`
             : system,
-          instruction: `请基于以下可信上下文推荐生成需求，并调用 xhs_requirement_submit 一次提交：\n${JSON.stringify(context)}`,
+          instruction: `请基于以下可信上下文推荐生成需求：\n${JSON.stringify(context)}`,
           name: 'xhs_requirement_submit',
           schema,
           source: 'xhs-topic.requirement-recommendation',
           temperature: 0.35,
+          delivery,
           scope,
         });
         const normalized = normalizeRequirementRecommendation(
@@ -546,10 +623,11 @@ export class XhsTopicService {
         }
         lastProblem = normalized.problems.join('；');
       } catch (error) {
-        // 模型没走函数调用或参数不是合法 JSON：带原因重试一次，而不是直接报错
+        // 格式失败改用纯 JSON 补发，避免重复走同一条不兼容的工具解析路径。
+        if (error instanceof OutputParserException) delivery = 'json';
         lastProblem =
           error instanceof OutputParserException
-            ? '交付格式不合法，请调用 xhs_requirement_submit 一次给齐六个字段'
+            ? '交付为空或格式不合法，请直接返回完整 JSON 对象，一次给齐六个字段'
             : '';
         this.logger.warn(
           `[recommendArticleRequirements] attempt=${attempt + 1} topic=${topicId}: ${error instanceof Error ? error.message : String(error)}`,
