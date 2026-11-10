@@ -27,6 +27,9 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-generation-job.service.spec.ts` — 保存候选脚本按批次制作方式分流：探店批次存成探店脚本且不启动分镜任务，分镜批次照旧逐条启动分镜任务。
 - `services/douyin-storyboard-image.service.ts` — 分镜自动配图：从租户图库挑选相关候选图、生成选图清单、按镜头文字相关度自动补图。
 - `services/douyin-shot-image.service.ts` — 按分镜描述文生图重新生成单镜画面，入图库后绑定到该镜；出图本身（`generateImage`）也给统一流程的逐段生图用。
+- `services/douyin-unify.ts` — 分镜与统一流程互转的纯函数：旧分镜转统一流程设置（超 8 段合并），以及「整条一次出」时把分段临时当成分镜。
+- `services/douyin-unify.service.ts` — 旧分镜脚本转统一出片流程的服务：打开时转一次，原分镜数据保留，转完让 AI 导演重新规划。
+- `services/douyin-unify.service.spec.ts` — 旧分镜转换单测：镜头变分段与素材、无正文用台词拼、超限合并、整条一次出的分镜视图、服务只转一次。
 - `services/douyin-segment-image.service.ts` — 统一流程「从脚本开始」的分段配图：按脚本从图库挑图（复用分镜选图）或逐段 AI 生图（延续上一段画面）。
 - `services/douyin-segment-image.service.spec.ts` — 分段配图单测：图库挑图模型挑 + 按相关度补、从门店开始拒绝、图库为空提示、逐段生图延续上一段并替换素材。
 - `services/douyin-operation.service.ts` — 整片 / 单镜头视频生成、发布、抓取与调用审计，按通道同步状态；列表与同步入口收敛过期客户端合成。
@@ -253,12 +256,21 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoryboardImageService.loadCandidates(query,scope,limitTags?)` — 按向量检索 → 标签命中 → 随机补足收集最多 40 张去重候选，排除拼图、封面与 AI 素材；传了限定标签时只收带这些标签的图、随机补足也只在标签内取；任一路失败不影响分镜 | keywords: 收集候选图片, 相关度排序, 图库标签限定, load-image-candidates, relevance-order, gallery-tag-filter
 - `DouyinOperationService()` — 管理三类直连操作及持久化审计 | keywords: 抖音直连接口, 禁止隐式节点, douyin-direct-api, no-implicit-super-claw
 - `ensureIndexes()` — 创建直连调用记录、用户时间线与供应商状态轮询索引 | keywords: 抖音调用索引, 操作查询, douyin-operation-indexes, operation-query
-- `createGeneration(topicId,prompt,user)` — 整片模式：节点 `full-video` 指定了模型时交给 PixMax / 数眼 / 自建 MiniMax-H3 通道，否则用整条分镜直连生成合成总片并写服务扣费流水；`user` 也可以直接传定好的租户用户作用域（MCP） | keywords: 直连视频生成, 合成总片, 生视频扣费, 整片生成, direct-video-generation, composite-video, video-service-charge, full-video
+- `createGeneration(topicId,prompt,user)` — 整片模式（统一流程的「整条一次出」先经 `storeVisitAsStoryboard` 把分段当成分镜）：节点 `full-video` 指定了模型时交给 PixMax / 数眼 / 自建 MiniMax-H3 通道，否则用整条分镜直连生成合成总片并写服务扣费流水；`user` 也可以直接传定好的租户用户作用域（MCP） | keywords: 直连视频生成, 合成总片, 生视频扣费, 整片生成, direct-video-generation, composite-video, video-service-charge, full-video
 - `createShotGeneration(topicId,shotId,prompt,user)` — 提交单镜视频生成并绑定结果，自动合成由桌面客户端认领；`user` 也可以直接传定好的租户用户作用域（MCP） | keywords: 单镜头视频生成, 分镜视频历史, single-shot-video-generation, shot-video-history
 - `DOUYIN_SHOT_IMAGE_SIZE` — 分镜画面出图尺寸（竖屏 1024x1792） | keywords: 分镜出图尺寸, 竖屏比例, shot-image-size, portrait-ratio
 - `DOUYIN_SHOT_IMAGE_TAG` — 分镜 AI 配图的图库业务标签「抖音分镜」 | keywords: 分镜配图标签, 业务标签, shot-image-tag, business-tag
 - `DouyinShotImageService()` — 分镜画面文生图重生成服务 | keywords: 分镜画面重生成, 文生图配图, shot-image-regeneration, text-to-image-shot
 - `DouyinShotImageService.generateImage({topic,description,shotType?,previousImageUrl?,scope})` — 按一段画面描述出一张竖屏镜头画面入图库（不绑定），带人物形象、风格与参考图，有上一张画面时以它为底图 | keywords: 生成镜头画面, 逐段生图, generate-shot-image, per-segment-imaging
+- `mergeShotsToLimit(shots,limit)` — 把镜头合并到不超过分段上限：每次合并相邻两镜里旁白加起来最短的一对，保留前一镜的 ID、画面与配图 | keywords: 合并分镜镜头, 分段上限, merge-shots-to-limit, segment-limit
+- `storyboardToStoreVisit(topic)` — 旧分镜脚本转统一流程设置（从脚本开始）：有旁白的镜头变分段，配的图或视频并进素材，脚本正文沿用，台词算作按这版脚本拆好，不露脸 | keywords: 分镜转统一流程, 旧脚本迁移, storyboard-to-unified, legacy-script-migration
+- `storeVisitAsStoryboard(topic)` — 「整条一次出」时把分段临时当成分镜（台词作旁白、画面描述作画面、配图作参考，口播稿用台词拼），只在内存里换，不是统一流程的原样返回 | keywords: 分段当分镜, 整条一次出, segments-as-storyboard, one-shot-full-video
+- `DouyinUnifyService` — 旧分镜脚本转统一出片流程：打开时或 AI 操作到它时转一次，原分镜数据保留作备份 | keywords: 旧分镜转换服务, 打开时转换, unify-storyboard-service, convert-on-open
+- `DouyinUnifyService.constructor(repository,director)` — 注入选题仓库与 AI 导演 | keywords: 初始化旧分镜转换, 转换依赖, init-unify-service, unify-dependencies
+- `DouyinUnifyService.unify(topicId,scope)` — 把一条旧分镜脚本转成统一流程并让导演重新规划，已经是统一流程时原样返回 | keywords: 转成统一流程, 旧分镜转换, unify-topic, convert-storyboard
+- `DouyinWorkbenchRepositoryService.convertToUnified(id,storeVisit,scope)` — 只在还不是 `store-visit` 时原子写入制作方式与统一流程设置，原分镜数据保留 | keywords: 写入统一流程, 旧分镜转换落库, persist-unified-flow, convert-storyboard-write
+- `unifyTopic(req,id)` — `POST topics/:id/unify`（`update DouyinWorkbench`），旧分镜脚本转统一出片流程，返回最新选题、是否转了与工作台 | keywords: 旧分镜转换接口, 打开时转换, unify-storyboard-api, convert-on-open
+- `shot(id,narration,media?)` — 测试用：造一个分镜镜头 | keywords: 测试分镜镜头, 旧分镜数据, test-storyboard-shot, legacy-shot-fixture
 - `DouyinSegmentImageService` — 统一流程「从脚本开始」的分段配图：图库挑图或逐段 AI 生图，从门店开始的脚本不走这里 | keywords: 分段配图服务, 从脚本开始配图, segment-image-service, script-first-imaging
 - `DouyinSegmentImageService.constructor(repository,candidates,storyboard,shotImages)` — 注入选题仓库、图库候选、分镜选图与生图依赖 | keywords: 初始化分段配图, 配图依赖, init-segment-image, imaging-dependencies
 - `DouyinSegmentImageService.pickImages(topicId,scope)` — 按脚本从图库给每段挑一张图（模型挑 + 按相关度补，限定标签沿用配图偏向），只返回每段的图与用到的场景图，由前端并进素材保存 | keywords: 分段图库配图, 按脚本挑图, segment-gallery-pick, pick-by-script
@@ -907,6 +919,23 @@ AI 抖音工作台（douyin-workbench）
 | 运镜与画面动态 | camera-and-motion |
 | 有效运动设计 | fresh-shot-direction |
 | 运镜收进原图 | keep-camera-in-frame |
+| 合并分镜镜头 | merge-shots-to-limit |
+| 分段上限 | segment-limit |
+| 分镜转统一流程 | storyboard-to-unified |
+| 旧脚本迁移 | legacy-script-migration |
+| 分段当分镜 | segments-as-storyboard |
+| 整条一次出 | one-shot-full-video |
+| 旧分镜转换服务 | unify-storyboard-service |
+| 打开时转换 | convert-on-open |
+| 初始化旧分镜转换 | init-unify-service |
+| 转换依赖 | unify-dependencies |
+| 转成统一流程 | unify-topic |
+| 旧分镜转换 | convert-storyboard |
+| 写入统一流程 | persist-unified-flow |
+| 旧分镜转换落库 | convert-storyboard-write |
+| 旧分镜转换接口 | unify-storyboard-api |
+| 测试分镜镜头 | test-storyboard-shot |
+| 旧分镜数据 | legacy-shot-fixture |
 | 读取出片起点 | read-production-start |
 | 从脚本开始 | script-first-start |
 | 出片起点 | production-start |
@@ -1860,6 +1889,8 @@ AI 抖音工作台（douyin-workbench）
 **视频版式模板（分镜 / 整片 / 探店）**：像「上方大标题 + 中间视频窗口 + 下方卖点与行动引导」这种版式，要不要套由 AI 导演看图决定（见下一段），画模板用「生图」节点**只在实拍图上编辑、不凭空生成**（凭空画会画出门店根本没有的东西）：底图取探店第 1 段的实拍场景图（不用合成的人物首帧）或分镜第一个配图镜头，`buildTemplateEditPrompt` 要求背景只用这张图本身（放大、裁切、虚化、压暗或叠色块），不加任何图里没有的物体、人物、食物、插画、图标；AI 导演规划的 `style` 也只写配色、字体与文字底板。没有实拍图、或「生图」模型只能文生图（数眼生图没有改图接口）时直接拒绝并提示，AI 导演自动规划遇到这种情况把模板记为停用并写明原因。排版时窗口位置画成纯绿 #00FF00 实心块（生图模型不一定照百分比摆，`locateTemplateWindow` 按实际绿块定位，认不出时按规划位置），抠成透明窗口的 1080×1920 PNG（外扩 6px 并清掉绿色杂边），再和首帧拼成封面预览。用户可开关、改文案 / 风格 / 比例后重新出图（`render`），或删除；改过或开关过的模板标 `source=user`，AI 导演之后不再覆盖。启用后：自建 MiniMax-H3（分镜 / 整片 / 探店）按窗口比例出片（`aspect_ratio` 取窗口比例，首尾帧先居中裁成同一比例，风格句写对应比例）；数眼 / PixMax 仍出 9:16。合成时 `DouyinShotConcatService.prepare` 返回 `template`，桌面端把每段视频按 cover 铺满窗口、字幕烧在窗口里，再放进 1080×1920 并叠上模板；旧客户端不认模板时直接回报失败。改模板后已出的片段不会自动重做，要按新比例重新出片。
 
 **AI 导演（出片前看图规划、出片后看片剪辑）**：不新增工作流节点，读图都用「思考」节点（要选视觉语言模型）。出片前：分镜生成任务配好图、PATCH 保存（换图、配场景后保存）、重新出图 / 换头 / 恢复原图之后，`DouyinVideoDirectorService.schedule` 先比对首帧指纹（`listDirectorFrames` + `directionFingerprint`；探店只看场景图，不看出片时才合成的人物首帧），变了才把 `videoDirection` 标成「规划中」并防抖 3 秒后台规划：一次看完各段首帧缩略图，按 `DOUYIN_DIRECTOR_SYSTEM` 同时给出版式模板方案与每段的运镜和画面动态（只动图里本来有的东西，英文不许含中文）。各段运动设计按段 ID 存在 `videoDirection.shots`，带画面标识 `sourceKey`，出片时 `freshShotDirection` 只用画面没变的：数眼 / PixMax 提示词加「【运镜与画面动态】」中文，自建 H3 时间轴改用英文（顺带去掉了分镜通道原来写进时间轴的中文画面描述）。模板按 `applyTemplatePlan` 自动起、停或保持（用户改过的不动）。同一组画面规划失败不自动重试，界面上可带补充要求「AI 重新规划」（`plan`）。出片后：桌面端合成前把各段下好、测人声区间、每段抽 5 帧交给 `planEdit`，`DOUYIN_EDIT_PLAN_SYSTEM` 让模型对照台词字数与人声区间掐头去尾（专治 H3 偶尔多说的语气词与半句）、定段间转场（接续段硬切）、字幕位置大小与封面帧，`parseEditPlan` 夹到安全范围（剪辑点不切进人声、剪完至少 1 秒、转场不超过相邻较短段三成）后记到合成记录 `request.editPlan`，桌面端按方案合成；外壳不支持、分析或规划失败时退回普通拼接。
+
+**分镜与探店合并（第三期：旧分镜转换与整条一次出）**：旧分镜脚本不做批量迁移，打开时（工作台调 `POST topics/:id/unify`）由 `DouyinUnifyService` 转一次：`storyboardToStoreVisit` 把有旁白的镜头变成分段（超 8 段时合并旁白最短的相邻两镜），配的图或视频并进素材，起点为从脚本开始、不露脸，台词算作按这版脚本拆好；`convertToUnified` 只在还不是 `store-visit` 时写入，原 `storyboard` 与 `generatedVideoId` 都保留，以前的分镜视频还在视频库里，分段要重新出片。「整条一次出」沿用整片接口 `POST topics/:id/video/generate`：`createGeneration` 先经 `storeVisitAsStoryboard` 把统一流程的分段当成分镜（口播稿用台词拼），出好后照旧写 `generatedVideoId` 作为成片。
 
 **分镜与探店合并（第二期：建脚本时选起点）**：生成候选脚本可带 `start`（`GenerateDouyinChildrenDto` → 任务 `start` → `DouyinChildTopicGenerationService.generate` → `confirmDrafts` → `createChildren` 写 `storeVisit.start`）。工作台新建脚本统一传 `productionMode: store-visit`，选「从脚本开始」时 `start=script`：规划按通用短视频、正文写不提门店的创作脚本（编导方案）；选「从门店开始」照旧写探店脚本。
 

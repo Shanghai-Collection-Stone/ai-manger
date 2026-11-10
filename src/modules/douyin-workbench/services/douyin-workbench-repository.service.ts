@@ -30,6 +30,7 @@ import {
   type DouyinStoreVisitSceneImage,
   type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
+  type DouyinStoreVisitSetting,
   type DouyinStoreVisitStart,
   type DouyinStoreVisitTemplate,
   type DouyinStoreVisitVoiceAnchor,
@@ -1156,6 +1157,39 @@ export class DouyinWorkbenchRepositoryService {
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id, kind: 'child' },
       { $set: { videoDirection: direction, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 把旧分镜脚本原子地改成统一出片流程：只在它还不是 `store-visit` 时写入制作方式与统一流程设置，原分镜数据原样保留；
+   *   两个请求同时转时只有一个生效。
+   * @keyword-cn 写入统一流程, 旧分镜转换落库
+   * @keyword-en persist-unified-flow, convert-storyboard-write
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinStoreVisitSetting} storeVisit 转换后的统一流程设置。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 转换后的选题；已经转过或不存在时为 null。
+   */
+  async convertToUnified(
+    id: number,
+    storeVisit: DouyinStoreVisitSetting,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    return await this.topics.findOneAndUpdate(
+      {
+        ...this.scopeFilter(scope),
+        id,
+        kind: 'child',
+        productionMode: { $ne: 'store-visit' },
+      },
+      {
+        $set: {
+          productionMode: 'store-visit',
+          storeVisit,
+          updatedAt: new Date(),
+        },
+      },
       { returnDocument: 'after' },
     );
   }

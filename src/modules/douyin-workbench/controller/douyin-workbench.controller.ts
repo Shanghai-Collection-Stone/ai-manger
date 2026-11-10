@@ -74,6 +74,7 @@ import { DouyinGenerationJobService } from '../services/douyin-generation-job.se
 import { DouyinShotConcatService } from '../services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from '../services/douyin-shot-image.service.js';
 import { DouyinSegmentImageService } from '../services/douyin-segment-image.service.js';
+import { DouyinUnifyService } from '../services/douyin-unify.service.js';
 import {
   DOUYIN_VOICE_ANCHOR_MAX_BYTES,
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
@@ -115,6 +116,7 @@ export class DouyinWorkbenchController {
     private readonly director: DouyinVideoDirectorService,
     private readonly pipeline: DouyinStoreVisitPipelineService,
     private readonly segmentImages: DouyinSegmentImageService,
+    private readonly unify: DouyinUnifyService,
   ) {}
 
   /**
@@ -704,6 +706,23 @@ export class DouyinWorkbenchController {
       { prompt: dto.prompt },
       this.scopeOf(this.requireUser(req)),
     );
+  }
+
+  /**
+   * @description 把一条旧分镜脚本转成统一出片流程（从脚本开始），已经是统一流程时原样返回；返回最新选题、是否转了与当前租户工作台。
+   * @keyword-cn 旧分镜转换接口, 打开时转换
+   * @keyword-en unify-storyboard-api, convert-on-open
+   */
+  @Post('topics/:id/unify')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async unifyTopic(@Req() req: AdminRequest, @Param('id') id: string) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.unify.unify(this.readId(id), scope);
+    return {
+      topic: { ...result.topic, _id: undefined },
+      converted: result.converted,
+      groups: await this.repository.listWorkspace(scope),
+    };
   }
 
   /**
