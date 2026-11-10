@@ -267,6 +267,15 @@ export type DouyinStoreVisitTemplate =
   (typeof DOUYIN_STORE_VISIT_TEMPLATES)[number];
 
 /**
+ * @description 统一出片流程的起点：`store` 从门店开始（先定门店再写脚本，画面配门店实拍，实景硬约束生效），
+ *   `script` 从脚本开始（不选门店，画面从图库挑或 AI 生图）。旧数据没有这个字段，一律按 `store` 算。
+ * @keyword-cn 出片起点, 从脚本开始
+ * @keyword-en production-start, script-first-start
+ */
+export const DOUYIN_STORE_VISIT_STARTS = ['store', 'script'] as const;
+export type DouyinStoreVisitStart = (typeof DOUYIN_STORE_VISIT_STARTS)[number];
+
+/**
  * @description 探店分段：照片或视频作为参考，每段生成动态视频与台词声音，nativeAudio 标记原声，audioUrl 仅保留旧数据兼容。
  *
  * @keyword-cn 探店分段, 画外音配音, 分段成片
@@ -389,6 +398,8 @@ export interface DouyinStoreVisitVoiceAnchor {
  * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
 export interface DouyinStoreVisitSetting {
+  /** @description 起点：`store` 从门店开始、`script` 从脚本开始（不选门店），缺省按 `store`；见 `DOUYIN_STORE_VISIT_STARTS` */
+  start?: DouyinStoreVisitStart;
   /** @description 独立的探店创作脚本正文，包含主题、叙事结构、画面安排与卖点依据，可先编辑再生成台词 */
   script?: string;
   /** @description 本版分段台词采用的脚本正文快照，用于识别脚本修改后台词是否需要更新 */

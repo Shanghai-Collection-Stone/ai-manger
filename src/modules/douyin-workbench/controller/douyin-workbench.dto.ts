@@ -21,10 +21,12 @@ import {
   DOUYIN_FACE_MASK_STYLES,
   DOUYIN_SCRIPT_STYLES,
   DOUYIN_STORE_VISIT_MOTIONS,
+  DOUYIN_STORE_VISIT_STARTS,
   DOUYIN_STORE_VISIT_TEMPLATES,
   DOUYIN_TEMPLATE_ASPECT_RATIOS,
   type DouyinFaceMaskStyle,
   type DouyinStoreVisitMotion,
+  type DouyinStoreVisitStart,
   type DouyinStoreVisitTemplate,
   type DouyinTemplateAspect,
 } from '../entities/douyin-workbench.entity.js';
@@ -457,6 +459,10 @@ export class DouyinStoreVisitSegmentDto {
  * @keyword-en store-visit-setting-dto, scene-lines
  */
 export class DouyinStoreVisitDto {
+  @IsOptional()
+  @IsIn(DOUYIN_STORE_VISIT_STARTS)
+  start?: DouyinStoreVisitStart;
+
   @IsOptional()
   @IsIn(['cosyvoice', 'qwen3-tts'])
   speechEngine?: 'cosyvoice' | 'qwen3-tts';

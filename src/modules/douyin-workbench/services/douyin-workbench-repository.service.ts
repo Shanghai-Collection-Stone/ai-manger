@@ -16,6 +16,7 @@ import {
 import {
   DOUYIN_SCRIPT_STYLES,
   DOUYIN_STORE_VISIT_MOTIONS,
+  DOUYIN_STORE_VISIT_STARTS,
   DOUYIN_STORE_VISIT_TEMPLATES,
   type DouyinFaceMaskStyle,
   type DouyinMediaReference,
@@ -29,6 +30,7 @@ import {
   type DouyinStoreVisitSceneImage,
   type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
+  type DouyinStoreVisitStart,
   type DouyinStoreVisitTemplate,
   type DouyinStoreVisitVoiceAnchor,
   type DouyinStoreVisitVoiceSample,
@@ -768,6 +770,7 @@ export class DouyinWorkbenchRepositoryService {
         script?: string;
         linesScript?: string;
         voicePrompt?: string;
+        start?: DouyinStoreVisitStart;
         speechEngine?: 'cosyvoice' | 'qwen3-tts';
         storeName?: string;
         storeId?: number;
@@ -969,6 +972,12 @@ export class DouyinWorkbenchRepositoryService {
       DOUYIN_STORE_VISIT_TEMPLATES.includes(input.storeVisit.template)
     ) {
       nested['storeVisit.template'] = input.storeVisit.template;
+    }
+    if (
+      input.storeVisit?.start !== undefined &&
+      DOUYIN_STORE_VISIT_STARTS.includes(input.storeVisit.start)
+    ) {
+      nested['storeVisit.start'] = input.storeVisit.start;
     }
     // 分段只收台词、场景、画面描述与镜头类型，首帧、成片与配音按段 ID 从已保存的分段接上；全文台词跟着分段走
     if (input.storeVisit?.segments !== undefined) {

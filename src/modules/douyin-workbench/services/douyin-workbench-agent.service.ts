@@ -27,7 +27,10 @@ import type {
   DouyinStoreVisitSegment,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
-import { isStoreVisitSegmentReady } from './douyin-store-visit-continuity.js';
+import {
+  isStoreVisitSegmentReady,
+  storeVisitStart,
+} from './douyin-store-visit-continuity.js';
 import {
   applyStoreVisitSceneMatches,
   applyStoreVisitTemplate,
@@ -346,15 +349,17 @@ export class DouyinWorkbenchAgentService {
       (segment.shot === 'presenter' && !segment.sceneVideoId
         ? presenterMax
         : videoMax);
-    const materials = store
-      ? spotsToStoreVisitMaterials(
-          store,
-          usedStoreVisitSpotIds(segments, store),
-        )
-      : {
-          sceneImages: setting.sceneImages ?? [],
-          sceneVideos: setting.sceneVideos ?? [],
-        };
+    // 从脚本开始的画面是图库挑图或 AI 生图，直接在脚本素材里，不按门店点位算
+    const materials =
+      store && storeVisitStart(setting) === 'store'
+        ? spotsToStoreVisitMaterials(
+            store,
+            usedStoreVisitSpotIds(segments, store),
+          )
+        : {
+            sceneImages: setting.sceneImages ?? [],
+            sceneVideos: setting.sceneVideos ?? [],
+          };
     /** @description 一段配好了场景：素材在这家店同步出的素材里，人物镜头不能用实拍视频。 @keyword-cn 分段场景就绪, 素材校验 @keyword-en segment-scene-ready, material-check */
     const placed = (segment: DouyinStoreVisitSegment) =>
       segment.sceneVideoId
@@ -374,7 +379,7 @@ export class DouyinWorkbenchAgentService {
     if (presenter && !setting.faceImage) return '还没有出镜人物';
     if (!segments.every((segment) => segment.lines?.trim() && fits(segment)))
       return '有段没写台词或台词太长';
-    if (!store) return '还没选门店';
+    if (!store && storeVisitStart(setting) === 'store') return '还没选门店';
     if (!segments.every(placed)) return '还有段没配场景';
     if (videoHint) return videoHint;
     if (presenter && avatarHint) return avatarHint;
@@ -1353,7 +1358,8 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 设定出镜方式、预设人物与音色（只改给出的项）：换出镜方式时按它重排各段镜头；音色可选音色库或按一句描述定制（定制会调用百炼声音设计）。
+   * @description 设定出镜方式、预设人物与音色（只改给出的项）：换出镜方式时按它重排各段镜头；音色可选音色库或按一句描述定制（定制会调用百炼声音设计）；
+   *   只换人物没给音色时，音色按 `matchPersonaVoice` 跟着人物走（录音克隆与描述定制的不动）。
    * @keyword-cn 设定人物音色, 切换出镜方式
    * @keyword-en set-cast, switch-template
    * @param {number} topicId 脚本 ID。
@@ -1410,6 +1416,8 @@ export class DouyinWorkbenchAgentService {
         scope,
       );
     }
+    if (input.personaId && !input.voiceId && !input.voiceDesignPrompt)
+      await this.storeVisit.matchPersonaVoice(topic.id, scope);
     if (input.voiceId)
       await this.storeVisit.usePresetVoice(topic.id, input.voiceId, scope);
     if (input.voiceDesignPrompt)

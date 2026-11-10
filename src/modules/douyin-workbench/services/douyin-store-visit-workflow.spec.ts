@@ -1,4 +1,7 @@
-import { BadRequestException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { BSON, type Db } from 'mongodb';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -37,6 +40,7 @@ import { DouyinChildTopicGenerationService } from './douyin-child-topic-generati
 import {
   COSYVOICE_CLONE_MODEL,
   COSYVOICE_PRESET_MODEL,
+  COSYVOICE_PRESET_VOICES,
 } from './douyin-cosyvoice.service.js';
 import {
   DouyinStoreVisitDto,
@@ -1172,6 +1176,68 @@ describe('独立探店制作流程（画外音）', () => {
       voiceModel: COSYVOICE_PRESET_MODEL,
       voiceProviderId: 'ds-1',
     });
+  });
+
+  it('换人物后音色跟着人物：音色库音色换成男女一致、不带方言的，录音克隆与定制的不动', async () => {
+    const xiaoya = {
+      id: 9,
+      name: '小雅',
+      voice: { gender: 'female', age: 'young', pace: 'fast' },
+    };
+    const service = buildVoiceoverService({
+      personaId: 9,
+      storeVisit: { voiceSource: 'preset', voiceId: 'longlaotie_v3' },
+    });
+    service.personas = { get: jest.fn().mockResolvedValue(xiaoya) };
+    const result = await service.matchPersonaVoice(2, scope);
+    expect(result.changed).toBe(true);
+    expect(result.topic.storeVisit).toMatchObject({
+      voiceSource: 'preset',
+      voiceModel: COSYVOICE_PRESET_MODEL,
+    });
+    expect(
+      COSYVOICE_PRESET_VOICES.find(
+        (item) => item.voiceId === result.topic.storeVisit.voiceId,
+      ),
+    ).toMatchObject({ gender: 'female', category: 'lively' });
+    for (const voiceSource of ['clone', 'design']) {
+      const kept = buildVoiceoverService({
+        personaId: 9,
+        storeVisit: { voiceSource, voiceId: 'my-voice' },
+      });
+      kept.personas = { get: jest.fn().mockResolvedValue(xiaoya) };
+      expect((await kept.matchPersonaVoice(2, scope)).changed).toBe(false);
+      expect(kept.repository.saveStoreVisitVoice).not.toHaveBeenCalled();
+    }
+    const noPersona = buildVoiceoverService({
+      storeVisit: { voiceSource: 'preset', voiceId: 'longlaotie_v3' },
+    });
+    expect((await noPersona.matchPersonaVoice(2, scope)).changed).toBe(false);
+  });
+
+  it('换人物时音色库不可用：按人物声线写声音描述', async () => {
+    const service = buildVoiceoverService({
+      personaId: 9,
+      storeVisit: { voicePrompt: '男声，东北直率男，东北话' },
+    });
+    service.personas = {
+      get: jest.fn().mockResolvedValue({
+        id: 9,
+        voice: { gender: 'female', age: 'young', pace: 'fast' },
+      }),
+    };
+    service.readVoiceRuntime = jest
+      .fn()
+      .mockRejectedValue(new ServiceUnavailableException('没配百炼'));
+    service.repository.update = jest
+      .fn()
+      .mockImplementation(async (_id, input) => ({ id: 2, ...input }));
+    const result = await service.matchPersonaVoice(2, scope);
+    expect(result.changed).toBe(true);
+    const prompt = service.repository.update.mock.calls[0][1].storeVisit
+      .voicePrompt as string;
+    expect(prompt).toContain('女');
+    expect(prompt).not.toContain('东北');
   });
 
   it('提示词定制音色：按描述设计并等可用，写进脚本、删掉旧克隆音色并记审计', async () => {

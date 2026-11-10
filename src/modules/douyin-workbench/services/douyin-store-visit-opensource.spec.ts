@@ -1,9 +1,12 @@
 import {
+  SCRIPT_FIRST_SCENE_RULES,
+  STORE_VISIT_REAL_SCENE_RULES,
   supportsStoreVisitReferenceAudio,
   supportsStoreVisitReferences,
 } from './douyin-store-visit-continuity.js';
 import {
   buildStoreVisitH3Prompt,
+  buildStoreVisitNativePrompt,
   buildStoreVisitVideoTarget,
   DouyinStoreVisitService,
   storeVisitProviderOf,
@@ -134,6 +137,35 @@ describe('探店分段走自建 MiniMax-H3', () => {
       'Audio: An off-screen narrator with exactly the voice, accent and tone of <Audio 1> (male voice, Northeastern Chinese accent) says in Mandarin Chinese, in a relaxed, natural conversational tone, clearly, completely and only once: "生日派对、朋友聚会、公司团建，一个包间全包了。"',
     );
     expect(prompt).toContain('<Audio 1> is only a voice sample');
+  });
+
+  it('从脚本开始：H3 与数眼提示词不称门店、不加门店实拍的硬约束，改成宽松的画面约束', () => {
+    const h3 = buildStoreVisitH3Prompt({
+      ...promptBase,
+      shot: 'broll',
+      referenceAudio: false,
+      scriptFirst: true,
+    });
+    expect(chineseOutsideLines(h3)).toBe(false);
+    expect(h3).toContain('Short-form vertical video');
+    expect(h3).toContain('Scene: starts from <Picture 1>');
+    expect(h3).not.toContain('store');
+    const native = buildStoreVisitNativePrompt({
+      ...promptBase,
+      shot: 'broll',
+      referenceAudio: false,
+      scriptFirst: true,
+    });
+    expect(native).toContain(SCRIPT_FIRST_SCENE_RULES);
+    expect(native).not.toContain(STORE_VISIT_REAL_SCENE_RULES);
+    expect(native).not.toContain('门店');
+    expect(
+      buildStoreVisitNativePrompt({
+        ...promptBase,
+        shot: 'broll',
+        referenceAudio: false,
+      }),
+    ).toContain(STORE_VISIT_REAL_SCENE_RULES);
   });
 
   it('H3 原生提示词：锚点段只要干净人声，其余段保留轻微环境声', () => {

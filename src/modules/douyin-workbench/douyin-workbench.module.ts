@@ -22,6 +22,7 @@ import { DouyinChildTopicGenerationService } from './services/douyin-child-topic
 import { DouyinGenerationJobService } from './services/douyin-generation-job.service.js';
 import { DouyinShotConcatService } from './services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from './services/douyin-shot-image.service.js';
+import { DouyinSegmentImageService } from './services/douyin-segment-image.service.js';
 import { DouyinVideoDirectorService } from './services/douyin-video-director.service.js';
 import { DouyinVideoTemplateService } from './services/douyin-video-template.service.js';
 import { DouyinVideoQueueService } from './services/douyin-video-queue.service.js';
@@ -67,6 +68,7 @@ import { DouyinWorkbenchAgentService } from './services/douyin-workbench-agent.s
     DouyinOpensourceVideoService,
     DouyinShotConcatService,
     DouyinShotImageService,
+    DouyinSegmentImageService,
     DouyinStoreVisitService,
     DouyinStoreVisitPipelineService,
     DouyinStoreVisitPlannerService,

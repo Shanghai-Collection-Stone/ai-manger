@@ -534,13 +534,14 @@ export class DouyinStoryboardGenerationService {
   /**
    * @description 分镜选图（模型取节点 `image-decision`，关闭思考）：一次调用为每段分镜从候选清单挑一张图，只认清单内编号，
    *   同一张图不重复用；选不上的镜头留给保存前的 `autoAssignShotImages` 按相关度补。调用失败只记警告，不影响分镜。
+   *   统一流程「从脚本开始」的分段图库配图（`DouyinSegmentImageService.pickImages`）把分段转成同样的结构后复用它。
    * @keyword-cn 分镜选图, 关闭思考
    * @keyword-en storyboard-image-pick, thinking-off
    * @param shots 刚写好的分镜，选中的图直接写到 `media`。
    * @param candidates 候选图。
    * @param scope 租户用户作用域。
    */
-  private async pickShotImages(
+  async pickShotImages(
     shots: DouyinStoryboardShot[],
     candidates: StoryboardImageCandidate[],
     scope: DouyinScope,
