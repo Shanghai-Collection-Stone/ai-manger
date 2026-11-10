@@ -32,7 +32,7 @@
 
 - `GalleryController.upload(files, body, req)` — 上传图片并写入图库记录，先修正 multipart 中文原文件名乱码，支持批量写入备注与 AI 人脸保护状态；`clientPreprocess` 仍按文件下标和原名校验，命中后跳过重复压缩与尺寸读取 | keywords: 图库上传, 图片元数据, 上传文件名, gallery-upload, image-metadata, upload-filename
 - `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset?, keyword? })` — 返回图库图片，游标按创建时间与 ID 复合定位，支持多标签、关键词、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, 关键词搜索, gallery-multi-sort, multi-tag-filter, keyword-search
-- `GalleryController.stats(req)` — 精确统计当前作用域图片、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
+- `GalleryController.stats(req)` — 精确统计当前作用域图片（含素材图）、其中的素材图 `materials`、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
 - `GalleryController.updateImagesMetaBatch(body, req)` — 批量更新可见图片的备注、收藏、人脸保护和标签 | keywords: 批量图片元数据, 作用域鉴权, batch-image-metadata, scope-authorization
 - `GalleryController.updateImageMeta(id, body, req)` — 更新单张可见图片的备注、收藏、人脸保护和标签 | keywords: 单图图片元数据, 作用域鉴权, single-image-metadata, scope-authorization
 - `GalleryController.similarImages(id, limit, req)` — 读取向量相似图并在向量不可用时按共同标签兜底 | keywords: 相似图片, 标签相似兜底, similar-images, tag-similarity-fallback
@@ -51,6 +51,8 @@
 - `AI_MATERIAL_TAG` = `ai素材`：AI 生成素材的固定标签,与前端 `web/src/ui/AiCommander/design-editor/material-lab/MaterialPanel.jsx` 的同名常量必须逐字一致 | keywords: AI素材标签, ai-material-tag
 - `GALLERY_COVER_TAGS` — 图库系统写入的封面类标签，供图片类型过滤与标签库排除复用 | keywords: 系统封面标签, 图库标签, system-cover-tags, gallery-tags
 - `AI_GENERATED_IMAGE_TAG` — AI 生成图片与素材面板共用的固定图库标签 | keywords: AI素材标签, ai-material-tag
+- `GALLERY_MATERIAL_TAGS` — 标记「素材图」的系统标签：`ai素材`、`探店连续生成尾帧`、`抖音探店人脸`、`抖音探店人物首帧`、`我的素材`（设计编辑器素材面板上传）、`画布成品` 与旧版 `灵感画布`（画布保存的成品），与写入方逐字一致；全部图片默认不显示，统一在「素材图」里看 | keywords: 素材图标签, 生成素材标签, material-image-tags, generated-material-tags
+- `GalleryImageType` — 图库图片类型 `all` / `regular`（不含拼图、封面与素材图）/ `collage` / `material`（拼图、封面与素材图标签） | keywords: 图库图片类型, 素材图类型, gallery-image-type, material-image-type
 - `normalizeGalleryUploadFilename(name)` — 将 latin1 误解码的 UTF-8 中文文件名还原，已正确解码或转换无效时保留原值 | keywords: 上传文件名, 中文乱码修复, upload-filename, mojibake-repair
 - `AI_GENERATED_IMAGE_TAG` — AI 生成图片固定标签「ai素材」 | keywords: AI素材标签, ai-material-tag
 - `resolveGeneratedImageFile(imagePath)` — 生图相对地址转落盘文件信息，拒绝外链与穿越路径 | keywords: 解析生图落盘路径, 防目录穿越, resolve-generated-image-file, path-traversal-guard
@@ -66,7 +68,7 @@
 - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
 - `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
 - `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
-- `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
+- `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片（含素材图）、其中的素材图、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
 - `GalleryService.updateImageMeta(input)` — 更新单张可见图片的元数据 | keywords: 单图元数据更新, 图片可见范围, single-image-metadata, image-visibility
 - `GalleryService.updateImagesMetaBatch(input)` — 批量更新可见图片并按行去重追加备注 | keywords: 批量元数据更新, 备注按行去重, batch-image-metadata, deduplicate-note-lines
 - `GalleryService.appendNoteLines(current, incoming)` — 追加非重复备注行并限制总长度 | keywords: 备注追加, 文本去重, append-note, text-deduplication
@@ -74,10 +76,10 @@
 - `GalleryService.convertTagsToNote(input)` — 把图片标签迁移为去重备注行 | keywords: 标签转备注, 图片批量迁移, tags-to-note, image-batch-migration
 - `PUBLIC_IMAGE_PROJECTION` — 图片公开查询投影，不读取 Mongo 主键和向量 | keywords: 图片公开投影, 不返回向量, public-image-projection, omit-embedding
 - `GalleryService.toPublicImage(image)` — 补齐历史图片默认字段并移除 Mongo 主键与向量 | keywords: 图片公开归一化, 历史默认值, public-image-normalization, legacy-defaults, omit-embedding
-- `GalleryService.getSystemTags()` — 返回标签库统计需要排除的系统标签 | keywords: 系统标签列表, 标签库排除, system-tag-list, tag-library-exclusion
+- `GalleryService.getSystemTags()` — 返回标签库统计需要排除的系统标签：封面类标签与 `GALLERY_MATERIAL_TAGS`（不进未归类、不能放进分类） | keywords: 系统标签列表, 标签库排除, system-tag-list, tag-library-exclusion
 - `GalleryService.normalizeTags(tags)` — 去井号、去空白并去重规整标签 | keywords: 标签规整, 标签去重, tag-normalization, tag-deduplication
-- `GalleryService.buildImageTypeFilter(imageType)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 AI 素材 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
-- `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤 | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
+- `GalleryService.buildImageTypeFilter(imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
+- `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤（含 `material`） | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
 - `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
 - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
 - `GalleryService.sampleRandom({ userId?, tenantId?, groupId?, tags?, imageType?, excludedGroupIds?, excludedTags?, limit?, includeUsed? })` — 从全部可见图片或所选标签并集随机采样；`imageType=regular` 排除拼图、封面标签与 AI 素材 | keywords: 图库随机采样, 标签随机取图, gallery-random-sample, tag-random-selection
@@ -139,6 +141,10 @@
 | AI素材生成 | ai-material-generate |
 | 客户端预处理清单 | client-preprocess-manifest |
 | AI素材标签 | ai-material-tag |
+| 素材图标签 | material-image-tags |
+| 生成素材标签 | generated-material-tags |
+| 图库图片类型 | gallery-image-type |
+| 素材图类型 | material-image-type |
 | 系统封面标签 | system-cover-tags |
 | 图库标签 | gallery-tags |
 | 中文乱码修复 | mojibake-repair |
@@ -251,7 +257,7 @@
   - `updateGroup`: `POST groups/:id` 改名或改描述标签；系统固定分组（如场景图库）拒绝改名
   - `deleteGroup`: `POST groups/:id/delete` 删除分组；系统固定分组（如场景图库）拒绝删除
   - `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset?, keyword? })` — 返回图库图片，游标按创建时间与 ID 复合定位，支持多标签、关键词、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, 关键词搜索, gallery-multi-sort, multi-tag-filter, keyword-search
-  - `GalleryController.stats(req)` — 精确统计当前作用域图片、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
+  - `GalleryController.stats(req)` — 精确统计当前作用域图片（含素材图）、其中的素材图 `materials`、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
   - `GalleryController.updateImagesMetaBatch(body, req)` — 批量更新可见图片的备注、收藏、人脸保护和标签 | keywords: 批量图片元数据, 作用域鉴权, batch-image-metadata, scope-authorization
   - `GalleryController.updateImageMeta(id, body, req)` — 更新单张可见图片的备注、收藏、人脸保护和标签 | keywords: 单图图片元数据, 作用域鉴权, single-image-metadata, scope-authorization
   - `GalleryController.similarImages(id, limit, req)` — 读取向量相似图并在向量不可用时按共同标签兜底 | keywords: 相似图片, 标签相似兜底, similar-images, tag-similarity-fallback
@@ -337,7 +343,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
   - `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
   - `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
-  - `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
+  - `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片（含素材图）、其中的素材图、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
   - `GalleryService.updateImageMeta(input)` — 更新单张可见图片的元数据 | keywords: 单图元数据更新, 图片可见范围, single-image-metadata, image-visibility
   - `GalleryService.updateImagesMetaBatch(input)` — 批量更新可见图片并按行去重追加备注 | keywords: 批量元数据更新, 备注按行去重, batch-image-metadata, deduplicate-note-lines
   - `GalleryService.appendNoteLines(current, incoming)` — 追加非重复备注行并限制总长度 | keywords: 备注追加, 文本去重, append-note, text-deduplication
@@ -345,10 +351,10 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `GalleryService.convertTagsToNote(input)` — 把图片标签迁移为去重备注行 | keywords: 标签转备注, 图片批量迁移, tags-to-note, image-batch-migration
   - `PUBLIC_IMAGE_PROJECTION` — 图片公开查询投影，不读取 Mongo 主键和向量 | keywords: 图片公开投影, 不返回向量, public-image-projection, omit-embedding
   - `GalleryService.toPublicImage(image)` — 补齐历史图片默认字段并移除 Mongo 主键与向量 | keywords: 图片公开归一化, 历史默认值, public-image-normalization, legacy-defaults, omit-embedding
-  - `GalleryService.getSystemTags()` — 返回标签库统计需要排除的系统标签 | keywords: 系统标签列表, 标签库排除, system-tag-list, tag-library-exclusion
+  - `GalleryService.getSystemTags()` — 返回标签库统计需要排除的系统标签：封面类标签与 `GALLERY_MATERIAL_TAGS`（不进未归类、不能放进分类） | keywords: 系统标签列表, 标签库排除, system-tag-list, tag-library-exclusion
   - `GalleryService.normalizeTags(tags)` — 去井号、去空白并去重规整标签 | keywords: 标签规整, 标签去重, tag-normalization, tag-deduplication
-  - `GalleryService.buildImageTypeFilter(imageType)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 AI 素材 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
-  - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤 | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
+  - `GalleryService.buildImageTypeFilter(imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
+  - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤（含 `material`） | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
   - `findAccessibleImagesByIds`: 按用户选择的图片 ID 精确读取当前租户可见图片，并按输入顺序返回，用于封面重生成/reference images by ids for cover regenerate
   - `searchSimilar`: 向量相似检索/search similar
   - `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
@@ -388,7 +394,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 
 图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, **favorite**, **favoritedAt**, **note**, **aiFaceProtected**, isCollage, collageSourceImageIds, collageMeta, **isUsed**, **usedAt**, embedding, createdAt, updatedAt）。历史数据缺少 `favorite` / `note` / `aiFaceProtected` 时对外分别按 `false` / `''` / `false` 返回；`isUsed=true` 表示该图已被动态拼图/生图组消耗,默认 searchByTags/sampleRandom 不再命中。
 
-图片类型口径：`imageType=regular` 同时排除 `isCollage=true`、系统封面标签与 `AI_GENERATED_IMAGE_TAG`（`ai素材`）；该过滤被图库列表、标签搜索、可用量统计、热门标签、随机采样与相似图结果共同复用，`collage` 口径不变。
+图片类型口径：`imageType=regular` 同时排除 `isCollage=true`、系统封面标签与 `GALLERY_MATERIAL_TAGS`（`ai素材`、探店出片过程存下的尾帧、出镜人脸照与人物首帧、设计素材 `我的素材`、画布成品 `画布成品` / `灵感画布`），列表请求明确按其中某个标签筛选时不排除该标签；`imageType=material` 正好取反，供工作台图库「素材图」入口使用，`GET stats` 另返回 `materials` 计数；该过滤被图库列表、标签搜索、可用量统计、热门标签、随机采样与相似图结果共同复用，`collage` 口径不变。
 
 - **关键词**: entity, image, width, height, isPortrait, isUsed, usedAt
 

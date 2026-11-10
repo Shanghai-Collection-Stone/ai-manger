@@ -914,6 +914,7 @@ export class GalleryController {
    * @param {string} [tenantId] - 查询参数：租户ID（优先从请求token解析）。
    * @param {string} [groupId] - 查询参数：图库组ID。
    * @param {string} [tag] - 查询参数：标签。
+   * @param {string} [imageType] - 查询参数：图片类型 all / regular（普通图，不含拼图、封面与素材图）/ collage / material（素材图）。
    * @param {string} [cursorId] - 查询参数：游标（上一页最后一张图片 ID）；按该图的创建时间与 ID 复合定位下一页。
    * @param {string} [limit] - 查询参数：返回条数上限。
    * @param {Request} [req] - 当前 HTTP 请求。
@@ -967,7 +968,10 @@ export class GalleryController {
       throw new BadRequestException('offset必须是非负整数');
     }
     const resolvedImageType =
-      imageType === 'regular' || imageType === 'collage' || imageType === 'all'
+      imageType === 'regular' ||
+      imageType === 'collage' ||
+      imageType === 'material' ||
+      imageType === 'all'
         ? imageType
         : undefined;
     // groupId can be number (legacy) or string (default_group_image, default_collage_image)
@@ -999,13 +1003,14 @@ export class GalleryController {
   }
 
   /**
-   * @description 精确统计当前图库可见范围内的图片、收藏、分组和标签数量。
+   * @description 精确统计当前图库可见范围内的图片（含素材图）、其中的素材图、收藏、分组和标签数量。
    * @keyword-cn 图库精确统计, 租户可见范围
    * @keyword-en gallery-exact-stats, tenant-visibility
    */
   @Get('stats')
   async stats(@Req() req: Request): Promise<{
     images: number;
+    materials: number;
     favorites: number;
     groups: number;
     tags: number;
