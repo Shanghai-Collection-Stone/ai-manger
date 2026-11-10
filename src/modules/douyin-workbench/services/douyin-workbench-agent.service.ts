@@ -25,6 +25,7 @@ import type {
   DouyinOperationView,
   DouyinScriptStyle,
   DouyinStoreVisitSegment,
+  DouyinStoreVisitStart,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import {
@@ -48,11 +49,12 @@ import {
 } from './douyin-store-visit-rules.js';
 import { DouyinGenerationJobService } from './douyin-generation-job.service.js';
 import { DouyinOperationService } from './douyin-operation.service.js';
-import { DouyinShotImageService } from './douyin-shot-image.service.js';
+import { DouyinSegmentImageService } from './douyin-segment-image.service.js';
 import { DouyinStoreVisitPipelineService } from './douyin-store-visit-pipeline.service.js';
 import { DouyinStoreVisitPlannerService } from './douyin-store-visit-planner.service.js';
 import { DouyinStoreVisitSpotService } from './douyin-store-visit-spot.service.js';
 import { DouyinStoreVisitService } from './douyin-store-visit.service.js';
+import { DouyinUnifyService } from './douyin-unify.service.js';
 import { DouyinVideoDirectorService } from './douyin-video-director.service.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
@@ -157,13 +159,14 @@ export class DouyinWorkbenchAgentService {
     private readonly spots: DouyinStoreVisitSpotService,
     private readonly operations: DouyinOperationService,
     private readonly generationJobs: DouyinGenerationJobService,
-    private readonly shotImages: DouyinShotImageService,
+    private readonly unify: DouyinUnifyService,
     private readonly director: DouyinVideoDirectorService,
     private readonly personas: DouyinPersonaRepositoryService,
     private readonly knowledge: KnowledgeService,
     private readonly gallery: GalleryService,
     private readonly galleryGroups: GalleryGroupService,
     private readonly pipeline: DouyinStoreVisitPipelineService,
+    private readonly segmentImages: DouyinSegmentImageService,
   ) {}
 
   /**
@@ -182,33 +185,17 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 读一条探店模式的脚本，分镜模式的脚本报错。
-   * @keyword-cn 读取探店脚本, 模式校验
-   * @keyword-en require-store-visit-topic, mode-check
+   * @description 读一条统一出片流程的脚本：旧分镜脚本先自动转成从脚本开始的统一流程（与桌面端打开时转换同规则）。
+   * @keyword-cn 读取统一流程脚本, 旧分镜自动转换
+   * @keyword-en require-unified-topic, auto-unify
    */
   private async requireStoreVisit(
     topicId: number,
     scope: DouyinScope,
   ): Promise<DouyinTopicEntity> {
     const topic = await this.requireChild(topicId, scope);
-    if (topic.productionMode !== 'store-visit')
-      throw new BadRequestException('这条脚本是分镜模式，请用分镜相关工具');
-    return topic;
-  }
-
-  /**
-   * @description 读一条分镜模式的脚本，探店模式的脚本报错。
-   * @keyword-cn 读取分镜脚本, 模式校验
-   * @keyword-en require-storyboard-topic, mode-check
-   */
-  private async requireStoryboard(
-    topicId: number,
-    scope: DouyinScope,
-  ): Promise<DouyinTopicEntity> {
-    const topic = await this.requireChild(topicId, scope);
-    if (topic.productionMode === 'store-visit')
-      throw new BadRequestException('这条脚本是探店模式，请用探店相关工具');
-    return topic;
+    if (topic.productionMode === 'store-visit') return topic;
+    return (await this.unify.unify(topic.id, scope)).topic;
   }
 
   /**
@@ -258,7 +245,7 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 读这条脚本选的门店，没选或门店已删除时为空。
+   * @description 读这条脚本选的门店，没选、门店已删除或从脚本开始时为空。
    * @keyword-cn 读取脚本门店, 门店可能已删
    * @keyword-en topic-store, store-may-be-deleted
    */
@@ -266,6 +253,7 @@ export class DouyinWorkbenchAgentService {
     topic: DouyinTopicEntity,
     scope: DouyinScope,
   ): Promise<DouyinStoreVisitStoreEntity | null> {
+    if (storeVisitStart(topic.storeVisit) === 'script') return null;
     const storeId = Number(topic.storeVisit?.storeId);
     if (!storeId) return null;
     return this.spots.requireStore(storeId, scope).catch(() => null);
@@ -380,7 +368,7 @@ export class DouyinWorkbenchAgentService {
     if (!segments.every((segment) => segment.lines?.trim() && fits(segment)))
       return '有段没写台词或台词太长';
     if (!store && storeVisitStart(setting) === 'store') return '还没选门店';
-    if (!segments.every(placed)) return '还有段没配场景';
+    if (!segments.every(placed)) return '还有段没配画面';
     if (videoHint) return videoHint;
     if (presenter && avatarHint) return avatarHint;
     return '';
@@ -470,14 +458,18 @@ export class DouyinWorkbenchAgentService {
         knowledgeIds: group.knowledgeIds ?? [],
         scripts: group.children.map((child) => {
           const segments = child.storeVisit?.segments ?? [];
+          const scriptFirst = storeVisitStart(child.storeVisit) === 'script';
           const progress =
             child.productionMode === 'store-visit'
-              ? `门店：${child.storeVisit?.storeName || '未选'}；脚本：${child.storeVisit?.script?.trim() ? '已写' : '未写'}；分段 ${segments.length} 段，已出片 ${segments.filter(isStoreVisitSegmentReady).length} 段；成片：${child.generatedVideoId ? '有' : '无'}`
-              : `分镜 ${child.storyboard.length} 镜，有图 ${child.storyboard.filter((shot) => shot.media).length} 镜，已出片 ${child.storyboard.filter((shot) => shot.videoId).length} 镜；成片：${child.generatedVideoId ? '有' : '无'}`;
+              ? `${scriptFirst ? '从脚本开始' : `从门店开始（门店：${child.storeVisit?.storeName || '未选'}）`}；脚本：${child.storeVisit?.script?.trim() ? '已写' : '未写'}；分段 ${segments.length} 段，已出片 ${segments.filter(isStoreVisitSegmentReady).length} 段；成片：${child.generatedVideoId ? '有' : '无'}`
+              : `旧分镜脚本（${child.storyboard.length} 镜），任一工具操作它时会自动转成从脚本开始的新流程；成片：${child.generatedVideoId ? '有' : '无'}`;
           return {
             id: child.id,
             title: child.title,
             productionMode: child.productionMode || 'storyboard',
+            ...(child.productionMode === 'store-visit'
+              ? { start: scriptFirst ? 'script' : 'store' }
+              : {}),
             status: child.status,
             progress,
           };
@@ -487,8 +479,8 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 一条脚本的完整状态：探店的门店、出镜、人物、音色、脚本与各段（场景、出片、生成状态），或分镜的各镜（文案、配图、出片），
-   *   成片地址、出片前还差什么、下一步建议，以及是否在等桌面端续段或拼接。
+   * @description 一条脚本的完整状态：起点、门店、出镜、人物、音色、脚本与各段（画面、出片、生成状态），成片地址、出片前还差什么、下一步建议，
+   *   以及是否在等桌面端续段或拼接；旧分镜脚本先自动转成统一流程。
    * @keyword-cn 脚本完整状态, 下一步建议
    * @keyword-en topic-detail, next-step
    * @param {number} topicId 脚本 ID。
@@ -496,12 +488,12 @@ export class DouyinWorkbenchAgentService {
    * @returns 脚本状态。
    */
   async topicDetail(topicId: number, scope: DouyinScope) {
-    const topic = await this.requireChild(topicId, scope);
+    const topic = await this.requireStoreVisit(topicId, scope);
     const operations = (await this.operations.list(scope)).filter(
       (operation) => operation.topicId === topic.id,
     );
     /** @description 某段或某镜最近的一条生成调用。 @keyword-cn 最近生成调用, 分段状态 @keyword-en latest-operation, segment-status */
-    const latest = (key: 'segmentId' | 'shotId', id: string) =>
+    const latest = (key: 'segmentId', id: string) =>
       operations
         .filter(
           (operation) =>
@@ -526,34 +518,6 @@ export class DouyinWorkbenchAgentService {
         : null,
       merge: this.operationBrief(merge),
     };
-    if (topic.productionMode !== 'store-visit') {
-      const shots = await Promise.all(
-        topic.storyboard.map(async (shot) => ({
-          id: shot.id,
-          duration: shot.duration,
-          narration: shot.narration,
-          visual: shot.visual,
-          image: shot.media ? { id: shot.media.id, url: shot.media.url } : null,
-          video: shot.videoId
-            ? {
-                videoId: shot.videoId,
-                url: await this.videoUrl(shot.videoId, scope),
-              }
-            : null,
-          generation: this.operationBrief(latest('shotId', shot.id)),
-        })),
-      );
-      const nextStep = !shots.length
-        ? '用 douyin_storyboard_generate 生成分镜'
-        : shots.some((shot) => !shot.image)
-          ? '有镜头还没配图，用 douyin_storyboard_shot_image 生成'
-          : shots.some((shot) => !shot.video)
-            ? '用 douyin_storyboard_shot_video 为还没出片的镜头出片'
-            : topic.generatedVideoId
-              ? '已有成片'
-              : '全部镜头已出片：用 douyin_video_merge 请求拼接，桌面端打开「视频制作」页后自动拼接';
-      return { ...base, shots, nextStep };
-    }
     const setting = topic.storeVisit ?? {};
     const store = await this.storeOf(topic, scope);
     const spotName = new Map(
@@ -600,27 +564,32 @@ export class DouyinWorkbenchAgentService {
     const waitingDesktop = segments.some(
       (item) => item.generation?.status === 'waiting-desktop',
     );
-    const nextStep = !store
-      ? '先用 douyin_store_visit_set_store 选门店（没有门店先 douyin_store_create 并上传照片归类）'
-      : !script
-        ? '用 douyin_store_visit_write_script 让 AI 写脚本'
-        : !linesCurrent
-          ? '用 douyin_store_visit_generate_lines 按脚本生成分段台词'
-          : blocker && blocker !== '还有段没配场景'
-            ? `出片前还差：${blocker}`
-            : blocker
-              ? '用 douyin_store_visit_match_scenes 让 AI 配场景'
-              : topic.generatedVideoId && allReady
-                ? '已有成片'
-                : allReady
-                  ? '全部分段已出片：桌面端打开「视频制作」页后自动拼接（可用 douyin_video_merge 打开自动拼接）'
-                  : setting.pipeline?.state === 'paused'
-                    ? '导演已暂停：改好后用 douyin_store_visit_pipeline（resume）继续'
-                    : segments.some((item) => item.generation)
-                      ? '出片进行中，稍后再用 douyin_topic_get 查看'
-                      : '可以用 douyin_store_visit_generate 出片';
+    const scriptFirst = storeVisitStart(setting) === 'script';
+    const nextStep =
+      !scriptFirst && !store
+        ? '先用 douyin_store_visit_set_store 选门店（没有门店先 douyin_store_create 并上传照片归类）；不拍门店就用 douyin_store_visit_set_start 改成从脚本开始'
+        : !script
+          ? '用 douyin_store_visit_write_script 让 AI 写脚本'
+          : !linesCurrent
+            ? '用 douyin_store_visit_generate_lines 按脚本生成分段台词'
+            : blocker && blocker !== '还有段没配画面'
+              ? `出片前还差：${blocker}`
+              : blocker
+                ? scriptFirst
+                  ? '用 douyin_store_visit_pick_pictures 从图库配画面，或 douyin_store_visit_generate_pictures 让 AI 生图'
+                  : '用 douyin_store_visit_match_scenes 让 AI 配场景'
+                : topic.generatedVideoId && allReady
+                  ? '已有成片'
+                  : allReady
+                    ? '全部分段已出片：桌面端打开「视频制作」页后自动拼接（可用 douyin_video_merge 打开自动拼接）'
+                    : setting.pipeline?.state === 'paused'
+                      ? '导演已暂停：改好后用 douyin_store_visit_pipeline（resume）继续'
+                      : segments.some((item) => item.generation)
+                        ? '出片进行中，稍后再用 douyin_topic_get 查看'
+                        : '可以用 douyin_store_visit_generate 出片';
     return {
       ...base,
+      start: scriptFirst ? 'script' : 'store',
       store: store ? { id: store.id, name: store.name } : null,
       template: setting.template ?? null,
       persona: topic.personaId ?? null,
@@ -700,11 +669,11 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 修改脚本：标题、探店脚本正文、探店各段台词与念法或分镜各镜的口播与画面描述（只改给出的项）。
+   * @description 修改脚本：标题、脚本正文、各段台词与念法（只改给出的项）；旧分镜脚本先自动转成统一流程。
    * @keyword-cn 修改脚本内容, 手动改台词
    * @keyword-en update-topic-content, edit-lines
    * @param {number} topicId 脚本 ID。
-   * @param {{title?: string, script?: string, segments?: Array<{id: string, lines?: string, delivery?: string}>, shots?: Array<{id: string, narration?: string, visual?: string}>}} input 修改。
+   * @param {{title?: string, script?: string, segments?: Array<{id: string, lines?: string, delivery?: string}>}} input 修改。
    * @param {DouyinScope} scope 作用域。
    * @returns 修改后的脚本状态。
    */
@@ -714,16 +683,13 @@ export class DouyinWorkbenchAgentService {
       title?: string;
       script?: string;
       segments?: Array<{ id: string; lines?: string; delivery?: string }>;
-      shots?: Array<{ id: string; narration?: string; visual?: string }>;
     },
     scope: DouyinScope,
   ) {
-    let topic = await this.requireChild(topicId, scope);
+    let topic = await this.requireStoreVisit(topicId, scope);
     if (input.title !== undefined)
       topic = await this.save(topic.id, { title: input.title }, scope);
     if (input.script !== undefined || input.segments?.length) {
-      if (topic.productionMode !== 'store-visit')
-        throw new BadRequestException('只有探店脚本有脚本正文和分段台词');
       if (input.script !== undefined)
         topic = await this.save(
           topic.id,
@@ -755,42 +721,6 @@ export class DouyinWorkbenchAgentService {
           scope,
         );
       }
-    }
-    if (input.shots?.length) {
-      if (topic.productionMode === 'store-visit')
-        throw new BadRequestException('探店脚本没有分镜，请改分段台词');
-      const edits = new Map(input.shots.map((item) => [item.id, item]));
-      const unknown = [...edits.keys()].filter(
-        (id) => !topic.storyboard.some((shot) => shot.id === id),
-      );
-      if (unknown.length)
-        throw new BadRequestException(`没有这些分镜：${unknown.join('、')}`);
-      topic = await this.save(
-        topic.id,
-        {
-          storyboard: topic.storyboard.map((shot) => {
-            const edit = edits.get(shot.id);
-            return {
-              id: shot.id,
-              duration: shot.duration,
-              shotType: shot.shotType,
-              visual: edit?.visual ?? shot.visual,
-              narration: edit?.narration ?? shot.narration,
-              transition: shot.transition,
-              ...(shot.media !== undefined ? { media: shot.media } : {}),
-              ...(shot.originalMedia !== undefined
-                ? { originalMedia: shot.originalMedia }
-                : {}),
-              ...(shot.faceMaskStyle !== undefined
-                ? { faceMaskStyle: shot.faceMaskStyle }
-                : {}),
-              ...(shot.imagePrompt ? { imagePrompt: shot.imagePrompt } : {}),
-              ...(shot.videoId ? { videoId: shot.videoId } : {}),
-            };
-          }),
-        },
-        scope,
-      );
     }
     return this.topicDetail(topic.id, scope);
   }
@@ -1477,15 +1407,39 @@ export class DouyinWorkbenchAgentService {
    * @keyword-cn 提交探店出片, 启动导演流水线
    * @keyword-en submit-store-visit, start-director-pipeline
    * @param {number} topicId 脚本 ID。
-   * @param {{all?: boolean, unifiedVoice?: boolean}} input 是否全部重做、是否用第 1 段的声音统一后面各段。
+   *   `full` 为真时改成「整条一次出」：视频模型一次生成整条视频（分段当成分镜），快但不能单段改，声音由视频模型自己出，出好后直接作为成片。
+   * @param {{all?: boolean, unifiedVoice?: boolean, full?: boolean, prompt?: string}} input 是否全部重做、是否用第 1 段的声音统一后面各段、是否整条一次出与整条时的补充要求。
    * @param {DouyinScope} scope 作用域。
-   * @returns 流水线状态与说明。
+   * @returns 流水线状态与说明，整条一次出时为提交的调用。
    */
   async generateStoreVisit(
     topicId: number,
-    input: { all?: boolean; unifiedVoice?: boolean },
+    input: {
+      all?: boolean;
+      unifiedVoice?: boolean;
+      full?: boolean;
+      prompt?: string;
+    },
     scope: DouyinScope,
   ) {
+    if (input.full) {
+      const topic = await this.requireStoreVisit(topicId, scope);
+      const blocker = await this.generateBlocker(
+        topic,
+        await this.storeOf(topic, scope),
+      );
+      if (blocker && !['还没有音色', '还没选出镜方式'].includes(blocker))
+        throw new BadRequestException(blocker);
+      const operation = await this.operations.createGeneration(
+        topic.id,
+        input.prompt,
+        scope,
+      );
+      return {
+        operation: this.operationBrief(operation),
+        note: '整条一次出已提交：出好后直接作为成片，用 douyin_topic_get 查看',
+      };
+    }
     const topic = await this.prepareStoreVisitGenerate(topicId, scope);
     const latest = await this.pipeline.start(topic.id, scope, {
       voiceAnchor: input.unifiedVoice !== false,
@@ -1626,17 +1580,22 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 分镜：按母选题让 AI 生成候选脚本（后台任务，立即返回任务），候选出来后用确认候选入库。
+   * @description 按母选题让 AI 生成候选脚本（后台任务，立即返回任务），候选出来后用确认候选入库；都进统一出片流程，`start` 决定从门店开始还是从脚本开始（缺省从脚本开始）。
    * @keyword-cn AI生成候选脚本, 后台任务
    * @keyword-en generate-script-candidates, background-job
    * @param {number} motherId 母选题 ID。
-   * @param {{prompt?: string, personaId?: number, scriptStyle?: string}} input 要求、人物与风格。
+   * @param {{prompt?: string, personaId?: number, scriptStyle?: string, start?: 'store'|'script'}} input 要求、人物、风格与起点。
    * @param {DouyinScope} scope 作用域。
    * @returns 任务。
    */
   async generateChildren(
     motherId: number,
-    input: { prompt?: string; personaId?: number; scriptStyle?: string },
+    input: {
+      prompt?: string;
+      personaId?: number;
+      scriptStyle?: string;
+      start?: DouyinStoreVisitStart;
+    },
     scope: DouyinScope,
   ) {
     const job = await this.generationJobs.start(
@@ -1647,6 +1606,8 @@ export class DouyinWorkbenchAgentService {
       {
         personaId: input.personaId,
         scriptStyle: input.scriptStyle as DouyinScriptStyle | undefined,
+        productionMode: 'store-visit',
+        start: input.start === 'store' ? 'store' : 'script',
       },
     );
     return { job: this.jobBrief(job) };
@@ -1685,7 +1646,7 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 分镜：运行中与最近 24 小时的后台任务（生成候选脚本、生成分镜），含待确认的候选。
+   * @description 运行中与最近 24 小时的后台任务（生成候选脚本等），含待确认的候选。
    * @keyword-cn 后台任务列表, 待确认候选
    * @keyword-en generation-jobs, pending-drafts
    * @param {DouyinScope} scope 作用域。
@@ -1700,9 +1661,9 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 分镜：把挑中的候选脚本入库（可改标题与正文），每条新脚本自动开始生成分镜。
-   * @keyword-cn 确认候选脚本, 自动生成分镜
-   * @keyword-en confirm-script-drafts, auto-storyboard
+   * @description 把挑中的候选脚本入库（可改标题与正文），新脚本按这批任务的起点进统一出片流程。
+   * @keyword-cn 确认候选脚本, 候选入统一流程
+   * @keyword-en confirm-script-drafts, drafts-to-unified-flow
    * @param {string} jobId 任务 ID。
    * @param {Array<{key: string, title?: string, script?: string}>} items 挑中的候选。
    * @param {DouyinScope} scope 作用域。
@@ -1717,110 +1678,131 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 分镜：让 AI 重新生成这条脚本的分镜（后台任务）。
-   * @keyword-cn 重新生成分镜, 后台任务
-   * @keyword-en regenerate-storyboard, background-job
+   * @description 设定这条脚本的起点（从门店开始 / 从脚本开始，与桌面端 `chooseStart` 同规则）：两种起点画面来源不同，已配的画面会清空，脚本和台词保留。
+   * @keyword-cn 设定出片起点, 切换起点清画面
+   * @keyword-en set-production-start, switch-start-clear-pictures
    * @param {number} topicId 脚本 ID。
-   * @param {string|undefined} prompt 补充要求。
+   * @param {'store'|'script'} start 起点。
    * @param {DouyinScope} scope 作用域。
-   * @returns 任务。
+   * @returns 脚本状态。
    */
-  async generateStoryboard(
+  async setStart(
     topicId: number,
-    prompt: string | undefined,
+    start: DouyinStoreVisitStart,
     scope: DouyinScope,
   ) {
-    await this.requireStoryboard(topicId, scope);
-    const job = await this.generationJobs.start(
-      'storyboard',
-      topicId,
-      prompt,
+    const topic = await this.requireStoreVisit(topicId, scope);
+    if (storeVisitStart(topic.storeVisit) === start)
+      return this.topicDetail(topic.id, scope);
+    const segments = topic.storeVisit?.segments ?? [];
+    const placed = segments.some(
+      (segment) =>
+        segment.sceneImageId || segment.sceneVideoId || segment.spotId,
+    );
+    await this.save(
+      topic.id,
+      {
+        storeVisit: {
+          start,
+          ...(placed
+            ? {
+                spotIds: [],
+                sceneImages: [],
+                sceneVideos: [],
+                openingScene: null,
+                segments: toStoreVisitSegmentsPayload(
+                  segments.map((segment) => {
+                    const copy = { ...segment };
+                    delete copy.spotId;
+                    delete copy.sceneImageId;
+                    delete copy.sceneImageIds;
+                    delete copy.sceneVideoId;
+                    delete copy.clipStart;
+                    return copy;
+                  }),
+                ),
+              }
+            : {}),
+        },
+      },
       scope,
     );
-    return { job: this.jobBrief(job) };
+    return this.topicDetail(topic.id, scope);
   }
 
   /**
-   * @description 分镜：按画面描述重新生成某一镜的竖屏配图并绑定，之后让 AI 导演重新规划。
-   * @keyword-cn 重新生成分镜配图, 单镜配图
-   * @keyword-en regenerate-shot-image, single-shot-image
+   * @description 从脚本开始：按台词从图库给每段挑一张图并保存（与桌面端 `pickGalleryPictures` 同规则），已配的画面会被替换。
+   * @keyword-cn 从图库配画面, 分段图库配图落库
+   * @keyword-en pick-gallery-pictures, save-segment-pictures
    * @param {number} topicId 脚本 ID。
-   * @param {string} shotId 分镜 ID。
-   * @param {string|undefined} prompt 补充要求。
    * @param {DouyinScope} scope 作用域。
-   * @returns 新图片。
+   * @returns 脚本状态。
    */
-  async regenerateShotImage(
-    topicId: number,
-    shotId: string,
-    prompt: string | undefined,
-    scope: DouyinScope,
-  ) {
-    await this.requireStoryboard(topicId, scope);
-    const result = await this.shotImages.regenerate(
-      topicId,
-      shotId,
-      prompt,
-      scope,
+  async pickPictures(topicId: number, scope: DouyinScope) {
+    const topic = await this.requireStoreVisit(topicId, scope);
+    const result = await this.segmentImages.pickImages(topic.id, scope);
+    const byId = new Map(
+      result.segments.map((item) => [item.id, Number(item.sceneImageId)]),
     );
-    await this.director.schedule(topicId, scope);
-    return { shotId: result.shotId, imageId: result.imageId };
+    const segments = (topic.storeVisit?.segments ?? []).map((segment) => {
+      const imageId = byId.get(segment.id);
+      if (!imageId) return segment;
+      const copy: DouyinStoreVisitSegment = {
+        ...segment,
+        sceneImageId: imageId,
+      };
+      delete copy.sceneImageIds;
+      delete copy.sceneVideoId;
+      delete copy.spotId;
+      return copy;
+    });
+    const used = new Set(
+      segments.map((segment) => Number(segment.sceneImageId)).filter(Boolean),
+    );
+    const sceneImages = [
+      ...(topic.storeVisit?.sceneImages ?? []),
+      ...result.sceneImages,
+    ].filter(
+      (image, index, list) =>
+        used.has(Number(image.id)) &&
+        list.findIndex((item) => Number(item.id) === Number(image.id)) ===
+          index,
+    );
+    await this.persistSegments(topic, segments, { sceneImages }, scope, null);
+    return this.topicDetail(topic.id, scope);
   }
 
   /**
-   * @description 分镜出片（会扣费）：`full` 为真时整条分镜一次生成一条完整视频；否则逐镜出片（默认只出还没出片的镜头），并打开「全部出片后自动拼接」。
-   * @keyword-cn 分镜出片, 逐镜生成
-   * @keyword-en storyboard-video, per-shot-generation
+   * @description 从脚本开始：一段接一段 AI 生图（后一段延续前一段的画面），每张生成后直接保存；给了 `segmentId` 时只重新生成这一段。会按张计生图费用。
+   * @keyword-cn AI生成画面, 逐段生图落库
+   * @keyword-en generate-ai-pictures, per-segment-imaging
    * @param {number} topicId 脚本 ID。
-   * @param {{shotIds?: string[], full?: boolean, prompt?: string}} input 镜头、是否整片、补充要求。
+   * @param {{segmentId?: string, prompt?: string}} input 只重新生成的分段与这次的补充描述。
    * @param {DouyinScope} scope 作用域。
-   * @returns 提交的调用。
+   * @returns 脚本状态。
+   * @throws {NotFoundException} 没有这个分段。
    */
-  async generateShotVideos(
+  async generatePictures(
     topicId: number,
-    input: { shotIds?: string[]; full?: boolean; prompt?: string },
+    input: { segmentId?: string; prompt?: string },
     scope: DouyinScope,
   ) {
-    const topic = await this.requireStoryboard(topicId, scope);
-    if (input.full) {
-      const operation = await this.operations.createGeneration(
+    const topic = await this.requireStoreVisit(topicId, scope);
+    const segments = topic.storeVisit?.segments ?? [];
+    const targets = input.segmentId
+      ? segments.filter((segment) => segment.id === input.segmentId)
+      : segments;
+    if (input.segmentId && !targets.length)
+      throw new NotFoundException('没有这个分段');
+    if (!targets.length) throw new BadRequestException('请先按脚本生成台词');
+    for (const segment of targets)
+      await this.segmentImages.generateImage(
         topic.id,
-        input.prompt,
+        segment.id,
+        input.segmentId ? input.prompt : undefined,
         scope,
       );
-      return { operations: [this.operationBrief(operation)] };
-    }
-    const shots = input.shotIds?.length
-      ? input.shotIds.map((id) => {
-          const shot = topic.storyboard.find((item) => item.id === id);
-          if (!shot) throw new NotFoundException(`没有这个分镜：${id}`);
-          return shot;
-        })
-      : topic.storyboard.filter((shot) => !shot.videoId);
-    if (!shots.length) throw new BadRequestException('没有要出片的镜头');
-    const operations: Array<Record<string, unknown>> = [];
-    for (const shot of shots) {
-      try {
-        const operation = await this.operations.createShotGeneration(
-          topic.id,
-          shot.id,
-          input.prompt,
-          scope,
-        );
-        operations.push({ shotId: shot.id, ...this.operationBrief(operation) });
-      } catch (error) {
-        operations.push({
-          shotId: shot.id,
-          status: 'failed',
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    await this.save(topic.id, { autoConcatShots: true }, scope);
-    return {
-      operations,
-      desktop:
-        '全部镜头出片后由桌面端拼接成片：请用同一账号打开桌面端「视频制作」页，之后用 douyin_topic_get 查看进度',
-    };
+    await this.director.schedule(topic.id, scope);
+    return this.topicDetail(topic.id, scope);
   }
 }

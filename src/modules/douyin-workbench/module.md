@@ -847,13 +847,12 @@ AI 抖音工作台（douyin-workbench）
 - `describeValidationErrors(errors)` — 把 class-validator 的嵌套错误摊平成一句中文可读的说明 | keywords: 校验错误说明, 参数错误, validation-error-message, invalid-input
 - `describeValidationErrors.walk(items,path)` — 逐层收集约束说明 | keywords: 收集校验说明, 嵌套错误, collect-constraints, nested-errors
 - `DouyinWorkbenchAgentService()` — 给 AI 操作抖音工作台（MCP）用的编排服务：每个方法完成桌面端一步的完整操作并落库，规则与桌面端一致，拼接成片、尾帧续段与统一音色仍由打开「视频制作」页的桌面端完成 | keywords: 抖音工作台编排, AI操作工作台, douyin-workbench-agent, ai-operated-workbench
-- `DouyinWorkbenchAgentService.constructor(repository,storeVisit,planner,spots,operations,generationJobs,shotImages,director,personas,knowledge,gallery,galleryGroups)` — 注入抖音工作台各业务服务与人物、知识、图库服务 | keywords: 编排服务依赖, 复用业务服务, agent-dependencies, reuse-services
+- `DouyinWorkbenchAgentService.constructor(repository,storeVisit,planner,spots,operations,generationJobs,unify,director,personas,knowledge,gallery,galleryGroups,pipeline,segmentImages)` — 注入抖音工作台各业务服务（含旧分镜转换与分段配图）与人物、知识、图库服务 | keywords: 编排服务依赖, 复用业务服务, agent-dependencies, reuse-services
 - `DouyinWorkbenchAgentService.requireChild(topicId,scope)` — 读一条脚本（子选题），不存在或不是脚本时报错 | keywords: 读取脚本, 子选题校验, require-child-topic, child-topic-check
-- `DouyinWorkbenchAgentService.requireStoreVisit(topicId,scope)` — 读一条探店模式的脚本，分镜模式的脚本报错 | keywords: 读取探店脚本, 模式校验, require-store-visit-topic, mode-check
-- `DouyinWorkbenchAgentService.requireStoryboard(topicId,scope)` — 读一条分镜模式的脚本，探店模式的脚本报错 | keywords: 读取分镜脚本, 模式校验, require-storyboard-topic, mode-check
+- `DouyinWorkbenchAgentService.requireStoreVisit(topicId,scope)` — 读一条统一出片流程的脚本，旧分镜脚本先自动转成从脚本开始的统一流程 | keywords: 读取统一流程脚本, 旧分镜自动转换, require-unified-topic, auto-unify
 - `DouyinWorkbenchAgentService.save(topicId,patch,scope)` — 按和 HTTP 接口同一套 DTO 校验（白名单、拒绝多余字段）后保存选题，再像接口一样让 AI 导演按新画面重新规划 | keywords: 校验后保存选题, 同步导演规划, validated-topic-save, reschedule-director
 - `DouyinWorkbenchAgentService.validated(type,input)` — 按 DTO 校验一份入参，失败时抛出中文说明 | keywords: DTO校验, 入参校验, validate-dto, input-validation
-- `DouyinWorkbenchAgentService.storeOf(topic,scope)` — 读这条脚本选的门店，没选或门店已删除时为空 | keywords: 读取脚本门店, 门店可能已删, topic-store, store-may-be-deleted
+- `DouyinWorkbenchAgentService.storeOf(topic,scope)` — 读这条脚本选的门店，没选、门店已删除或从脚本开始时为空 | keywords: 读取脚本门店, 门店可能已删, topic-store, store-may-be-deleted
 - `DouyinWorkbenchAgentService.persistSegments(topic,segments,extra,scope,store?)` — 保存分段：选了门店时一并把分段用到的点位同步成选题素材（与桌面端 `persistSegments` 同规则） | keywords: 保存分段与素材, 点位同步素材, persist-segments, sync-spot-materials
 - `DouyinWorkbenchAgentService.presenterSource()` — 人物镜头的画面来源：人物节点支持多图参考时用参考图，否则 AI 合成首帧（与桌面端 `defaultPresenterSource` 同规则） | keywords: 人物画面来源, 多图参考, presenter-source, multi-reference
 - `DouyinWorkbenchAgentService.generateBlocker(topic,store)` — 出片前的拦截原因（与桌面端 `generateBlocked` 同规则与顺序），可以出片时为空 | keywords: 出片拦截原因, 出片前检查, generate-blocker, pre-generate-check
@@ -862,11 +861,11 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinWorkbenchAgentService.operationBrief(operation)` — 一条调用记录的简明状态：等模型空位、等桌面端截尾帧续段、生成中、完成或失败（带原因） | keywords: 调用简明状态, 等桌面端, operation-brief, waiting-for-desktop
 - `DouyinWorkbenchAgentService.videoUrl(videoId,scope)` — 读视频记录的播放地址，读不到时为空 | keywords: 读取视频地址, 成片地址, video-url, merged-video-url
 - `DouyinWorkbenchAgentService.storeBrief(store)` — 门店的简明视图：点位名称、说明、开场标记、图片与视频数和最高分图 | keywords: 门店简明视图, 点位概览, store-brief, spot-overview
-- `DouyinWorkbenchAgentService.workspace(scope)` — 工作台概览：每个母选题下的脚本与制作进度一句话摘要 | keywords: 工作台概览, 制作进度摘要, workspace-overview, production-summary
-- `DouyinWorkbenchAgentService.topicDetail(topicId,scope)` — 一条脚本的完整状态：探店的门店、出镜、人物、音色、脚本与各段（场景、出片、生成状态），或分镜的各镜（文案、配图、出片），成片地址、出片前还差什么、下一步建议，以及是否在等桌面端续段或拼接 | keywords: 脚本完整状态, 下一步建议, topic-detail, next-step
+- `DouyinWorkbenchAgentService.workspace(scope)` — 工作台概览：每个母选题下的脚本（带起点）与制作进度一句话摘要，旧分镜脚本标明会自动转换 | keywords: 工作台概览, 制作进度摘要, workspace-overview, production-summary
+- `DouyinWorkbenchAgentService.topicDetail(topicId,scope)` — 一条脚本的完整状态：起点、门店、出镜、人物、音色、脚本与各段（画面、出片、生成状态），成片地址、出片前还差什么、下一步建议（从脚本开始时提示从图库配画面或 AI 生图），以及是否在等桌面端续段或拼接；旧分镜脚本先自动转换 | keywords: 脚本完整状态, 下一步建议, topic-detail, next-step
 - `DouyinWorkbenchAgentService.topicDetail.latest(key,id)` — 某段或某镜最近的一条生成调用 | keywords: 最近生成调用, 分段状态, latest-operation, segment-status
 - `DouyinWorkbenchAgentService.createTopic(input,scope)` — 新建母选题（分镜或探店模式，可带引用知识）；探店模式会自动带出一条空脚本 | keywords: 新建母选题, 探店带脚本, create-mother-topic, store-visit-draft
-- `DouyinWorkbenchAgentService.updateTopic(topicId,input,scope)` — 修改脚本：标题、探店脚本正文、探店各段台词与念法或分镜各镜的口播与画面描述（只改给出的项） | keywords: 修改脚本内容, 手动改台词, update-topic-content, edit-lines
+- `DouyinWorkbenchAgentService.updateTopic(topicId,input,scope)` — 修改脚本：标题、脚本正文、各段台词与念法（只改给出的项），旧分镜脚本先自动转换 | keywords: 修改脚本内容, 手动改台词, update-topic-content, edit-lines
 - `DouyinWorkbenchAgentService.deleteTopic(topicId,scope)` — 删除选题（删母选题时连同下面的脚本） | keywords: 删除选题, 级联删除, delete-topic, cascade-delete
 - `DouyinWorkbenchAgentService.videoOptions()` — 视频节点概况：整片 / 分镜出片通道与可选时长，探店三个节点（音色、画面视频、人物）是否配好及原因 | keywords: 视频节点概况, 节点可用性, video-options, node-availability
 - `DouyinWorkbenchAgentService.personaList(scope)` — 可选的预设出镜人物：名称、简介、有没有可用形象图（探店开头出镜必须有） | keywords: 预设人物列表, 形象图可用, persona-list, face-image-available
@@ -883,18 +882,18 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinWorkbenchAgentService.setCast(topicId,input,scope)` — 设定出镜方式、预设人物与音色（只改给出的项）：换出镜方式时按它重排各段镜头；音色可选音色库或按一句描述定制（定制会调用百炼声音设计）；只换人物没给音色时按 `matchPersonaVoice` 让音色跟着人物 | keywords: 设定人物音色, 切换出镜方式, set-cast, switch-template
 - `DouyinWorkbenchAgentService.voices()` — 音色库：按风格分类的百炼预置音色（男女声、特质、方言） | keywords: 音色库列表, 预置音色, preset-voice-list, voice-catalog
 - `DouyinWorkbenchAgentService.matchScenes(topicId,scope)` — AI 按脚本从门店点位给每段配 1～3 张实拍图或实拍视频并保存（与桌面端 `matchScenes` 同规则），已配的场景会被替换 | keywords: AI配场景, 分段配图落库, match-scenes, save-segment-scenes
-- `DouyinWorkbenchAgentService.generateStoreVisit(topicId,input,scope)` — 探店出片（与桌面端「开始生成」同流程，会按段扣费）：先做出片前检查并保存分段，缺人物首帧的镜头先生成首帧，再启动 AI 导演流水线一段一段地出片；有段已出片时只接着生成没出片的段（`all` 为真时清掉全部重做），全部出完后自动拼接。同点位续段与统一音色要桌面端打开「视频制作」页完成 | keywords: 提交探店出片, 启动导演流水线, submit-store-visit, start-director-pipeline
+- `DouyinWorkbenchAgentService.generateStoreVisit(topicId,input,scope)` — 探店出片（与桌面端「开始生成」同流程，会按段扣费）：先做出片前检查并保存分段，缺人物首帧的镜头先生成首帧，再启动 AI 导演流水线一段一段地出片；有段已出片时只接着生成没出片的段（`all` 为真时清掉全部重做），全部出完后自动拼接。同点位续段与统一音色要桌面端打开「视频制作」页完成；`full` 为真时改成「整条一次出」（不要求音色，调整片生成，出好后直接作为成片） | keywords: 提交探店出片, 启动导演流水线, submit-store-visit, start-director-pipeline
 - `DouyinWorkbenchAgentService.regenerateStoreVisitSegment(topicId,segmentId,input,scope)` — 让 AI 导演重做探店某一段（以及接它尾帧的续段），会扣费：先保存分段，缺人物首帧时先生成，清掉这段的出片结果后由导演按顺序重做；导演还没开始时直接开始生成，暂停中时要再继续 | keywords: 重新生成探店分段, 单段重做, regenerate-store-visit-segment, segment-retry
 - `DouyinWorkbenchAgentService.controlStoreVisitPipeline(topicId,input,scope)` — 控制 AI 导演流水线：暂停（不再提交下一段，在跑的段跑完为止）、继续（失败或编辑后手动继续）、重做某段（排进重做，不改暂停状态） | keywords: 控制导演流水线, 暂停继续重做, control-director-pipeline, pause-resume-redo
 - `DouyinWorkbenchAgentService.prepareStoreVisitGenerate(topicId,scope,segmentId?)` — 出片前准备：出片前检查（不过就报错、不扣费）、保存分段，缺人物首帧的镜头先生成首帧；给了 `segmentId` 时只补这一段的首帧 | keywords: 出片前准备, 自动补首帧, prepare-store-visit-generate, auto-keyframes
 - `DouyinWorkbenchAgentService.pipelineBrief(topic)` — 流水线状态的简报：状态、暂停原因、失败原因、正在生成第几段、已出片段数与下一步说明 | keywords: 流水线简报, 出片进度, pipeline-brief, generation-progress
-- `DouyinWorkbenchAgentService.generateChildren(motherId,input,scope)` — 分镜：按母选题让 AI 生成候选脚本（后台任务，立即返回任务），候选出来后用确认候选入库 | keywords: AI生成候选脚本, 后台任务, generate-script-candidates, background-job
+- `DouyinWorkbenchAgentService.generateChildren(motherId,input,scope)` — 按母选题让 AI 生成候选脚本（后台任务，立即返回任务），都进统一出片流程，`start` 选从门店开始或从脚本开始（缺省从脚本开始） | keywords: AI生成候选脚本, 后台任务, generate-script-candidates, background-job
 - `DouyinWorkbenchAgentService.jobBrief(job)` — 后台任务的简明视图：类型、状态、进度、错误与候选脚本（候选只给标题和开头） | keywords: 后台任务简明视图, 候选脚本, job-brief, script-candidates
-- `DouyinWorkbenchAgentService.generationJobList(scope)` — 分镜：运行中与最近 24 小时的后台任务（生成候选脚本、生成分镜），含待确认的候选 | keywords: 后台任务列表, 待确认候选, generation-jobs, pending-drafts
-- `DouyinWorkbenchAgentService.confirmDrafts(jobId,items,scope)` — 分镜：把挑中的候选脚本入库（可改标题与正文），每条新脚本自动开始生成分镜 | keywords: 确认候选脚本, 自动生成分镜, confirm-script-drafts, auto-storyboard
-- `DouyinWorkbenchAgentService.generateStoryboard(topicId,prompt,scope)` — 分镜：让 AI 重新生成这条脚本的分镜（后台任务） | keywords: 重新生成分镜, 后台任务, regenerate-storyboard, background-job
-- `DouyinWorkbenchAgentService.regenerateShotImage(topicId,shotId,prompt,scope)` — 分镜：按画面描述重新生成某一镜的竖屏配图并绑定，之后让 AI 导演重新规划 | keywords: 重新生成分镜配图, 单镜配图, regenerate-shot-image, single-shot-image
-- `DouyinWorkbenchAgentService.generateShotVideos(topicId,input,scope)` — 分镜出片（会扣费）：`full` 为真时整条分镜一次生成一条完整视频；否则逐镜出片（默认只出还没出片的镜头），并打开「全部出片后自动拼接」 | keywords: 分镜出片, 逐镜生成, storyboard-video, per-shot-generation
+- `DouyinWorkbenchAgentService.generationJobList(scope)` — 运行中与最近 24 小时的后台任务（生成候选脚本等），含待确认的候选 | keywords: 后台任务列表, 待确认候选, generation-jobs, pending-drafts
+- `DouyinWorkbenchAgentService.confirmDrafts(jobId,items,scope)` — 把挑中的候选脚本入库（可改标题与正文），新脚本按这批任务的起点进统一出片流程 | keywords: 确认候选脚本, 候选入统一流程, confirm-script-drafts, drafts-to-unified-flow
+- `DouyinWorkbenchAgentService.setStart(topicId,start,scope)` — 设定起点（从门店开始 / 从脚本开始，与桌面端 `chooseStart` 同规则），已配的画面清空，脚本和台词保留 | keywords: 设定出片起点, 切换起点清画面, set-production-start, switch-start-clear-pictures
+- `DouyinWorkbenchAgentService.pickPictures(topicId,scope)` — 从脚本开始：按台词从图库给每段挑一张图并保存（与桌面端 `pickGalleryPictures` 同规则） | keywords: 从图库配画面, 分段图库配图落库, pick-gallery-pictures, save-segment-pictures
+- `DouyinWorkbenchAgentService.generatePictures(topicId,input,scope)` — 从脚本开始：一段接一段 AI 生图并保存，给 `segmentId` 时只重新生成这一段 | keywords: AI生成画面, 逐段生图落库, generate-ai-pictures, per-segment-imaging
 
 ## 关键词索引 (Keyword Index)
 
@@ -919,6 +918,15 @@ AI 抖音工作台（douyin-workbench）
 | 运镜与画面动态 | camera-and-motion |
 | 有效运动设计 | fresh-shot-direction |
 | 运镜收进原图 | keep-camera-in-frame |
+| 读取统一流程脚本 | require-unified-topic |
+| 旧分镜自动转换 | auto-unify |
+| 候选入统一流程 | drafts-to-unified-flow |
+| 设定出片起点 | set-production-start |
+| 切换起点清画面 | switch-start-clear-pictures |
+| 从图库配画面 | pick-gallery-pictures |
+| 分段图库配图落库 | save-segment-pictures |
+| AI生成画面 | generate-ai-pictures |
+| 逐段生图落库 | per-segment-imaging |
 | 合并分镜镜头 | merge-shots-to-limit |
 | 分段上限 | segment-limit |
 | 分镜转统一流程 | storyboard-to-unified |
@@ -1889,6 +1897,8 @@ AI 抖音工作台（douyin-workbench）
 **视频版式模板（分镜 / 整片 / 探店）**：像「上方大标题 + 中间视频窗口 + 下方卖点与行动引导」这种版式，要不要套由 AI 导演看图决定（见下一段），画模板用「生图」节点**只在实拍图上编辑、不凭空生成**（凭空画会画出门店根本没有的东西）：底图取探店第 1 段的实拍场景图（不用合成的人物首帧）或分镜第一个配图镜头，`buildTemplateEditPrompt` 要求背景只用这张图本身（放大、裁切、虚化、压暗或叠色块），不加任何图里没有的物体、人物、食物、插画、图标；AI 导演规划的 `style` 也只写配色、字体与文字底板。没有实拍图、或「生图」模型只能文生图（数眼生图没有改图接口）时直接拒绝并提示，AI 导演自动规划遇到这种情况把模板记为停用并写明原因。排版时窗口位置画成纯绿 #00FF00 实心块（生图模型不一定照百分比摆，`locateTemplateWindow` 按实际绿块定位，认不出时按规划位置），抠成透明窗口的 1080×1920 PNG（外扩 6px 并清掉绿色杂边），再和首帧拼成封面预览。用户可开关、改文案 / 风格 / 比例后重新出图（`render`），或删除；改过或开关过的模板标 `source=user`，AI 导演之后不再覆盖。启用后：自建 MiniMax-H3（分镜 / 整片 / 探店）按窗口比例出片（`aspect_ratio` 取窗口比例，首尾帧先居中裁成同一比例，风格句写对应比例）；数眼 / PixMax 仍出 9:16。合成时 `DouyinShotConcatService.prepare` 返回 `template`，桌面端把每段视频按 cover 铺满窗口、字幕烧在窗口里，再放进 1080×1920 并叠上模板；旧客户端不认模板时直接回报失败。改模板后已出的片段不会自动重做，要按新比例重新出片。
 
 **AI 导演（出片前看图规划、出片后看片剪辑）**：不新增工作流节点，读图都用「思考」节点（要选视觉语言模型）。出片前：分镜生成任务配好图、PATCH 保存（换图、配场景后保存）、重新出图 / 换头 / 恢复原图之后，`DouyinVideoDirectorService.schedule` 先比对首帧指纹（`listDirectorFrames` + `directionFingerprint`；探店只看场景图，不看出片时才合成的人物首帧），变了才把 `videoDirection` 标成「规划中」并防抖 3 秒后台规划：一次看完各段首帧缩略图，按 `DOUYIN_DIRECTOR_SYSTEM` 同时给出版式模板方案与每段的运镜和画面动态（只动图里本来有的东西，英文不许含中文）。各段运动设计按段 ID 存在 `videoDirection.shots`，带画面标识 `sourceKey`，出片时 `freshShotDirection` 只用画面没变的：数眼 / PixMax 提示词加「【运镜与画面动态】」中文，自建 H3 时间轴改用英文（顺带去掉了分镜通道原来写进时间轴的中文画面描述）。模板按 `applyTemplatePlan` 自动起、停或保持（用户改过的不动）。同一组画面规划失败不自动重试，界面上可带补充要求「AI 重新规划」（`plan`）。出片后：桌面端合成前把各段下好、测人声区间、每段抽 5 帧交给 `planEdit`，`DOUYIN_EDIT_PLAN_SYSTEM` 让模型对照台词字数与人声区间掐头去尾（专治 H3 偶尔多说的语气词与半句）、定段间转场（接续段硬切）、字幕位置大小与封面帧，`parseEditPlan` 夹到安全范围（剪辑点不切进人声、剪完至少 1 秒、转场不超过相邻较短段三成）后记到合成记录 `request.editPlan`，桌面端按方案合成；外壳不支持、分析或规划失败时退回普通拼接。
+
+**分镜与探店合并（第三期：AI 操作工作台工具合并）**：`DouyinWorkbenchAgentService` 读脚本统一走 `requireStoreVisit`，碰到旧分镜脚本先经 `DouyinUnifyService` 转成从脚本开始；从脚本开始的脚本不读门店。删掉只给旧分镜用的重新生成分镜、单镜配图与分镜出片，新增 `setStart`、`pickPictures`（`DouyinSegmentImageService.pickImages` + 保存）与 `generatePictures`（逐段 `generateImage`），`generateStoreVisit` 加 `full` 走「整条一次出」，`generateChildren` 带 `start` 并固定统一流程。对应的 MCP 工具见 [tenant-mcp](../tenant-mcp/module.md)。
 
 **分镜与探店合并（第三期：旧分镜转换与整条一次出）**：旧分镜脚本不做批量迁移，打开时（工作台调 `POST topics/:id/unify`）由 `DouyinUnifyService` 转一次：`storyboardToStoreVisit` 把有旁白的镜头变成分段（超 8 段时合并旁白最短的相邻两镜），配的图或视频并进素材，起点为从脚本开始、不露脸，台词算作按这版脚本拆好；`convertToUnified` 只在还不是 `store-visit` 时写入，原 `storyboard` 与 `generatedVideoId` 都保留，以前的分镜视频还在视频库里，分段要重新出片。「整条一次出」沿用整片接口 `POST topics/:id/video/generate`：`createGeneration` 先经 `storeVisitAsStoryboard` 把统一流程的分段当成分镜（口播稿用台词拼），出好后照旧写 `generatedVideoId` 作为成片。
 

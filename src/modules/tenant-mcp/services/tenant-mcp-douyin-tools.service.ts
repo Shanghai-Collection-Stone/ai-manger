@@ -152,6 +152,19 @@ export class TenantMcpDouyinToolsService {
         const input = tools.douyin_store_spots_save.schema.parse(raw);
         return this.agent.saveStoreSpots(input.storeId, input.spots, scope);
       }
+      case 'douyin_store_visit_set_start': {
+        const input = tools.douyin_store_visit_set_start.schema.parse(raw);
+        return this.agent.setStart(input.topicId, input.start, scope);
+      }
+      case 'douyin_store_visit_pick_pictures': {
+        const input = tools.douyin_store_visit_pick_pictures.schema.parse(raw);
+        return this.agent.pickPictures(input.topicId, scope);
+      }
+      case 'douyin_store_visit_generate_pictures': {
+        const { topicId, ...input } =
+          tools.douyin_store_visit_generate_pictures.schema.parse(raw);
+        return this.agent.generatePictures(topicId, input, scope);
+      }
       case 'douyin_store_visit_set_store': {
         const input = tools.douyin_store_visit_set_store.schema.parse(raw);
         return this.agent.setStore(input.topicId, input.storeId, scope);
@@ -208,28 +221,6 @@ export class TenantMcpDouyinToolsService {
       case 'douyin_storyboard_drafts_confirm': {
         const input = tools.douyin_storyboard_drafts_confirm.schema.parse(raw);
         return this.agent.confirmDrafts(input.jobId, input.items, scope);
-      }
-      case 'douyin_storyboard_generate': {
-        const input = tools.douyin_storyboard_generate.schema.parse(raw);
-        return this.agent.generateStoryboard(
-          input.topicId,
-          input.prompt,
-          scope,
-        );
-      }
-      case 'douyin_storyboard_shot_image': {
-        const input = tools.douyin_storyboard_shot_image.schema.parse(raw);
-        return this.agent.regenerateShotImage(
-          input.topicId,
-          input.shotId,
-          input.prompt,
-          scope,
-        );
-      }
-      case 'douyin_storyboard_shot_video': {
-        const { topicId, ...input } =
-          tools.douyin_storyboard_shot_video.schema.parse(raw);
-        return this.agent.generateShotVideos(topicId, input, scope);
       }
     }
   }
