@@ -164,7 +164,7 @@ AI 抖音工作台（douyin-workbench）
 - `RefineDouyinScriptDto()` — 校验脚本 AI 微调请求（原正文 + 一句话修改指令 + 可选人物风格） | keywords: 脚本微调参数, 修改指令, refine-script-dto, revision-instruction
 - `ConfirmDouyinScriptDraftsDto()` — 校验一次保存 1 至 12 条挑中候选 | keywords: 保存挑选脚本, 批量入库, confirm-script-drafts-dto, batch-persist
 - `CreateDouyinMotherTopicDto()` — 校验人工母选题创建参数（标题、制作模式与可选引用知识 `knowledgeIds`，最多 10 条） | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
-- `GenerateDouyinChildrenDto()` — 校验 AI 子选题的可选生成要求、本轮统一的出镜人物与风格，以及这批脚本的制作方式 `productionMode`（`storyboard` / `store-visit`，缺省分镜） | keywords: 生成抖音子题, 平台提示词, 脚本制作方式, generate-douyin-children, platform-ai-prompt, script-production-mode
+- `GenerateDouyinChildrenDto()` — 校验 AI 子选题的可选生成要求、本轮统一的出镜人物与风格，以及这批脚本的制作方式 `productionMode`（`storyboard` / `store-visit`，缺省分镜）与统一流程的起点 `start`（`store` / `script`） | keywords: 生成抖音子题, 平台提示词, 脚本制作方式, generate-douyin-children, platform-ai-prompt, script-production-mode
 - `UpdateDouyinTopicDto()` — 校验选题、母题引用知识（空数组清空）、出镜人物（0 表示取消）、风格（空串表示取消）、参考图及完整分镜更新 | keywords: 更新抖音选题, 保存分镜, update-douyin-topic, save-storyboard
 - `DOUYIN_SCRIPT_STYLES` — 脚本风格登记表：生活随拍 / 电影质感 / 干净商业 / 纪实街头 / 高饱和潮流 / 温暖治愈，每项含口播调性 `tone` 与画面质感 `visual` | keywords: 脚本风格, 画面质感风格, script-style, visual-style
 - `normalizeScriptStyle(input?)` — 规整脚本风格，未登记回退为不指定 | keywords: 规整脚本风格, 默认不指定风格, normalize-script-style, default-no-style
@@ -187,7 +187,7 @@ AI 抖音工作台（douyin-workbench）
 - `ensureIndexes()` — 创建抖音选题父子查询与用户创建时间线索引 | keywords: 抖音选题索引, 父子查询, douyin-topic-indexes, parent-child-query
 - `listWorkspace(scope)` — 返回真实母子选题聚合 | keywords: 查询抖音工作台, 母子聚合, list-douyin-workspace, parent-child-aggregation
 - `create(input,scope)` — 人工新建母选题，可带引用知识与制作模式；探店同时创建空制作草稿 | keywords: 新建抖音母题, 人工母题, create-douyin-mother, manual-mother-topic
-- `createChildren(parentId,candidates,scope)` — 批量保存用户挑中的脚本（标题 + 口播正文 + 配图偏向 + 出镜人物 + 风格 + 参考图）并固定短视频类型；`productionMode=store-visit` 的候选存为探店脚本，正文写进 `storeVisit.script`，不带配图偏向与参考图 | keywords: 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向, 探店脚本, persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference, store-visit-script, fixed-short-video, storyboard-image-preference
+- `createChildren(parentId,candidates,scope)` — 批量保存用户挑中的脚本（标题 + 口播正文 + 配图偏向 + 出镜人物 + 风格 + 参考图）并固定短视频类型；`productionMode=store-visit` 的候选存为统一流程脚本，正文写进 `storeVisit.script`，`start=script` 时再写 `storeVisit.start`，不带配图偏向与参考图 | keywords: 保存AI脚本, 脚本正文, 固定短视频, 分镜配图偏向, 探店脚本, persist-ai-scripts, script-body, fixed-short-video, storyboard-image-preference, store-visit-script, fixed-short-video, storyboard-image-preference
 - `get(id,scope)` — 按作用域读取选题 | keywords: 读取抖音选题, 所有权校验, get-douyin-topic, ownership-check
 - `update(id,input,scope)` — 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长与清晰度、发布文案、完整分镜或成片绑定，以及探店出镜人物（是所选人物的形象图时按人物记录放行、否则按租户图库校验，换人时作废首帧与人物段成片）、出镜模板、场景、台词与分段（音色字段不收），遵守选题作用域 | keywords: 更新抖音选题, 保存脚本正文, 持久化分镜, update-douyin-topic, persist-script-body, persist-storyboard
 - `updateShot(topicId,shotId,patch,scope)` — 用 arrayFilters 只写一镜的画面 / 配图提示词 / 分镜视频，并发互不覆盖 | keywords: 更新单段分镜, 分镜局部写入, update-single-shot, partial-storyboard-write
@@ -206,12 +206,12 @@ AI 抖音工作台（douyin-workbench）
 - `ZDouyinScriptPlan` — 规划候选脚本的结构化输出（标题 + 切入角度，3-12 条） | keywords: 脚本规划结构, LLM自主数量, script-plan-schema, llm-decided-count
 - `ZDouyinScriptBody` — 单条口播正文的结构化输出 | keywords: 口播正文结构, 结构化输出, script-body-schema, structured-output
 - `buildScriptLlm(scope)` — 按节点 `script` 构造带计费回调的模型，规划与各条写稿共用 | keywords: 构造脚本模型, 节点指定模型, build-script-llm, per-node-model
-- `planScripts(llm,brief,takenTitles,storeVisit?)` — 一次结构化输出规划全部标题与角度（探店 3-6 条，角度写这家店的看点），去掉与已有题目或本轮重复的标题 | keywords: 规划候选脚本, 标题去重, plan-script-drafts, title-deduplication
-- `writeScript(llm,brief,item,siblings,storeVisit?)` — 按标题与角度写一条口播正文（探店写创作脚本正文），太短或报错重试一次；两次太短返回 null，第二次仍报错则抛出 | keywords: 写候选脚本正文, 失败重试, write-script-draft, retry-once
+- `planScripts(llm,brief,takenTitles,storeVisit?)` — 一次结构化输出规划全部标题与角度（探店 3-6 条，角度写这家店的看点；从脚本开始按通用短视频规划），去掉与已有题目或本轮重复的标题 | keywords: 规划候选脚本, 标题去重, plan-script-drafts, title-deduplication
+- `writeScript(llm,brief,item,siblings,storeVisit?,scriptFirst?)` — 按标题与角度写一条口播正文（探店写创作脚本正文，`scriptFirst` 写不按探店的短视频创作脚本正文），太短或报错重试一次；两次太短返回 null，第二次仍报错则抛出 | keywords: 写候选脚本正文, 失败重试, write-script-draft, retry-once
 - `runWithConcurrency(list,limit,worker)` — 以固定并发数跑完一组异步任务 | keywords: 限流并发执行, 并发写脚本, bounded-concurrency, parallel-script-writing
 - `recommendPrompt(parentId,scope)` — 根据完整上下文推荐可编辑的生成要求 | keywords: 推荐抖音子题提示, 母题上下文, recommend-douyin-child-prompt, mother-topic-context
 - `loadGenerationContext(parentId,scope)` — 读取母题（含引用知识 ID）、平台提示和已有子题 | keywords: 读取子题生成上下文, 已有子题, load-child-generation-context, existing-child-topics
-- `buildSystemPrompt(input)` — 构造规划与写稿共用的创作背景（母题、要求、已有题目、人设段、风格调性、母题引用知识、平台业务说明与安全约束）；`storeVisit` 时换成探店编导角色与探店写法约束 | keywords: 构造子题提示词, 固定短视频, build-child-topic-prompt, fixed-short-video
+- `buildSystemPrompt(input)` — 构造规划与写稿共用的创作背景（母题、要求、已有题目、人设段、风格调性、母题引用知识、平台业务说明与安全约束）；`storeVisit` 时换成探店编导角色与探店写法约束，再加 `scriptFirst` 时换成通用短视频编导、画面安排成之后从图库挑或 AI 生图的场景 | keywords: 构造子题提示词, 固定短视频, build-child-topic-prompt, fixed-short-video
 - `refineScript(input,scope)` — 按一句话指令微调口播正文，只改点名处、保留原意与人称，不落库 | keywords: 脚本AI微调, 按指令改写, refine-script, instruction-rewrite
 - `readAgentText(result)` — 从 Agent 响应读取推荐提示文本 | keywords: 读取Agent文本, 推荐提示, read-agent-text, prompt-recommendation
 - `DouyinStoryboardGenerationService()` — 使用 LLM 一次结构化输出生成抖音分镜，图库配图另做一次关思考的选图 | keywords: 抖音分镜生成, 结构化工具调用, douyin-storyboard-generation, structured-tool-call
@@ -230,10 +230,10 @@ AI 抖音工作台（douyin-workbench）
 - `DOUYIN_GENERATION_ERROR_MESSAGES` — 后台生成失败码与中文原因对照表（含 AI 画面全部失败） | keywords: 生成失败原因, 错误码翻译, generation-failure-reason, error-code-translate
 - `DouyinGenerationJobService()` — 分镜与子选题的后台生成任务服务 | keywords: 后台生成任务, 异步生成, background-generation-job, async-generation
 - `DouyinGenerationJobService.ensureIndexes()` — 创建任务 ID、作用域更新时间线/开始时间线与同选题运行态索引 | keywords: 生成任务索引, 运行态查询, generation-job-indexes, running-state-query
-- `DouyinGenerationJobService.start(kind,topicId,prompt,scope,options?)` — 校验选题类型、拦截同选题重复任务，写入运行中任务（候选脚本任务可带本轮统一的 `personaId` / `scriptStyle` 与制作方式 `productionMode`，任务视图带出 `productionMode`）后立即返回 | keywords: 启动后台生成, 重复任务拦截, start-background-generation, duplicate-job-guard
+- `DouyinGenerationJobService.start(kind,topicId,prompt,scope,options?)` — 校验选题类型、拦截同选题重复任务，写入运行中任务（候选脚本任务可带本轮统一的 `personaId` / `scriptStyle`、制作方式 `productionMode` 与起点 `start`，任务视图带出 `productionMode` 与从脚本开始时的 `start`）后立即返回 | keywords: 启动后台生成, 重复任务拦截, start-background-generation, duplicate-job-guard
 - `DouyinGenerationJobService.list(scope)` — 触发一次排队补位后，读取运行中、最近 24 小时以及候选未处理的任务，先收敛中断任务 | keywords: 查询生成任务, 进度轮询, list-generation-jobs, progress-polling
 - `DouyinGenerationJobService.run(job,scope)` — 后台执行生成（先在抖音生成通道排队占名额）、进度写库，成功写结果（分镜段数与出图数，或候选脚本），失败写失败码与中文原因；分镜写好配好图后触发 AI 导演规划 | keywords: 执行后台生成, 进度写库, run-background-generation, persist-progress
-- `DouyinGenerationJobService.confirmDrafts(jobId,items,scope)` — 占住候选后按序入库挑中的脚本与偏向（人物 / 风格留空时沿用本轮任务设置，制作方式沿用本轮任务），再只为分镜脚本逐条启动分镜任务，探店脚本不启动 | keywords: 保存挑选脚本, 启动分镜任务, confirm-script-drafts, start-storyboard-jobs
+- `DouyinGenerationJobService.confirmDrafts(jobId,items,scope)` — 占住候选后按序入库挑中的脚本与偏向（人物 / 风格留空时沿用本轮任务设置，制作方式与起点沿用本轮任务），再只为分镜脚本逐条启动分镜任务，探店脚本不启动 | keywords: 保存挑选脚本, 启动分镜任务, confirm-script-drafts, start-storyboard-jobs
 - `DouyinGenerationJobService.discardDrafts(jobId,scope)` — 放弃整批候选脚本 | keywords: 放弃候选脚本, 候选已处理, discard-script-drafts, drafts-settled
 - `DouyinGenerationJobService.requirePendingDrafts(jobId,scope)` — 读取本人已完成且候选未处理的子选题任务 | keywords: 读取待选脚本, 候选归属校验, require-pending-drafts, draft-ownership-check
 - `DouyinGenerationJobService.acquireSlot(jobId,scope,report)` — 在抖音生成通道排队申请名额（任务 ID 作业务键登记），一时拿不到时回报 `queued`，返回释放函数 | keywords: 申请抖音生成名额, 排队生成, acquire-douyin-generation-slot, queued-generation
@@ -1860,6 +1860,8 @@ AI 抖音工作台（douyin-workbench）
 **视频版式模板（分镜 / 整片 / 探店）**：像「上方大标题 + 中间视频窗口 + 下方卖点与行动引导」这种版式，要不要套由 AI 导演看图决定（见下一段），画模板用「生图」节点**只在实拍图上编辑、不凭空生成**（凭空画会画出门店根本没有的东西）：底图取探店第 1 段的实拍场景图（不用合成的人物首帧）或分镜第一个配图镜头，`buildTemplateEditPrompt` 要求背景只用这张图本身（放大、裁切、虚化、压暗或叠色块），不加任何图里没有的物体、人物、食物、插画、图标；AI 导演规划的 `style` 也只写配色、字体与文字底板。没有实拍图、或「生图」模型只能文生图（数眼生图没有改图接口）时直接拒绝并提示，AI 导演自动规划遇到这种情况把模板记为停用并写明原因。排版时窗口位置画成纯绿 #00FF00 实心块（生图模型不一定照百分比摆，`locateTemplateWindow` 按实际绿块定位，认不出时按规划位置），抠成透明窗口的 1080×1920 PNG（外扩 6px 并清掉绿色杂边），再和首帧拼成封面预览。用户可开关、改文案 / 风格 / 比例后重新出图（`render`），或删除；改过或开关过的模板标 `source=user`，AI 导演之后不再覆盖。启用后：自建 MiniMax-H3（分镜 / 整片 / 探店）按窗口比例出片（`aspect_ratio` 取窗口比例，首尾帧先居中裁成同一比例，风格句写对应比例）；数眼 / PixMax 仍出 9:16。合成时 `DouyinShotConcatService.prepare` 返回 `template`，桌面端把每段视频按 cover 铺满窗口、字幕烧在窗口里，再放进 1080×1920 并叠上模板；旧客户端不认模板时直接回报失败。改模板后已出的片段不会自动重做，要按新比例重新出片。
 
 **AI 导演（出片前看图规划、出片后看片剪辑）**：不新增工作流节点，读图都用「思考」节点（要选视觉语言模型）。出片前：分镜生成任务配好图、PATCH 保存（换图、配场景后保存）、重新出图 / 换头 / 恢复原图之后，`DouyinVideoDirectorService.schedule` 先比对首帧指纹（`listDirectorFrames` + `directionFingerprint`；探店只看场景图，不看出片时才合成的人物首帧），变了才把 `videoDirection` 标成「规划中」并防抖 3 秒后台规划：一次看完各段首帧缩略图，按 `DOUYIN_DIRECTOR_SYSTEM` 同时给出版式模板方案与每段的运镜和画面动态（只动图里本来有的东西，英文不许含中文）。各段运动设计按段 ID 存在 `videoDirection.shots`，带画面标识 `sourceKey`，出片时 `freshShotDirection` 只用画面没变的：数眼 / PixMax 提示词加「【运镜与画面动态】」中文，自建 H3 时间轴改用英文（顺带去掉了分镜通道原来写进时间轴的中文画面描述）。模板按 `applyTemplatePlan` 自动起、停或保持（用户改过的不动）。同一组画面规划失败不自动重试，界面上可带补充要求「AI 重新规划」（`plan`）。出片后：桌面端合成前把各段下好、测人声区间、每段抽 5 帧交给 `planEdit`，`DOUYIN_EDIT_PLAN_SYSTEM` 让模型对照台词字数与人声区间掐头去尾（专治 H3 偶尔多说的语气词与半句）、定段间转场（接续段硬切）、字幕位置大小与封面帧，`parseEditPlan` 夹到安全范围（剪辑点不切进人声、剪完至少 1 秒、转场不超过相邻较短段三成）后记到合成记录 `request.editPlan`，桌面端按方案合成；外壳不支持、分析或规划失败时退回普通拼接。
+
+**分镜与探店合并（第二期：建脚本时选起点）**：生成候选脚本可带 `start`（`GenerateDouyinChildrenDto` → 任务 `start` → `DouyinChildTopicGenerationService.generate` → `confirmDrafts` → `createChildren` 写 `storeVisit.start`）。工作台新建脚本统一传 `productionMode: store-visit`，选「从脚本开始」时 `start=script`：规划按通用短视频、正文写不提门店的创作脚本（编导方案）；选「从门店开始」照旧写探店脚本。
 
 **分镜与探店合并（第一期：后端通用化）**：两种制作方式要合并成一个四步流程（脚本 → 画面 → 声音 → 出片），区别只在起点。底层统一用探店这套引擎（分段 + AI 导演逐段出片 + 单独配音 + 尾帧衔接），探店设置新增起点 `storeVisit.start`：`store` 从门店开始（旧数据缺省都是它，行为不变），`script` 从脚本开始。从脚本开始时：写脚本与生成台词不问、不要门店，提示词换成通用短视频写法，台词里的 scene 写之后从图库挑或 AI 生图的画面；画面由 `DouyinSegmentImageService` 配——`POST store-visit/images/pick` 按脚本从图库挑（复用分镜的候选图、模型选图与按相关度补，只返回由前端保存），`POST store-visit/segments/:segmentId/image/generate` 逐段 AI 生图（复用 `DouyinShotImageService.generateImage`，延续上一段画面，服务端直接保存并触发导演重新规划）；出片提示词、人物首帧与尾帧衔接规划不称门店，「只拍图里有的东西」那组实景硬约束换成宽松的 `SCRIPT_FIRST_SCENE_RULES`；AI 导演按分镜的创意视频规划，运镜不收进原图；MCP 出片前检查不再要求门店。建脚本时选起点、前端统一工作区、旧分镜脚本迁移与旧分镜出片代码下线在后续两期。
 

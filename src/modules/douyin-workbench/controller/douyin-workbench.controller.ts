@@ -171,6 +171,7 @@ export class DouyinWorkbenchController {
           personaId: dto.personaId,
           scriptStyle: dto.scriptStyle as DouyinScriptStyle | undefined,
           productionMode: dto.productionMode,
+          start: dto.start,
         },
       ),
     };

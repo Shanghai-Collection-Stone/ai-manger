@@ -572,6 +572,8 @@ export interface DouyinGenerationJobView {
   topicId: number;
   /** 子选题任务专用：这批候选脚本的制作方式（分镜 / 探店），缺省为分镜 */
   productionMode?: 'storyboard' | 'store-visit';
+  /** 子选题任务专用：统一流程的起点，只有 `script`（从脚本开始）时才记，缺省为从门店开始 */
+  start?: DouyinStoreVisitStart;
   status: 'running' | 'done' | 'failed';
   progress: DouyinGenerationJobProgress;
   error?: string;

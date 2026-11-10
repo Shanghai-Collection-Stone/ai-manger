@@ -649,6 +649,7 @@ export class DouyinWorkbenchRepositoryService {
       scriptStyle?: string;
       referenceImages?: Array<Partial<DouyinMediaReference>>;
       productionMode?: 'storyboard' | 'store-visit';
+      start?: DouyinStoreVisitStart;
     }>,
     scope: DouyinScope,
   ): Promise<Array<Omit<DouyinTopicEntity, '_id'>>> {
@@ -678,6 +679,7 @@ export class DouyinWorkbenchRepositoryService {
             : undefined,
         scriptStyle: normalizeScriptStyle(candidate?.scriptStyle),
         storeVisit: candidate?.productionMode === 'store-visit',
+        scriptFirst: candidate?.start === 'script',
         referenceImages:
           candidate?.productionMode === 'store-visit'
             ? []
@@ -712,7 +714,10 @@ export class DouyinWorkbenchRepositoryService {
         ...(candidate.storeVisit
           ? {
               productionMode: 'store-visit' as const,
-              storeVisit: candidate.script ? { script: candidate.script } : {},
+              storeVisit: {
+                ...(candidate.scriptFirst ? { start: 'script' as const } : {}),
+                ...(candidate.script ? { script: candidate.script } : {}),
+              },
             }
           : {
               script: candidate.script || undefined,

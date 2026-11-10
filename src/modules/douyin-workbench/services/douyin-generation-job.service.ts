@@ -15,6 +15,7 @@ import type {
   DouyinGenerationJobView,
   DouyinMediaReference,
   DouyinScriptStyle,
+  DouyinStoreVisitStart,
   DouyinStoryboardPreference,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
@@ -133,6 +134,7 @@ export class DouyinGenerationJobService {
       personaId?: number;
       scriptStyle?: DouyinScriptStyle;
       productionMode?: 'storyboard' | 'store-visit';
+      start?: DouyinStoreVisitStart;
     },
   ): Promise<DouyinGenerationJobView> {
     const topic = await this.repository.get(topicId, scope);
@@ -167,7 +169,10 @@ export class DouyinGenerationJobService {
       personaId: options?.personaId,
       scriptStyle: options?.scriptStyle,
       ...(kind === 'children' && options?.productionMode === 'store-visit'
-        ? { productionMode: 'store-visit' as const }
+        ? {
+            productionMode: 'store-visit' as const,
+            ...(options.start === 'script' ? { start: 'script' as const } : {}),
+          }
         : {}),
       status: 'running',
       progress: { stage: 'preparing', current: 0 },
@@ -266,6 +271,7 @@ export class DouyinGenerationJobService {
             personaId: job.personaId,
             scriptStyle: job.scriptStyle,
             productionMode: job.productionMode,
+            start: job.start,
           },
           scope,
           report,
@@ -367,6 +373,7 @@ export class DouyinGenerationJobService {
         scriptStyle: item.scriptStyle ?? job.scriptStyle,
         referenceImages: item.referenceImages,
         productionMode: job.productionMode,
+        start: job.start,
       };
     });
     // 先占住这批候选，防止连点重复入库
@@ -549,6 +556,7 @@ export class DouyinGenerationJobService {
       kind: row.kind,
       topicId: row.topicId,
       ...(row.productionMode ? { productionMode: row.productionMode } : {}),
+      ...(row.start ? { start: row.start } : {}),
       status: row.status,
       progress: row.progress,
       error: row.error,

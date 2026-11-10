@@ -199,6 +199,10 @@ export class GenerateDouyinChildrenDto {
   productionMode?: 'storyboard' | 'store-visit';
 
   @IsOptional()
+  @IsIn(DOUYIN_STORE_VISIT_STARTS)
+  start?: DouyinStoreVisitStart;
+
+  @IsOptional()
   @IsString()
   @MaxLength(1000)
   prompt?: string;
