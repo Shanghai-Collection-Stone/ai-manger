@@ -2,7 +2,9 @@ import type {
   DouyinStoreVisitSceneImage,
   DouyinStoreVisitSceneVideo,
   DouyinStoreVisitSegment,
+  DouyinStoreVisitSetting,
 } from '../entities/douyin-workbench.entity.js';
+
 import type {
   DouyinStoreVisitSpot,
   DouyinStoreVisitSpotImage,
@@ -13,6 +15,25 @@ import {
 } from './douyin-store-visit-continuity.js';
 import { STORE_VISIT_SCENE_IMAGES_PER_SPOT } from './douyin-store-visit-planner.service.js';
 import { DOUYIN_STORE_VISIT_CLASSIFY_BATCH } from './douyin-store-visit-spot.service.js';
+
+/**
+ * @description 检查分段引用的图片或视频仍在脚本素材中，人物段不能以实拍视频作画面。
+ * @keyword-cn 分段配图就绪, 素材引用校验
+ * @keyword-en segment-picture-ready, material-reference-check
+ */
+export function storeVisitSegmentHasMaterial(
+  setting: DouyinStoreVisitSetting,
+  segment: DouyinStoreVisitSegment,
+): boolean {
+  return segment.sceneVideoId
+    ? segment.shot !== 'presenter' &&
+        (setting.sceneVideos || []).some(
+          (video) => Number(video.id) === Number(segment.sceneVideoId),
+        )
+    : (setting.sceneImages || []).some(
+        (image) => Number(image.id) === Number(segment.sceneImageId),
+      );
+}
 
 /**
  * @description 探店出镜方式：只配解说、开头有人打招呼，以及旧数据里的全程出镜、首尾出镜。

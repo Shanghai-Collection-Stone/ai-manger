@@ -227,7 +227,11 @@ describe('AI 操作抖音工作台（编排服务）', () => {
       },
       review: { passed: true, issues: [] },
     });
-    const result = await agent.writeScript(5, { prompt: '突出团购' }, scope);
+    const result = await agent.writeScript(
+      5,
+      { prompt: '突出团购', keepCast: false },
+      scope,
+    );
     expect(topic.storeVisit).toMatchObject({
       script: '老铁们，今天来集合石。',
       template: 'opening',
@@ -264,6 +268,26 @@ describe('AI 操作抖音工作台（编排服务）', () => {
       storeQuestion: { question: '是哪家店？' },
     });
     expect(repository.update).not.toHaveBeenCalled();
+  });
+
+  it('默认写脚本沿用现有出镜人物音色，不应用隐式推荐并清除微调未完成标记', async () => {
+    const { agent, topic, planner, storeVisitService } = buildAgent({
+      template: 'opening',
+      voiceId: 'selected-voice',
+      scriptNeedsRefine: true,
+    });
+    planner.writeScript.mockResolvedValue({
+      script: '已按当前人物和音色写好的创作方案。',
+      presenter: false,
+      voice: { voiceId: 'other-voice' },
+    });
+    await agent.writeScript(5, {}, scope);
+    expect(topic.storeVisit).toMatchObject({
+      template: 'opening',
+      voiceId: 'selected-voice',
+      scriptNeedsRefine: false,
+    });
+    expect(storeVisitService.usePresetVoice).not.toHaveBeenCalled();
   });
 
   it('按脚本生成台词：每段新 ID、按出镜方式排镜头，并记下台词对应的脚本', async () => {
@@ -323,6 +347,82 @@ describe('AI 操作抖音工作台（编排服务）', () => {
       11, 12, 21,
     ]);
     expect(topic.storeVisit!.openingScene).toEqual({ type: 'image', id: 11 });
+  });
+
+  it('托管配图仅填缺失段，保留用户选好的门店图', async () => {
+    const { agent, topic, planner } = buildAgent({
+      sceneImages: [
+        { id: 11, type: 'image', name: '已选画面', url: '/11.jpg' },
+      ],
+      segments: [
+        {
+          id: 'a',
+          lines: '开场',
+          spotId: 'gate',
+          sceneImageId: 11,
+          videoId: 80,
+          nativeAudio: true,
+        },
+        { id: 'b', lines: '吧台' },
+      ],
+    });
+    planner.matchScenes.mockResolvedValue({
+      segments: [
+        { id: 'a', spotId: 'bar', sceneImageId: 21 },
+        { id: 'b', spotId: 'bar', sceneImageId: 21 },
+      ],
+    });
+    await agent.matchScenes(5, scope, { onlyMissing: true });
+    expect(topic.storeVisit!.segments![0]).toMatchObject({
+      sceneImageId: 11,
+      spotId: 'gate',
+    });
+    expect(topic.storeVisit!.segments![1].sceneImageId).toBe(21);
+  });
+
+  it('从脚本开始无需选择门店即可生成台词', async () => {
+    const { agent, planner, topic } = buildAgent({
+      start: 'script',
+      storeId: undefined,
+      script: '创作方案',
+      template: 'voiceover',
+    });
+    planner.generateLines.mockResolvedValue({
+      linesScript: '创作方案',
+      segments: [{ lines: '周末来玩', scene: '城市' }],
+    });
+    await agent.generateLines(5, undefined, scope);
+    expect(topic.storeVisit!.linesScript).toBe('创作方案');
+    expect(topic.storeVisit!.segments).toHaveLength(1);
+  });
+
+  it('托管图库配图仅填缺失段，保留用户已选画面', async () => {
+    const { agent, topic, segmentImages } = buildAgent({
+      start: 'script',
+      sceneImages: [
+        { id: 11, type: 'image', name: '已选画面', url: '/11.jpg' },
+      ],
+      segments: [
+        {
+          id: 'a',
+          lines: '开场',
+          sceneImageId: 11,
+          videoId: 80,
+          nativeAudio: true,
+        },
+        { id: 'b', lines: '结尾' },
+      ],
+    });
+    segmentImages.pickImages.mockResolvedValue({
+      segments: [
+        { id: 'a', sceneImageId: 31 },
+        { id: 'b', sceneImageId: 31 },
+      ],
+      sceneImages: [{ id: 31, type: 'image', name: '图库图', url: '/31.jpg' }],
+    });
+    await agent.pickPictures(5, scope, { onlyMissing: true });
+    expect(topic.storeVisit!.segments![0]).toMatchObject({ sceneImageId: 11 });
+    expect(topic.storeVisit!.segments![1].sceneImageId).toBe(31);
   });
 
   it('旧分镜脚本被任一工具操作时先自动转成统一流程', async () => {

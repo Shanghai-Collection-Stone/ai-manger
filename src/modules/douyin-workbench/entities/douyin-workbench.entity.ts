@@ -392,18 +392,47 @@ export interface DouyinStoreVisitVoiceAnchor {
 }
 
 /**
- * @description 探店设置：门店名称、出镜人物与出镜模板、场景图与实拍视频素材（各带说明与标签）、开场素材与门店整体说明、音色（录音克隆、音色库或提示词定制）、台词与分段。
- *   各段视频保留原声由桌面端拼接后绑定到脚本的 `generatedVideoId`。旧版数字人流程留下的声音设计等字段不再读取。
+ * @description 可暂停和续跑的 Agent 托管状态，记录当前制作步骤和原子认领，生成结果仍保存在各业务字段。
+ * @keyword-cn Agent托管状态, 全流程进度
+ * @keyword-en agent-autopilot-state, full-workflow-progress
+ */
+export interface DouyinStoreVisitAutopilot {
+  runId: string;
+  state: 'running' | 'paused' | 'waiting' | 'done';
+  stage: 'script' | 'lines' | 'picture' | 'voice' | 'make';
+  message: string;
+  pictureSource: 'gallery' | 'ai';
+  voiceAnchor: boolean;
+  scriptPrompt?: string;
+  linesPrompt?: string;
+  reviewKey?: string;
+  mustMerge?: boolean;
+  videoBaseline?: number;
+  mergeRequested?: boolean;
+  mergeAfter?: Date;
+  resumePipeline?: boolean;
+  claimId?: string;
+  advancingAt?: Date;
+  startedAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * @description 探店设置包含创作脚本、人物音色、场景分段与系统托管进度，原声视频由桌面端拼成成片。
  * @keyword-cn 探店模式设置, 画外音设置, 克隆音色
  * @keyword-en store-visit-setting, voiceover-setting, cloned-voice
  */
 export interface DouyinStoreVisitSetting {
+  /** @description 全流程 Agent 托管任务，系统专用，普通设置更新不接收。 */
+  autopilot?: DouyinStoreVisitAutopilot;
   /** @description 起点：`store` 从门店开始、`script` 从脚本开始（不选门店），缺省按 `store`；见 `DOUYIN_STORE_VISIT_STARTS` */
   start?: DouyinStoreVisitStart;
   /** @description 独立的探店创作脚本正文，包含主题、叙事结构、画面安排与卖点依据，可先编辑再生成台词 */
   script?: string;
   /** @description 本版分段台词采用的脚本正文快照，用于识别脚本修改后台词是否需要更新 */
   linesScript?: string;
+  /** @description 新人物音色设定的脚本微调尚未完成，重新打开时继续微调，期间不得生成新台词。 */
+  scriptNeedsRefine?: boolean;
   /** @description 出镜人物照（租户图库图片），人物出镜段的首帧以它为底图；换人物会作废各段首帧 */
   faceImage?: DouyinMediaReference;
   /** @description 出镜模板，决定新分段默认是人物出镜还是门店空镜 */
@@ -566,6 +595,10 @@ export interface DouyinGenerationJobProgress {
  * @keyword-en generation-job-view, progress-polling
  */
 export interface DouyinGenerationJobView {
+  /** 候选生成时的人物、音色与风格，重新打开候选时还原本轮设定。 */
+  personaId?: number;
+  voiceId?: string;
+  scriptStyle?: DouyinScriptStyle;
   id: string;
   kind: DouyinGenerationJobKind;
   /** 分镜任务是子选题 ID，子选题任务是母选题 ID */

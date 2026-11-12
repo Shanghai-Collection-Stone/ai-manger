@@ -42,6 +42,7 @@ import {
   spotsToStoreVisitMaterials,
   storeVisitKeyframeOf,
   storeVisitSceneStarts,
+  storeVisitSegmentHasMaterial,
   toStoreVisitSegmentsPayload,
   toStoreVisitSpotsPayload,
   usedStoreVisitSpotIds,
@@ -1125,7 +1126,7 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description AI 读引用知识写探店脚本正文并保存（与桌面端 `applyScript` 同规则）：不沿用人物音色时一并定出镜方式、预设人物（要有形象图）与音色；
+   * @description AI 读引用知识写创作脚本并保存，默认沿用人物音色；显式 keepCast=false 时才应用人物音色推荐；
    *   门店还没定时只返回 AI 的门店确认问题，不落库。
    * @keyword-cn AI写探店脚本, 人物音色落库
    * @keyword-en write-store-visit-script, save-cast
@@ -1155,7 +1156,7 @@ export class DouyinWorkbenchAgentService {
       };
       review?: unknown;
     };
-    const keepCast = Boolean(input.keepCast || input.issues?.length);
+    const keepCast = input.keepCast !== false || Boolean(input.issues?.length);
     const current = topic.storeVisit?.template;
     const template = keepCast
       ? current === 'opening' || current === 'voiceover'
@@ -1166,7 +1167,13 @@ export class DouyinWorkbenchAgentService {
         : 'voiceover';
     await this.save(
       topic.id,
-      { storeVisit: { script: written.script.trim(), template } },
+      {
+        storeVisit: {
+          script: written.script.trim(),
+          template,
+          scriptNeedsRefine: false,
+        },
+      },
       scope,
     );
     const cast: Record<string, unknown> = {};
@@ -1248,7 +1255,7 @@ export class DouyinWorkbenchAgentService {
   ) {
     const topic = await this.requireStoreVisit(topicId, scope);
     const store = await this.storeOf(topic, scope);
-    if (!store)
+    if (!store && storeVisitStart(topic.storeVisit) !== 'script')
       throw new BadRequestException(
         '请先选门店（douyin_store_visit_set_store）',
       );
@@ -1383,19 +1390,33 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description AI 按脚本从门店点位给每段配 1～3 张实拍图或实拍视频并保存（与桌面端 `matchScenes` 同规则），已配的场景会被替换。
+   * @description AI 按脚本从门店点位给每段配 1～3 张实拍图或实拍视频并保存（与桌面端 `matchScenes` 同规则），默认替换已配场景，onlyMissing 时保留已有素材。
    * @keyword-cn AI配场景, 分段配图落库
    * @keyword-en match-scenes, save-segment-scenes
    * @param {number} topicId 脚本 ID。
    * @param {DouyinScope} scope 作用域。
    * @returns 脚本状态。
    */
-  async matchScenes(topicId: number, scope: DouyinScope) {
+  async matchScenes(
+    topicId: number,
+    scope: DouyinScope,
+    options: { onlyMissing?: boolean } = {},
+  ) {
     const topic = await this.requireStoreVisit(topicId, scope);
     const result = await this.planner.matchScenes(topic.id, scope);
     const next = applyStoreVisitSceneMatches(
       topic.storeVisit?.segments ?? [],
-      result?.segments ?? [],
+      options.onlyMissing
+        ? (result?.segments ?? []).filter((match) => {
+            const original = (topic.storeVisit?.segments || []).find(
+              (segment) => segment.id === match.id,
+            );
+            return (
+              original &&
+              !storeVisitSegmentHasMaterial(topic.storeVisit || {}, original)
+            );
+          })
+        : (result?.segments ?? []),
     );
     await this.persistSegments(topic, next, {}, scope);
     return this.topicDetail(topic.id, scope);
@@ -1731,20 +1752,29 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 从脚本开始：按台词从图库给每段挑一张图并保存（与桌面端 `pickGalleryPictures` 同规则），已配的画面会被替换。
+   * @description 从脚本开始：按台词从图库给每段挑一张图并保存（与桌面端 `pickGalleryPictures` 同规则），默认替换已配画面，onlyMissing 时保留已有素材。
    * @keyword-cn 从图库配画面, 分段图库配图落库
    * @keyword-en pick-gallery-pictures, save-segment-pictures
    * @param {number} topicId 脚本 ID。
    * @param {DouyinScope} scope 作用域。
    * @returns 脚本状态。
    */
-  async pickPictures(topicId: number, scope: DouyinScope) {
+  async pickPictures(
+    topicId: number,
+    scope: DouyinScope,
+    options: { onlyMissing?: boolean } = {},
+  ) {
     const topic = await this.requireStoreVisit(topicId, scope);
     const result = await this.segmentImages.pickImages(topic.id, scope);
     const byId = new Map(
       result.segments.map((item) => [item.id, Number(item.sceneImageId)]),
     );
     const segments = (topic.storeVisit?.segments ?? []).map((segment) => {
+      if (
+        options.onlyMissing &&
+        storeVisitSegmentHasMaterial(topic.storeVisit || {}, segment)
+      )
+        return segment;
       const imageId = byId.get(segment.id);
       if (!imageId) return segment;
       const copy: DouyinStoreVisitSegment = {

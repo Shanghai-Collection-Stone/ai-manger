@@ -36,6 +36,7 @@ import { DouyinStoryboardImageService } from './services/douyin-storyboard-image
 import { DouyinVideoStorageService } from './services/douyin-video-storage.service.js';
 import { DouyinWorkbenchRepositoryService } from './services/douyin-workbench-repository.service.js';
 import { DouyinWorkbenchAgentService } from './services/douyin-workbench-agent.service.js';
+import { DouyinStoreVisitAutopilotService } from './services/douyin-store-visit-autopilot.service.js';
 
 /**
  * @description 装配抖音母子选题、分镜、视频生成（整片 / 分镜 / 分镜合成 / 探店画外音）、发布与抓取真实业务能力（含预设人物能力，用于脚本、分镜与出图的人物一致性）。
@@ -83,6 +84,7 @@ import { DouyinWorkbenchAgentService } from './services/douyin-workbench-agent.s
     DouyinVideoTemplateService,
     DouyinWorkbenchRepositoryService,
     DouyinWorkbenchAgentService,
+    DouyinStoreVisitAutopilotService,
   ],
   exports: [DouyinWorkbenchRepositoryService, DouyinWorkbenchAgentService],
 })

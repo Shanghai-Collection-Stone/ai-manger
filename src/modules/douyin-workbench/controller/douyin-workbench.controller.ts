@@ -52,6 +52,7 @@ import {
   RedoDouyinStoreVisitPipelineSegmentDto,
   SaveDouyinStoreVisitVoiceAnchorDto,
   StartDouyinStoreVisitPipelineDto,
+  StartDouyinAutopilotDto,
   GenerateDouyinVideoDto,
   PlanDouyinVideoDirectionDto,
   PlanDouyinVideoEditDto,
@@ -81,6 +82,7 @@ import {
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
 import { DouyinStoreVisitPipelineService } from '../services/douyin-store-visit-pipeline.service.js';
+import { DouyinStoreVisitAutopilotService } from '../services/douyin-store-visit-autopilot.service.js';
 import { DouyinStoreVisitPlannerService } from '../services/douyin-store-visit-planner.service.js';
 import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot.service.js';
 import { DouyinVideoDirectorService } from '../services/douyin-video-director.service.js';
@@ -102,6 +104,11 @@ import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-r
   }),
 )
 export class DouyinWorkbenchController {
+  /**
+   * @description 注入选题、脚本、素材、导演和全流程 Agent 托管业务服务。
+   * @keyword-cn 工作台入口依赖, 托管接口依赖
+   * @keyword-en workbench-entry-dependencies, autopilot-api-dependencies
+   */
   constructor(
     private readonly repository: DouyinWorkbenchRepositoryService,
     private readonly childTopics: DouyinChildTopicGenerationService,
@@ -117,6 +124,7 @@ export class DouyinWorkbenchController {
     private readonly pipeline: DouyinStoreVisitPipelineService,
     private readonly segmentImages: DouyinSegmentImageService,
     private readonly unify: DouyinUnifyService,
+    private readonly autopilot: DouyinStoreVisitAutopilotService,
   ) {}
 
   /**
@@ -171,6 +179,7 @@ export class DouyinWorkbenchController {
         this.scopeOf(this.requireUser(req)),
         {
           personaId: dto.personaId,
+          voiceId: dto.voiceId,
           scriptStyle: dto.scriptStyle as DouyinScriptStyle | undefined,
           productionMode: dto.productionMode,
           start: dto.start,
@@ -866,6 +875,37 @@ export class DouyinWorkbenchController {
       voiceAnchor: dto.voiceAnchor === true,
       restart: dto.restart === true,
     });
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /** @description 启动或继续当前脚本的全流程 Agent 托管，立即返回持久化状态。 @keyword-cn 启动托管接口, 全流程Agent @keyword-en start-autopilot-api, full-workflow-agent */
+  @Post('topics/:id/store-visit/autopilot/start')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async startStoreVisitAutopilot(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: StartDouyinAutopilotDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.autopilot.start(this.readId(id), dto, scope);
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /** @description 暂停 Agent 后续步骤并同时暂停正在运行的出片导演，保留已完成结果。 @keyword-cn 暂停托管接口, 托管进度保留 @keyword-en pause-autopilot-api, preserve-autopilot-progress */
+  @Post('topics/:id/store-visit/autopilot/pause')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async pauseStoreVisitAutopilot(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.autopilot.pause(this.readId(id), scope);
     return {
       topic: { ...topic, _id: undefined },
       groups: await this.repository.listWorkspace(scope),

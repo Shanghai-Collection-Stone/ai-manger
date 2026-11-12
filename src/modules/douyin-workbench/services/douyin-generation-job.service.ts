@@ -132,6 +132,7 @@ export class DouyinGenerationJobService {
     scope: DouyinScope,
     options?: {
       personaId?: number;
+      voiceId?: string;
       scriptStyle?: DouyinScriptStyle;
       productionMode?: 'storyboard' | 'store-visit';
       start?: DouyinStoreVisitStart;
@@ -167,6 +168,7 @@ export class DouyinGenerationJobService {
           .trim()
           .slice(0, 1000) || undefined,
       personaId: options?.personaId,
+      voiceId: options?.voiceId,
       scriptStyle: options?.scriptStyle,
       ...(kind === 'children' && options?.productionMode === 'store-visit'
         ? {
@@ -269,6 +271,7 @@ export class DouyinGenerationJobService {
           {
             prompt: job.prompt,
             personaId: job.personaId,
+            voiceId: job.voiceId,
             scriptStyle: job.scriptStyle,
             productionMode: job.productionMode,
             start: job.start,
@@ -344,6 +347,7 @@ export class DouyinGenerationJobService {
     jobId: string,
     items: Array<{
       key: string;
+      voiceId?: string;
       title?: string;
       script?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
@@ -370,6 +374,7 @@ export class DouyinGenerationJobService {
         script: String(item.script ?? '').trim() || draft.script,
         storyboardPreference: item.storyboardPreference,
         personaId: item.personaId ?? job.personaId,
+        voiceId: item.voiceId ?? job.voiceId,
         scriptStyle: item.scriptStyle ?? job.scriptStyle,
         referenceImages: item.referenceImages,
         productionMode: job.productionMode,
@@ -555,6 +560,9 @@ export class DouyinGenerationJobService {
       id: row.id,
       kind: row.kind,
       topicId: row.topicId,
+      personaId: row.personaId,
+      voiceId: row.voiceId,
+      scriptStyle: row.scriptStyle,
       ...(row.productionMode ? { productionMode: row.productionMode } : {}),
       ...(row.start ? { start: row.start } : {}),
       status: row.status,

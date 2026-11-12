@@ -5,6 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import {
+  COSYVOICE_PRESET_MODEL,
+  COSYVOICE_PRESET_VOICES,
+} from './douyin-cosyvoice.service.js';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
@@ -647,6 +651,7 @@ export class DouyinWorkbenchRepositoryService {
       script?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
       personaId?: number;
+      voiceId?: string;
       scriptStyle?: string;
       referenceImages?: Array<Partial<DouyinMediaReference>>;
       productionMode?: 'storyboard' | 'store-visit';
@@ -679,6 +684,10 @@ export class DouyinWorkbenchRepositoryService {
             ? Number(candidate?.personaId)
             : undefined,
         scriptStyle: normalizeScriptStyle(candidate?.scriptStyle),
+        voiceId: candidate.voiceId,
+        voice: COSYVOICE_PRESET_VOICES.find(
+          (voice) => voice.voiceId === candidate.voiceId,
+        ),
         storeVisit: candidate?.productionMode === 'store-visit',
         scriptFirst: candidate?.start === 'script',
         referenceImages:
@@ -698,6 +707,8 @@ export class DouyinWorkbenchRepositoryService {
     }
 
     for (const candidate of normalized) {
+      if (candidate.voiceId && !candidate.voice)
+        throw new BadRequestException('音色不在音色库中，请重新选择');
       await this.validateMediaReferences(candidate.referenceImages, scope);
     }
 
@@ -716,6 +727,15 @@ export class DouyinWorkbenchRepositoryService {
           ? {
               productionMode: 'store-visit' as const,
               storeVisit: {
+                template: 'voiceover' as const,
+                ...(candidate.voice
+                  ? {
+                      voiceId: candidate.voice.voiceId,
+                      voiceName: candidate.voice.voiceName,
+                      voiceSource: 'preset' as const,
+                      voiceModel: COSYVOICE_PRESET_MODEL,
+                    }
+                  : {}),
                 ...(candidate.scriptFirst ? { start: 'script' as const } : {}),
                 ...(candidate.script ? { script: candidate.script } : {}),
               },
@@ -775,6 +795,7 @@ export class DouyinWorkbenchRepositoryService {
       storeVisit?: {
         script?: string;
         linesScript?: string;
+        scriptNeedsRefine?: boolean;
         voicePrompt?: string;
         start?: DouyinStoreVisitStart;
         speechEngine?: 'cosyvoice' | 'qwen3-tts';
@@ -881,6 +902,9 @@ export class DouyinWorkbenchRepositoryService {
       if (text) nested[`storeVisit.${field}`] = text;
       else unset[`storeVisit.${field}`] = '';
     }
+    if (input.storeVisit?.scriptNeedsRefine !== undefined)
+      nested['storeVisit.scriptNeedsRefine'] =
+        input.storeVisit.scriptNeedsRefine;
     if (input.storeVisit?.lines !== undefined) {
       const lines = normalizeStoreVisitLines(input.storeVisit.lines);
       if (lines) nested['storeVisit.lines'] = lines;

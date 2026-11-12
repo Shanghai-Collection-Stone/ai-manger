@@ -10,6 +10,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import type { DouyinPublishWorkEntity } from '../entities/douyin-publish.entity.js';
+import { parseDouyinAwemeId } from '../../douyin-data/services/douyin-aweme-link.js';
 import {
   RequireDouyinPublishTokenAccess,
   type DouyinPublishTaskRequest,
@@ -62,7 +63,7 @@ export class DouyinPublishTaskController {
   }
 
   /**
-   * @description 回写抖音原生发布器的成功或失败结果并释放租约。
+   * @description 回写原生发布结果或待补ID状态，返回原始ID与后续数字抓取目标。
    * @keyword-cn 小程序发布回写接口, 释放租约
    * @keyword-en publish-result-endpoint, release-lease
    */
@@ -75,7 +76,15 @@ export class DouyinPublishTaskController {
   ) {
     const library = req.douyinPublishLibrary;
     await this.works.updatePublishResult(id, library._id, body);
-    return { ok: true };
+    const work = await this.works.getForLibrary(id, library._id);
+    return {
+      ok: true,
+      douyinVideoId: work?.douyinVideoId ?? null,
+      crawlTarget:
+        parseDouyinAwemeId(work?.douyinUrl ?? '') ||
+        parseDouyinAwemeId(work?.douyinVideoId ?? '') ||
+        null,
+    };
   }
 
   /**
@@ -95,6 +104,12 @@ export class DouyinPublishTaskController {
       videoUrl: this.toAbsoluteUrl(work.videoUrl, req),
       coverUrl: this.toAbsoluteUrl(work.coverUrl, req),
       duration: work.duration,
+      status: work.status,
+      douyinVideoId: work.douyinVideoId,
+      crawlTarget:
+        parseDouyinAwemeId(work.douyinUrl ?? '') ||
+        parseDouyinAwemeId(work.douyinVideoId ?? '') ||
+        null,
     };
   }
 

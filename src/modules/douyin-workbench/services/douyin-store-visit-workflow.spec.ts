@@ -660,6 +660,86 @@ describe('探店真实尾帧连续生成', () => {
 describe('独立探店制作流程（画外音）', () => {
   const scope = { tenantId: 'tenant-1', userId: 'user-1' };
 
+  it('候选保存仅持久化用户选定的音色，不生成台词或视频，未指定时保留为空', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    const voice = COSYVOICE_PRESET_VOICES[0];
+    await repository.createChildren(
+      7,
+      [
+        {
+          title: '已选音色',
+          script: '主题：亲子周末。',
+          productionMode: 'store-visit',
+          voiceId: voice.voiceId,
+        },
+        {
+          title: '未选音色',
+          script: '主题：周末游玩。',
+          productionMode: 'store-visit',
+        },
+      ],
+      scope,
+    );
+    const docs = topics.insertMany.mock.calls[0][0];
+    expect(docs[0].storeVisit).toMatchObject({
+      voiceId: voice.voiceId,
+      voiceName: voice.voiceName,
+      voiceSource: 'preset',
+      voiceModel: COSYVOICE_PRESET_MODEL,
+      script: '主题：亲子周末。',
+    });
+    expect(docs[0].storeVisit).not.toHaveProperty('segments');
+    expect(docs[1].storeVisit).not.toHaveProperty('voiceId');
+    expect(docs[1].storeVisit).not.toHaveProperty('voicePrompt');
+    expect(docs[1].storeVisit).not.toHaveProperty('segments');
+  });
+
+  it('候选保存拒绝音色库以外的 ID，未入库任何候选', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    await expect(
+      repository.createChildren(
+        7,
+        [
+          {
+            title: '无效音色',
+            productionMode: 'store-visit',
+            voiceId: 'unknown-voice',
+          },
+        ],
+        scope,
+      ),
+    ).rejects.toThrow('音色不在音色库中');
+    expect(topics.insertMany).not.toHaveBeenCalled();
+  });
+
+  it('新设定微调保留编导方案格式，并按音色库特征调整节奏', async () => {
+    const script =
+      '主题：周末亲子游。开场：门头实拍。中段：双人套餐 99 元，拍摄卡丁车。结尾：引导查看团购。';
+    const runWithMessages = jest.fn().mockResolvedValue({ content: script });
+    const service = new DouyinChildTopicGenerationService(
+      { runWithMessages } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { resolveNodeRuntime: jest.fn().mockResolvedValue(null) } as never,
+      {} as never,
+    );
+    const result = await service.refineScript(
+      {
+        script,
+        instruction: '按新音色微调，保留事实和结构',
+        voiceId: COSYVOICE_PRESET_VOICES[0].voiceId,
+        productionMode: 'store-visit',
+      },
+      scope,
+    );
+    const system = runWithMessages.mock.calls[0][0].config.system;
+    expect(system).toContain('创作脚本（编导方案）');
+    expect(system).toContain('不要改成逐段台词');
+    expect(system).toContain(COSYVOICE_PRESET_VOICES[0].trait);
+    expect(result.script).toBe(script);
+  });
+
   it('新建探店母题同时创建没有脚本与分镜的真实制作草稿', async () => {
     const { repository, topics } = buildStoreVisitRepository();
     const mother = await repository.create(

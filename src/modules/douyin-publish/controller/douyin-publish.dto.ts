@@ -107,18 +107,24 @@ export class UpdateDouyinPublishWorkDto {
 }
 
 /**
- * @description 校验小程序发布结果回写参数。
+ * @description 校验成功、失败或待补ID状态及可选作品链接。
  * @keyword-cn 发布结果参数
  * @keyword-en publish-result-dto
  */
 export class DouyinPublishResultDto {
-  @IsIn(['published', 'failed'])
-  status!: 'published' | 'failed';
+  @IsIn(['published', 'failed', 'identity-pending'])
+  status!: 'published' | 'failed' | 'identity-pending';
 
   @IsOptional()
   @IsString()
   @MaxLength(200)
   douyinVideoId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
+  douyinUrl?: string;
 
   @IsOptional()
   @IsString()

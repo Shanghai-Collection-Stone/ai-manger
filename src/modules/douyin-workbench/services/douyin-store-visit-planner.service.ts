@@ -682,8 +682,8 @@ export class DouyinStoreVisitPlannerService {
   ) {}
 
   /**
-   * @description 从门店开始时门店未确定先按引用知识询问用户确认，确定后写独立创作脚本正文及人物音色建议；从脚本开始（`storeVisitStart` 为 script）不问门店，
-   *   按通用短视频写法写正文，画面安排成能拍或能画的场景。台词由下一步单独生成。
+   * @description 从门店开始时先询问并确认门店，从脚本开始则直接写通用创作方案；默认沿用人物音色，未指定时保持未指定。
+   *   显式 keepCast=false 才提供人物音色建议，台词由下一步单独生成。
    * @keyword-cn AI写探店脚本, 按自检意见改
    * @keyword-en write-store-visit-script, revise-by-review
    */
@@ -700,7 +700,7 @@ export class DouyinStoreVisitPlannerService {
         storeQuestion: await this.askStore(context, input.prompt, scope),
       };
     }
-    const keepCast = Boolean(input.keepCast || input.issues?.length);
+    const keepCast = input.keepCast !== false || Boolean(input.issues?.length);
     const available = keepCast
       ? []
       : (await this.personas.list(scope)).filter((item) =>
@@ -737,7 +737,7 @@ export class DouyinStoreVisitPlannerService {
       STORE_VISIT_SELLING_POINT_RULE,
       style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
       keepCast
-        ? '沿用当前出镜方式、人物和音色，只修改脚本正文。'
+        ? '沿用当前出镜方式、人物和音色，只修改脚本正文。未指定人物或音色就保持未指定，不自行推荐或生成声音，不生成分段台词。'
         : `同时决定 presenter 是否开头出镜，personaId 只能选候选中有形象图的人物，无候选则不出镜。voiceId 从音色库选，${STORE_VISIT_VOICE_PICK_RULE}voicePrompt 写年龄、男女声、音色和语速，personaReason、voiceReason 简述理由。`,
       keepCast
         ? '只输出 JSON：{"script":"完整脚本正文，分段用换行"}'
@@ -757,6 +757,9 @@ export class DouyinStoreVisitPlannerService {
       keepCast ? buildPersonaScriptBrief(persona) : '',
       keepCast && context.topic.storeVisit?.voicePrompt
         ? `当前声音描述：${context.topic.storeVisit.voicePrompt}`
+        : '',
+      keepCast && context.topic.storeVisit?.voiceId
+        ? `当前音色：${COSYVOICE_PRESET_VOICES.find((voice) => voice.voiceId === context.topic.storeVisit?.voiceId)?.trait || context.topic.storeVisit.voiceName || '沿用已选音色'}，据此安排表达节奏。`
         : '',
       context.topic.storeVisit?.script
         ? `上一版脚本：\n${context.topic.storeVisit.script}`
@@ -888,6 +891,8 @@ export class DouyinStoreVisitPlannerService {
   ) {
     const context = await this.loadScriptContext(topicId, scope);
     const { topic } = context;
+    if (topic.storeVisit?.scriptNeedsRefine)
+      throw new BadRequestException('请先完成按新人物和音色微调脚本');
     const script = topic.storeVisit?.script?.trim();
     if (!script)
       throw new BadRequestException('请先生成或填写脚本正文并保存，再生成台词');
@@ -901,17 +906,22 @@ export class DouyinStoreVisitPlannerService {
     const presenterNow = STORE_VISIT_PRESENTER_TEMPLATES.includes(
       topic.storeVisit?.template ?? '',
     );
-    const persona =
-      presenterNow && topic.personaId
-        ? await this.personas.get(topic.personaId, scope)
-        : null;
+    const persona = topic.personaId
+      ? await this.personas.get(topic.personaId, scope)
+      : null;
     const style =
       topic.scriptStyle && topic.scriptStyle in DOUYIN_SCRIPT_STYLES
         ? DOUYIN_SCRIPT_STYLES[topic.scriptStyle]
         : undefined;
     const personaBrief = buildPersonaScriptBrief(persona);
+    const voice = COSYVOICE_PRESET_VOICES.find(
+      (item) => item.voiceId === topic.storeVisit?.voiceId,
+    );
     const system = [
       '【脚本先行】严格根据用户已确认的【脚本正文】写台词，保留叙事顺序、核心卖点、开场与结尾，不得另起主题。脚本中的编导提示不能念成台词，待补充的事实不能编造。补充要求与脚本冲突时以脚本为准。',
+      topic.storeVisit?.voicePrompt || voice
+        ? `【当前音色】${topic.storeVisit?.voicePrompt || `${voice?.gender === 'male' ? '男声' : '女声'}，${voice?.trait}`}。台词语气、句长与念法贴合此声音，不改人物和音色。`
+        : '',
       scriptFirst
         ? '你是抖音短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个画面、说一句口播台词。像真人博主跟朋友聊，不是逐个讲解画面的说明视频。'
         : '你是抖音探店短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个实拍画面、说一句口播台词。像真人博主跟朋友推荐这家店，不是逐个讲解画面的说明视频。',
@@ -944,6 +954,9 @@ export class DouyinStoreVisitPlannerService {
           ? `开头由固定的预设人物出镜，台词必须是这个人物的第一人称、语气一致：\n${personaBrief}`
           : '开头有人出镜打招呼，全程用第一人称。'
         : '视频不露脸、全程画外音，用统一的第一人称讲。',
+      !presenterNow && personaBrief
+        ? `画外音由当前选定人物讲述，按此人设的视角和语气写台词：\n${personaBrief}`
+        : '',
       style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
       scriptFirst
         ? '【示例】只示范写法和节奏，内容必须换成这条视频的，不要照抄示例里的内容：'

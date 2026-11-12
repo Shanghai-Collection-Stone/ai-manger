@@ -62,7 +62,7 @@ function setup(
   const start = jest
     .spyOn(service, 'start')
     .mockResolvedValue({ id: 'storyboard-job' } as never);
-  return { service, repository, start };
+  return { service, repository, start, job };
 }
 
 describe('DouyinGenerationJobService.confirmDrafts', () => {
@@ -122,5 +122,30 @@ describe('DouyinGenerationJobService.confirmDrafts', () => {
     ).toBeUndefined();
     expect(start).toHaveBeenCalledWith('storyboard', 100, undefined, scope);
     expect(result.jobs).toHaveLength(1);
+  });
+
+  it('还原批次人物音色，逐条取消时保留显式空值，不回退成批次选择', async () => {
+    const { service, repository, job } = setup('store-visit');
+    Object.assign(job, {
+      personaId: 42,
+      voiceId: 'longanyang',
+      scriptStyle: 'cinematic',
+    });
+    await service.confirmDrafts('job-1', [{ key: 'd1' }], scope);
+    expect(repository.createChildren.mock.calls[0][1][0]).toMatchObject({
+      personaId: 42,
+      voiceId: 'longanyang',
+      scriptStyle: 'cinematic',
+    });
+    await service.confirmDrafts(
+      'job-1',
+      [{ key: 'd1', personaId: 0, voiceId: '', scriptStyle: '' }],
+      scope,
+    );
+    expect(repository.createChildren.mock.calls[1][1][0]).toMatchObject({
+      personaId: 0,
+      voiceId: '',
+      scriptStyle: '',
+    });
   });
 });

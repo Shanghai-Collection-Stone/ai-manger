@@ -7,6 +7,11 @@ import {
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
+import {
+  extractDouyinUrl,
+  parseDouyinAwemeId,
+  resolveDouyinAwemeId,
+} from '../../douyin-data/services/douyin-aweme-link.js';
 import { DouyinWorkbenchRepositoryService } from '../../douyin-workbench/services/douyin-workbench-repository.service.js';
 import type {
   CreateDouyinPublishWorkDto,
@@ -378,7 +383,7 @@ export class DouyinPublishWorkService {
   }
 
   /**
-   * @description 回写发布成功或失败结果，终态成功回写幂等并始终释放租约。
+   * @description 回写成功、失败或待补ID结果，保护已发布身份并释放租约。
    * @keyword-cn 发布结果回写, 释放租约
    * @keyword-en update-publish-result, release-lease
    */
@@ -389,17 +394,50 @@ export class DouyinPublishWorkService {
   ): Promise<void> {
     const current = await this.getForLibrary(id, libraryId);
     if (!current) throw new NotFoundException('DOUYIN_PUBLISH_WORK_NOT_FOUND');
-    if (current.status === 'published') return;
+    if (current.status === 'published' && input.status !== 'published') return;
     const now = new Date();
-    if (input.status === 'published') {
+    if (input.status === 'identity-pending') {
       await this.works.updateOne(
-        { _id: current._id, libraryId },
+        { _id: current._id, libraryId, status: 'unpublished' },
         {
           $set: {
             status: 'published',
             publishedAt: now,
-            douyinVideoId: String(input.douyinVideoId ?? '').trim() || null,
+            lastError: '视频已发出，等待补全作品ID，暂不能抓取',
+            lockExpireAt: null,
+            leaseToken: null,
             publishedSnapshot: {
+              title: this.requireTitle(input.title ?? current.title),
+              description: String(
+                input.description ?? current.description,
+              ).trim(),
+              tags:
+                input.tags === undefined
+                  ? current.tags
+                  : this.normalizeTags(input.tags),
+            },
+            updatedAt: now,
+          },
+        },
+      );
+      return;
+    }
+    if (input.status === 'published') {
+      const identity = await this.resolvePublishedIdentity(current, input);
+      const saved = await this.works.updateOne(
+        {
+          _id: current._id,
+          libraryId,
+          douyinVideoId: { $in: [null, '', identity.videoId] },
+          douyinUrl: { $in: [null, current.douyinUrl ?? null, identity.url] },
+        },
+        {
+          $set: {
+            status: 'published',
+            publishedAt: current.publishedAt ?? now,
+            douyinVideoId: identity.videoId,
+            douyinUrl: identity.url,
+            publishedSnapshot: current.publishedSnapshot ?? {
               title: this.requireTitle(input.title ?? current.title),
               description: String(
                 input.description ?? current.description,
@@ -416,10 +454,12 @@ export class DouyinPublishWorkService {
           },
         },
       );
+      if (!saved.matchedCount)
+        throw new ConflictException('DOUYIN_PUBLISH_VIDEO_ID_CONFLICT');
       return;
     }
     await this.works.updateOne(
-      { _id: current._id, libraryId },
+      { _id: current._id, libraryId, status: 'unpublished' },
       {
         $set: {
           lastError: String(input.errorMessage ?? '').trim() || null,
@@ -429,6 +469,44 @@ export class DouyinPublishWorkService {
         },
       },
     );
+  }
+
+  /**
+   * @description 保留原生视频ID，解析分享链接为数字抓取ID；拒绝无ID成功回写与已发布作品标识冲突。
+   * @keyword-cn 发布标识, 抓取衔接
+   * @keyword-en publish-identity, crawl-handoff
+   */
+  private async resolvePublishedIdentity(
+    work: DouyinPublishWorkEntity,
+    input: DouyinPublishResultDto,
+  ): Promise<{ videoId: string; url: string | null }> {
+    const previous = String(work.douyinVideoId ?? '').trim();
+    const reported = String(input.douyinVideoId ?? '').trim();
+    if (previous && reported && previous !== reported) {
+      throw new ConflictException('DOUYIN_PUBLISH_VIDEO_ID_CONFLICT');
+    }
+    const link = String(input.douyinUrl ?? '').trim();
+    if (link && !/^\d{15,21}$/.test(link) && !extractDouyinUrl(link)) {
+      throw new BadRequestException('DOUYIN_PUBLISH_VIDEO_LINK_INVALID');
+    }
+    const linkedId = link ? await resolveDouyinAwemeId(link) : '';
+    if (link && !linkedId)
+      throw new BadRequestException('DOUYIN_PUBLISH_VIDEO_LINK_INVALID');
+    const previousTarget =
+      parseDouyinAwemeId(work.douyinUrl ?? '') || parseDouyinAwemeId(previous);
+    if (previousTarget && linkedId && previousTarget !== linkedId) {
+      throw new ConflictException('DOUYIN_PUBLISH_VIDEO_ID_CONFLICT');
+    }
+    const videoId = previous || reported || linkedId;
+    if (!videoId)
+      throw new BadRequestException('DOUYIN_PUBLISH_VIDEO_ID_REQUIRED');
+    const target = linkedId || previousTarget || parseDouyinAwemeId(videoId);
+    return {
+      videoId,
+      url: target
+        ? `https://www.douyin.com/video/${target}`
+        : (work.douyinUrl ?? null),
+    };
   }
 
   /**
@@ -567,6 +645,10 @@ export class DouyinPublishWorkService {
       duration: work.duration,
       status: work.status,
       douyinVideoId: work.douyinVideoId,
+      crawlTarget:
+        parseDouyinAwemeId(work.douyinUrl ?? '') ||
+        parseDouyinAwemeId(work.douyinVideoId ?? '') ||
+        null,
       publishedAt: work.publishedAt?.toISOString() ?? null,
       lastError: work.lastError,
       leased: this.isLeased(work),

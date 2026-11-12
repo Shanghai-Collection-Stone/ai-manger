@@ -402,7 +402,54 @@ describe('store visit script writing', () => {
     ],
   };
 
-  it('第一次写脚本：看母选题的引用知识写分段脚本并定出镜、人物与音色，写完对照引用知识自检', async () => {
+  it('默认只写创作脚本，未选人物音色时不推荐声线，也不输出台词', async () => {
+    const runWithMessages = jest
+      .fn()
+      .mockResolvedValueOnce({ content: JSON.stringify(script) })
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, list } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '欢乐谷探店',
+        storeVisit: { storeId: 701 },
+      },
+      personas: [persona],
+      runWithMessages,
+    });
+    const result = await service.writeScript(2, {}, { userId: 'u1' });
+    expect(result).toMatchObject({ script: script.script, presenter: false });
+    expect(result).not.toHaveProperty('voice');
+    expect(result).not.toHaveProperty('persona');
+    expect(result).not.toHaveProperty('segments');
+    expect(list).not.toHaveBeenCalled();
+    expect(runWithMessages.mock.calls[0][0].config.system).toContain(
+      '未指定人物或音色就保持未指定',
+    );
+  });
+
+  it('新设定的脚本微调未完成时拒绝生成台词，不调用模型', async () => {
+    const runWithMessages = jest.fn();
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '探店',
+        storeVisit: {
+          storeId: 701,
+          script: script.script,
+          scriptNeedsRefine: true,
+        },
+      },
+      runWithMessages,
+    });
+    await expect(
+      service.generateLines(2, {}, { userId: 'u1' }),
+    ).rejects.toThrow('请先完成按新人物和音色微调脚本');
+    expect(runWithMessages).not.toHaveBeenCalled();
+  });
+
+  it('显式要求 AI 推荐时写脚本并定出镜、人物与音色，写完对照引用知识自检', async () => {
     const runWithMessages = jest
       .fn()
       .mockResolvedValueOnce({ content: JSON.stringify(script) })
@@ -429,7 +476,11 @@ describe('store visit script writing', () => {
         '<reference_knowledge>【价格】卡丁车双人套餐 99 元</reference_knowledge>',
       runWithMessages,
     });
-    const result = await service.writeScript(2, {}, { userId: 'u1' });
+    const result = await service.writeScript(
+      2,
+      { keepCast: false },
+      { userId: 'u1' },
+    );
     expect(buildPromptSection).toHaveBeenCalledWith(['a'.repeat(24)], {
       userId: 'u1',
     });
@@ -475,7 +526,11 @@ describe('store visit script writing', () => {
       personas: [{ ...persona, id: 44, name: '阿杰' }, persona],
       runWithMessages,
     });
-    const result = await service.writeScript(2, {}, { userId: 'u1' });
+    const result = await service.writeScript(
+      2,
+      { keepCast: false },
+      { userId: 'u1' },
+    );
     const writing = runWithMessages.mock.calls[0][0];
     expect(writing.messages[0].content).toContain('id=42｜小林');
     expect(writing.messages[0].content).not.toContain('id=44');
@@ -594,7 +649,7 @@ describe('store visit script writing', () => {
     expect(writing).toContain('你是抖音短视频编导');
     expect(writing).not.toContain('探店');
     expect(writing).toContain('从图库挑图或 AI 生图');
-    expect(list).toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
     const lines = await service.generateLines(2, {}, { userId: 'u1' });
     expect(lines).toMatchObject({ segments: script.segments });
     const linesSystem = runWithMessages.mock.calls[2][0].config

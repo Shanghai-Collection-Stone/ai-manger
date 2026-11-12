@@ -12,6 +12,7 @@ import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
 import { buildPersonaScriptBrief } from '../../douyin-persona/services/douyin-persona-prompt.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
+import { COSYVOICE_PRESET_VOICES } from './douyin-cosyvoice.service.js';
 import {
   toWorkflowLlmConfig,
   WorkflowModelService,
@@ -371,6 +372,7 @@ export class DouyinChildTopicGenerationService {
     input: {
       prompt?: string;
       personaId?: number;
+      voiceId?: string;
       scriptStyle?: string;
       productionMode?: 'storyboard' | 'store-visit';
       start?: DouyinStoreVisitStart;
@@ -379,9 +381,21 @@ export class DouyinChildTopicGenerationService {
     onProgress?: ProgressReporter,
   ): Promise<{ decidedCount: number; drafts: DouyinScriptDraft[] }> {
     const context = await this.loadGenerationContext(parentId, scope);
-    const userPrompt = String(input.prompt ?? '')
-      .trim()
-      .slice(0, 1000);
+    const voice = COSYVOICE_PRESET_VOICES.find(
+      (item) => item.voiceId === input.voiceId,
+    );
+    if (input.voiceId && !voice)
+      throw new BadRequestException('音色不在音色库中，请重新选择');
+    const userPrompt = [
+      String(input.prompt ?? '')
+        .trim()
+        .slice(0, 1000),
+      voice
+        ? `已选音色：${voice.voiceName}，${voice.gender === 'male' ? '男声' : '女声'}，${voice.trait}${voice.dialect ? `，${voice.dialect}` : ''}。据此安排表达节奏，不生成配音，不另选音色。`
+        : '未指定音色，不要自行决定具体声线。',
+    ]
+      .filter(Boolean)
+      .join('\n');
     onProgress?.({ stage: 'planning', current: 0 });
     const persona = input.personaId
       ? await this.personas.get(input.personaId, scope)
@@ -547,6 +561,9 @@ export class DouyinChildTopicGenerationService {
       title?: string;
       personaId?: number;
       scriptStyle?: string;
+      productionMode?: 'storyboard' | 'store-visit';
+      voicePrompt?: string;
+      voiceId?: string;
     },
     scope: DouyinScope,
   ): Promise<{ script: string }> {
@@ -566,6 +583,10 @@ export class DouyinChildTopicGenerationService {
         : undefined
     ) as DouyinScriptStyle | undefined;
     const personaBrief = buildPersonaScriptBrief(persona);
+    const creativeScript = input.productionMode === 'store-visit';
+    const voice = COSYVOICE_PRESET_VOICES.find(
+      (item) => item.voiceId === input.voiceId,
+    );
 
     const result = await this.agentService.runWithMessages({
       config: {
@@ -586,13 +607,23 @@ export class DouyinChildTopicGenerationService {
           platformScope: !scope.tenantId,
         },
         system: [
-          '你负责按用户的一句话指令微调一段抖音短视频口播稿。',
+          creativeScript
+            ? '你负责按用户指令微调抖音创作脚本（编导方案）。'
+            : '你负责按用户的一句话指令微调一段抖音短视频口播稿。',
           '只做用户指令要求的改动：没被点名的部分尽量保留原句，不要整篇重写、不要改变原本的主题和结论。',
-          '保持可以直接念出来的口语，保留分段换行；不要写镜头号、时间码、标题、Markdown 或任何解释。',
+          creativeScript
+            ? '保留原稿的主题、开场、中段、结尾、画面安排和章节结构；只调整人物视角、表达方式与节奏。不要改成逐段台词、对白列表，不生成音频，不添加解释。'
+            : '保持可以直接念出来的口语，保留分段换行；不要写镜头号、时间码、标题、Markdown 或任何解释。',
           '不编造事实，不加入违法、危险、歧视、低俗、侵权或效果承诺类内容。',
           personaBrief
-            ? '这段口播稿有固定出镜人物，改写后必须仍然是这个人物的第一人称、语气一致：\n' +
+            ? '按当前选定人物调整叙事视角与语气（人物设定优先于旧稿的人设）：\n' +
               personaBrief
+            : '',
+          input.voicePrompt
+            ? `当前音色与表达节奏：${String(input.voicePrompt).slice(0, 500)}。只微调表达，不改事实、价格、项目和行动引导，不重新选择声音。`
+            : '',
+          voice
+            ? `已选音色特征：${voice.gender === 'male' ? '男声' : '女声'}，${voice.trait}${voice.dialect ? `，${voice.dialect}` : ''}。`
             : '',
           style
             ? '整体调性保持「' +
@@ -601,7 +632,9 @@ export class DouyinChildTopicGenerationService {
               DOUYIN_SCRIPT_STYLES[style].tone +
               '。'
             : '',
-          '只输出改写后的口播正文本身。',
+          creativeScript
+            ? '只输出改写后的完整创作脚本。'
+            : '只输出改写后的口播正文本身。',
         ]
           .filter(Boolean)
           .join('\n'),
@@ -611,9 +644,11 @@ export class DouyinChildTopicGenerationService {
           role: 'user',
           content: [
             input.title ? `脚本标题：${input.title}` : '',
-            `原口播正文：<script>${original}</script>`,
+            `原脚本正文：<script>${original}</script>`,
             `修改指令：<instruction>${instruction}</instruction>`,
-            '请输出改写后的完整口播正文。',
+            creativeScript
+              ? '请输出保留编导方案结构的完整创作脚本。'
+              : '请输出改写后的完整口播正文。',
           ]
             .filter(Boolean)
             .join('\n'),
