@@ -87,6 +87,52 @@ export class DouyinMiniappSchemaService {
   }
 
   /**
+   * 创建可触发任务 Webhook 的长期视频任务，挂载公开会客厅页面。
+   * @keyword-cn 拍抖音任务, 发布回调
+   * @keyword-en douyin-video-task, publish-webhook
+   */
+  async createPublishVideoTask(): Promise<{ id: string; expiresAt: Date }> {
+    const settings = this.readSettings();
+    if (!settings)
+      throw new DouyinMiniappSchemaError('DOUYIN_MINIAPP_NOT_CONFIGURED');
+    const now = Math.floor(Date.now() / 1000);
+    const endTime = now + 360 * 24 * 60 * 60;
+    const body = {
+      app_id: settings.appId,
+      task_type: 2,
+      rule_type: 2,
+      target_count: 1,
+      start_time: now - 60,
+      end_time: endTime,
+      mount_link: '/pages/home/index',
+      publish_type: [1],
+      tags: [],
+    };
+    let token = await this.getClientToken(settings, false);
+    let payload = (await this.postJson(
+      `${settings.apiBase}/api/apps/v1/douyin/create_task/`,
+      body,
+      { 'access-token': token },
+    )) as { err_no?: number; data?: { task_id?: string } };
+    if (payload?.err_no === ACCESS_TOKEN_INVALID_ERR_NO) {
+      token = await this.getClientToken(settings, true);
+      payload = (await this.postJson(
+        `${settings.apiBase}/api/apps/v1/douyin/create_task/`,
+        body,
+        { 'access-token': token },
+      )) as typeof payload;
+    }
+    const id = String(payload?.data?.task_id ?? '').trim();
+    if (payload?.err_no !== 0 || !id)
+      throw new DouyinMiniappSchemaError(
+        'DOUYIN_PUBLISH_TASK_CREATE_FAILED',
+        `err_no=${payload?.err_no ?? -1}`,
+        payload?.err_no,
+      );
+    return { id, expiresAt: new Date(endTime * 1000) };
+  }
+
+  /**
    * @description 当前 Schema 的身份键：AppID + 发布页 + 启动参数。任何一项变了，已缓存的 Schema 就不能再用。
    * @keyword-cn Schema身份键, 失效判断
    * @keyword-en schema-identity-key, cache-invalidation

@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
@@ -382,6 +383,17 @@ export class DouyinPublishWorkService {
     return this.works.findOne({ _id: new ObjectId(id), libraryId });
   }
 
+  /** 平台任务准备失败时释放本次领取，保护已被接管或已发布的作品，避免跳过十分钟。
+   * @keyword-cn 任务准备, 释放租约
+   * @keyword-en task-prepare, release-lease
+   */
+  async releaseUnstartedLease(work: DouyinPublishWorkEntity): Promise<void> {
+    await this.works.updateOne(
+      { _id: work._id, status: 'unpublished', leaseToken: work.leaseToken },
+      { $set: { lockExpireAt: null, leaseToken: null, updatedAt: new Date() } },
+    );
+  }
+
   /**
    * @description 回写成功、失败或待补ID结果，保护已发布身份并释放租约。
    * @keyword-cn 发布结果回写, 释放租约
@@ -430,6 +442,7 @@ export class DouyinPublishWorkService {
           libraryId,
           douyinVideoId: { $in: [null, '', identity.videoId] },
           douyinUrl: { $in: [null, current.douyinUrl ?? null, identity.url] },
+          douyinWebhook: current.douyinWebhook ?? null,
         },
         {
           $set: {
@@ -447,7 +460,7 @@ export class DouyinPublishWorkService {
                   ? current.tags
                   : this.normalizeTags(input.tags),
             },
-            lastError: null,
+            lastError: this.webhookMessage(current.douyinWebhook?.status),
             lockExpireAt: null,
             leaseToken: null,
             updatedAt: now,
@@ -507,6 +520,77 @@ export class DouyinPublishWorkService {
         ? `https://www.douyin.com/video/${target}`
         : (work.douyinUrl ?? null),
     };
+  }
+
+  /**
+   * 将已验签且任务关联成功的平台通知原子写回作品，保留原生ID并拒绝乱序与身份覆盖。
+   * @keyword-cn 发布回调, 抓取衔接
+   * @keyword-en publish-webhook, crawl-handoff
+   */
+  async applyPublishWebhook(
+    id: ObjectId,
+    event: NonNullable<DouyinPublishWorkEntity['douyinWebhook']>,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.works.findOne({ _id: id });
+      if (!current) return;
+      const previous = current.douyinWebhook;
+      if (
+        previous &&
+        ((event.messageId && event.messageId === previous.messageId) ||
+          event.timestamp < previous.timestamp ||
+          (event.timestamp === previous.timestamp &&
+            event.status <= previous.status))
+      )
+        return;
+      const target = parseDouyinAwemeId(event.videoId);
+      const currentTarget =
+        parseDouyinAwemeId(current.douyinUrl ?? '') ||
+        parseDouyinAwemeId(current.douyinVideoId ?? '');
+      if (
+        (target && currentTarget && target !== currentTarget) ||
+        (previous?.videoId && previous.videoId !== event.videoId)
+      )
+        throw new ConflictException('DOUYIN_PUBLISH_VIDEO_ID_CONFLICT');
+      const saved = await this.works.updateOne(
+        {
+          _id: id,
+          libraryId: current.libraryId,
+          douyinVideoId: current.douyinVideoId ?? null,
+          douyinUrl: current.douyinUrl ?? null,
+          douyinWebhook: previous ?? null,
+        },
+        {
+          $set: {
+            status: 'published',
+            publishedAt:
+              current.publishedAt ?? new Date(event.timestamp * 1000),
+            douyinWebhook: event,
+            ...(target
+              ? { douyinUrl: `https://www.douyin.com/video/${target}` }
+              : {}),
+            lastError: this.webhookMessage(event.status),
+            lockExpireAt: null,
+            leaseToken: null,
+            updatedAt: new Date(),
+          },
+        },
+      );
+      if (saved.matchedCount) return;
+    }
+    throw new ServiceUnavailableException('DOUYIN_WEBHOOK_WRITE_RETRY');
+  }
+
+  /**
+   * 将平台公开审核状态转换为工作台可见提示，不把任务失败重新派发为未发布。
+   * @keyword-cn 发布回调, 审核状态
+   * @keyword-en publish-webhook, audit-status
+   */
+  private webhookMessage(status: 0 | 1 | 2 | undefined): string | null {
+    if (status === 0) return '视频已提交抖音，等待公开或审核通过';
+    if (status === 2)
+      return '抖音任务失败：作品删除、审核失败或未满足任务条件，请在抖音确认';
+    return null;
   }
 
   /**

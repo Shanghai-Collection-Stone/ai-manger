@@ -21,6 +21,11 @@
 - `guards/douyin-publish-token.guard.ts` — 小程序入口的同址权限声明装饰器、Bearer 扫码 token Guard 与发布库请求上下文。
 - `../../../.env` — 本机抖音小程序 AppID 与发布页配置；环境文件被 Git 忽略，AppSecret 仅从服务端环境读取。
 
+- `services/douyin-publish-webhook.service.ts` — 平台任务创建、跨进程复用和通知关联。
+- `guards/douyin-publish-webhook.guard.ts` — 原始请求体验签及同址权限装饰器。
+- `controller/douyin-publish-webhook.controller.ts` — 平台地址校验与任务回调 HTTP 入口。
+- `services/douyin-publish-webhook.service.spec.ts` — 平台签名、任务关联、持久化重试与乱序回归测试。
+
 ## 函数清单 (Function List)
 
 - `DOUYIN_PUBLISH_LEASE_MS` — 固定十分钟发布任务租约 | keywords: 发布租约, 十分钟租约, publish-lease, ten-minute-lease
@@ -112,11 +117,56 @@
 - `canActivate(context)` — 校验 DouyinWorkbench 权限主体与扫码令牌 | keywords: 校验扫码入口, 权限主体校验, validate-qr-entry, permission-subject-check
 - `RequireDouyinPublishTokenAccess(action,subject)` — 在路由注册处挂载权限声明与扫码 Guard | keywords: 扫码权限装饰器, 同址权限声明, qr-access-decorator, colocated-permission-declaration
 - `DouyinPublishTaskController()` — 提供小程序扫码发布接口 | keywords: 小程序发布接口, 扫码令牌鉴权, publish-task-controller, qr-token-auth
-- `leaseNext(req)` — 领取下一条未发布作品 | keywords: 小程序领取接口, FIFO领取, lease-next-endpoint, fifo-lease
-- `getWork(id,req)` — 读取扫码库内指定作品 | keywords: 小程序作品详情接口, publish-task-detail-endpoint
-- `publishResult(id,body,req)` — 回写发布结果并释放租约 | keywords: 小程序发布回写接口, 释放租约, publish-result-endpoint, release-lease
+- `leaseNext(req)` — 领取下一条未发布作品并准备平台任务，准备失败释放本次租约 | keywords: 小程序领取接口, FIFO领取, lease-next-endpoint, fifo-lease
+- `getWork(id,req)` — 读取扫码库内作品及平台状态，为未发布作品准备任务 | keywords: 小程序作品详情接口, publish-task-detail-endpoint
+- `publishResult(id,body,req)` — 回写发布结果并释放租约，返回平台状态与抓取目标 | keywords: 小程序发布回写接口, 释放租约, publish-result-endpoint, release-lease
 - `toTaskView(work,req)` — 转换小程序任务字段并补全媒体地址 | keywords: 小程序任务视图, 绝对媒体地址, publish-task-view, absolute-media-url
 - `toAbsoluteUrl(value,req)` — 按转发协议与 host 补全相对地址 | keywords: 媒体地址补全, 代理协议识别, absolute-media-url, forwarded-protocol
+
+- `DouyinPublishWebhookService()` — services/douyin-publish-webhook.service.ts：创建发布任务并将签名验证后的平台通知交给关联作品 | keywords: 拍抖音任务, 发布回调, douyin-video-task, publish-webhook
+- `DouyinPublishWebhookService.constructor(db, config, platform, works)` — services/douyin-publish-webhook.service.ts：注入平台调用、作品服务与持久化任务关联 | keywords: 拍抖音任务, 发布回调, douyin-video-task, publish-webhook
+- `onModuleInit()` — services/douyin-publish-webhook.service.ts：在启动完成前建立平台任务唯一索引，支持多进程去重 | keywords: 任务关联, 唯一索引, task-mapping, unique-index
+- `prepareTask(work)` — services/douyin-publish-webhook.service.ts：为未发布作品复用或创建任务；启用后配置和权限错误会阻止无回调发布 | keywords: 拍抖音任务, 任务关联, douyin-video-task, task-mapping
+- `activeTask(slot)` — services/douyin-publish-webhook.service.ts：查找仍有至少五分钟有效期的任务 | keywords: 任务关联, 任务复用, task-mapping, task-reuse
+- `receive(body, messageId)` — services/douyin-publish-webhook.service.ts：处理平台原生事件名，关联任务后记录作品ID和审核公开状态；未知事件只确认接收 | keywords: 发布回调, 作品标识, publish-webhook, video-identity
+- `parseContent(value)` — services/douyin-publish-webhook.service.ts：兼容平台 content 对象及 JSON 字符串格式 | keywords: 发布回调, 消息解析, publish-webhook, message-parse
+- `DouyinPublishWebhookGuard()` — guards/douyin-publish-webhook.guard.ts：校验平台原始请求体签名与 AppID；challenge 只允许无副作用的地址验证 | keywords: 回调验签, 同址权限声明, webhook-signature, colocated-permission-declaration
+- `DouyinPublishWebhookGuard.constructor(config, reflector)` — guards/douyin-publish-webhook.guard.ts：注入签名秘钥及入口权限声明读取器 | keywords: 回调验签, 同址权限声明, webhook-signature, colocated-permission-declaration
+- `canActivate(context)` — guards/douyin-publish-webhook.guard.ts：只接受配置应用的签名消息；不将 JSON 再序列化作为验签输入 | keywords: 回调验签, 原始请求体, webhook-signature, raw-body
+- `RequireDouyinPublishWebhookAccess(action, subject)` — guards/douyin-publish-webhook.guard.ts：在平台回调路由同址声明真实权限根主体及平台签名鉴权 | keywords: 回调验签, 同址权限声明, webhook-signature, colocated-permission-declaration
+- `DouyinPublishWebhookController()` — controller/douyin-publish-webhook.controller.ts：接收抖音平台地址验证及拍抖音任务通知 | keywords: 发布回调, 平台通知, publish-webhook, platform-notification
+- `DouyinPublishWebhookController.constructor(webhook)` — controller/douyin-publish-webhook.controller.ts：注入已签名通知的业务处理服务 | keywords: 发布回调, 平台通知, publish-webhook, platform-notification
+- `receive(body, req, res)` — controller/douyin-publish-webhook.controller.ts：返回平台要求的文本 JSON challenge；业务事件落库成功后才确认接收 | keywords: 发布回调, 平台通知, publish-webhook, platform-notification
+- `webhookFixture()` — services/douyin-publish-webhook.service.spec.ts：构造真实服务、内存持久层与可控平台 API，验证签名到作品更新全链路 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `matches(filter, value)` — services/douyin-publish-webhook.service.spec.ts：按 Mongo 精确值及 in 条件匹配，返回快照以验证实际并发比较更新 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `matchesCandidate(candidate)` — services/douyin-publish-webhook.service.spec.ts：比较精确候选值 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `findTestWork(filter)` — services/douyin-publish-webhook.service.spec.ts：读取作品快照 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `writeTestWork(filter, patch)` — services/douyin-publish-webhook.service.spec.ts：原子应用作品更新 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `findSlot(filter)` — services/douyin-publish-webhook.service.spec.ts：按作品或平台任务查询关联 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `matchesTask(task)` — services/douyin-publish-webhook.service.spec.ts：匹配历史平台任务 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `claimSlot(filter, patch)` — services/douyin-publish-webhook.service.spec.ts：模拟跨进程任务创建租约 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `writeSlot(filter, patch)` — services/douyin-publish-webhook.service.spec.ts：应用任务保存和租约释放 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `getWebhookCollection(name)` — services/douyin-publish-webhook.service.spec.ts：返回请求的测试集合 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `getWebhookSetting(key)` — services/douyin-publish-webhook.service.spec.ts：读取测试配置 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `notification(status, timestamp, videoId)` — services/douyin-publish-webhook.service.spec.ts：构造平台原生通知，content 按官方字符串格式传输 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `webhookTests()` — services/douyin-publish-webhook.service.spec.ts：验证安全入口、持久化任务关联及乱序回调 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `preparesMappedTasks()` — services/douyin-publish-webhook.service.spec.ts：任务按作品持久复用，关闭功能不影响原生发布，启用错误明确阻止发布 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `preventsConcurrentTaskCreation()` — services/douyin-publish-webhook.service.spec.ts：两次并发准备只有一个平台任务被创建 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `successfulTaskClaim(outcome)` — services/douyin-publish-webhook.service.spec.ts：统计成功的任务领取 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `handlesWebhookBeforeNativeResult()` — services/douyin-publish-webhook.service.spec.ts：平台通知先到也能接收后来的原生加密ID，不覆盖数字抓取目标 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `handlesDuplicateAndOutOfOrderEvents()` — services/douyin-publish-webhook.service.spec.ts：重复和旧通知不会降级状态，失败状态不重新进入发布队列 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `retriesFailedPersistence()` — services/douyin-publish-webhook.service.spec.ts：写入失败不提前标记已消费，平台重试可完成同一条通知 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `retainsOpaqueWebhookIdentity()` — services/douyin-publish-webhook.service.spec.ts：不将不透明平台ID假装成可抓取的数字作品ID | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `verifiesHttpSignatures()` — services/douyin-publish-webhook.service.spec.ts：使用真实 HTTP body parser 和路由验证原始字节签名及地址校验响应 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `createsOfficialLongTermTask()` — services/douyin-publish-webhook.service.spec.ts：平台创建请求使用长期任务类型和公开会客厅路径 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
+- `createPublishVideoTask()` — 创建携带公开会客厅挂载路径的长期视频任务 | keywords: 拍抖音任务, 发布回调, douyin-video-task, publish-webhook
+- `applyPublishWebhook(id, event)` — 原子回写平台作品ID及状态并防止乱序覆盖 | keywords: 发布回调, 抓取衔接, publish-webhook, crawl-handoff
+- `webhookMessage(status)` — 转换任务公开审核状态为工作台提示 | keywords: 发布回调, 审核状态, publish-webhook, audit-status
+- `DouyinPublishTaskController.constructor(works, webhook)` — 注入作品与平台任务服务 | keywords: 小程序发布接口, 扫码令牌鉴权, publish-task-controller, qr-token-auth
+
+- `releaseUnstartedLease(work)` — 平台任务准备失败时按租约条件释放作品，避免重试跳过当前视频 | keywords: 任务准备, 释放租约, task-prepare, release-lease
+
+- `releasesLeaseAfterTaskFailure()` — 验证任务准备失败后立即释放新领取租约并允许重试 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
 
 ## 关键词索引 (Keyword Index)
 
@@ -156,6 +206,19 @@
 | 非用户授权 | client-credential |
 | 抖音开放平台错误 | douyin-open-api-error |
 | 生成Schema失败 | generate-schema-failure |
+| 发布回调 | publish-webhook |
+| 拍抖音任务 | douyin-video-task |
+| 任务关联 | task-mapping |
+| 回调验签 | webhook-signature |
+| 原始请求体 | raw-body |
+| 平台通知 | platform-notification |
+| 发布回调测试 | publish-webhook-test |
+| 任务复用 | task-reuse |
+| 消息解析 | message-parse |
+| 作品标识 | video-identity |
+| 审核状态 | audit-status |
+| 任务准备 | task-prepare |
+| 唯一索引 | unique-index |
 
 ## 类型导出 (Type Exports)
 
@@ -181,6 +244,7 @@
 |---|---|---|
 | GET | `/api/douyin-publish/libraries` | `AdminAuthGuard` + `AdminPoliciesGuard`，`read DouyinWorkbench` |
 | POST | `/api/douyin-publish/libraries` | 同上，`create DouyinWorkbench` |
+| POST | `/api/douyin-publish/webhook` | 同址 `update DouyinWorkbench`，平台签名 Guard 与 AppID 校验；challenge 仅回显 |
 | PATCH | `/api/douyin-publish/libraries/:id` | 同上，`update DouyinWorkbench` |
 | DELETE | `/api/douyin-publish/libraries/:id` | 同上，`delete DouyinWorkbench` |
 | GET | `/api/douyin-publish/libraries/:id/qr` | 同上，`read DouyinWorkbench` |
@@ -212,3 +276,5 @@
 领取与详情返回 `{ id, title, description, tags, videoUrl, coverUrl, duration, status, douyinVideoId, crawlTarget }`。小程序重开指定作品时依据 status 恢复已发布锁定状态；crawlTarget 为空时可补作品链接，不能再次发布。相对媒体路径按请求协议与host补全。无可领取作品返回404；无效token返回401；租户不匹配返回403。
 
 错误码：`DOUYIN_PUBLISH_LIBRARY_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_NOT_AVAILABLE`（404）、`DOUYIN_PUBLISH_LIBRARY_NOT_EMPTY`（409）、`DOUYIN_PUBLISH_WORK_EXISTS`（409，响应额外携带 `workId`、`libraryId`）、`DOUYIN_PUBLISH_WORK_LEASED`（409）、`DOUYIN_PUBLISH_QR_TOKEN_FAILED`（409）、`DOUYIN_VIDEO_ASSET_NOT_FOUND`（404）、`DOUYIN_PUBLISH_TOKEN_REQUIRED`（401）、`DOUYIN_PUBLISH_TOKEN_INVALID`（401）、`DOUYIN_PUBLISH_TENANT_MISMATCH`（403）、`DOUYIN_PUBLISH_LIBRARY_NAME_INVALID`（400）、`DOUYIN_PUBLISH_TITLE_INVALID`（400）、`DOUYIN_PUBLISH_TAGS_INVALID`（400）、`DOUYIN_PUBLISH_STATUS_INVALID`（400）、`DOUYIN_PUBLISH_PAGINATION_INVALID`（400）。DTO 字段不合法时沿用 Nest `ValidationPipe` 的 400 默认错误结构。
+
+平台 Webhook 入口为 POST /api/douyin-publish/webhook，同址声明 update DouyinWorkbench，由平台原始请求体 SHA1 签名鉴权；challenge 仅回显，无业务写入。平台保留事件名 verify_webhook、douyin_video_task_message 和 Nest 生命周期 onModuleInit 不属于自定义事件总线命名。平台任务按作品保存历史关联，taskIds 在作品领取/详情时送入新版小程序发布器；平台通知在客户端未返回页面时仍可回写原作品，保留原生ID并供既有抓取目标读取。配置与能力前置条件见 CONFIGURATION.md。

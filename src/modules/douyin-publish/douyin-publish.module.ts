@@ -4,10 +4,13 @@ import { DataSourceModule } from '../data-source/data-source.module.js';
 import { DouyinWorkbenchModule } from '../douyin-workbench/douyin-workbench.module.js';
 import { DouyinPublishController } from './controller/douyin-publish.controller.js';
 import { DouyinPublishTaskController } from './controller/douyin-publish-task.controller.js';
+import { DouyinPublishWebhookController } from './controller/douyin-publish-webhook.controller.js';
 import { DouyinPublishTokenGuard } from './guards/douyin-publish-token.guard.js';
+import { DouyinPublishWebhookGuard } from './guards/douyin-publish-webhook.guard.js';
 import { DouyinMiniappSchemaService } from './services/douyin-miniapp-schema.service.js';
 import { DouyinPublishLibraryService } from './services/douyin-publish-library.service.js';
 import { DouyinPublishWorkService } from './services/douyin-publish-work.service.js';
+import { DouyinPublishWebhookService } from './services/douyin-publish-webhook.service.js';
 
 /**
  * @description 装配抖音视频发布库管理端与小程序扫码发布能力。
@@ -16,12 +19,18 @@ import { DouyinPublishWorkService } from './services/douyin-publish-work.service
  */
 @Module({
   imports: [AdminModule, DataSourceModule, DouyinWorkbenchModule],
-  controllers: [DouyinPublishController, DouyinPublishTaskController],
+  controllers: [
+    DouyinPublishController,
+    DouyinPublishTaskController,
+    DouyinPublishWebhookController,
+  ],
   providers: [
     DouyinMiniappSchemaService,
     DouyinPublishLibraryService,
     DouyinPublishWorkService,
     DouyinPublishTokenGuard,
+    DouyinPublishWebhookService,
+    DouyinPublishWebhookGuard,
   ],
   exports: [DouyinPublishLibraryService, DouyinPublishWorkService],
 })

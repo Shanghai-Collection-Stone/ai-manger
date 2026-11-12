@@ -87,6 +87,14 @@ export interface DouyinPublishWorkEntity {
   status: DouyinPublishStatus;
   douyinVideoId: string | null;
   publishedAt: Date | null;
+  /** 已验签的平台任务状态；与小程序原生 videoId 分开保存。 */
+  douyinWebhook?: {
+    taskId: string;
+    videoId: string;
+    status: 0 | 1 | 2;
+    timestamp: number;
+    messageId: string;
+  } | null;
   publishedSnapshot?: DouyinPublishedSnapshot;
   lastError: string | null;
   lockExpireAt?: Date | null;

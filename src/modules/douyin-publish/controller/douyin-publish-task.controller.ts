@@ -16,6 +16,7 @@ import {
   type DouyinPublishTaskRequest,
 } from '../guards/douyin-publish-token.guard.js';
 import { DouyinPublishWorkService } from '../services/douyin-publish-work.service.js';
+import { DouyinPublishWebhookService } from '../services/douyin-publish-webhook.service.js';
 import { DouyinPublishResultDto } from './douyin-publish.dto.js';
 
 /**
@@ -32,10 +33,17 @@ import { DouyinPublishResultDto } from './douyin-publish.dto.js';
   }),
 )
 export class DouyinPublishTaskController {
-  constructor(private readonly works: DouyinPublishWorkService) {}
+  /** 注入作品服务和可选的平台任务准备服务。
+   * @keyword-cn 小程序发布接口, 扫码令牌鉴权
+   * @keyword-en publish-task-controller, qr-token-auth
+   */
+  constructor(
+    private readonly works: DouyinPublishWorkService,
+    private readonly webhook?: DouyinPublishWebhookService,
+  ) {}
 
   /**
-   * @description 原子领取二维码 token 所属库的下一条未发布作品，无可领取作品返回 404。
+   * @description 原子领取库内下一条未发布作品并准备平台任务；准备失败释放本次租约，无作品返回404。
    * @keyword-cn 小程序领取接口, FIFO领取
    * @keyword-en lease-next-endpoint, fifo-lease
    */
@@ -45,11 +53,19 @@ export class DouyinPublishTaskController {
     const library = req.douyinPublishLibrary;
     const work = await this.works.leaseNext(library._id);
     if (!work) throw new NotFoundException('DOUYIN_PUBLISH_WORK_NOT_AVAILABLE');
-    return this.toTaskView(work, req);
+    try {
+      return {
+        ...this.toTaskView(work, req),
+        douyinTaskIds: (await this.webhook?.prepareTask(work)) ?? [],
+      };
+    } catch (error) {
+      await this.works.releaseUnstartedLease(work);
+      throw error;
+    }
   }
 
   /**
-   * @description 读取二维码 token 所属库内指定作品，不跨库暴露。
+   * @description 读取扫码库内指定作品及平台状态，为未发布作品准备任务，不跨库暴露。
    * @keyword-cn 小程序作品详情接口
    * @keyword-en publish-task-detail-endpoint
    */
@@ -59,11 +75,14 @@ export class DouyinPublishTaskController {
     const library = req.douyinPublishLibrary;
     const work = await this.works.getForLibrary(id, library._id);
     if (!work) throw new NotFoundException('DOUYIN_PUBLISH_WORK_NOT_FOUND');
-    return this.toTaskView(work, req);
+    return {
+      ...this.toTaskView(work, req),
+      douyinTaskIds: (await this.webhook?.prepareTask(work)) ?? [],
+    };
   }
 
   /**
-   * @description 回写原生发布结果或待补ID状态，返回原始ID与后续数字抓取目标。
+   * @description 回写原生发布结果或待补ID状态，返回原始ID、平台状态与数字抓取目标。
    * @keyword-cn 小程序发布回写接口, 释放租约
    * @keyword-en publish-result-endpoint, release-lease
    */
@@ -80,6 +99,7 @@ export class DouyinPublishTaskController {
     return {
       ok: true,
       douyinVideoId: work?.douyinVideoId ?? null,
+      platformStatus: work?.douyinWebhook?.status ?? null,
       crawlTarget:
         parseDouyinAwemeId(work?.douyinUrl ?? '') ||
         parseDouyinAwemeId(work?.douyinVideoId ?? '') ||
@@ -106,6 +126,7 @@ export class DouyinPublishTaskController {
       duration: work.duration,
       status: work.status,
       douyinVideoId: work.douyinVideoId,
+      platformStatus: work.douyinWebhook?.status ?? null,
       crawlTarget:
         parseDouyinAwemeId(work.douyinUrl ?? '') ||
         parseDouyinAwemeId(work.douyinVideoId ?? '') ||
