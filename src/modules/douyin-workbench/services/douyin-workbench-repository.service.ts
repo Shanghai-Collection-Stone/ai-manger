@@ -5,6 +5,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import {
+  COSYVOICE_PRESET_MODEL,
+  COSYVOICE_PRESET_VOICES,
+} from './douyin-cosyvoice.service.js';
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
@@ -16,6 +20,7 @@ import {
 import {
   DOUYIN_SCRIPT_STYLES,
   DOUYIN_STORE_VISIT_MOTIONS,
+  DOUYIN_STORE_VISIT_STARTS,
   DOUYIN_STORE_VISIT_TEMPLATES,
   type DouyinFaceMaskStyle,
   type DouyinMediaReference,
@@ -29,6 +34,8 @@ import {
   type DouyinStoreVisitSceneImage,
   type DouyinStoreVisitSceneVideo,
   type DouyinStoreVisitSegment,
+  type DouyinStoreVisitSetting,
+  type DouyinStoreVisitStart,
   type DouyinStoreVisitTemplate,
   type DouyinStoreVisitVoiceAnchor,
   type DouyinStoreVisitVoiceSample,
@@ -644,9 +651,11 @@ export class DouyinWorkbenchRepositoryService {
       script?: string;
       storyboardPreference?: Partial<DouyinStoryboardPreference>;
       personaId?: number;
+      voiceId?: string;
       scriptStyle?: string;
       referenceImages?: Array<Partial<DouyinMediaReference>>;
       productionMode?: 'storyboard' | 'store-visit';
+      start?: DouyinStoreVisitStart;
     }>,
     scope: DouyinScope,
   ): Promise<Array<Omit<DouyinTopicEntity, '_id'>>> {
@@ -675,7 +684,12 @@ export class DouyinWorkbenchRepositoryService {
             ? Number(candidate?.personaId)
             : undefined,
         scriptStyle: normalizeScriptStyle(candidate?.scriptStyle),
+        voiceId: candidate.voiceId,
+        voice: COSYVOICE_PRESET_VOICES.find(
+          (voice) => voice.voiceId === candidate.voiceId,
+        ),
         storeVisit: candidate?.productionMode === 'store-visit',
+        scriptFirst: candidate?.start === 'script',
         referenceImages:
           candidate?.productionMode === 'store-visit'
             ? []
@@ -693,6 +707,8 @@ export class DouyinWorkbenchRepositoryService {
     }
 
     for (const candidate of normalized) {
+      if (candidate.voiceId && !candidate.voice)
+        throw new BadRequestException('音色不在音色库中，请重新选择');
       await this.validateMediaReferences(candidate.referenceImages, scope);
     }
 
@@ -710,7 +726,19 @@ export class DouyinWorkbenchRepositoryService {
         ...(candidate.storeVisit
           ? {
               productionMode: 'store-visit' as const,
-              storeVisit: candidate.script ? { script: candidate.script } : {},
+              storeVisit: {
+                template: 'voiceover' as const,
+                ...(candidate.voice
+                  ? {
+                      voiceId: candidate.voice.voiceId,
+                      voiceName: candidate.voice.voiceName,
+                      voiceSource: 'preset' as const,
+                      voiceModel: COSYVOICE_PRESET_MODEL,
+                    }
+                  : {}),
+                ...(candidate.scriptFirst ? { start: 'script' as const } : {}),
+                ...(candidate.script ? { script: candidate.script } : {}),
+              },
             }
           : {
               script: candidate.script || undefined,
@@ -767,7 +795,9 @@ export class DouyinWorkbenchRepositoryService {
       storeVisit?: {
         script?: string;
         linesScript?: string;
+        scriptNeedsRefine?: boolean;
         voicePrompt?: string;
+        start?: DouyinStoreVisitStart;
         speechEngine?: 'cosyvoice' | 'qwen3-tts';
         storeName?: string;
         storeId?: number;
@@ -872,6 +902,9 @@ export class DouyinWorkbenchRepositoryService {
       if (text) nested[`storeVisit.${field}`] = text;
       else unset[`storeVisit.${field}`] = '';
     }
+    if (input.storeVisit?.scriptNeedsRefine !== undefined)
+      nested['storeVisit.scriptNeedsRefine'] =
+        input.storeVisit.scriptNeedsRefine;
     if (input.storeVisit?.lines !== undefined) {
       const lines = normalizeStoreVisitLines(input.storeVisit.lines);
       if (lines) nested['storeVisit.lines'] = lines;
@@ -969,6 +1002,12 @@ export class DouyinWorkbenchRepositoryService {
       DOUYIN_STORE_VISIT_TEMPLATES.includes(input.storeVisit.template)
     ) {
       nested['storeVisit.template'] = input.storeVisit.template;
+    }
+    if (
+      input.storeVisit?.start !== undefined &&
+      DOUYIN_STORE_VISIT_STARTS.includes(input.storeVisit.start)
+    ) {
+      nested['storeVisit.start'] = input.storeVisit.start;
     }
     // 分段只收台词、场景、画面描述与镜头类型，首帧、成片与配音按段 ID 从已保存的分段接上；全文台词跟着分段走
     if (input.storeVisit?.segments !== undefined) {
@@ -1142,6 +1181,39 @@ export class DouyinWorkbenchRepositoryService {
     return await this.topics.findOneAndUpdate(
       { ...this.scopeFilter(scope), id, kind: 'child' },
       { $set: { videoDirection: direction, updatedAt: new Date() } },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
+   * @description 把旧分镜脚本原子地改成统一出片流程：只在它还不是 `store-visit` 时写入制作方式与统一流程设置，原分镜数据原样保留；
+   *   两个请求同时转时只有一个生效。
+   * @keyword-cn 写入统一流程, 旧分镜转换落库
+   * @keyword-en persist-unified-flow, convert-storyboard-write
+   * @param {number} id 子选题（脚本）ID。
+   * @param {DouyinStoreVisitSetting} storeVisit 转换后的统一流程设置。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinTopicEntity|null>} 转换后的选题；已经转过或不存在时为 null。
+   */
+  async convertToUnified(
+    id: number,
+    storeVisit: DouyinStoreVisitSetting,
+    scope: DouyinScope,
+  ): Promise<DouyinTopicEntity | null> {
+    return await this.topics.findOneAndUpdate(
+      {
+        ...this.scopeFilter(scope),
+        id,
+        kind: 'child',
+        productionMode: { $ne: 'store-visit' },
+      },
+      {
+        $set: {
+          productionMode: 'store-visit',
+          storeVisit,
+          updatedAt: new Date(),
+        },
+      },
       { returnDocument: 'after' },
     );
   }

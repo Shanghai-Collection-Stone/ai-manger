@@ -21,10 +21,12 @@ import {
   DOUYIN_FACE_MASK_STYLES,
   DOUYIN_SCRIPT_STYLES,
   DOUYIN_STORE_VISIT_MOTIONS,
+  DOUYIN_STORE_VISIT_STARTS,
   DOUYIN_STORE_VISIT_TEMPLATES,
   DOUYIN_TEMPLATE_ASPECT_RATIOS,
   type DouyinFaceMaskStyle,
   type DouyinStoreVisitMotion,
+  type DouyinStoreVisitStart,
   type DouyinStoreVisitTemplate,
   type DouyinTemplateAspect,
 } from '../entities/douyin-workbench.entity.js';
@@ -193,8 +195,18 @@ export class CreateDouyinMotherTopicDto {
  */
 export class GenerateDouyinChildrenDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  @Matches(/^[a-zA-Z0-9_-]*$/)
+  voiceId?: string;
+
+  @IsOptional()
   @IsIn(['storyboard', 'store-visit'])
   productionMode?: 'storyboard' | 'store-visit';
+
+  @IsOptional()
+  @IsIn(DOUYIN_STORE_VISIT_STARTS)
+  start?: DouyinStoreVisitStart;
 
   @IsOptional()
   @IsString()
@@ -458,6 +470,14 @@ export class DouyinStoreVisitSegmentDto {
  */
 export class DouyinStoreVisitDto {
   @IsOptional()
+  @IsBoolean()
+  scriptNeedsRefine?: boolean;
+
+  @IsOptional()
+  @IsIn(DOUYIN_STORE_VISIT_STARTS)
+  start?: DouyinStoreVisitStart;
+
+  @IsOptional()
   @IsIn(['cosyvoice', 'qwen3-tts'])
   speechEngine?: 'cosyvoice' | 'qwen3-tts';
 
@@ -546,6 +566,12 @@ export class DouyinStoreVisitDto {
  * @keyword-en script-draft-pick-dto, draft-edit
  */
 export class DouyinScriptDraftPickDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  @Matches(/^[a-zA-Z0-9_-]*$/)
+  voiceId?: string;
+
   @IsString()
   @MinLength(1)
   @MaxLength(64)
@@ -568,11 +594,11 @@ export class DouyinScriptDraftPickDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(0)
   personaId?: number;
 
   @IsOptional()
-  @IsIn(SCRIPT_STYLE_KEYS)
+  @IsIn(['', ...SCRIPT_STYLE_KEYS])
   scriptStyle?: string;
 
   @IsOptional()
@@ -703,6 +729,20 @@ export class UpdateDouyinTopicDto {
  * @keyword-en refine-script-dto, revision-instruction
  */
 export class RefineDouyinScriptDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  voiceId?: string;
+
+  @IsOptional()
+  @IsIn(['storyboard', 'store-visit'])
+  productionMode?: 'storyboard' | 'store-visit';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  voicePrompt?: string;
+
   @IsString()
   @MinLength(20)
   @MaxLength(8000)
@@ -1305,6 +1345,31 @@ export class StartDouyinStoreVisitPipelineDto {
   @IsOptional()
   @IsBoolean()
   restart?: boolean;
+}
+
+/**
+ * @description 校验 Agent 自动托管的配图偏向、统一声音能力和当前脚本台词要求，不允许直接写任务状态。
+ * @keyword-cn Agent托管参数, 托管创作要求
+ * @keyword-en agent-autopilot-dto, autopilot-instruction
+ */
+export class StartDouyinAutopilotDto {
+  @IsOptional()
+  @IsIn(['gallery', 'ai'])
+  pictureSource?: 'gallery' | 'ai';
+
+  @IsOptional()
+  @IsBoolean()
+  voiceAnchor?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  scriptPrompt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  linesPrompt?: string;
 }
 
 /**

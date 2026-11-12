@@ -51,6 +51,7 @@ import {
   resolveOpensourceVideoMode,
 } from '../../opensource-video/services/opensource-video-params.js';
 import { toStoreVisitLipSyncView } from './douyin-store-visit-lip-sync.js';
+import { storeVisitAsStoryboard } from './douyin-unify.js';
 import {
   supportsStoreVisitReferenceAudio,
   supportsStoreVisitReferences,
@@ -133,6 +134,7 @@ export class DouyinOperationService {
   /**
    * @description 整片模式：所有分镜一次生成一条完整视频。后台为节点 `douyin-workbench/full-video` 指定了模型时走 PixMax、数眼智能或自建 MiniMax-H3，
    *   否则把整条分镜提交给环境变量配置的视频生成服务；成功受理后记录响应并扣除生视频服务 Credit。
+   *   统一出片流程的脚本（「整条一次出」）先经 `storeVisitAsStoryboard` 把分段当成分镜。
    * @keyword-cn 直连视频生成, 合成总片, 生视频扣费, 整片生成
    * @keyword-en direct-video-generation, composite-video, video-service-charge, full-video
    */
@@ -142,7 +144,9 @@ export class DouyinOperationService {
     user: AdminUserEntity | DouyinScope,
   ): Promise<DouyinOperationView> {
     const scope = this.scopeOf(user);
-    const topic = await this.requireChild(topicId, scope);
+    const topic = storeVisitAsStoryboard(
+      await this.requireChild(topicId, scope),
+    );
     if (!topic.storyboard.length)
       throw new BadRequestException('DOUYIN_STORYBOARD_REQUIRED');
     const nodeRuntime = await this.workflowModels.resolveNodeRuntime(

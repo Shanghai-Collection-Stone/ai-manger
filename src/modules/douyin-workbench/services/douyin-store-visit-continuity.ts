@@ -1,8 +1,28 @@
-import type { DouyinStoreVisitSegment } from '../entities/douyin-workbench.entity.js';
+import type {
+  DouyinStoreVisitSegment,
+  DouyinStoreVisitSetting,
+  DouyinStoreVisitStart,
+} from '../entities/douyin-workbench.entity.js';
 
-/** @description 所有探店视频共享的实景与稳定镜头约束，追加在模型规划之后：不新增、不改变画面里的东西，但画面里本来就有的东西要自然地动起来，不能像一张照片往前推。 @keyword-cn 实景保真约束, 稳定镜头 @keyword-en real-scene-constraints, stable-camera */
+/** @description 读取统一出片流程的起点：只有明确写了 `script` 才是从脚本开始，旧数据与缺省都按从门店开始。 @keyword-cn 读取出片起点, 从脚本开始 @keyword-en read-production-start, script-first-start */
+export function storeVisitStart(
+  setting: Pick<DouyinStoreVisitSetting, 'start'> | null | undefined,
+): DouyinStoreVisitStart {
+  return setting?.start === 'script' ? 'script' : 'store';
+}
+
+/** @description 所有探店视频共享的实景与稳定镜头约束，追加在模型规划之后：镜头只能固定机位或缓慢推近、画面始终在原图范围以内，不新增、不改变画面里的东西，但画面里本来就有的东西要自然地动起来，不能像一张照片往前推。 @keyword-cn 实景保真约束, 稳定镜头 @keyword-en real-scene-constraints, stable-camera */
 export const STORE_VISIT_REAL_SCENE_RULES =
-  '【实景硬约束】原始场景图是环境、产品和设施的唯一画面依据；说明和台词不授权扩展画面。保持原图布局、产品身份、招牌和可见文字，不新增图外空间、菜品、设施或路人；只在所给图片可见范围内拍摄。单段只有一个连续镜头，缓慢推近或小幅平移，不切镜、不环绕、不快速摇移、不突然拉远、不穿门、不模拟走向图外区域；不得改变陈设布局、产品身份和设施结构。画面要像实拍视频而不是一张照片往前推：原图里本来就有的东西自然地动起来，例如灯光与霓虹流动闪烁、屏幕和投影在播放、布帘和旗子轻轻晃动、热气和水汽飘动、原图里已有的人轻微活动。不添加字幕、水印或新文字。';
+  '【实景硬约束】原始场景图是环境、产品和设施的唯一画面依据；说明和台词不授权扩展画面。保持原图布局、产品身份、招牌和可见文字，不新增图外空间、菜品、设施或路人；只在所给图片可见范围内拍摄。单段只有一个连续镜头，镜头只能固定机位或缓慢推近图里已有的主体，画面始终落在原图边框以内、只往里收不往外扩：不平移、不上下摇、不拉远、不后退、不环绕、不跟拍、不升降、不切镜、不穿门，不露出原图边框以外的任何区域，不模拟走向图外区域；不得改变陈设布局、产品身份和设施结构。画面要像实拍视频而不是一张照片往前推：原图里本来就有的东西自然地动起来，例如灯光与霓虹流动闪烁、屏幕和投影在播放、布帘和旗子轻轻晃动、热气和水汽飘动、原图里已有的人轻微活动。不添加字幕、水印或新文字。';
+
+/** @description 从脚本开始的画面约束：画面不是门店实拍，不需要「只拍图里有的东西」那组硬约束，只要求以所给图片为准延续主体、人物与画风，镜头平稳、画面活起来、不加文字。 @keyword-cn 从脚本开始画面约束, 创意画面约束 @keyword-en script-first-scene-rules, creative-scene-rules */
+export const SCRIPT_FIRST_SCENE_RULES =
+  '【画面约束】以所给图片为首帧和画面依据：保持主体、人物长相与穿着、画风和色调一致；单段只有一个连续镜头，运镜平稳，不切镜、不快速甩动；画面里的东西自然地动起来，不要像一张照片往前推。不添加字幕、水印或新文字。';
+
+/** @description 按起点取画面约束：从门店开始用实景硬约束 `STORE_VISIT_REAL_SCENE_RULES`，从脚本开始用 `SCRIPT_FIRST_SCENE_RULES`。 @keyword-cn 按起点取画面约束, 实景约束开关 @keyword-en scene-rules-by-start, real-scene-switch */
+export function storeVisitSceneRules(scriptFirst: boolean): string {
+  return scriptFirst ? SCRIPT_FIRST_SCENE_RULES : STORE_VISIT_REAL_SCENE_RULES;
+}
 
 /** @description 读取生成素材来源，旧 local 照片统一按 original 生成动态声画。
  * @keyword-cn 探店画面来源, 旧数据兼容 @keyword-en store-visit-visual-source, legacy-visual-source */
@@ -138,33 +158,35 @@ export function parseStoreVisitContinuityPlan(
   };
 }
 
-/** @description 为视觉 LLM 写衔接任务，明确尾帧为真实起点、场景图为空间参考、台词段不触发重构画面。 @keyword-cn 尾帧理解要求, 场景衔接规划 @keyword-en tail-frame-analysis, scene-continuity-planning */
+/** @description 为视觉 LLM 写衔接任务，明确尾帧为真实起点、场景图为空间参考、台词段不触发重构画面；`scriptFirst`（从脚本开始）时不称门店、画面约束换成 `SCRIPT_FIRST_SCENE_RULES`。 @keyword-cn 尾帧理解要求, 场景衔接规划 @keyword-en tail-frame-analysis, scene-continuity-planning */
 export function buildStoreVisitContinuityBrief(input: {
   title: string;
   previous: DouyinStoreVisitSegment;
   segment: DouyinStoreVisitSegment;
   sceneChanged: boolean;
   sceneDescription?: string;
+  scriptFirst?: boolean;
 }): string {
+  const scenery = input.scriptFirst ? '空镜' : '门店空镜';
   return [
-    `探店视频：${input.title}`,
+    `${input.scriptFirst ? '短视频' : '探店视频'}：${input.title}`,
     '图片1：上一段在最终成片中实际播放结束的尾帧。图片2：当前段的原始场景图。图片3（如有）：固定出镜人物的身份参考。',
-    `上一段镜头：${input.previous.shot === 'presenter' ? '人物出镜' : '门店空镜'}；台词：${input.previous.lines}`,
-    `下一段镜头：${input.segment.shot === 'presenter' ? '人物出镜' : '门店空镜'}；台词：${input.segment.lines}`,
+    `上一段镜头：${input.previous.shot === 'presenter' ? '人物出镜' : scenery}；台词：${input.previous.lines}`,
+    `下一段镜头：${input.segment.shot === 'presenter' ? '人物出镜' : scenery}；台词：${input.segment.lines}`,
     `下一段动作要求：${input.segment.action || '固定机位，自然延续当前画面，不新增动作和空间'}`,
     `场景说明：${input.sceneDescription || ''}`,
     input.sceneChanged
       ? '这里切换素材或镜头用途。直接切入图片2对应的画面，不生成走路、穿门、人物入画或空间变形的过渡。'
-      : '场景没有变化。下一段必须从图片1的实际画面接续：保持人物位置、姿态、视线、构图、光线、运镜方向和空间关系。图片2只用于理解空间与原貌，禁止重新从图片2的构图开始。台词分段不是重新开镜或重新生图。',
+      : '场景没有变化。下一段必须从图片1的实际画面接续：保持人物位置、姿态、视线、构图、光线和空间关系。图片2只用于理解空间与原貌，禁止重新从图片2的构图开始。台词分段不是重新开镜或重新生图。上一段如果在平移、摇镜或拉远，这一段不要沿着那个方向继续走，改成固定机位或缓慢推近。',
     input.previous.shot !== input.segment.shot
       ? '镜头用途改变时直接切入所选素材，不生成让人物自动进出画面的过渡。'
       : '不要在段落边界突然改变人物、机位、景别或镜头类型。',
-    '先描述图片1的可见画面，再决定衔接动作，最后结合下一段台词写实际生视频提示词。生成提示词要写可执行的镜头、动作和结束状态，明确第一帧的连续关系；台词由视频模型直接说出，声音和画面一起生成，禁止生成字幕、文字或水印。',
+    '先描述图片1的可见画面，再决定衔接动作，最后结合下一段台词写实际生视频提示词。生成提示词要写可执行的镜头、动作和结束状态，明确第一帧的连续关系；镜头只写固定机位或缓慢推近，不写平移、摇镜、拉远、后退、环绕、跟拍或升降；台词由视频模型直接说出，声音和画面一起生成，禁止生成字幕、文字或水印。',
     input.segment.shot === 'experience'
       ? '本段是人物体验：仅执行用户明确指定、原图可支持的一项轻微动作，配画外音；不要求正脸讲解或对口型，不擅自连续品尝、拿取和游玩。'
       : '',
     '如果尾帧已经偏离原始场景，不得把新增空间或物体当成下一段的事实继续扩展。',
-    STORE_VISIT_REAL_SCENE_RULES,
+    storeVisitSceneRules(Boolean(input.scriptFirst)),
     '只返回 JSON，三个非空字符串字段：tailDescription、transition、videoPrompt。',
   ].join('\n');
 }

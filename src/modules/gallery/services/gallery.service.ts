@@ -12,7 +12,7 @@ import type {
   GalleryPublicImage,
   GallerySearchResult,
 } from '../entities/gallery-image.entity.js';
-import { AI_GENERATED_IMAGE_TAG } from '../gallery.constants.js';
+import { GALLERY_MATERIAL_TAGS } from '../gallery.constants.js';
 
 /**
  * @description 对外返回图片时的读取投影：不读 Mongo 主键和 768 维向量。向量只在服务端相似检索里用，前端从不需要，
@@ -33,6 +33,20 @@ export const GALLERY_COVER_TAGS = [
   '自动封面',
   'canvas封面',
 ] as const;
+
+/**
+ * @description 图库图片类型：all 全部，regular 普通图（不含拼图、封面和素材图），collage 拼图与封面，material 素材图（拼图、封面与 `GALLERY_MATERIAL_TAGS` 标记的 AI 生成与出片过程图）。
+ * @keyword-cn 图库图片类型, 素材图类型
+ * @keyword-en gallery-image-type, material-image-type
+ */
+export type GalleryImageType = 'all' | 'regular' | 'collage' | 'material';
+
+/** 不算普通图的系统标签：封面类标签加素材图标签 */
+const NON_REGULAR_TAGS: string[] = [
+  ...GALLERY_COVER_TAGS,
+  ...GALLERY_MATERIAL_TAGS,
+];
+const materialTagSet = new Set<string>(GALLERY_MATERIAL_TAGS);
 
 @Injectable()
 export class GalleryService {
@@ -246,12 +260,12 @@ export class GalleryService {
   }
 
   /**
-   * @description 返回标签库统计应排除的系统封面标签。
+   * @description 返回标签库统计应排除的系统标签：封面类标签与素材图标签（素材图标签不进未归类、不能放进分类）。
    * @keyword-cn 系统标签列表, 标签库排除
    * @keyword-en system-tag-list, tag-library-exclusion
    */
   getSystemTags(): string[] {
-    return [...this.COVER_TAGS];
+    return [...this.COVER_TAGS, ...GALLERY_MATERIAL_TAGS];
   }
 
   /**
@@ -419,7 +433,7 @@ export class GalleryService {
       cursorId?: number;
       limit?: number;
       includeCollage?: boolean;
-      imageType?: 'all' | 'regular' | 'collage';
+      imageType?: GalleryImageType;
       sortOrder?: 'asc' | 'desc';
       sort?: 'newest' | 'oldest' | 'random' | 'favorite';
       tags?: string[];
@@ -446,13 +460,18 @@ export class GalleryService {
     const sortDirection = resolvedSort === 'oldest' ? 1 : -1;
     const scope = this.buildTenantFilter(userId, tenantId);
     const clauses: Record<string, unknown>[] = [scope];
+    const normalizedTags = this.normalizeTags(tags);
     if (imageType && imageType !== 'all') {
-      clauses.push(this.buildImageTypeFilter(imageType));
+      clauses.push(
+        this.buildImageTypeFilter(imageType, [
+          ...normalizedTags,
+          ...(tag ? [tag] : []),
+        ]),
+      );
     } else if (!includeCollage) {
       clauses.push({ isCollage: { $ne: true } });
     }
     if (groupId !== undefined) clauses.push({ groupId });
-    const normalizedTags = this.normalizeTags(tags);
     if (normalizedTags.length > 0) {
       clauses.push({ tags: { $all: normalizedTags } });
     }
@@ -548,22 +567,31 @@ export class GalleryService {
   }
 
   /**
-   * @description 精确统计当前图片可见范围内的图片、收藏和去重标签数量。
+   * @description 精确统计当前图片可见范围内的图片（含素材图）、其中的素材图、收藏和去重标签数量。
    * @keyword-cn 图库精确统计, 可见范围计数
    * @keyword-en gallery-exact-stats, visibility-count
    */
   async getAccessibleStats(
     userId: string | undefined,
     tenantId?: string,
-  ): Promise<{ images: number; favorites: number; tags: number }> {
+  ): Promise<{
+    images: number;
+    materials: number;
+    favorites: number;
+    tags: number;
+  }> {
     const filter = this.buildTenantFilter(userId, tenantId);
-    const [images, favorites, tags] = await Promise.all([
+    const [images, materials, favorites, tags] = await Promise.all([
       this.images.countDocuments(filter),
+      this.images.countDocuments({
+        $and: [filter, this.buildImageTypeFilter('material')],
+      }),
       this.images.countDocuments({ $and: [filter, { favorite: true }] }),
       this.images.distinct('tags', filter),
     ]);
     return {
       images,
+      materials,
       favorites,
       tags: new Set(tags.map((tag) => String(tag ?? '').trim()).filter(Boolean))
         .size,
@@ -858,47 +886,58 @@ export class GalleryService {
   }
 
   /**
-   * @description 构建图片类型 DB 过滤条件；普通图排除拼图、封面标签与 AI 生成素材，拼图口径保持不变。
-   * @param {'regular' | 'collage'} imageType - 目标图片类型。
+   * @description 构建图片类型 DB 过滤条件；普通图排除拼图、封面标签与素材图标签（AI 生成、出片过程图、设计素材与画布成品），素材图正好取反，拼图口径保持不变。
+   *   调用方明确按某个标签筛选时，普通图不再排除这个标签（例如设计编辑器手动选「画布成品」），否则结果必然为空。
+   * @param {Exclude<GalleryImageType, 'all'>} imageType - 目标图片类型。
+   * @param {string[]} [requestedTags] - 调用方明确要筛的标签。
    * @returns {Record<string, unknown>} MongoDB filter 对象。
    * @keyword-cn 普通图筛选, AI素材排除
    * @keyword-en regular-image-filter, exclude-ai-material
    */
   private buildImageTypeFilter(
-    imageType: 'regular' | 'collage',
+    imageType: Exclude<GalleryImageType, 'all'>,
+    requestedTags: string[] = [],
   ): Record<string, unknown> {
     if (imageType === 'regular') {
-      // Exclude collages, system cover images, and AI-generated materials.
       return {
         isCollage: { $ne: true },
-        tags: { $nin: [...this.COVER_TAGS, AI_GENERATED_IMAGE_TAG] },
+        tags: {
+          $nin: NON_REGULAR_TAGS.filter((tag) => !requestedTags.includes(tag)),
+        },
+      };
+    }
+    if (imageType === 'material') {
+      return {
+        $or: [{ isCollage: true }, { tags: { $in: NON_REGULAR_TAGS } }],
       };
     }
     return {
-      $or: [{ isCollage: true }, { tags: { $in: this.COVER_TAGS } }],
+      $or: [{ isCollage: true }, { tags: { $in: [...GALLERY_COVER_TAGS] } }],
     };
   }
 
   /**
-   * @description 内存层图片类型匹配；普通图排除拼图、封面标签与 AI 生成素材，用于 Atlas 向量搜索结果后处理。
+   * @description 内存层图片类型匹配；普通图排除拼图、封面标签与素材图标签，素材图取反，用于 Atlas 向量搜索结果后处理。
    * @param {GalleryImageEntity} image - 图片对象。
-   * @param {'all' | 'regular' | 'collage'} imageType - 目标类型。
+   * @param {GalleryImageType} imageType - 目标类型。
    * @returns {boolean}
    * @keyword-cn 普通图内存筛选, AI素材排除
    * @keyword-en in-memory-image-filter, exclude-ai-material
    */
   private matchesImageType(
     image: GalleryImageEntity,
-    imageType: 'all' | 'regular' | 'collage',
+    imageType: GalleryImageType,
   ): boolean {
     if (imageType === 'all') return true;
     const tags = Array.isArray(image.tags) ? image.tags : [];
     const isCover =
       image.isCollage === true ||
       tags.some((t) => this.coverTagSet.has(String(t ?? '').trim()));
-    if (imageType === 'regular') {
-      return !isCover && !tags.includes(AI_GENERATED_IMAGE_TAG);
-    }
+    const isMaterial = tags.some((t) =>
+      materialTagSet.has(String(t ?? '').trim()),
+    );
+    if (imageType === 'regular') return !isCover && !isMaterial;
+    if (imageType === 'material') return isCover || isMaterial;
     return isCover;
   }
 
@@ -1046,7 +1085,7 @@ export class GalleryService {
     tags: string[];
     limit?: number;
     matchCollage?: boolean;
-    imageType?: 'all' | 'regular' | 'collage';
+    imageType?: GalleryImageType;
     /** 是否包含已使用 (isUsed=true) 图片, 默认 false */
     includeUsed?: boolean;
   }): Promise<GalleryImageEntity[]> {
@@ -1093,7 +1132,7 @@ export class GalleryService {
     userId?: string;
     tenantId?: string;
     tags: string[];
-    imageType?: 'all' | 'regular' | 'collage';
+    imageType?: GalleryImageType;
     /** 是否包含已使用 (isUsed=true) 图片, 默认 false(去重统计) */
     includeUsed?: boolean;
   }): Promise<{ total: number; byTag: Record<string, number> }> {
@@ -1129,7 +1168,7 @@ export class GalleryService {
     userId?: string;
     tenantId?: string;
     limit?: number;
-    imageType?: 'all' | 'regular' | 'collage';
+    imageType?: GalleryImageType;
   }): Promise<Array<{ tag: string; count: number }>> {
     const matchClauses: Record<string, unknown>[] = [
       this.buildTenantFilter(input.userId, input.tenantId),
@@ -1189,7 +1228,7 @@ export class GalleryService {
     tenantId?: string;
     groupId?: string | number;
     tags?: string[];
-    imageType?: 'all' | 'regular' | 'collage';
+    imageType?: GalleryImageType;
     excludedGroupIds?: Array<string | number>;
     excludedTags?: string[];
     limit?: number;
@@ -1484,7 +1523,7 @@ export class GalleryService {
     tenantId?: string,
     limit = 8,
     minScore = 0.5,
-    imageType?: 'all' | 'regular' | 'collage',
+    imageType?: GalleryImageType,
   ): Promise<GallerySearchResult[]> {
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
     const queryEmbedding = await this.embedding.embedText(
@@ -1560,7 +1599,7 @@ export class GalleryService {
     tenantId: string | undefined,
     limit: number,
     minScore: number,
-    imageType?: 'all' | 'regular' | 'collage',
+    imageType?: GalleryImageType,
   ): Promise<GallerySearchResult[]> {
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(userId, tenantId),

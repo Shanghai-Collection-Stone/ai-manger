@@ -13,10 +13,13 @@
 - `services/douyin-publish-library.service.ts` — 发布库 CRUD、批量统计、二维码 token、长期 Schema 缓存与扫码 token 查询。
 - `services/douyin-miniapp-schema.service.ts` — 抖音小程序 client_token 缓存与「生成 SchemaV2」调用，产出抖音扫一扫可直接打开发布页的 `sslocal://miniapp?ticket=…`。
 - `services/douyin-publish-work.service.ts` — 视频快照入库、作品列表、选题位置、换库、FIFO 租约与发布结果回写。
+- `services/douyin-publish-work.service.spec.ts` — 原生ID必需、加密ID保留、链接补全、待补状态防重发与抓取衔接回归测试。
+- CONFIGURATION.md — 服务端配置、平台权限、桌面接口配套与部署步骤。
 - `controller/douyin-publish.controller.ts` — `/api/douyin-publish` 管理端接口。
 - `controller/douyin-publish-task.controller.ts` — `/api/publish-tasks` 抖音小程序扫码 token 接口。
 - `controller/douyin-publish.dto.ts` — 管理端与小程序请求体校验 DTO。
 - `guards/douyin-publish-token.guard.ts` — 小程序入口的同址权限声明装饰器、Bearer 扫码 token Guard 与发布库请求上下文。
+- `../../../.env` — 本机抖音小程序 AppID 与发布页配置；环境文件被 Git 忽略，AppSecret 仅从服务端环境读取。
 
 ## 函数清单 (Function List)
 
@@ -65,6 +68,22 @@
 - `leaseNext(libraryId)` — 原子 FIFO 领取下一条作品 | keywords: FIFO领取, 原子租约, fifo-lease-next, atomic-lease
 - `getForLibrary(id,libraryId)` — 按扫码库读取指定作品 | keywords: 小程序读取作品, miniapp-get-work
 - `updatePublishResult(id,libraryId,input)` — 回写发布结果并释放租约 | keywords: 发布结果回写, 释放租约, update-publish-result, release-lease
+- resolvePublishedIdentity(work, input) — 保留原生ID并校验分享链接对应的数字抓取ID，拒绝缺ID成功与身份冲突 | keywords: publish-identity, crawl-handoff, 发布标识, 抓取衔接
+- publishFixture() — 构造真实服务和内存作品验证发布回写 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- findWork() — 测试中读取当前作品 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- updateWork(filter, patch) — 测试中按数据库条件应用更新以验证并发保护 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- getCollection() — 测试中提供内存集合 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- publishIdentityTests() — 注册发布身份与抓取衔接回归 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- rejectsMissingId() — 验证缺ID不能正常上报已完成发布 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- numericIdIsCrawlable() — 验证数字原生ID供后续抓取读取 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- completesEncryptedId() — 验证加密ID原样保存并可补齐抓取链接 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- recoversMissingIdWithLink() — 验证漏返ID时退出领取队列并用链接恢复 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- protectsPublishedIdentity() — 验证已发布作品标识不可被冲突回调覆盖 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- rejectsInvalidLink() — 验证无效链接不能补全发布身份 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- rejectsConcurrentIdentityOverwrite() — 验证并发回调不能覆盖已落库的不同视频ID | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- bindsDesktopLinkToPublishedWork() — 验证桌面绑定链接能补齐发布库抓取身份且保留原始ID | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- writeMonitor(_query, patch) — 测试中模拟监控行upsert | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
+- getMonitorCollection() — 测试中提供监控集合 | keywords: publish-result-test, crawl-handoff, 发布回写测试, 抓取衔接
 - `scopeFilter(scope)` — 构造作品租户用户过滤 | keywords: 作品作用域过滤, 用户隔离, work-scope-filter, user-isolation
 - `requireWork(id,scope)` — 要求当前作用域作品存在 | keywords: 要求发布作品, require-publish-work
 - `normalizeTags(tags?)` — 去井号、空白并去重标签 | keywords: 标签归一化, normalize-publish-tags
@@ -73,7 +92,7 @@
 - `throwLeased()` — 抛出作品租约冲突 | keywords: 租约冲突错误, leased-work-conflict
 - `throwDuplicate(work)` — 抛出重复选题冲突并携带位置 | keywords: 重复选题错误, duplicate-topic-conflict
 - `escapeRegex(value)` — 转义关键词搜索正则 | keywords: 搜索词转义, escape-search-regex
-- `toView(work)` — 转换作品视图并实时计算租约状态 | keywords: 作品视图转换, 实时租约状态, publish-work-view-mapping, computed-lease-state
+- `toView(work)` — 转换管理端作品视图，返回租约状态和数字抓取目标crawlTarget | keywords: 作品视图转换, 实时租约状态, publish-work-view-mapping, computed-lease-state
 - `DouyinPublishController()` — 提供发布库管理端接口 | keywords: 发布库管理接口, 管理端鉴权, publish-admin-controller, admin-authorization
 - `listLibraries(req)` — 列出发布库及统计 | keywords: 发布库列表接口, list-publish-libraries-endpoint
 - `createLibrary(body,req)` — 新建发布库 | keywords: 新建发布库接口, create-publish-library-endpoint
@@ -121,6 +140,9 @@
 | 选题入库位置 | topic-work-locations |
 | 绝对媒体地址 | absolute-media-url |
 | 发布结果回写 | update-publish-result |
+| 发布标识 | publish-identity |
+| 抓取衔接 | crawl-handoff |
+| 发布回写测试 | publish-result-test |
 | 按链接建作品 | create-work-from-link |
 | 手动链接作品 | manual-link-work |
 | 抖音小程序Schema | douyin-miniapp-schema |
@@ -177,12 +199,16 @@
 
 作品新增 `source`（`video` / `manual-link`，旧数据缺省按 `video` 输出）与 `douyinUrl`。`manual-link` 作品由 `douyin-data` 的「新增链接」经 `createFromLink` 创建：直接是已发布状态，`douyinVideoId` 为解析出的作品 ID，没有视频地址、封面与时长，因为不是未发布状态所以永远不会被小程序领取；同一发布库里同一 `douyinVideoId` 重复时返回 409 `DOUYIN_PUBLISH_WORK_EXISTS`。`findWork` 供数据监控在抓取前确认作品仍存在。
 
-领取使用 `findOneAndUpdate`，条件为 `status: unpublished` 且租约不存在、为空或已过期，按 `createdAt` 升序原子写入 `lockExpireAt = now + DOUYIN_PUBLISH_LEASE_MS` 与随机 `leaseToken`。租约固定十分钟；发布成功和失败均清除租约，失败写 `lastError` 且作品仍为未发布，成功写 `publishedAt`、`douyinVideoId` 和实际 `title` / `description` / `tags` 的 `publishedSnapshot`。已发布作品重复上报成功幂等返回 `{ ok: true }`。有效租约期间管理端换库、编辑或删除返回 409 `DOUYIN_PUBLISH_WORK_LEASED`。
+领取使用 `findOneAndUpdate`，条件为 `status: unpublished` 且租约不存在、为空或已过期，按 `createdAt` 升序原子写入十分钟租约。成功和失败均清除租约。正常 published 回写必须有原生 douyinVideoId 或可解析的 douyinUrl；原生加密ID原样保存，数字ID对应链接保存到 douyinUrl，供 douyin-data 使用。已发布回写可补齐作品链接，保留首次发布时间与文案快照，通过数据库条件防止冲突ID或链接覆盖，晚到的失败不降级已发布状态。响应为 `{ ok, douyinVideoId, crawlTarget }`。
+
+平台发布成功却漏返ID时，小程序上报 identity-pending，后端按实际已发布状态从领取队列移出，lastError 明确标记待补作品ID，防止租约过期后重复发布；补充链接后清除待补提示并提供数字抓取目标。此时 crawlTarget 为 null，不能开启抓取。douyinUrl 支持15-21位数字ID、抖音作品长链接和分享口令中的短链，仅跟随抖音域名；错误为 DOUYIN_PUBLISH_VIDEO_ID_REQUIRED、DOUYIN_PUBLISH_VIDEO_LINK_INVALID 或 DOUYIN_PUBLISH_VIDEO_ID_CONFLICT。有效租约期间管理端换库、编辑或删除仍返回409。
 
 **扫码直接打开小程序（长期 Schema）**：配置了 `DOUYIN_MINIAPP_APP_ID` 与 `DOUYIN_MINIAPP_APP_SECRET` 时，`getQr` 的 `qrContent` 改为抖音「生成 SchemaV2」产出的长期链接 `sslocal://miniapp?ticket=…`（`qrContentType: douyin-schema`），抖音 App 扫一扫即可打开小程序发布页。Schema 的启动参数是扁平的 `{token, tenantId}`（不是 `path` JSON），小程序 `readPublishEntryPayload` 在没有 `path` 时直接从 options 读这两个键。每个发布库只生成一次，存在 `qrSchema`，`qrSchemaKey` 记下 AppID + 发布页 + 启动参数，任一项变化才重新生成；长期 Schema 全平台上限 10 万条，所以不能每次打开二维码都生成。client_token 来自 `POST /oauth/client_token/`（`grant_type=client_credential`），按进程缓存、提前 5 分钟刷新；多进程互相刷新导致令牌失效（`err_no=28001003`）时刷新后重试一次。生成失败返回 502 `DOUYIN_PUBLISH_QR_SCHEMA_FAILED` 并记日志（含抖音 `err_no` / `log_id`），不悄悄退回打不开的原始 JSON。可选配置：`DOUYIN_OPEN_API_BASE`（默认 `https://open.douyin.com`，沙盒用 `https://open-sandbox.douyin.com`）、`DOUYIN_MINIAPP_PUBLISH_PAGE`（默认 `pages/publish/index`）。小程序需开通 `ma.share.schema` 权限。
 
+本机 `.env` 的 `DOUYIN_MINIAPP_APP_ID` 已配置为 `ttd8d9ae6446a0257001`，与合并后的 `shunye-ip/super-myself/src/manifest.json` 一致；`DOUYIN_MINIAPP_PUBLISH_PAGE` 为独立发布页 `pages/publish/index`，小程序默认首页保留会客厅内容。仍需在服务端单独提供 `DOUYIN_MINIAPP_APP_SECRET`，不能仅凭 AppID 生成 Schema。部署环境也需提供同名配置，本机 `.env` 不随 Git 分发。
+
 二维码 token 懒生成，使用 32 字节随机数的 base64url 字符串。`path` 是 `{"token":"...","tenantId":"..."}` JSON；未配置 `DOUYIN_PUBLISH_QR_LINK_TEMPLATE` 时 `qrContent` 等于 `path`。配置模板时必须包含 `{path}`，服务会替换为 `encodeURIComponent(path)`；模板应指向抖音小程序页面 `pages/publish/index`，入口参数名为 `path`，可使用抖音小程序 schema 或抖音开放平台生成的带参链接。
 
-小程序字段逐字对应 `publish-douyin`：领取与详情返回裸对象 `{ id, title, description, tags, videoUrl, coverUrl, duration }`；相对 `videoUrl` / `coverUrl` 使用请求的 `x-forwarded-proto`、`host` 补成绝对地址。没有可领取作品返回 404；无效 token 返回 401；`X-Tenant-Id` 与库租户不一致返回 403。
+领取与详情返回 `{ id, title, description, tags, videoUrl, coverUrl, duration, status, douyinVideoId, crawlTarget }`。小程序重开指定作品时依据 status 恢复已发布锁定状态；crawlTarget 为空时可补作品链接，不能再次发布。相对媒体路径按请求协议与host补全。无可领取作品返回404；无效token返回401；租户不匹配返回403。
 
 错误码：`DOUYIN_PUBLISH_LIBRARY_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_NOT_AVAILABLE`（404）、`DOUYIN_PUBLISH_LIBRARY_NOT_EMPTY`（409）、`DOUYIN_PUBLISH_WORK_EXISTS`（409，响应额外携带 `workId`、`libraryId`）、`DOUYIN_PUBLISH_WORK_LEASED`（409）、`DOUYIN_PUBLISH_QR_TOKEN_FAILED`（409）、`DOUYIN_VIDEO_ASSET_NOT_FOUND`（404）、`DOUYIN_PUBLISH_TOKEN_REQUIRED`（401）、`DOUYIN_PUBLISH_TOKEN_INVALID`（401）、`DOUYIN_PUBLISH_TENANT_MISMATCH`（403）、`DOUYIN_PUBLISH_LIBRARY_NAME_INVALID`（400）、`DOUYIN_PUBLISH_TITLE_INVALID`（400）、`DOUYIN_PUBLISH_TAGS_INVALID`（400）、`DOUYIN_PUBLISH_STATUS_INVALID`（400）、`DOUYIN_PUBLISH_PAGINATION_INVALID`（400）。DTO 字段不合法时沿用 Nest `ValidationPipe` 的 400 默认错误结构。

@@ -52,6 +52,7 @@ import {
   RedoDouyinStoreVisitPipelineSegmentDto,
   SaveDouyinStoreVisitVoiceAnchorDto,
   StartDouyinStoreVisitPipelineDto,
+  StartDouyinAutopilotDto,
   GenerateDouyinVideoDto,
   PlanDouyinVideoDirectionDto,
   PlanDouyinVideoEditDto,
@@ -73,12 +74,15 @@ import { DouyinChildTopicGenerationService } from '../services/douyin-child-topi
 import { DouyinGenerationJobService } from '../services/douyin-generation-job.service.js';
 import { DouyinShotConcatService } from '../services/douyin-shot-concat.service.js';
 import { DouyinShotImageService } from '../services/douyin-shot-image.service.js';
+import { DouyinSegmentImageService } from '../services/douyin-segment-image.service.js';
+import { DouyinUnifyService } from '../services/douyin-unify.service.js';
 import {
   DOUYIN_VOICE_ANCHOR_MAX_BYTES,
   DOUYIN_VOICE_SAMPLE_MAX_BYTES,
   DouyinStoreVisitService,
 } from '../services/douyin-store-visit.service.js';
 import { DouyinStoreVisitPipelineService } from '../services/douyin-store-visit-pipeline.service.js';
+import { DouyinStoreVisitAutopilotService } from '../services/douyin-store-visit-autopilot.service.js';
 import { DouyinStoreVisitPlannerService } from '../services/douyin-store-visit-planner.service.js';
 import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot.service.js';
 import { DouyinVideoDirectorService } from '../services/douyin-video-director.service.js';
@@ -100,6 +104,11 @@ import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-r
   }),
 )
 export class DouyinWorkbenchController {
+  /**
+   * @description 注入选题、脚本、素材、导演和全流程 Agent 托管业务服务。
+   * @keyword-cn 工作台入口依赖, 托管接口依赖
+   * @keyword-en workbench-entry-dependencies, autopilot-api-dependencies
+   */
   constructor(
     private readonly repository: DouyinWorkbenchRepositoryService,
     private readonly childTopics: DouyinChildTopicGenerationService,
@@ -113,6 +122,9 @@ export class DouyinWorkbenchController {
     private readonly videoTemplates: DouyinVideoTemplateService,
     private readonly director: DouyinVideoDirectorService,
     private readonly pipeline: DouyinStoreVisitPipelineService,
+    private readonly segmentImages: DouyinSegmentImageService,
+    private readonly unify: DouyinUnifyService,
+    private readonly autopilot: DouyinStoreVisitAutopilotService,
   ) {}
 
   /**
@@ -167,8 +179,10 @@ export class DouyinWorkbenchController {
         this.scopeOf(this.requireUser(req)),
         {
           personaId: dto.personaId,
+          voiceId: dto.voiceId,
           scriptStyle: dto.scriptStyle as DouyinScriptStyle | undefined,
           productionMode: dto.productionMode,
+          start: dto.start,
         },
       ),
     };
@@ -704,6 +718,71 @@ export class DouyinWorkbenchController {
   }
 
   /**
+   * @description 把一条旧分镜脚本转成统一出片流程（从脚本开始），已经是统一流程时原样返回；返回最新选题、是否转了与当前租户工作台。
+   * @keyword-cn 旧分镜转换接口, 打开时转换
+   * @keyword-en unify-storyboard-api, convert-on-open
+   */
+  @Post('topics/:id/unify')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async unifyTopic(@Req() req: AdminRequest, @Param('id') id: string) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.unify.unify(this.readId(id), scope);
+    return {
+      topic: { ...result.topic, _id: undefined },
+      converted: result.converted,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 从脚本开始的脚本按台词从租户图库给每段挑一张图（模型挑 + 按相关度补），只返回每段的图与用到的场景图，由前端并进素材后保存。
+   * @keyword-cn 分段图库配图接口, 按脚本挑图
+   * @keyword-en segment-gallery-pick-api, pick-by-script
+   */
+  @Post('topics/:id/store-visit/images/pick')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async pickStoreVisitSegmentImages(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    return await this.segmentImages.pickImages(
+      this.readId(id),
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
+   * @description 从脚本开始的脚本给一段 AI 生一张图（上一段有图时延续它），绑定到这一段并保存，随后让 AI 导演按新画面重新规划；返回更新后的选题与工作台。
+   * @keyword-cn 分段AI生图接口, 逐段生图
+   * @keyword-en segment-ai-image-api, per-segment-imaging
+   */
+  @Post('topics/:id/store-visit/segments/:segmentId/image/generate')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async generateStoreVisitSegmentImage(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Param('segmentId') segmentId: string,
+    @Body() dto: GenerateDouyinShotImageDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.segmentImages.generateImage(
+      this.readId(id),
+      this.readSegmentId(segmentId),
+      dto.prompt,
+      scope,
+    );
+    return {
+      topic: {
+        ...(await this.afterFrameChange(result.topic, scope)),
+        _id: undefined,
+      },
+      segmentId: result.segmentId,
+      imageId: result.imageId,
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
    * @description 对照引用知识自检已保存的探店脚本，只列出问题不改。
    * @keyword-cn 脚本自检接口, 引用知识核对
    * @keyword-en script-review-api, knowledge-check
@@ -796,6 +875,37 @@ export class DouyinWorkbenchController {
       voiceAnchor: dto.voiceAnchor === true,
       restart: dto.restart === true,
     });
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /** @description 启动或继续当前脚本的全流程 Agent 托管，立即返回持久化状态。 @keyword-cn 启动托管接口, 全流程Agent @keyword-en start-autopilot-api, full-workflow-agent */
+  @Post('topics/:id/store-visit/autopilot/start')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async startStoreVisitAutopilot(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: StartDouyinAutopilotDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.autopilot.start(this.readId(id), dto, scope);
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /** @description 暂停 Agent 后续步骤并同时暂停正在运行的出片导演，保留已完成结果。 @keyword-cn 暂停托管接口, 托管进度保留 @keyword-en pause-autopilot-api, preserve-autopilot-progress */
+  @Post('topics/:id/store-visit/autopilot/pause')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async pauseStoreVisitAutopilot(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topic = await this.autopilot.pause(this.readId(id), scope);
     return {
       topic: { ...topic, _id: undefined },
       groups: await this.repository.listWorkspace(scope),
@@ -1105,6 +1215,30 @@ export class DouyinWorkbenchController {
     );
     return {
       topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 换出镜人物后让音色跟着人物：音色库音色或还没有音色时按人物声线换音色，录音克隆与描述定制的音色不动；返回当前租户工作台与是否换了音色。
+   * @keyword-cn 音色跟随人物接口, 换人物换音色
+   * @keyword-en voice-follows-persona-api, persona-voice-sync
+   */
+  @Post('topics/:id/store-visit/voice/persona')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async matchStoreVisitPersonaVoice(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const result = await this.storeVisit.matchPersonaVoice(
+      this.readId(id),
+      scope,
+    );
+    return {
+      topic: { ...result.topic, _id: undefined },
+      changed: result.changed,
+      ...(result.voiceName ? { voiceName: result.voiceName } : {}),
       groups: await this.repository.listWorkspace(scope),
     };
   }

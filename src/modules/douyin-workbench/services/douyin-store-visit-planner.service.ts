@@ -47,6 +47,7 @@ import {
   DOUYIN_STORE_VISIT_SEGMENT_LIMITS,
   DouyinWorkbenchRepositoryService,
 } from './douyin-workbench-repository.service.js';
+import { storeVisitStart } from './douyin-store-visit-continuity.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
@@ -456,12 +457,91 @@ export function parseStoreVisitSceneMatches(
 }
 
 /**
- * @description 校验模型的人物与音色推荐：人物只认候选里的（要出镜时必须有形象图），音色只认音色库里的；不合规时按人物性别或「活力种草」兜底，
+ * @description 给模型挑音色的硬规则：选了人物时男女和人物一致，方言音色只在用户要求或人物设定明确要方言时才选（代码里 `pickStoreVisitRecommendation` 同样把关）。
+ * @keyword-cn 挑音色规则, 不默认方言
+ * @keyword-en voice-pick-rule, no-default-dialect
+ */
+export const STORE_VISIT_VOICE_PICK_RULE =
+  '选了人物时音色的男女要和人物一致；方言音色（东北话、粤语）只在补充要求或人物设定明确要方言时才选，其余一律选普通话音色。';
+
+/**
+ * @description 方言音色是否被明确要求：只有用户要求或人物设定里提到这种方言（如「东北」「粤」）时才算。
+ * @keyword-cn 方言音色许可, 方言要求判断
+ * @keyword-en dialect-voice-allowed, dialect-request-check
+ * @param {CosyVoicePresetVoice} voice 音色库里的音色。
+ * @param {string} hint 用户要求与人物设定拼起来的文字。
+ * @returns {boolean} 不是方言音色，或方言被明确要求时为真。
+ */
+export function isStoreVisitDialectAllowed(
+  voice: CosyVoicePresetVoice,
+  hint: string,
+): boolean {
+  if (!voice.dialect) return true;
+  const key = voice.dialect.replace(/[话语]$/, '');
+  return Boolean(key) && hint.includes(key);
+}
+
+/**
+ * @description 按预设人物的声线从音色库挑音色：男女一致（中性不限）；人物设定提到方言时优先该方言音色，否则不选方言音色；
+ *   音色特质或语速、年龄决定风格（温柔 / 沉稳 / 活力，默认活力），同类取音色库里第一个，挑不到时先放宽风格再放宽男女。
+ * @keyword-cn 按人物配音色, 人物声线匹配
+ * @keyword-en persona-voice-match, pick-persona-voice
+ * @param {Pick<DouyinPersonaView,'voice'|'summary'|'persona'>|null|undefined} persona 预设人物。
+ * @param {readonly CosyVoicePresetVoice[]} voices 音色库。
+ * @returns {CosyVoicePresetVoice} 挑中的音色。
+ */
+export function pickPersonaPresetVoice(
+  persona:
+    Pick<DouyinPersonaView, 'voice' | 'summary' | 'persona'> | null | undefined,
+  voices: readonly CosyVoicePresetVoice[],
+): CosyVoicePresetVoice {
+  const spec = persona?.voice;
+  const gender =
+    spec?.gender === 'male' || spec?.gender === 'female'
+      ? spec.gender
+      : undefined;
+  const hint = [spec?.timbre, persona?.summary, persona?.persona]
+    .filter(Boolean)
+    .join(' ');
+  const timbre = spec?.timbre || '';
+  const category = /温柔|温暖|温婉|轻柔|柔和|细腻/.test(timbre)
+    ? 'gentle'
+    : /沉稳|知性|磁性|理智|睿智|成熟|稳重/.test(timbre)
+      ? 'steady'
+      : /活力|元气|活泼|阳光|欢快|热情/.test(timbre)
+        ? 'lively'
+        : spec?.pace === 'slow'
+          ? 'gentle'
+          : spec?.age === 'mature'
+            ? 'steady'
+            : 'lively';
+  const sameGender = (voice: CosyVoicePresetVoice) =>
+    !gender || voice.gender === gender;
+  return (
+    voices.find(
+      (voice) =>
+        voice.dialect &&
+        sameGender(voice) &&
+        isStoreVisitDialectAllowed(voice, hint),
+    ) ||
+    voices.find(
+      (voice) =>
+        !voice.dialect && sameGender(voice) && voice.category === category,
+    ) ||
+    voices.find((voice) => !voice.dialect && sameGender(voice)) ||
+    voices.find((voice) => !voice.dialect) ||
+    voices[0]
+  );
+}
+
+/**
+ * @description 校验模型的人物与音色推荐：人物只认候选里的（要出镜时必须有形象图），音色只认音色库里的，且男女要和人物一致、
+ *   方言音色只在用户要求或人物设定提到时才用；不合规时有人物按人物声线（`pickPersonaPresetVoice`）、没人物按「活力种草」兜底，
  *   声音描述优先用人物设定的音色。
  * @keyword-cn 校验编排推荐, 推荐兜底
  * @keyword-en validate-plan-recommendation, recommendation-fallback
  * @param {Record<string, unknown>} raw 模型输出的 JSON。
- * @param {{personas: DouyinPersonaView[], voices: readonly CosyVoicePresetVoice[], presenter: boolean}} context 候选人物、音色库与是否出镜。
+ * @param {{personas: DouyinPersonaView[], voices: readonly CosyVoicePresetVoice[], presenter: boolean, hint?: string}} context 候选人物、音色库、是否出镜与用户要求。
  * @returns {{persona: {personaId: number, name: string, reason: string}|null, voice: {voiceId: string, voiceName: string, reason: string, voicePrompt: string}}} 推荐。
  */
 export function pickStoreVisitRecommendation(
@@ -470,6 +550,7 @@ export function pickStoreVisitRecommendation(
     personas: DouyinPersonaView[];
     voices: readonly CosyVoicePresetVoice[];
     presenter: boolean;
+    hint?: string;
   },
 ): {
   persona: { personaId: number; name: string; reason: string } | null;
@@ -488,15 +569,30 @@ export function pickStoreVisitRecommendation(
     persona?.voice.gender === 'male' || persona?.voice.gender === 'female'
       ? persona.voice.gender
       : undefined;
+  const hint = [
+    context.hint,
+    persona?.voice.timbre,
+    persona?.summary,
+    persona?.persona,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const chosen = context.voices.find(
+    (item) => item.voiceId === readStoreVisitText(raw.voiceId),
+  );
+  const accepted =
+    chosen &&
+    (!gender || chosen.gender === gender) &&
+    isStoreVisitDialectAllowed(chosen, hint)
+      ? chosen
+      : undefined;
   const voice =
-    context.voices.find(
-      (item) => item.voiceId === readStoreVisitText(raw.voiceId),
-    ) ||
-    context.voices.find(
-      (item) =>
-        item.category === 'lively' && (!gender || item.gender === gender),
-    ) ||
-    context.voices[0];
+    accepted ||
+    (persona
+      ? pickPersonaPresetVoice(persona, context.voices)
+      : context.voices.find(
+          (item) => item.category === 'lively' && !item.dialect,
+        ) || context.voices[0]);
   const reason = (value: unknown, fallback: string) =>
     readStoreVisitText(value).trim().slice(0, 80) || fallback;
   const presetPrompt = `${voice.gender === 'male' ? '男声' : '女声'}，${voice.trait}${voice.dialect ? `，${voice.dialect}` : ''}，自然口语，像博主带朋友逛店`;
@@ -511,10 +607,16 @@ export function pickStoreVisitRecommendation(
     voice: {
       voiceId: voice.voiceId,
       voiceName: voice.voiceName,
-      reason: reason(raw.voiceReason, '适合探店种草的口播'),
+      // 模型选的音色被换掉时，它写的理由和声音描述也不再适用
+      reason: accepted
+        ? reason(raw.voiceReason, '适合探店种草的口播')
+        : persona
+          ? '和出镜人物的男女与声线一致'
+          : '适合探店种草的口播',
       voicePrompt: (persona
         ? `${describePersonaVoice(persona.voice)}，自然口语，像博主带朋友逛店`
-        : readStoreVisitText(raw.voicePrompt).trim() || presetPrompt
+        : (accepted && readStoreVisitText(raw.voicePrompt).trim()) ||
+          presetPrompt
       ).slice(0, 300),
     },
   };
@@ -580,7 +682,8 @@ export class DouyinStoreVisitPlannerService {
   ) {}
 
   /**
-   * @description 门店未确定时先按引用知识询问用户确认，确定后写独立创作脚本正文及人物音色建议，台词由下一步单独生成。
+   * @description 从门店开始时先询问并确认门店，从脚本开始则直接写通用创作方案；默认沿用人物音色，未指定时保持未指定。
+   *   显式 keepCast=false 才提供人物音色建议，台词由下一步单独生成。
    * @keyword-cn AI写探店脚本, 按自检意见改
    * @keyword-en write-store-visit-script, revise-by-review
    */
@@ -590,20 +693,26 @@ export class DouyinStoreVisitPlannerService {
     scope: DouyinScope,
   ) {
     const context = await this.loadScriptContext(topicId, scope);
-    if (!context.store) {
+    const scriptFirst = storeVisitStart(context.topic.storeVisit) === 'script';
+    if (!scriptFirst && !context.store) {
       return {
         needsStore: true as const,
         storeQuestion: await this.askStore(context, input.prompt, scope),
       };
     }
-    const keepCast = Boolean(input.keepCast || input.issues?.length);
-    const candidates = keepCast
+    const keepCast = input.keepCast !== false || Boolean(input.issues?.length);
+    const available = keepCast
       ? []
       : (await this.personas.list(scope)).filter((item) =>
           item.referenceImages?.some(
             (image) => Number(image.imageId) > 0 && image.url,
           ),
         );
+    // 用户已经选好的人物（有形象图）就只给它，模型不再另挑别人
+    const selected = available.find(
+      (item) => item.id === Number(context.topic.personaId),
+    );
+    const candidates = selected ? [selected] : available;
     const presenterNow = STORE_VISIT_PRESENTER_TEMPLATES.includes(
       context.topic.storeVisit?.template ?? '',
     );
@@ -617,15 +726,19 @@ export class DouyinStoreVisitPlannerService {
         ? DOUYIN_SCRIPT_STYLES[context.topic.scriptStyle]
         : undefined;
     const system = [
-      '你是抖音探店短视频编导。先读【引用知识】，写出一份有具体内容、可编辑的创作脚本正文，后续才根据它生成台词。',
+      scriptFirst
+        ? '你是抖音短视频编导。先读【引用知识】，写出一份有具体内容、可编辑的创作脚本正文，后续才根据它生成台词。'
+        : '你是抖音探店短视频编导。先读【引用知识】，写出一份有具体内容、可编辑的创作脚本正文，后续才根据它生成台词。',
       '【引用知识】事实、必须提到的内容、禁用词和写法要求以引用知识为准；没有的事实不能编造，资料不足时标注待补充。',
-      '【正文】按主题与切入角度、开场、中段卖点、结尾组织；每部分写清叙事目的、具体介绍什么、卖点依据、实拍画面和人物安排。正文约 300～1200 字，整片计划 20～45 秒。不能只给标题、空泛大纲或台词列表，不输出 segments。',
-      '脚本是编导方案，不是口播台词，不要把正文写成可以直接朗读的对白。画面只安排资料中实际有、拍得到的内容。',
+      `【正文】按主题与切入角度、开场、中段${scriptFirst ? '要点' : '卖点'}、结尾组织；每部分写清叙事目的、具体${scriptFirst ? '讲什么、依据、画面' : '介绍什么、卖点依据、实拍画面'}和人物安排。正文约 300～1200 字，整片计划 20～45 秒。不能只给标题、空泛大纲或台词列表，不输出 segments。`,
+      scriptFirst
+        ? '脚本是编导方案，不是口播台词，不要把正文写成可以直接朗读的对白。画面写成具体、能拍或能画出来的场景，之后会从图库挑图或 AI 生图。'
+        : '脚本是编导方案，不是口播台词，不要把正文写成可以直接朗读的对白。画面只安排资料中实际有、拍得到的内容。',
       STORE_VISIT_SELLING_POINT_RULE,
       style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
       keepCast
-        ? '沿用当前出镜方式、人物和音色，只修改脚本正文。'
-        : '同时决定 presenter 是否开头出镜，personaId 只能选候选中有形象图的人物，无候选则不出镜。voiceId 从音色库选，voicePrompt 写年龄、男女声、音色和语速，personaReason、voiceReason 简述理由。',
+        ? '沿用当前出镜方式、人物和音色，只修改脚本正文。未指定人物或音色就保持未指定，不自行推荐或生成声音，不生成分段台词。'
+        : `同时决定 presenter 是否开头出镜，personaId 只能选候选中有形象图的人物，无候选则不出镜。voiceId 从音色库选，${STORE_VISIT_VOICE_PICK_RULE}voicePrompt 写年龄、男女声、音色和语速，personaReason、voiceReason 简述理由。`,
       keepCast
         ? '只输出 JSON：{"script":"完整脚本正文，分段用换行"}'
         : '只输出 JSON：{"script":"完整脚本正文，分段用换行","presenter":true,"personaId":数字或null,"personaReason":"","voiceId":"","voiceReason":"","voicePrompt":""}',
@@ -644,6 +757,9 @@ export class DouyinStoreVisitPlannerService {
       keepCast ? buildPersonaScriptBrief(persona) : '',
       keepCast && context.topic.storeVisit?.voicePrompt
         ? `当前声音描述：${context.topic.storeVisit.voicePrompt}`
+        : '',
+      keepCast && context.topic.storeVisit?.voiceId
+        ? `当前音色：${COSYVOICE_PRESET_VOICES.find((voice) => voice.voiceId === context.topic.storeVisit?.voiceId)?.trait || context.topic.storeVisit.voiceName || '沿用已选音色'}，据此安排表达节奏。`
         : '',
       context.topic.storeVisit?.script
         ? `上一版脚本：\n${context.topic.storeVisit.script}`
@@ -694,6 +810,7 @@ export class DouyinStoreVisitPlannerService {
           personas: candidates,
           voices: COSYVOICE_PRESET_VOICES,
           presenter,
+          hint: input.prompt,
         });
     return { script, presenter, ...cast, review };
   }
@@ -759,7 +876,7 @@ export class DouyinStoreVisitPlannerService {
 
   /**
    * @description 根据已保存的脚本正文生成分段画面和口播台词，沿用当前人物音色，返回所用脚本快照与台词自检结果。
-   *   格式不对重试一次，写完对照引用知识自检，不自动改正文。
+   *   从门店开始要先定门店、画面写门店实拍；从脚本开始不要门店，画面写之后从图库挑或 AI 生图的场景。格式不对重试一次，写完对照引用知识自检，不自动改正文。
    * @keyword-cn 按脚本生成台词, 分段台词生成
    * @keyword-en generate-lines-from-script, script-dialogue
    * @param {number} topicId 子选题（脚本）ID。
@@ -774,10 +891,13 @@ export class DouyinStoreVisitPlannerService {
   ) {
     const context = await this.loadScriptContext(topicId, scope);
     const { topic } = context;
+    if (topic.storeVisit?.scriptNeedsRefine)
+      throw new BadRequestException('请先完成按新人物和音色微调脚本');
     const script = topic.storeVisit?.script?.trim();
     if (!script)
       throw new BadRequestException('请先生成或填写脚本正文并保存，再生成台词');
-    if (!context.store)
+    const scriptFirst = storeVisitStart(topic.storeVisit) === 'script';
+    if (!scriptFirst && !context.store)
       throw new BadRequestException('请先在脚本步骤确认这条视频拍哪家店');
     const requirement = String(input.prompt ?? '')
       .replace(/\s+/g, ' ')
@@ -786,41 +906,64 @@ export class DouyinStoreVisitPlannerService {
     const presenterNow = STORE_VISIT_PRESENTER_TEMPLATES.includes(
       topic.storeVisit?.template ?? '',
     );
-    const persona =
-      presenterNow && topic.personaId
-        ? await this.personas.get(topic.personaId, scope)
-        : null;
+    const persona = topic.personaId
+      ? await this.personas.get(topic.personaId, scope)
+      : null;
     const style =
       topic.scriptStyle && topic.scriptStyle in DOUYIN_SCRIPT_STYLES
         ? DOUYIN_SCRIPT_STYLES[topic.scriptStyle]
         : undefined;
     const personaBrief = buildPersonaScriptBrief(persona);
+    const voice = COSYVOICE_PRESET_VOICES.find(
+      (item) => item.voiceId === topic.storeVisit?.voiceId,
+    );
     const system = [
       '【脚本先行】严格根据用户已确认的【脚本正文】写台词，保留叙事顺序、核心卖点、开场与结尾，不得另起主题。脚本中的编导提示不能念成台词，待补充的事实不能编造。补充要求与脚本冲突时以脚本为准。',
-      '你是抖音探店短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个实拍画面、说一句口播台词。像真人博主跟朋友推荐这家店，不是逐个讲解画面的说明视频。',
+      topic.storeVisit?.voicePrompt || voice
+        ? `【当前音色】${topic.storeVisit?.voicePrompt || `${voice?.gender === 'male' ? '男声' : '女声'}，${voice?.trait}`}。台词语气、句长与念法贴合此声音，不改人物和音色。`
+        : '',
+      scriptFirst
+        ? '你是抖音短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个画面、说一句口播台词。像真人博主跟朋友聊，不是逐个讲解画面的说明视频。'
+        : '你是抖音探店短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个实拍画面、说一句口播台词。像真人博主跟朋友推荐这家店，不是逐个讲解画面的说明视频。',
       context.knowledge
         ? '【引用知识】引用知识是这条视频的依据：店名、项目、价格、套餐等事实以它为准；它规定的写法、必须提到的内容、禁用词和禁止的说法都要遵守，和下面的通用要求冲突时以引用知识为准（安全边界和输出格式除外）。'
-        : '【资料】母选题没有引用知识：事实只能用选题和门店资料里的，资料里没有的一律不写。',
+        : `【资料】母选题没有引用知识：事实只能用选题和${scriptFirst ? '脚本' : '门店资料'}里的，资料里没有的一律不写。`,
       '【结构】',
-      `1. 第 1 段开场：先点出已知门店名称，再按脚本说清这是什么店、主打什么好玩或好吃的；不知道店名时不编造。${presenterNow ? '这一段由出镜人物站在门头前对着镜头说，用第一人称。' : ''}`,
-      '2. 中间每段讲一个卖点（一个项目、一道菜、一个打卡点或一个套餐），照下面【讲卖点，不念画面】写；内容多的卖点可以分成两段，但不要为了凑长度分段。',
+      scriptFirst
+        ? `1. 第 1 段开场：一句话抓住人，点出这条视频要讲什么。${presenterNow ? '这一段由出镜人物对着镜头说，用第一人称。' : ''}`
+        : `1. 第 1 段开场：先点出已知门店名称，再按脚本说清这是什么店、主打什么好玩或好吃的；不知道店名时不编造。${presenterNow ? '这一段由出镜人物站在门头前对着镜头说，用第一人称。' : ''}`,
+      scriptFirst
+        ? '2. 中间每段讲一个要点，照下面【讲卖点，不念画面】写；内容多的要点可以分成两段，但不要为了凑长度分段。'
+        : '2. 中间每段讲一个卖点（一个项目、一道菜、一个打卡点或一个套餐），照下面【讲卖点，不念画面】写；内容多的卖点可以分成两段，但不要为了凑长度分段。',
       '3. 资料里写了团购价的，报价要连同对象一起说，例如「这份双人套餐，抖音团购只要 99 元」；报价只是写法之一，不必每段都报，没写价格就不提价格。',
-      '4. 最后一段用一句话引导下单，不再加新的事实。',
-      '【画面】每段的 scene 写这段要配的实拍画面（6～20 字，例如「门头招牌」「蹦床区全景」「招牌双人套餐」）：只写门店里实际有、拍得到的东西，之后会按它从门店图库里挑实拍图；第 1 段写门头。',
+      scriptFirst
+        ? '4. 最后一段用一句话收尾或引导互动、下单，不再加新的事实。'
+        : '4. 最后一段用一句话引导下单，不再加新的事实。',
+      scriptFirst
+        ? '【画面】每段的 scene 写这段要配的画面（6～20 字，例如「孩子们围着生日蛋糕」「派对布置全景」）：写具体、能拍或能画出来的画面，之后会按它从图库挑图或 AI 生图。'
+        : '【画面】每段的 scene 写这段要配的实拍画面（6～20 字，例如「门头招牌」「蹦床区全景」「招牌双人套餐」）：只写门店里实际有、拍得到的东西，之后会按它从门店图库里挑实拍图；第 1 段写门头。',
       '【语气】口语、热情、自然，像跟朋友推荐；不用「老铁」「兄弟」「整」这类江湖口吻（预设人物另有要求时按人物来）。段与段之间可以用「再来看看」「还有」衔接，但不编走路、推门之类画面里没有的动作。用好标点帮配音带出语气：惊喜、推荐处用「！」，设问用「？」，该停顿的地方断句，不要整段一个逗号念到底。',
       '【念法】每段再写一个 delivery：这段台词该怎么念，8～20 个字，只写声音——情绪、语速、语调、重音和停顿，例如「热情打招呼，语调上扬」「惊喜地报价格，重音在数字」「压低声音，像分享小秘密」「干脆有力地催下单」；不写动作、表情、走位和画面（不写推门、走进去、指着、拿起、转身、边走边说这类），配音只听得到声音；整条要有起伏，相邻两段不要写成一样；整条保持短视频口播的紧凑节奏，不写放慢、拖长、慢慢说这类减速的说法。',
       STORE_VISIT_SELLING_POINT_RULE,
       STORE_VISIT_PLAIN_SPEECH_RULE,
-      '【不许编造】店名、项目、价格、份量、人数只写引用知识、选题和门店资料里出现的；不编招牌秘方、获奖排名、限时活动、赠品这类资料里没有的卖点，不写「我刚吃了」「我玩了三局」这类具体的亲身经历；价格、份量、人数一律用阿拉伯数字，且和资料里一模一样。',
+      `【不许编造】店名、项目、价格、份量、人数只写引用知识、选题和${scriptFirst ? '脚本' : '门店资料'}里出现的；` +
+        '不编招牌秘方、获奖排名、限时活动、赠品这类资料里没有的卖点，不写「我刚吃了」「我玩了三局」这类具体的亲身经历；价格、份量、人数一律用阿拉伯数字，且和资料里一模一样。',
       '【长度】整条约 20～45 秒（90～200 字），短而有料；共 3～8 段，每段台词 15～40 个字；台词里不写镜头号、动作提示、括号说明、标题或 Markdown。',
       presenterNow
         ? personaBrief
           ? `开头由固定的预设人物出镜，台词必须是这个人物的第一人称、语气一致：\n${personaBrief}`
           : '开头有人出镜打招呼，全程用第一人称。'
         : '视频不露脸、全程画外音，用统一的第一人称讲。',
+      !presenterNow && personaBrief
+        ? `画外音由当前选定人物讲述，按此人设的视角和语气写台词：\n${personaBrief}`
+        : '',
       style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
-      '【示例】只示范写法和节奏，内容必须换成本店的，不要照抄示例里的店名、项目和价格：',
-      '{"segments":[{"scene":"门头招牌","lines":"今天我们来到了 XX 乐园，一家室内亲子乐园，蹦床、滑梯、海洋球一次玩个够！","delivery":"热情打招呼，语调上扬"},{"scene":"蹦床区全景","lines":"蹦床区怎么蹦都不怕摔，小朋友能玩一下午，大人跟着蹦也特别解压。","delivery":"轻快兴奋，重音在解压"},{"scene":"咖啡休息区","lines":"玩累了去咖啡区坐坐，大人喝杯咖啡歇歇脚，孩子就在眼前玩。","delivery":"语气放松，轻快带笑"},{"scene":"门头招牌","lines":"单人票抖音团购才 59 元！周末遛娃就来这儿，点左下角就能下单。","delivery":"惊喜地报价格，干脆催下单"}]}',
+      scriptFirst
+        ? '【示例】只示范写法和节奏，内容必须换成这条视频的，不要照抄示例里的内容：'
+        : '【示例】只示范写法和节奏，内容必须换成本店的，不要照抄示例里的店名、项目和价格：',
+      scriptFirst
+        ? '{"segments":[{"scene":"孩子们围着生日蛋糕","lines":"给孩子办生日会，最怕大人忙一下午，孩子却玩不开心！","delivery":"开门见山，语调上扬"},{"scene":"派对布置全景","lines":"主题、布置、玩法都让孩子自己挑，他喜欢的才是真正的生日会。","delivery":"轻快肯定，重音在自己挑"},{"scene":"大人孩子一起做游戏","lines":"大人也能一起玩进去，全家一起过，比礼物更让孩子记得住。","delivery":"温暖带笑，语速平稳"},{"scene":"孩子吹蜡烛特写","lines":"想给孩子办一场这样的生日会，评论区告诉我你家孩子几岁！","delivery":"亲切收尾，邀请互动"}]}'
+        : '{"segments":[{"scene":"门头招牌","lines":"今天我们来到了 XX 乐园，一家室内亲子乐园，蹦床、滑梯、海洋球一次玩个够！","delivery":"热情打招呼，语调上扬"},{"scene":"蹦床区全景","lines":"蹦床区怎么蹦都不怕摔，小朋友能玩一下午，大人跟着蹦也特别解压。","delivery":"轻快兴奋，重音在解压"},{"scene":"咖啡休息区","lines":"玩累了去咖啡区坐坐，大人喝杯咖啡歇歇脚，孩子就在眼前玩。","delivery":"语气放松，轻快带笑"},{"scene":"门头招牌","lines":"单人票抖音团购才 59 元！周末遛娃就来这儿，点左下角就能下单。","delivery":"惊喜地报价格，干脆催下单"}]}',
       '只输出 JSON，不要解释：{"segments":[{"scene":"","lines":"","delivery":""}]}',
     ]
       .filter(Boolean)
@@ -1001,7 +1144,7 @@ export class DouyinStoreVisitPlannerService {
             options.presenter
               ? '视频开头有人物站在门头前打招呼：从候选人物里挑一个最搭这家店和这条脚本的（看店的类型、脚本语气和人物的简介、人设与声线）。'
               : '视频不露脸、全程画外音：不用挑人物，personaId 填 null。',
-            '再从音色库里挑一个最适合的音色：亲子游乐、潮流打卡偏活力；咖啡甜品、生活方式偏温柔；品牌讲解偏知性；本地老店小吃可以用方言。选了人物时音色的男女要和人物一致。引用知识对人物或声音有要求时照它来。',
+            `再从音色库里挑一个最适合的音色：亲子游乐、潮流打卡偏活力；咖啡甜品、生活方式偏温柔；品牌讲解偏知性。${STORE_VISIT_VOICE_PICK_RULE}引用知识对人物或声音有要求时照它来。`,
             'reason 用 20 字内的大白话说为什么选它；voicePrompt 写一句 30 字内的声音描述（年龄、男女声、音色、语速、说话风格）。',
             '{"personaId":数字或null,"personaReason":"","voiceId":"音色库里的 voiceId","voiceReason":"","voicePrompt":""}',
           ].join('\n'),

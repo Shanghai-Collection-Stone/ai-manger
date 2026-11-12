@@ -1,4 +1,5 @@
-import { GalleryService } from './gallery.service.js';
+import { GALLERY_MATERIAL_TAGS } from '../gallery.constants.js';
+import { GALLERY_COVER_TAGS, GalleryService } from './gallery.service.js';
 
 /**
  * @description 创建记录列表查询条件、可指定游标图片的集合替身。
@@ -75,6 +76,41 @@ describe('图库列表复合游标与关键词搜索', () => {
     await listClauses(images, { cursorId: 120, sort: 'favorite', offset: 40 });
     expect(images.findOne).not.toHaveBeenCalled();
     expect(images.cursor.skip).toHaveBeenCalledWith(40);
+  });
+
+  it('普通图排除拼图、封面与素材图标签，素材图正好取反', async () => {
+    const regular = await listClauses(createListCollection(null), {
+      imageType: 'regular',
+    });
+    const tags = [...GALLERY_COVER_TAGS, ...GALLERY_MATERIAL_TAGS];
+    expect(regular).toContainEqual({
+      isCollage: { $ne: true },
+      tags: { $nin: tags },
+    });
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        'ai素材',
+        '探店连续生成尾帧',
+        '抖音探店人脸',
+        '我的素材',
+        '画布成品',
+      ]),
+    );
+    const picked = await listClauses(createListCollection(null), {
+      imageType: 'regular',
+      tag: '画布成品',
+    });
+    expect(picked).toContainEqual({
+      isCollage: { $ne: true },
+      tags: { $nin: tags.filter((item) => item !== '画布成品') },
+    });
+    expect(picked).toContainEqual({ tags: '画布成品' });
+    const material = await listClauses(createListCollection(null), {
+      imageType: 'material',
+    });
+    expect(material).toContainEqual({
+      $or: [{ isCollage: true }, { tags: { $in: tags } }],
+    });
   });
 
   it('关键词去空白、转义正则特殊字符并匹配文件名、描述与备注', async () => {

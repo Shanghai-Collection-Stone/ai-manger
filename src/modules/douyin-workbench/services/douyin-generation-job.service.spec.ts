@@ -5,9 +5,13 @@ import { DouyinGenerationJobService } from './douyin-generation-job.service.js';
  * @keyword-cn 生成任务测试桩, 候选脚本任务
  * @keyword-en generation-job-test-stub, draft-job-fixture
  * @param productionMode 这批候选的制作方式。
+ * @param productionStart 统一流程的起点（只有从脚本开始才记）。
  * @returns 服务、仓库桩与 start 间谍。
  */
-function setup(productionMode?: 'storyboard' | 'store-visit') {
+function setup(
+  productionMode?: 'storyboard' | 'store-visit',
+  productionStart?: 'script',
+) {
   const job = {
     id: 'job-1',
     kind: 'children',
@@ -15,6 +19,7 @@ function setup(productionMode?: 'storyboard' | 'store-visit') {
     status: 'done',
     progress: { stage: 'saving', current: 1 },
     ...(productionMode ? { productionMode } : {}),
+    ...(productionStart ? { start: productionStart } : {}),
     result: {
       drafts: [
         { key: 'd1', title: '欢乐谷周末遛娃', script: '主题：亲子周末。' },
@@ -57,7 +62,7 @@ function setup(productionMode?: 'storyboard' | 'store-visit') {
   const start = jest
     .spyOn(service, 'start')
     .mockResolvedValue({ id: 'storyboard-job' } as never);
-  return { service, repository, start };
+  return { service, repository, start, job };
 }
 
 describe('DouyinGenerationJobService.confirmDrafts', () => {
@@ -90,6 +95,16 @@ describe('DouyinGenerationJobService.confirmDrafts', () => {
     expect(result.jobs).toEqual([]);
   });
 
+  it('从脚本开始的批次入库时带上起点，同样不启动分镜任务', async () => {
+    const { service, repository, start } = setup('store-visit', 'script');
+    await service.confirmDrafts('job-1', [{ key: 'd1' }], scope as never);
+    expect(repository.createChildren.mock.calls[0][1][0]).toMatchObject({
+      productionMode: 'store-visit',
+      start: 'script',
+    });
+    expect(start).not.toHaveBeenCalled();
+  });
+
   it('分镜批次照旧逐条启动分镜任务', async () => {
     const { service, repository, start } = setup();
     const result = await service.confirmDrafts(
@@ -107,5 +122,30 @@ describe('DouyinGenerationJobService.confirmDrafts', () => {
     ).toBeUndefined();
     expect(start).toHaveBeenCalledWith('storyboard', 100, undefined, scope);
     expect(result.jobs).toHaveLength(1);
+  });
+
+  it('还原批次人物音色，逐条取消时保留显式空值，不回退成批次选择', async () => {
+    const { service, repository, job } = setup('store-visit');
+    Object.assign(job, {
+      personaId: 42,
+      voiceId: 'longanyang',
+      scriptStyle: 'cinematic',
+    });
+    await service.confirmDrafts('job-1', [{ key: 'd1' }], scope);
+    expect(repository.createChildren.mock.calls[0][1][0]).toMatchObject({
+      personaId: 42,
+      voiceId: 'longanyang',
+      scriptStyle: 'cinematic',
+    });
+    await service.confirmDrafts(
+      'job-1',
+      [{ key: 'd1', personaId: 0, voiceId: '', scriptStyle: '' }],
+      scope,
+    );
+    expect(repository.createChildren.mock.calls[1][1][0]).toMatchObject({
+      personaId: 0,
+      voiceId: '',
+      scriptStyle: '',
+    });
   });
 });

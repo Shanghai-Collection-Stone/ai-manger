@@ -109,7 +109,11 @@ export class DouyinDataCrawlService implements OnModuleInit, OnModuleDestroy {
     if (monitor?.status !== 'monitoring') {
       throw new BadRequestException('DOUYIN_DATA_NOT_MONITORING');
     }
-    const target = resolveCrawlTarget(work.douyinVideoId, monitor.awemeId);
+    const target = resolveCrawlTarget(
+      work.douyinVideoId,
+      monitor.awemeId,
+      work.douyinUrl,
+    );
     if (!target) throw new BadRequestException('DOUYIN_DATA_TARGET_MISSING');
     if (!(await this.tikhub.isReady(scope))) {
       throw new BadRequestException('DOUYIN_DATA_TIKHUB_KEY_MISSING');
@@ -193,7 +197,11 @@ export class DouyinDataCrawlService implements OnModuleInit, OnModuleDestroy {
       });
       return;
     }
-    const target = resolveCrawlTarget(work.douyinVideoId, monitor.awemeId);
+    const target = resolveCrawlTarget(
+      work.douyinVideoId,
+      monitor.awemeId,
+      work.douyinUrl,
+    );
     if (!target) {
       await this.release(monitor, {
         lastError: '还没有可抓取的抖音作品 ID，请先绑定作品链接',

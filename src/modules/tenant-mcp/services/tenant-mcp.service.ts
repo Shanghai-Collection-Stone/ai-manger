@@ -23,6 +23,7 @@ import type {
   TenantMcpSecretEnvelope,
 } from '../entities/tenant-mcp.entity.js';
 import {
+  TENANT_MCP_RETIRED_TOOLS,
   TENANT_MCP_TOOL_META,
   TENANT_MCP_TOOLS,
   type TenantMcpToolName,
@@ -280,14 +281,20 @@ export class TenantMcpService implements OnModuleInit {
     return { ok: true };
   }
 
-  /** @keyword-en mcp-permissions, input-validation */
+  /**
+   * @description 校验密钥权限里的工具名：已下线的工具（`TENANT_MCP_RETIRED_TOOLS`）直接去掉，旧密钥照样能改；其余不认识的名字报错。
+   * @keyword-cn 校验工具权限, 去掉已下线工具
+   * @keyword-en mcp-permissions, input-validation
+   */
   private validatePermissions(permissions: string[]): string[] {
-    if (
-      !Array.isArray(permissions) ||
-      permissions.some((name) => !Object.hasOwn(TENANT_MCP_TOOLS, name))
-    )
+    if (!Array.isArray(permissions))
       throw new BadRequestException('INVALID_MCP_PERMISSIONS');
-    return [...new Set(permissions)];
+    const current = permissions.filter(
+      (name) => !TENANT_MCP_RETIRED_TOOLS.includes(name),
+    );
+    if (current.some((name) => !Object.hasOwn(TENANT_MCP_TOOLS, name)))
+      throw new BadRequestException('INVALID_MCP_PERMISSIONS');
+    return [...new Set(current)];
   }
 
   /** @keyword-en mcp-expiry, input-validation */

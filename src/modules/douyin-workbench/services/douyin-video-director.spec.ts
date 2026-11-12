@@ -5,6 +5,7 @@ import {
   describeDirectionZh,
   directionFingerprint,
   freshShotDirection,
+  keepCameraInFrame,
   listDirectorFrames,
   parseDirectorPlan,
 } from './douyin-video-director.js';
@@ -178,6 +179,150 @@ describe('douyin video director helpers', () => {
     expect(parseDirectorPlan('not json', frames).template.useTemplate).toBe(
       false,
     );
+  });
+
+  it('keeps store-visit camera moves inside the photo', () => {
+    const direction = (camera: string, cameraZh: string) => ({
+      sourceKey: 'k',
+      camera,
+      motion: 'steam drifts up',
+      cameraZh,
+      motionZh: '热气飘动',
+    });
+    expect(
+      keepCameraInFrame(
+        direction('slow push-in toward the cake', '缓慢推近蛋糕'),
+        'broll',
+      ),
+    ).toMatchObject({ camera: 'slow push-in toward the cake' });
+    expect(
+      keepCameraInFrame(
+        direction('static camera', '固定机位带轻微手持感'),
+        'presenter',
+      ).cameraZh,
+    ).toBe('固定机位带轻微手持感');
+    for (const [camera, cameraZh] of [
+      ['slow pan to the right', '缓慢向右平移'],
+      ['gentle tilt up to the sign', '轻微上摇到招牌'],
+      ['slow pull back to reveal the hall', '缓慢拉远'],
+      ['slow push-in, then pan left', '缓慢推近后左移'],
+      ['camera tracks along the counter', '推近'],
+    ])
+      expect(keepCameraInFrame(direction(camera, cameraZh), 'broll')).toEqual({
+        sourceKey: 'k',
+        camera: 'slow push-in toward the main subject',
+        motion: 'steam drifts up',
+        cameraZh: '缓慢推近主体',
+        motionZh: '热气飘动',
+      });
+    expect(
+      keepCameraInFrame(direction('', '缓慢左右平移'), 'presenter'),
+    ).toMatchObject({ camera: 'static camera', cameraZh: '固定机位' });
+  });
+
+  it('clamps store-visit plans and stored directions, but not storyboard ones', () => {
+    const topic = {
+      id: 8,
+      kind: 'child',
+      productionMode: 'store-visit',
+      title: '探店',
+      storyboard: [],
+      storeVisit: {
+        sceneImages: [
+          { type: 'image', id: 21, name: '吧台', url: '/static/bar.jpg' },
+        ],
+        segments: [{ id: 'g1', lines: '看这个吧台', sceneImageId: 21 }],
+      },
+    } as unknown as DouyinTopicEntity;
+    const frames = listDirectorFrames(topic);
+    const plan = parseDirectorPlan(
+      JSON.stringify({
+        shots: [
+          {
+            no: 1,
+            camera: 'slow pan right across the bar',
+            motion: 'lights flicker',
+            cameraZh: '缓慢向右平移',
+            motionZh: '灯光闪烁',
+          },
+        ],
+      }),
+      frames,
+    );
+    expect(plan.shots.g1).toMatchObject({
+      camera: 'slow push-in toward the main subject',
+      cameraZh: '缓慢推近主体',
+      motion: 'lights flicker',
+    });
+    topic.videoDirection = {
+      status: 'ready',
+      fingerprint: 'x',
+      shots: {
+        g1: {
+          sourceKey: frames[0].sourceKey,
+          camera: 'gentle tilt up',
+          motion: 'lights flicker',
+          cameraZh: '轻微上摇',
+          motionZh: '灯光闪烁',
+        },
+      },
+      updatedAt: new Date(),
+    };
+    expect(describeDirectionZh(freshShotDirection(topic, 'g1'))).toBe(
+      '运镜：缓慢推近主体；画面动态：灯光闪烁',
+    );
+    const storyboard = parseDirectorPlan(
+      JSON.stringify({
+        shots: [{ no: 2, camera: 'slow pan left', cameraZh: '缓慢左移' }],
+      }),
+      listDirectorFrames(storyboardTopic()),
+    );
+    expect(storyboard.shots.s2.camera).toBe('slow pan left');
+  });
+
+  it('从脚本开始的脚本不把运镜收进原图', () => {
+    const topic = {
+      id: 9,
+      kind: 'child',
+      productionMode: 'store-visit',
+      title: '生日会',
+      storyboard: [],
+      storeVisit: {
+        start: 'script',
+        sceneImages: [
+          { type: 'image', id: 31, name: 'ai', url: '/static/ai.jpg' },
+        ],
+        segments: [{ id: 'g1', lines: '开场', sceneImageId: 31 }],
+      },
+    } as unknown as DouyinTopicEntity;
+    const frames = listDirectorFrames(topic);
+    const raw = JSON.stringify({
+      shots: [{ no: 1, camera: 'slow pan right', cameraZh: '缓慢右移' }],
+    });
+    expect(parseDirectorPlan(raw, frames, false).shots.g1.camera).toBe(
+      'slow pan right',
+    );
+    expect(parseDirectorPlan(raw, frames).shots.g1.camera).toBe(
+      'slow push-in toward the main subject',
+    );
+    topic.videoDirection = {
+      status: 'ready',
+      fingerprint: 'x',
+      shots: {
+        g1: {
+          sourceKey: frames[0].sourceKey,
+          camera: 'slow pan right',
+          motion: '',
+          cameraZh: '缓慢右移',
+          motionZh: '',
+        },
+      },
+      updatedAt: new Date(),
+    };
+    expect(freshShotDirection(topic, 'g1')?.camera).toBe('slow pan right');
+    expect(
+      buildDirectorBrief({ mode: 'storyboard', title: '生日会', frames }),
+    ).toContain('（空镜，');
   });
 
   it('only uses a direction designed for the current frame', () => {

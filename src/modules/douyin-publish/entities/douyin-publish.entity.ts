@@ -74,7 +74,7 @@ export interface DouyinPublishWorkEntity {
   topicId: number | null;
   /** 作品来源：视频库成片入库，或数据监控里手动添加的抖音链接；旧数据缺省视为 video。 */
   source?: DouyinPublishWorkSource;
-  /** 手动添加链接时用户粘贴的原始抖音链接。 */
+  /** 手动添加的抖音链接，或发布回写时补全的数字作品ID对应链接，供后续抓取。 */
   douyinUrl?: string | null;
   videoId: string;
   title: string;
@@ -140,6 +140,8 @@ export interface DouyinPublishWorkView {
   status: DouyinPublishStatus;
   douyinVideoId: string | null;
   publishedAt: string | null;
+  /** 当前可用于数据抓取的数字作品ID，待补标识时为空。 */
+  crawlTarget: string | null;
   lastError: string | null;
   leased: boolean;
   createdAt: string;

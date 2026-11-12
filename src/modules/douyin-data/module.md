@@ -4,7 +4,7 @@
 
 ## 概述 (Overview)
 
-抖音工作台「抓取数据」区的后端，对应小红书的 `xhs-topic-data` 数据监控。以视频发布库（`douyin-publish`）里的**已发布作品**为监控对象：每个作品可开启 / 取消监控，开启后 14 天内由 leader 进程按固定间隔（默认 6 小时）经 TikHub 按抖音作品 ID 抓取互动数据并写快照，满 14 天自动结束；监控中的作品也能立即抓取一次。抓取目标作品 ID 取「用户绑定的链接」优先，其次是小程序发布回写的 `douyinVideoId`（只认纯数字作品 ID，加密 ID 需要绑定链接）。「新增链接」可按抖音链接直接在发布库里建一条已发布作品并开启监控。TikHub Key 与小红书共用，不另设配置。
+抖音工作台「抓取数据」区的后端，对应小红书的 `xhs-topic-data` 数据监控。以发布库已发布作品为监控对象：开启后14天内由 leader 进程默认每6小时经 TikHub 抓取数字作品ID的互动数据并写快照，也支持立即抓取。抓取ID依次取监控中绑定的链接、发布页补全并回写的作品链接、纯数字 douyinVideoId；加密原生ID单独保留，不当作数字抓取ID。新增链接可在发布库建已发布作品并开启监控。TikHub Key 与小红书共用。
 
 ## 文件清单 (File List)
 
@@ -27,13 +27,13 @@
 - `extractDouyinUrl(text)` — 从分享口令里取出第一个抖音域名链接 | keywords: 提取抖音链接, 分享口令, extract-douyin-url, share-text
 - `isDouyinHost(url)` — 判断链接是否属于允许跟随跳转的抖音域名 | keywords: 抖音域名白名单, 防止外发, douyin-host-allowlist, exfiltration-guard
 - `resolveDouyinAwemeId(text)` — 能直接解析就不发请求，短链逐跳读 Location（最多 3 跳、只跟随抖音域名） | keywords: 解析抖音短链, 跟随跳转, resolve-douyin-short-link, follow-redirect
-- `resolveCrawlTarget(douyinVideoId,boundAwemeId)` — 绑定链接优先、其次纯数字 douyinVideoId，都不可用返回 null | keywords: 抓取目标作品ID, 绑定链接优先, resolve-crawl-target, bound-link-first
+- `resolveCrawlTarget(douyinVideoId,boundAwemeId,publishedUrl?)` — 监控绑定ID优先、其次发布页补全的作品链接、最后纯数字原生ID，不可用返回null | keywords: 抓取目标作品ID, 绑定链接优先, resolve-crawl-target, bound-link-first
 - `DouyinDataService()` — 数据监控列表、监控开关、绑定链接与新增链接 | keywords: 抖音数据监控服务, 作品监控, douyin-data-service, work-monitor
 - `DouyinDataService.ensureIndexes()` — 建立作品唯一、调度到期与快照时间线索引 | keywords: 数据监控索引, 调度到期索引, douyin-data-indexes, due-schedule-index
 - `DouyinDataService.intervalMinutes()` — 读取 `DOUYIN_DATA_CRAWL_INTERVAL_MINUTES`（30-1440），非法用默认 | keywords: 抓取间隔, 环境变量, crawl-interval, environment-config
 - `DouyinDataService.listLibraryWorks(libraryId,range,scope)` — 列出库内已发布作品、监控状态、区间最近指标、抓取目标、未发布数与采集通道状态 | keywords: 数据监控作品列表, 区间指标, list-monitor-works, ranged-metrics
 - `DouyinDataService.setMonitoring(workId,monitoring,scope)` — 开启时要求有抓取目标并重计 14 天窗口、立即排第一次抓取；取消时停止调度 | keywords: 切换作品监控, 开启取消监控, toggle-work-monitor, start-stop-monitor
-- `DouyinDataService.bindLink(workId,url,scope)` — 解析并保存作品 ID，监控中的作品立即按新 ID 重抓 | keywords: 绑定作品链接, 解析抖音作品ID, bind-work-link, parse-douyin-aweme-id
+- `DouyinDataService.bindLink(workId,url,scope)` — 绑定链接并补齐缺失的发布库抓取身份，监控中的作品排期重抓 | keywords: 绑定作品链接, 解析抖音作品ID, bind-work-link, parse-douyin-aweme-id
 - `DouyinDataService.createManualLink(input,scope)` — 按链接在发布库建已发布作品并直接开启监控 | keywords: 新增抖音链接, 手动添加作品, add-douyin-link, manual-douyin-work
 - `DouyinDataService.requirePublishedWork(workId,scope)` — 读取作用域内已发布作品，不存在 404、未发布 400 | keywords: 要求已发布作品, 作用域校验, require-published-work, scope-check
 - `DouyinDataService.toMonitorView(entity)` — 监控实体转接口视图 | keywords: 监控视图转换, monitor-view-mapping
@@ -120,7 +120,7 @@
 
 **抓取**：`DouyinDataCrawlService` 在 leader 进程（`isLeaderProcess()`）每分钟轮询一次，按 `nextCrawlAt` 原子领取到期的监控行（`lockToken` + 2 分钟 `lockUntil`，崩溃后锁过期可接管），每轮最多 20 条、相邻调用间隔 300ms。成功写 `douyin_data_snapshots`、刷新 `lastCrawledAt` 与 TikHub 返回的封面（手动链接作品没有视频快照，界面用它展示），下一次为间隔之后；失败记中文 `lastError`，30 分钟后重试。满 14 天改为 `finished`；作品被删除或不再是已发布改为 `stopped`；缺抓取目标或 TikHub Key 时记原因等下一个间隔，不调用上游。立即抓取只允许监控中的作品，写 `trigger=manual` 快照、不改定时计划，一分钟内重复返回 429，同一作品已在抓返回 409。
 
-**作品 ID**：抖音小程序发布回写的 `videoId` 可能是加密 ID，TikHub 只接受纯数字 aweme_id，所以监控行可单独保存用户绑定的链接（`awemeId` / `linkUrl`）且优先使用。链接解析支持 `douyin.com/video|note/<id>`、`iesdouyin.com/share/video/<id>`、`?modal_id=<id>`、裸 ID；`v.douyin.com` 短链与分享口令由服务端逐跳读 `Location`，只跟随抖音域名，避免被当作任意地址代理。
+**作品 ID**：抖音小程序回写的原始 videoId 可能是加密ID，不能直接交给 TikHub。发布页补齐的数字作品链接保存为发布作品 douyinUrl，列表、开启监控、立即抓取、定时抓取均通过 resolveCrawlTarget 读取：监控中手动绑定的 awemeId 优先，其次发布作品的 douyinUrl，最后纯数字 douyinVideoId。原生ID不被数字ID覆盖。链接支持长链、分享口令和抖音短链，仅跟随抖音域名，跳转到外域时拒绝解析；无目标时仍阻止抓取。发布状态 identity-pending 的实际已发出作品不再进入领取队列，但补齐ID之前不能启动监控。
 
 错误码：`DOUYIN_DATA_TARGET_MISSING`（400，还没有可抓取的作品 ID）、`DOUYIN_DATA_LINK_INVALID`（400，链接解析不到作品 ID）、`DOUYIN_DATA_NOT_MONITORING`（400）、`DOUYIN_DATA_TIKHUB_KEY_MISSING`（400）、`DOUYIN_DATA_WORK_UNPUBLISHED`（400）、`DOUYIN_DATA_RANGE_INVALID`（400）、`DOUYIN_DATA_CRAWL_TOO_FREQUENT`（429）、`DOUYIN_DATA_CRAWL_RUNNING`（409），以及透传的 `DOUYIN_PUBLISH_WORK_NOT_FOUND`（404）、`DOUYIN_PUBLISH_LIBRARY_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_EXISTS`（409，同库同作品 ID 已存在）。
 

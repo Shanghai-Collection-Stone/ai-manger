@@ -16,7 +16,10 @@ import type {
   DouyinVideoTemplate,
 } from '../entities/douyin-workbench.entity.js';
 import { DouyinShotConcatService } from './douyin-shot-concat.service.js';
-import { isStoreVisitVisualStart } from './douyin-store-visit-continuity.js';
+import {
+  isStoreVisitVisualStart,
+  storeVisitStart,
+} from './douyin-store-visit-continuity.js';
 import {
   buildDirectorBrief,
   directionFingerprint,
@@ -182,11 +185,14 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
         frames.map((frame) => this.templates.toVisionImage(frame.url)),
       );
       const storeVisit = topic.productionMode === 'store-visit';
+      // 从脚本开始的脚本画面不是门店实拍，按分镜的创意视频规划，运镜不收进原图
+      const fromStore =
+        storeVisit && storeVisitStart(topic.storeVisit) === 'store';
       const content: VisionContent = [
         {
           type: 'text',
           text: buildDirectorBrief({
-            mode: storeVisit ? 'store-visit' : 'storyboard',
+            mode: fromStore ? 'store-visit' : 'storyboard',
             title: topic.title,
             script: storeVisit
               ? topic.storeVisit?.script || topic.storeVisit?.lines
@@ -215,6 +221,7 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
           content,
         ),
         frames,
+        fromStore,
       );
       const written = await this.repository.setVideoDirection(
         topicId,

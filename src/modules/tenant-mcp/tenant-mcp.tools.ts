@@ -33,13 +33,6 @@ const segmentId = z
   .string()
   .regex(/^[A-Za-z0-9_-]{1,40}$/)
   .describe('探店分段 ID，来自 douyin_topic_get');
-/** @keyword-en mcp-schema, douyin-shot */
-const shotId = z
-  .string()
-  .trim()
-  .min(1)
-  .max(80)
-  .describe('分镜 ID，来自 douyin_topic_get');
 
 /** @keyword-en mcp-tools, tool-permission */
 export const TENANT_MCP_TOOLS = {
@@ -172,19 +165,19 @@ export const TENANT_MCP_TOOLS = {
   douyin_workspace: {
     title: '抖音工作台概览',
     description:
-      '列出抖音工作台的母选题和下面的脚本（子选题），每条脚本带模式（探店 / 分镜）与一句话制作进度。做视频前先看这里拿脚本 ID。',
+      '列出抖音工作台的母选题和下面的脚本（子选题），每条脚本带起点（从门店开始 / 从脚本开始）与一句话制作进度。所有脚本都走同一个五步出片流程（脚本 → 台词 → 画面 → 声音 → 出片），旧分镜脚本被任一工具操作时自动转成从脚本开始。做视频前先看这里拿脚本 ID。',
     schema: z.object({}).strict(),
   },
   douyin_topic_get: {
     title: '脚本详情与进度',
     description:
-      '读取一条脚本的完整状态：探店的门店、出镜方式、人物、音色、脚本正文与各段（台词、场景、出片状态），或分镜的各镜（文案、配图、出片），成片地址、出片前还差什么、下一步建议。出片和拼接是异步的，用它轮询进度；状态 waiting-desktop 表示在等桌面端续段。',
+      '读取一条脚本的完整状态：起点、门店、出镜方式、人物、音色、脚本正文与各段（台词、画面、出片状态），成片地址、出片前还差什么、下一步建议。出片和拼接是异步的，用它轮询进度；状态 waiting-desktop 表示在等桌面端续段。',
     schema: z.object({ topicId }).strict(),
   },
   douyin_topic_create: {
     title: '新建抖音母选题',
     description:
-      '新建母选题。productionMode 为 store-visit（探店：按门店实拍点位配图出片）时会自动带出一条脚本；为 storyboard（分镜：AI 写候选脚本、分镜、配图后出片）时再用 douyin_storyboard_children_generate 生成候选脚本。knowledgeIds 来自 douyin_knowledge_list，AI 写脚本会照着引用知识写。',
+      '新建母选题。productionMode 为 store-visit 时会自动带出一条空脚本（从门店开始，可用 douyin_store_visit_set_start 改成从脚本开始）；为 storyboard 时不带脚本，再用 douyin_storyboard_children_generate 生成候选脚本。knowledgeIds 来自 douyin_knowledge_list，AI 写脚本会照着引用知识写。',
     schema: z
       .object({
         title: z.string().trim().min(2).max(100),
@@ -199,7 +192,7 @@ export const TENANT_MCP_TOOLS = {
   douyin_topic_update: {
     title: '修改脚本内容',
     description:
-      '修改脚本标题、探店脚本正文（改了正文要重新生成台词）、探店某几段台词或念法 delivery（这段怎么念：情绪、语速、重音，40 字内，配音时作为情感指令），或分镜某几镜的口播 narration / 画面描述 visual。只改给出的项，分段与分镜 ID 来自 douyin_topic_get。',
+      '修改脚本标题、脚本正文（改了正文要重新生成台词）、某几段台词或念法 delivery（这段怎么念：情绪、语速、重音，40 字内，配音时作为情感指令）。只改给出的项，分段 ID 来自 douyin_topic_get。',
     schema: z
       .object({
         topicId,
@@ -217,18 +210,6 @@ export const TENANT_MCP_TOOLS = {
           )
           .max(40)
           .optional(),
-        shots: z
-          .array(
-            z
-              .object({
-                id: shotId,
-                narration: z.string().max(2000).optional(),
-                visual: z.string().max(2000).optional(),
-              })
-              .strict(),
-          )
-          .max(60)
-          .optional(),
       })
       .strict(),
   },
@@ -240,7 +221,7 @@ export const TENANT_MCP_TOOLS = {
   douyin_video_options: {
     title: '视频节点概况',
     description:
-      '查看整片 / 分镜出片通道与可选时长，以及探店三个节点（音色、画面视频、人物）是否已配好；没配好时出片会失败，需要管理员先在后台配置。',
+      '查看出片通道与可选时长（含「整条一次出」的整片通道），以及音色、画面视频、人物三个节点是否已配好；没配好时出片会失败，需要管理员先在后台配置。',
     schema: z.object({}).strict(),
   },
   douyin_personas: {
@@ -347,6 +328,30 @@ export const TENANT_MCP_TOOLS = {
       })
       .strict(),
   },
+  douyin_store_visit_set_start: {
+    title: '出片：选起点',
+    description:
+      '设定这条脚本的起点：store 从门店开始（先选门店，画面配门店实拍）；script 从脚本开始（不选门店，画面用 douyin_store_visit_pick_pictures 从图库挑或 douyin_store_visit_generate_pictures 让 AI 生图）。两种起点画面来源不同，已配的画面会清空，脚本和台词保留。',
+    schema: z.object({ topicId, start: z.enum(['store', 'script']) }).strict(),
+  },
+  douyin_store_visit_pick_pictures: {
+    title: '出片：从图库配画面',
+    description:
+      '从脚本开始的脚本：按台词从本租户图库给每段挑一张图并保存，已配的画面会被替换。需要先生成好台词。会调用大模型并产生费用。',
+    schema: z.object({ topicId }).strict(),
+  },
+  douyin_store_visit_generate_pictures: {
+    title: '出片：AI 生成画面',
+    description:
+      '从脚本开始的脚本：一段接一段 AI 生图（后一段延续前一段的画面）并保存；给 segmentId 时只重新生成这一段，prompt 是这一段的补充描述。按张产生生图费用。',
+    schema: z
+      .object({
+        topicId,
+        segmentId: segmentId.optional(),
+        prompt: z.string().trim().max(500).optional(),
+      })
+      .strict(),
+  },
   douyin_store_visit_set_store: {
     title: '探店：选门店',
     description:
@@ -404,12 +409,14 @@ export const TENANT_MCP_TOOLS = {
   douyin_store_visit_generate: {
     title: '探店：出片',
     description:
-      '启动 AI 导演一段一段地出片，会按段扣生视频费用。先检查台词、出镜、人物、音色与场景是否齐全（不齐不提交），人物镜头自动先生成首帧；前一段出完才接下一段，有段已出片时只接着生成没出片的段，all 为真时全部重做；某段失败时导演暂停，需用 douyin_store_visit_pipeline（resume）手动继续。全部出完自动拼接。同点位续段、统一音色与拼接成片要桌面端同一账号打开「视频制作」页完成；之后用 douyin_topic_get 轮询。',
+      '启动 AI 导演一段一段地出片，会按段扣生视频费用。先检查台词、出镜、人物、音色与画面是否齐全（不齐不提交），人物镜头自动先生成首帧；前一段出完才接下一段，有段已出片时只接着生成没出片的段，all 为真时全部重做；某段失败时导演暂停，需用 douyin_store_visit_pipeline（resume）手动继续。全部出完自动拼接。同点位续段、统一音色与拼接成片要桌面端同一账号打开「视频制作」页完成；之后用 douyin_topic_get 轮询。full 为真时改成「整条一次出」：视频模型一次生成整条视频，快但不能单段改，声音由视频模型自己出，出好后直接作为成片（prompt 是整条的补充要求）。',
     schema: z
       .object({
         topicId,
         all: z.boolean().optional(),
         unifiedVoice: z.boolean().optional(),
+        full: z.boolean().optional(),
+        prompt: z.string().trim().max(1000).optional(),
       })
       .strict(),
   },
@@ -438,28 +445,29 @@ export const TENANT_MCP_TOOLS = {
       .strict(),
   },
   douyin_storyboard_children_generate: {
-    title: '分镜：AI 生成候选脚本',
+    title: 'AI 生成候选脚本',
     description:
-      '按母选题让 AI 生成若干候选脚本（后台任务，立即返回 job）。用 douyin_generation_jobs 等任务完成拿到候选，再用 douyin_storyboard_drafts_confirm 挑选入库。会调用大模型并产生费用。',
+      '按母选题让 AI 生成若干候选脚本（后台任务，立即返回 job）。start 选起点：script 从脚本开始（缺省，通用短视频脚本）/ store 从门店开始（探店脚本）。用 douyin_generation_jobs 等任务完成拿到候选，再用 douyin_storyboard_drafts_confirm 挑选入库。会调用大模型并产生费用。',
     schema: z
       .object({
         motherTopicId: id,
         prompt: z.string().trim().max(1000).optional(),
         personaId: id.optional(),
         scriptStyle: z.string().trim().max(40).optional(),
+        start: z.enum(['store', 'script']).optional(),
       })
       .strict(),
   },
   douyin_generation_jobs: {
-    title: '分镜：后台任务',
+    title: '后台任务',
     description:
-      '查看运行中与最近 24 小时的后台任务（生成候选脚本、生成分镜），含待确认的候选脚本 drafts 与生成出的脚本 ID。',
+      '查看运行中与最近 24 小时的后台任务（生成候选脚本等），含待确认的候选脚本 drafts 与生成出的脚本 ID。',
     schema: z.object({}).strict(),
   },
   douyin_storyboard_drafts_confirm: {
-    title: '分镜：确认候选脚本',
+    title: '确认候选脚本',
     description:
-      '把挑中的候选脚本入库（可改标题与正文），每条新脚本自动开始生成分镜与配图（后台任务）。',
+      '把挑中的候选脚本入库（可改标题与正文），新脚本按生成时选的起点进五步出片流程，接着用 douyin_store_visit_generate_lines 拆台词。',
     schema: z
       .object({
         jobId: z
@@ -481,43 +489,21 @@ export const TENANT_MCP_TOOLS = {
       })
       .strict(),
   },
-  douyin_storyboard_generate: {
-    title: '分镜：重新生成分镜',
-    description:
-      '让 AI 重新生成这条脚本的分镜与配图（后台任务，已有分镜会被替换）。会调用大模型与生图并产生费用。',
-    schema: z
-      .object({ topicId, prompt: z.string().trim().max(1000).optional() })
-      .strict(),
-  },
-  douyin_storyboard_shot_image: {
-    title: '分镜：重新生成某镜配图',
-    description:
-      '按画面描述重新生成某一镜的竖屏配图并绑定到这一镜。会调用生图并产生费用。',
-    schema: z
-      .object({
-        topicId,
-        shotId,
-        prompt: z.string().trim().max(1000).optional(),
-      })
-      .strict(),
-  },
-  douyin_storyboard_shot_video: {
-    title: '分镜：出片',
-    description:
-      '分镜出片，会扣生视频费用。默认逐镜出片（不给 shotIds 时只出还没出片的镜头），并打开全部出片后自动拼接（拼接要桌面端打开「视频制作」页）；full 为真时整条分镜一次生成一条完整视频。',
-    schema: z
-      .object({
-        topicId,
-        shotIds: z.array(shotId).min(1).max(60).optional(),
-        full: z.boolean().optional(),
-        prompt: z.string().trim().max(1000).optional(),
-      })
-      .strict(),
-  },
 } as const;
 
 /** @keyword-en mcp-tools, tool-permission */
 export type TenantMcpToolName = keyof typeof TENANT_MCP_TOOLS;
+
+/**
+ * @description 已下线的工具名：分镜与探店合并成一个出片流程后，旧分镜的「重新生成分镜 / 某镜配图 / 分镜出片」不再提供；老密钥权限里还留着时校验直接去掉，迁移 `20261110000000-unify-douyin-mcp-tools` 也会清掉。
+ * @keyword-cn 已下线工具, 旧分镜工具
+ * @keyword-en retired-tools, legacy-storyboard-tools
+ */
+export const TENANT_MCP_RETIRED_TOOLS: readonly string[] = [
+  'douyin_storyboard_generate',
+  'douyin_storyboard_shot_image',
+  'douyin_storyboard_shot_video',
+];
 
 /**
  * @description 抖音工作台工具名（`douyin_` 开头），由 `TenantMcpDouyinToolsService` 分发。
@@ -585,12 +571,15 @@ export const TENANT_MCP_TOOL_META: Record<
   douyin_store_visit_generate: { group: '抖音 · 探店' },
   douyin_store_visit_regenerate_segment: { group: '抖音 · 探店' },
   douyin_store_visit_pipeline: { group: '抖音 · 探店' },
-  douyin_storyboard_children_generate: { group: '抖音 · 分镜' },
-  douyin_generation_jobs: { group: '抖音 · 分镜', readOnly: true },
-  douyin_storyboard_drafts_confirm: { group: '抖音 · 分镜' },
-  douyin_storyboard_generate: { group: '抖音 · 分镜', destructive: true },
-  douyin_storyboard_shot_image: { group: '抖音 · 分镜' },
-  douyin_storyboard_shot_video: { group: '抖音 · 分镜' },
+  douyin_storyboard_children_generate: { group: '抖音 · 通用' },
+  douyin_generation_jobs: { group: '抖音 · 通用', readOnly: true },
+  douyin_storyboard_drafts_confirm: { group: '抖音 · 通用' },
+  douyin_store_visit_set_start: { group: '抖音 · 探店' },
+  douyin_store_visit_pick_pictures: { group: '抖音 · 探店', destructive: true },
+  douyin_store_visit_generate_pictures: {
+    group: '抖音 · 探店',
+    destructive: true,
+  },
 };
 
 /** @keyword-en article-upload, input-validation */

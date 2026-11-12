@@ -119,7 +119,11 @@ export class DouyinDataService {
           work,
           monitor: monitor ? this.toMonitorView(monitor) : null,
           metrics: metricsByWork.get(work.id) ?? null,
-          crawlTarget: resolveCrawlTarget(work.douyinVideoId, monitor?.awemeId),
+          crawlTarget: resolveCrawlTarget(
+            work.douyinVideoId,
+            monitor?.awemeId,
+            work.douyinUrl,
+          ),
         };
       }),
       total: result.total,
@@ -157,7 +161,13 @@ export class DouyinDataService {
     const existing = await this.monitors.findOne({ workId: work._id });
     const now = new Date();
     if (monitoring) {
-      if (!resolveCrawlTarget(work.douyinVideoId, existing?.awemeId)) {
+      if (
+        !resolveCrawlTarget(
+          work.douyinVideoId,
+          existing?.awemeId,
+          work.douyinUrl,
+        )
+      ) {
         throw new BadRequestException('DOUYIN_DATA_TARGET_MISSING');
       }
       return this.upsertMonitor(work, {
@@ -172,7 +182,7 @@ export class DouyinDataService {
   }
 
   /**
-   * @description 给作品绑定抖音链接（或作品 ID）：服务端解析出作品 ID 后保存，监控中的作品一分钟内按新 ID 重新抓取。
+   * @description 绑定作品链接并补齐缺失的发布库抓取身份，监控中的作品按新ID排期重抓。
    * @keyword-cn 绑定作品链接, 解析抖音作品ID
    * @keyword-en bind-work-link, parse-douyin-aweme-id
    * @param workId 发布作品 ID。
@@ -189,6 +199,12 @@ export class DouyinDataService {
     const work = await this.requirePublishedWork(workId, scope);
     const awemeId = await resolveDouyinAwemeId(url);
     if (!awemeId) throw new BadRequestException('DOUYIN_DATA_LINK_INVALID');
+    if (!resolveCrawlTarget(work.douyinVideoId, null, work.douyinUrl)) {
+      await this.works.updatePublishResult(workId, work.libraryId, {
+        status: 'published',
+        douyinUrl: awemeId,
+      });
+    }
     const existing = await this.monitors.findOne({ workId: work._id });
     return this.upsertMonitor(work, {
       awemeId,

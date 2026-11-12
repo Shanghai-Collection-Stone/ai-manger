@@ -96,6 +96,7 @@ export async function resolveDouyinAwemeId(text: string): Promise<string> {
     }
     if (!location) return '';
     const next = new URL(location, current).toString();
+    if (!isDouyinHost(next)) return '';
     const awemeId = parseDouyinAwemeId(next);
     if (awemeId) return awemeId;
     current = isDouyinHost(next) ? next : '';
@@ -104,19 +105,22 @@ export async function resolveDouyinAwemeId(text: string): Promise<string> {
 }
 
 /**
- * @description 取实际用于抓取的作品 ID：用户绑定的链接优先，其次是发布回写的 douyinVideoId（只接受纯数字作品 ID）。
+ * @description 取数字抓取ID：监控中绑定的链接优先，其次发布回写补全的链接，最后是纯数字原生ID。
  * @keyword-cn 抓取目标作品ID, 绑定链接优先
  * @keyword-en resolve-crawl-target, bound-link-first
  * @param douyinVideoId 小程序发布回写或手动链接建作品时写入的作品 ID。
  * @param boundAwemeId 用户在数据监控里绑定链接解析出的作品 ID。
- * @returns {string | null} 作品 ID；两者都不可用时为 null。
+ * @param publishedUrl 发布页补全并回写的作品链接。
+ * @returns {string | null} 数字作品ID；全部来源均不可用时为null。
  */
 export function resolveCrawlTarget(
   douyinVideoId: string | null | undefined,
   boundAwemeId: string | null | undefined,
+  publishedUrl?: string | null,
 ): string | null {
   return (
     parseDouyinAwemeId(boundAwemeId ?? '') ||
+    parseDouyinAwemeId(publishedUrl ?? '') ||
     parseDouyinAwemeId(douyinVideoId ?? '') ||
     null
   );

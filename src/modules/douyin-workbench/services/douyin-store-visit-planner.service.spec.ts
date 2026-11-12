@@ -6,9 +6,11 @@ import {
   buildStoreVisitSceneCatalog,
   describeStoreVisitSpotCatalog,
   guessStoreVisitSceneSpot,
+  isStoreVisitDialectAllowed,
   parseStoreVisitReviewIssues,
   parseStoreVisitSceneMatches,
   parseStoreVisitScript,
+  pickPersonaPresetVoice,
   pickStoreVisitRecommendation,
   reviewStoreVisitScriptRules,
 } from './douyin-store-visit-planner.service.js';
@@ -62,16 +64,14 @@ function plannerWith(input: {
   const service = new DouyinStoreVisitPlannerService(
     { get } as never,
     {
-      requireStore: jest
-        .fn()
-        .mockResolvedValue(
-          input.store ?? {
-            id: 701,
-            name: '欢乐谷',
-            description: '',
-            spots: [],
-          },
-        ),
+      requireStore: jest.fn().mockResolvedValue(
+        input.store ?? {
+          id: 701,
+          name: '欢乐谷',
+          description: '',
+          spots: [],
+        },
+      ),
       listStores: jest.fn().mockResolvedValue(input.stores ?? []),
     } as never,
     { list, get: jest.fn().mockResolvedValue(null) } as never,
@@ -188,14 +188,22 @@ describe('store visit script parsing and review', () => {
         '{"segments":[{"scene":"门头","lines":"今天来集合石！","delivery":" 热情打招呼，语调上扬 "}]}',
       ).segments,
     ).toEqual([
-      { scene: '门头', lines: '今天来集合石！', delivery: '热情打招呼，语调上扬' },
+      {
+        scene: '门头',
+        lines: '今天来集合石！',
+        delivery: '热情打招呼，语调上扬',
+      },
     ]);
     expect(
       parseStoreVisitScript(
         '{"segments":[{"scene":"门头","lines":"今天来集合石！","delivery":"边推门边说，热络招呼，语调上扬"},{"scene":"吧台","lines":"来看看吧台","delivery":"推门进去"}]}',
       ).segments,
     ).toEqual([
-      { scene: '门头', lines: '今天来集合石！', delivery: '热络招呼，语调上扬' },
+      {
+        scene: '门头',
+        lines: '今天来集合石！',
+        delivery: '热络招呼，语调上扬',
+      },
       { scene: '吧台', lines: '来看看吧台' },
     ]);
     expect(parseStoreVisitScript('不是 JSON')).toEqual({
@@ -243,7 +251,7 @@ describe('store visit plan recommendation', () => {
   ] as unknown as DouyinPersonaView[];
 
   it('采用模型选的人物与音色，声音描述跟着人物声线走', () => {
-    const voice = COSYVOICE_PRESET_VOICES[1];
+    const voice = COSYVOICE_PRESET_VOICES[0];
     const result = pickStoreVisitRecommendation(
       {
         personaId: 8,
@@ -275,6 +283,88 @@ describe('store visit plan recommendation', () => {
     ).toBe('lively');
     expect(result.voice.reason).toBe('适合探店种草的口播');
   });
+
+  it('模型选的音色和人物男女不一致，或是没人要求的方言音色时，按人物声线换掉', () => {
+    const male = COSYVOICE_PRESET_VOICES.find(
+      (item) => item.gender === 'male' && !item.dialect,
+    )!;
+    const mismatched = pickStoreVisitRecommendation(
+      { personaId: 7, voiceId: male.voiceId, voiceReason: '有劲' },
+      { personas, voices: COSYVOICE_PRESET_VOICES, presenter: true },
+    );
+    expect(
+      COSYVOICE_PRESET_VOICES.find(
+        (item) => item.voiceId === mismatched.voice.voiceId,
+      ),
+    ).toMatchObject({ gender: 'female' });
+    expect(mismatched.voice.reason).toBe('和出镜人物的男女与声线一致');
+    const dialect = pickStoreVisitRecommendation(
+      { voiceId: 'longlaotie_v3', voicePrompt: '东北大哥' },
+      { personas, voices: COSYVOICE_PRESET_VOICES, presenter: false },
+    );
+    expect(dialect.voice.voiceId).not.toBe('longlaotie_v3');
+    expect(dialect.voice.voicePrompt).not.toContain('东北');
+    expect(
+      pickStoreVisitRecommendation(
+        { voiceId: 'longlaotie_v3' },
+        {
+          personas,
+          voices: COSYVOICE_PRESET_VOICES,
+          presenter: false,
+          hint: '用东北话讲',
+        },
+      ).voice.voiceId,
+    ).toBe('longlaotie_v3');
+  });
+});
+
+describe('persona preset voice', () => {
+  const laotie = COSYVOICE_PRESET_VOICES.find(
+    (item) => item.voiceId === 'longlaotie_v3',
+  )!;
+
+  it('方言音色只在要求里提到这种方言时才算被要求', () => {
+    expect(isStoreVisitDialectAllowed(laotie, '')).toBe(false);
+    expect(isStoreVisitDialectAllowed(laotie, '人设是东北大哥')).toBe(true);
+    expect(isStoreVisitDialectAllowed(COSYVOICE_PRESET_VOICES[0], '')).toBe(
+      true,
+    );
+  });
+
+  it('按人物男女与声线挑音色，人物没写方言就不用方言，写了就用', () => {
+    const pick = (voice: Record<string, unknown>, extra = {}) =>
+      pickPersonaPresetVoice(
+        { voice, ...extra } as unknown as DouyinPersonaView,
+        COSYVOICE_PRESET_VOICES,
+      );
+    expect(
+      pick({ gender: 'female', age: 'young', pace: 'fast' }),
+    ).toMatchObject({ gender: 'female', category: 'lively' });
+    expect(
+      pick({ gender: 'male', age: 'mature', pace: 'normal' }),
+    ).toMatchObject({ gender: 'male', category: 'steady' });
+    expect(
+      pick({ gender: 'female', age: 'adult', pace: 'normal', timbre: '温柔' }),
+    ).toMatchObject({ gender: 'female', category: 'gentle' });
+    expect(
+      pick({ gender: 'male', age: 'adult', pace: 'normal' }).dialect,
+    ).toBeUndefined();
+    expect(
+      pick(
+        { gender: 'male', age: 'adult', pace: 'normal' },
+        { summary: '豪爽的东北大哥' },
+      ).voiceId,
+    ).toBe('longlaotie_v3');
+    expect(
+      pick(
+        { gender: 'female', age: 'adult', pace: 'normal' },
+        { summary: '东北姑娘' },
+      ).gender,
+    ).toBe('female');
+    expect(pickPersonaPresetVoice(null, COSYVOICE_PRESET_VOICES).dialect).toBe(
+      undefined,
+    );
+  });
 });
 
 describe('store visit script writing', () => {
@@ -291,7 +381,7 @@ describe('store visit script writing', () => {
     presenter: true,
     personaId: 42,
     personaReason: '人设最搭',
-    voiceId: COSYVOICE_PRESET_VOICES[0].voiceId,
+    voiceId: COSYVOICE_PRESET_VOICES[1].voiceId,
     voiceReason: '活泼',
     segments: [
       {
@@ -312,7 +402,54 @@ describe('store visit script writing', () => {
     ],
   };
 
-  it('第一次写脚本：看母选题的引用知识写分段脚本并定出镜、人物与音色，写完对照引用知识自检', async () => {
+  it('默认只写创作脚本，未选人物音色时不推荐声线，也不输出台词', async () => {
+    const runWithMessages = jest
+      .fn()
+      .mockResolvedValueOnce({ content: JSON.stringify(script) })
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, list } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '欢乐谷探店',
+        storeVisit: { storeId: 701 },
+      },
+      personas: [persona],
+      runWithMessages,
+    });
+    const result = await service.writeScript(2, {}, { userId: 'u1' });
+    expect(result).toMatchObject({ script: script.script, presenter: false });
+    expect(result).not.toHaveProperty('voice');
+    expect(result).not.toHaveProperty('persona');
+    expect(result).not.toHaveProperty('segments');
+    expect(list).not.toHaveBeenCalled();
+    expect(runWithMessages.mock.calls[0][0].config.system).toContain(
+      '未指定人物或音色就保持未指定',
+    );
+  });
+
+  it('新设定的脚本微调未完成时拒绝生成台词，不调用模型', async () => {
+    const runWithMessages = jest.fn();
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '探店',
+        storeVisit: {
+          storeId: 701,
+          script: script.script,
+          scriptNeedsRefine: true,
+        },
+      },
+      runWithMessages,
+    });
+    await expect(
+      service.generateLines(2, {}, { userId: 'u1' }),
+    ).rejects.toThrow('请先完成按新人物和音色微调脚本');
+    expect(runWithMessages).not.toHaveBeenCalled();
+  });
+
+  it('显式要求 AI 推荐时写脚本并定出镜、人物与音色，写完对照引用知识自检', async () => {
     const runWithMessages = jest
       .fn()
       .mockResolvedValueOnce({ content: JSON.stringify(script) })
@@ -339,7 +476,11 @@ describe('store visit script writing', () => {
         '<reference_knowledge>【价格】卡丁车双人套餐 99 元</reference_knowledge>',
       runWithMessages,
     });
-    const result = await service.writeScript(2, {}, { userId: 'u1' });
+    const result = await service.writeScript(
+      2,
+      { keepCast: false },
+      { userId: 'u1' },
+    );
     expect(buildPromptSection).toHaveBeenCalledWith(['a'.repeat(24)], {
       userId: 'u1',
     });
@@ -353,7 +494,7 @@ describe('store visit script writing', () => {
     expect(result).toMatchObject({
       presenter: true,
       persona: { personaId: 42, reason: '人设最搭' },
-      voice: { voiceId: COSYVOICE_PRESET_VOICES[0].voiceId },
+      voice: { voiceId: COSYVOICE_PRESET_VOICES[1].voiceId },
       script: script.script,
       review: {
         passed: false,
@@ -365,6 +506,36 @@ describe('store visit script writing', () => {
     expect(runWithMessages.mock.calls[1][0].config.system).toContain(
       '对照【引用知识】',
     );
+  });
+
+  it('已经选好出镜人物时写脚本只给这个人物，模型挑别人也按它出镜', async () => {
+    const runWithMessages = jest
+      .fn()
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ ...script, personaId: 44 }),
+      })
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '欢乐谷探店',
+        personaId: 42,
+        storeVisit: { storeId: 701 },
+      },
+      personas: [{ ...persona, id: 44, name: '阿杰' }, persona],
+      runWithMessages,
+    });
+    const result = await service.writeScript(
+      2,
+      { keepCast: false },
+      { userId: 'u1' },
+    );
+    const writing = runWithMessages.mock.calls[0][0];
+    expect(writing.messages[0].content).toContain('id=42｜小林');
+    expect(writing.messages[0].content).not.toContain('id=44');
+    expect(writing.config.system).toContain('方言音色（东北话、粤语）');
+    expect(result).toMatchObject({ persona: { personaId: 42 } });
   });
 
   it('按自检意见改：沿用当前出镜与人物，只改台词，把上一版和问题交给模型；格式不对重试一次', async () => {
@@ -452,6 +623,58 @@ describe('store visit script writing', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it('从脚本开始：不选门店也能写脚本和生成台词，提示词换成通用短视频、画面从图库挑或 AI 生图', async () => {
+    const runWithMessages = jest
+      .fn()
+      .mockResolvedValueOnce({ content: JSON.stringify(script) })
+      .mockResolvedValueOnce({ content: '{"issues":[]}' })
+      .mockResolvedValueOnce({
+        content: JSON.stringify({ segments: script.segments }),
+      })
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, list } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '孩子的生日会',
+        storeVisit: { start: 'script', script: script.script },
+      },
+      personas: [persona],
+      runWithMessages,
+    });
+    const written = await service.writeScript(2, {}, { userId: 'u1' });
+    expect(written).not.toHaveProperty('needsStore');
+    expect(written).toMatchObject({ script: script.script });
+    const writing = runWithMessages.mock.calls[0][0].config.system as string;
+    expect(writing).toContain('你是抖音短视频编导');
+    expect(writing).not.toContain('探店');
+    expect(writing).toContain('从图库挑图或 AI 生图');
+    expect(list).not.toHaveBeenCalled();
+    const lines = await service.generateLines(2, {}, { userId: 'u1' });
+    expect(lines).toMatchObject({ segments: script.segments });
+    const linesSystem = runWithMessages.mock.calls[2][0].config
+      .system as string;
+    expect(linesSystem).toContain('你是抖音短视频的编导兼撰稿人');
+    expect(linesSystem).toContain('从图库挑图或 AI 生图');
+    expect(linesSystem).not.toContain('门店名称');
+  });
+
+  it('从门店开始仍要先定门店才能生成台词', async () => {
+    const runWithMessages = jest.fn();
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        storeVisit: { start: 'store', script: script.script },
+      },
+      runWithMessages,
+    });
+    await expect(
+      service.generateLines(2, {}, { userId: 'u1' }),
+    ).rejects.toThrow('确认这条视频拍哪家店');
+    expect(runWithMessages).not.toHaveBeenCalled();
+  });
+
   it('没有独立脚本时拒绝生成台词，不调用模型；只有台词格式的脚本结果重试后仍拒绝', async () => {
     const runWithMessages = jest.fn().mockResolvedValue({
       content: JSON.stringify({ segments: script.segments }),
@@ -520,16 +743,14 @@ describe('store visit script writing', () => {
 
 describe('store visit store confirmation', () => {
   it('没选门店时先读取引用知识询问确认已有门店，不直接写脚本', async () => {
-    const runWithMessages = jest
-      .fn()
-      .mockResolvedValue({
-        content: JSON.stringify({
-          question: '这条视频拍欢乐谷人民路店吗？',
-          storeId: 701,
-          name: '模型的简称',
-          description: '模型的说明',
-        }),
-      });
+    const runWithMessages = jest.fn().mockResolvedValue({
+      content: JSON.stringify({
+        question: '这条视频拍欢乐谷人民路店吗？',
+        storeId: 701,
+        name: '模型的简称',
+        description: '模型的说明',
+      }),
+    });
     const { service } = plannerWith({
       topic: { id: 2, kind: 'child', title: '周末遛娃', storeVisit: {} },
       stores: [

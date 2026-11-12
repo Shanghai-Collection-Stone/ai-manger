@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryAiImageService } from '../../gallery/services/gallery-ai-image.service.js';
+import type { GalleryImageEntity } from '../../gallery/entities/gallery-image.entity.js';
 import {
   DOUYIN_SCRIPT_STYLES,
   type DouyinFaceMaskStyle,
@@ -152,26 +153,73 @@ export class DouyinShotImageService {
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 1000);
+    const image = await this.generateImage({
+      topic,
+      description: [
+        requirement,
+        requirement ? '' : String(shot.imagePrompt ?? '').trim(),
+        requirement ? '' : String(shot.visual ?? '').trim(),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .trim(),
+      shotType: shot.shotType,
+      previousImageUrl: options?.previousImageUrl,
+      scope,
+    });
+    const updated = await this.repository.updateShot(
+      topicId,
+      shotId,
+      {
+        media: {
+          type: 'image',
+          id: image.id,
+          name: image.originalName || `图片 #${image.id}`,
+          url: image.url,
+          coverUrl: image.thumbUrl || image.url,
+        },
+        imagePrompt: requirement || shot.imagePrompt || shot.visual,
+      },
+      scope,
+    );
+    return { topic: updated, shotId, imageId: image.id, imageUrl: image.url };
+  }
+
+  /**
+   * @description 按一段画面描述出一张竖屏镜头画面并登记进图库（「抖音分镜」与 `ai素材` 标签），不绑定到任何分镜或分段：
+   *   带上脚本的预设人物形象、风格与参考图，有上一张画面时以它为底图延续场景与色调。分镜重生成与统一流程「从脚本开始」的逐段生图共用。
+   * @keyword-cn 生成镜头画面, 逐段生图
+   * @keyword-en generate-shot-image, per-segment-imaging
+   * @param input 脚本、画面描述、景别、上一张画面地址与作用域。
+   * @returns {Promise<GalleryImageEntity>} 入库后的图片。
+   * @throws {BadRequestException} 画面描述为空时抛出 DOUYIN_SHOT_IMAGE_PROMPT_REQUIRED。
+   */
+  async generateImage(input: {
+    topic: DouyinTopicEntity;
+    description: string;
+    shotType?: string;
+    previousImageUrl?: string;
+    scope: DouyinScope;
+  }): Promise<GalleryImageEntity> {
+    const { topic, scope } = input;
     const persona = topic.personaId
       ? await this.personas.get(topic.personaId, scope)
       : null;
     const basePrompt = this.buildShotImagePrompt(
       topic.title,
-      shot,
-      requirement,
+      { description: input.description, shotType: input.shotType },
       persona,
       topic.scriptStyle,
-      Boolean(options?.previousImageUrl),
+      Boolean(input.previousImageUrl),
     );
     if (!basePrompt)
       throw new BadRequestException('DOUYIN_SHOT_IMAGE_PROMPT_REQUIRED');
-
     const nodeRuntime = await this.workflowModels.resolveNodeRuntime(
       WORKFLOW_NODES.douyinWorkbench.key,
       WORKFLOW_NODES.douyinWorkbench.shotImage,
     );
     const baseImageCandidates = [
-      String(options?.previousImageUrl ?? '').trim(),
+      String(input.previousImageUrl ?? '').trim(),
       ...personaBaseImageUrls(persona),
       ...(topic.referenceImages ?? []).map((item) =>
         String(item.url ?? '').trim(),
@@ -190,7 +238,7 @@ export class DouyinShotImageService {
         source: 'douyin-workbench.shot-image-generation',
       },
     });
-    const image = await this.aiImages.persistGeneratedImage({
+    return await this.aiImages.persistGeneratedImage({
       imagePath: String(generated?.imagePath ?? ''),
       userId: scope.userId,
       tenantId: scope.tenantId,
@@ -198,22 +246,6 @@ export class DouyinShotImageService {
       description: `抖音分镜画面:${basePrompt.slice(0, 120)}`,
       tags: [DOUYIN_SHOT_IMAGE_TAG],
     });
-    const updated = await this.repository.updateShot(
-      topicId,
-      shotId,
-      {
-        media: {
-          type: 'image',
-          id: image.id,
-          name: image.originalName || `图片 #${image.id}`,
-          url: image.url,
-          coverUrl: image.thumbUrl || image.url,
-        },
-        imagePrompt: requirement || shot.imagePrompt || shot.visual,
-      },
-      scope,
-    );
-    return { topic: updated, shotId, imageId: image.id, imageUrl: image.url };
   }
 
   /**
@@ -363,13 +395,12 @@ export class DouyinShotImageService {
   }
 
   /**
-   * @description 拼出这一镜的文生图描述：用户补充描述优先，其次分镜自带的配图提示词，最后回退到画面描述，
-   *   再统一叠加竖屏、无文字、写实质感这类固定规格。
+   * @description 拼出这一镜的文生图描述：画面内容由调用方定好（分镜是补充描述、配图提示词或画面描述，分段是画面描述或台词），
+   *   再统一叠加景别、人物、风格、延续上一镜、竖屏、无文字、写实质感这类固定规格。
    * @keyword-cn 构造分镜出图提示, 竖屏无文字
    * @keyword-en build-shot-image-prompt, portrait-no-text
    * @param {string} title 脚本标题，作为画面主题上下文。
-   * @param {DouyinStoryboardShot} shot 目标分镜。
-   * @param {string} requirement 用户本次补充描述。
+   * @param {{description: string, shotType?: string}} shot 这一镜的画面内容与景别。
    * @param {object|null} persona 选用的预设人物，决定出镜人物的长相与穿着。
    * @param {string|undefined} style 脚本风格，决定画面质感。
    * @param {boolean} hasPreviousShot 是否以上一镜画面为底图（线性连贯出图）。
@@ -377,20 +408,15 @@ export class DouyinShotImageService {
    */
   private buildShotImagePrompt(
     title: string,
-    shot: DouyinStoryboardShot,
-    requirement: string,
+    shot: { description: string; shotType?: string },
     persona: Parameters<typeof buildPersonaImageBrief>[0],
     style: keyof typeof DOUYIN_SCRIPT_STYLES | undefined,
     hasPreviousShot: boolean,
   ): string {
-    const description = [
-      requirement,
-      requirement ? '' : String(shot.imagePrompt ?? '').trim(),
-      requirement ? '' : String(shot.visual ?? '').trim(),
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .trim();
+    const description = String(shot.description ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 1000);
     if (!description) return '';
     const visual = style ? DOUYIN_SCRIPT_STYLES[style].visual : '';
     return [

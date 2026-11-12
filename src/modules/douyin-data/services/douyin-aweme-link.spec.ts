@@ -68,5 +68,19 @@ describe('extractDouyinUrl / resolveCrawlTarget', () => {
       '7000000000000000001',
     );
     expect(resolveCrawlTarget('@9VwL2uyFU8wtNXvkaclgR', null)).toBeNull();
+    expect(
+      resolveCrawlTarget(
+        '@encrypted',
+        null,
+        'https://www.douyin.com/video/7312345678901234567',
+      ),
+    ).toBe('7312345678901234567');
+    expect(
+      resolveCrawlTarget(
+        '@encrypted',
+        '7000000000000000001',
+        'https://www.douyin.com/video/7312345678901234567',
+      ),
+    ).toBe('7000000000000000001');
   });
 });
