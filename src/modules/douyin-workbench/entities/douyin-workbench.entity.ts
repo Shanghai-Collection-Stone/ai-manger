@@ -411,6 +411,13 @@ export interface DouyinStoreVisitAutopilot {
   mergeRequested?: boolean;
   mergeAfter?: Date;
   resumePipeline?: boolean;
+  failureId?: string;
+  recovery?: {
+    reason: string;
+    stage: DouyinStoreVisitAutopilot['stage'];
+    segmentId?: string;
+    pending: boolean;
+  };
   claimId?: string;
   advancingAt?: Date;
   startedAt: Date;

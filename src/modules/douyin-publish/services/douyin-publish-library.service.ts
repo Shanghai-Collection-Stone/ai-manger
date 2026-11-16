@@ -6,11 +6,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
 import type {
+  DouyinMiniappVersionType,
   DouyinPublishLibraryEntity,
   DouyinPublishLibraryStats,
   DouyinPublishLibraryView,
@@ -255,12 +257,13 @@ export class DouyinPublishLibraryService {
   }
 
   /**
-   * @description 懒生成 32 字节 base64url 二维码 token 并构造小程序入口内容：配置了抖音小程序 AppID 时内容为长期 Schema，
-   *   抖音扫一扫可直接打开小程序发布页；否则沿用 `DOUYIN_PUBLISH_QR_LINK_TEMPLATE` 模板或原始 JSON。
+   * @description 按后端统一版本配置生成同一发布库扫码入口；开发测试版必须使用官方 Schema。
+   *   本地开发时打印可直接粘贴到小程序发布页的入口 JSON，复用二维码缓存时同样打印。
    * @keyword-cn 生成发布二维码, 懒生成令牌
    * @keyword-en build-publish-qr, lazy-qr-token
    */
   async getQr(id: string, scope: DouyinPublishScope) {
+    const versionType = this.schemas.getVersionType();
     let library = await this.require(id, scope);
     if (!library.qrToken) {
       for (let attempt = 0; attempt < 3 && !library.qrToken; attempt += 1) {
@@ -293,15 +296,30 @@ export class DouyinPublishLibraryService {
       throw new ConflictException('DOUYIN_PUBLISH_QR_TOKEN_FAILED');
     const query = { token: library.qrToken, tenantId: library.tenantId ?? '' };
     const path = JSON.stringify(query);
+    const environment = String(
+      this.config.get<string>('NODE_ENV') ?? process.env.NODE_ENV ?? '',
+    )
+      .trim()
+      .toLowerCase();
+    if (['', 'development', 'dev'].includes(environment)) {
+      this.logger.log(
+        `[qr] entry_json library=${library._id.toHexString()} version=${versionType}\n${path}`,
+      );
+    }
     if (this.schemas.isConfigured()) {
       return {
         libraryId: library._id.toHexString(),
         token: library.qrToken,
         path,
-        qrContent: await this.resolveQrSchema(library, query),
+        versionType,
+        qrContent: await this.resolveQrSchema(library, query, versionType),
         qrContentType: 'douyin-schema' as const,
       };
     }
+    if (versionType === 'latest')
+      throw new ServiceUnavailableException(
+        'DOUYIN_PUBLISH_TEST_QR_NOT_CONFIGURED',
+      );
     const template = String(
       this.config.get<string>('DOUYIN_PUBLISH_QR_LINK_TEMPLATE') ?? '',
     ).trim();
@@ -309,6 +327,7 @@ export class DouyinPublishLibraryService {
       libraryId: library._id.toHexString(),
       token: library.qrToken,
       path,
+      versionType,
       qrContent: template.includes('{path}')
         ? template.replaceAll('{path}', encodeURIComponent(path))
         : path,
@@ -319,7 +338,7 @@ export class DouyinPublishLibraryService {
   }
 
   /**
-   * @description 取发布库的长期 Schema：已存的 Schema 与当前 AppID / 发布页 / 启动参数一致就直接复用，否则生成一次并写回发布库。
+   * @description 按版本分别复用发布库长期 Schema，正式版兼容旧缓存；并发生成也按版本隔离。
    *   启动参数是扁平的 `{token, tenantId}`，小程序在 onLoad 的 options 里直接读这两个键。
    * @keyword-cn 发布库Schema, 生成一次复用
    * @keyword-en publish-library-schema, generate-once-reuse
@@ -328,23 +347,48 @@ export class DouyinPublishLibraryService {
   private async resolveQrSchema(
     library: DouyinPublishLibraryEntity,
     query: { token: string; tenantId: string },
+    versionType: DouyinMiniappVersionType,
   ): Promise<string> {
     const key = this.schemas.buildSchemaKey(query);
-    if (library.qrSchema && key && library.qrSchemaKey === key) {
+    const cached = library.qrSchemas?.[versionType];
+    if (cached?.schema && key && cached.key === key) return cached.schema;
+    if (
+      versionType === 'current' &&
+      library.qrSchema &&
+      key &&
+      library.qrSchemaKey === key
+    ) {
       return library.qrSchema;
     }
     const inflightKey = `${library._id.toHexString()}|${key}`;
     let pending = this.schemaInFlight.get(inflightKey);
     if (!pending) {
-      pending = (async () => {
-        const schema = await this.schemas.generatePermanentSchema(query);
-        // 只在 token 没变时写回；不改 updatedAt，二维码生成不算发布库内容变化
-        await this.libraries.updateOne(
-          { _id: library._id, qrToken: query.token },
-          { $set: { qrSchema: schema, qrSchemaKey: key ?? '' } },
-        );
-        return schema;
-      })().finally(() => this.schemaInFlight.delete(inflightKey));
+      pending = (
+        /** 生成并持久化所选版本的二维码，不修改作品或发布库统计。 @name generateVersionSchema
+         * @keyword-cn 版本二维码缓存, 生成一次复用
+         * @keyword-en version-qr-cache, generate-once-reuse
+         */ async () => {
+          const schema = await this.schemas.generatePermanentSchema(query);
+          // 只在 token 没变时写回；不改 updatedAt，二维码生成不算发布库内容变化
+          await this.libraries.updateOne(
+            { _id: library._id, qrToken: query.token },
+            {
+              $set: {
+                [`qrSchemas.${versionType}`]: { schema, key: key ?? '' },
+                ...(versionType === 'current'
+                  ? { qrSchema: schema, qrSchemaKey: key ?? '' }
+                  : {}),
+              },
+            },
+          );
+          return schema;
+        }
+      )().finally(
+        /** 清除本次版本生成的进程内去重标记。 @name clearVersionSchemaFlight
+         * @keyword-cn 版本二维码缓存, 生成一次复用
+         * @keyword-en version-qr-cache, generate-once-reuse
+         */ () => this.schemaInFlight.delete(inflightKey),
+      );
       this.schemaInFlight.set(inflightKey, pending);
     }
     try {

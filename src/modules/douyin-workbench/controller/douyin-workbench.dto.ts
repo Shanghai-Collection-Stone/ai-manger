@@ -1354,6 +1354,11 @@ export class StartDouyinStoreVisitPipelineDto {
  */
 export class StartDouyinAutopilotDto {
   @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  recoverFailureId?: string;
+
+  @IsOptional()
   @IsIn(['gallery', 'ai'])
   pictureSource?: 'gallery' | 'ai';
 

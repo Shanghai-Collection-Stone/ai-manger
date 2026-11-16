@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | DOUYIN_MINIAPP_APP_ID | ttd8d9ae6446a0257001 | 与会客厅抖音小程序一致 |
 | DOUYIN_MINIAPP_APP_SECRET | 在服务器填写对应小程序 AppSecret | 获取 client_token 并生成可扫码的 Schema；仅放服务端 |
+| DOUYIN_MINIAPP_VERSION_TYPE | current 正式版（默认）；latest 开发测试版 | 由后端统一决定所有发布库二维码打开的版本，软件端不可覆盖；修改后重启服务 |
 | DOUYIN_MINIAPP_PUBLISH_PAGE | pages/publish/index | 扫码直接打开独立发布页，默认首页仍为会客厅 |
 | DOUYIN_PUBLISH_WEBHOOK_ENABLED | 权限和回调配置完成后设为 true；默认关闭 | 为每件作品创建拍抖音长期任务，并将 taskIds 返回小程序发布器 |
 | DOUYIN_PUBLISH_WEBHOOK_SECRET | 平台 Webhooks 页面提供的验签秘钥 | 对原始请求体执行 SHA1(secret + body) 验签；仅放服务端，勿填写扫码 token |
@@ -13,6 +14,14 @@
 | DOUYIN_DATA_CRAWL_INTERVAL_MINUTES | 可选，默认 360 | 抓取间隔，允许 30–1440 分钟 |
 
 不使用沙盒时保留默认 `DOUYIN_OPEN_API_BASE=https://open.douyin.com`。配置 AppID 与 AppSecret 后走官方 Schema，不需要额外配置 `DOUYIN_PUBLISH_QR_LINK_TEMPLATE`。
+
+小程序版本只在 ai-manger 后端设置：DOUYIN_MINIAPP_VERSION_TYPE=current 打开线上正式版（默认）；需要测试时才改为 latest，打开平台已上传的开发测试版。非法值会明确报错。修改服务器环境变量后重启或重新部署服务，再在工作台刷新二维码。软件端仅显示后端返回的当前版本，没有版本选择控件，也不提交版本参数；旧客户端即使传 versionType 查询参数也不能覆盖服务器设置。
+
+两种版本分别缓存，切换后端设置后复用对应入口。GET /api/douyin-publish/libraries/:id/qr 返回实际 versionType；两种二维码使用同一发布库 token 和租户参数，发布、ID回写、Webhook与抓取仍归原发布库。本机 .env 已设置为 current 正式版，未配置时也默认正式版；本机环境文件被 Git 忽略，服务器环境需单独设置。
+
+本地测试时生成或刷新发布库二维码，后端终端会打印 `[qr] entry_json`，下一行 JSON 可直接粘贴到小程序「视频发布 → 载入生成的视频」。格式为 `{"token":"发布库扫码token","tenantId":"租户ID"}`；token 必填，tenantId 可省略或为空。需要指定作品时增加 `"workId":"作品ID"`，否则领取该库下一条待发布视频。命中二维码缓存时也会打印。该日志仅在 NODE_ENV 未设置或为 development / dev 时启用，production、test 及其他环境不输出入口凭证。
+
+测试前需上传新版测试包，并将扫码账号加入平台测试账号。latest 不会读取电脑上未上传的代码，视频发布仍使用真实抖音能力。使用本项目 AppID 调用官方接口生成测试版链接已成功，真机发布及通知投递仍需账号与权限齐备。官方接口：[生成 SchemaV2](https://developer.open-douyin.com/docs/resource/zh-CN/mini-app/develop/server/basic-abilities/url-and-qrcode/schema/generate-schema-v2)。
 
 平台侧需开通 Schema（ma.share.schema）、发布视频和短视频挂载能力，并使用具备挂载权限的抖音号真机验证。配置后端 HTTPS 域名为小程序 request 合法域名，视频域名配置到 downloadFile 合法域名。小程序只携带发布库扫码凭证，AppSecret 与 TikHub Key 均不进入客户端。
 
@@ -22,7 +31,15 @@
 
 小程序原生 success / fail 仍主动回写 `POST /api/publish-tasks/:id/publish-result`。另外已实现平台任务 Webhook，可在用户没有回到小程序、客户端回写未执行时接收作品状态与 video_id。它需要“拍抖音任务”能力，普通原生发布不会自动产生这类任务通知。
 
-1. 在小程序能力实验室开通“拍抖音任务”（scope `apps.douyin.task`），确认 AppSecret 已配置。
+该扩展能力需单独申请，不能仅凭文档或填写回调地址认定当前 AppID 已开通。apps.douyin.task 是接口权限名，控制台对应“拍抖音任务能力”；官方目前指引到“能力 → 能力实验室”。如果该应用看不到入口，需由平台确认开放资格与实际入口；若能申请但事件不可见，应先确认该应用能力已获批，再检查应用的 Webhooks 订阅页。
+
+针对 Webhooks 列表没有任务事件的实际排查：AppID ttd8d9ae6446a0257001 调用 POST /api/apps/v1/douyin/create_task/ 返回 err_no=28001018、err_msg=应用未获得该能力，且未创建任务。请求 log_id 为 202611122223177D8CF42850978EFDE041，可随 AppID 一起提交平台核查 apps.douyin.task 的申请资格或授权状态。该结果确认本次调用时任务能力不可用，不能由订阅页面缺少事件推断全部应用都不支持。获批后仍需完成事件订阅，再开启后端任务开关。
+
+官方2023年申请公告曾列出内测及投稿量条件，该历史公告不能视为当前统一申请门槛。未确认能力和事件订阅前，保持 DOUYIN_PUBLISH_WEBHOOK_ENABLED=false，使用已有原生 success/fail 回写与作品链接补全。启用但无权限会令任务创建失败并阻止作品载入。已签名的历史任务通知仍可按原关联接收。
+
+官方说明：[拍抖音能力与任务能力的区别](https://developer.open-douyin.com/docs/resource/zh-CN/mini-app/open-capacity/operation/douyin-video/douyin-task)、[2023年能力申请公告（历史条件）](https://developer.open-douyin.com/forum/bulletin/post/653b28b141dcfdfb21a9d474)。
+
+1. 确认当前 AppID 已获批“拍抖音任务能力”（scope `apps.douyin.task`），且 AppSecret 已配置。
 2. 启用平台 Webhooks，把其验签秘钥填入服务器 `DOUYIN_PUBLISH_WEBHOOK_SECRET`，部署后端。
 3. 回调地址填写 `https://ai-manger.superboxlink.com/api/douyin-publish/webhook`。网关需允许平台 POST 到此路径，保留原始请求体以及 `X-Douyin-Signature`、`Msg-Id` 请求头，不加后台登录跳转。
 4. 平台保存地址时，接口对 `verify_webhook` 返回文本 JSON challenge。地址验证可能不带签名，只回显 challenge；业务事件必须验签并匹配 AppID。

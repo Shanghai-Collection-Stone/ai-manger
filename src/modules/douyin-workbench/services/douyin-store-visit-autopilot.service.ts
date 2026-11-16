@@ -63,7 +63,7 @@ export function autopilotScriptKey(topic: DouyinTopicEntity): string {
 }
 
 /**
- * @description 持久化全流程 Agent 托管，复用单步 AI 编排依次补齐设定、脚本、台词、画面和出片；暂停保留已完成结果，失败不自动循环重试或重复扣费。
+ * @description 持久化全流程 Agent 托管，按失败原因调整并断点续跑，复用已完成结果与原子认领。
  * @keyword-cn Agent全流程托管, 断点续跑
  * @keyword-en agent-workflow-autopilot, resumable-workflow
  */
@@ -116,6 +116,13 @@ export class DouyinStoreVisitAutopilotService
     const topic = await this.requireTopic(topicId, scope);
     const previous = topic.storeVisit?.autopilot;
     if (previous?.state === 'running') return topic;
+    // 自动恢复只能认领弹窗对应的失败，其他窗口的暂停或新失败优先。
+    if (
+      input.recoverFailureId &&
+      (previous?.state !== 'waiting' ||
+        previous.failureId !== input.recoverFailureId)
+    )
+      return topic;
     const resume = previous && previous.state !== 'done';
     const now = new Date();
     const state: DouyinStoreVisitAutopilot = {
@@ -133,6 +140,17 @@ export class DouyinStoreVisitAutopilotService
       mergeRequested: false,
       mergeAfter: now,
       resumePipeline: topic.storeVisit?.pipeline?.state === 'paused',
+      recovery:
+        previous?.state === 'waiting'
+          ? {
+              reason: previous.message,
+              stage: previous.stage,
+              segmentId: topic.storeVisit?.pipeline?.currentSegmentId,
+              pending: true,
+            }
+          : resume
+            ? previous.recovery
+            : undefined,
       videoBaseline: resume
         ? previous.videoBaseline
         : topic.generatedVideoId || 0,
@@ -140,7 +158,13 @@ export class DouyinStoreVisitAutopilotService
       updatedAt: now,
     };
     await this.topics.updateOne(
-      { _id: topic._id, 'storeVisit.autopilot.state': { $ne: 'running' } },
+      {
+        _id: topic._id,
+        'storeVisit.autopilot.state': previous?.state || { $exists: false },
+        ...(input.recoverFailureId
+          ? { 'storeVisit.autopilot.failureId': input.recoverFailureId }
+          : {}),
+      },
       { $set: { 'storeVisit.autopilot': state, updatedAt: now } },
     );
     void this.advance(topicId, scope).catch((error) =>
@@ -153,7 +177,10 @@ export class DouyinStoreVisitAutopilotService
   async pause(topicId: number, scope: Scope): Promise<DouyinTopicEntity> {
     const topic = await this.requireTopic(topicId, scope);
     await this.topics.updateOne(
-      { _id: topic._id, 'storeVisit.autopilot.state': 'running' },
+      {
+        _id: topic._id,
+        'storeVisit.autopilot.state': { $in: ['running', 'waiting'] },
+      },
       {
         $set: {
           'storeVisit.autopilot.state': 'paused',
@@ -280,6 +307,8 @@ export class DouyinStoreVisitAutopilotService
     };
     for (const [key, value] of Object.entries(fields))
       if (value !== undefined) set[`storeVisit.autopilot.${key}`] = value;
+    if (fields.state === 'waiting')
+      set['storeVisit.autopilot.failureId'] = randomUUID();
     await this.topics.updateOne(
       {
         _id: topic._id,
@@ -288,6 +317,92 @@ export class DouyinStoreVisitAutopilotService
       },
       { $set: set },
     );
+  }
+
+  /** @description 按失败事项调整脚本、配图或过长台词，服务任务失效时清理失败调用后仅续跑未完成分段。 @keyword-cn 托管错误修复, 失败分段续跑 @keyword-en autopilot-error-repair, resume-failed-segment */
+  private async recoverStep(
+    topic: DouyinTopicEntity,
+    scope: Scope,
+  ): Promise<void> {
+    const setting = topic.storeVisit!;
+    const recovery = setting.autopilot!.recovery!;
+    const reason = recovery.reason.slice(0, 350);
+    await this.patch(topic, {
+      message: `Agent 正在根据失败原因调整：${reason}`,
+    });
+    if (
+      recovery.stage === 'script' &&
+      /自检|事实|脚本.*(不符|问题)/.test(reason)
+    ) {
+      await this.agent.writeScript(
+        topic.id,
+        { keepCast: true, issues: [reason] },
+        scope,
+      );
+    } else if (
+      recovery.stage === 'picture' &&
+      storeVisitStart(setting) === 'script' &&
+      setting.autopilot!.pictureSource === 'gallery'
+    ) {
+      await this.patch(topic, { pictureSource: 'ai', mustMerge: true });
+    } else if (recovery.stage === 'make') {
+      const segment = setting.segments?.find(
+        (item) => item.id === recovery.segmentId,
+      );
+      if (
+        segment &&
+        !isStoreVisitSegmentReady(segment) &&
+        /台词|口播|配音/.test(reason) &&
+        /太长|超长|超过|超出|长于/.test(reason)
+      ) {
+        const maxChars = Math.max(20, Math.floor(segment.lines.length * 0.7));
+        const result = await this.scripts.refineScript(
+          {
+            script: segment.lines,
+            title: topic.title,
+            voiceId: setting.voiceId,
+            instruction: `这段生成失败：${reason}。只修改这段台词，压缩至 ${maxChars} 字以内以适配时长，保留店名、价格、项目等事实，不加解释。`,
+          },
+          scope,
+        );
+        if (result.script.length > maxChars || result.script === segment.lines)
+          throw new BadRequestException(
+            '台词调整未达到时长要求，Agent 将继续调整',
+          );
+        const current = await this.requireTopic(topic.id, scope);
+        if (
+          current.storeVisit?.autopilot?.state !== 'running' ||
+          current.storeVisit.autopilot.claimId !== setting.autopilot!.claimId
+        )
+          return;
+        await this.repository.update(
+          topic.id,
+          {
+            storeVisit: {
+              segments: setting.segments!.map((item) =>
+                item.id === segment.id
+                  ? { ...item, lines: result.script }
+                  : item,
+              ),
+            },
+          },
+          scope,
+        );
+      }
+      // 失效任务、提交失败与网络失败使用最新分段重建调用，成功段不重做。
+      const current = await this.requireTopic(topic.id, scope);
+      if (
+        current.storeVisit?.autopilot?.state !== 'running' ||
+        current.storeVisit.autopilot.claimId !== setting.autopilot!.claimId
+      )
+        return;
+      if (current.storeVisit.pipeline?.state === 'paused')
+        await this.pipeline.resume(topic.id, scope);
+    }
+    await this.patch(topic, {
+      recovery: { ...recovery, pending: false },
+      resumePipeline: false,
+    });
   }
 
   /** @description 保留用户已选人物音色，仅为缺失项请求 AI 推荐，音色库未配置时保存明确的声音描述。 @keyword-cn 托管补齐人物音色, 保留用户设定 @keyword-en autopilot-fill-cast, preserve-user-cast */
@@ -360,6 +475,10 @@ export class DouyinStoreVisitAutopilotService
   private async runStep(topic: DouyinTopicEntity, scope: Scope): Promise<void> {
     const setting = topic.storeVisit || {};
     const auto = setting.autopilot!;
+    if (auto.recovery?.pending) {
+      await this.recoverStep(topic, scope);
+      return;
+    }
     if (setting.pipeline?.state === 'running') {
       await this.finishVideo(topic, scope);
       return;
@@ -502,7 +621,7 @@ export class DouyinStoreVisitAutopilotService
         .filter((value) => value > 0);
       await this.agent.generateLines(
         topic.id,
-        `${auto.linesPrompt || ''} 每段台词控制在 ${Math.max(5, Math.floor(Math.min(...limits, 15) * 4))} 字以内，完整保留脚本事实。`,
+        `${auto.linesPrompt || ''} ${auto.recovery?.stage === 'lines' ? `上次失败原因：${auto.recovery.reason.slice(0, 350)}，请针对该问题调整。` : ''} 每段台词控制在 ${Math.max(5, Math.floor(Math.min(...limits, 15) * 4))} 字以内，完整保留脚本事实。`,
         scope,
       );
       return;
@@ -622,7 +741,9 @@ export class DouyinStoreVisitAutopilotService
     }
     if (setting.pipeline?.state === 'paused' && !auto.resumePipeline) {
       await this.patch(topic, {
-        state: 'waiting',
+        state: ['user', 'editing'].includes(setting.pipeline.pauseReason || '')
+          ? 'paused'
+          : 'waiting',
         stage: 'make',
         message: setting.pipeline.error || '出片已暂停，检查后可继续托管',
       });

@@ -18,6 +18,13 @@ export interface DouyinPublishScope {
 }
 
 /**
+ * @description 发布库扫码打开的小程序版本；latest 为平台已上传的开发测试版。
+ * @keyword-cn 小程序版本, 测试版二维码
+ * @keyword-en miniapp-version, test-version-qr
+ */
+export type DouyinMiniappVersionType = 'current' | 'latest';
+
+/**
  * @description 抖音视频发布库持久化实体。
  * @keyword-cn 发布库实体
  * @keyword-en publish-library-entity
@@ -32,6 +39,10 @@ export interface DouyinPublishLibraryEntity {
   qrSchema?: string;
   /** 生成 qrSchema 时的 AppID + 发布页 + 启动参数；与当前不一致时重新生成 */
   qrSchemaKey?: string;
+  /** 按正式版与开发测试版分别保存 Schema，切换版本不覆盖另一份缓存。 */
+  qrSchemas?: Partial<
+    Record<DouyinMiniappVersionType, { schema: string; key: string }>
+  >;
   createdAt: Date;
   updatedAt: Date;
 }

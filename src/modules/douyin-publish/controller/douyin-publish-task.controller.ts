@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   Body,
   Controller,
   Get,
@@ -6,9 +7,12 @@ import {
   Param,
   Post,
   Req,
+  Res,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { Readable } from 'node:stream';
 import type { DouyinPublishWorkEntity } from '../entities/douyin-publish.entity.js';
 import { parseDouyinAwemeId } from '../../douyin-data/services/douyin-aweme-link.js';
 import {
@@ -82,6 +86,57 @@ export class DouyinPublishTaskController {
   }
 
   /**
+   * @description 由后端转发作品登记的视频，供小程序直连外链被来源站拒绝时下载；只转发该作品自己的地址并透传 Range，不接受调用方传入地址。
+   * @keyword-cn 小程序视频转发接口, 外链下载兜底
+   * @keyword-en publish-task-video-endpoint, external-video-fallback
+   */
+  @Get(':id/video')
+  @RequireDouyinPublishTokenAccess('read', 'DouyinWorkbench')
+  async streamVideo(
+    @Param('id') id: string,
+    @Req() req: DouyinPublishTaskRequest,
+    @Res() res: Response,
+  ): Promise<void> {
+    const library = req.douyinPublishLibrary;
+    const work = await this.works.getForLibrary(id, library._id);
+    if (!work) throw new NotFoundException('DOUYIN_PUBLISH_WORK_NOT_FOUND');
+    const source = this.toAbsoluteUrl(work.videoUrl, req);
+    if (!source) {
+      throw new NotFoundException('DOUYIN_PUBLISH_VIDEO_NOT_AVAILABLE');
+    }
+    const range = req.headers.range;
+    let upstream: globalThis.Response;
+    try {
+      upstream = await fetch(source, {
+        headers: range ? { Range: range } : undefined,
+        signal: AbortSignal.timeout(10 * 60 * 1000),
+      });
+    } catch {
+      throw new BadGatewayException('DOUYIN_PUBLISH_VIDEO_FETCH_FAILED');
+    }
+    if (!upstream.ok || !upstream.body) {
+      throw new BadGatewayException(
+        `DOUYIN_PUBLISH_VIDEO_FETCH_FAILED_${upstream.status}`,
+      );
+    }
+    res.status(upstream.status);
+    for (const name of [
+      'content-type',
+      'content-length',
+      'content-range',
+      'accept-ranges',
+    ]) {
+      const value = upstream.headers.get(name);
+      if (value) res.setHeader(name, value);
+    }
+    const stream = Readable.fromWeb(
+      upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0],
+    );
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
+  }
+
+  /**
    * @description 回写原生发布结果或待补ID状态，返回原始ID、平台状态与数字抓取目标。
    * @keyword-cn 小程序发布回写接口, 释放租约
    * @keyword-en publish-result-endpoint, release-lease
@@ -122,6 +177,7 @@ export class DouyinPublishTaskController {
       description: work.description,
       tags: work.tags,
       videoUrl: this.toAbsoluteUrl(work.videoUrl, req),
+      videoDownloadUrl: this.toVideoDownloadUrl(work, req),
       coverUrl: this.toAbsoluteUrl(work.coverUrl, req),
       duration: work.duration,
       status: work.status,
@@ -132,6 +188,29 @@ export class DouyinPublishTaskController {
         parseDouyinAwemeId(work.douyinVideoId ?? '') ||
         null,
     };
+  }
+
+  /**
+   * @description 视频登记在外部站点时给出本服务的转发地址，供小程序直连失败后改走后端；站内或相对地址返回空串。
+   * @keyword-cn 视频转发地址, 外链下载兜底
+   * @keyword-en video-download-url, external-video-fallback
+   */
+  private toVideoDownloadUrl(
+    work: DouyinPublishWorkEntity,
+    req: DouyinPublishTaskRequest,
+  ): string {
+    const source = String(work.videoUrl ?? '').trim();
+    const host = typeof req.get === 'function' ? req.get('host') : undefined;
+    if (!host || !/^https?:\/\//i.test(source)) return '';
+    try {
+      if (new URL(source).host === host) return '';
+    } catch {
+      return '';
+    }
+    return this.toAbsoluteUrl(
+      `api/publish-tasks/${work._id.toHexString()}/video`,
+      req,
+    );
   }
 
   /**

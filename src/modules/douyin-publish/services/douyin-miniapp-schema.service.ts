@@ -1,5 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { DouyinMiniappVersionType } from '../entities/douyin-publish.entity.js';
 
 /** 抖音开放平台默认网关；沙盒联调时把 DOUYIN_OPEN_API_BASE 配成 https://open-sandbox.douyin.com */
 const DEFAULT_DOUYIN_OPEN_API_BASE = 'https://open.douyin.com';
@@ -87,6 +92,22 @@ export class DouyinMiniappSchemaService {
   }
 
   /**
+   * 从服务端环境读取统一的小程序版本，缺省正式版，配置错误时拒绝生成二维码。
+   * @keyword-cn 后端版本配置, 小程序版本
+   * @keyword-en server-version-config, miniapp-version
+   */
+  getVersionType(): DouyinMiniappVersionType {
+    const value =
+      String(this.config.get('DOUYIN_MINIAPP_VERSION_TYPE') ?? '').trim() ||
+      'current';
+    if (value !== 'current' && value !== 'latest')
+      throw new ServiceUnavailableException(
+        'DOUYIN_MINIAPP_VERSION_TYPE_INVALID',
+      );
+    return value;
+  }
+
+  /**
    * 创建可触发任务 Webhook 的长期视频任务，挂载公开会客厅页面。
    * @keyword-cn 拍抖音任务, 发布回调
    * @keyword-en douyin-video-task, publish-webhook
@@ -133,7 +154,7 @@ export class DouyinMiniappSchemaService {
   }
 
   /**
-   * @description 当前 Schema 的身份键：AppID + 发布页 + 启动参数。任何一项变了，已缓存的 Schema 就不能再用。
+   * @description Schema 按后端配置版本隔离，正式版保留旧缓存键以兼容已有二维码。
    * @keyword-cn Schema身份键, 失效判断
    * @keyword-en schema-identity-key, cache-invalidation
    * @param {Record<string, string>} query 启动参数。
@@ -142,11 +163,12 @@ export class DouyinMiniappSchemaService {
   buildSchemaKey(query: Record<string, string>): string | null {
     const settings = this.readSettings();
     if (!settings) return null;
-    return `${settings.appId}|${settings.page}|${JSON.stringify(query)}`;
+    const versionType = this.getVersionType();
+    return `${settings.appId}|${settings.page}|${versionType === 'current' ? '' : `${versionType}|`}${JSON.stringify(query)}`;
   }
 
   /**
-   * @description 生成长期有效的 Schema（`no_expire: true`），启动参数原样作为页面 options 交给小程序。
+   * @description 为后端配置的版本生成长期 Schema，启动参数仍原样传给小程序。
    * @keyword-cn 生成长期Schema, 扫码唤起小程序
    * @keyword-en generate-permanent-schema, qr-open-miniapp
    * @param {Record<string, string>} query 启动参数，小程序在 onLoad 的 options 里按键读取。
@@ -165,6 +187,7 @@ export class DouyinMiniappSchemaService {
       path: settings.page,
       query: JSON.stringify(query),
       no_expire: true,
+      version_type: this.getVersionType(),
     };
     let token = await this.getClientToken(settings, false);
     let result = await this.postSchema(settings, token, body);

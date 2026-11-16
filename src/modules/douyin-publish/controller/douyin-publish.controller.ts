@@ -115,7 +115,7 @@ export class DouyinPublishController {
   }
 
   /**
-   * @description 获取发布库扫码入口 token、path 和二维码内容。
+   * @description 读取后端统一配置版本的发布库扫码入口，客户端查询参数不能覆盖版本。
    * @keyword-cn 发布二维码接口
    * @keyword-en publish-qr-endpoint
    */

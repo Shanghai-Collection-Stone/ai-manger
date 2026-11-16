@@ -10,8 +10,8 @@ AI 抖音工作台（douyin-workbench）
 
 ## 文件清单 (File List)
 
-- `services/douyin-store-visit-autopilot.service.ts` — 持久化全流程 Agent 托管，原子认领、心跳、断点续跑、错误等待与成片完成判定。
-- `services/douyin-store-visit-autopilot.service.spec.ts` — 真实状态机的逐步托管、保留设定、暂停续跑、跨进程防重、失效认领与用户隔离测试。
+- `services/douyin-store-visit-autopilot.service.ts` — 持久化全流程 Agent 托管，原子认领、失败标识校验、按错误修复与失败分段续跑、心跳和成片完成判定。
+- `services/douyin-store-visit-autopilot.service.spec.ts` — 状态机逐步托管、失败事项修复、过期恢复拦截、保留成功分段、暂停续跑、跨进程防重与用户隔离测试。
 
 - `services/douyin-store-visit-lip-sync.ts` — 人物段视频型号出片后的对口型：可灵人脸识别与对口型地址、人脸解析、按出现时长挑主播与视觉比对提示、配音按出现时间切给选中的脸、跳过原因翻译与公开视图。
 - `services/douyin-store-visit-continuity.ts` — 台词与场景边界判断、场景起始图复用、视觉 LLM 尾帧衔接任务和严格结构化结果校验。
@@ -903,7 +903,8 @@ AI 抖音工作台（douyin-workbench）
 - `DOUYIN_AUTOPILOT_TICK_MS` — Agent 托管巡检间隔，每次只推进一项尚未完成的业务操作 | keywords: 托管巡检间隔, 逐步推进, autopilot-tick-interval, stepwise-advance
 - `DOUYIN_AUTOPILOT_CLAIM_MS` — 认领在无心跳两分钟后失效，允许崩溃进程的任务被重新认领 | keywords: 托管认领租期, 崩溃恢复, autopilot-claim-lease, crash-recovery
 - `autopilotScriptKey(topic)` — 为当前脚本与人物音色生成自检标识，内容或设定变化后重新检查 | keywords: 托管脚本指纹, 自检去重, autopilot-script-key, review-deduplication
-- `DouyinStoreVisitAutopilotService()` — 持久化全流程 Agent 托管，复用单步 AI 编排依次补齐设定、脚本、台词、画面和出片；暂停保留已完成结果，失败不自动循环重试或重复扣费 | keywords: Agent全流程托管, 断点续跑, agent-workflow-autopilot, resumable-workflow
+- `DouyinStoreVisitAutopilotService()` — 持久化全流程 Agent 托管，按失败原因调整并断点续跑，复用已完成结果与原子认领 | keywords: Agent全流程托管, 断点续跑, agent-workflow-autopilot, resumable-workflow
+- `DouyinStoreVisitAutopilotService.recoverStep(topic,scope)` — 按失败事项调整脚本、配图或过长台词，服务任务失效时清理失败调用后仅续跑未完成分段 | keywords: 托管错误修复, 失败分段续跑, autopilot-error-repair, resume-failed-segment
 - `DouyinStoreVisitAutopilotService.constructor(db,repository,agent,planner,scripts,spots,personas,pipeline)` — 注入持久化集合和现有工作台 AI 编排，生成结果沿用各业务服务保存 | keywords: 初始化Agent托管, 托管依赖, init-agent-autopilot, autopilot-dependencies
 - `DouyinStoreVisitAutopilotService.onModuleInit()` — 仅在 leader 启动巡检，已保存的运行任务在服务重启后继续 | keywords: 启动托管巡检, 服务重启续跑, start-autopilot-patrol, resume-autopilot-after-restart
 - `DouyinStoreVisitAutopilotService.onModuleDestroy()` — 停止当前进程的托管巡检 | keywords: 停止托管巡检, 托管模块销毁, stop-autopilot-patrol, autopilot-module-destroy
@@ -934,6 +935,8 @@ AI 抖音工作台（douyin-workbench）
 | 中文 | English |
 | --- | --- |
 | 工作台入口依赖 | workbench-entry-dependencies |
+| 托管错误修复 | autopilot-error-repair |
+| 失败分段续跑 | resume-failed-segment |
 | 托管接口依赖 | autopilot-api-dependencies |
 | 托管巡检间隔 | autopilot-tick-interval |
 | 逐步推进 | stepwise-advance |
@@ -2018,4 +2021,4 @@ AI 抖音工作台（douyin-workbench）
 
 **创作脚本与人物音色**：候选生成与确认接口接收可选 `voiceId`，只允许真实音色库 ID；选择随任务保存并公开人物、音色和风格，候选重开按任务还原。逐条确认允许 `personaId=0`、空 `voiceId` 和空风格，显式取消不回退到批次设定。生成提示按音色特征安排表达节奏；未选择时不自行绑定具体声线，候选确认只落创作方案和设定，不拆台词、不生成音频或视频。`writeScript` 缺省沿用当前人物音色，只有显式 `keepCast=false` 才进入推荐分支，编排服务保持相同缺省行为。微调接口接收 `productionMode`、`voiceId` 和 `voicePrompt`，创作方案保留章节与画面安排，只调整叙事视角、语气、节奏；不改价格等事实、不变成逐段对白。客户端微调前持久化 `scriptNeedsRefine=true` 并清台词来源快照，成功写入新正文后清标记；失败或重开可继续，期间生成台词接口拒绝调用模型。不露脸的台词也按预设人物视角和所选音色特征写作。
 
-**Agent 自动托管**：POST topics/:id/store-visit/autopilot/start（create DouyinWorkbench）启动或续跑，POST topics/:id/store-visit/autopilot/pause（update DouyinWorkbench）暂停。按所属租户用户逐步补齐人物音色、独立创作脚本、按稿拆台词、缺失画面和导演出片；已选设定与完成结果复用。门店不明确、无实拍素材、余额不足或 AI 失败时进入等待，用户处理后再继续。图库不足时逐段 AI 补图，不虚构门店实拍。后台每 3 秒原子认领一步，心跳续租防跨进程重复执行。暂停保留当前结果，已提交操作允许结束。尾帧、音色锚点和拼接沿用打开的桌面端；仅新成片落库才标记完成，不执行公开发布。
+**Agent 自动托管**：POST topics/:id/store-visit/autopilot/start（create DouyinWorkbench）启动或续跑，POST topics/:id/store-visit/autopilot/pause（update DouyinWorkbench）暂停。按所属租户用户补齐设定、脚本、台词、画面和出片，复用已完成结果。错误进入 waiting 并生成唯一 failureId；桌面端展示原因，等待 6 秒后携带 recoverFailureId 续跑。服务端只接受仍在等待且标识相符的恢复，原子更新拦截过期请求与跨窗口暂停竞态；暂停同时支持 running 和 waiting。恢复携带服务端保存的失败步骤、原因和分段：脚本自检问题定向重写；台词生成附失败原因；脚本起点的图库失败改 AI 补图；出片台词过长先压缩失败段并校验长度，任务失效或网络失败清理结束调用后重提未完成分段；拼接失败重新请求拼接。成功段保留，修复过程中用户暂停后不启动下一段。门店、素材、余额或配置等外部条件仍需补齐，新的失败会再次告知原因；不虚构实拍素材。后台每 3 秒原子认领一步并续心跳。尾帧、音色和拼接沿用打开的桌面端；仅新成片落库才完成，不执行公开发布。

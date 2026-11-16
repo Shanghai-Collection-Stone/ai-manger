@@ -19,12 +19,14 @@
 - `controller/douyin-publish-task.controller.ts` — `/api/publish-tasks` 抖音小程序扫码 token 接口。
 - `controller/douyin-publish.dto.ts` — 管理端与小程序请求体校验 DTO。
 - `guards/douyin-publish-token.guard.ts` — 小程序入口的同址权限声明装饰器、Bearer 扫码 token Guard 与发布库请求上下文。
-- `../../../.env` — 本机抖音小程序 AppID 与发布页配置；环境文件被 Git 忽略，AppSecret 仅从服务端环境读取。
+- `../../../.env` — 本机抖音小程序 AppID、发布页及默认正式版 current 配置；环境文件被 Git 忽略，AppSecret 仅从服务端环境读取。
 
 - `services/douyin-publish-webhook.service.ts` — 平台任务创建、跨进程复用和通知关联。
 - `guards/douyin-publish-webhook.guard.ts` — 原始请求体验签及同址权限装饰器。
 - `controller/douyin-publish-webhook.controller.ts` — 平台地址校验与任务回调 HTTP 入口。
 - `services/douyin-publish-webhook.service.spec.ts` — 平台签名、任务关联、持久化重试与乱序回归测试。
+
+- `services/douyin-publish-qr.spec.ts` — 发布库版本参数、官方请求、缓存隔离、旧码兼容及并发生成测试。
 
 ## 函数清单 (Function List)
 
@@ -44,14 +46,14 @@
 - `require(id,scope)` — 要求当前作用域发布库存在 | keywords: 要求发布库, 发布库不存在, require-publish-library, publish-library-not-found
 - `update(id,name,scope)` — 更新发布库名称 | keywords: 更新发布库, update-publish-library
 - `remove(id,scope)` — 删除空发布库 | keywords: 删除发布库, 非空库保护, delete-publish-library, non-empty-library-guard
-- `getQr(id,scope)` — 懒生成 token 并构造二维码内容：配置小程序 AppID 时为长期 Schema，否则沿用链接模板或原始 JSON | keywords: 生成发布二维码, 懒生成令牌, build-publish-qr, lazy-qr-token
-- `resolveQrSchema(library,query)` — 复用或生成一次发布库长期 Schema 并写回发布库，同库并发只生成一次 | keywords: 发布库Schema, 生成一次复用, publish-library-schema, generate-once-reuse
+- `getQr(id,scope)` — 懒生成 token 并构造二维码内容：按后端 current/latest 配置分别缓存 Schema，本地开发打印可粘贴的入口 JSON；客户端不能设置版本 | keywords: 生成发布二维码, 懒生成令牌, build-publish-qr, lazy-qr-token
+- `resolveQrSchema(library,query,versionType)` — 复用或生成一次发布库长期 Schema 并写回发布库，同库同版本并发只生成一次，测试版不覆盖正式版 | keywords: 发布库Schema, 生成一次复用, publish-library-schema, generate-once-reuse
 - `DouyinMiniappSchemaError(code,detail?,errNo?)` — 抖音开放平台调用失败，带业务错误码与抖音原始错误 | keywords: 抖音开放平台错误, 生成Schema失败, douyin-open-api-error, generate-schema-failure
 - `DouyinMiniappSchemaService(config)` — 抖音小程序 Schema 生成服务，client_token 按进程缓存并在令牌失效时刷新重试一次 | keywords: 抖音小程序Schema, 扫码唤起小程序, douyin-miniapp-schema, qr-open-miniapp
 - `readSettings()` — 读取小程序 AppID、AppSecret、网关与发布页路径 | keywords: 小程序配置, 配置读取, miniapp-config, config-read
 - `isConfigured()` — 是否已配置小程序 AppID 与 AppSecret | keywords: 小程序配置, 是否启用Schema, miniapp-config, schema-enabled
-- `buildSchemaKey(query)` — 当前 Schema 的身份键（AppID + 发布页 + 启动参数） | keywords: Schema身份键, 失效判断, schema-identity-key, cache-invalidation
-- `generatePermanentSchema(query)` — 生成长期有效 Schema，启动参数原样作为页面 options | keywords: 生成长期Schema, 扫码唤起小程序, generate-permanent-schema, qr-open-miniapp
+- `buildSchemaKey(query)` — Schema 按版本隔离，正式版兼容原缓存键 | keywords: Schema身份键, 失效判断, schema-identity-key, cache-invalidation
+- `generatePermanentSchema(query)` — 生成后端配置版本的长期 Schema，显式传入 version_type | keywords: 生成长期Schema, 扫码唤起小程序, generate-permanent-schema, qr-open-miniapp
 - `postSchema(settings,token,body)` — 调用生成 SchemaV2 并整理错误码与 Schema | keywords: 生成Schema请求, 抖音开放平台, generate-schema-request, douyin-open-api
 - `getClientToken(settings,forceRefresh)` — 取缓存或单路在途换新 client_token | keywords: 获取client_token, 令牌缓存, get-client-token, token-cache
 - `fetchClientToken(settings)` — 以 client_credential 换取 client_token 并写入缓存 | keywords: 获取client_token, 非用户授权, get-client-token, client-credential
@@ -103,7 +105,7 @@
 - `createLibrary(body,req)` — 新建发布库 | keywords: 新建发布库接口, create-publish-library-endpoint
 - `updateLibrary(id,body,req)` — 更新发布库名称 | keywords: 更新发布库接口, update-publish-library-endpoint
 - `deleteLibrary(id,req)` — 删除空发布库 | keywords: 删除发布库接口, delete-publish-library-endpoint
-- `getLibraryQr(id,req)` — 获取二维码入口内容 | keywords: 发布二维码接口, publish-qr-endpoint
+- `getLibraryQr(id,req)` — 按后端统一配置获取发布库二维码，忽略客户端版本覆盖 | keywords: 发布二维码接口, publish-qr-endpoint
 - `listWorks(id,status,keyword,page,pageSize,req)` — 分页列出作品 | keywords: 发布作品列表接口, list-publish-works-endpoint
 - `createWork(id,body,req)` — 创建视频快照作品 | keywords: 作品入库接口, create-publish-work-endpoint
 - `getLocations(topicIds,req)` — 查询选题位置 | keywords: 选题位置接口, topic-locations-endpoint
@@ -120,7 +122,9 @@
 - `leaseNext(req)` — 领取下一条未发布作品并准备平台任务，准备失败释放本次租约 | keywords: 小程序领取接口, FIFO领取, lease-next-endpoint, fifo-lease
 - `getWork(id,req)` — 读取扫码库内作品及平台状态，为未发布作品准备任务 | keywords: 小程序作品详情接口, publish-task-detail-endpoint
 - `publishResult(id,body,req)` — 回写发布结果并释放租约，返回平台状态与抓取目标 | keywords: 小程序发布回写接口, 释放租约, publish-result-endpoint, release-lease
+- `streamVideo(id,req,res)` — 转发作品登记的视频并透传 Range，供小程序直连外链被拒时下载 | keywords: 小程序视频转发接口, 外链下载兜底, publish-task-video-endpoint, external-video-fallback
 - `toTaskView(work,req)` — 转换小程序任务字段并补全媒体地址 | keywords: 小程序任务视图, 绝对媒体地址, publish-task-view, absolute-media-url
+- `toVideoDownloadUrl(work,req)` — 视频在外部站点时给出本服务转发地址，站内或相对地址返回空串 | keywords: 视频转发地址, 外链下载兜底, video-download-url, external-video-fallback
 - `toAbsoluteUrl(value,req)` — 按转发协议与 host 补全相对地址 | keywords: 媒体地址补全, 代理协议识别, absolute-media-url, forwarded-protocol
 
 - `DouyinPublishWebhookService()` — services/douyin-publish-webhook.service.ts：创建发布任务并将签名验证后的平台通知交给关联作品 | keywords: 拍抖音任务, 发布回调, douyin-video-task, publish-webhook
@@ -168,6 +172,24 @@
 
 - `releasesLeaseAfterTaskFailure()` — 验证任务准备失败后立即释放新领取租约并允许重试 | keywords: 发布回调测试, 回调验签, publish-webhook-test, webhook-signature
 
+- `versionQrFixture()` — 构造真实版本缓存服务、平台配置及按字段更新的持久层替身 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `getVersionQrSetting(key)` — 读取二维码测试配置 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `readVersionQrLibrary(filter)` — 查询精确发布库并保留快照，模拟并发读 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `saveVersionQrLibrary(filter, patch)` — 应用 Mongo 点号字段更新，验证两种版本不会互相覆盖 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `getVersionQrCollection()` — 提供发布库测试集合 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `generateVersionQr(_query, versionType)` — 为每种版本生成不同入口，以发现串码和错误复用 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `versionQrTests()` — 验证版本参数贯穿管理端、缓存和官方 API，且与原发布库回调凭证保持关联 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `isolatesVersionCaches()` — 同库正式和测试二维码分别缓存，往返切换复用而不消耗新配额 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `reusesLegacyAndConcurrentCaches()` — 旧正式版缓存继续有效，测试版不会复用它；同版并发只生成一次 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `rejectsUnsupportedVersion()` — 不支持的版本或缺少官方配置时拒绝，不用正式二维码冒充测试版 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `sendsOfficialVersionParameter()` — 官方 Schema API 使用后端配置版本，保留同一页面与扫码参数 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `generateVersionSchema()` — 生成并持久化后端配置版本的二维码，不修改作品与统计 | keywords: 版本二维码缓存, 生成一次复用, version-qr-cache, generate-once-reuse
+- `clearVersionSchemaFlight()` — 清理本次版本的进程内生成标记 | keywords: 版本二维码缓存, 生成一次复用, version-qr-cache, generate-once-reuse
+
+- `getVersionType()` — 从后端 DOUYIN_MINIAPP_VERSION_TYPE 读取统一版本，非法值报错 | keywords: 后端版本配置, 小程序版本, server-version-config, miniapp-version
+- `enforcesBackendVersionOverQuery()` — 真实HTTP验证客户端查询参数不能覆盖后端版本，并保留租户用户过滤 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+- `canActivate(context)` — 发布库HTTP测试中提供隔离的已鉴权用户上下文 | keywords: 版本二维码测试, 缓存隔离, version-qr-test, cache-isolation
+
 ## 关键词索引 (Keyword Index)
 
 | 中文 | English |
@@ -189,6 +211,9 @@
 | 释放租约 | release-lease |
 | 选题入库位置 | topic-work-locations |
 | 绝对媒体地址 | absolute-media-url |
+| 小程序视频转发接口 | publish-task-video-endpoint |
+| 外链下载兜底 | external-video-fallback |
+| 视频转发地址 | video-download-url |
 | 发布结果回写 | update-publish-result |
 | 发布标识 | publish-identity |
 | 抓取衔接 | crawl-handoff |
@@ -206,6 +231,12 @@
 | 非用户授权 | client-credential |
 | 抖音开放平台错误 | douyin-open-api-error |
 | 生成Schema失败 | generate-schema-failure |
+| 小程序版本 | miniapp-version |
+| 后端版本配置 | server-version-config |
+| 测试版二维码 | test-version-qr |
+| 版本二维码缓存 | version-qr-cache |
+| 版本二维码测试 | version-qr-test |
+| 缓存隔离 | cache-isolation |
 | 发布回调 | publish-webhook |
 | 拍抖音任务 | douyin-video-task |
 | 任务关联 | task-mapping |
@@ -221,6 +252,8 @@
 | 唯一索引 | unique-index |
 
 ## 类型导出 (Type Exports)
+
+- `DouyinMiniappVersionType` — current 正式版、latest 平台已上传的开发测试版 | keywords: 小程序版本, 测试版二维码, miniapp-version, test-version-qr
 
 - `DouyinPublishScope` — 租户与用户双重作用域 | keywords: 发布作用域, publish-scope
 - `DouyinPublishLibraryEntity` — 发布库 Mongo 实体；`qrSchema` / `qrSchemaKey` 缓存长期 Schema 及生成它时的 AppID + 发布页 + 启动参数 | keywords: 发布库实体, publish-library-entity
@@ -273,8 +306,16 @@
 
 二维码 token 懒生成，使用 32 字节随机数的 base64url 字符串。`path` 是 `{"token":"...","tenantId":"..."}` JSON；未配置 `DOUYIN_PUBLISH_QR_LINK_TEMPLATE` 时 `qrContent` 等于 `path`。配置模板时必须包含 `{path}`，服务会替换为 `encodeURIComponent(path)`；模板应指向抖音小程序页面 `pages/publish/index`，入口参数名为 `path`，可使用抖音小程序 schema 或抖音开放平台生成的带参链接。
 
-领取与详情返回 `{ id, title, description, tags, videoUrl, coverUrl, duration, status, douyinVideoId, crawlTarget }`。小程序重开指定作品时依据 status 恢复已发布锁定状态；crawlTarget 为空时可补作品链接，不能再次发布。相对媒体路径按请求协议与host补全。无可领取作品返回404；无效token返回401；租户不匹配返回403。
+本地生成或刷新二维码时，若 NODE_ENV 未设置或为 development / dev，后端输出 `[qr] entry_json` 日志及独立一行的入口 JSON；复用已缓存 Schema 时也输出，可复制 JSON 到小程序视频发布页的入口输入框。production、test 及其他环境不输出该凭证。token 必填且为发布库扫码 token，tenantId 可选；额外传入 workId 时读取该库指定作品，不传则领取下一条待发布作品。
+
+领取与详情返回 `{ id, title, description, tags, videoUrl, coverUrl, duration, status, douyinVideoId, crawlTarget }`。小程序重开指定作品时依据 status 恢复已发布锁定状态；crawlTarget 为空时可补作品链接，不能再次发布。相对媒体路径按请求协议与host补全。视频登记在外部站点（如未配置 OSS 时的供应商地址）时额外返回 `videoDownloadUrl`，指向 `GET /api/publish-tasks/:id/video`：同一扫码 token 鉴权，只转发该作品登记的地址并透传 Range，小程序直连被来源站拒绝时改走这里；上游失败返回502。无可领取作品返回404；无效token返回401；租户不匹配返回403。
 
 错误码：`DOUYIN_PUBLISH_LIBRARY_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_NOT_FOUND`（404）、`DOUYIN_PUBLISH_WORK_NOT_AVAILABLE`（404）、`DOUYIN_PUBLISH_LIBRARY_NOT_EMPTY`（409）、`DOUYIN_PUBLISH_WORK_EXISTS`（409，响应额外携带 `workId`、`libraryId`）、`DOUYIN_PUBLISH_WORK_LEASED`（409）、`DOUYIN_PUBLISH_QR_TOKEN_FAILED`（409）、`DOUYIN_VIDEO_ASSET_NOT_FOUND`（404）、`DOUYIN_PUBLISH_TOKEN_REQUIRED`（401）、`DOUYIN_PUBLISH_TOKEN_INVALID`（401）、`DOUYIN_PUBLISH_TENANT_MISMATCH`（403）、`DOUYIN_PUBLISH_LIBRARY_NAME_INVALID`（400）、`DOUYIN_PUBLISH_TITLE_INVALID`（400）、`DOUYIN_PUBLISH_TAGS_INVALID`（400）、`DOUYIN_PUBLISH_STATUS_INVALID`（400）、`DOUYIN_PUBLISH_PAGINATION_INVALID`（400）。DTO 字段不合法时沿用 Nest `ValidationPipe` 的 400 默认错误结构。
 
 平台 Webhook 入口为 POST /api/douyin-publish/webhook，同址声明 update DouyinWorkbench，由平台原始请求体 SHA1 签名鉴权；challenge 仅回显，无业务写入。平台保留事件名 verify_webhook、douyin_video_task_message 和 Nest 生命周期 onModuleInit 不属于自定义事件总线命名。平台任务按作品保存历史关联，taskIds 在作品领取/详情时送入新版小程序发布器；平台通知在客户端未返回页面时仍可回写原作品，保留原生ID并供既有抓取目标读取。配置与能力前置条件见 CONFIGURATION.md。
+
+发布库二维码版本由后端 DOUYIN_MINIAPP_VERSION_TYPE 统一决定，默认 current，可设 latest；HTTP查询参数不能覆盖。软件只读取并显示实际版本，二维码、发布回调和抓取仍使用原发布库身份。配置切换后重启后端、刷新二维码即可复用对应版本缓存。
+
+拍抖音任务扩展能力需确认当前AppID实际获批并可订阅事件，官方文档存在不代表所有应用均可开通。入口或订阅未确认前，保持 DOUYIN_PUBLISH_WEBHOOK_ENABLED=false；本机开关已关闭，普通发布沿用客户端成功/失败回写和链接补ID。能力与界面排查说明见 CONFIGURATION.md。
+
+当前 AppID 因 Webhooks 列表缺少任务事件进行过接口排查：创建任务返回 28001018（应用未获得该能力），未创建诊断任务。平台授权及订阅需先完成，后端任务开关维持关闭；错误信息与可提交平台的 log_id 见 CONFIGURATION.md。

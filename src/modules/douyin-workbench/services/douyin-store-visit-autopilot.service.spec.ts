@@ -3,6 +3,7 @@ import type { DouyinTopicEntity } from '../entities/douyin-workbench.entity.js';
 import {
   DouyinStoreVisitAutopilotService,
   DOUYIN_AUTOPILOT_CLAIM_MS,
+  autopilotScriptKey,
 } from './douyin-store-visit-autopilot.service.js';
 
 /** @description 取内存 Mongo 桩的点号路径值。 @keyword-cn 托管测试取值, 嵌套字段 @keyword-en autopilot-test-value, nested-field */
@@ -28,6 +29,7 @@ function matches(record: any, query: any): boolean {
           new Date(actual).getTime() < new Date(condition.$lt).getTime()
         );
       if ('$ne' in condition) return actual !== condition.$ne;
+      if ('$in' in condition) return condition.$in.includes(actual);
     }
     return String(actual) === String(condition);
   });
@@ -123,7 +125,9 @@ function setup(setting: Record<string, unknown> = {}) {
     }),
   };
   const scripts = {
-    refineScript: jest.fn(async () => ({ script: body + '表达轻快自然。' })),
+    refineScript: jest.fn(async (_input: any, _scope: any) => ({
+      script: body + '表达轻快自然。',
+    })),
   };
   const agent = {
     videoOptions: jest.fn().mockResolvedValue({
@@ -190,6 +194,10 @@ function setup(setting: Record<string, unknown> = {}) {
   };
   const personas = { get: jest.fn().mockResolvedValue(null) };
   const pipeline = {
+    resume: jest.fn(async () => {
+      topic.storeVisit!.pipeline = { state: 'running', updatedAt: new Date() };
+      return snapshot();
+    }),
     pause: jest.fn(async () => {
       if (topic.storeVisit?.pipeline)
         topic.storeVisit.pipeline.state = 'paused';
@@ -236,6 +244,172 @@ function setup(setting: Record<string, unknown> = {}) {
 }
 
 describe('Agent 全流程托管', () => {
+  it('脚本自检失败按原因重写，台词失败把原因交给下一次生成', async () => {
+    const f = setup();
+    await f.begin();
+    Object.assign(f.topic.storeVisit!.autopilot!, {
+      state: 'waiting',
+      stage: 'script',
+      failureId: 'review',
+      message: '脚本自检仍需处理：套餐价格与资料不符',
+    });
+    await f.begin({ recoverFailureId: 'review' });
+    await f.service.advance(5, scope);
+    expect(f.agent.writeScript).toHaveBeenCalledWith(
+      5,
+      { keepCast: true, issues: ['脚本自检仍需处理：套餐价格与资料不符'] },
+      scope,
+    );
+    Object.assign(f.topic.storeVisit!.autopilot!, {
+      state: 'waiting',
+      stage: 'lines',
+      failureId: 'lines',
+      message: '台词缺少套餐价格',
+      reviewKey: autopilotScriptKey(f.topic),
+    });
+    await f.begin({ recoverFailureId: 'lines' });
+    await f.service.advance(5, scope);
+    await f.service.advance(5, scope);
+    expect(f.agent.generateLines).toHaveBeenCalledWith(
+      5,
+      expect.stringContaining('上次失败原因：台词缺少套餐价格'),
+      scope,
+    );
+  });
+
+  it('手动暂停导演不触发错误自动恢复', async () => {
+    const f = setup({ pipeline: { state: 'running', updatedAt: new Date() } });
+    await f.begin();
+    f.topic.storeVisit!.pipeline = {
+      state: 'paused',
+      pauseReason: 'editing',
+      updatedAt: new Date(),
+    };
+    await (f.service as any).finishVideo(f.topic, scope);
+    expect(f.topic.storeVisit!.autopilot!.state).toBe('paused');
+    expect(f.topic.storeVisit!.autopilot!.failureId).toBeUndefined();
+  });
+
+  it('失败标识保护自动恢复，用户暂停和其他失败均不能被过期倒计时覆盖', async () => {
+    const f = setup();
+    f.planner.reviewScript.mockRejectedValueOnce(new Error('network timeout'));
+    await f.begin();
+    await f.service.advance(5, scope);
+    const failureId = f.topic.storeVisit!.autopilot!.failureId!;
+    expect(failureId).toBeTruthy();
+    await f.service.start(5, { recoverFailureId: 'stale' }, scope);
+    expect(f.topic.storeVisit!.autopilot!.state).toBe('waiting');
+    await f.service.pause(5, scope);
+    expect(f.topic.storeVisit!.autopilot!.state).toBe('paused');
+    await f.service.start(5, { recoverFailureId: failureId }, scope);
+    expect(f.topic.storeVisit!.autopilot!.state).toBe('paused');
+  });
+
+  it('任务不存在时只续跑失败分段，不重做已成功视频', async () => {
+    const f = setup({
+      linesScript: body,
+      sceneImages: [{ type: 'image', id: 31, url: '/31.jpg' }],
+      segments: [
+        {
+          id: 'a',
+          lines: '已成功',
+          shot: 'broll',
+          sceneImageId: 31,
+          videoId: 88,
+          nativeAudio: true,
+        },
+        { id: 'b', lines: '待生成', shot: 'broll', sceneImageId: 31 },
+      ],
+    });
+    await f.begin();
+    Object.assign(f.topic.storeVisit!.autopilot!, {
+      stage: 'make',
+      reviewKey: autopilotScriptKey(f.topic),
+    });
+    f.topic.storeVisit!.pipeline = {
+      state: 'paused',
+      pauseReason: 'failed',
+      currentSegmentId: 'b',
+      error: '自建视频服务上找不到这次任务，请重新生成',
+      updatedAt: new Date(),
+    };
+    await f.service.advance(5, scope);
+    const failureId = f.topic.storeVisit!.autopilot!.failureId;
+    expect(f.topic.storeVisit!.autopilot!.state).toBe('waiting');
+    await f.begin({ recoverFailureId: failureId });
+    await f.service.advance(5, scope);
+    expect(f.pipeline.resume).toHaveBeenCalledTimes(1);
+    expect(f.topic.storeVisit!.segments![0].videoId).toBe(88);
+    expect(f.topic.storeVisit!.autopilot!.recovery).toMatchObject({
+      stage: 'make',
+      segmentId: 'b',
+      pending: false,
+    });
+    expect(f.agent.generateLines).not.toHaveBeenCalled();
+  });
+
+  it('台词过长先按失败原因改短该段，再继续导演', async () => {
+    const longLines =
+      '双人套餐 99 元，周末约上朋友来体验卡丁车，现场还有更多亲子项目可以一起玩。';
+    const f = setup({
+      segments: [
+        { id: 'a', lines: '成功段', videoId: 88, nativeAudio: true },
+        { id: 'b', lines: longLines },
+      ],
+    });
+    await f.begin();
+    Object.assign(f.topic.storeVisit!.autopilot!, {
+      state: 'waiting',
+      stage: 'make',
+      failureId: 'long',
+      message: '第 2 段配音太长，超过视频时长',
+    });
+    f.topic.storeVisit!.pipeline = {
+      state: 'paused',
+      currentSegmentId: 'b',
+      updatedAt: new Date(),
+    };
+    f.scripts.refineScript.mockResolvedValue({
+      script: '双人套餐 99 元，周末约朋友一起来体验卡丁车。',
+    });
+    await f.begin({ recoverFailureId: 'long' });
+    await f.service.advance(5, scope);
+    expect(f.scripts.refineScript.mock.calls[0][0]).toMatchObject({
+      script: longLines,
+      instruction: expect.stringContaining('配音太长'),
+    });
+    expect(f.topic.storeVisit!.segments![0].videoId).toBe(88);
+    expect(f.topic.storeVisit!.segments![1].lines.length).toBeLessThan(
+      longLines.length,
+    );
+    expect(f.pipeline.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('恢复期间再次暂停不会重新启动出片', async () => {
+    const f = setup({ segments: [{ id: 'b', lines: body }] });
+    await f.begin();
+    Object.assign(f.topic.storeVisit!.autopilot!, {
+      state: 'waiting',
+      stage: 'make',
+      failureId: 'long',
+      message: '台词太长，配音超长',
+    });
+    f.topic.storeVisit!.pipeline = {
+      state: 'paused',
+      currentSegmentId: 'b',
+      updatedAt: new Date(),
+    };
+    f.scripts.refineScript.mockImplementation(async () => {
+      await f.service.pause(5, scope);
+      return { script: '双人套餐 99 元，周末约朋友一起来体验卡丁车。' };
+    });
+    await f.begin({ recoverFailureId: 'long' });
+    await f.service.advance(5, scope);
+    expect(f.topic.storeVisit!.autopilot!.state).toBe('paused');
+    expect(f.pipeline.resume).not.toHaveBeenCalled();
+    expect(f.topic.storeVisit!.segments![0].lines).toBe(body);
+  });
+
   it('复用已有脚本与音色，逐步完成台词、画面、出片，拼接完成前不报成功', async () => {
     const { service, topic, begin, agent, planner } = setup();
     await begin();
