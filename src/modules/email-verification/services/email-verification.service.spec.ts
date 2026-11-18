@@ -25,9 +25,21 @@ function matchValue(actual: unknown, expected: unknown): boolean {
   return actual === expected;
 }
 
-/** 只支持本服务用到的集合操作的内存 Db */
-function createFakeDb(): { db: Db; rows: Doc[] } {
+/** 只支持本服务用到的集合操作的内存 Db：rows 是验证码集合，accounts 是账号集合（用于注册场景发码前查重） */
+function createFakeDb(): { db: Db; rows: Doc[]; accounts: Doc[] } {
   const rows: Doc[] = [];
+  const accounts: Doc[] = [];
+  const codes = createFakeCollection(rows);
+  const accountCollection = createFakeCollection(accounts);
+  const db = {
+    collection: (name: string) =>
+      name === 'admin_accounts' ? accountCollection : codes,
+  } as unknown as Db;
+  return { db, rows, accounts };
+}
+
+/** 基于内存数组的单个集合 */
+function createFakeCollection(rows: Doc[]) {
   const matches = (doc: Doc, filter: Doc): boolean =>
     Object.entries(filter).every(([key, value]) => matchValue(doc[key], value));
   const newest = (filter: Doc): Doc | null =>
@@ -66,7 +78,7 @@ function createFakeDb(): { db: Db; rows: Doc[] } {
     countDocuments: (filter: Doc) =>
       Promise.resolve(rows.filter((row) => matches(row, filter)).length),
   };
-  return { db: { collection: () => collection } as unknown as Db, rows };
+  return collection;
 }
 
 /** 记录发送内容的假发信服务，可切换为抛错 */
@@ -137,6 +149,29 @@ describe('EmailVerificationService', () => {
     await expect(
       service.verify({ email: 'a@example.com', scene: 'register', code }),
     ).rejects.toThrow('EMAIL_CODE_TOO_MANY_ATTEMPTS');
+  });
+
+  it('注册场景邮箱已注册：不发信直接报已注册，但这次请求计入频控，留下的记录也不能拿来校验', async () => {
+    const { db, rows, accounts } = createFakeDb();
+    const { mail, sent } = createFakeMail();
+    const service = new EmailVerificationService(db, mail);
+    accounts.push({ _id: new ObjectId(), email: 'taken@example.com' });
+
+    await expect(
+      service.send({ email: ' Taken@Example.com ', scene: 'register', ip: '2.2.2.2' }),
+    ).rejects.toThrow('EMAIL_ALREADY_REGISTERED');
+    expect(sent).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ blockedReason: 'registered', ip: '2.2.2.2' });
+    await expect(
+      service.send({ email: 'taken@example.com', scene: 'register', ip: '2.2.2.2' }),
+    ).rejects.toThrow('EMAIL_SEND_TOO_FREQUENT');
+    await expect(
+      service.verify({ email: 'taken@example.com', scene: 'register', code: '123456' }),
+    ).rejects.toThrow('EMAIL_CODE_EXPIRED');
+
+    await service.send({ email: 'free@example.com', scene: 'register', ip: '2.2.2.2' });
+    expect(sent).toHaveLength(1);
   });
 
   it('60 秒内重发被拒绝，邮箱格式错误直接拒绝', async () => {

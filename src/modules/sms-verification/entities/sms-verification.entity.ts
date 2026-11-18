@@ -236,6 +236,8 @@ export interface SmsCodeEntity {
   verifyVia: 'local' | 'provider';
   providerBizId?: string;
   consumedAt?: Date;
+  /** 注册场景发码时手机号已注册：没有发码，只为计入频控落的作废记录 */
+  blockedReason?: 'registered';
   expiresAt: Date;
   createdAt: Date;
 }

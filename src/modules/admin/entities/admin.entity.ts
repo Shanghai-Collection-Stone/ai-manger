@@ -80,6 +80,18 @@ export interface AdminLoginTenantOption {
   role: AdminUserRole;
   displayName: string;
   lastLoginAt?: Date;
+  /** 是否自助注册默认租户（「其他」）；客户端有别的租户时跳过它 */
+  isDefault: boolean;
+}
+
+/**
+ * @description 登录第一步一并返回的待审批加入申请（按公司名称申请），客户端只有默认租户时据此展示「审批中」
+ * @keyword-cn 待审批申请, 登录审批提示
+ * @keyword-en login-pending-application, approval-notice
+ */
+export interface AdminLoginPendingApplication {
+  tenantName: string;
+  createdAt: Date;
 }
 
 /**

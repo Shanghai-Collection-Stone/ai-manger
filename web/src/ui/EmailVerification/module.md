@@ -21,7 +21,7 @@
 - `EMAIL_PATTERN` — 基础邮箱正则 | keywords: 邮箱格式, email-pattern
 - `sendEmailCode(email,scene)` — 公开发码，失败抛带 code/retryAfterSeconds 的 Error | keywords: 发送邮箱验证码, 公开接口, send-email-code, public-api
 - `describeEmailError(code)` — 错误码转中文提示 | keywords: 描述邮箱验证码错误, 中文提示, describe-email-error, chinese-message
-- `EMAIL_ERROR_MESSAGES` — 后端错误码中文映射表 | keywords: 邮箱验证码错误提示, 错误码映射, email-error-messages, error-code-map
+- `EMAIL_ERROR_MESSAGES` — 后端错误码中文映射表，含注册发码时的 `EMAIL_ALREADY_REGISTERED` | keywords: 邮箱验证码错误提示, 错误码映射, email-error-messages, error-code-map
 
 ## 关键词索引 (Keyword Index)
 

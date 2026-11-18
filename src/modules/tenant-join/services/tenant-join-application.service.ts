@@ -13,7 +13,9 @@ import type {
   AdminUserEntity,
 } from '../../admin/entities/admin.entity.js';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { EmailVerificationService } from '../../email-verification/services/email-verification.service.js';
 import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
+import { SmsVerificationService } from '../../sms-verification/services/sms-verification.service.js';
 import { TenantCreditService } from '../../tenant-credit/services/tenant-credit.service.js';
 import type {
   ApplicationView,
@@ -29,6 +31,13 @@ import { TenantJoinNotifyService } from './tenant-join-notify.service.js';
  * @keyword-en company-application-message, registration-application
  */
 const COMPANY_APPLICATION_MESSAGE = '注册时按公司名称申请加入';
+
+/**
+ * @description 注册页公司名称模糊搜索每次最多返回的候选租户数。
+ * @keyword-cn 公司搜索条数上限, 防枚举
+ * @keyword-en company-search-limit, anti-enumeration
+ */
+const COMPANY_SEARCH_LIMIT = 10;
 
 /**
  * @description 租户入驻申请服务，编排随便逛逛 / 邀请 / 公司名称三种注册方式、租户范围审批与通知结果回写
@@ -47,6 +56,8 @@ export class TenantJoinApplicationService implements OnModuleInit {
     private readonly invites: TenantInviteService,
     private readonly notify: TenantJoinNotifyService,
     private readonly credits: TenantCreditService,
+    private readonly smsCodes: SmsVerificationService,
+    private readonly emailCodes: EmailVerificationService,
   ) {
     this.applications = db.collection<TenantJoinApplicationEntity>(
       'tenant_join_applications',
@@ -80,7 +91,7 @@ export class TenantJoinApplicationService implements OnModuleInit {
   }
 
   /**
-   * @description 按注册时选的加入方式注册已短信验证的手机号（邮箱已由邮箱验证码校验）：随便逛逛进默认租户；邀请码直接加入邀请租户；公司名称先进默认租户逛，同时向同名租户提交入驻申请等管理员审批。新成员按所进租户的设置领赠送 Credit，成功后发注册成功邮件
+   * @description 按注册时选的加入方式注册已短信验证的手机号（邮箱已由邮箱验证码校验）：随便逛逛进默认租户；邀请码直接加入邀请租户；公司（模糊搜索后选中的租户 ID，或旧客户端的公司名称）先进默认租户逛，同时向该租户提交入驻申请等管理员审批。新成员按所进租户的设置领赠送 Credit，成功后发注册成功邮件
    * @keyword-cn 租户目标注册, 可信手机号, 注册加入方式
    * @keyword-en tenant-target-registration, trusted-phone, registration-join-choice
    */
@@ -91,6 +102,7 @@ export class TenantJoinApplicationService implements OnModuleInit {
     displayName?: string;
     inviteCode?: string;
     companyName?: string;
+    companyTenantId?: string;
   }): Promise<{
     registered: true;
     mode: 'invite' | 'default' | 'company';
@@ -99,16 +111,17 @@ export class TenantJoinApplicationService implements OnModuleInit {
     application?: { id: string; tenantName: string; status: 'pending' };
   }> {
     const companyName = this.normalizeCompanyName(input.companyName);
-    if (input.inviteCode && companyName) {
+    const companyTenantId = String(input.companyTenantId ?? '').trim();
+    if (input.inviteCode && (companyName || companyTenantId)) {
       throw new BadRequestException('JOIN_TARGET_CONFLICT');
     }
     if (input.inviteCode) return this.registerByInvite(input);
-    const companyTenant = companyName
-      ? await this.findCompanyTenant(
-          input.phone || input.email || '',
-          companyName,
-        )
-      : null;
+    const contact = input.phone || input.email || '';
+    const companyTenant = companyTenantId
+      ? await this.findCompanyTenantById(contact, companyTenantId)
+      : companyName
+        ? await this.findCompanyTenant(contact, companyName)
+        : null;
 
     const registered = await this.admin.register({
       password: input.password,
@@ -166,6 +179,128 @@ export class TenantJoinApplicationService implements OnModuleInit {
   }
 
   /**
+   * @description 注册第 1 步预检：校验所选手机号 / 邮箱的验证码（只累加尝试次数、不作废，正式注册还能用），再查是否已注册，让「已注册」「验证码错误」在选公司之前就提示；必须先证明是本人号码才查注册状态，防止枚举账号。判重规则与建账号一致：有手机号按手机号，只有邮箱时按邮箱
+   * @keyword-cn 注册预检, 已注册提前提示, 防枚举
+   * @keyword-en register-precheck, early-duplicate-check, anti-enumeration
+   */
+  async precheckRegistration(input: {
+    smsPhone?: string;
+    smsCode?: string;
+    email?: string;
+    emailCode?: string;
+  }): Promise<{ ok: true }> {
+    const smsCode = String(input.smsCode ?? '').trim();
+    const emailCode = String(input.emailCode ?? '').trim();
+    if (!smsCode && !emailCode) {
+      throw new BadRequestException('VERIFICATION_CODE_REQUIRED');
+    }
+    let phone: string | undefined;
+    let email: string | undefined;
+    if (smsCode) {
+      if (!input.smsPhone) throw new BadRequestException('SMS_PHONE_INVALID');
+      phone = (
+        await this.smsCodes.verify({
+          phone: input.smsPhone,
+          scene: 'register',
+          code: smsCode,
+        })
+      ).phone;
+    }
+    if (emailCode) {
+      if (!input.email) throw new BadRequestException('EMAIL_INVALID');
+      email = (
+        await this.emailCodes.verify({
+          email: input.email,
+          scene: 'register',
+          code: emailCode,
+        })
+      ).email;
+    }
+    if (
+      phone &&
+      (await this.accounts.findOne({ phone }, { projection: { _id: 1 } }))
+    ) {
+      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+    }
+    if (
+      !phone &&
+      email &&
+      (await this.accounts.findOne({ email }, { projection: { _id: 1 } }))
+    ) {
+      throw new BadRequestException('EMAIL_ALREADY_REGISTERED');
+    }
+    return { ok: true };
+  }
+
+  /**
+   * @description 注册页公司名称模糊搜索：用户先输入至少 2 个字，按名称包含（忽略大小写）查租户，排除默认租户，前缀命中优先、名称短的优先，最多返回 10 条；按 IP 每分钟 30 次限流，防止遍历租户列表
+   * @keyword-cn 公司名称模糊搜索, 防枚举限流
+   * @keyword-en company-fuzzy-search, anti-enumeration-throttle
+   */
+  async searchCompanies(
+    ip: string,
+    keyword: string,
+  ): Promise<Array<{ id: string; name: string }>> {
+    const normalized = this.normalizeCompanyName(keyword);
+    if (normalized.length < 2) return [];
+    await this.invites.assertAttemptLimit(
+      `company-search:${ip || 'unknown'}`,
+      60_000,
+      30,
+    );
+    const selfRegisterName =
+      process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
+    const rows = await this.tenants
+      .find(
+        { name: { $regex: this.escapeRegExp(normalized), $options: 'i' } },
+        { projection: { _id: 1, name: 1 } },
+      )
+      .limit(COMPANY_SEARCH_LIMIT * 3)
+      .toArray();
+    const lowered = normalized.toLowerCase();
+    return rows
+      .map((row) => ({ id: row._id.toHexString(), name: row.name.trim() }))
+      .filter((row) => row.name && row.name !== selfRegisterName)
+      .sort((a, b) => {
+        const aPrefix = a.name.toLowerCase().startsWith(lowered) ? 0 : 1;
+        const bPrefix = b.name.toLowerCase().startsWith(lowered) ? 0 : 1;
+        if (aPrefix !== bPrefix) return aPrefix - bPrefix;
+        return a.name.length - b.name.length || a.name.localeCompare(b.name);
+      })
+      .slice(0, COMPANY_SEARCH_LIMIT);
+  }
+
+  /**
+   * @description 转义正则特殊字符，让用户输入的公司名称只按字面匹配
+   * @keyword-cn 正则转义, 字面匹配
+   * @keyword-en escape-regexp, literal-match
+   */
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * @description 按模糊搜索后选中的租户 ID 找公司租户；默认租户等同随便逛逛返回 null，ID 不存在报 `COMPANY_NOT_FOUND` 并按注册手机号或邮箱限流
+   * @keyword-cn 选中公司租户, 按编号匹配
+   * @keyword-en selected-company-tenant, match-by-id
+   */
+  private async findCompanyTenantById(
+    contact: string,
+    tenantId: string,
+  ): Promise<SassTenantEntity | null> {
+    const selfRegisterName =
+      process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
+    const tenant = ObjectId.isValid(tenantId)
+      ? await this.tenants.findOne({ _id: new ObjectId(tenantId) })
+      : null;
+    if (tenant) {
+      return tenant.name.trim() === selfRegisterName ? null : tenant;
+    }
+    await this.invites.assertAttemptLimit(`company:${contact}`, 10 * 60_000);
+    throw new BadRequestException('COMPANY_NOT_FOUND');
+  }
+
+  /**
    * @description 按公司名称（先精确、再忽略大小写）找唯一租户；填的是默认租户等同随便逛逛返回 null，找不到或重名报错。查找失败按注册手机号或邮箱限流，防止拿验证码反复猜租户名
    * @keyword-cn 公司名称匹配租户, 防猜测限流
    * @keyword-en match-company-tenant, guess-throttle
@@ -182,7 +317,7 @@ export class TenantJoinApplicationService implements OnModuleInit {
       .limit(2)
       .toArray();
     if (!matches.length) {
-      const escaped = companyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = this.escapeRegExp(companyName);
       matches = await this.tenants
         .find({ name: { $regex: `^\\s*${escaped}\\s*$`, $options: 'i' } })
         .limit(2)

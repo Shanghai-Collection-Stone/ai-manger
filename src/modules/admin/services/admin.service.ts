@@ -48,6 +48,7 @@ import type {
   AdminClawConfigEntity,
   AdminJwtPayload,
   AdminLlmSettingEntity,
+  AdminLoginPendingApplication,
   AdminLoginTenantOption,
   AdminLoginTicketPayload,
   AdminSessionEntity,
@@ -88,6 +89,13 @@ export class AdminService {
   private readonly sassTenants: Collection<SassTenantEntity>;
   private readonly sassApiKeys: Collection<SassApiKeyEntity>;
   private readonly dataSources: Collection<DataSourceEntity>;
+  /** 租户入驻申请（tenant-join 模块的集合），登录时只读取本人待审批的申请 */
+  private readonly joinApplications: Collection<{
+    accountId: string;
+    tenantName: string;
+    status: string;
+    createdAt: Date;
+  }>;
   private readonly SESSION_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000;
   private readonly LOGIN_TICKET_EXPIRE_SECONDS = 5 * 60;
   private readonly jwtSecret: string;
@@ -120,6 +128,7 @@ export class AdminService {
     this.sassTenants = db.collection<SassTenantEntity>('sass_tenants');
     this.sassApiKeys = db.collection<SassApiKeyEntity>('sass_api_keys');
     this.dataSources = db.collection<DataSourceEntity>('data_sources');
+    this.joinApplications = db.collection('tenant_join_applications');
     this.jwtSecret =
       process.env.ADMIN_JWT_SECRET?.trim() ||
       process.env.ADMIN_BOOTSTRAP_PASSWORD?.trim() ||
@@ -317,7 +326,7 @@ export class AdminService {
   }
 
   /**
-   * @description 两步登录第一步：按手机号账号或历史用户名校验密码，返回短期登录票据与已绑定的可选租户
+   * @description 两步登录第一步：按手机号账号或历史用户名校验密码，返回短期登录票据、已绑定的可选租户（标出默认租户「其他」）与本人待审批的加入申请
    * @keyword-cn 两步登录, 手机号登录, 可选租户
    * @keyword-en two-step-login, phone-login, login-tenant-options
    */
@@ -325,6 +334,7 @@ export class AdminService {
     loginTicket: string;
     expiresIn: number;
     tenants: AdminLoginTenantOption[];
+    pendingApplications: AdminLoginPendingApplication[];
   }> {
     const matched = await this.findPasswordMatchedUsers(
       input.account.trim(),
@@ -358,7 +368,47 @@ export class AdminService {
       }),
       expiresIn: this.LOGIN_TICKET_EXPIRE_SECONDS,
       tenants: await this.toTenantOptions(candidates),
+      pendingApplications: await this.findPendingJoinApplications(candidates),
     };
+  }
+
+  /**
+   * @description 读取这些成员所属手机号账号还在待审批的加入申请（最新在前，最多 5 条），只回租户名与提交时间
+   * @keyword-cn 待审批申请, 登录审批提示
+   * @keyword-en login-pending-application, approval-notice
+   * @param {AdminUserEntity[]} members 本次登录匹配到的成员。
+   * @returns {Promise<AdminLoginPendingApplication[]>} 待审批申请。
+   */
+  private async findPendingJoinApplications(
+    members: AdminUserEntity[],
+  ): Promise<AdminLoginPendingApplication[]> {
+    const accountIds = [
+      ...new Set(
+        members.map((user) => user.accountId).filter((id): id is string => !!id),
+      ),
+    ];
+    if (!accountIds.length) return [];
+    const rows = await this.joinApplications
+      .find(
+        { accountId: { $in: accountIds }, status: 'pending' },
+        { projection: { tenantName: 1, createdAt: 1 } },
+      )
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .toArray();
+    return rows.map((row) => ({
+      tenantName: row.tenantName,
+      createdAt: row.createdAt,
+    }));
+  }
+
+  /**
+   * @description 自助注册默认租户的名称（默认「其他」，可用 SELF_REGISTER_TENANT_NAME 覆盖）
+   * @keyword-cn 默认注册租户, 默认租户名称
+   * @keyword-en self-register-tenant, default-tenant-name
+   */
+  private selfRegisterTenantName(): string {
+    return process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
   }
 
   /**
@@ -382,15 +432,18 @@ export class AdminService {
     const tenantNames = new Map(
       tenants.map((row) => [String(row._id), row.name]),
     );
-    return members.map((user) => ({
-      tenantId: user.tenantId ?? '',
-      tenantName: user.tenantId
-        ? (tenantNames.get(user.tenantId) ?? '未知租户')
-        : '平台端',
-      role: user.role,
-      displayName: user.displayName,
-      lastLoginAt: user.lastLoginAt,
-    }));
+    const defaultName = this.selfRegisterTenantName();
+    return members.map((user) => {
+      const name = user.tenantId ? tenantNames.get(user.tenantId) : undefined;
+      return {
+        tenantId: user.tenantId ?? '',
+        tenantName: user.tenantId ? (name ?? '未知租户') : '平台端',
+        role: user.role,
+        displayName: user.displayName,
+        lastLoginAt: user.lastLoginAt,
+        isDefault: name?.trim() === defaultName,
+      };
+    });
   }
 
   /**
@@ -465,6 +518,28 @@ export class AdminService {
     if (!next) throw new ForbiddenException('TENANT_NOT_BOUND');
     const session = await this.issueSession(next);
     await this.logout(token);
+    return session;
+  }
+
+  /**
+   * @description 续期当前会话：给同一成员签发一个新的 7 天会话，旧会话只再保留 2 分钟（让已经发出的请求不被打断）后失效。
+   *   桌面端在令牌剩余不足 6 天时调用，常用的客户端就不会到期被踢回登录页；7 天没用过仍需重新登录。
+   * @keyword-cn 会话续期, 保持登录
+   * @keyword-en renew-session, stay-signed-in
+   * @param {AdminUserEntity} user 当前登录成员。
+   * @param {string} token 当前会话令牌，续期后进入短暂宽限期。
+   * @returns {Promise<{token: string, user: AdminUserPublic}>} 新会话。
+   */
+  async renewSession(
+    user: AdminUserEntity,
+    token: string,
+  ): Promise<{ token: string; user: AdminUserPublic }> {
+    const session = await this.issueSession(user);
+    const graceUntil = new Date(Date.now() + 2 * 60 * 1000);
+    await this.sessions.updateOne(
+      { tokenHash: this.hashToken(token), expiresAt: { $gt: graceUntil } },
+      { $set: { expiresAt: graceUntil, updatedAt: new Date() } },
+    );
     return session;
   }
 
@@ -925,7 +1000,7 @@ export class AdminService {
    * @keyword-en self-register-tenant, ensure-default-tenant
    */
   async ensureSelfRegisterTenant(): Promise<SassTenantEntity> {
-    const name = process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
+    const name = this.selfRegisterTenantName();
     const tenants = await this.sassTenants.find({ name }).limit(2).toArray();
     if (tenants.length > 1) {
       throw new BadRequestException('SELF_REGISTER_TENANT_AMBIGUOUS');

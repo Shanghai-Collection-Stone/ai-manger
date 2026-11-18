@@ -18,6 +18,7 @@ export const EMAIL_ERROR_MESSAGES = {
   EMAIL_CODE_INVALID: '邮箱验证码错误',
   EMAIL_CODE_EXPIRED: '邮箱验证码已失效，请重新获取',
   EMAIL_CODE_TOO_MANY_ATTEMPTS: '邮箱验证码错误次数过多，请重新获取',
+  EMAIL_ALREADY_REGISTERED: '该邮箱已注册，请直接用已有账号登录或加入',
 };
 
 /**

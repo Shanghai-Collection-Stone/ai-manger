@@ -28,6 +28,7 @@ export const SMS_ERROR_MESSAGES = {
   SMS_CODE_INVALID: '验证码错误',
   SMS_CODE_EXPIRED: '验证码已失效，请重新获取',
   SMS_CODE_TOO_MANY_ATTEMPTS: '验证码错误次数过多，请重新获取',
+  PHONE_ALREADY_REGISTERED: '该手机号已注册，请直接用已有账号登录或加入',
 };
 
 /**

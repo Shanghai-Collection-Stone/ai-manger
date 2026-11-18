@@ -28,8 +28,10 @@ import { TenantInviteService } from '../services/tenant-invite.service.js';
 import {
   AcceptInviteDto,
   ApplicationListQueryDto,
+  CompanySearchQueryDto,
   CreateInviteDto,
   InviteListQueryDto,
+  RegisterPrecheckDto,
   RejectApplicationDto,
   TenantJoinRegisterDto,
 } from './tenant-join.dto.js';
@@ -61,6 +63,34 @@ export class TenantJoinController {
   @Get('invites/:code')
   async previewInvite(@Param('code') code: string) {
     return { invite: await this.invites.preview(code) };
+  }
+
+  /**
+   * @description 公开免鉴权的注册第 1 步预检：校验验证码（不作废）并检查手机号 / 邮箱是否已注册，让已注册在选公司之前就提示；不带本人有效验证码查不到注册状态，验证码尝试次数与发送频控防刷
+   * @keyword-cn 注册预检接口, 公开免鉴权
+   * @keyword-en register-precheck-endpoint, public-no-auth
+   */
+  @Post('register/precheck')
+  async precheckRegister(@Body() dto: RegisterPrecheckDto) {
+    return this.applications.precheckRegistration(dto);
+  }
+
+  /**
+   * @description 公开免鉴权的注册页公司名称模糊搜索：至少 2 个字才搜，只返回租户 ID 与名称、最多 10 条，按 IP 每分钟 30 次限流防遍历
+   * @keyword-cn 公司搜索接口, 公开免鉴权
+   * @keyword-en company-search-endpoint, public-no-auth
+   */
+  @Get('companies')
+  async searchCompanies(
+    @Req() req: Request,
+    @Query() query: CompanySearchQueryDto,
+  ) {
+    return {
+      companies: await this.applications.searchCompanies(
+        this.readClientIp(req),
+        query.keyword,
+      ),
+    };
   }
 
   /**

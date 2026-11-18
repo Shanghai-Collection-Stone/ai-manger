@@ -16,7 +16,8 @@
 - `services/sms-config.service.ts` — 平台短信配置读写（含短信专用 AccessKey，Secret 仅掩码）、分服务商运行配置解析与模拟模式判断。
 - `services/aliyun-sms.service.ts` — Dysms `SendSms` 调用与可复用 RPC V1 签名。
 - `services/aliyun-dypns.service.ts` — Dypns `SendSmsVerifyCode`、`CheckSmsVerifyCode` 调用。
-- `services/sms-verification.service.ts` — 分服务商发码与校验、频控、作废及后台测试发送。
+- `services/sms-verification.service.ts` — 分服务商发码与校验、频控、注册场景发码前查重、作废及后台测试发送。
+- `services/sms-verification.service.spec.ts` — 注册场景发码前查重单测：已注册不发码但计入频控、留下的记录不能校验，未注册照常发码。
 - `guards/sms-code.guard.ts` — 按场景判定请求携带的验证码，可选声明下没带验证码放行。
 - `guards/sms-code.guard.spec.ts` — 守卫可选模式（放行 / 照常校验 / 非可选仍拒绝）单测。
 - `interceptors/sms-code-consume.interceptor.ts` — 业务成功后作废验证码。
@@ -33,10 +34,11 @@
 - `SmsCodeConsumeInterceptor.intercept(context,next)` — 响应前作废已校验验证码 | keywords: 响应前作废, 一次性使用, consume-before-response, single-use
 - `SmsVerificationService.ensureIndexes()` — 建立验证码 TTL 与频控查询索引 | keywords: 验证码索引, TTL清理, sms-code-indexes, ttl-cleanup
 - `SmsVerificationService.send({phone,scene,ip})` — 按所选服务商先落记录再发送，失败删除记录 | keywords: 发送验证码, 发送频控, send-sms-code, send-throttle
-- `SmsVerificationService.verify({phone,scene,code})` — 本地或服务商校验前原子累加尝试次数 | keywords: 校验验证码, 防爆破, verify-sms-code, brute-force-guard
+- `SmsVerificationService.verify({phone,scene,code})` — 本地或服务商校验前原子累加尝试次数，不作废；服务商校验通过后改存本地哈希，同一码再校验（如注册预检后正式提交）不再请求服务商 | keywords: 校验验证码, 防爆破, verify-sms-code, brute-force-guard
 - `SmsVerificationService.consume(codeId)` — 作废验证码，重复作废返回 false | keywords: 作废验证码, 一次性使用, consume-sms-code, single-use
 - `SmsVerificationService.testSend(rawPhone)` — 按所选服务商测试发送并返回原始错误 | keywords: 测试发送短信, 配置自检, test-send-sms, config-probe
 - `SmsVerificationService.assertSendQuota(phone,scene,ip)` — 执行重发、手机号日限额与 IP 小时限额 | keywords: 发送频控, 重发间隔, send-throttle, resend-interval
+- `SmsVerificationService.assertPhoneNotRegistered(phone,scene,ip)` — 注册场景发码前查手机号是否已注册，已注册不发码报 `PHONE_ALREADY_REGISTERED`，但落一条作废记录计入频控防查号 | keywords: 发码前查重, 已注册不发码, 防枚举, send-time-duplicate-check, skip-registered-send, anti-enumeration
 - `SmsVerificationService.toPublicSendError(error)` — 收敛服务商发送错误并识别 Dypns 限流码 | keywords: 发送错误收敛, 服务商错误映射, map-send-error, provider-error-mapping
 - `SmsVerificationService.normalizePhone(raw)` — 规范化并校验大陆手机号 | keywords: 手机号规范化, 大陆手机号, normalize-phone, mainland-mobile
 - `SmsVerificationService.assertScene(scene)` — 校验场景在白名单内 | keywords: 场景校验, 场景白名单, assert-scene, scene-allowlist
@@ -107,6 +109,8 @@
 | 共用签名实现 | shared-rpc-signer |
 | 发送验证码 | send-sms-code |
 | 发送频控 | send-throttle |
+| 发码前查重 | send-time-duplicate-check |
+| 已注册不发码 | skip-registered-send |
 | 重发间隔 | resend-interval |
 | 校验验证码 | verify-sms-code |
 | 防爆破 | brute-force-guard |
@@ -142,7 +146,7 @@
 - `AliyunSmsRuntimeConfig` — Dysms 明文运行配置 | keywords: 阿里云运行配置, aliyun-runtime-config
 - `AliyunDypnsRuntimeConfig` — Dypns 明文运行配置 | keywords: 号码认证运行配置, dypns-runtime-config
 - `SmsRuntimeConfig` — 当前接口类型的判别联合运行配置 | keywords: 短信运行配置, sms-runtime-config
-- `SmsCodeEntity` — 含 `verifyVia: 'local' | 'provider'` 的验证码记录。
+- `SmsCodeEntity` — 含 `verifyVia: 'local' | 'provider'` 的验证码记录；`blockedReason: 'registered'` 表示注册场景因手机号已注册没发码、只为计入频控落的作废记录。
 - `SmsVerifiedContext` / `SmsVerifiedRequest` — 守卫通过后的可信验证码上下文。
 - `ALIYUN_SMS_ENDPOINT` — Dysms 接口地址 | keywords: 阿里云短信地址, aliyun-sms-endpoint
 - `ALIYUN_DYPNS_ENDPOINT` — Dypns 接口地址 | keywords: 号码认证短信地址, aliyun-dypns-endpoint
@@ -154,6 +158,8 @@
 Dysms 侧需开通短信服务、申请签名和验证码模板，并给 RAM 子账号授予 `AliyunDysmsFullAccess`。Dypns 侧在号码认证控制台「短信认证参数配置」页查看：签名名称在「签名配置」页签，模板 CODE 在「模板配置」页签（模板名称如「登录/注册模板」不能当签名填，否则返回 `isv.INVALID_PARAMETERS`），赠送签名与赠送模板须配套使用，模板参数 JSON 至少一个值必须为 `##code##`，并给 RAM 子账号授予 `AliyunDypnsFullAccess`。
 
 Dypns 发码先写入带占位摘要的本地记录，再调用 `SendSmsVerifyCode`。响应含 `Model.VerifyCode` 时更新 HMAC 摘要并设置 `verifyVia: 'local'`；未回传时设置 `verifyVia: 'provider'`，校验阶段调用 `CheckSmsVerifyCode`。两条路径均由本地执行五次尝试上限、五分钟有效期、消费作废与只认最新一条记录。发送失败删除预写记录。模拟模式对两类服务商都只打印验证码，不访问阿里云。
+
+**注册场景发码前查重**：`register` 场景在频控通过后查 `admin_accounts` 是否已有该手机号，已有就不发短信，直接报 `PHONE_ALREADY_REGISTERED`。为了不让人借发码接口无限次查号，被拦下的这次也落一条已作废（`consumedAt` + `blockedReason: 'registered'`）的记录，照样占重发间隔、单号日上限和单 IP 时上限；这条记录不能拿来校验。注册页第 1 步的预检和正式提交仍会再查一次，兜住发码之后被人抢注的情况。
 
 **接入方式**（任意模块控制器方法）：
 

@@ -14,7 +14,7 @@
   - `generateDecisionCard`: 生成并落库决策卡；prompt 内嵌可指派对象清单与 actions 三要素约束/generate and persist decision card
   - `buildCapabilityBrief`: 构建能力清单（含 robots/agents/users 三类可指派对象 + assignee 格式约定），供生成与执行两阶段共用/build capability brief with assignable robots agents users
   - `listAssignableUsers`: 按租户拉取可指派用户（user:<id> 格式）/list assignable users for decision assignee
-  - `applyDecision`: 应用决策；阶段 A 基于大纲立即创建粗粒度 todo 并返回（首屏快），阶段 B 后台异步补详情+延后触发 robot/apply decision two-phase fast-return
+  - `applyDecision`: 应用决策；阶段 A 基于大纲立即创建粗粒度 todo 并返回（首屏快），阶段 B 后台异步补详情+延后触发 robot；失败时 `details.failures` / `details.warnings` 只含 `{ stage }`，原始报错、堆栈与模型原文只写服务端日志/apply decision two-phase fast-return | keywords: 应用决策, 失败阶段脱敏, apply-decision, sanitized-failure-stage
   - `fillTodoDetailsInBackground`: 后台批量为 todo 生成执行详情，逐条 update；详情就绪后再触发 robot/agent/fill todo details in background
   - `listBySession`: 会话决策卡列表/list decision cards by session
   - `getById`: 决策卡详情/get decision card detail

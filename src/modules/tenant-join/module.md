@@ -8,18 +8,20 @@
 
 - `tenant-join.module.ts` — NestJS 模块装配，导入后台、数据源、SaaS 租户与租户额度（新成员赠送）能力。
 - `entities/tenant-join.entity.ts` — 入驻申请、邀请、通知结果和接口视图类型。
-- `services/tenant-join-application.service.ts` — 三种注册加入方式（含公司名称匹配与申请创建）、申请分页、审批、新成员赠送和通知状态回写。
+- `services/tenant-join-application.service.ts` — 注册第 1 步预检、三种注册加入方式（含公司名称模糊搜索、选中租户与申请创建）、申请分页、审批、新成员赠送和通知状态回写。
 - `services/tenant-invite.service.ts` — 邀请生成、预览、接受、撤销、使用计数和公开入口限流。
 - `services/tenant-join-notify.service.ts` — 审批邮件文案（按 mail 模块统一版式发送）、称呼兜底和失败收敛。
-- `controller/tenant-join.controller.ts` — 公开注册/邀请接口与受权限保护的管理接口。
-- `controller/tenant-join.dto.ts` — 注册、审批、邀请和分页请求校验。
+- `controller/tenant-join.controller.ts` — 公开注册/注册预检/邀请/公司名称模糊搜索接口与受权限保护的管理接口。
+- `controller/tenant-join.dto.ts` — 注册、注册预检、公司搜索、审批、邀请和分页请求校验。
 
 ## 函数清单 (Function List)
 
 - `TenantJoinModule()` — 装配租户入驻控制器与服务 | keywords: 租户入驻模块, 邀请入驻, tenant-join-module, invite-onboarding
 - `TenantJoinController()` — 提供公开注册邀请与受保护的申请审批、邀请管理入口 | keywords: 租户入驻接口, 入口鉴权, tenant-join-controller, endpoint-authorization
 - `TenantJoinController.previewInvite(code)` — 公开预览邀请码实时状态 | keywords: 邀请预览接口, 公开免鉴权, invite-preview-endpoint, public-no-auth
+- `TenantJoinController.searchCompanies(req,query)` — `GET /api/tenant-join/companies?keyword=` 公开的注册页公司名称模糊搜索，至少 2 个字，只返回 `{id,name}` 最多 10 条，按 IP 限流 | keywords: 公司搜索接口, 公开免鉴权, company-search-endpoint, public-no-auth
 - `TenantJoinController.register(req,dto)` — 手机号或邮箱只填一个并用验证码验证，只保存验证过的联系方式，按随便逛逛 / 邀请码 / 公司名称执行注册；一个都没验证报 `VERIFICATION_CODE_REQUIRED` | keywords: 租户注册接口, 短信验证码, 邮箱验证码, 二选一验证, tenant-register-endpoint, sms-verification, email-verification, either-verification
+- `TenantJoinController.precheckRegister(dto)` — `POST /api/tenant-join/register/precheck` 公开的注册第 1 步预检：校验验证码（不作废）并查手机号 / 邮箱是否已注册 | keywords: 注册预检接口, 公开免鉴权, register-precheck-endpoint, public-no-auth
 - `TenantJoinController.acceptInvite(req,code,dto)` — 已有账号凭密码接受邀请并执行防刷 | keywords: 接受邀请接口, 防暴力尝试, accept-invite-endpoint, brute-force-throttle
 - `TenantJoinController.listApplications(req,query)` — 分页读取可见租户范围的申请 | keywords: 申请列表接口, 租户范围, application-list-endpoint, tenant-scope
 - `TenantJoinController.approveApplication(req,id)` — 审批通过本租户申请 | keywords: 通过申请接口, 更新入驻权限, approve-application-endpoint, update-tenant-join
@@ -30,11 +32,16 @@
 - `TenantJoinController.readClientIp(req)` — 从转发头或连接读取客户端 IP | keywords: 读取客户端IP, 代理转发, read-client-ip, forwarded-for
 - `TenantJoinController.requireUser(req)` — 从请求获取已鉴权后台用户 | keywords: 读取后台用户, 鉴权上下文, read-admin-user, auth-context
 - `COMPANY_APPLICATION_MESSAGE` — 注册时按公司名称申请的申请留言 | keywords: 公司名称申请留言, 注册申请, company-application-message, registration-application
+- `COMPANY_SEARCH_LIMIT` — 公司名称模糊搜索每次最多返回 10 条 | keywords: 公司搜索条数上限, 防枚举, company-search-limit, anti-enumeration
 - `TenantJoinApplicationService()` — 编排三种注册加入方式、申请审批与通知回写 | keywords: 入驻申请服务, 两种注册模式, join-application-service, registration-modes
 - `TenantJoinApplicationService.onModuleInit()` — 建立申请集合索引 | keywords: 申请索引, 待审批唯一, application-indexes, unique-pending-application
-- `TenantJoinApplicationService.register(input)` — 随便逛逛进默认租户；带邀请码走邀请模式；带公司名称先进默认租户并向匹配租户建待审批申请（`company` 模式），邀请码与公司名称互斥；新成员领赠送 Credit，成功后发注册成功邮件 | keywords: 租户目标注册, 可信手机号, 注册加入方式, tenant-target-registration, trusted-phone, registration-join-choice
+- `TenantJoinApplicationService.register(input)` — 随便逛逛进默认租户；带邀请码走邀请模式；带选中的公司租户 ID（`companyTenantId`，优先）或旧客户端的公司名称，先进默认租户并向该租户建待审批申请（`company` 模式），邀请码与公司互斥；新成员领赠送 Credit，成功后发注册成功邮件 | keywords: 租户目标注册, 可信手机号, 注册加入方式, tenant-target-registration, trusted-phone, registration-join-choice
 - `TenantJoinApplicationService.normalizeCompanyName(value?)` — 公司名称去首尾空格并合并连续空白 | keywords: 公司名称规范化, 空白合并, normalize-company-name, collapse-whitespace
-- `TenantJoinApplicationService.findCompanyTenant(phone,companyName)` — 先精确再忽略大小写找唯一租户，默认租户等同随便逛逛，找不到 / 重名报错并按手机号限流 | keywords: 公司名称匹配租户, 防猜测限流, match-company-tenant, guess-throttle
+- `TenantJoinApplicationService.precheckRegistration(input)` — 用 sms / email 验证码服务的 `verify` 校验所选联系方式（只累加尝试次数、不作废），再按建账号同样的规则查重，报 `PHONE_ALREADY_REGISTERED` / `EMAIL_ALREADY_REGISTERED` | keywords: 注册预检, 已注册提前提示, 防枚举, register-precheck, early-duplicate-check, anti-enumeration
+- `TenantJoinApplicationService.searchCompanies(ip,keyword)` — 名称包含（忽略大小写）模糊搜索租户，排除默认租户，前缀命中、名称短的优先，最多 10 条，按 IP 每分钟 30 次限流 | keywords: 公司名称模糊搜索, 防枚举限流, company-fuzzy-search, anti-enumeration-throttle
+- `TenantJoinApplicationService.escapeRegExp(value)` — 转义正则特殊字符，公司名称只按字面匹配 | keywords: 正则转义, 字面匹配, escape-regexp, literal-match
+- `TenantJoinApplicationService.findCompanyTenantById(contact,tenantId)` — 按搜索后选中的租户 ID 找公司，默认租户等同随便逛逛，不存在报 `COMPANY_NOT_FOUND` 并限流 | keywords: 选中公司租户, 按编号匹配, selected-company-tenant, match-by-id
+- `TenantJoinApplicationService.findCompanyTenant(phone,companyName)` — 旧客户端按名称：先精确再忽略大小写找唯一租户，默认租户等同随便逛逛，找不到 / 重名报错并按手机号限流 | keywords: 公司名称匹配租户, 防猜测限流, match-company-tenant, guess-throttle
 - `TenantJoinApplicationService.registerByInvite(input)` — 邀请模式建账号并在加成员失败时回滚，新成员领赠送 Credit，成功后发带团队名的注册成功邮件 | keywords: 邀请模式注册, 失败回滚账号, invite-mode-registration, account-rollback
 - `TenantJoinApplicationService.list(user,input)` — 分页查询申请与当前范围待审总数 | keywords: 申请分页列表, 待审数量, paged-application-list, pending-count
 - `TenantJoinApplicationService.approve(user,id)` — 加入租户后落审批结果，新成员领赠送 Credit，并独立通知 | keywords: 通过入驻申请, 审批后通知, approve-join-application, notify-after-approval
@@ -54,14 +61,16 @@
 - `TenantInviteService.revoke(user,id)` — 在租户边界内撤销邀请 | keywords: 撤销租户邀请, 立即失效, revoke-tenant-invite, immediate-invalidation
 - `TenantInviteService.resolveTenantScope(user,requestedTenantId,requireSuperAdminTenant)` — 解析邀请管理目标租户 | keywords: 租户范围解析, 超管指定租户, resolve-tenant-scope, super-admin-tenant-selection
 - `TenantInviteService.assertTenantAccess(user,tenantId)` — 禁止非超管跨租户操作邀请 | keywords: 邀请租户鉴权, 跨租户禁止, invite-tenant-authorization, cross-tenant-forbidden
-- `TenantInviteService.assertAttemptLimit(key,windowMs)` — 每个限流窗口最多允许十次尝试，计数存 Mongo `tenant_invite_attempts`，多进程共用；公开给公司名称查找失败限流复用 | keywords: 共享限流计数, 尝试次数限制, shared-rate-limit, attempt-limit
+- `TenantInviteService.assertAttemptLimit(key,windowMs,maxAttempts?)` — 每个限流窗口最多允许若干次（缺省十次）尝试，计数存 Mongo `tenant_invite_attempts`，多进程共用；公开给公司名称查找失败限流与公司模糊搜索（按 IP 每分钟 30 次）复用 | keywords: 共享限流计数, 尝试次数限制, shared-rate-limit, attempt-limit
 - `TenantInviteService.toView(row)` — 计算实时邀请状态并转换视图 | keywords: 邀请视图转换, 实时邀请状态, invite-view-mapping, computed-invite-status
 - `TenantJoinNotifyService()` — 按统一版式拼装审批邮件并把失败收敛成状态 | keywords: 入驻邮件通知, 审批解耦, join-email-notification, approval-decoupling
 - `TenantJoinNotifyService.sendApproved(input)` — 发送含团队名、登录账号（脱敏手机号，没有手机号时为邮箱）、审核时间与登录指引的申请通过邮件 | keywords: 申请通过邮件, 手机号脱敏, approval-email, masked-phone
 - `TenantJoinNotifyService.sendRejected(input)` — 发送含团队名、审核结果与拒绝原因的申请未通过邮件 | keywords: 申请拒绝邮件, 拒绝原因, rejection-email, rejection-reason
 - `TenantJoinNotifyService.greeting(displayName)` — 生成称呼，昵称为空时退回通用称呼 | keywords: 邮件称呼, 昵称兜底, mail-greeting, display-name-fallback
 - `TenantJoinNotifyService.sendSafely(to,content)` — 按统一版式发送并捕获全部发送异常 | keywords: 安全发送邮件, 通知失败记录, safe-mail-send, notification-failure-record
-- `TenantJoinRegisterDto()` — 校验邀请码、公司名称（2–60 字）或默认租户注册请求；`email` 可选；没带验证码的 `smsPhone` / `email` 只做格式校验、不会保存 | keywords: 租户入驻注册请求体, tenant-join-register-dto
+- `TenantJoinRegisterDto()` — 校验邀请码、选中的公司租户 ID（`companyTenantId`）、旧客户端公司名称（2–60 字）或默认租户注册请求；`email` 可选；没带验证码的 `smsPhone` / `email` 只做格式校验、不会保存 | keywords: 租户入驻注册请求体, tenant-join-register-dto
+- `RegisterPrecheckDto()` — 校验预检请求：手机号 + 6 位短信验证码，或邮箱 + 6 位邮箱验证码 | keywords: 注册预检请求体, register-precheck-dto
+- `CompanySearchQueryDto()` — 校验公司模糊搜索关键字 2–60 字，不足 2 字报 `COMPANY_KEYWORD_TOO_SHORT` | keywords: 公司搜索查询参数, company-search-query-dto
 - `AcceptInviteDto()` — 校验已有账号接受邀请请求，账号可为手机号或注册邮箱 | keywords: 接受邀请请求体, accept-invite-dto
 - `ApplicationListQueryDto()` — 校验申请列表分页查询 | keywords: 入驻申请查询参数, join-application-query-dto
 - `RejectApplicationDto()` — 校验拒绝原因 | keywords: 拒绝申请请求体, reject-application-dto
@@ -77,6 +86,11 @@
 | 注册加入方式 | registration-join-choice |
 | 公司名称匹配租户 | match-company-tenant |
 | 防猜测限流 | guess-throttle |
+| 公司名称模糊搜索 | company-fuzzy-search |
+| 注册预检 | register-precheck |
+| 已注册提前提示 | early-duplicate-check |
+| 防枚举限流 | anti-enumeration-throttle |
+| 选中公司租户 | selected-company-tenant |
 | 新成员赠送 | new-member-grant |
 | 入驻申请 | join-application |
 | 申请审批 | application-approval |
@@ -111,15 +125,15 @@
 
 - `default`（随便逛逛）：不带邀请码与公司名称，加入默认租户「其他」。
 - `invite`（邀请码）：先校验邀请有效，再创建平台账号并直接以 `operator` 加入邀请租户，不加入默认租户；加入成员失败会删除本次刚创建且 ID 精确匹配的平台账号作为补偿回滚。
-- `company`（公司名称）：先按名称找唯一租户（精确匹配，找不到再忽略大小写），找不到报 `COMPANY_NOT_FOUND`、重名报 `COMPANY_NAME_AMBIGUOUS`，都发生在建账号之前，验证码只在成功后作废，用户可改名重试；查找失败按手机号计入 `tenant_invite_attempts` 限流（10 分钟 10 次），防止拿一组验证码反复猜租户名。找到后先加入「其他」随便逛逛，同时建一条 `pending` 入驻申请（留言「注册时按公司名称申请加入」），租户管理员在后台「入驻审批」通过后加入该租户。填的就是默认租户名时等同随便逛逛。
+- `company`（公司名称）：注册页先让用户输入至少 2 个字，再调 `GET /api/tenant-join/companies?keyword=` 模糊搜索（名称包含、忽略大小写、排除默认租户、最多 10 条、按 IP 每分钟 30 次限流），用户必须从下方列表选中一个租户，注册时提交 `companyTenantId`；ID 不存在报 `COMPANY_NOT_FOUND`。旧客户端仍可只提交 `companyName`：先按名称找唯一租户（精确匹配，找不到再忽略大小写），找不到报 `COMPANY_NOT_FOUND`、重名报 `COMPANY_NAME_AMBIGUOUS`，都发生在建账号之前，验证码只在成功后作废，用户可改名重试；查找失败按手机号计入 `tenant_invite_attempts` 限流（10 分钟 10 次），防止拿一组验证码反复猜租户名。找到后先加入「其他」随便逛逛，同时建一条 `pending` 入驻申请（留言「注册时按公司名称申请加入」），租户管理员在后台「入驻审批」通过后加入该租户。填的就是默认租户名时等同随便逛逛。
 
-邀请码与公司名称同时提交报 `JOIN_TARGET_CONFLICT`。系统仍不对外暴露租户列表。
+邀请码与公司（`companyTenantId` / `companyName`）同时提交报 `JOIN_TARGET_CONFLICT`。不提供完整租户列表，公司搜索只按用户输入的关键字返回少量名称，不含成员、额度等其他信息。
 
 **新成员赠送 Credit**：随便逛逛 / 公司名称注册进默认租户、邀请注册、已有账号接受邀请（新加入时）、申请审批通过（新加入时）都会调 tenant-credit 的 `grantNewMember`，按所进租户的「新成员赠送」从待分配额度发放；只对分配模式租户生效，同一成员只发一次，失败不影响注册或审批。见 [tenant-credit 模块](../tenant-credit/module.md)。
 
 **注册验证与注册成功邮件**
 
-注册时手机号或邮箱只填一个，并用对应验证码验证：`@RequireSmsCode` 与 `@RequireEmailCode`（见 [email-verification 模块](../email-verification/module.md)）都以 `{ optional: true }` 挂载，接口要求至少一项已验证，否则报 `VERIFICATION_CODE_REQUIRED`。只保存验证过的联系方式（`req.smsVerification.phone` / `req.emailVerification.email`），没带验证码的手机号或邮箱一律丢弃，避免拿别人的号码或邮箱抢注。只用邮箱注册的账号没有手机号，以邮箱登录、接受邀请；邮箱已被任一账号使用时报 `EMAIL_ALREADY_REGISTERED`。入驻申请的 `phone` / `email` 因此都可能为空，审批通过邮件的登录账号在没有手机号时显示邮箱，没有邮箱则不发邮件（`skipped`）。注册成功后由 `AdminService.notifyRegistered()` 异步发送「账号注册成功」邮件：默认模式列出登录账号（脱敏手机号）、绑定邮箱与注册时间；邀请模式额外写明已加入的团队。邮件失败只记日志，不影响注册结果。
+注册时手机号或邮箱只填一个，并用对应验证码验证：`@RequireSmsCode` 与 `@RequireEmailCode`（见 [email-verification 模块](../email-verification/module.md)）都以 `{ optional: true }` 挂载，接口要求至少一项已验证，否则报 `VERIFICATION_CODE_REQUIRED`。只保存验证过的联系方式（`req.smsVerification.phone` / `req.emailVerification.email`），没带验证码的手机号或邮箱一律丢弃，避免拿别人的号码或邮箱抢注。只用邮箱注册的账号没有手机号，以邮箱登录、接受邀请；邮箱已被任一账号使用时报 `EMAIL_ALREADY_REGISTERED`。注册页第 1 步点「下一步」时先调 `POST /api/tenant-join/register/precheck` 预检：带所选的手机号 + 短信验证码或邮箱 + 邮箱验证码，服务端直接调两个验证码服务的 `verify`（只累加尝试次数，不作废，正式注册还能再用），再按建账号同样的规则查重（有手机号按手机号，只有邮箱时按邮箱），已注册在选公司之前就报 `PHONE_ALREADY_REGISTERED` / `EMAIL_ALREADY_REGISTERED`。必须先证明是本人号码才查注册状态，所以不能拿来枚举账号；预检不挂 `@RequireSmsCode` / `@RequireEmailCode`，因为装饰器会在成功后作废验证码。发码时（sms / email 验证码模块的 `register` 场景）已先查过一次是否注册，预检再查是为了兜住发码之后、点下一步之前被别人抢注的情况；正式注册仍会再查一次。入驻申请的 `phone` / `email` 因此都可能为空，审批通过邮件的登录账号在没有手机号时显示邮箱，没有邮箱则不发邮件（`skipped`）。注册成功后由 `AdminService.notifyRegistered()` 异步发送「账号注册成功」邮件：默认模式列出登录账号（脱敏手机号）、绑定邮箱与注册时间；邀请模式额外写明已加入的团队。邮件失败只记日志，不影响注册结果。
 
 **审批与邮件通知**
 

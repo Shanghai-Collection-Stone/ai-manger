@@ -130,3 +130,62 @@ describe('登录后切换租户', () => {
     expect(service.logout).not.toHaveBeenCalled();
   });
 });
+
+describe('会话续期与登录选租户信息', () => {
+  it('续期给同一成员签发新会话，旧会话只保留 2 分钟宽限，不直接删除', async () => {
+    const service = buildSwitchService([current]);
+    service.sessions = { updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }) };
+    const before = Date.now();
+    const session = await service.renewSession(current, 'old-token');
+    expect(service.issueSession).toHaveBeenCalledWith(current);
+    expect(service.logout).not.toHaveBeenCalled();
+    expect(session.token).toBe(`token-${TENANT_A}`);
+    const [filter, update] = service.sessions.updateOne.mock.calls[0];
+    expect(filter.tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    const graceUntil = update.$set.expiresAt.getTime();
+    expect(graceUntil - before).toBeGreaterThanOrEqual(2 * 60 * 1000 - 50);
+    expect(graceUntil - before).toBeLessThanOrEqual(2 * 60 * 1000 + 1000);
+  });
+
+  it('可选租户标出默认租户「其他」', async () => {
+    const service = buildSwitchService([]);
+    service.sassTenants = {
+      find: jest.fn().mockReturnValue({
+        toArray: () =>
+          Promise.resolve([
+            { _id: new ObjectId(TENANT_A), name: '其他' },
+            { _id: new ObjectId(TENANT_B), name: '街角咖啡' },
+          ]),
+      }),
+    };
+    const options = await service.toTenantOptions([current, otherTenant, platform]);
+    expect(options.map((row: { isDefault: boolean }) => row.isDefault)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it('只读本人账号的待审批申请，没有关联账号时不查', async () => {
+    const service = buildSwitchService([]);
+    const toArray = jest
+      .fn()
+      .mockResolvedValue([{ tenantName: '街角咖啡', createdAt: new Date('2026-11-18') }]);
+    service.joinApplications = {
+      find: jest.fn().mockReturnValue({
+        sort: () => ({ limit: () => ({ toArray }) }),
+      }),
+    };
+    const rows = await service.findPendingJoinApplications([current, otherTenant]);
+    expect(service.joinApplications.find.mock.calls[0][0]).toEqual({
+      accountId: { $in: ['acc-1'] },
+      status: 'pending',
+    });
+    expect(rows).toEqual([{ tenantName: '街角咖啡', createdAt: new Date('2026-11-18') }]);
+    const legacy = await service.findPendingJoinApplications([
+      { ...current, accountId: undefined },
+    ]);
+    expect(legacy).toEqual([]);
+    expect(service.joinApplications.find).toHaveBeenCalledTimes(1);
+  });
+});

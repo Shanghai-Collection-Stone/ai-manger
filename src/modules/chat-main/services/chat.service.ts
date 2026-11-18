@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpException, Injectable, Logger } from '@nestjs/common';
 import { ContextService } from '../../context/services/context.service.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { ChatRequest, ChatResponse } from '../types/chat.types';
@@ -841,22 +841,12 @@ export class ChatMainService {
             }
           }
           if (!subscriber.closed) {
-            const creditExhausted =
-              e.name === 'CREDIT_EXHAUSTED' ||
-              e.message.includes('CREDIT_EXHAUSTED');
             subscriber.next({
               data: {
                 type: 'error',
-                data: {
-                  code: creditExhausted
-                    ? 'CREDIT_EXHAUSTED'
-                    : 'STREAM_ERROR',
-                  message: creditExhausted
-                    ? '额度已用尽，已保留本次生成的部分内容'
-                    : e.message,
-                },
+                data: this.toClientStreamError(e, 'STREAM_ERROR'),
               },
-            } as MessageEvent);
+            });
           }
         } finally {
           if (streamWatchdog) {
@@ -876,6 +866,32 @@ export class ChatMainService {
         }
       };
     });
+  }
+
+  /**
+   * @description 把流式对话异常转成可下发前端的 `{ code, message }`：额度耗尽给固定提示，
+   *   业务主动抛出的 HttpException 保留其文案，其余异常只给通用文案；原始信息与堆栈由调用方写服务端日志。
+   * @keyword-cn 流错误脱敏, 前端错误文案
+   * @keyword-en sanitize-stream-error, client-error-message
+   */
+  toClientStreamError(
+    err: unknown,
+    fallbackCode: string,
+  ): { code: string; message: string } {
+    const e = err instanceof Error ? err : new Error(String(err));
+    if (
+      e.name === 'CREDIT_EXHAUSTED' ||
+      e.message.includes('CREDIT_EXHAUSTED')
+    ) {
+      return {
+        code: 'CREDIT_EXHAUSTED',
+        message: '额度已用尽，已保留本次生成的部分内容',
+      };
+    }
+    if (err instanceof HttpException) {
+      return { code: fallbackCode, message: e.message };
+    }
+    return { code: fallbackCode, message: '对话服务异常，请稍后重试' };
   }
 
   /**

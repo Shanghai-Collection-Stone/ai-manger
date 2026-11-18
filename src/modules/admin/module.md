@@ -12,10 +12,11 @@
 - **关键词**: admin, auth, login, jwt, tenants, providers, ai service, service credit, users, keys, controller, claw, agent, llm settings
 - **函数**:
   - `login(body)` — POST /admin/auth/login 旧版单步登录(用户名+租户)，公开免鉴权，保留兼容 | keywords: 兼容登录接口, 用户名登录, legacy-login-endpoint, username-login
-  - `identifyLogin(body)` — POST /admin/auth/login/identify 两步登录第一步(公开免鉴权)，手机号或用户名+密码换登录票据与已绑定租户 | keywords: 登录识别接口, 手机号登录, login-identify-endpoint, phone-login
+  - `identifyLogin(body)` — POST /admin/auth/login/identify 两步登录第一步(公开免鉴权)，手机号或用户名+密码换登录票据、已绑定租户（标出默认租户）与本人待审批的加入申请 | keywords: 登录识别接口, 手机号登录, login-identify-endpoint, phone-login
   - `selectLoginTenant(body)` — POST /admin/auth/login/select 两步登录第二步(公开免鉴权，凭票据)，选定租户签发会话 | keywords: 选择租户接口, 签发会话, login-select-endpoint, issue-session
   - `listSwitchableTenants(req)` — GET /admin/auth/switch-tenants 登录后列出同一手机号账号下可切换的租户并标出当前租户（`read User`） | keywords: 可切换租户接口, 当前租户标记, switchable-tenants-endpoint, current-tenant-flag
   - `switchTenant(req,body)` — POST /admin/auth/switch-tenant 登录后切换租户：签发目标租户新会话并吊销当前会话（`read User`） | keywords: 切换租户接口, 吊销旧会话, switch-tenant-endpoint, revoke-old-session
+  - `renewSession(req)` — POST /admin/auth/renew 续期当前会话：签发同一成员的新 7 天会话，旧会话 2 分钟宽限后失效；桌面端令牌快到期时调用以保持登录（`read User`） | keywords: 会话续期接口, 保持登录, renew-session-endpoint, stay-signed-in
   - `getSalesContact()` — GET /admin/auth/sales-contact 租户入驻页业务员二维码与提示语(公开免鉴权，只读平台配置) | keywords: 业务员二维码接口, 租户入驻, sales-contact-endpoint, tenant-onboarding
   - `register(req,body)` — POST /admin/auth/register 公开自助注册，挂 `@RequireSmsCode('register')` + `@RequireEmailCode('register')` 需 smsPhone/smsCode 与 email/emailCode，以已验证手机号和已验证邮箱建账号并固定加入默认租户「其他」 | keywords: 自助注册接口, 默认租户, self-register-endpoint, default-tenant
   - `listLoginTenants`: 登录租户选项/list login tenants
@@ -58,12 +59,15 @@
   - `ensureIndexes()` — 后台索引初始化，覆盖成员/供应商类别回退/接入配置/自媒体账号时间线、账号邮箱查询索引，将旧会话过期时间普通索引迁移为 TTL 索引，并在重建唯一偏索引前执行兜底去重 | keywords: 后台索引初始化, 会话过期索引迁移, admin-index-initialization, session-ttl-index-migration
   - `dedupeDefaultProviders`: 重建 { modelCategory, isDefault } 唯一偏索引前去重（llm/em/image/video/audio），每个 modelCategory 仅留最新一条 isDefault=true，其余降级 false，防 E11000 | keywords: dedupe-default-providers, unique-index-guard
   - `login({username,password,tenantId?})` — 旧版单步登录，关联了账号的成员以账号密码校验 | keywords: 兼容登录, 用户名登录, legacy-login, username-login
-  - `identifyLogin({account,password})` — 两步登录第一步：手机号或邮箱对应账号关联成员 ∪ 同名历史用户名成员中密码通过且启用的，按租户去重，签发 5 分钟登录票据；全部停用抛 ACCOUNT_DISABLED | keywords: 两步登录, 手机号登录, 可选租户, two-step-login, phone-login, login-tenant-options
+  - `identifyLogin({account,password})` — 两步登录第一步：手机号或邮箱对应账号关联成员 ∪ 同名历史用户名成员中密码通过且启用的，按租户去重，签发 5 分钟登录票据，并返回 `pendingApplications`（本人待审批的加入申请）；全部停用抛 ACCOUNT_DISABLED | keywords: 两步登录, 手机号登录, 可选租户, two-step-login, phone-login, login-tenant-options
   - `selectLoginTenant({loginTicket,tenantId?})` — 两步登录第二步：票据失效抛 LOGIN_TICKET_EXPIRED，租户不在候选抛 TENANT_NOT_BOUND | keywords: 选择登录租户, 签发会话, select-login-tenant, issue-session
-  - `toTenantOptions(members)` — 成员行转可选租户项并补租户名（平台端显示「平台端」，查不到为「未知租户」），登录与切换共用 | keywords: 可选租户项, 补租户名, tenant-options, tenant-name-lookup
+  - `toTenantOptions(members)` — 成员行转可选租户项并补租户名（平台端显示「平台端」，查不到为「未知租户」），按名称标出默认租户 `isDefault`，登录与切换共用 | keywords: 可选租户项, 补租户名, tenant-options, tenant-name-lookup
+  - `findPendingJoinApplications(members)` — 读这些成员所属手机号账号待审批的加入申请（`tenant_join_applications`，最新 5 条，只回租户名与提交时间），客户端只有「其他」时据此显示审批中 | keywords: 待审批申请, 登录审批提示, login-pending-application, approval-notice
+  - `selfRegisterTenantName()` — 自助注册默认租户名称（默认「其他」，`SELF_REGISTER_TENANT_NAME` 覆盖），建默认租户与标 `isDefault` 共用 | keywords: 默认注册租户, 默认租户名称, self-register-tenant, default-tenant-name
   - `findSameAccountMembers(user)` — 同一手机号账号（accountId）下启用中的成员，每租户一行，当前租户固定用当前成员；未关联账号的历史成员只有自己 | keywords: 同账号成员, 可切换范围, same-account-members, switch-scope
   - `listSwitchableTenants(user)` — 列出可切换租户并标出当前租户 | keywords: 可切换租户, 当前租户标记, switchable-tenants, current-tenant-flag
   - `switchTenant(user,token,tenantId?)` — 切到同账号在目标租户的启用成员：目标为当前租户抛 TENANT_ALREADY_ACTIVE，不在同账号成员里抛 TENANT_NOT_BOUND；签发新会话后吊销当前会话 | keywords: 切换租户, 吊销旧会话, switch-tenant, revoke-old-session
+  - `renewSession(user,token)` — 给同一成员签发新会话，旧会话只保留 2 分钟宽限（不立即删除，已发出的请求不被打断）；会话本身仍是 7 天，常用的客户端靠续期保持登录 | keywords: 会话续期, 保持登录, renew-session, stay-signed-in
   - `getSalesContact()` — 读取平台作用域业务员二维码与提示语 | keywords: 业务员二维码, 租户入驻, sales-wechat-qrcode, tenant-onboarding
   - `ensureAccountPhoneIndex()` — 手机号唯一索引改为只约束有手机号的账号（部分唯一索引），启动时删掉旧的整表唯一索引再重建，避免只用邮箱注册的账号互相撞键 | keywords: 手机号部分唯一索引, 邮箱账号兼容, partial-phone-unique-index, email-account-compat
   - `findPasswordMatchedUsers(account,password)` — 收集密码校验通过的成员行：手机号或邮箱对应账号的成员 + 同名历史用户名成员 | keywords: 密码匹配成员, 手机号账号, password-matched-members, phone-account
@@ -170,7 +174,8 @@
 - **类型**:
   - `AdminAccountEntity` — 平台账号(`admin_accounts`)：手机号或邮箱至少一个，phone 有值时唯一（部分唯一索引），email 以小写去空格形式存储；只用邮箱注册的账号以邮箱登录 | keywords: 手机号账号, 多租户身份, phone-account-entity, multi-tenant-identity
   - `AdminLoginTicketPayload` — 两步登录票据载荷(typ/uids/exp/iat) | keywords: 登录票据, 候选租户, login-ticket-payload, tenant-candidates
-  - `AdminLoginTenantOption` — 登录可选租户项(tenantId 空串为平台端) | keywords: 可选租户, 登录租户选择, login-tenant-option, tenant-selection
+  - `AdminLoginTenantOption` — 登录可选租户项(tenantId 空串为平台端，`isDefault` 标自助注册默认租户「其他」) | keywords: 可选租户, 登录租户选择, login-tenant-option, tenant-selection
+  - `AdminLoginPendingApplication` — 登录第一步返回的待审批加入申请（租户名、提交时间） | keywords: 待审批申请, 登录审批提示, login-pending-application, approval-notice
   - `AdminAiProviderEntity` — AI 提供商配置，`providerCode + modelCategory` 唯一；类别 llm / em / image / video / audio（audio 支持音色克隆及声音设计，创建 / 更新 DTO 与服务端规整同步放行） | keywords: AI提供商配置, 模型类别, ai-provider-entity, model-category
 
 ### services/admin-tenant-switch.spec.ts

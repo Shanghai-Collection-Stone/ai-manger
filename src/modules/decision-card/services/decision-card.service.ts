@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { BaseMessage } from 'langchain';
@@ -16,6 +16,7 @@ import { RobotRegistryService } from '../../auto-task-robot/services/robot-regis
 @Injectable()
 export class DecisionCardService {
   private readonly cards: Collection<DecisionCardEntity>;
+  private readonly logger = new Logger(DecisionCardService.name);
 
   constructor(
     @Inject('DS_MONGO_DB') private readonly db: Db,
@@ -689,8 +690,10 @@ export class DecisionCardService {
   }
 
   /**
-   * @description 应用决策，生成对应的待办任务
-   * @keyword-en apply decision and generate todo
+   * @description 应用决策，生成对应的待办任务；失败明细（原始报错、堆栈、模型原文）只写服务端日志，
+   *   响应里的 `details.failures` / `details.warnings` 只带失败阶段。
+   * @keyword-cn 应用决策, 失败阶段脱敏
+   * @keyword-en apply-decision, sanitized-failure-stage
    */
   async applyDecision(
     cardId: string,
@@ -708,27 +711,28 @@ export class DecisionCardService {
     error?: string;
     details?: Record<string, unknown>;
   }> {
-    const isProd = process.env.NODE_ENV === 'production';
     const trunc = (s: unknown, max = 2400): string => {
       const raw = typeof s === 'string' ? s : JSON.stringify(s ?? '');
       const t = raw.length > max ? raw.slice(0, max) + '…' : raw;
       return t;
     };
+    // 完整诊断只写服务端日志；返回给前端的失败项只保留阶段名，不带报错原文、堆栈与模型原文
     const capture = (
       stage: string,
       err: unknown,
       extra?: Record<string, unknown>,
-    ) => {
-      const e = err instanceof Error ? err : new Error(String(err));
-      return {
-        stage,
-        name: e.name,
-        message: e.message,
-        ...(isProd ? {} : { stack: e.stack }),
-        ...(extra ?? {}),
-      };
+    ): { stage: string } => {
+      const name = err instanceof Error ? err.name : 'Error';
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `[applyDecision] card=${cardId} stage=${stage} ${name}: ${message}${
+          extra ? ` extra=${trunc(extra, 4000)}` : ''
+        }`,
+        err instanceof Error ? err.stack : undefined,
+      );
+      return { stage };
     };
-    const failures: Array<Record<string, unknown>> = [];
+    const failures: Array<{ stage: string }> = [];
 
     const card = await this.getById(cardId, scope);
     if (!card) {

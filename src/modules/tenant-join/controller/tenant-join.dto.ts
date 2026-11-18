@@ -47,12 +47,56 @@ export class TenantJoinRegisterDto {
   @Matches(/^[A-Za-z0-9_-]{22}$/, { message: 'INVITE_CODE_INVALID' })
   inviteCode?: string;
 
-  /** 注册时按公司名称申请加入；与 inviteCode 互斥，都不填即随便逛逛进默认租户 */
+  /** 旧客户端：按公司名称申请加入；与 inviteCode 互斥，都不填即随便逛逛进默认租户 */
   @IsOptional()
   @IsString()
   @MinLength(2, { message: 'COMPANY_NAME_INVALID' })
   @MaxLength(60, { message: 'COMPANY_NAME_INVALID' })
   companyName?: string;
+
+  /** 注册页公司名称模糊搜索后选中的租户 ID；优先于 companyName，与 inviteCode 互斥 */
+  @IsOptional()
+  @IsMongoId({ message: 'COMPANY_NOT_FOUND' })
+  companyTenantId?: string;
+}
+
+/**
+ * @description 注册第 1 步预检请求体：手机号 + 短信验证码，或邮箱 + 邮箱验证码，只带所选的那一组
+ * @keyword-cn 注册预检请求体
+ * @keyword-en register-precheck-dto
+ */
+export class RegisterPrecheckDto {
+  @IsOptional()
+  @IsString()
+  @Matches(/^1[3-9]\d{9}$/, { message: 'SMS_PHONE_INVALID' })
+  smsPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'SMS_CODE_INVALID' })
+  smsCode?: string;
+
+  @IsOptional()
+  @IsEmail({}, { message: 'EMAIL_INVALID' })
+  @MaxLength(254)
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'EMAIL_CODE_INVALID' })
+  emailCode?: string;
+}
+
+/**
+ * @description 注册页公司名称模糊搜索查询参数，至少 2 个字才搜
+ * @keyword-cn 公司搜索查询参数
+ * @keyword-en company-search-query-dto
+ */
+export class CompanySearchQueryDto {
+  @IsString()
+  @MinLength(2, { message: 'COMPANY_KEYWORD_TOO_SHORT' })
+  @MaxLength(60, { message: 'COMPANY_NAME_INVALID' })
+  keyword!: string;
 }
 
 /**

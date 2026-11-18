@@ -275,15 +275,20 @@ export class TenantInviteService implements OnModuleInit {
   }
 
   /**
-   * @description 对同一限流键执行每窗口最多十次的限制，计数存 Mongo（`tenant_invite_attempts`），多进程共用同一份：
+   * @description 对同一限流键执行每窗口最多若干次（默认十次）的限制，计数存 Mongo（`tenant_invite_attempts`），多进程共用同一份：
    *   窗口内原子加一，窗口外重开计数；窗口结束后由过期索引自动删除。
    * @keyword-cn 共享限流计数, 尝试次数限制
    * @keyword-en shared-rate-limit, attempt-limit
    * @param key 限流键（`ip:` 或 `account:` 前缀）。
    * @param windowMs 窗口长度。
-   * @throws {HttpException} 窗口内超过十次时 429 `TOO_MANY_ATTEMPTS`。
+   * @param maxAttempts 窗口内允许的次数，缺省 10；公司名称边输边搜按 IP 放宽。
+   * @throws {HttpException} 窗口内超过上限时 429 `TOO_MANY_ATTEMPTS`。
    */
-  async assertAttemptLimit(key: string, windowMs: number): Promise<void> {
+  async assertAttemptLimit(
+    key: string,
+    windowMs: number,
+    maxAttempts = 10,
+  ): Promise<void> {
     const now = new Date();
     const before = await this.attempts.findOneAndUpdate(
       {
@@ -307,7 +312,7 @@ export class TenantInviteService implements OnModuleInit {
       );
       return;
     }
-    if (before.count >= 10) {
+    if (before.count >= maxAttempts) {
       throw new HttpException(
         'TOO_MANY_ATTEMPTS',
         HttpStatus.TOO_MANY_REQUESTS,

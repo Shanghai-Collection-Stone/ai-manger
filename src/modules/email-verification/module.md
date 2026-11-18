@@ -12,7 +12,7 @@
 
 - `email-verification.module.ts` — 全局模块入口，装配发码接口、验证码服务、守卫与拦截器。
 - `entities/email-verification.entity.ts` — 场景白名单、场景文案、元数据键、有效期与频控常量、验证码记录与请求上下文类型。
-- `services/email-verification.service.ts` — 发码频控、验证码邮件文案、摘要校验、作废与发信错误收敛。
+- `services/email-verification.service.ts` — 发码频控、注册场景发码前查重、验证码邮件文案、摘要校验、作废与发信错误收敛。
 - `guards/email-code.guard.ts` — 按场景用请求体 `email` + `emailCode` 判定邮箱验证码，可选声明下没带验证码放行。
 - `guards/email-code.guard.spec.ts` — 守卫可选模式（放行 / 非可选仍拒绝）单测。
 - `interceptors/email-code-consume.interceptor.ts` — 业务成功后作废邮箱验证码。
@@ -36,6 +36,7 @@
 - `EmailVerificationService.consume(codeId)` — 作废验证码，重复作废返回 false | keywords: 作废邮箱验证码, 一次性使用, consume-email-code, single-use
 - `EmailVerificationService.buildCodeMail(scene,code)` — 组装用途说明、验证码框、有效期与防诈骗提示 | keywords: 验证码邮件文案, 防诈骗提示, code-mail-copy, anti-fraud-notice
 - `EmailVerificationService.assertSendQuota(email,scene,ip)` — 60 秒重发间隔、邮箱日限额与 IP 小时限额 | keywords: 发送频控, 重发间隔, send-throttle, resend-interval
+- `EmailVerificationService.assertEmailNotRegistered(email,scene,ip)` — 注册场景发码前查邮箱是否已被任一账号使用，已注册不发信报 `EMAIL_ALREADY_REGISTERED`，但落一条作废记录计入频控防查邮箱 | keywords: 发码前查重, 已注册不发码, 防枚举, send-time-duplicate-check, skip-registered-send, anti-enumeration
 - `EmailVerificationService.toPublicSendError(error)` — 未配置映射为 `EMAIL_NOT_CONFIGURED`，SMTP 原始错误只进日志 | keywords: 发送错误收敛, 隐藏服务商错误, map-send-error, hide-provider-error
 - `EmailVerificationService.hashCode(email,scene,code)` — 生成绑定邮箱与场景的 HMAC 摘要 | keywords: 邮箱验证码摘要, 场景绑定, email-code-hash, scene-binding
 - `EmailVerificationService.normalizeEmail(raw)` — 去空格转小写并校验格式与长度 | keywords: 邮箱规范化, 邮箱格式校验, normalize-email, email-format-check
@@ -63,6 +64,8 @@
 | 校验邮箱验证码 | verify-email-code |
 | 作废邮箱验证码 | consume-email-code |
 | 发送频控 | send-throttle |
+| 发码前查重 | send-time-duplicate-check |
+| 已注册不发码 | skip-registered-send |
 | 重发间隔 | resend-interval |
 | 防爆破 | brute-force-guard |
 | 验证码邮件文案 | code-mail-copy |
@@ -87,7 +90,7 @@
 - `EMAIL_ADDRESS_DAILY_LIMIT`(10) — 单邮箱 24 小时上限 | keywords: 邮箱日限额, email-daily-limit
 - `EMAIL_IP_HOURLY_LIMIT`(30) — 单 IP 1 小时上限 | keywords: IP小时限额, ip-hourly-limit
 - `EMAIL_CODE_MAX_ATTEMPTS`(5) — 单条验证码最多校验次数 | keywords: 最大尝试次数, 防爆破, max-attempts, brute-force-guard
-- `EmailCodeEntity` — `email_verification_codes` 验证码记录 | keywords: 邮箱验证码记录, email-code-entity
+- `EmailCodeEntity` — `email_verification_codes` 验证码记录；`blockedReason: 'registered'` 表示注册场景因邮箱已注册没发信、只为计入频控落的作废记录 | keywords: 邮箱验证码记录, email-code-entity
 - `EmailVerifiedContext` — 守卫通过后的上下文 | keywords: 邮箱验证通过上下文, email-verified-context
 - `EmailVerifiedRequest` — 携带 `emailVerification` 的请求 | keywords: 已验证请求, 可信邮箱, email-verified-request, trusted-email
 
@@ -104,7 +107,7 @@
 
 已接入：`POST /api/tenant-join/register`、`POST /admin/auth/register`（场景 `register`，均同时要求短信验证码）。
 
-**发码流程**：规范化邮箱与场景 → 频控 → 写入带摘要的记录 → `MailService.sendTemplate()` 发送验证码邮件（统一版式：用途说明、大号验证码框、10 分钟有效期、防诈骗提示）。发信失败删除记录，不占频控额度。发信邮箱未配置返回 `EMAIL_NOT_CONFIGURED`；SMTP 失败统一返回 `EMAIL_SEND_FAILED`，服务商原始错误只写日志，不对公开接口泄露。`MAIL_MOCK=true`（非生产）时验证码写在模拟发信日志里。
+**发码流程**：规范化邮箱与场景 → 频控 → `register` 场景查邮箱是否已被任一账号使用（已注册不发信，报 `EMAIL_ALREADY_REGISTERED`，但落一条已作废的 `blockedReason: 'registered'` 记录照样占重发间隔与日 / 时上限，防止借发码接口无限次查邮箱；注册预检与正式提交仍会再查，兜住发码后被抢注）→ 写入带摘要的记录 → `MailService.sendTemplate()` 发送验证码邮件（统一版式：用途说明、大号验证码框、10 分钟有效期、防诈骗提示）。发信失败删除记录，不占频控额度。发信邮箱未配置返回 `EMAIL_NOT_CONFIGURED`；SMTP 失败统一返回 `EMAIL_SEND_FAILED`，服务商原始错误只写日志，不对公开接口泄露。`MAIL_MOCK=true`（非生产）时验证码写在模拟发信日志里。
 
 **校验规则**：只认该邮箱该场景最新一条；已作废或过期返回 `EMAIL_CODE_EXPIRED`；先原子累加 `attempts` 再比对摘要，第 6 次起返回 `EMAIL_CODE_TOO_MANY_ATTEMPTS`。摘要 pepper 依次取 `MAIL_ENCRYPTION_KEY`、`SMS_ENCRYPTION_KEY`、`BROWSER_AUTH_ENCRYPTION_KEY`、`ADMIN_JWT_SECRET`。
 

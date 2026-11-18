@@ -88,6 +88,8 @@ export interface EmailCodeEntity {
   ip: string;
   attempts: number;
   consumedAt?: Date;
+  /** 注册场景发码时邮箱已注册：没有发信，只为计入频控落的作废记录 */
+  blockedReason?: 'registered';
   expiresAt: Date;
   createdAt: Date;
 }

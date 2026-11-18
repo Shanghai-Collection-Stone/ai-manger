@@ -26,7 +26,8 @@
 - **关键词**: chat main, streaming, non-streaming, context, service, session-type, thought-route, tool-whitelist, article-library
 - **函数**:
   - `send`: 非流式发送/send
-  - `stream`: 流式发送;收到 agent 的 error 事件时,除了 safeSend 给前端,**额外 this.logger.error 完整打印 code + message + stack**。**stream 看门狗**: 启动 setInterval 监控,连续 3 分钟(STREAM_IDLE_TIMEOUT_MS)无任何 stream 事件视为 silent hang,主动 abortController.abort() → 前端收到 error 而非永久卡死。**🆕 中断补落库**: `fullText`(含 earlyEmit 推送的 canvas-it/handoff-it/tag-select-it fence)与 `assistantPersisted` 标记提到 try 外;stream 正常结束 appendMessage 后置 assistantPersisted=true;catch 分支若 assistantPersisted=false,把 sanitizeFinalText(fullText) 补写入 mongo —— 解决 stream 中断时 assistant 从不落库导致"用户已看到的卡片刷新后全消失"的根因/stream with watchdog and partial-persist on interruption
+  - `stream`: 流式发送;收到 agent 的 error 事件时,除了 safeSend 给前端(agent 侧已脱敏的 code/message),**额外 this.logger.error 完整打印 code + message + stack**;自身 catch 到的异常经 `toClientStreamError` 脱敏后下发。**stream 看门狗**: 启动 setInterval 监控,连续 3 分钟(STREAM_IDLE_TIMEOUT_MS)无任何 stream 事件视为 silent hang,主动 abortController.abort() → 前端收到 error 而非永久卡死。**🆕 中断补落库**: `fullText`(含 earlyEmit 推送的 canvas-it/handoff-it/tag-select-it fence)与 `assistantPersisted` 标记提到 try 外;stream 正常结束 appendMessage 后置 assistantPersisted=true;catch 分支若 assistantPersisted=false,把 sanitizeFinalText(fullText) 补写入 mongo —— 解决 stream 中断时 assistant 从不落库导致"用户已看到的卡片刷新后全消失"的根因/stream with watchdog and partial-persist on interruption
+  - `toClientStreamError(err, fallbackCode)` — 把流式对话异常转成可下发前端的 `{ code, message }`:额度耗尽给固定提示,HttpException 保留业务文案,其余只给通用文案 | keywords: 流错误脱敏, 前端错误文案, sanitize-stream-error, client-error-message
   - `createSession`: 创建会话/create session
   - `appendUser`: 追加用户/append user
   - `appendAssistant`: 追加助手/append assistant
@@ -120,7 +121,8 @@
 - **关键词**: controller, session-type
 - **函数**:
   - `send`: 非流式发送/send
-  - `stream`: 流式发送/stream
+  - `stream`: 流式发送(GET SSE 与 POST 两个入口出错时都只下发脱敏错误事件,不交给 Nest SSE 原样写 err.message)/stream
+  - `toStreamErrorEvent(err, code)` — 生成下发前端的脱敏错误事件,原始报错与堆栈写服务端日志 | keywords: 流错误事件, 错误日志, stream-error-event, error-logging
   - `createSession`: 创建会话/create session
   - `getMessages`: 获取消息/get messages
   - `deleteMessages`: 删除消息/delete messages

@@ -13,6 +13,8 @@ import {
   UploadedFiles,
   BadRequestException,
   UnauthorizedException,
+  HttpException,
+  Logger,
 } from '@nestjs/common';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { ChatMainService } from '../services/chat.service.js';
@@ -34,10 +36,30 @@ import { randomUUID } from 'crypto';
  */
 @Controller('chat')
 export class ChatMainController {
+  private readonly logger = new Logger(ChatMainController.name);
+
   constructor(
     private readonly chat: ChatMainService,
     private readonly adminService: AdminService,
   ) {}
+
+  /**
+   * @description 流式接口出错时生成下发前端的脱敏错误事件；原始报错与堆栈只写服务端日志。
+   * @keyword-cn 流错误事件, 错误日志
+   * @keyword-en stream-error-event, error-logging
+   */
+  private toStreamErrorEvent(
+    err: unknown,
+    code: string,
+  ): { type: 'error'; data: { code: string; message: string } } {
+    const e = err instanceof Error ? err : new Error(String(err));
+    if (err instanceof HttpException) {
+      this.logger.warn(`[stream] ${code} ${e.name}: ${e.message}`);
+    } else {
+      this.logger.error(`[stream] ${code} ${e.name}: ${e.message}`, e.stack);
+    }
+    return { type: 'error', data: this.chat.toClientStreamError(err, code) };
+  }
 
   @Post('upload-images')
   @UseInterceptors(
@@ -177,15 +199,24 @@ export class ChatMainController {
             userId: auth.userId,
             tenantId: auth.tenantId,
           });
+          // 不把异常交给 Nest 的 SSE 处理：它会把 err.message 原样写进流里
           const inner = stream$.subscribe({
             next: (event) => subscriber.next(event),
-            error: (err) => subscriber.error(err),
+            error: (err: unknown) => {
+              subscriber.next({
+                data: this.toStreamErrorEvent(err, 'STREAM_ERROR'),
+              });
+              subscriber.complete();
+            },
             complete: () => subscriber.complete(),
           });
           return inner;
         })
         .catch((err: unknown) => {
-          subscriber.error(err);
+          subscriber.next({
+            data: this.toStreamErrorEvent(err, 'STREAM_INIT_ERROR'),
+          });
+          subscriber.complete();
         });
     });
   }
@@ -233,12 +264,8 @@ export class ChatMainController {
           },
           error: (err: unknown) => {
             if (res.writableEnded) return;
-            const e = err instanceof Error ? err : new Error(String(err));
             res.write(
-              `data: ${JSON.stringify({
-                type: 'error',
-                data: { code: 'STREAM_ERROR', message: e.message },
-              })}\n\n`,
+              `data: ${JSON.stringify(this.toStreamErrorEvent(err, 'STREAM_ERROR'))}\n\n`,
             );
             res.end();
           },
@@ -248,12 +275,9 @@ export class ChatMainController {
         });
       })
       .catch((err: unknown) => {
-        const e = err instanceof Error ? err : new Error(String(err));
+        if (res.writableEnded) return;
         res.write(
-          `data: ${JSON.stringify({
-            type: 'error',
-            data: { code: 'STREAM_INIT_ERROR', message: e.message },
-          })}\n\n`,
+          `data: ${JSON.stringify(this.toStreamErrorEvent(err, 'STREAM_INIT_ERROR'))}\n\n`,
         );
         res.end();
       });

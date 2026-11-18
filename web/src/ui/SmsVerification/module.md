@@ -22,7 +22,7 @@
 - `resolveSmsApiBase()` — 本地 4322 端口直连 3011，其余同源 | keywords: 接口基地址, 本地开发直连, resolve-api-base, local-dev-direct
 - `sendSmsCode(phone,scene)` — 公开发码，失败抛带 code/retryAfterSeconds 的 Error | keywords: 发送短信验证码, 公开接口, send-sms-code, public-api
 - `describeSmsError(code)` — 错误码转中文提示 | keywords: 描述验证码错误, 中文提示, describe-sms-error, chinese-message
-- `SMS_ERROR_MESSAGES` — 后端错误码中文映射表 | keywords: 验证码错误提示, 错误码映射, sms-error-messages, error-code-map
+- `SMS_ERROR_MESSAGES` — 后端错误码中文映射表，含注册发码时的 `PHONE_ALREADY_REGISTERED` | keywords: 验证码错误提示, 错误码映射, sms-error-messages, error-code-map
 
 ## 关键词索引 (Keyword Index)
 

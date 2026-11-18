@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { createHmac, randomInt, timingSafeEqual } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
+import type { AdminAccountEntity } from '../../admin/entities/admin.entity.js';
 import type { MailTemplateContent } from '../../mail/entities/mail.entity.js';
 import { MailService } from '../../mail/services/mail.service.js';
 import {
@@ -36,12 +37,14 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export class EmailVerificationService {
   private readonly logger = new Logger(EmailVerificationService.name);
   private readonly codes: Collection<EmailCodeEntity>;
+  private readonly accounts: Collection<AdminAccountEntity>;
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly mail: MailService,
   ) {
     this.codes = db.collection<EmailCodeEntity>('email_verification_codes');
+    this.accounts = db.collection<AdminAccountEntity>('admin_accounts');
     void this.ensureIndexes();
   }
 
@@ -81,6 +84,9 @@ export class EmailVerificationService {
     const email = this.normalizeEmail(input.email);
     const scene = this.assertScene(input.scene);
     await this.assertSendQuota(email, scene, input.ip);
+    if (scene === 'register') {
+      await this.assertEmailNotRegistered(email, scene, input.ip);
+    }
 
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
     const now = new Date();
@@ -105,6 +111,41 @@ export class EmailVerificationService {
       expiresInSeconds: EMAIL_CODE_TTL_SECONDS,
       resendAfterSeconds: EMAIL_RESEND_INTERVAL_SECONDS,
     };
+  }
+
+  /**
+   * @description 注册场景发码前查邮箱是否已被任一账号使用（与建账号的邮箱判重一致）：已注册就不发信，直接报 `EMAIL_ALREADY_REGISTERED`；但照样落一条作废记录计入频控（重发间隔、单邮箱日上限、单 IP 时上限），防止借发码接口无限次查邮箱
+   * @keyword-cn 发码前查重, 已注册不发码, 防枚举
+   * @keyword-en send-time-duplicate-check, skip-registered-send, anti-enumeration
+   * @param email 规范化邮箱。
+   * @param scene 业务场景。
+   * @param ip 客户端 IP。
+   * @returns {Promise<void>}
+   */
+  private async assertEmailNotRegistered(
+    email: string,
+    scene: EmailVerificationScene,
+    ip: string,
+  ): Promise<void> {
+    const registered = await this.accounts.findOne(
+      { email },
+      { projection: { _id: 1 } },
+    );
+    if (!registered) return;
+    const now = new Date();
+    await this.codes.insertOne({
+      _id: new ObjectId(),
+      email,
+      scene,
+      codeHash: '',
+      ip,
+      attempts: 0,
+      consumedAt: now,
+      blockedReason: 'registered',
+      expiresAt: new Date(now.getTime() + EMAIL_CODE_TTL_SECONDS * 1000),
+      createdAt: now,
+    });
+    throw new BadRequestException('EMAIL_ALREADY_REGISTERED');
   }
 
   /**

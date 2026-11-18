@@ -77,32 +77,7 @@ export class GalleryTagLibraryService {
   }
 
   /**
-   * @description 返回首次使用图库时写入的默认标签分类。
-   * @keyword-cn 默认标签分类, 标签库初始化
-   * @keyword-en default-tag-categories, tag-library-bootstrap
-   */
-  private defaultCategories(): GalleryTagCategory[] {
-    return [
-      {
-        id: randomUUID(),
-        name: '门店',
-        tags: ['月亮湾店', '诺瓦城店', '丽宝店', '其他'],
-      },
-      {
-        id: randomUUID(),
-        name: '活动',
-        tags: ['团建', '生日派对', '快闪活动', '主理人活动', '大厅潮玩'],
-      },
-      {
-        id: randomUUID(),
-        name: '画面',
-        tags: ['人像', '群像', '特写', '亲子', '情侣', '餐食', '环境'],
-      },
-    ];
-  }
-
-  /**
-   * @description 读取标签库，不存在时原子写入默认分类。
+   * @description 读取标签库，不存在时建一个空的：分类由租户自己建或用 JSON 批量导入，不再写入预设。旧租户已有的标签库（包括早期写入的那套门店 / 活动 / 画面）原样保留。
    * @keyword-cn 读取标签库, 未分类统计
    * @keyword-en read-tag-library, uncategorized-statistics
    */
@@ -118,14 +93,14 @@ export class GalleryTagLibraryService {
         $setOnInsert: {
           _id: new ObjectId(),
           scopeKey,
-          categories: this.defaultCategories(),
+          categories: [],
           createdAt: now,
           updatedAt: now,
         },
       },
       { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
-    const categories = result.value?.categories ?? this.defaultCategories();
+    const categories = result.value?.categories ?? [];
     const categorized = categories.flatMap((category) => category.tags);
     const excluded = Array.from(
       new Set([...categorized, ...systemTags].map((tag) => String(tag).trim())),

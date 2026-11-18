@@ -22,6 +22,7 @@
 - `services/gallery-public-image.spec.ts`
 - `services/gallery-list-query.spec.ts`
 - `services/gallery-tag-library.service.ts`
+- `services/gallery-tag-library.service.spec.ts` — 新建标签库为空、旧租户已有的标签库（含早期写入的门店 / 活动预设）原样返回不改写。
 - `services/gallery.service.ts`
 - `material-styles/` — 子模块索引见 `material-styles/module.md`。
 - `zip-import/` — 子模块索引见 `zip-import/module.md`。
@@ -105,8 +106,7 @@
 - `GalleryTagLibraryService.ensureIndexes()` — 创建作用域唯一索引 | keywords: 标签库索引, 作用域唯一, tag-library-index, unique-scope
 - `GalleryTagLibraryService.resolveScopeKey(tenantId?)` — 生成与图片可见性一致的作用域键 | keywords: 标签库作用域, 租户隔离, tag-library-scope, tenant-isolation
 - `GalleryTagLibraryService.buildImageScopeFilter(tenantId?)` — 构造图库图片租户过滤条件 | keywords: 图片可见范围, 租户过滤, image-visibility, tenant-filter
-- `GalleryTagLibraryService.defaultCategories()` — 返回首次使用时的默认三类标签 | keywords: 默认标签分类, 标签库初始化, default-tag-categories, tag-library-bootstrap
-- `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取或初始化标签库并统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
+- `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取标签库（不存在时建空库，不再写入预设分类；旧租户已有的标签库原样保留），并统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
 - `GalleryTagLibraryService.replace(tenantId, categories, systemTags)` — 校验并整体替换标签分类 | keywords: 替换标签库, 标签唯一性, replace-tag-library, unique-tag-category
 - `GalleryGroupSystemKey` — 系统固定分组标识，`store-visit-scene` 是探店「场景图库」 | keywords: 固定分组标识, 场景图库, system-group-key, scene-gallery
 - `GALLERY_SCENE_GROUP_SYSTEM` — 探店「场景图库」固定分组的系统标识值 | keywords: 场景图库标识, 固定分组, scene-group-key, system-group
@@ -223,14 +223,13 @@
 | 标签库响应 | tag-library-response |
 | 未分类统计 | uncategorized-statistics |
 | 图库标签库 | gallery-tag-library |
-| 标签库初始化 | tag-library-bootstrap |
+| 标签库初始化 | tag-library-initialization |
 | 数据集合 | data-collections |
 | 标签库索引 | tag-library-index |
 | 作用域唯一 | unique-scope |
 | 标签库作用域 | tag-library-scope |
 | 租户隔离 | tenant-isolation |
 | 租户过滤 | tenant-filter |
-| 默认标签分类 | default-tag-categories |
 | 标签唯一性 | unique-tag-category |
 | 固定分组标识 | system-group-key |
 | 场景图库 | scene-gallery |
@@ -429,7 +428,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 
 **gallery-tag-library.service.ts**
 
-按图库图片可见作用域管理标签分类，并聚合实际使用但未分类的标签。
+按图库图片可见作用域管理标签分类，并聚合实际使用但未分类的标签。新标签库从空开始，分类由租户自己建，或在客户端标签库管理里用 JSON 批量导入（走原有的整体替换接口）；旧版曾给每个租户写入一套门店 / 活动 / 画面预设，有的老租户在用，所以已有的标签库一律不动。
 
 - **关键词**: tag-library, tenant-scope, uncategorized, aggregation
 - **函数**:
@@ -439,8 +438,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `GalleryTagLibraryService.ensureIndexes()` — 创建作用域唯一索引 | keywords: 标签库索引, 作用域唯一, tag-library-index, unique-scope
   - `GalleryTagLibraryService.resolveScopeKey(tenantId?)` — 生成与图片可见性一致的作用域键 | keywords: 标签库作用域, 租户隔离, tag-library-scope, tenant-isolation
   - `GalleryTagLibraryService.buildImageScopeFilter(tenantId?)` — 构造图库图片租户过滤条件 | keywords: 图片可见范围, 租户过滤, image-visibility, tenant-filter
-  - `GalleryTagLibraryService.defaultCategories()` — 返回首次使用时的默认三类标签 | keywords: 默认标签分类, 标签库初始化, default-tag-categories, tag-library-bootstrap
-  - `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取或初始化标签库并统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
+  - `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取标签库（不存在时建空库，不再写入预设分类；旧租户已有的标签库原样保留），并统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
   - `GalleryTagLibraryService.replace(tenantId, categories, systemTags)` — 校验并整体替换标签分类 | keywords: 替换标签库, 标签唯一性, replace-tag-library, unique-tag-category
 
 **gallery-group.entity.ts**

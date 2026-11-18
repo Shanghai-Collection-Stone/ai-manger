@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { randomInt, timingSafeEqual } from 'crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
+import type { AdminAccountEntity } from '../../admin/entities/admin.entity.js';
 import {
   SMS_CODE_MAX_ATTEMPTS,
   SMS_CODE_TTL_SECONDS,
@@ -34,6 +35,7 @@ import { SmsCryptoService } from './sms-crypto.service.js';
 export class SmsVerificationService {
   private readonly logger = new Logger(SmsVerificationService.name);
   private readonly codes: Collection<SmsCodeEntity>;
+  private readonly accounts: Collection<AdminAccountEntity>;
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
@@ -43,6 +45,7 @@ export class SmsVerificationService {
     private readonly crypto: SmsCryptoService,
   ) {
     this.codes = db.collection<SmsCodeEntity>('sms_verification_codes');
+    this.accounts = db.collection<AdminAccountEntity>('admin_accounts');
     void this.ensureIndexes();
   }
 
@@ -87,6 +90,9 @@ export class SmsVerificationService {
       throw new ServiceUnavailableException('SMS_NOT_CONFIGURED');
     }
     await this.assertSendQuota(phone, scene, input.ip);
+    if (scene === 'register') {
+      await this.assertPhoneNotRegistered(phone, scene, input.ip);
+    }
 
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
     const verifyVia = runtime?.provider === 'aliyun_dypns' ? 'provider' : 'local';
@@ -149,7 +155,43 @@ export class SmsVerificationService {
   }
 
   /**
-   * @description 校验验证码但不作废：只认该手机号该场景最新一条，先原子累加次数再比对，超过上限即作废
+   * @description 注册场景发码前查手机号是否已注册：已注册就不发短信，直接报 `PHONE_ALREADY_REGISTERED`；但照样落一条作废记录计入频控（重发间隔、单号日上限、单 IP 时上限），防止借发码接口无限次查号
+   * @keyword-cn 发码前查重, 已注册不发码, 防枚举
+   * @keyword-en send-time-duplicate-check, skip-registered-send, anti-enumeration
+   * @param phone 规范化手机号。
+   * @param scene 业务场景。
+   * @param ip 客户端 IP。
+   * @returns {Promise<void>}
+   */
+  private async assertPhoneNotRegistered(
+    phone: string,
+    scene: SmsVerificationScene,
+    ip: string,
+  ): Promise<void> {
+    const registered = await this.accounts.findOne(
+      { phone },
+      { projection: { _id: 1 } },
+    );
+    if (!registered) return;
+    const now = new Date();
+    await this.codes.insertOne({
+      _id: new ObjectId(),
+      phone,
+      scene,
+      codeHash: '',
+      ip,
+      attempts: 0,
+      verifyVia: 'local',
+      consumedAt: now,
+      blockedReason: 'registered',
+      expiresAt: new Date(now.getTime() + SMS_CODE_TTL_SECONDS * 1000),
+      createdAt: now,
+    });
+    throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+  }
+
+  /**
+   * @description 校验验证码但不作废：只认该手机号该场景最新一条，先原子累加次数再比对，超过上限即作废；服务商校验通过后改存本地哈希，同一码再校验（如注册预检后正式提交）不再请求服务商
    * @keyword-cn 校验验证码, 防爆破
    * @keyword-en verify-sms-code, brute-force-guard
    * @param input 手机号、场景与验证码。
@@ -207,6 +249,18 @@ export class SmsVerificationService {
       );
       valid =
         expected.length === actual.length && timingSafeEqual(expected, actual);
+    }
+    // 服务商校验通过后改存本地哈希：同一验证码可能被预检和正式提交各校验一次，避免第二次再去服务商核验
+    if (valid && latest.verifyVia === 'provider') {
+      await this.codes.updateOne(
+        { _id: latest._id },
+        {
+          $set: {
+            codeHash: this.crypto.hashCode(phone, input.scene, code),
+            verifyVia: 'local',
+          },
+        },
+      );
     }
     if (!valid) {
       throw new BadRequestException('SMS_CODE_INVALID');

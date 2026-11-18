@@ -3351,15 +3351,21 @@ export class AgentService {
 
   /**
    * @description 将模型流异常归一为稳定错误码；计费错误即使被中间件包装也保持可识别。
-   * @keyword-cn 流错误归一, 计费错误透传
-   * @keyword-en normalize-stream-error, billing-error-forwarding
+   *   结果会下发前端：带错误码前缀的只回错误码（冒号后常带文件路径、上游原始报错），
+   *   未识别的异常只回通用文案，原始信息只留在服务端日志。
+   * @keyword-cn 流错误归一, 计费错误透传, 错误文案脱敏
+   * @keyword-en normalize-stream-error, billing-error-forwarding, error-message-sanitize
    */
   private normalizeStreamError(error: Error): {
     code: string;
     message: string;
   } {
+    const fallback = {
+      code: 'STREAM_ERROR',
+      message: '模型调用失败，请稍后重试',
+    };
     const raw = String(error.message || '').trim();
-    if (!raw) return { code: 'STREAM_ERROR', message: 'STREAM_ERROR' };
+    if (!raw) return fallback;
     if (raw.includes('CREDIT_EXHAUSTED')) {
       return {
         code: 'CREDIT_EXHAUSTED',
@@ -3389,8 +3395,8 @@ export class AgentService {
     }
     // code 必须是 ≥3 个大写字母/数字/下划线 + 紧跟冒号(避免把句子首字母 "I" 这种当 code)
     const m = /^([A-Z][A-Z0-9_]{2,}):\s*/.exec(raw);
-    const code = m?.[1] ? m[1] : 'STREAM_ERROR';
-    return { code, message: raw.slice(0, 240) };
+    if (m?.[1]) return { code: m[1], message: m[1] };
+    return fallback;
   }
 
   /**

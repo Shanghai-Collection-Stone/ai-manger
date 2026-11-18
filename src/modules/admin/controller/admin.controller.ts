@@ -187,6 +187,22 @@ export class AdminController {
   }
 
   /**
+   * @description 续期当前会话：签发同一成员的新会话，旧会话 2 分钟宽限后失效；桌面端在令牌快到期时调用以保持登录
+   * @keyword-cn 会话续期接口, 保持登录
+   * @keyword-en renew-session-endpoint, stay-signed-in
+   */
+  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
+  @RequirePermission('read', 'User')
+  @Post('auth/renew')
+  async renewSession(@Req() req: Request) {
+    const token = (req as AdminRequest).adminToken;
+    if (typeof token !== 'string' || !token) {
+      throw new UnauthorizedException('UNAUTHORIZED');
+    }
+    return this.adminService.renewSession(this.requireUser(req), token);
+  }
+
+  /**
    * @description 退出登录
    * @keyword-en admin logout endpoint
    */
