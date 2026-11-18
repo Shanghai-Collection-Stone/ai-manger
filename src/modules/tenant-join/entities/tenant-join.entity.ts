@@ -22,8 +22,10 @@ export type TenantJoinNotifyStatus = 'sent' | 'failed' | 'skipped';
 export interface TenantJoinApplicationEntity {
   _id: ObjectId;
   accountId: string;
-  phone: string;
-  email: string;
+  /** 申请人手机号；只用邮箱注册的账号没有 */
+  phone?: string;
+  /** 申请人邮箱；只用手机号注册的账号没有 */
+  email?: string;
   displayName: string;
   tenantId: string;
   tenantName: string;
@@ -68,8 +70,8 @@ export interface ApplicationView {
   id: string;
   tenantId: string;
   tenantName: string;
-  phone: string;
-  email: string;
+  phone: string | null;
+  email: string | null;
   displayName: string;
   message: string | null;
   status: TenantJoinApplicationStatus;

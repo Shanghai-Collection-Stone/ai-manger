@@ -1240,18 +1240,21 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 按已保存的脚本正文生成分段台词并保存（与桌面端 `generateScriptLines` 同规则）：每段新 ID，按出镜方式排好镜头，已有台词与场景会被替换。
+   * @description 按已保存的脚本正文生成分段台词并保存（与桌面端 `generateScriptLines` 同规则）：每段新 ID，按出镜方式排好镜头，已有台词与场景会被替换；
+   *   从脚本开始时先按脚本方向匹配图库素材再按图写台词，每段直接绑好素材图并把用到的图存进脚本素材。
    * @keyword-cn 按脚本生成台词, 保存台词来源
    * @keyword-en generate-script-lines, save-lines-source
    * @param {number} topicId 脚本 ID。
    * @param {string|undefined} prompt 台词要求。
    * @param {DouyinScope} scope 作用域。
+   * @param {{useMaterials?: boolean}} [options] useMaterials 为 false 时从脚本开始也不先匹配素材（如托管选了 AI 画面）。
    * @returns 脚本状态。
    */
   async generateLines(
     topicId: number,
     prompt: string | undefined,
     scope: DouyinScope,
+    options: { useMaterials?: boolean } = {},
   ) {
     const topic = await this.requireStoreVisit(topicId, scope);
     const store = await this.storeOf(topic, scope);
@@ -1263,18 +1266,24 @@ export class DouyinWorkbenchAgentService {
     if (!source) throw new BadRequestException('请先写脚本正文');
     const result = await this.planner.generateLines(
       topic.id,
-      { prompt: prompt?.trim() },
+      { prompt: prompt?.trim(), useMaterials: options.useMaterials },
       scope,
     );
     if (!result?.segments?.length || result.linesScript !== source)
       throw new BadRequestException('台词未对应当前脚本，请重试');
     const drafts: DouyinStoreVisitSegment[] = result.segments.map(
-      (segment: { lines: string; scene?: string; delivery?: string }) => ({
+      (segment: {
+        lines: string;
+        scene?: string;
+        delivery?: string;
+        sceneImageId?: number;
+      }) => ({
         id: createStoreVisitSegmentId(),
         lines: segment.lines,
         scene: segment.scene || '',
         action: '',
         ...(segment.delivery ? { delivery: segment.delivery } : {}),
+        ...(segment.sceneImageId ? { sceneImageId: segment.sceneImageId } : {}),
         shot: 'broll',
       }),
     );
@@ -1284,10 +1293,25 @@ export class DouyinWorkbenchAgentService {
       await this.presenterSource(),
       'original',
     );
+    // 先素材后分镜：把各段用到的素材图并进脚本素材，没用到的旧图移出（图库里仍保留）
+    const used = new Set(
+      next.map((segment) => Number(segment.sceneImageId)).filter(Boolean),
+    );
+    const sceneImages = result.sceneImages?.length
+      ? [
+          ...(topic.storeVisit?.sceneImages ?? []),
+          ...result.sceneImages,
+        ].filter(
+          (image, index, list) =>
+            used.has(Number(image.id)) &&
+            list.findIndex((item) => Number(item.id) === Number(image.id)) ===
+              index,
+        )
+      : undefined;
     await this.persistSegments(
       topic,
       next,
-      { linesScript: source },
+      { linesScript: source, ...(sceneImages ? { sceneImages } : {}) },
       scope,
       store,
     );
@@ -1420,6 +1444,56 @@ export class DouyinWorkbenchAgentService {
     );
     await this.persistSegments(topic, next, {}, scope);
     return this.topicDetail(topic.id, scope);
+  }
+
+  /**
+   * @description 以素材为准补齐还没配上素材的分段：由 AI 从门店已有素材里给这些段换点位与图，并把这几段台词和画面改成讲素材里看得到的内容后保存；已配好素材的段不动，不要求客户补素材或改台词。
+   * @keyword-cn 以素材补齐画面, 改写未配段台词
+   * @keyword-en fit-segments-to-materials, rewrite-unmatched-lines
+   * @param {number} topicId 脚本 ID。
+   * @param {DouyinScope} scope 作用域。
+   * @returns {Promise<{rewritten: number, missing: number}>} 改写了台词的段数与仍缺素材的段数。
+   */
+  async fitSegmentsToMaterials(
+    topicId: number,
+    scope: DouyinScope,
+  ): Promise<{ rewritten: number; missing: number }> {
+    const topic = await this.requireStoreVisit(topicId, scope);
+    const setting = topic.storeVisit ?? {};
+    const missing = (setting.segments ?? []).filter(
+      (segment) =>
+        segment.lines?.trim() &&
+        !storeVisitSegmentHasMaterial(setting, segment),
+    );
+    if (!missing.length) return { rewritten: 0, missing: 0 };
+    const fits = await this.planner.fitSegmentsToMaterials(
+      topic.id,
+      missing.map((segment) => segment.id),
+      scope,
+    );
+    const byId = new Map(fits.map((fit) => [fit.id, fit]));
+    const next = applyStoreVisitSceneMatches(setting.segments ?? [], fits).map(
+      (segment) => {
+        const fit = byId.get(segment.id);
+        return fit?.lines
+          ? {
+              ...segment,
+              lines: fit.lines,
+              ...(fit.scene ? { scene: fit.scene } : {}),
+            }
+          : segment;
+      },
+    );
+    const saved = await this.persistSegments(topic, next, {}, scope);
+    const still = (saved.storeVisit?.segments ?? []).filter(
+      (segment) =>
+        segment.lines?.trim() &&
+        !storeVisitSegmentHasMaterial(saved.storeVisit ?? {}, segment),
+    ).length;
+    return {
+      rewritten: fits.filter((fit) => fit.lines).length,
+      missing: still,
+    };
   }
 
   /**

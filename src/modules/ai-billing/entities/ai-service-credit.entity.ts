@@ -1,4 +1,5 @@
 import type { ObjectId } from 'mongodb';
+import type { AiCreditAllocation } from './ai-credit-wallet.entity.js';
 
 /**
  * @description 代码内固定的 AI 收费服务编码。
@@ -69,6 +70,8 @@ export interface AiServiceUsageRecordEntity {
   source?: string;
   creditCost: number;
   chargedUnits: number;
+  /** 扣费实际落在哪些钱包上，退款按此原路退回；缺省的历史流水全部记在租户钱包 */
+  allocations?: AiCreditAllocation[];
   unlimited: boolean;
   /** refunded：业务生成失败后已原路退回，状态只能由 succeeded 单向流转过来 */
   status: 'succeeded' | 'credit_exhausted' | 'refunded';

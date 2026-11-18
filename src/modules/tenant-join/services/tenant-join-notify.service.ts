@@ -19,7 +19,7 @@ export class TenantJoinNotifyService {
   constructor(private readonly mail: MailService) {}
 
   /**
-   * @description 发送入驻申请通过通知：团队名、脱敏登录账号、审核时间与登录指引
+   * @description 发送入驻申请通过通知：团队名、登录账号（手机号脱敏，没有手机号时为邮箱）、审核时间与登录指引
    * @keyword-cn 申请通过邮件, 手机号脱敏
    * @keyword-en approval-email, masked-phone
    */
@@ -27,10 +27,14 @@ export class TenantJoinNotifyService {
     email?: string;
     displayName: string;
     tenantName: string;
-    phone: string;
+    phone?: string;
   }): Promise<JoinNotifyResult> {
     if (!input.email?.trim()) return { status: 'skipped' };
-    const phone = maskMailPhone(input.phone);
+    // 只用邮箱注册的账号没有手机号，登录账号就是邮箱
+    const loginAccount = input.phone
+      ? maskMailPhone(input.phone)
+      : input.email.trim();
+    const loginLabel = input.phone ? '手机号' : '邮箱';
     return this.sendSafely(input.email.trim(), {
       subject: `您加入「${input.tenantName}」的申请已通过`,
       preheader: `您已成为「${input.tenantName}」团队成员，登录客户端即可开始使用。`,
@@ -41,12 +45,12 @@ export class TenantJoinNotifyService {
       ],
       details: [
         { label: '团队名称', value: input.tenantName },
-        { label: '登录账号', value: phone },
+        { label: '登录账号', value: loginAccount },
         { label: '审核结果', value: '已通过' },
         { label: '审核时间', value: formatMailDateTime(new Date()) },
       ],
       afterParagraphs: [
-        `请打开 AI 营销官客户端，使用手机号 ${phone} 登录，在团队列表中选择「${input.tenantName}」即可开始使用。`,
+        `请打开 AI 营销官客户端，使用${loginLabel} ${loginAccount} 登录，在团队列表中选择「${input.tenantName}」即可开始使用。`,
       ],
       notice: '如对审核结果有疑问，请联系该团队管理员。',
     });

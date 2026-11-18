@@ -60,9 +60,10 @@ export class AdminLoginDto {
  * @keyword-en login-identify-dto, phone-login
  */
 export class AdminLoginIdentifyDto {
+  /** 手机号、账号邮箱或历史用户名 */
   @IsString()
   @MinLength(3)
-  @MaxLength(60)
+  @MaxLength(254)
   account!: string;
 
   @IsString()

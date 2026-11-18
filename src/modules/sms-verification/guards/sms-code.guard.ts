@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import {
   REQUIRE_SMS_CODE_KEY,
+  REQUIRE_SMS_CODE_OPTIONAL_KEY,
   type SmsVerificationScene,
   type SmsVerifiedRequest,
 } from '../entities/sms-verification.entity.js';
@@ -15,6 +16,7 @@ import { SmsVerificationService } from '../services/sms-verification.service.js'
 /**
  * @description 短信验证码判定守卫：读取 body 的 smsPhone/smsCode（或 X-Sms-Phone/X-Sms-Code 头）校验，
  *   通过后从 body 移除这两个字段（业务 DTO 无需声明）并把可信手机号挂到 req.smsVerification。
+ *   声明为可选时没带验证码直接放行：只移除空的 smsCode，smsPhone 留给业务 DTO 当未验证手机号。
  * @keyword-cn 验证码守卫, 验证码判定
  * @keyword-en sms-code-guard, sms-code-check
  */
@@ -26,7 +28,7 @@ export class SmsCodeGuard implements CanActivate {
   ) {}
 
   /**
-   * @description 按 @RequireSmsCode 声明的场景校验验证码
+   * @description 按 @RequireSmsCode 声明的场景校验验证码，可选声明下没带验证码放行
    * @keyword-cn 校验请求验证码, 场景绑定
    * @keyword-en check-request-sms-code, scene-binding
    * @param context 执行上下文。
@@ -44,6 +46,15 @@ export class SmsCodeGuard implements CanActivate {
     ) as Record<string, unknown>;
     const phone = this.readField(body.smsPhone, req.headers['x-sms-phone']);
     const code = this.readField(body.smsCode, req.headers['x-sms-code']);
+    const optional =
+      this.reflector.getAllAndOverride<boolean | undefined>(
+        REQUIRE_SMS_CODE_OPTIONAL_KEY,
+        [context.getHandler(), context.getClass()],
+      ) === true;
+    if (optional && !code) {
+      delete body.smsCode;
+      return true;
+    }
     if (!phone || !code) throw new BadRequestException('SMS_CODE_REQUIRED');
 
     req.smsVerification = await this.verification.verify({

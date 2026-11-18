@@ -74,6 +74,8 @@ export const ADMIN_SUBJECTS = {
   TenantJoin: 'TenantJoin',
   /** 客户端运维上报(问题描述 + 本地错误日志) */
   OpsReport: 'OpsReport',
+  /** AI 图库(图片、图库组、标签库、AI 素材与 ZIP 批量导入)，租户内按用户归属 */
+  Gallery: 'Gallery',
   /** 通配全部主体 */
   All: 'all',
 } as const;

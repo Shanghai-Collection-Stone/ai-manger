@@ -44,9 +44,9 @@ export interface AdminUserEntity {
  */
 export interface AdminAccountEntity {
   _id: ObjectId;
-  /** 已短信验证的大陆手机号，全局唯一 */
-  phone: string;
-  /** 平台账号邮箱，统一以去首尾空格的小写形式存储 */
+  /** 已短信验证的大陆手机号，有值时全局唯一；只用邮箱注册的账号没有手机号 */
+  phone?: string;
+  /** 平台账号邮箱，统一以去首尾空格的小写形式存储；只用邮箱注册的账号以它登录 */
   email?: string;
   passwordHash: string;
   displayName: string;

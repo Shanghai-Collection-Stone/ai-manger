@@ -331,20 +331,24 @@ export class GalleryGroupService {
   }
 
   /**
-   * @description 读取分组的系统固定标识，普通分组或分组不存在时返回空。
-   * @keyword-cn 读取固定分组标识, 分组保护
-   * @keyword-en read-system-group-key, group-protection
-   * @param {string | number} id - 图库组ID。
-   * @returns {Promise<GalleryGroupSystemKey | undefined>} 固定分组标识。
+   * @description 在 token 用户本租户的可见范围内（与 `listAccessibleGroups` 同口径）按 ID 读取分组的 ID 与系统固定标识；
+   *   不存在或属于他人、其他租户时返回空，供改名删除前校验归属与固定分组保护。
+   * @keyword-cn 可见分组读取, 分组归属校验, 分组保护
+   * @keyword-en find-accessible-group, group-ownership-check, group-protection
+   * @param {number} id - 图库组ID。
+   * @param {string} userId - token 用户名。
+   * @param {string} [tenantId] - token 租户ID，母平台为空。
+   * @returns {Promise<Pick<GalleryGroupEntity, 'id' | 'system'> | null>} 可见分组的 ID 与固定标识。
    */
-  async findSystemKey(
-    id: string | number,
-  ): Promise<GalleryGroupSystemKey | undefined> {
-    const group = await this.groups.findOne(
-      { id },
-      { projection: { _id: 0, system: 1 } },
+  async findAccessibleGroup(
+    id: number,
+    userId: string,
+    tenantId?: string,
+  ): Promise<Pick<GalleryGroupEntity, 'id' | 'system'> | null> {
+    return this.groups.findOne(
+      { ...this.buildTenantFilter(userId, tenantId), id },
+      { projection: { _id: 0, id: 1, system: 1 } },
     );
-    return group?.system;
   }
 
   /**

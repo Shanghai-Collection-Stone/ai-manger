@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -63,22 +64,31 @@ export class TenantJoinController {
   }
 
   /**
-   * @description 公开免鉴权注册入口，使用短信验证码校验后的可信手机号与邮箱验证码校验后的可信邮箱执行邀请或默认注册
-   * @keyword-cn 租户注册接口, 短信验证码, 邮箱验证码
-   * @keyword-en tenant-register-endpoint, sms-verification, email-verification
+   * @description 公开免鉴权注册入口：手机号或邮箱只填一个并用验证码验证（两个都验证也可以），只保存验证过的联系方式，按随便逛逛 / 邀请码 / 公司名称执行注册
+   * @keyword-cn 租户注册接口, 短信验证码, 邮箱验证码, 二选一验证
+   * @keyword-en tenant-register-endpoint, sms-verification, email-verification, either-verification
    */
   @Post('register')
-  @RequireSmsCode('register')
-  @RequireEmailCode('register')
+  @RequireSmsCode('register', { optional: true })
+  @RequireEmailCode('register', { optional: true })
   async register(
     @Req() req: SmsVerifiedRequest & EmailVerifiedRequest,
     @Body() dto: TenantJoinRegisterDto,
   ) {
-    const phone = req.smsVerification?.phone;
-    if (!phone) throw new UnauthorizedException('SMS_CODE_REQUIRED');
-    const email = req.emailVerification?.email;
-    if (!email) throw new UnauthorizedException('EMAIL_CODE_REQUIRED');
-    return this.applications.register({ ...dto, phone, email });
+    const verifiedPhone = req.smsVerification?.phone;
+    const verifiedEmail = req.emailVerification?.email;
+    if (!verifiedPhone && !verifiedEmail) {
+      throw new BadRequestException('VERIFICATION_CODE_REQUIRED');
+    }
+    // 未验证的手机号 / 邮箱一律不保存，避免拿别人的号码或邮箱抢注
+    const { smsPhone, email, ...rest } = dto;
+    void smsPhone;
+    void email;
+    return this.applications.register({
+      ...rest,
+      phone: verifiedPhone,
+      email: verifiedEmail,
+    });
   }
 
   /**

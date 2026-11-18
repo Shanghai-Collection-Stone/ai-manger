@@ -39,8 +39,12 @@
 - `GalleryController.getTagLibrary(req)` — 读取标签分类和未分类标签统计 | keywords: 读取标签库, 未分类标签, read-tag-library, uncategorized-tags
 - `GalleryController.replaceTagLibrary(body, req)` — 校验并整体替换当前作用域标签分类 | keywords: 替换标签库, 分类唯一性, replace-tag-library, category-uniqueness
 - `GalleryController.convertTagsToNote(body, req)` — 批量移除标签并把标签文字去重追加到备注 | keywords: 标签转备注, 批量迁移, tags-to-note, batch-migration
+- `GalleryController.resolveAuthScope(req)` — 解析 token 用户的 tenantId/userId，`AdminAuthGuard` 已注入 `req.adminUser` 时直接复用，不再二次查库 | keywords: 解析登录范围, 复用守卫用户, resolve-auth-scope, reuse-guard-user
 - `GalleryController.requireUserScope(req?)` — 从 Bearer token 解析 `{ userId, tenantId }`，userId 只认 token；控制器所有用到 userId 的入口共用，请求体 / 查询参数里的 userId 一律不再读取 | keywords: token用户解析, 身份防冒用, require-user-scope, token-user-identity
 - `GalleryController.createGroup(body, req)` — `POST groups` 创建图库组，userId 与 tenantId 都取 token，与 `GET groups` 可见口径一致 | keywords: 创建图库组, 租户归属, create-gallery-group, tenant-ownership
+- `GalleryController.requireAccessibleGroup(id, req)` — 取 token 用户与租户并校验路径分组在其可见范围内，ID 非法 `INVALID_ID`，不存在或属于他人 404 | keywords: 分组归属校验, 越权防护, require-accessible-group, group-ownership-guard
+- `GalleryController.updateGroup(id, body, req)` — `POST groups/:id` 改名或改描述标签，必须带 token 且只能改自己本租户的分组；系统固定分组拒绝改名 | keywords: 更新图库组, 分组归属校验, update-gallery-group, group-ownership-check
+- `GalleryController.deleteGroup(id, req)` — `POST groups/:id/delete` 删除分组，必须带 token 且只能删自己本租户的分组；系统固定分组拒绝删除 | keywords: 删除图库组, 分组归属校验, delete-gallery-group, group-ownership-check
 - `deleteImagesBatch`: `POST images/batch-delete` 批量删除当前租户可见图片(body `{ ids[] }`),镜像 `images/tags/batch` 参数校验 | keywords: gallery batch delete images, 图库批量删除
 - `listMaterialStyles`: `GET material-styles` 列出 AI 素材可选的风格预设与分组，只下发 id/展示名/分组/气质概括，提示词留服务端，缩略图由安装包按同名 id 自带 | keywords: 素材风格列表, list-material-styles
 - `detectMaterialTextIntent(prompt)` — 判断用户描述是否明确要求或排除画面文字，未明确要求时回落到无字贴纸 | keywords: 文字意图识别, 素材文字需求, material-text-intent, detect-text-intent
@@ -88,7 +92,7 @@
 - `deleteManyImages({ userId?, tenantId?, ids })`: 批量删除当前租户可见图片,逐条复用单删逻辑互不阻断,返回 {deleted, failed, deletedIds} | keywords: gallery batch delete images, 图库批量删除
 - `GalleryGroupService.ensureIndexes()` — 建立用户与租户分组时间线索引 | keywords: gallery, groups, mongo, group-timeline-index
 - `GalleryGroupService.findOrCreateSceneGroup(userId, tenantId?)` — 查找或创建当前用户在本租户的「场景图库」固定分组（`system=store-visit-scene`），已有同名普通分组时收编，同一作用域并发只建一次 | keywords: 场景图库分组, 固定分组, scene-gallery-group, system-group
-- `GalleryGroupService.findSystemKey(id)` — 读取分组的系统固定标识，普通分组或不存在时为空，供改名删除保护 | keywords: 读取固定分组标识, 分组保护, read-system-group-key, group-protection
+- `GalleryGroupService.findAccessibleGroup(id, userId, tenantId?)` — 在 token 用户本租户可见范围内（与 `listAccessibleGroups` 同口径）读取分组 ID 与系统固定标识，不存在或属于他人时为空，供改名删除校验归属与固定分组保护 | keywords: 可见分组读取, 分组归属校验, 分组保护, find-accessible-group, group-ownership-check, group-protection
 - `GalleryGroupService.countAccessibleGroups(userId, tenantId?)` — 按现有分组列表口径精确计数 | keywords: 图库组精确统计, 分组可见范围, exact-group-count, group-visibility
 - `UpdateGalleryImageMetaDto()` — 校验单张图片元数据更新请求 | keywords: 图片元数据, 单图更新, image-metadata, single-image-update
 - `BatchUpdateGalleryImageMetaDto()` — 校验批量图片元数据更新请求 | keywords: 图片元数据, 批量更新, image-metadata, batch-image-update
@@ -130,6 +134,8 @@
 | 标签转备注 | tags-to-note |
 | 批量迁移 | batch-migration |
 | token用户解析 | require-user-scope |
+| 解析登录范围 | resolve-auth-scope |
+| 复用守卫用户 | reuse-guard-user |
 | 身份防冒用 | token-user-identity |
 | 创建图库组 | create-gallery-group |
 | 租户归属 | tenant-ownership |
@@ -199,8 +205,12 @@
 | 删除图片 | delete-image |
 | 场景图库分组 | scene-gallery-group |
 | 固定分组 | system-group |
-| 读取固定分组标识 | read-system-group-key |
+| 可见分组读取 | find-accessible-group |
+| 分组归属校验 | group-ownership-check |
 | 分组保护 | group-protection |
+| 越权防护 | group-ownership-guard |
+| 更新图库组 | update-gallery-group |
+| 删除图库组 | delete-gallery-group |
 | 图库组精确统计 | exact-group-count |
 | 分组可见范围 | group-visibility |
 | 单图更新 | single-image-update |
@@ -254,8 +264,9 @@
 - **函数**:
   - `GalleryController.upload(files, body, req)` — 上传图片并写入图库记录，先修正 multipart 中文原文件名乱码，支持批量写入备注与 AI 人脸保护状态；`clientPreprocess` 仍按文件下标和原名校验，命中后跳过重复压缩与尺寸读取 | keywords: 图库上传, 图片元数据, 上传文件名, gallery-upload, image-metadata, upload-filename
   - `listGroups`: 自动确保并置顶「场景图库」固定分组与默认分组“动态封面/动态拼图”（顺序：场景图库、动态封面、动态拼图），分组带 `system` 时前端只读
-  - `updateGroup`: `POST groups/:id` 改名或改描述标签；系统固定分组（如场景图库）拒绝改名
-  - `deleteGroup`: `POST groups/:id/delete` 删除分组；系统固定分组（如场景图库）拒绝删除
+  - `updateGroup`: `POST groups/:id` 改名或改描述标签；必须带 token，只能改 token 用户本租户的分组（不存在或属于他人返回 404）；系统固定分组（如场景图库）拒绝改名
+  - `deleteGroup`: `POST groups/:id/delete` 删除分组；必须带 token，只能删 token 用户本租户的分组（不存在或属于他人返回 404）；系统固定分组（如场景图库）拒绝删除
+  - `requireAccessibleGroup`: 改名与删除共用的归属校验，口径与 `GET groups` 一致
   - `GalleryController.list({ userId?, tenantId?, groupId?, tag?, tags?, imageType?, cursorId?, limit?, sortOrder?, sort?, favoriteOnly?, offset?, keyword? })` — 返回图库图片，游标按创建时间与 ID 复合定位，支持多标签、关键词、随机和收藏优先排序 | keywords: 图库多条件排序, 多标签筛选, 关键词搜索, gallery-multi-sort, multi-tag-filter, keyword-search
   - `GalleryController.stats(req)` — 精确统计当前作用域图片（含素材图）、其中的素材图 `materials`、收藏、分组与标签数量 | keywords: 图库精确统计, 租户可见范围, gallery-exact-stats, tenant-visibility
   - `GalleryController.updateImagesMetaBatch(body, req)` — 批量更新可见图片的备注、收藏、人脸保护和标签 | keywords: 批量图片元数据, 作用域鉴权, batch-image-metadata, scope-authorization
@@ -299,7 +310,7 @@
 
 **鉴权说明**
 
-`gallery` 控制器全部入口走模块自有的 `resolveAuthScope(req)`(Bearer token → `AdminService.getUserByToken` → tenantId/userId,失败抛 `UnauthorizedException`),不使用 admin 的 CASL `RequirePermission` 装饰器——后者绑定 `AdminAuthGuard` 且 subject 注册中心里没有 Gallery 主体,挂上会把租户侧调用方全部挡死。新增入口一律沿用 `resolveAuthScope`,与同模块既有 20+ 入口保持一致。
+`GalleryController` 类级挂 `AdminAuthGuard` + `AdminPoliciesGuard`,每个入口与路由装饰器同址声明 `@RequirePermission(<action>, 'Gallery')`:查询类 `read`,上传 / AI 素材 / 建组 `create`,改元数据 / 标签 / 标签库 / 重建向量 / 改组 `update`,删图 / 删组 `delete`。`Gallery` 主体在 `admin/casl` 注册,`tenant_admin` 与 `operator` 均授 `manage Gallery`,超管走 `manage all`。新增入口必须同样挂 `@RequirePermission(..., 'Gallery')`。入口内仍用 `resolveAuthScope(req)` 取 tenantId/userId:守卫已注入 `req.adminUser` 时直接复用,不二次查库;未登录由守卫先拦截返回 401 `UNAUTHORIZED`。
 
 userId 只从 token 取(`requireUserScope`),不接受请求体 / 查询参数传入。图片写操作(`updateTagsBatch` / `deleteImage` / `deleteManyImages` / `rebuildEmbeddings`)按租户可见范围过滤(`buildTenantFilter`),与图库列表、`updateImageMeta` 同口径——历史上网页端把 `userId=default` 写进了图片记录,按 userId 精确过滤会导致这些图片再也删不掉。图库组仍按 userId 归属。
 
@@ -382,7 +393,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `ensureDefaultDynamicGroups`: 确保默认动态分组存在
   - `getDefaultDynamicGroupIds`: 返回默认动态分组 ID（用于生成流程过滤）
   - `GalleryGroupService.findOrCreateSceneGroup(userId, tenantId?)` — 查找或创建当前用户在本租户的「场景图库」固定分组（`system=store-visit-scene`），已有同名普通分组时收编，同一作用域并发只建一次 | keywords: 场景图库分组, 固定分组, scene-gallery-group, system-group
-  - `GalleryGroupService.findSystemKey(id)` — 读取分组的系统固定标识，普通分组或不存在时为空，供改名删除保护 | keywords: 读取固定分组标识, 分组保护, read-system-group-key, group-protection
+  - `GalleryGroupService.findAccessibleGroup(id, userId, tenantId?)` — 在 token 用户本租户可见范围内（与 `listAccessibleGroups` 同口径）读取分组 ID 与系统固定标识，不存在或属于他人时为空，供改名删除校验归属与固定分组保护 | keywords: 可见分组读取, 分组归属校验, 分组保护, find-accessible-group, group-ownership-check, group-protection
   - `resolveDefaultEmbeddingConfig`: 读取 ai_providers em 记录作为向量运行时配置（apiKey/baseUrl/model）/resolve default embedding config
   - `safeEmbedText`: 安全文本向量化（失败兜底零向量，已接入 admin runtime 配置）/safe embed text with admin runtime
   - `searchSimilar`: 向量相似检索（透传 admin 默认 em 配置到 EmbeddingService）/vector similarity search

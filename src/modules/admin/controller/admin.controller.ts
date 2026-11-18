@@ -187,33 +187,6 @@ export class AdminController {
   }
 
   /**
-   * @description 查询当前登录租户自己的 Credit 余额与倒序不可变流水。
-   * @keyword-cn 当前Credit账户, 自身流水
-   * @keyword-en current-credit-account, own-transaction-list
-   */
-  @UseGuards(AdminAuthGuard, AdminPoliciesGuard)
-  @RequirePermission('read', 'User')
-  @Get('auth/credit-account')
-  async getCurrentCreditAccount(
-    @Req() req: Request,
-    @Query('limit') limit?: string,
-    @Query('before') before?: string,
-  ) {
-    const parsedLimit = limit ? Number(limit) : undefined;
-    const parsedBefore = before ? new Date(before) : undefined;
-    if (parsedLimit !== undefined && !Number.isInteger(parsedLimit)) {
-      throw new BadRequestException('CREDIT_LIMIT_INVALID');
-    }
-    if (parsedBefore && Number.isNaN(parsedBefore.getTime())) {
-      throw new BadRequestException('CREDIT_BEFORE_INVALID');
-    }
-    return this.adminService.getCurrentCreditAccount(this.requireUser(req), {
-      limit: parsedLimit,
-      before: parsedBefore,
-    });
-  }
-
-  /**
    * @description 退出登录
    * @keyword-en admin logout endpoint
    */

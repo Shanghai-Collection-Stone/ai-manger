@@ -13,7 +13,8 @@
 - `email-verification.module.ts` — 全局模块入口，装配发码接口、验证码服务、守卫与拦截器。
 - `entities/email-verification.entity.ts` — 场景白名单、场景文案、元数据键、有效期与频控常量、验证码记录与请求上下文类型。
 - `services/email-verification.service.ts` — 发码频控、验证码邮件文案、摘要校验、作废与发信错误收敛。
-- `guards/email-code.guard.ts` — 按场景用请求体 `email` + `emailCode` 判定邮箱验证码。
+- `guards/email-code.guard.ts` — 按场景用请求体 `email` + `emailCode` 判定邮箱验证码，可选声明下没带验证码放行。
+- `guards/email-code.guard.spec.ts` — 守卫可选模式（放行 / 非可选仍拒绝）单测。
 - `interceptors/email-code-consume.interceptor.ts` — 业务成功后作废邮箱验证码。
 - `decorators/require-email-code.decorator.ts` — 接口接入邮箱验证码的组合装饰器。
 - `controller/email-verification.controller.ts` — 公开发码接口。
@@ -22,9 +23,9 @@
 ## 函数清单 (Function List)
 
 - `EmailVerificationModule()` — 注册全局邮箱验证码模块 | keywords: 邮箱验证码模块, 全局模块, email-verification-module, global-module
-- `RequireEmailCode(scene)` — 一行接入邮箱验证码场景、判定守卫与成功后作废 | keywords: 接入邮箱验证码, 邮箱验证码装饰器, require-email-code, email-code-decorator
+- `RequireEmailCode(scene,options?)` — 一行接入邮箱验证码场景、判定守卫与成功后作废；`{ optional: true }` 时没带验证码也放行，用于手机号与邮箱二选一验证 | keywords: 接入邮箱验证码, 邮箱验证码装饰器, require-email-code, email-code-decorator
 - `EmailCodeGuard()` — 邮箱验证码判定守卫 | keywords: 邮箱验证码守卫, 验证码判定, email-code-guard, email-code-check
-- `EmailCodeGuard.canActivate(context)` — 校验后移除 `emailCode`、邮箱换成规范化值并挂 `req.emailVerification` | keywords: 校验请求邮箱验证码, 场景绑定, check-request-email-code, scene-binding
+- `EmailCodeGuard.canActivate(context)` — 校验后移除 `emailCode`、邮箱换成规范化值并挂 `req.emailVerification`；可选声明下没带验证码只删空 emailCode 后放行 | keywords: 校验请求邮箱验证码, 场景绑定, check-request-email-code, scene-binding
 - `EmailCodeGuard.readCode(bodyValue,headerValue)` — body 优先、`X-Email-Code` 头兜底读取验证码 | keywords: 读取邮箱验证码, 请求头兜底, read-email-code, header-fallback
 - `EmailCodeConsumeInterceptor()` — 业务成功后作废邮箱验证码 | keywords: 成功后作废, 邮箱验证码拦截器, consume-on-success, email-code-interceptor
 - `EmailCodeConsumeInterceptor.intercept(context,next)` — 响应前作废已校验验证码 | keywords: 响应前作废, 一次性使用, consume-before-response, single-use
@@ -53,6 +54,7 @@
 | 接入邮箱验证码 | require-email-code |
 | 邮箱验证码装饰器 | email-code-decorator |
 | 邮箱验证码守卫 | email-code-guard |
+| 二选一验证 | either-verification |
 | 邮箱验证码拦截器 | email-code-interceptor |
 | 成功后作废 | consume-on-success |
 | 一次性使用 | single-use |
@@ -79,6 +81,7 @@
 - `EmailVerificationScene` — 邮箱验证码场景类型 | keywords: 邮箱验证码场景类型, email-code-scene-type
 - `EMAIL_SCENE_ACTIONS` — 场景在验证码邮件里的操作说明 | keywords: 场景操作说明, 验证码邮件文案, scene-action-label, code-mail-copy
 - `REQUIRE_EMAIL_CODE_KEY` — 场景元数据 key | keywords: 邮箱验证码元数据键, require-email-code-metadata-key
+- `REQUIRE_EMAIL_CODE_OPTIONAL_KEY` — 可选标记元数据 key | keywords: 邮箱验证码可选标记, 二选一验证, email-code-optional-key, either-verification
 - `EMAIL_CODE_TTL_SECONDS`(600) — 有效期 | keywords: 邮箱验证码有效期, email-code-ttl
 - `EMAIL_RESEND_INTERVAL_SECONDS`(60) — 重发间隔 | keywords: 邮箱重发间隔, email-resend-interval
 - `EMAIL_ADDRESS_DAILY_LIMIT`(10) — 单邮箱 24 小时上限 | keywords: 邮箱日限额, email-daily-limit
@@ -97,6 +100,7 @@
 3. 请求体携带业务字段 `email` 与 `emailCode`（验证码也可放 `X-Email-Code` 头）。守卫校验后删除 `emailCode`，并把 `email` 改写为规范化值（去空格、小写）。
 4. 业务方法从 `req.emailVerification.email` 读取可信邮箱。
 5. 业务成功返回后拦截器才作废验证码；参数或业务失败仍可在五次尝试限制内重试。
+6. 需要「手机号与邮箱二选一验证」时写 `@RequireEmailCode(scene, { optional: true })`（通常与 `@RequireSmsCode(scene, { optional: true })` 成对）：没带验证码直接放行、不挂 `req.emailVerification`，`email` 原样留给业务 DTO；业务方法必须自己要求至少一项已验证。
 
 已接入：`POST /api/tenant-join/register`、`POST /admin/auth/register`（场景 `register`，均同时要求短信验证码）。
 

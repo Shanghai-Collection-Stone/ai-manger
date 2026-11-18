@@ -14,7 +14,7 @@ import {
 } from 'class-validator';
 
 /**
- * @description 支持邀请码或默认租户的短信注册请求体
+ * @description 支持随便逛逛（默认租户）、邀请码或公司名称申请三种加入方式的注册请求体；手机号或邮箱只填一个并用验证码验证
  * @keyword-cn 租户入驻注册请求体
  * @keyword-en tenant-join-register-dto
  */
@@ -24,9 +24,17 @@ export class TenantJoinRegisterDto {
   @MaxLength(120)
   password!: string;
 
+  /** 兼容旧客户端：带了手机号却没带短信验证码时留在 body，只做格式校验，不会保存（只保存验证过的手机号） */
+  @IsOptional()
+  @IsString()
+  @Matches(/^1[3-9]\d{9}$/, { message: 'SMS_PHONE_INVALID' })
+  smsPhone?: string;
+
+  /** 用邮箱注册时由邮箱验证码守卫校验；没带邮箱验证码时不会保存 */
+  @IsOptional()
   @IsEmail({}, { message: 'EMAIL_INVALID' })
   @MaxLength(254)
-  email!: string;
+  email?: string;
 
   @IsOptional()
   @IsString()
@@ -39,6 +47,12 @@ export class TenantJoinRegisterDto {
   @Matches(/^[A-Za-z0-9_-]{22}$/, { message: 'INVITE_CODE_INVALID' })
   inviteCode?: string;
 
+  /** 注册时按公司名称申请加入；与 inviteCode 互斥，都不填即随便逛逛进默认租户 */
+  @IsOptional()
+  @IsString()
+  @MinLength(2, { message: 'COMPANY_NAME_INVALID' })
+  @MaxLength(60, { message: 'COMPANY_NAME_INVALID' })
+  companyName?: string;
 }
 
 /**
@@ -47,8 +61,12 @@ export class TenantJoinRegisterDto {
  * @keyword-en accept-invite-dto
  */
 export class AcceptInviteDto {
+  /** 已有账号的手机号或注册邮箱 */
   @IsString()
-  @Matches(/^1[3-9]\d{9}$/, { message: 'PHONE_INVALID' })
+  @MaxLength(254)
+  @Matches(/^(1[3-9]\d{9}|[^\s@]+@[^\s@]+\.[^\s@]+)$/, {
+    message: 'PHONE_INVALID',
+  })
   account!: string;
 
   @IsString()

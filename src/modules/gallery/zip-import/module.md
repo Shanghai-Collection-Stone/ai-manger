@@ -28,12 +28,15 @@
 - `recoverOrphanedJobs()` — 接手排队任务并为中断或取消任务收尾 | keywords: ZIP任务恢复, 中断任务接手, zip-job-recovery, take-over-pending-job, fail-interrupted-job
 - `scheduleJob(id)` — 登记本进程任务并排入串行处理链 | keywords: 登记本进程任务, 串行处理, register-owned-job, sequential-processing
 - `readClientPreprocessManifest(zip)` — 校验前端尺寸清单并索引可跳过重复处理的图片 | keywords: 客户端预处理清单, 跳过重复压缩, client-preprocess-manifest, skip-duplicate-compression
+- `GalleryZipImportController.resolveAuthScope(req)` — Bearer token → `{ tenantId, userId }`，`AdminAuthGuard` 已注入 `req.adminUser` 时直接复用，不再二次查库 | keywords: 解析登录范围, 复用守卫用户, resolve-auth-scope, reuse-guard-user
 - `GalleryZipImportController.upload(file, body, req)` — `POST /upload` 接收单个 ZIP，修正 multipart 中文原文件名后入队并立即返回任务；归属用户只取 token，不读请求体 userId | keywords: ZIP上传, 文件名修复, zip-upload, filename-repair
 
 ## 关键词索引 (Keyword Index)
 
 | 中文 | English |
 |---|---|
+| 解析登录范围 | resolve-auth-scope |
+| 复用守卫用户 | reuse-guard-user |
 | ZIP任务恢复 | zip-job-recovery |
 | 心跳续期 | heartbeat-renewal |
 | 停止定时器 | stop-timers |
@@ -64,7 +67,7 @@
 - **分批入库**:每 20 张一批走 `GalleryService.createMany`(含 embedding 批量调用)
 - **可取消**:`POST :id/cancel` 写 `cancelRequested=true`,运行循环下一次轮询时中断并保留已入库数据
 - **可指定库 + 全局 tag**:`groupId` 落到每张图的 `groupId` 字段,`tags` 落到 `tags` 字段
-- **挂载点**:`/gallery/zip-import/*`,复用 `AdminAuthGuard`(Bearer token + tenant scope)
+- **挂载点**:`/gallery/zip-import/*`,类级挂 `AdminAuthGuard` + `AdminPoliciesGuard`,入口同址声明 `@RequirePermission(<action>, 'Gallery')`(上传 `create`、列表 / 详情 `read`、取消 `update`、删除 `delete`)
 - **zip 上限**:1GB,zip 临时文件存 `public/uploads_zips/`,处理完(成功/失败/取消)自动 unlink
 - **客户端预处理兼容**:识别根目录 `_gallery_manifest.json`;清单有效的图片复用前端宽高并跳过服务端重复压缩/尺寸读取，无清单或单图处理失败时自动回退原流水线
 - **重启恢复**：任务带 `ownerId` 与 `heartbeatAt`，负责进程每 30 秒续期。启动 5 秒后及每分钟扫描一次，心跳超过 2 分钟的任务才接手；旧任务没有心跳则以 `updatedAt` 超过 10 分钟判定。排队任务原子接手继续执行，中断的解压/入库任务置失败并保留已入库图片，取消请求按取消收尾，同时清理临时 ZIP。活跃进程的任务不受影响。
@@ -117,7 +120,7 @@ HTTP 控制器(挂载 `/gallery/zip-import`)。
 - **关键词**: zip import controller, multipart, list, cancel, bearer auth
 - **常量**: `MAX_ZIP_BYTES = 1GB`
 - **函数**:
-  - `resolveAuthScope`: Bearer token → `{ tenantId, userId }` /resolve bearer token
+  - `GalleryZipImportController.resolveAuthScope(req)` — Bearer token → `{ tenantId, userId }`，`AdminAuthGuard` 已注入 `req.adminUser` 时直接复用，不再二次查库 | keywords: 解析登录范围, 复用守卫用户, resolve-auth-scope, reuse-guard-user
   - `GalleryZipImportController.upload(file, body, req)` — `POST /upload` 接收单个 ZIP，修正 multipart 中文原文件名后入队并立即返回任务；归属用户只取 token，不读请求体 userId | keywords: ZIP上传, 文件名修复, zip-upload, filename-repair
   - `list`: `GET /list?limit=` 列出 token 用户最近任务(不读查询参数 userId) /list recent jobs
   - `getById`: `GET /:id` 单条详情(前端轮询)/get job by id

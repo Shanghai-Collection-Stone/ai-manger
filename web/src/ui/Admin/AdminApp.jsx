@@ -14,6 +14,7 @@ import AliyunSettingPanel from './AliyunSettingPanel';
 import TenantJoinPanel from './TenantJoinPanel';
 import WorkflowModelPanel from './WorkflowModelPanel';
 import TenantMcpPanel from './TenantMcpPanel';
+import MemberCreditPanel from './MemberCreditPanel';
 
 const LazyMDEditor = React.lazy(() => import('@uiw/react-md-editor'));
 const LazyMDMarkdown = React.lazy(() =>
@@ -356,6 +357,7 @@ const ALL_TABS = [
   { id: 'hot_topic', label: '热点采集榜' },
   { id: 'douyin_personas', label: '抖音预设人物' },
   { id: 'tenant_join', label: '入驻审批', adminOnly: true },
+  { id: 'member_credits', label: '成员 Credit', adminOnly: true },
   { id: 'ops_reports', label: '运维上报', adminOnly: true },
   { id: 'tenant_mcp', label: 'MCP 接入', adminOnly: true },
   { id: 'aliyun_settings', label: '阿里云配置', platformOnly: true },
@@ -3677,6 +3679,12 @@ const AdminApp = () => {
                       当前是无限额度（∞）。入账后会切换为按余额计费，余额等于本次填写的数量；无限额度下不能扣减。
                     </div>
                   ) : null}
+                  {creditAccountDialog.tenant?.creditMode === 'allocated' ? (
+                    // 分配模式下租户余额只是待分配额度，成员要靠「成员 Credit」Tab 分到额度才能用
+                    <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-700">
+                      该租户是分配模式：这里入账的是待分配额度，成员不能直接用，需要在「成员 Credit」里分给成员，或用于新成员赠送。
+                    </div>
+                  ) : null}
                   <label className="block text-xs text-slate-600">
                     {creditAccountDialog.mode === 'recharge'
                       ? '充值 Credit'
@@ -5557,6 +5565,16 @@ const AdminApp = () => {
         {/* 入驻审批与邀请链接（仅超管和租户管理员） | @keyword-en tenant-join-admin-tab */}
         {activeTab === 'tenant_join' ? (
           <TenantJoinPanel
+            currentRole={currentRole}
+            tenants={tenants}
+            onNotice={setNotice}
+            onError={setError}
+          />
+        ) : null}
+
+        {/* 成员 Credit 分配、新成员赠送、旧余额迁移与个人额度（仅超管和租户管理员） | @keyword-en member-credit-admin-tab */}
+        {activeTab === 'member_credits' ? (
+          <MemberCreditPanel
             currentRole={currentRole}
             tenants={tenants}
             onNotice={setNotice}

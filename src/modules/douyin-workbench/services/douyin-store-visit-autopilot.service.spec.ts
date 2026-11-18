@@ -138,7 +138,8 @@ function setup(setting: Record<string, unknown> = {}) {
       },
     }),
     setCast: jest.fn(async (_id, input) => {
-      topic.storeVisit!.voiceId = input.voiceId;
+      if (input.voiceId) topic.storeVisit!.voiceId = input.voiceId;
+      if (input.template) topic.storeVisit!.template = input.template;
     }),
     writeScript: jest.fn(async () => {
       topic.storeVisit!.script = body;
@@ -178,6 +179,16 @@ function setup(setting: Record<string, unknown> = {}) {
       )!.sceneImageId = id;
     }),
     matchScenes: jest.fn(),
+    setStore: jest.fn((_id: number, storeId: number) => {
+      topic.storeVisit!.storeId = storeId;
+      return Promise.resolve();
+    }),
+    createStore: jest.fn((input: { name: string }) =>
+      Promise.resolve({ store: { id: 88, name: input.name } }),
+    ),
+    fitSegmentsToMaterials: jest
+      .fn()
+      .mockResolvedValue({ rewritten: 0, missing: 0 }),
     classifyStorePhotos: jest.fn().mockResolvedValue({ assigned: 0 }),
     generateStoreVisit: jest.fn(async () => {
       topic.storeVisit!.pipeline = { state: 'running', updatedAt: new Date() };
@@ -274,6 +285,7 @@ describe('Agent 全流程托管', () => {
       5,
       expect.stringContaining('上次失败原因：台词缺少套餐价格'),
       scope,
+      { useMaterials: true },
     );
   });
 
@@ -599,5 +611,166 @@ describe('Agent 全流程托管', () => {
     await service.pause(5, scope);
     expect(pipeline.pause).toHaveBeenCalledWith(5, 'user', scope);
     expect(topic.storeVisit!.autopilot!.state).toBe('paused');
+  });
+
+  it('从门店开始时配不上素材的段按已有素材改写台词，不停下来要客户补素材', async () => {
+    const { service, topic, begin, agent } = setup({
+      start: 'store',
+      storeId: 7,
+      linesScript: body,
+      sceneImages: [{ type: 'image', id: 31, url: '/31.jpg' }],
+      segments: [
+        { id: 'a', lines: '门头打卡', sceneImageId: 31, shot: 'broll' },
+        { id: 'b', lines: '招牌甜品超好吃', shot: 'broll' },
+      ],
+    });
+    agent.fitSegmentsToMaterials.mockImplementation(() => {
+      Object.assign(topic.storeVisit!.segments![1], {
+        lines: '蹦床区随便蹦，孩子能玩一下午',
+        sceneImageId: 31,
+      });
+      return Promise.resolve({ rewritten: 1, missing: 0 });
+    });
+    await begin();
+    topic.storeVisit!.autopilot!.reviewKey = autopilotScriptKey(topic);
+    await service.advance(5, scope);
+    expect(agent.matchScenes).toHaveBeenCalledWith(5, scope, {
+      onlyMissing: true,
+    });
+    expect(agent.fitSegmentsToMaterials).toHaveBeenCalledWith(5, scope);
+    expect(topic.storeVisit!.autopilot!.state).toBe('running');
+    expect(topic.storeVisit!.autopilot!.message).toContain('已按门店已有素材');
+    expect(topic.storeVisit!.segments![0].lines).toBe('门头打卡');
+  });
+
+  it('只剩人物出镜段配不上照片时改为不露脸解说，而不是等客户处理', async () => {
+    const { service, topic, begin, agent } = setup({
+      start: 'store',
+      storeId: 7,
+      template: 'opening',
+      faceImage: { imageId: 1, url: '/face.jpg' },
+      linesScript: body,
+      sceneImages: [{ type: 'image', id: 31, url: '/31.jpg' }],
+      segments: [
+        { id: 'a', lines: '大家好', shot: 'presenter' },
+        { id: 'b', lines: '蹦床区', sceneImageId: 31, shot: 'broll' },
+      ],
+    });
+    agent.fitSegmentsToMaterials.mockResolvedValue({
+      rewritten: 0,
+      missing: 1,
+    });
+    await begin();
+    topic.storeVisit!.autopilot!.reviewKey = autopilotScriptKey(topic);
+    await service.advance(5, scope);
+    expect(agent.setCast).toHaveBeenCalledWith(
+      5,
+      { template: 'voiceover' },
+      scope,
+    );
+    expect(topic.storeVisit!.autopilot!.state).toBe('running');
+  });
+
+  it('脚本按自检意见重写后仍有提示时照常往下做，不停下来', async () => {
+    const { service, topic, begin, agent, planner } = setup();
+    planner.reviewScript.mockResolvedValue({
+      passed: false,
+      issues: ['第 2 段缺少价格'],
+    });
+    agent.writeScript.mockImplementation(() => {
+      topic.storeVisit!.script = body + '补充了价格说明。';
+      return Promise.resolve({
+        script: topic.storeVisit!.script,
+        review: { passed: false, issues: ['第 3 段语气偏平'] },
+      });
+    });
+    await begin();
+    await service.advance(5, scope);
+    expect(agent.writeScript).toHaveBeenCalledTimes(1);
+    expect(topic.storeVisit!.autopilot!.state).toBe('running');
+    expect(topic.storeVisit!.autopilot!.message).toContain('剩余提示');
+    await service.advance(5, scope);
+    expect(agent.generateLines).toHaveBeenCalledTimes(1);
+  });
+
+  it('脚本或客户需求里写明了已有门店时直接设定，不再等客户确认', async () => {
+    const { service, topic, begin, planner, agent, operations } = setup({
+      start: 'store',
+    });
+    operations.findOne.mockResolvedValueOnce({ prompt: '周末带娃去欢乐谷' });
+    planner.writeScript.mockResolvedValue({
+      needsStore: true,
+      storeQuestion: {
+        question: '这条视频拍欢乐谷吗？',
+        storeId: 7,
+        name: '欢乐谷',
+        description: '',
+        confident: true,
+      },
+    });
+    await begin({ scriptPrompt: '突出亲子套餐' });
+    await service.advance(5, scope);
+    expect(planner.writeScript).toHaveBeenCalledWith(
+      5,
+      { keepCast: true, prompt: '突出亲子套餐\n周末带娃去欢乐谷' },
+      scope,
+    );
+    expect(agent.setStore).toHaveBeenCalledWith(5, 7, scope);
+    expect(agent.createStore).not.toHaveBeenCalled();
+    expect(topic.storeVisit!.autopilot!.state).toBe('running');
+    expect(topic.storeVisit!.autopilot!.message).toContain('欢乐谷');
+  });
+
+  it('需求里写明的门店还没建时按店名新建再设定；没确定时照旧询问', async () => {
+    const created = setup({ start: 'store' });
+    created.planner.writeScript.mockResolvedValue({
+      needsStore: true,
+      storeQuestion: {
+        question: '这条视频拍小熊烘焙吗？',
+        storeId: null,
+        name: '小熊烘焙',
+        description: '社区烘焙店',
+        confident: true,
+      },
+    });
+    await created.begin();
+    await created.service.advance(5, scope);
+    expect(created.agent.createStore).toHaveBeenCalledWith(
+      { name: '小熊烘焙', description: '社区烘焙店' },
+      scope,
+    );
+    expect(created.agent.setStore).toHaveBeenCalledWith(5, 88, scope);
+    expect(created.topic.storeVisit!.autopilot!.state).toBe('running');
+    const unsure = setup({ start: 'store' });
+    unsure.planner.writeScript.mockResolvedValue({
+      needsStore: true,
+      storeQuestion: {
+        question: '拍哪家店？',
+        storeId: 7,
+        name: '欢乐谷',
+        description: '',
+        confident: false,
+      },
+    });
+    await unsure.begin();
+    await unsure.service.advance(5, scope);
+    expect(unsure.agent.setStore).not.toHaveBeenCalled();
+    expect(unsure.topic.storeVisit!.autopilot!.state).toBe('waiting');
+  });
+
+  it('要出镜却没有带形象图的人物时改为不露脸解说继续', async () => {
+    const { service, topic, begin, agent } = setup({
+      template: 'opening',
+      voiceId: undefined,
+    });
+    await begin();
+    await service.advance(5, scope);
+    expect(agent.setCast).toHaveBeenCalledWith(
+      5,
+      { template: 'voiceover' },
+      scope,
+    );
+    expect(topic.storeVisit!.template).toBe('voiceover');
+    expect(topic.storeVisit!.autopilot!.state).toBe('running');
   });
 });

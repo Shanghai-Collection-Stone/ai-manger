@@ -13,6 +13,7 @@ import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js'
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
 import type { StartDouyinAutopilotDto } from '../controller/douyin-workbench.dto.js';
 import type {
+  DouyinGenerationJobEntity,
   DouyinOperationEntity,
   DouyinStoreVisitAutopilot,
   DouyinTopicEntity,
@@ -74,6 +75,7 @@ export class DouyinStoreVisitAutopilotService
   private readonly logger = new Logger(DouyinStoreVisitAutopilotService.name);
   private readonly topics: Collection<DouyinTopicEntity>;
   private readonly operations: Collection<DouyinOperationEntity>;
+  private readonly jobs: Collection<DouyinGenerationJobEntity>;
   private timer?: NodeJS.Timeout;
   private readonly advancing = new Set<number>();
 
@@ -90,6 +92,9 @@ export class DouyinStoreVisitAutopilotService
   ) {
     this.topics = db.collection<DouyinTopicEntity>('douyin_topics');
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
+    this.jobs = db.collection<DouyinGenerationJobEntity>(
+      'douyin_generation_jobs',
+    );
   }
 
   /** @description 仅在 leader 启动巡检，已保存的运行任务在服务重启后继续。 @keyword-cn 启动托管巡检, 服务重启续跑 @keyword-en start-autopilot-patrol, resume-autopilot-after-restart */
@@ -262,7 +267,7 @@ export class DouyinStoreVisitAutopilotService
           message:
             DOUYIN_GENERATION_ERROR_MESSAGES[message] ||
             message ||
-            '这一步未完成，请检查后继续托管',
+            '这一步未完成，Agent 会自动重试',
         });
       }
     } finally {
@@ -405,7 +410,7 @@ export class DouyinStoreVisitAutopilotService
     });
   }
 
-  /** @description 保留用户已选人物音色，仅为缺失项请求 AI 推荐，音色库未配置时保存明确的声音描述。 @keyword-cn 托管补齐人物音色, 保留用户设定 @keyword-en autopilot-fill-cast, preserve-user-cast */
+  /** @description 保留用户已选人物音色，仅为缺失项请求 AI 推荐，音色库未配置时保存明确的声音描述；要出镜却没有带形象图的人物时改为不露脸解说继续。 @keyword-cn 托管补齐人物音色, 保留用户设定 @keyword-en autopilot-fill-cast, preserve-user-cast */
   private async prepareCast(
     topic: DouyinTopicEntity,
     scope: Scope,
@@ -427,10 +432,15 @@ export class DouyinStoreVisitAutopilotService
           scope,
         );
       const face = persona ? personaFaceReference(persona) : null;
-      if (!face || !persona)
-        throw new BadRequestException(
-          '没有可用的出镜人物，请先选择人物形象或改用不露脸解说',
-        );
+      if (!face || !persona) {
+        // 没有带形象图的人物时不停下来等客户，直接改成不露脸解说继续
+        await this.agent.setCast(topic.id, { template: 'voiceover' }, scope);
+        await this.patch(topic, {
+          stage: 'script',
+          message: '没有可用的出镜人物，已改为不露脸解说继续制作',
+        });
+        return;
+      }
       await this.repository.update(
         topic.id,
         { personaId: persona.id, storeVisit: { faceImage: face } },
@@ -471,7 +481,7 @@ export class DouyinStoreVisitAutopilotService
     });
   }
 
-  /** @description 按最新业务数据只执行一个缺失步骤，已完成脚本、台词和画面不会盲目重做。 @keyword-cn 托管执行下一步, 已有结果复用 @keyword-en autopilot-next-step, reuse-existing-output */
+  /** @description 按最新业务数据只执行一个缺失步骤，已完成脚本、台词和画面不会盲目重做；配不上素材的段以已有素材为准改写台词，自检剩余提示不拦截，尽量不需要客户介入。 @keyword-cn 托管执行下一步, 已有结果复用 @keyword-en autopilot-next-step, reuse-existing-output */
   private async runStep(topic: DouyinTopicEntity, scope: Scope): Promise<void> {
     const setting = topic.storeVisit || {};
     const auto = setting.autopilot!;
@@ -484,17 +494,26 @@ export class DouyinStoreVisitAutopilotService
       return;
     }
     if (storeVisitStart(setting) !== 'script' && !setting.storeId) {
+      // 带上客户写的需求描述与托管要求，脚本或需求里已经确定门店时直接设定，不再问客户
+      const brief = await this.loadCustomerBrief(topic);
       const result = await this.planner.writeScript(
         topic.id,
-        { keepCast: true },
+        {
+          keepCast: true,
+          prompt:
+            [auto.scriptPrompt, brief].filter(Boolean).join('\n') || undefined,
+        },
         scope,
       );
+      const question =
+        'needsStore' in result && result.needsStore
+          ? result.storeQuestion
+          : undefined;
+      if (await this.settleStore(topic, question, scope)) return;
       await this.patch(topic, {
         state: 'waiting',
         stage: 'script',
-        message:
-          result.storeQuestion?.question ||
-          '请先在脚本页确认拍摄门店，再继续托管',
+        message: question?.question || '请先在脚本页确认拍摄门店，再继续托管',
       });
       return;
     }
@@ -531,11 +550,15 @@ export class DouyinStoreVisitAutopilotService
         { keepCast: true, prompt: auto.scriptPrompt },
         scope,
       );
-      if ('needsStore' in result && result.needsStore)
+      if ('needsStore' in result && result.needsStore) {
+        if (await this.settleStore(topic, result.storeQuestion, scope)) return;
         await this.patch(topic, {
           state: 'waiting',
-          message: '门店尚未确认，请在脚本页补充后继续托管',
+          message:
+            result.storeQuestion?.question ||
+            '门店尚未确认，请在脚本页补充后继续托管',
         });
+      }
       return;
     }
     if (setting.scriptNeedsRefine) {
@@ -591,11 +614,13 @@ export class DouyinStoreVisitAutopilotService
         const checked = rewritten as {
           review?: { passed: boolean; issues: string[] };
         };
-        if (checked.review && !checked.review.passed)
-          await this.patch(topic, {
-            state: 'waiting',
-            message: `脚本自检仍需处理：${checked.review.issues.join('；')}`,
-          });
+        // 已按自检意见重写过一次，剩下的提示不再拦住托管，交给后面的台词与出片继续
+        await this.patch(topic, {
+          message:
+            checked.review && !checked.review.passed
+              ? `脚本已按自检意见修改，剩余提示不影响制作：${checked.review.issues.join('；').slice(0, 300)}`
+              : '脚本已按自检意见修改，准备生成台词',
+        });
       } else
         await this.patch(topic, {
           reviewKey: autopilotScriptKey(topic),
@@ -607,7 +632,10 @@ export class DouyinStoreVisitAutopilotService
     if (!segments.length || setting.linesScript !== script) {
       await this.patch(topic, {
         stage: 'lines',
-        message: 'AI 正在按脚本拆分台词并安排每段念法',
+        message:
+          storeVisitStart(setting) === 'script' && auto.pictureSource !== 'ai'
+            ? 'AI 正按脚本方向匹配图库素材，并按素材设计每段台词和画面'
+            : 'AI 正在按脚本拆分台词并安排每段念法',
         mustMerge: true,
       });
       const options = await this.agent.videoOptions();
@@ -623,6 +651,8 @@ export class DouyinStoreVisitAutopilotService
         topic.id,
         `${auto.linesPrompt || ''} ${auto.recovery?.stage === 'lines' ? `上次失败原因：${auto.recovery.reason.slice(0, 350)}，请针对该问题调整。` : ''} 每段台词控制在 ${Math.max(5, Math.floor(Math.min(...limits, 15) * 4))} 字以内，完整保留脚本事实。`,
         scope,
+        // 从脚本开始时先按脚本方向匹配素材再写台词；托管选了 AI 画面时不匹配
+        { useMaterials: auto.pictureSource !== 'ai' },
       );
       return;
     }
@@ -661,10 +691,47 @@ export class DouyinStoreVisitAutopilotService
             (segment) =>
               !storeVisitSegmentHasMaterial(next.storeVisit!, segment),
           )
-        )
-          throw new BadRequestException(
-            '部分台词还没有匹配到门店素材，请补充素材后继续托管',
+        ) {
+          // 以已有素材为准：配不上的段换成门店有的画面并改写这几段台词，不要求客户补素材或改台词
+          await this.patch(topic, {
+            message: '有几段在门店素材里配不上画面，AI 正按已有素材改写这几段',
+          });
+          const fitted = await this.agent.fitSegmentsToMaterials(
+            topic.id,
+            scope,
           );
+          if (fitted.missing > 0) {
+            const latest = await this.requireTopic(topic.id, scope);
+            const left = (latest.storeVisit?.segments || []).filter(
+              (segment) =>
+                !storeVisitSegmentHasMaterial(latest.storeVisit!, segment),
+            );
+            // 剩下的只有人物出镜段：门店没有能给人物用的照片，改成不露脸解说
+            if (
+              left.length &&
+              left.every((segment) => segment.shot === 'presenter') &&
+              latest.storeVisit?.template === 'opening'
+            ) {
+              await this.agent.setCast(
+                topic.id,
+                { template: 'voiceover' },
+                scope,
+              );
+              await this.patch(topic, {
+                message: '门店没有能给出镜人物用的照片，已改为不露脸解说',
+              });
+              return;
+            }
+            throw new BadRequestException(
+              '还有几段没配上画面，Agent 会按已有素材再调整一次',
+            );
+          }
+          await this.patch(topic, {
+            message: fitted.rewritten
+              ? `已按门店已有素材改写 ${fitted.rewritten} 段台词，画面已配齐`
+              : '已按门店已有素材配齐画面',
+          });
+        }
       } else if (auto.pictureSource === 'ai') {
         await this.agent.generatePictures(
           topic.id,
@@ -680,7 +747,7 @@ export class DouyinStoreVisitAutopilotService
           !storeVisitSegmentHasMaterial(next.storeVisit!, generated)
         )
           throw new BadRequestException(
-            'AI 尚未保存这一段的画面，请检查后继续托管',
+            'AI 这一段的画面没保存成功，Agent 会自动重试',
           );
       } else {
         try {
@@ -714,6 +781,68 @@ export class DouyinStoreVisitAutopilotService
       return;
     }
     await this.finishVideo(topic, scope);
+  }
+
+  /** @description 读取这条脚本生成时客户写的需求描述（生成候选脚本那一轮的要求），找不到时为空。 @keyword-cn 读取客户需求描述, 候选生成要求 @keyword-en load-customer-brief, draft-generation-prompt */
+  private async loadCustomerBrief(topic: DouyinTopicEntity): Promise<string> {
+    try {
+      const job = await this.jobs.findOne(
+        {
+          'result.createdTopicIds': topic.id,
+          userId: topic.userId,
+          ...(topic.tenantId ? { tenantId: topic.tenantId } : {}),
+        },
+        { projection: { prompt: 1 } },
+      );
+      return String(job?.prompt ?? '')
+        .trim()
+        .slice(0, 800);
+    } catch (error) {
+      this.logger.warn(
+        `[loadCustomerBrief] topic=${topic.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return '';
+    }
+  }
+
+  /** @description 脚本或客户需求里已经确定门店时直接设定：已有门店直接选用，还没有的按店名新建（同名复用）后选用；没确定返回 false 交回询问。 @keyword-cn 托管直接设定门店, 确定门店免询问 @keyword-en autopilot-settle-store, skip-store-question */
+  private async settleStore(
+    topic: DouyinTopicEntity,
+    question:
+      | {
+          storeId: number | null;
+          name: string;
+          description: string;
+          confident?: boolean;
+        }
+      | undefined,
+    scope: Scope,
+  ): Promise<boolean> {
+    if (!question?.confident) return false;
+    let storeId = Number(question.storeId) || 0;
+    const created = !storeId;
+    if (created) {
+      const name = question.name.trim();
+      if (!name) return false;
+      const result = await this.agent.createStore(
+        {
+          name,
+          ...(question.description
+            ? { description: question.description }
+            : {}),
+        },
+        scope,
+      );
+      storeId = Number(result.store.id);
+    }
+    await this.agent.setStore(topic.id, storeId, scope);
+    await this.patch(topic, {
+      stage: 'script',
+      message: created
+        ? `脚本和需求里写明了门店「${question.name}」，已新建并设定，继续制作`
+        : `已从脚本和需求里确定门店「${question.name}」，继续制作`,
+    });
+    return true;
   }
 
   /** @description 交接现有导演逐段出片，失败暂停，等待桌面端拼接出新成片后完成；不触发公开发布。 @keyword-cn 托管完成出片, 等待成片拼接 @keyword-en autopilot-finish-video, await-final-merge */
@@ -768,7 +897,7 @@ export class DouyinStoreVisitAutopilotService
       if (latest?.status === 'failed') {
         await this.patch(topic, {
           state: 'waiting',
-          message: latest.error || '成片拼接失败，请检查后继续托管',
+          message: latest.error || '成片拼接失败，Agent 会重新请求拼接',
         });
         return;
       }

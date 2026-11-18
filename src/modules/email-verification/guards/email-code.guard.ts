@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import {
   REQUIRE_EMAIL_CODE_KEY,
+  REQUIRE_EMAIL_CODE_OPTIONAL_KEY,
   type EmailVerificationScene,
   type EmailVerifiedRequest,
 } from '../entities/email-verification.entity.js';
@@ -15,6 +16,7 @@ import { EmailVerificationService } from '../services/email-verification.service
 /**
  * @description 邮箱验证码判定守卫：用请求体业务字段 email 与 emailCode（或 X-Email-Code 头）校验，
  *   通过后从 body 移除 emailCode（业务 DTO 无需声明），把 email 换成规范化值，并把可信邮箱挂到 req.emailVerification。
+ *   声明为可选时没带验证码直接放行：只移除空的 emailCode，email 原样留给业务 DTO 当未验证邮箱。
  * @keyword-cn 邮箱验证码守卫, 验证码判定
  * @keyword-en email-code-guard, email-code-check
  */
@@ -26,7 +28,7 @@ export class EmailCodeGuard implements CanActivate {
   ) {}
 
   /**
-   * @description 按 @RequireEmailCode 声明的场景校验邮箱验证码
+   * @description 按 @RequireEmailCode 声明的场景校验邮箱验证码，可选声明下没带验证码放行
    * @keyword-cn 校验请求邮箱验证码, 场景绑定
    * @keyword-en check-request-email-code, scene-binding
    * @param context 执行上下文。
@@ -44,6 +46,15 @@ export class EmailCodeGuard implements CanActivate {
     ) as Record<string, unknown>;
     const email = typeof body.email === 'string' ? body.email.trim() : '';
     const code = this.readCode(body.emailCode, req.headers['x-email-code']);
+    const optional =
+      this.reflector.getAllAndOverride<boolean | undefined>(
+        REQUIRE_EMAIL_CODE_OPTIONAL_KEY,
+        [context.getHandler(), context.getClass()],
+      ) === true;
+    if (optional && !code) {
+      delete body.emailCode;
+      return true;
+    }
     if (!email || !code) throw new BadRequestException('EMAIL_CODE_REQUIRED');
 
     req.emailVerification = await this.verification.verify({

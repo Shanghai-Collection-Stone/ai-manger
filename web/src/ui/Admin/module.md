@@ -7,7 +7,7 @@
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
-新增“入驻审批”Tab：超管与租户管理员可审批入驻申请、查看邮件通知结果，并生成、复制、撤销不限人数的限时邀请链接；新增“运维上报”Tab：查看客户端问题与完整日志，超管可更新处理状态和备注；新增平台级“发信邮箱”Tab：维护 SMTP 配置并真实测试发信。
+新增“成员 Credit”Tab（超管与租户管理员）：租户 Credit 统一分配给成员，管理员把待分配额度分给 / 收回成员、设置新成员赠送额度，超管还能把旧全员共用租户迁移（每个成员一份全额）或直接切换为分配模式，并给成员的个人额度（跨租户通用）充值；租户「充值/流水」弹窗在分配模式下提示入账的是待分配额度。新增“入驻审批”Tab：超管与租户管理员可审批入驻申请、查看邮件通知结果，并生成、复制、撤销不限人数的限时邀请链接；新增“运维上报”Tab：查看客户端问题与完整日志，超管可更新处理状态和备注；新增平台级“发信邮箱”Tab：维护 SMTP 配置并真实测试发信。
 新增平台级「阿里云配置」Tab(原「短信验证码」Tab 并入)：对象存储 OSS 与短信验证码集中维护，两边各填各的 AccessKey(可以是不同阿里云账号)，由 `AliyunSettingPanel.jsx` 承载。
 用户管理按平台账号与租户成员关系分权：超管保留完整用户资料管理能力，并可按手机号把已有账号加入任意租户（一人多租户）；租户管理员只能按手机号添加已注册账号，并维护本租户成员的角色、启用状态与移除，不能修改昵称和密码；列表展示成员邮箱。
 **租户隔离**:`tenant_admin` 不可见 AI 提供商、租户管理 Tab;看板配置映射锁定到自己租户。
@@ -189,6 +189,32 @@
   - `onRevokeInvite(row)` — 二次确认后撤销邀请链接 | keywords: 撤销邀请链接, revoke-invite-link
   - `onCopyInvite(row)` — 复制邀请码对应的同源网页地址 | keywords: 复制邀请地址, copy-invite-address
 
+### MemberCreditPanel.jsx
+
+后台“成员 Credit”Tab 的独立面板。超管先选租户，租户管理员固定本租户。顶部三张卡：额度模式（分配模式 / 全员共用旧模式 / 无限额度）、待分配额度（共用模式下为全员共用余额）、新成员赠送（可编辑保存）；超管看到旧共用租户时出现「迁移：每个成员各得一份全额」与「直接切换（余额留作待分配）」两个按钮，二次确认写明金额与人数。成员表展示本租户额度（超管多一列个人额度），每行可「分配 / 回收」（仅分配模式的有限额度租户可用）、查看本租户额度流水，超管可打开个人额度弹窗做充值 / 正负调账并看流水。接口错误码统一翻成中文。后端见 [tenant-credit 模块](../../../../src/modules/tenant-credit/module.md)。
+
+- **关键词**: member credit panel, credit allocation, new member grant, legacy credit migration, personal credit
+- **常量**:
+  - `CREDIT_ERROR_MESSAGES` — 成员 Credit 接口错误码到中文提示的映射 | keywords: 成员额度错误文案, 错误码映射, member-credit-error-messages, error-code-map
+  - `LEDGER_TYPE_NAMES` — 流水类型的中文名 | keywords: 流水类型名称, ledger-type-names
+  - `ROLE_NAMES` — 角色中文名 | keywords: 成员角色名称, member-role-names
+  - `LEDGER_PAGE_SIZE` — 每页流水条数 | keywords: 流水分页大小, ledger-page-size
+- **函数**:
+  - `describeCreditError(message)` — 把接口错误翻译成中文 | keywords: 成员额度错误提示, member-credit-error-text
+  - `formatCredit(value)` — 格式化 Credit 数值，-1 显示为无限 | keywords: 额度格式化, 无限额度, credit-format, unlimited-credit
+  - `formatDelta(value)` — 格式化带正负号的流水变动额 | keywords: 变动额格式化, 正负号, signed-credit-format, ledger-delta
+  - `formatTime(value)` — 格式化流水时间 | keywords: 流水时间格式化, ledger-time-format
+  - `LedgerList({ rows, hasMore, loading, onLoadMore })` — 成员流水与个人流水共用的流水列表 | keywords: 流水列表, 加载更多, ledger-list, load-more
+  - `MemberCreditPanel({ currentRole, tenants, onNotice, onError })` — 成员额度分配、新成员赠送、旧余额迁移与个人额度面板 | keywords: 成员额度面板, 额度分配, member-credit-panel, credit-allocation
+  - `run(key, action, successText)` — 包装异步动作，统一忙碌状态与中文错误 | keywords: 额度异步动作, member-credit-action
+  - `loadOverview(target)` — 读取租户额度总览与成员列表 | keywords: 加载成员额度, load-member-credits
+  - `onSaveGrant()` — 保存新成员赠送额度 | keywords: 保存新成员赠送, save-new-member-grant
+  - `onSwitchMode(migrate)` — 超管切分配模式，可选迁移旧余额 | keywords: 切换分配模式, 旧余额迁移, switch-credit-mode, legacy-credit-migration
+  - `onSubmitAllocate()` — 提交分配或回收成员额度 | keywords: 提交成员额度分配, submit-member-allocation
+  - `loadMemberLedger(member, before)` — 打开或翻页读取成员本租户额度流水 | keywords: 成员额度流水弹窗, member-ledger-dialog
+  - `loadPersonal(member, before)` — 打开或翻页读取个人额度与流水 | keywords: 个人额度弹窗, personal-credit-dialog
+  - `onSubmitPersonal()` — 提交个人额度充值或调账 | keywords: 提交个人充值, submit-personal-recharge
+
 ### OpsReportPanel.jsx
 
 后台“运维上报”Tab 的独立面板，支持状态、关键词和超管租户筛选、分页摘要列表与详情抽屉；详情展示完整描述、联系方式、客户端信息及日志条目，并可复制全部日志。超管可更新状态和处理备注，租户管理员只读。
@@ -356,6 +382,13 @@
   - `adminApi.getTenantCreditAccount(id,query)` — 查询余额与流水 | keywords: Credit账户查询, 流水查询, credit-account-query, transaction-list
   - `adminApi.rechargeTenantCredit(id,payload)` — 新增充值流水 | keywords: 租户充值, 追加流水, tenant-recharge, append-ledger
   - `adminApi.adjustTenantCredit(id,payload)` — 新增人工调账流水 | keywords: 人工调账, 余额增减, manual-credit-adjustment, balance-change
+  - `adminApi.getTenantCreditOverview(tenantId?)` — 读取租户额度总览与成员额度 GET /admin/tenant-credits | keywords: 成员额度总览, 待分配额度, member-credit-overview, pool-credit
+  - `adminApi.updateTenantCreditSettings(tenantId,payload)` — 设置新成员赠送 PATCH /admin/tenant-credits/:tenantId/settings | keywords: 新成员赠送设置, 租户额度设置, update-new-member-grant, tenant-credit-settings
+  - `adminApi.switchTenantCreditMode(tenantId,payload)` — 超管切分配模式 / 迁移旧余额 POST /admin/tenant-credits/:tenantId/mode | keywords: 切换分配模式, 旧余额迁移, switch-credit-mode, legacy-credit-migration
+  - `adminApi.allocateMemberCredit(tenantId,memberId,payload)` — 分配或回收成员额度 | keywords: 分配成员额度, 回收额度, allocate-member-credit, reclaim-credit
+  - `adminApi.listMemberCreditTransactions(tenantId,memberId,query)` — 成员本租户额度流水 | keywords: 成员额度流水, 倒序分页, member-credit-ledger, reverse-pagination
+  - `adminApi.getPersonalCreditAccount(accountId,query)` — 超管读个人额度与流水 | keywords: 个人额度查询, 个人流水, personal-credit-query, personal-ledger
+  - `adminApi.changePersonalCredit(accountId,kind,payload)` — 超管个人额度充值或调账 | keywords: 个人充值, 个人调账, personal-recharge, personal-adjustment
   - `adminApi.listSuperClaws()` — 平台 SuperClaw 节点列表 | keywords: 节点列表, 平台管理, super-claw-list, platform-management
   - `adminApi.createSuperClaw(payload)` — 创建节点并接收一次性 Token | keywords: 创建节点, 一次性令牌, super-claw-create, one-time-token
   - `adminApi.updateSuperClaw(id, payload)` — 更新节点与容量 | keywords: 更新节点, 容量上限, super-claw-update, capacity-limit

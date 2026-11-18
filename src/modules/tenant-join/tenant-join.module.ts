@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AdminModule } from '../admin/admin.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
 import { SassModule } from '../sass/sass.module.js';
+import { TenantCreditModule } from '../tenant-credit/tenant-credit.module.js';
 import { TenantJoinController } from './controller/tenant-join.controller.js';
 import { TenantJoinApplicationService } from './services/tenant-join-application.service.js';
 import { TenantJoinNotifyService } from './services/tenant-join-notify.service.js';
@@ -13,7 +14,7 @@ import { TenantInviteService } from './services/tenant-invite.service.js';
  * @keyword-en tenant-join-module, invite-onboarding
  */
 @Module({
-  imports: [AdminModule, DataSourceModule, SassModule],
+  imports: [AdminModule, DataSourceModule, SassModule, TenantCreditModule],
   controllers: [TenantJoinController],
   providers: [
     TenantJoinApplicationService,

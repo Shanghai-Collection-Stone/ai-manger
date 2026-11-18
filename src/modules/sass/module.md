@@ -77,7 +77,7 @@ Sass服务，封装schema、tenant、api-key和租户数据隔离能力，支持
   - `deleteSchema`: 删除schema/delete schema
   - `getSchema`: 获取schema/get schema
   - `listSchema`: 列出schema/list schema
-- `createTenant`: 创建租户，新租户 Credit 缺省为 0，历史无限租户继续使用 -1/create tenant
+- `createTenant`: 创建租户，新租户 Credit 缺省为 0、`creditMode` 为 allocated（余额作待分配额度）、新成员赠送 0，历史无限租户继续使用 -1/create tenant
   - `getTenant`: 获取租户/get tenant
   - `listTenant`: 列出租户/list tenant
   - `createApiKey`: 创建api key/create api key
@@ -125,9 +125,9 @@ Schema实体定义。
 
 ### sass-tenant.entity.ts
 
-租户实体定义；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，`xhsArticleConcurrencyLimit` 保存文章生成租户并发上限，`douyinGenerationConcurrencyLimit` 保存抖音生成（候选脚本、分镜）租户并发上限；平台信息的 `xhsArticleGlobalConcurrencyLimit` / `douyinGenerationGlobalConcurrencyLimit` 分别是两条生成通道的全平台上限。
+租户实体定义；`creditMode`（缺省 / shared 全员共用，allocated 统一分配给成员）、`memberCreditGrant`（新成员赠送）与 `creditMigratedAt`（旧余额迁移时间）见 tenant-credit 模块；`superClawId` 保存租户工作区默认归属的 SuperClaw 节点，`xhsArticleConcurrencyLimit` 保存文章生成租户并发上限，`douyinGenerationConcurrencyLimit` 保存抖音生成（候选脚本、分镜）租户并发上限；平台信息的 `xhsArticleGlobalConcurrencyLimit` / `douyinGenerationGlobalConcurrencyLimit` 分别是两条生成通道的全平台上限。
 
-- **关键词**: entity, tenant, tenant-node-assignment, workspace-count
+- **关键词**: entity, tenant, tenant-node-assignment, workspace-count, tenant-credit-mode, new-member-grant
 
 ### sass-api-key.entity.ts
 

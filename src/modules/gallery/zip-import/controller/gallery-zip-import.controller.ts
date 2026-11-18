@@ -9,6 +9,7 @@ import {
   Req,
   UnauthorizedException,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -19,6 +20,10 @@ import { randomUUID } from 'crypto';
 import type { Request } from 'express';
 import { GalleryZipImportService } from '../services/gallery-zip-import.service.js';
 import { AdminService } from '../../../admin/services/admin.service.js';
+import { RequirePermission } from '../../../admin/decorators/require-permission.decorator.js';
+import { AdminAuthGuard } from '../../../admin/guards/admin-auth.guard.js';
+import { AdminPoliciesGuard } from '../../../admin/guards/policies.guard.js';
+import type { AdminRequest } from '../../../admin/types/admin-request.types.js';
 import { normalizeGalleryUploadFilename } from '../../gallery-upload-filename.js';
 
 /** @description 1GB 单包上限 */
@@ -29,6 +34,7 @@ const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
  * @keyword-en gallery zip import controller, upload, list, cancel
  */
 @Controller('gallery/zip-import')
+@UseGuards(AdminAuthGuard, AdminPoliciesGuard)
 export class GalleryZipImportController {
   constructor(
     private readonly zipImport: GalleryZipImportService,
@@ -36,12 +42,17 @@ export class GalleryZipImportController {
   ) {}
 
   /**
-   * @description 从 Bearer token 解析作用域(tenantId+userId)
-   * @keyword-en resolve auth scope from bearer token
+   * @description 从 Bearer token 解析作用域(tenantId+userId)；`AdminAuthGuard` 已解析出登录用户时直接复用，不再二次查库。
+   * @keyword-cn 解析登录范围, 复用守卫用户
+   * @keyword-en resolve-auth-scope, reuse-guard-user
    */
   private async resolveAuthScope(
     req: Request,
   ): Promise<{ tenantId?: string; userId?: string }> {
+    const guardedUser = (req as AdminRequest | undefined)?.adminUser;
+    if (guardedUser) {
+      return { tenantId: guardedUser.tenantId, userId: guardedUser.username };
+    }
     const auth = req?.headers.authorization;
     if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
       throw new UnauthorizedException('AUTH_REQUIRED');
@@ -59,6 +70,7 @@ export class GalleryZipImportController {
    * @keyword-en zip-upload, filename-repair
    */
   @Post('upload')
+  @RequirePermission('create', 'Gallery')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: multer.diskStorage({
@@ -147,6 +159,7 @@ export class GalleryZipImportController {
    * @keyword-en list recent zip import jobs
    */
   @Get('list')
+  @RequirePermission('read', 'Gallery')
   async list(
     @Query('limit') limit: string | undefined,
     @Req() req: Request,
@@ -166,6 +179,7 @@ export class GalleryZipImportController {
    * @keyword-en get single zip import job by id
    */
   @Get(':id')
+  @RequirePermission('read', 'Gallery')
   async getById(
     @Param('id') id: string,
     @Req() req: Request,
@@ -180,6 +194,7 @@ export class GalleryZipImportController {
    * @keyword-en cancel zip import job
    */
   @Post(':id/cancel')
+  @RequirePermission('update', 'Gallery')
   async cancel(
     @Param('id') id: string,
     @Req() req: Request,
@@ -193,6 +208,7 @@ export class GalleryZipImportController {
    * @keyword-en delete zip import job record
    */
   @Post(':id/delete')
+  @RequirePermission('delete', 'Gallery')
   async remove(
     @Param('id') id: string,
     @Req() req: Request,

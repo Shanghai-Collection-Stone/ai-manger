@@ -81,6 +81,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       // 可提交运维上报，并查看本租户成员提交的上报；处理状态流转留给平台
       { action: 'create', subject: 'OpsReport' },
       { action: 'read', subject: 'OpsReport' },
+      // AI 图库全量操作；数据仍按 token 用户与租户归属隔离
+      { action: 'manage', subject: 'Gallery' },
     ],
   },
   {
@@ -104,6 +106,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'WorkspaceConversation' },
       { action: 'manage', subject: 'WorkspaceTask' },
       { action: 'manage', subject: 'Netdisk' },
+      // 操作员日常出图要上传、整理和删除自己的图库素材，与接入权限前的可用范围一致
+      { action: 'manage', subject: 'Gallery' },
       { action: 'read', subject: 'Notice' },
       { action: 'manage', subject: 'NoticeRead' },
       // 客户端右上角「上报」按钮提交问题与本地错误日志

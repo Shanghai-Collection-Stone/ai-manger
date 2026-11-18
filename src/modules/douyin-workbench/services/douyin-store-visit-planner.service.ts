@@ -24,6 +24,7 @@ import type {
 } from '../entities/douyin-store-visit-store.entity.js';
 import {
   DOUYIN_SCRIPT_STYLES,
+  type DouyinStoreVisitSceneImage,
   type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import {
@@ -48,6 +49,10 @@ import {
   DouyinWorkbenchRepositoryService,
 } from './douyin-workbench-repository.service.js';
 import { storeVisitStart } from './douyin-store-visit-continuity.js';
+import {
+  DouyinStoryboardImageService,
+  type StoryboardImageCandidate,
+} from './douyin-storyboard-image.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
@@ -64,6 +69,126 @@ export const STORE_VISIT_SCENE_IMAGES_PER_SPOT = 4;
  * @keyword-en presenter-templates, presenter-check
  */
 const STORE_VISIT_PRESENTER_TEMPLATES = ['opening', 'bookend', 'presenter-all'];
+
+/**
+ * @description 以素材为准的硬规则（从门店开始时写脚本、写台词共用）：画面与每段要讲的卖点只能来自有图片或视频的点位，资料里有但没素材的内容不单独成段，避免之后因为配不上素材再让客户改台词。
+ * @keyword-cn 以素材为准, 素材先行
+ * @keyword-en material-first-rule, fit-to-materials
+ */
+export const STORE_VISIT_MATERIAL_FIRST_RULE =
+  '【以素材为准】画面只能安排【门店里的点位】清单中有图片或视频的点位；每段要讲的卖点都要在这些点位的素材里找得到对应画面。资料里提到但没有素材的项目、菜品或区域，最多在别的段里顺带一句，不要单独成段，也不要写成画面。';
+
+/**
+ * @description 从脚本开始时，按选中的脚本方向从图库匹配给模型看的素材张数上限。
+ * @keyword-cn 脚本匹配素材上限, 先素材后分镜
+ * @keyword-en script-material-limit, materials-before-segments
+ */
+export const STORE_VISIT_SCRIPT_MATERIAL_LIMIT = 20;
+
+/**
+ * @description 从脚本开始时「先素材后分镜」的硬规则：每段先从匹配到的素材里选一张图，再照这张图写画面和台词，没有合适素材的要点不单独成段。
+ * @keyword-cn 先素材后分镜, 按图写台词
+ * @keyword-en materials-before-segments, lines-from-image
+ */
+export const STORE_VISIT_MATERIAL_DESIGN_RULE =
+  '【先看素材再设计分镜】【可用素材】是按这条脚本的方向从图库匹配到的图片。先看素材，再设计分段：每段从【可用素材】里选一张图（image 填图编号），scene 照这张图里看得到的内容写，台词讲这张图能承载的要点；不同段尽量用不同的图，素材不够时才重复用；脚本里有、但没有合适素材的要点不要单独成段，可以在相关段里顺带一句。';
+
+/**
+ * @description 把匹配到的图库素材写成给模型看的清单：「图k：描述（标签）」，没有描述时用文件名。
+ * @keyword-cn 素材清单文本, 图编号
+ * @keyword-en material-list-text, image-numbering
+ * @param {StoryboardImageCandidate[]} materials 匹配到的素材。
+ * @returns {string} 清单文本。
+ */
+export function describeStoreVisitMaterials(
+  materials: StoryboardImageCandidate[],
+): string {
+  return materials
+    .map(
+      (material, index) =>
+        `图${index + 1}：${(material.description || material.name).slice(0, 160)}${material.tags.length ? `（标签：${material.tags.slice(0, 4).join('、')}）` : ''}`,
+    )
+    .join('\n');
+}
+
+/**
+ * @description 读出模型给每段选的素材图编号（与 `parseStoreVisitScript` 同样只算有台词的段），换成图片 ID；没选或选错的段按相关度顺序补一张还没用过的，全用过时轮着用。
+ * @keyword-cn 解析分段选图, 素材补位
+ * @keyword-en parse-segment-images, material-fallback
+ * @param {string} text 模型输出。
+ * @param {StoryboardImageCandidate[]} materials 匹配到的素材（相关度从高到低）。
+ * @returns {number[]} 与解析出的分段一一对应的图片 ID。
+ */
+export function assignStoreVisitMaterialImages(
+  text: string,
+  materials: StoryboardImageCandidate[],
+): number[] {
+  if (!materials.length) return [];
+  const raw = readStoreVisitJson(text);
+  const items = (Array.isArray(raw.segments) ? raw.segments : [])
+    .map((item: unknown) =>
+      item && typeof item === 'object' ? (item as Record<string, unknown>) : {},
+    )
+    .filter((record) =>
+      readStoreVisitText(record.lines).replace(/\s+/g, ' ').trim(),
+    )
+    .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count);
+  const picks = items.map((record) => {
+    const order = Math.round(Number(record.image));
+    return order >= 1 && order <= materials.length
+      ? materials[order - 1].id
+      : 0;
+  });
+  const used = new Set(picks.filter(Boolean));
+  let cursor = 0;
+  return picks.map((id) => {
+    if (id) return id;
+    const free = materials.find((material) => !used.has(material.id));
+    if (free) {
+      used.add(free.id);
+      return free.id;
+    }
+    const reuse = materials[cursor % materials.length];
+    cursor += 1;
+    return reuse.id;
+  });
+}
+
+/**
+ * @description 门店是否已经被脚本或客户需求确定：模型认为确定之外，还要求店名真的出现在选题、脚本或客户的需求描述里；
+ *   已有门店的全名出现即可，只出现简称时要求租户里只有一家门店的名字包含这个简称。只看引用知识推断出来的不算。
+ * @keyword-cn 门店已确定判断, 店名出现校验
+ * @keyword-en store-determined-check, store-name-evidence
+ * @param {{confident: boolean, name: string, existingName?: string, sources: string, storeNames: string[]}} input 模型判断、店名、匹配到的已有门店名、客户文字与租户门店名。
+ * @returns {boolean} 是否可以直接设定门店。
+ */
+export function isStoreVisitStoreDetermined(input: {
+  confident: boolean;
+  name: string;
+  existingName?: string;
+  sources: string;
+  storeNames: string[];
+}): boolean {
+  if (!input.confident) return false;
+  const text = input.sources.replace(/\s+/g, '');
+  const compact = (value: string) => value.replace(/\s+/g, '');
+  if (input.existingName && text.includes(compact(input.existingName)))
+    return true;
+  const name = compact(input.name);
+  if (name.length < 2 || !text.includes(name)) return false;
+  // 新店名和已有门店名互相包含（如「欢乐谷」与「欢乐谷万达店」）时不算确定，免得建出重复门店
+  if (!input.existingName)
+    return !input.storeNames.some(
+      (storeName) =>
+        compact(storeName).includes(name) || name.includes(compact(storeName)),
+    );
+  const matches = input.storeNames.filter((storeName) =>
+    compact(storeName).includes(name),
+  );
+  return (
+    matches.length === 1 && compact(matches[0]) === compact(input.existingName)
+  );
+}
 
 /**
  * @description 配场景用的点位目录：第 k 个点位（开场门头在前）带它打分最高的几张图（编号 k.1、k.2…），没有图的点位带它的第一段实拍视频。
@@ -87,6 +212,8 @@ export interface StoreVisitScriptSegment {
   lines: string;
   /** 念法：这段怎么念（情绪、语速、重音），配音时作为情感指令；模型没给时为空 */
   delivery?: string;
+  /** 从脚本开始先匹配素材时，这段选的素材图 ID */
+  sceneImageId?: number;
 }
 
 /**
@@ -668,7 +795,7 @@ export class DouyinStoreVisitPlannerService {
   private readonly logger = new Logger(DouyinStoreVisitPlannerService.name);
 
   /**
-   * @description 注入选题、门店点位、预设人物、引用知识与模型依赖。
+   * @description 注入选题、门店点位、预设人物、引用知识、模型与图库候选图依赖。
    * @keyword-cn 初始化编排服务, 编排依赖
    * @keyword-en init-planner-service, planner-dependencies
    */
@@ -679,6 +806,7 @@ export class DouyinStoreVisitPlannerService {
     private readonly workflowModels: WorkflowModelService,
     private readonly agentService: AgentService,
     private readonly knowledge: KnowledgeService,
+    private readonly candidates: DouyinStoryboardImageService,
   ) {}
 
   /**
@@ -733,7 +861,7 @@ export class DouyinStoreVisitPlannerService {
       `【正文】按主题与切入角度、开场、中段${scriptFirst ? '要点' : '卖点'}、结尾组织；每部分写清叙事目的、具体${scriptFirst ? '讲什么、依据、画面' : '介绍什么、卖点依据、实拍画面'}和人物安排。正文约 300～1200 字，整片计划 20～45 秒。不能只给标题、空泛大纲或台词列表，不输出 segments。`,
       scriptFirst
         ? '脚本是编导方案，不是口播台词，不要把正文写成可以直接朗读的对白。画面写成具体、能拍或能画出来的场景，之后会从图库挑图或 AI 生图。'
-        : '脚本是编导方案，不是口播台词，不要把正文写成可以直接朗读的对白。画面只安排资料中实际有、拍得到的内容。',
+        : `脚本是编导方案，不是口播台词，不要把正文写成可以直接朗读的对白。画面只安排资料中实际有、拍得到的内容。${STORE_VISIT_MATERIAL_FIRST_RULE}`,
       STORE_VISIT_SELLING_POINT_RULE,
       style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
       keepCast
@@ -816,7 +944,8 @@ export class DouyinStoreVisitPlannerService {
   }
 
   /**
-   * @description 门店未确定时，按引用知识和已有门店提出确认问题；只给建议，不自动选店或创建门店，模型失败回退到明确询问。
+   * @description 门店未确定时，按选题、脚本、客户需求、引用知识和已有门店提出确认问题，同时给出门店是否已被脚本或客户需求确定（confident）；
+   *   本方法不选店也不建店，是否直接设定由调用方按 confident 决定，模型失败回退到明确询问。
    * @keyword-cn AI询问门店, 门店确认建议
    * @keyword-en ask-store-identity, store-confirmation-suggestion
    */
@@ -832,12 +961,18 @@ export class DouyinStoreVisitPlannerService {
         await this.ask(
           scope,
           'douyin-workbench.store-visit-store-question',
-          '你是探店视频编导，写脚本前必须先向用户确认拍哪家店。结合选题、引用知识和已有门店，提出一个简短明确的问题。能确定候选时问“这条视频是拍……吗？”，有多家或资料不明时问用户店名及分店，不得擅自确定、不编门店。已有门店只可使用清单中的 storeId；新店 storeId 填 null。description 只摘录资料中属于该店的事实，不确定留空。只输出 JSON：{"question":"给用户的确认问题","storeId":数字或null,"name":"候选门店全名，不确定留空","description":"已有事实，不超过500字"}。',
+          '你是探店视频编导，写脚本前要弄清拍哪家店。结合选题、脚本、客户需求、引用知识和已有门店判断，并提出一个简短明确的确认问题。能确定候选时问“这条视频是拍……吗？”，有多家或资料不明时问用户店名及分店，不编门店。confident 只有在选题、脚本或客户需求里明确写出了这家店的名称、且只指向这一家店时才填 true；只从引用知识推断、有多家店、只说了品类或描述含糊时填 false。已有门店只可使用清单中的 storeId；新店 storeId 填 null。description 只摘录资料中属于该店的事实，不确定留空。只输出 JSON：{"question":"给用户的确认问题","storeId":数字或null,"name":"候选门店全名，不确定留空","confident":false,"description":"已有事实，不超过500字"}。',
           [
             `选题：${context.topic.title}；母选题：${context.motherTitle}`,
+            context.topic.script
+              ? `候选脚本：${context.topic.script.slice(0, 1500)}`
+              : '',
+            context.topic.storeVisit?.script
+              ? `创作脚本：${context.topic.storeVisit.script.slice(0, 1500)}`
+              : '',
+            prompt ? `客户需求：${prompt.slice(0, 800)}` : '',
             context.knowledge,
             context.storeText,
-            prompt ? `用户要求：${prompt.slice(0, 500)}` : '',
             `当前租户已有门店：\n${stores.map((store) => `${store.id}：${store.name}`).join('\n')}`,
           ]
             .filter(Boolean)
@@ -852,6 +987,7 @@ export class DouyinStoreVisitPlannerService {
         storeId: null,
         name: '',
         description: '',
+        confident: false,
       };
     }
     const name =
@@ -859,7 +995,24 @@ export class DouyinStoreVisitPlannerService {
     const existing =
       stores.find((store) => Number(store.id) === Number(raw.storeId)) ||
       stores.find((store) => store.name === name);
+    // 只认选题、脚本和客户需求里真的写了的店名，引用知识里推出来的不算
+    const confident = isStoreVisitStoreDetermined({
+      confident: raw.confident === true,
+      name: name || existing?.name || '',
+      existingName: existing?.name,
+      sources: [
+        context.topic.title,
+        context.motherTitle,
+        context.topic.script,
+        context.topic.storeVisit?.script,
+        prompt,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      storeNames: stores.map((store) => store.name),
+    });
     return {
+      confident,
       question:
         typeof raw.question === 'string' && raw.question.trim()
           ? raw.question.trim().slice(0, 300)
@@ -876,17 +1029,18 @@ export class DouyinStoreVisitPlannerService {
 
   /**
    * @description 根据已保存的脚本正文生成分段画面和口播台词，沿用当前人物音色，返回所用脚本快照与台词自检结果。
-   *   从门店开始要先定门店、画面写门店实拍；从脚本开始不要门店，画面写之后从图库挑或 AI 生图的场景。格式不对重试一次，写完对照引用知识自检，不自动改正文。
+   *   从门店开始要先定门店、画面写门店实拍；从脚本开始不要门店，先按选中的脚本方向（配图偏向的图库标签内）从图库匹配素材，每段先选一张素材图再照图写画面和台词，
+   *   返回每段的 sceneImageId 与用到的素材；配图偏向为 AI 画面、调用方关掉素材或图库匹配不到图时照旧只写画面描述，之后再挑图或 AI 生图。格式不对重试一次，写完对照引用知识自检，不自动改正文。
    * @keyword-cn 按脚本生成台词, 分段台词生成
    * @keyword-en generate-lines-from-script, script-dialogue
    * @param {number} topicId 子选题（脚本）ID。
-   * @param {{prompt?: string}} input 台词补充要求。
+   * @param {{prompt?: string, useMaterials?: boolean}} input 台词补充要求；useMaterials 为 false 时从脚本开始也不先匹配素材。
    * @param {DouyinScope} scope 租户用户作用域。
-   * @returns 分段画面与台词、所用脚本快照、自检结果。
+   * @returns 分段画面与台词（从脚本开始匹配到素材时带 sceneImageId）、用到的素材、所用脚本快照、自检结果。
    */
   async generateLines(
     topicId: number,
-    input: { prompt?: string },
+    input: { prompt?: string; useMaterials?: boolean },
     scope: DouyinScope,
   ) {
     const context = await this.loadScriptContext(topicId, scope);
@@ -899,6 +1053,13 @@ export class DouyinStoreVisitPlannerService {
     const scriptFirst = storeVisitStart(topic.storeVisit) === 'script';
     if (!scriptFirst && !context.store)
       throw new BadRequestException('请先在脚本步骤确认这条视频拍哪家店');
+    // 从脚本开始：选中的脚本就是方向，先按它匹配素材，再围着素材设计分镜
+    const materials =
+      scriptFirst &&
+      input.useMaterials !== false &&
+      topic.storyboardPreference?.imageSource !== 'generate'
+        ? await this.loadScriptMaterials(context, script, scope)
+        : [];
     const requirement = String(input.prompt ?? '')
       .replace(/\s+/g, ' ')
       .trim()
@@ -939,9 +1100,12 @@ export class DouyinStoreVisitPlannerService {
       scriptFirst
         ? '4. 最后一段用一句话收尾或引导互动、下单，不再加新的事实。'
         : '4. 最后一段用一句话引导下单，不再加新的事实。',
-      scriptFirst
-        ? '【画面】每段的 scene 写这段要配的画面（6～20 字，例如「孩子们围着生日蛋糕」「派对布置全景」）：写具体、能拍或能画出来的画面，之后会按它从图库挑图或 AI 生图。'
-        : '【画面】每段的 scene 写这段要配的实拍画面（6～20 字，例如「门头招牌」「蹦床区全景」「招牌双人套餐」）：只写门店里实际有、拍得到的东西，之后会按它从门店图库里挑实拍图；第 1 段写门头。',
+      scriptFirst && materials.length
+        ? `【画面】每段的 scene 写这段所选素材图里看得到的画面（6～20 字）。${STORE_VISIT_MATERIAL_DESIGN_RULE}`
+        : scriptFirst
+          ? '【画面】每段的 scene 写这段要配的画面（6～20 字，例如「孩子们围着生日蛋糕」「派对布置全景」）：写具体、能拍或能画出来的画面，之后会按它从图库挑图或 AI 生图。'
+          : '【画面】每段的 scene 写这段要配的实拍画面（6～20 字，例如「门头招牌」「蹦床区全景」「招牌双人套餐」）：只能是【门店里的点位】清单里某个点位的画面（写点位名或它图里看得到的内容），之后会按它从门店图库里挑实拍图；第 1 段写门头。',
+      scriptFirst ? '' : STORE_VISIT_MATERIAL_FIRST_RULE,
       '【语气】口语、热情、自然，像跟朋友推荐；不用「老铁」「兄弟」「整」这类江湖口吻（预设人物另有要求时按人物来）。段与段之间可以用「再来看看」「还有」衔接，但不编走路、推门之类画面里没有的动作。用好标点帮配音带出语气：惊喜、推荐处用「！」，设问用「？」，该停顿的地方断句，不要整段一个逗号念到底。',
       '【念法】每段再写一个 delivery：这段台词该怎么念，8～20 个字，只写声音——情绪、语速、语调、重音和停顿，例如「热情打招呼，语调上扬」「惊喜地报价格，重音在数字」「压低声音，像分享小秘密」「干脆有力地催下单」；不写动作、表情、走位和画面（不写推门、走进去、指着、拿起、转身、边走边说这类），配音只听得到声音；整条要有起伏，相邻两段不要写成一样；整条保持短视频口播的紧凑节奏，不写放慢、拖长、慢慢说这类减速的说法。',
       STORE_VISIT_SELLING_POINT_RULE,
@@ -964,7 +1128,9 @@ export class DouyinStoreVisitPlannerService {
       scriptFirst
         ? '{"segments":[{"scene":"孩子们围着生日蛋糕","lines":"给孩子办生日会，最怕大人忙一下午，孩子却玩不开心！","delivery":"开门见山，语调上扬"},{"scene":"派对布置全景","lines":"主题、布置、玩法都让孩子自己挑，他喜欢的才是真正的生日会。","delivery":"轻快肯定，重音在自己挑"},{"scene":"大人孩子一起做游戏","lines":"大人也能一起玩进去，全家一起过，比礼物更让孩子记得住。","delivery":"温暖带笑，语速平稳"},{"scene":"孩子吹蜡烛特写","lines":"想给孩子办一场这样的生日会，评论区告诉我你家孩子几岁！","delivery":"亲切收尾，邀请互动"}]}'
         : '{"segments":[{"scene":"门头招牌","lines":"今天我们来到了 XX 乐园，一家室内亲子乐园，蹦床、滑梯、海洋球一次玩个够！","delivery":"热情打招呼，语调上扬"},{"scene":"蹦床区全景","lines":"蹦床区怎么蹦都不怕摔，小朋友能玩一下午，大人跟着蹦也特别解压。","delivery":"轻快兴奋，重音在解压"},{"scene":"咖啡休息区","lines":"玩累了去咖啡区坐坐，大人喝杯咖啡歇歇脚，孩子就在眼前玩。","delivery":"语气放松，轻快带笑"},{"scene":"门头招牌","lines":"单人票抖音团购才 59 元！周末遛娃就来这儿，点左下角就能下单。","delivery":"惊喜地报价格，干脆催下单"}]}',
-      '只输出 JSON，不要解释：{"segments":[{"scene":"","lines":"","delivery":""}]}',
+      materials.length
+        ? '示例没写 image，你的输出每段都要带 image（【可用素材】里的图编号）。只输出 JSON，不要解释：{"segments":[{"image":1,"scene":"","lines":"","delivery":""}]}'
+        : '只输出 JSON，不要解释：{"segments":[{"scene":"","lines":"","delivery":""}]}',
     ]
       .filter(Boolean)
       .join('\n');
@@ -976,6 +1142,9 @@ export class DouyinStoreVisitPlannerService {
       context.knowledge || '（母选题没有引用知识）',
       context.storeText,
       `【脚本正文】\n${script}\n【脚本正文结束】`,
+      materials.length
+        ? `【可用素材】（图编号即 image）：\n${describeStoreVisitMaterials(materials)}`
+        : '',
       requirement ? `补充要求：<requirement>${requirement}</requirement>` : '',
       '请输出 JSON 格式的分段脚本。',
     ]
@@ -1012,12 +1181,64 @@ export class DouyinStoreVisitPlannerService {
     )
       throw new BadRequestException('AI 没按脚本写出完整分段台词，请重试');
     const review = await this.reviewSegments(context, draft.segments, scope);
+    const imageIds = assignStoreVisitMaterialImages(text, materials);
+    const segments = draft.segments.map((segment, index) =>
+      imageIds[index] ? { ...segment, sceneImageId: imageIds[index] } : segment,
+    );
+    const sceneImages: DouyinStoreVisitSceneImage[] = materials
+      .filter((material) => imageIds.includes(material.id))
+      .map((material) => ({
+        type: 'image',
+        id: material.id,
+        name: material.name || `图片 #${material.id}`,
+        url: material.url,
+        ...(material.coverUrl ? { coverUrl: material.coverUrl } : {}),
+        description: String(
+          material.description ||
+            segments.find((segment) => segment.sceneImageId === material.id)
+              ?.scene ||
+            '',
+        ).slice(0, 300),
+        ...(material.tags.length ? { tags: material.tags.slice(0, 10) } : {}),
+      }));
     return {
       presenter: presenterNow,
-      segments: draft.segments,
+      segments,
+      ...(sceneImages.length ? { sceneImages } : {}),
       linesScript: script,
       review,
     };
+  }
+
+  /**
+   * @description 从脚本开始时按选中的脚本方向从图库匹配素材：用母选题、选题与脚本开头检索，限定在脚本配图偏向的图库标签内，取相关度最高的一批；图库不可用时返回空，退回先写台词再配图。
+   * @keyword-cn 按脚本方向匹配素材, 图库标签范围
+   * @keyword-en match-materials-by-direction, gallery-tag-scope
+   * @param {StoreVisitScriptContext} context 脚本上下文。
+   * @param {string} script 选中的脚本正文。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<StoryboardImageCandidate[]>} 匹配到的素材（相关度从高到低）。
+   */
+  private async loadScriptMaterials(
+    context: StoreVisitScriptContext,
+    script: string,
+    scope: DouyinScope,
+  ): Promise<StoryboardImageCandidate[]> {
+    try {
+      const found = await this.candidates.loadCandidates(
+        [context.motherTitle, context.topic.title, script.slice(0, 400)]
+          .filter(Boolean)
+          .join(' '),
+        scope,
+        context.topic.storyboardPreference?.galleryTags ?? [],
+      );
+      return found.slice(0, STORE_VISIT_SCRIPT_MATERIAL_LIMIT);
+    } catch (error) {
+      this.logger.warn(
+        `[loadScriptMaterials] 匹配素材失败，退回先写台词 topic=${context.topic.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
   }
 
   /**
@@ -1105,6 +1326,119 @@ export class DouyinStoreVisitPlannerService {
     return {
       segments: parseStoreVisitSceneMatches(text, catalog, segments),
     };
+  }
+
+  /**
+   * @description 以素材为准改写没配上素材的分段：从有素材的点位里给每段挑点位与图，并把这段台词和画面改成讲这个点位里看得到的内容（保留这段在整条里的作用与资料事实），不再要求客户补素材或改台词。
+   *   模型失败、漏段或改出的台词带资料里没有的数字时，只按规则配素材、保留原台词；门店一张素材都没有时报错（不虚构实拍）。
+   * @keyword-cn 以素材改写台词, 未配素材分段
+   * @keyword-en fit-lines-to-materials, unmatched-segments
+   * @param {number} topicId 子选题（脚本）ID。
+   * @param {string[]} segmentIds 要改写的分段 ID（一般是还没配上素材的段）。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns 每段的点位与参考素材，模型改写成功的段带新台词与画面。
+   */
+  async fitSegmentsToMaterials(
+    topicId: number,
+    segmentIds: string[],
+    scope: DouyinScope,
+  ): Promise<
+    Array<{
+      id: string;
+      spotId: string;
+      sceneImageId?: number;
+      sceneImageIds?: number[];
+      sceneVideoId?: number;
+      lines?: string;
+      scene?: string;
+    }>
+  > {
+    const context = await this.loadScriptContext(topicId, scope);
+    if (!context.store) throw new BadRequestException('先选好门店');
+    const catalog = buildStoreVisitSceneCatalog(context.store.spots);
+    if (!catalog.length)
+      throw new BadRequestException(
+        '门店还没有可用素材，请先上传并整理门店场景图库，再继续托管',
+      );
+    const all = (context.topic.storeVisit?.segments ?? []).filter((segment) =>
+      segment.lines?.trim(),
+    );
+    const targets = all.filter((segment) => segmentIds.includes(segment.id));
+    if (!targets.length) return [];
+    let text = '';
+    try {
+      text = await this.ask(
+        scope,
+        'douyin-workbench.store-visit-fit-materials',
+        [
+          '你是探店短视频的编导兼剪辑师。下面几段台词在门店素材里配不上画面，现在以门店已有素材为准改写它们，不让客户补素材或改台词。只输出 JSON，不要解释。',
+          '1. 每段先从点位清单里挑一个最能承接这段作用的点位（spot 填点位序号），再从这个点位的图里挑 1～3 张（images 填图编号，如 "2.1"）；标了「人物出镜」的段只能选有图的点位、只挑 1 张，优先开场门头。尽量不和其他段用同一个点位、同一张图。',
+          '2. 把这段台词改成讲这个点位画面里看得到的内容：保留这段在整条里的作用（开场、卖点或收尾引导下单）和与前后段的衔接；店名、项目、价格只用资料里有的，不编造数字和亲身经历；15～40 个字，与原台词长度相近。scene 写这段的画面（6～20 字）。',
+          STORE_VISIT_PLAIN_SPEECH_RULE,
+          '{"segments":[{"segment":1,"spot":1,"images":["1.1"],"scene":"","lines":""}]}',
+        ].join('\n'),
+        [
+          `门店：${context.store.name}`,
+          context.knowledge,
+          context.storeText,
+          `门店点位（序号即 spot，图k.a 即 images 里的编号）：<spots>\n${describeStoreVisitSpotCatalog(catalog)}\n</spots>`,
+          `整条台词（供衔接参考）：\n${describeStoreVisitScript(all)}`,
+          `需要改写的段（segment 填这里的序号）：\n${targets
+            .map(
+              (segment, index) =>
+                `待改第${index + 1}段（原第${all.indexOf(segment) + 1}段${segment.shot === 'presenter' ? '｜人物出镜' : ''}${segment.scene ? `｜原画面：${segment.scene}` : ''}）：${segment.lines}`,
+            )
+            .join('\n')}`,
+          '请输出每段的点位、图片、画面和改写后的台词。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        0.3,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `[fitSegmentsToMaterials] 改写失败按规则只配素材 topic=${topicId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const matches = parseStoreVisitSceneMatches(text, catalog, targets);
+    const raw = readStoreVisitJson(text);
+    const rewrites = new Map<number, { lines: string; scene: string }>();
+    for (const item of Array.isArray(raw.segments) ? raw.segments : []) {
+      const record = (item && typeof item === 'object' ? item : {}) as Record<
+        string,
+        unknown
+      >;
+      const order = Number(record.segment);
+      const lines = readStoreVisitText(record.lines)
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+      const scene = readStoreVisitText(record.scene)
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 30);
+      if (
+        Number.isInteger(order) &&
+        order > 0 &&
+        lines.length >= 6 &&
+        !rewrites.has(order)
+      )
+        rewrites.set(order, { lines, scene });
+    }
+    return matches.map((match, index) => {
+      const rewrite = rewrites.get(index + 1);
+      // 改出了资料里没有的数字就不用，宁可保留原台词也不编造价格份量
+      const safe =
+        rewrite &&
+        !findStoreVisitUnknownNumbers(rewrite.lines, context.facts).length;
+      return safe
+        ? {
+            ...match,
+            lines: rewrite.lines,
+            ...(rewrite.scene ? { scene: rewrite.scene } : {}),
+          }
+        : match;
+    });
   }
 
   /**
@@ -1288,7 +1622,7 @@ export class DouyinStoreVisitPlannerService {
   }
 
   /**
-   * @description 读取写脚本与自检的上下文：子选题、母选题的引用知识（按引用拼成提示词段落），选过门店时带门店名称、整体说明与点位清单，
+   * @description 读取写脚本与自检的上下文：子选题、母选题的引用知识（按引用拼成提示词段落），选过门店时带门店名称、整体说明与有素材的点位清单（没素材的点位单独标明不能安排画面），
    *   旧选题没门店 ID 时用它记下的门店名与说明；资料全文用来核对台词里的数字。
    * @keyword-cn 读取脚本上下文, 母选题引用知识
    * @keyword-en load-script-context, mother-knowledge
@@ -1325,18 +1659,30 @@ export class DouyinStoreVisitPlannerService {
     const storeDescription =
       store?.description ||
       String(topic.storeVisit?.sceneDescription ?? '').trim();
+    // 只把有图片或视频的点位当成能安排画面的地方，没素材的点位单独列出，避免脚本写了却配不上
+    const catalog = store ? buildStoreVisitSceneCatalog(store.spots) : [];
+    const bareSpots = store
+      ? store.spots.filter(
+          (spot) => spot.name && !catalog.some((entry) => entry.spot === spot),
+        )
+      : [];
     const storeText = [
       storeName ? `门店名称：<store_name>${storeName}</store_name>` : '',
       storeDescription
         ? `门店整体说明：<store>${storeDescription.slice(0, 2000)}</store>`
         : '',
-      store?.spots.length
-        ? `门店里的点位（用来知道店里有什么、写画面；说明是照图写的画面描述，不要照着念）：<spots>\n${store.spots
+      catalog.length
+        ? `门店里的点位（只列有图片或视频素材的，画面只能从这里安排；说明是照图写的画面描述，不要照着念）：<spots>\n${catalog
             .map(
-              (spot) =>
-                `- ${spot.name}${spot.opening ? '（门头）' : ''}：${spot.description || '没写说明'}`,
+              (entry) =>
+                `- ${entry.spot.name}${entry.spot.opening ? '（门头）' : ''}：${entry.spot.description || entry.images[0]?.description || '没写说明'}（${entry.images.length ? `${entry.spot.images.length} 张图` : '实拍视频'}）`,
             )
             .join('\n')}\n</spots>`
+        : '',
+      bareSpots.length
+        ? `这些点位还没有图片或视频，画面不能安排在这里：${bareSpots
+            .map((spot) => spot.name)
+            .join('、')}`
         : '',
     ]
       .filter(Boolean)

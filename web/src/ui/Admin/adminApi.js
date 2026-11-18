@@ -293,6 +293,86 @@ export const adminApi = {
     });
   },
 
+  // ─── 成员 Credit 分配 ───────────────────────────────────────────────────────
+
+  /**
+   * @description 读取租户额度总览与成员额度列表，超管需传租户，租户管理员省略即本租户。
+   * @keyword-cn 成员额度总览, 待分配额度
+   * @keyword-en member-credit-overview, pool-credit
+   */
+  async getTenantCreditOverview(tenantId) {
+    const suffix = tenantId ? `?tenantId=${encodeURIComponent(tenantId)}` : '';
+    return request(`/tenant-credits${suffix}`);
+  },
+  /**
+   * @description 设置新成员加入时赠送的 Credit。
+   * @keyword-cn 新成员赠送设置, 租户额度设置
+   * @keyword-en update-new-member-grant, tenant-credit-settings
+   */
+  async updateTenantCreditSettings(tenantId, payload) {
+    return request(`/tenant-credits/${tenantId}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+  /**
+   * @description 超管把旧共用租户切到分配模式，migrate 为 true 时原余额给每个成员各一份全额。
+   * @keyword-cn 切换分配模式, 旧余额迁移
+   * @keyword-en switch-credit-mode, legacy-credit-migration
+   */
+  async switchTenantCreditMode(tenantId, payload) {
+    return request(`/tenant-credits/${tenantId}/mode`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  /**
+   * @description 给成员分配（正数）或回收（负数）本租户额度。
+   * @keyword-cn 分配成员额度, 回收额度
+   * @keyword-en allocate-member-credit, reclaim-credit
+   */
+  async allocateMemberCredit(tenantId, memberId, payload) {
+    return request(`/tenant-credits/${tenantId}/members/${memberId}/allocate`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+  /**
+   * @description 分页读取成员本租户额度流水。
+   * @keyword-cn 成员额度流水, 倒序分页
+   * @keyword-en member-credit-ledger, reverse-pagination
+   */
+  async listMemberCreditTransactions(tenantId, memberId, query = {}) {
+    const search = new URLSearchParams();
+    if (query.limit) search.set('limit', String(query.limit));
+    if (query.before) search.set('before', String(query.before));
+    const suffix = search.toString();
+    return request(`/tenant-credits/${tenantId}/members/${memberId}/transactions${suffix ? `?${suffix}` : ''}`);
+  },
+  /**
+   * @description 超管读取手机号账号的个人额度与流水。
+   * @keyword-cn 个人额度查询, 个人流水
+   * @keyword-en personal-credit-query, personal-ledger
+   */
+  async getPersonalCreditAccount(accountId, query = {}) {
+    const search = new URLSearchParams();
+    if (query.limit) search.set('limit', String(query.limit));
+    if (query.before) search.set('before', String(query.before));
+    const suffix = search.toString();
+    return request(`/credit-accounts/${accountId}${suffix ? `?${suffix}` : ''}`);
+  },
+  /**
+   * @description 超管给个人额度充值（recharge）或正负调账（adjust）。
+   * @keyword-cn 个人充值, 个人调账
+   * @keyword-en personal-recharge, personal-adjustment
+   */
+  async changePersonalCredit(accountId, kind, payload) {
+    return request(`/credit-accounts/${accountId}/${kind === 'adjust' ? 'adjust' : 'recharge'}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   // ─── SuperClaw 平台节点 ─────────────────────────────────────────────────────
 
   /**

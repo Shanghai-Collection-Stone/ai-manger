@@ -12,6 +12,7 @@ import {
   UsePipes,
   ValidationPipe,
   UseFilters,
+  UseGuards,
   UseInterceptors,
   UploadedFiles,
 } from '@nestjs/common';
@@ -26,6 +27,10 @@ import { GalleryGroupService } from '../services/gallery-group.service.js';
 import { GalleryTagLibraryService } from '../services/gallery-tag-library.service.js';
 import type { GalleryTagLibraryView } from '../services/gallery-tag-library.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { RequirePermission } from '../../admin/decorators/require-permission.decorator.js';
+import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard.js';
+import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
+import type { AdminRequest } from '../../admin/types/admin-request.types.js';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
 import { GalleryUploadExceptionFilter } from '../filters/gallery-upload-exception.filter.js';
 import { MaterialStyleService } from '../material-styles/services/material-style.service.js';
@@ -427,6 +432,7 @@ async function createUploadThumbnails(
 }
 
 @Controller('gallery')
+@UseGuards(AdminAuthGuard, AdminPoliciesGuard)
 export class GalleryController {
   constructor(
     private readonly gallery: GalleryService,
@@ -439,16 +445,21 @@ export class GalleryController {
   ) {}
 
   /**
-   * @description 从请求中解析租户范围（必须提供有效的认证 token）
+   * @description 从请求中解析租户范围（必须提供有效的认证 token）；`AdminAuthGuard` 已解析出登录用户时直接复用，不再二次查库。
    * @param {Request} req - Express 请求对象
    * @returns {Promise<{ tenantId?: string; userId?: string }>} 租户和用户范围
    * @throws {UnauthorizedException} 当没有 token 或 token 无效时抛出
-   * @keyword-en resolve auth scope from request
+   * @keyword-cn 解析登录范围, 复用守卫用户
+   * @keyword-en resolve-auth-scope, reuse-guard-user
    */
   private async resolveAuthScope(req: Request): Promise<{
     tenantId?: string;
     userId?: string;
   }> {
+    const guardedUser = (req as AdminRequest | undefined)?.adminUser;
+    if (guardedUser) {
+      return { tenantId: guardedUser.tenantId, userId: guardedUser.username };
+    }
     const auth = req?.headers.authorization;
     if (typeof auth !== 'string' || !auth.startsWith('Bearer ')) {
       throw new UnauthorizedException('AUTH_REQUIRED');
@@ -540,6 +551,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Post('upload')
+  @RequirePermission('create', 'Gallery')
   @UseFilters(new GalleryUploadExceptionFilter())
   @UseInterceptors(
     FilesInterceptor('files', 24, {
@@ -827,6 +839,7 @@ export class GalleryController {
    * @keyword-en list-material-styles, material-style-preset
    */
   @Get('material-styles')
+  @RequirePermission('read', 'Gallery')
   async listMaterialStyles(@Req() req?: Request): Promise<{
     groups: Array<{ id: MaterialStyleGroupId; label: string }>;
     styles: MaterialStyleOption[];
@@ -849,6 +862,7 @@ export class GalleryController {
    * @keyword-en ai-material-generate, prompt-first
    */
   @Post('ai-material')
+  @RequirePermission('create', 'Gallery')
   async generateAiMaterial(
     @Body()
     body: {
@@ -926,6 +940,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Get()
+  @RequirePermission('read', 'Gallery')
   async list(
     @Query('tenantId') tenantId?: string,
     @Query('groupId') groupId?: string,
@@ -1008,6 +1023,7 @@ export class GalleryController {
    * @keyword-en gallery-exact-stats, tenant-visibility
    */
   @Get('stats')
+  @RequirePermission('read', 'Gallery')
   async stats(@Req() req: Request): Promise<{
     images: number;
     materials: number;
@@ -1031,6 +1047,7 @@ export class GalleryController {
    * @keyword-en batch-image-metadata, scope-authorization
    */
   @Post('images/meta/batch')
+  @RequirePermission('update', 'Gallery')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async updateImagesMetaBatch(
     @Body() body: BatchUpdateGalleryImageMetaDto,
@@ -1058,6 +1075,7 @@ export class GalleryController {
    * @keyword-en single-image-metadata, scope-authorization
    */
   @Post('images/:id/meta')
+  @RequirePermission('update', 'Gallery')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async updateImageMeta(
     @Param('id') id: string,
@@ -1085,6 +1103,7 @@ export class GalleryController {
    * @keyword-en similar-images, tag-similarity-fallback
    */
   @Get('images/:id/similar')
+  @RequirePermission('read', 'Gallery')
   async similarImages(
     @Param('id') id: string,
     @Query('limit') limit: string | undefined,
@@ -1118,6 +1137,7 @@ export class GalleryController {
    * @keyword-en read-tag-library, uncategorized-tags
    */
   @Get('tag-library')
+  @RequirePermission('read', 'Gallery')
   async getTagLibrary(@Req() req: Request): Promise<GalleryTagLibraryView> {
     const authScope = await this.resolveAuthScope(req);
     return this.tagLibrary.get(authScope.tenantId, [
@@ -1132,6 +1152,7 @@ export class GalleryController {
    * @keyword-en replace-tag-library, category-uniqueness
    */
   @Post('tag-library')
+  @RequirePermission('update', 'Gallery')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async replaceTagLibrary(
     @Body() body: ReplaceGalleryTagLibraryDto,
@@ -1150,6 +1171,7 @@ export class GalleryController {
    * @keyword-en tags-to-note, batch-migration
    */
   @Post('tags/convert-to-note')
+  @RequirePermission('update', 'Gallery')
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async convertTagsToNote(
     @Body() body: ConvertGalleryTagsToNoteDto,
@@ -1175,6 +1197,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Get('tags')
+  @RequirePermission('read', 'Gallery')
   async listTags(
     @Query('tenantId') tenantId?: string,
     @Query('limit') limit?: string,
@@ -1201,6 +1224,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Post('images/tags/batch')
+  @RequirePermission('update', 'Gallery')
   async updateImageTagsBatch(
     @Body()
     body: {
@@ -1236,6 +1260,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Post('images/:id/delete')
+  @RequirePermission('delete', 'Gallery')
   async deleteImage(
     @Param('id') id: string,
     @Req() req: Request,
@@ -1258,6 +1283,7 @@ export class GalleryController {
    * @keyword-en gallery batch delete images
    */
   @Post('images/batch-delete')
+  @RequirePermission('delete', 'Gallery')
   async deleteImagesBatch(
     @Body() body: { ids?: Array<number | string> },
     @Req() req: Request,
@@ -1279,6 +1305,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Post('images/embedding/rebuild')
+  @RequirePermission('update', 'Gallery')
   async rebuildImageEmbeddings(
     @Body()
     body: {
@@ -1310,6 +1337,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Post('groups')
+  @RequirePermission('create', 'Gallery')
   async createGroup(
     @Body()
     body: {
@@ -1355,6 +1383,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Get('groups')
+  @RequirePermission('read', 'Gallery')
   async listGroups(
     @Query('tenantId') tenantId?: string,
     @Query('tag') tag?: string,
@@ -1390,21 +1419,50 @@ export class GalleryController {
   }
 
   /**
-   * @description 更新图库组；场景图库等系统固定分组拒绝改名。
+   * @description 校验路径上的分组属于 token 用户本租户的可见范围（与 `GET groups` 同口径），返回分组 ID 与系统固定标识。
+   * @param {string} id - 路径参数：图库组ID。
+   * @param {Request} req - 当前 HTTP 请求。
+   * @returns {Promise<{ id: number; system?: GalleryGroupEntity['system'] }>} 可操作的分组。
+   * @throws {UnauthorizedException} 无 token 或 token 失效时抛出 `AUTH_REQUIRED`。
+   * @throws {BadRequestException} ID 非法时抛出 `INVALID_ID`。
+   * @throws {NotFoundException} 分组不存在或不在当前用户可见范围时抛出。
+   * @keyword-cn 分组归属校验, 越权防护
+   * @keyword-en require-accessible-group, group-ownership-guard
+   */
+  private async requireAccessibleGroup(
+    id: string,
+    req: Request,
+  ): Promise<{ id: number; system?: GalleryGroupEntity['system'] }> {
+    const { userId, tenantId } = await this.requireUserScope(req);
+    const gid = Number(id);
+    if (!Number.isFinite(gid)) throw new BadRequestException('INVALID_ID');
+    const group = await this.groups.findAccessibleGroup(gid, userId, tenantId);
+    if (!group) throw new NotFoundException('分组不存在或已被删除');
+    return { id: gid, system: group.system };
+  }
+
+  /**
+   * @description 更新 token 用户本租户可见范围内的图库组；场景图库等系统固定分组拒绝改名。
    * @param {string} id - 路径参数：图库组ID。
    * @param {{ name?: string; description?: string; tags?: string }} body - 更新字段。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ group: Omit<GalleryGroupEntity, '_id'> | null }>} 更新后的图库组。
+   * @throws {UnauthorizedException} 无 token 或 token 失效时抛出 `AUTH_REQUIRED`。
+   * @throws {NotFoundException} 分组不存在或属于他人时抛出。
    * @keyword gallery, groups, update
+   * @keyword-cn 更新图库组, 分组归属校验
+   * @keyword-en update-gallery-group, group-ownership-check
    * @since 2026-02-04
    */
   @Post('groups/:id')
+  @RequirePermission('update', 'Gallery')
   async updateGroup(
     @Param('id') id: string,
     @Body() body: { name?: string; description?: string; tags?: string },
+    @Req() req: Request,
   ): Promise<{ group: Omit<GalleryGroupEntity, '_id'> | null }> {
-    const gid = Number(id);
-    if (await this.groups.findSystemKey(gid))
-      throw new BadRequestException('场景图库是固定分组，不能改名');
+    const { id: gid, system } = await this.requireAccessibleGroup(id, req);
+    if (system) throw new BadRequestException('场景图库是固定分组，不能改名');
     const rawTags = String(body?.tags ?? '');
     const tags = rawTags.length
       ? rawTags
@@ -1428,17 +1486,25 @@ export class GalleryController {
   }
 
   /**
-   * @description 删除图库组；场景图库等系统固定分组拒绝删除。
+   * @description 删除 token 用户本租户可见范围内的图库组；场景图库等系统固定分组拒绝删除。
    * @param {string} id - 路径参数：图库组ID。
+   * @param {Request} req - 当前 HTTP 请求。
    * @returns {Promise<{ ok: boolean }>} 删除结果。
+   * @throws {UnauthorizedException} 无 token 或 token 失效时抛出 `AUTH_REQUIRED`。
+   * @throws {NotFoundException} 分组不存在或属于他人时抛出。
    * @keyword gallery, groups, delete
+   * @keyword-cn 删除图库组, 分组归属校验
+   * @keyword-en delete-gallery-group, group-ownership-check
    * @since 2026-02-04
    */
   @Post('groups/:id/delete')
-  async deleteGroup(@Param('id') id: string): Promise<{ ok: boolean }> {
-    const gid = Number(id);
-    if (await this.groups.findSystemKey(gid))
-      throw new BadRequestException('场景图库是固定分组，不能删除');
+  @RequirePermission('delete', 'Gallery')
+  async deleteGroup(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<{ ok: boolean }> {
+    const { id: gid, system } = await this.requireAccessibleGroup(id, req);
+    if (system) throw new BadRequestException('场景图库是固定分组，不能删除');
     return await this.groups.remove(gid);
   }
 
@@ -1453,6 +1519,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Get('groups/search')
+  @RequirePermission('read', 'Gallery')
   async searchGroups(
     @Query('q') q?: string,
     @Query('tenantId') tenantId?: string,
@@ -1495,6 +1562,7 @@ export class GalleryController {
    * @since 2026-02-04
    */
   @Get('search')
+  @RequirePermission('read', 'Gallery')
   async search(
     @Query('q') q?: string,
     @Query('tenantId') tenantId?: string,

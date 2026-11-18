@@ -14,6 +14,7 @@ import { ObjectId } from 'mongodb';
 import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import { SassService } from '../../sass/services/sass.service.js';
+import { TenantCreditService } from '../../tenant-credit/services/tenant-credit.service.js';
 import type {
   InviteView,
   TenantInviteEntity,
@@ -41,6 +42,7 @@ export class TenantInviteService implements OnModuleInit {
     @Inject('DS_MONGO_DB') db: Db,
     private readonly admin: AdminService,
     private readonly sass: SassService,
+    private readonly credits: TenantCreditService,
   ) {
     this.invites = db.collection<TenantInviteEntity>('tenant_invites');
     this.attempts = db.collection<AttemptWindowDoc>('tenant_invite_attempts');
@@ -152,7 +154,10 @@ export class TenantInviteService implements OnModuleInit {
       tenantId: invite.tenantId,
       role: 'operator',
     });
-    if (!joined.alreadyMember) await this.markUsed(invite._id);
+    if (!joined.alreadyMember) {
+      await this.markUsed(invite._id);
+      await this.credits.grantNewMember(String(joined.user.id));
+    }
     return {
       joined: true,
       alreadyMember: joined.alreadyMember,
@@ -278,10 +283,7 @@ export class TenantInviteService implements OnModuleInit {
    * @param windowMs 窗口长度。
    * @throws {HttpException} 窗口内超过十次时 429 `TOO_MANY_ATTEMPTS`。
    */
-  private async assertAttemptLimit(
-    key: string,
-    windowMs: number,
-  ): Promise<void> {
+  async assertAttemptLimit(key: string, windowMs: number): Promise<void> {
     const now = new Date();
     const before = await this.attempts.findOneAndUpdate(
       {

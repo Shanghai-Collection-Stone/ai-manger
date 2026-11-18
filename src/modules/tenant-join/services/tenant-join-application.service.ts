@@ -13,6 +13,8 @@ import type {
   AdminUserEntity,
 } from '../../admin/entities/admin.entity.js';
 import { AdminService } from '../../admin/services/admin.service.js';
+import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
+import { TenantCreditService } from '../../tenant-credit/services/tenant-credit.service.js';
 import type {
   ApplicationView,
   TenantJoinApplicationEntity,
@@ -22,7 +24,14 @@ import { TenantInviteService } from './tenant-invite.service.js';
 import { TenantJoinNotifyService } from './tenant-join-notify.service.js';
 
 /**
- * @description 租户入驻申请服务，编排两种注册模式、租户范围审批与通知结果回写
+ * @description 注册时按公司名称申请加入的申请留言。
+ * @keyword-cn 公司名称申请留言, 注册申请
+ * @keyword-en company-application-message, registration-application
+ */
+const COMPANY_APPLICATION_MESSAGE = '注册时按公司名称申请加入';
+
+/**
+ * @description 租户入驻申请服务，编排随便逛逛 / 邀请 / 公司名称三种注册方式、租户范围审批与通知结果回写
  * @keyword-cn 入驻申请服务, 两种注册模式
  * @keyword-en join-application-service, registration-modes
  */
@@ -30,16 +39,20 @@ import { TenantJoinNotifyService } from './tenant-join-notify.service.js';
 export class TenantJoinApplicationService implements OnModuleInit {
   private readonly applications: Collection<TenantJoinApplicationEntity>;
   private readonly accounts: Collection<AdminAccountEntity>;
+  private readonly tenants: Collection<SassTenantEntity>;
 
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly admin: AdminService,
     private readonly invites: TenantInviteService,
     private readonly notify: TenantJoinNotifyService,
+    private readonly credits: TenantCreditService,
   ) {
-    this.applications =
-      db.collection<TenantJoinApplicationEntity>('tenant_join_applications');
+    this.applications = db.collection<TenantJoinApplicationEntity>(
+      'tenant_join_applications',
+    );
     this.accounts = db.collection<AdminAccountEntity>('admin_accounts');
+    this.tenants = db.collection<SassTenantEntity>('sass_tenants');
   }
 
   /**
@@ -67,23 +80,35 @@ export class TenantJoinApplicationService implements OnModuleInit {
   }
 
   /**
-   * @description 按默认或邀请模式注册已短信验证的手机号（邮箱已由邮箱验证码校验），注册成功后发注册成功邮件
-   * @keyword-cn 租户目标注册, 可信手机号
-   * @keyword-en tenant-target-registration, trusted-phone
+   * @description 按注册时选的加入方式注册已短信验证的手机号（邮箱已由邮箱验证码校验）：随便逛逛进默认租户；邀请码直接加入邀请租户；公司名称先进默认租户逛，同时向同名租户提交入驻申请等管理员审批。新成员按所进租户的设置领赠送 Credit，成功后发注册成功邮件
+   * @keyword-cn 租户目标注册, 可信手机号, 注册加入方式
+   * @keyword-en tenant-target-registration, trusted-phone, registration-join-choice
    */
   async register(input: {
-    phone: string;
+    phone?: string;
     password: string;
-    email: string;
+    email?: string;
     displayName?: string;
     inviteCode?: string;
+    companyName?: string;
   }): Promise<{
     registered: true;
-    mode: 'invite' | 'default';
+    mode: 'invite' | 'default' | 'company';
     tenantId: string;
     tenantName: string;
+    application?: { id: string; tenantName: string; status: 'pending' };
   }> {
+    const companyName = this.normalizeCompanyName(input.companyName);
+    if (input.inviteCode && companyName) {
+      throw new BadRequestException('JOIN_TARGET_CONFLICT');
+    }
     if (input.inviteCode) return this.registerByInvite(input);
+    const companyTenant = companyName
+      ? await this.findCompanyTenant(
+          input.phone || input.email || '',
+          companyName,
+        )
+      : null;
 
     const registered = await this.admin.register({
       password: input.password,
@@ -91,12 +116,86 @@ export class TenantJoinApplicationService implements OnModuleInit {
       email: input.email,
       displayName: input.displayName,
     });
+    await this.credits.grantNewMember(String(registered.user.id));
+    if (!companyTenant) {
+      return {
+        registered: true,
+        mode: 'default',
+        tenantId: registered.tenantId,
+        tenantName: registered.tenantName,
+      };
+    }
+    const now = new Date();
+    const application: TenantJoinApplicationEntity = {
+      _id: new ObjectId(),
+      accountId: registered.accountId,
+      ...(input.phone ? { phone: input.phone } : {}),
+      ...(input.email ? { email: input.email.trim().toLowerCase() } : {}),
+      displayName:
+        input.displayName?.trim() || input.phone || input.email || '',
+      tenantId: companyTenant._id.toHexString(),
+      tenantName: companyTenant.name,
+      message: COMPANY_APPLICATION_MESSAGE,
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.applications.insertOne(application);
     return {
       registered: true,
-      mode: 'default',
+      mode: 'company',
       tenantId: registered.tenantId,
       tenantName: registered.tenantName,
+      application: {
+        id: application._id.toHexString(),
+        tenantName: companyTenant.name,
+        status: 'pending',
+      },
     };
+  }
+
+  /**
+   * @description 规范公司名称：去首尾空格、合并连续空白，空串视为未填写
+   * @keyword-cn 公司名称规范化, 空白合并
+   * @keyword-en normalize-company-name, collapse-whitespace
+   */
+  private normalizeCompanyName(value?: string): string {
+    return String(value ?? '')
+      .trim()
+      .replace(/\s+/g, ' ');
+  }
+
+  /**
+   * @description 按公司名称（先精确、再忽略大小写）找唯一租户；填的是默认租户等同随便逛逛返回 null，找不到或重名报错。查找失败按注册手机号或邮箱限流，防止拿验证码反复猜租户名
+   * @keyword-cn 公司名称匹配租户, 防猜测限流
+   * @keyword-en match-company-tenant, guess-throttle
+   */
+  private async findCompanyTenant(
+    contact: string,
+    companyName: string,
+  ): Promise<SassTenantEntity | null> {
+    const selfRegisterName =
+      process.env.SELF_REGISTER_TENANT_NAME?.trim() || '其他';
+    if (companyName === selfRegisterName) return null;
+    let matches = await this.tenants
+      .find({ name: companyName })
+      .limit(2)
+      .toArray();
+    if (!matches.length) {
+      const escaped = companyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      matches = await this.tenants
+        .find({ name: { $regex: `^\\s*${escaped}\\s*$`, $options: 'i' } })
+        .limit(2)
+        .toArray();
+    }
+    if (matches.length === 1) {
+      if (matches[0].name.trim() === selfRegisterName) return null;
+      return matches[0];
+    }
+    await this.invites.assertAttemptLimit(`company:${contact}`, 10 * 60_000);
+    throw new BadRequestException(
+      matches.length ? 'COMPANY_NAME_AMBIGUOUS' : 'COMPANY_NOT_FOUND',
+    );
   }
 
   /**
@@ -105,9 +204,9 @@ export class TenantJoinApplicationService implements OnModuleInit {
    * @keyword-en invite-mode-registration, account-rollback
    */
   private async registerByInvite(input: {
-    phone: string;
+    phone?: string;
     password: string;
-    email: string;
+    email?: string;
     displayName?: string;
     inviteCode?: string;
   }): Promise<{
@@ -135,6 +234,7 @@ export class TenantJoinApplicationService implements OnModuleInit {
       throw error;
     }
     await this.invites.markUsed(invite._id);
+    await this.credits.grantNewMember(String(joined.user.id));
     this.admin.notifyRegistered(account, joined.tenantName);
     return {
       registered: true,
@@ -217,6 +317,9 @@ export class TenantJoinApplicationService implements OnModuleInit {
       { returnDocument: 'after' },
     );
     if (!approved) throw new BadRequestException('APPLICATION_NOT_PENDING');
+    if (!member.alreadyMember) {
+      await this.credits.grantNewMember(String(member.user.id));
+    }
     const notify = await this.notify.sendApproved({
       email: approved.email,
       displayName: approved.displayName,
@@ -339,8 +442,8 @@ export class TenantJoinApplicationService implements OnModuleInit {
       id: String(row._id),
       tenantId: row.tenantId,
       tenantName: row.tenantName,
-      phone: row.phone,
-      email: row.email,
+      phone: row.phone ?? null,
+      email: row.email ?? null,
       displayName: row.displayName,
       message: row.message ?? null,
       status: row.status as TenantJoinApplicationStatus,

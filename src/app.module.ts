@@ -51,6 +51,7 @@ import { SmsVerificationModule } from './modules/sms-verification/sms-verificati
 import { AliyunConfigModule } from './modules/aliyun-config/aliyun-config.module.js';
 import { MailModule } from './modules/mail/mail.module.js';
 import { EmailVerificationModule } from './modules/email-verification/email-verification.module.js';
+import { TenantCreditModule } from './modules/tenant-credit/tenant-credit.module.js';
 import { TenantJoinModule } from './modules/tenant-join/tenant-join.module.js';
 import { OpsReportModule } from './modules/ops-report/ops-report.module.js';
 import { TenantMcpModule } from './modules/tenant-mcp/tenant-mcp.module.js';
@@ -102,6 +103,7 @@ import { TenantMcpModule } from './modules/tenant-mcp/tenant-mcp.module.js';
     AliyunConfigModule,
     MailModule,
     EmailVerificationModule,
+    TenantCreditModule,
     TenantJoinModule,
     OpsReportModule,
     TenantMcpModule,

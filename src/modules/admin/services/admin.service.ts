@@ -158,7 +158,8 @@ export class AdminService {
     await this.users.createIndex({ tenantId: 1, updatedAt: -1 });
     await this.users.createIndex({ updatedAt: -1 });
     await this.users.createIndex({ accountId: 1 });
-    await this.accounts.createIndex({ phone: 1 }, { unique: true });
+    await this.ensureAccountPhoneIndex();
+    await this.accounts.createIndex({ email: 1 });
     await this.sessions.createIndex({ tokenHash: 1 }, { unique: true });
     await this.sessions.createIndex({ sessionId: 1 }, { unique: true });
     await this.sessions.createIndex({ userId: 1 });
@@ -503,7 +504,7 @@ export class AdminService {
   }
 
   /**
-   * @description 收集密码校验通过的成员行：手机号账号关联的全部成员 + 同名历史用户名成员
+   * @description 收集密码校验通过的成员行：手机号或邮箱对应账号关联的全部成员 + 同名历史用户名成员
    * @keyword-cn 密码匹配成员, 手机号账号
    * @keyword-en password-matched-members, phone-account
    */
@@ -512,15 +513,12 @@ export class AdminService {
     password: string,
   ): Promise<AdminUserEntity[]> {
     const matched = new Map<string, AdminUserEntity>();
-    const phone = this.normalizeLoginPhone(account);
-    if (phone) {
-      const owner = await this.accounts.findOne({ phone });
-      if (owner && this.verifyPassword(password, owner.passwordHash)) {
-        const rows = await this.users
-          .find({ accountId: String(owner._id) })
-          .toArray();
-        for (const row of rows) matched.set(String(row._id), row);
-      }
+    for (const owner of await this.findAccountsByLogin(account)) {
+      if (!this.verifyPassword(password, owner.passwordHash)) continue;
+      const rows = await this.users
+        .find({ accountId: String(owner._id) })
+        .toArray();
+      for (const row of rows) matched.set(String(row._id), row);
     }
     const legacyRows = await this.users
       .find({ username: account })
@@ -592,7 +590,29 @@ export class AdminService {
   }
 
   /**
-   * @description 自助注册：以已短信验证的手机号新建账号，固定加入默认租户（「其他」）并立即可登录；手机号已注册直接拒绝，不允许自行选择其他租户
+   * @description 手机号唯一索引只约束有手机号的账号：只用邮箱注册的账号没有手机号，旧的整表唯一索引会让第二个这样的账号撞键，启动时先删旧索引再建部分唯一索引
+   * @keyword-cn 手机号部分唯一索引, 邮箱账号兼容
+   * @keyword-en partial-phone-unique-index, email-account-compat
+   */
+  private async ensureAccountPhoneIndex(): Promise<void> {
+    const indexes: Array<{ name?: string; partialFilterExpression?: unknown }> =
+      await this.accounts.indexes().catch(() => []);
+    const legacy = indexes.find(
+      (index) => index.name === 'phone_1' && !index.partialFilterExpression,
+    );
+    if (legacy) await this.accounts.dropIndex('phone_1');
+    await this.accounts.createIndex(
+      { phone: 1 },
+      {
+        name: 'phone_1',
+        unique: true,
+        partialFilterExpression: { phone: { $type: 'string' } },
+      },
+    );
+  }
+
+  /**
+   * @description 自助注册：以已验证的手机号或邮箱（至少一个）新建账号，固定加入默认租户（「其他」）并立即可登录；手机号或邮箱已注册直接拒绝，不允许自行选择其他租户
    * @keyword-cn 自助注册, 平台账号
    * @keyword-en self-register, platform-account
    */
@@ -600,7 +620,7 @@ export class AdminService {
     username?: string;
     displayName?: string;
     password: string;
-    phone: string;
+    phone?: string;
     email?: string;
   }): Promise<{
     registered: true;
@@ -621,12 +641,12 @@ export class AdminService {
     const now = new Date();
     const doc: AdminUserEntity = {
       _id: new ObjectId(),
-      username: input.username?.trim() || phone,
+      username: input.username?.trim() || phone || owner.email || '',
       passwordHash: owner.passwordHash,
       displayName: owner.displayName,
       role: 'operator',
       tenantId: String(tenant._id),
-      phone,
+      ...(phone ? { phone } : {}),
       accountId: String(owner._id),
       enabled: true,
       createdAt: now,
@@ -660,13 +680,15 @@ export class AdminService {
     const email = account.email?.trim();
     if (!email) return;
     const named =
-      account.displayName && account.displayName !== account.phone
+      account.displayName &&
+      account.displayName !== (account.phone || account.email)
         ? `${account.displayName}，您好：`
         : undefined;
+    const loginLabel = account.phone ? '手机号' : '邮箱';
     void this.mail
       .sendTemplate(email, {
         subject: '账号注册成功',
-        preheader: '您的 AI 营销官账号已注册成功，使用注册手机号即可登录。',
+        preheader: `您的 AI 营销官账号已注册成功，使用注册${loginLabel}即可登录。`,
         title: '欢迎加入 AI 营销官',
         greeting: named,
         paragraphs: [
@@ -675,13 +697,16 @@ export class AdminService {
           }。以下是您的账号信息：`,
         ],
         details: [
-          { label: '登录账号', value: maskMailPhone(account.phone) },
+          {
+            label: '登录账号',
+            value: account.phone ? maskMailPhone(account.phone) : email,
+          },
           { label: '绑定邮箱', value: email },
           ...(tenantName ? [{ label: '所属团队', value: tenantName }] : []),
           { label: '注册时间', value: formatMailDateTime(account.createdAt) },
         ],
         afterParagraphs: [
-          '请打开 AI 营销官客户端，使用注册手机号和密码登录，即可开始使用。',
+          `请打开 AI 营销官客户端，使用注册${loginLabel}和密码登录，即可开始使用。`,
         ],
         notice:
           '如果这不是您本人的操作，请尽快联系平台管理员处理。为保障账号安全，请勿向任何人透露您的密码和验证码。',
@@ -696,33 +721,39 @@ export class AdminService {
   }
 
   /**
-   * @description 只创建平台手机号账号，不创建任何租户成员身份
+   * @description 只创建平台账号，不创建任何租户成员身份；手机号与邮箱至少一个，只有邮箱时邮箱即登录账号、不得与已有账号重复，邮箱小写去空格存储
    * @keyword-cn 平台账号创建, 手机号唯一
    * @keyword-en platform-account-creation, unique-phone-account
    */
   async createPlatformAccount(input: {
-    phone: string;
+    phone?: string;
     password: string;
     displayName?: string;
     email?: string;
   }): Promise<AdminAccountEntity> {
-    const phone = input.phone.trim();
+    const phone = input.phone?.trim() || undefined;
+    const email = input.email?.trim().toLowerCase() || undefined;
+    if (!phone && !email) {
+      throw new BadRequestException('ACCOUNT_CONTACT_REQUIRED');
+    }
+    if (!phone && email && (await this.accounts.findOne({ email }))) {
+      throw new BadRequestException('EMAIL_ALREADY_REGISTERED');
+    }
     const now = new Date();
     const account: AdminAccountEntity = {
       _id: new ObjectId(),
-      phone,
+      ...(phone ? { phone } : {}),
       passwordHash: this.hashPassword(input.password),
-      displayName: input.displayName?.trim() || phone,
-      ...(input.email?.trim()
-        ? { email: input.email.trim().toLowerCase() }
-        : {}),
+      displayName: input.displayName?.trim() || phone || email || '',
+      ...(email ? { email } : {}),
       createdAt: now,
       updatedAt: now,
     };
     try {
       await this.accounts.insertOne(account);
-    } catch {
-      throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+    } catch (error) {
+      if (phone) throw new BadRequestException('PHONE_ALREADY_REGISTERED');
+      throw error;
     }
     return account;
   }
@@ -773,7 +804,7 @@ export class AdminService {
           $set: {
             enabled: true,
             displayName: account.displayName,
-            phone: account.phone,
+            ...(account.phone ? { phone: account.phone } : {}),
             passwordHash: account.passwordHash,
             updatedAt: now,
           },
@@ -790,11 +821,12 @@ export class AdminService {
     }
 
     const now = new Date();
+    const baseUsername = account.phone || account.email || accountId;
     const candidates = [
-      account.phone,
+      baseUsername,
       ...Array.from(
         { length: 4 },
-        (_, index) => `${account.phone}-${index + 2}`,
+        (_, index) => `${baseUsername}-${index + 2}`,
       ),
     ];
     for (const username of candidates) {
@@ -805,7 +837,7 @@ export class AdminService {
         displayName: account.displayName,
         role: input.role ?? 'operator',
         tenantId,
-        phone: account.phone,
+        ...(account.phone ? { phone: account.phone } : {}),
         accountId,
         enabled: true,
         createdAt: now,
@@ -835,7 +867,7 @@ export class AdminService {
   }
 
   /**
-   * @description 按手机号账号统一校验密码，不以账号是否存在区分凭据错误
+   * @description 按手机号或邮箱账号统一校验密码，不以账号是否存在区分凭据错误；同一邮箱有多个历史账号时取密码匹配的那个
    * @keyword-cn 平台账号验密, 防账号枚举
    * @keyword-en platform-account-verification, credential-enumeration-guard
    */
@@ -843,16 +875,38 @@ export class AdminService {
     account: string;
     password: string;
   }): Promise<AdminAccountEntity> {
-    const phone = this.normalizeLoginPhone(input.account);
-    const account = phone ? await this.accounts.findOne({ phone }) : null;
+    const candidates = await this.findAccountsByLogin(input.account);
+    if (candidates.length === 1 && candidates[0].deletedAt) {
+      throw new BadRequestException('ACCOUNT_DELETED');
+    }
+    const account = candidates.find((row) =>
+      this.verifyPassword(input.password, row.passwordHash),
+    );
     if (!account) {
       throw new UnauthorizedException('INVALID_CREDENTIALS');
     }
     if (account.deletedAt) throw new BadRequestException('ACCOUNT_DELETED');
-    if (!this.verifyPassword(input.password, account.passwordHash)) {
-      throw new UnauthorizedException('INVALID_CREDENTIALS');
-    }
     return account;
+  }
+
+  /**
+   * @description 按登录名找平台账号：大陆手机号精确匹配，邮箱（小写）可能匹配多个历史账号，其他输入返回空
+   * @keyword-cn 登录名找账号, 邮箱登录
+   * @keyword-en find-account-by-login, email-login
+   */
+  private async findAccountsByLogin(
+    login: string,
+  ): Promise<AdminAccountEntity[]> {
+    const phone = this.normalizeLoginPhone(login);
+    if (phone) {
+      const owner = await this.accounts.findOne({ phone });
+      return owner ? [owner] : [];
+    }
+    const email = String(login ?? '')
+      .trim()
+      .toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return [];
+    return this.accounts.find({ email }).limit(20).toArray();
   }
 
   /**
@@ -1041,36 +1095,6 @@ export class AdminService {
     });
 
     return { deletedAt: now, revokedSessions: revoked.deletedCount ?? 0 };
-  }
-
-  /**
-   * @description 按登录态中的租户边界查询当前用户自己的 Credit 余额与倒序流水。
-   * @keyword-cn 当前Credit账户, 自身流水
-   * @keyword-en current-credit-account, own-transaction-list
-   */
-  async getCurrentCreditAccount(
-    currentUser: AdminUserEntity,
-    input: { limit?: number; before?: Date },
-  ): Promise<{
-    tenant: SassTenantEntity | null;
-    transactions: AiCreditTransactionEntity[];
-  }> {
-    if (!currentUser.tenantId) {
-      return { tenant: null, transactions: [] };
-    }
-    const tenantId = this.toObjectId(currentUser.tenantId, 'INVALID_TENANT_ID');
-    const tenant = await this.sassTenants.findOne({ _id: tenantId });
-    if (!tenant) throw new NotFoundException('TENANT_NOT_FOUND');
-    const filter: Record<string, unknown> = {
-      tenantId: tenantId.toHexString(),
-    };
-    if (input.before) filter.createdAt = { $lt: input.before };
-    const transactions = await this.creditTransactions
-      .find(filter)
-      .sort({ createdAt: -1 })
-      .limit(Math.min(200, Math.max(1, input.limit ?? 50)))
-      .toArray();
-    return { tenant, transactions };
   }
 
   /**
@@ -2085,8 +2109,10 @@ export class AdminService {
     const tenantId = this.toObjectId(id, 'INVALID_TENANT_ID');
     const tenant = await this.sassTenants.findOne({ _id: tenantId });
     if (!tenant) throw new NotFoundException('TENANT_NOT_FOUND');
+    // 只看租户钱包流水；成员额度与个人额度的流水由 tenant-credit 模块查询
     const filter: Record<string, unknown> = {
       tenantId: tenantId.toHexString(),
+      wallet: { $nin: ['member', 'account'] },
     };
     if (input.before) filter.createdAt = { $lt: input.before };
     const transactions = await this.creditTransactions
@@ -2215,6 +2241,7 @@ export class AdminService {
       const existing = await this.creditTransactions.findOne(
         {
           tenantId: tenantId.toHexString(),
+          wallet: { $nin: ['member', 'account'] },
           referenceId,
           operatorType: 'admin',
         },
@@ -2262,6 +2289,7 @@ export class AdminService {
       _id: new ObjectId(),
       transactionId: randomUUID(),
       tenantId: tenantId.toHexString(),
+      wallet: 'tenant',
       type: input.type,
       amount: amountUnits / 1_000_000,
       amountUnits,

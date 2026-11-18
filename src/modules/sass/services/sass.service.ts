@@ -408,6 +408,8 @@ export class SassService {
       credit: input.credit ?? 0,
       creditUnits:
         input.credit === -1 ? -1 : Math.floor((input.credit ?? 0) * 1_000_000),
+      creditMode: 'allocated',
+      memberCreditGrant: 0,
       createdAt: now,
       updatedAt: now,
     };

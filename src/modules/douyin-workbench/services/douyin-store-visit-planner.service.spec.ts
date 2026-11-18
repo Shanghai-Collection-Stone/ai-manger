@@ -7,6 +7,7 @@ import {
   describeStoreVisitSpotCatalog,
   guessStoreVisitSceneSpot,
   isStoreVisitDialectAllowed,
+  isStoreVisitStoreDetermined,
   parseStoreVisitReviewIssues,
   parseStoreVisitSceneMatches,
   parseStoreVisitScript,
@@ -54,6 +55,7 @@ function plannerWith(input: {
   stores?: unknown[];
   personas?: unknown[];
   knowledge?: string;
+  materials?: unknown[];
   runWithMessages: jest.Mock;
 }) {
   const get = jest.fn((id: number) =>
@@ -61,6 +63,7 @@ function plannerWith(input: {
   );
   const list = jest.fn().mockResolvedValue(input.personas ?? []);
   const buildPromptSection = jest.fn().mockResolvedValue(input.knowledge ?? '');
+  const loadCandidates = jest.fn().mockResolvedValue(input.materials ?? []);
   const service = new DouyinStoreVisitPlannerService(
     { get } as never,
     {
@@ -78,8 +81,9 @@ function plannerWith(input: {
     { resolveNodeRuntime: jest.fn().mockResolvedValue(null) } as never,
     { runWithMessages: input.runWithMessages } as never,
     { buildPromptSection } as never,
+    { loadCandidates } as never,
   );
-  return { service, list, buildPromptSection };
+  return { service, list, buildPromptSection, loadCandidates };
 }
 
 describe('store visit scene catalog', () => {
@@ -659,6 +663,133 @@ describe('store visit script writing', () => {
     expect(linesSystem).not.toContain('门店名称');
   });
 
+  it('从脚本开始：先按选中的脚本方向在配图偏向标签内匹配素材，再让每段按选的素材图写画面和台词', async () => {
+    const materials = [
+      {
+        id: 91,
+        name: 'a.jpg',
+        url: '/91.jpg',
+        coverUrl: '/91s.jpg',
+        tags: ['生日会'],
+        description: '孩子们围着蛋糕',
+        isPortrait: false,
+      },
+      {
+        id: 92,
+        name: 'b.jpg',
+        url: '/92.jpg',
+        coverUrl: '',
+        tags: [],
+        description: '派对布置全景',
+        isPortrait: false,
+      },
+      {
+        id: 93,
+        name: 'c.jpg',
+        url: '/93.jpg',
+        coverUrl: '',
+        tags: [],
+        description: '吹蜡烛特写',
+        isPortrait: false,
+      },
+    ];
+    const runWithMessages = jest
+      .fn()
+      .mockResolvedValueOnce({
+        content: JSON.stringify({
+          segments: [
+            {
+              image: 2,
+              scene: '派对布置全景',
+              lines: '给孩子办生日会，布置是第一印象！',
+              delivery: '开门见山，语调上扬',
+            },
+            {
+              image: 9,
+              scene: '孩子围着蛋糕',
+              lines: '蛋糕一端上来，孩子们全围过来了。',
+              delivery: '轻快带笑',
+            },
+            {
+              image: 3,
+              scene: '吹蜡烛特写',
+              lines: '许个愿吹蜡烛，这一刻最值得记住。',
+              delivery: '温暖收尾',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, loadCandidates } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '孩子的生日会',
+        storyboardPreference: {
+          imageSource: 'gallery',
+          galleryTags: ['生日会'],
+        },
+        storeVisit: { start: 'script', script: script.script },
+      },
+      materials,
+      runWithMessages,
+    });
+    const lines = (await service.generateLines(2, {}, { userId: 'u1' })) as {
+      segments: Array<{ sceneImageId?: number }>;
+      sceneImages?: Array<{ id: number; description?: string }>;
+    };
+    expect(loadCandidates).toHaveBeenCalledWith(
+      expect.stringContaining('孩子的生日会'),
+      { userId: 'u1' },
+      ['生日会'],
+    );
+    const call = runWithMessages.mock.calls[0][0];
+    expect(call.config.system).toContain('【先看素材再设计分镜】');
+    expect(call.messages[0].content).toContain(
+      '图1：孩子们围着蛋糕（标签：生日会）',
+    );
+    // 第 2 段给了不存在的图 9，按相关度补一张还没用过的
+    expect(lines.segments.map((segment) => segment.sceneImageId)).toEqual([
+      92, 91, 93,
+    ]);
+    expect(lines.sceneImages?.map((image) => image.id)).toEqual([91, 92, 93]);
+  });
+
+  it('配图偏向是 AI 画面或调用方关掉素材时，从脚本开始也不去图库匹配', async () => {
+    const runWithMessages = jest.fn().mockResolvedValue({
+      content: JSON.stringify({ segments: script.segments }),
+    });
+    const generate = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '孩子的生日会',
+        storyboardPreference: { imageSource: 'generate', galleryTags: [] },
+        storeVisit: { start: 'script', script: script.script },
+      },
+      materials: [{ id: 91 }],
+      runWithMessages,
+    });
+    await generate.service.generateLines(2, {}, { userId: 'u1' });
+    expect(generate.loadCandidates).not.toHaveBeenCalled();
+    const off = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '孩子的生日会',
+        storeVisit: { start: 'script', script: script.script },
+      },
+      materials: [{ id: 91 }],
+      runWithMessages,
+    });
+    await off.service.generateLines(
+      2,
+      { useMaterials: false },
+      { userId: 'u1' },
+    );
+    expect(off.loadCandidates).not.toHaveBeenCalled();
+  });
+
   it('从门店开始仍要先定门店才能生成台词', async () => {
     const runWithMessages = jest.fn();
     const { service } = plannerWith({
@@ -816,6 +947,92 @@ describe('store visit store confirmation', () => {
       service.generateLines(2, {}, { userId: 'u1' }),
     ).rejects.toThrow('请先在脚本步骤确认');
     expect(runWithMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('客户需求里写明了已有门店时标为已确定；只在引用知识里出现的不算', async () => {
+    const runWithMessages = jest.fn().mockResolvedValue({
+      content: JSON.stringify({
+        question: '这条视频拍欢乐谷人民路店吗？',
+        storeId: 701,
+        name: '欢乐谷人民路店',
+        confident: true,
+      }),
+    });
+    const { service } = plannerWith({
+      topic: { id: 2, kind: 'child', title: '周末遛娃', storeVisit: {} },
+      stores: [{ id: 701, name: '欢乐谷人民路店' }],
+      knowledge: '本次拍摄欢乐谷人民路店',
+      runWithMessages,
+    });
+    expect(await service.writeScript(2, {}, { userId: 'u1' })).toMatchObject({
+      storeQuestion: { storeId: 701, confident: false },
+    });
+    expect(
+      await service.writeScript(
+        2,
+        { prompt: '帮我拍欢乐谷人民路店的亲子套餐' },
+        { userId: 'u1' },
+      ),
+    ).toMatchObject({ storeQuestion: { storeId: 701, confident: true } });
+    expect(runWithMessages.mock.calls[1][0].messages[0].content).toContain(
+      '客户需求：帮我拍欢乐谷人民路店的亲子套餐',
+    );
+  });
+
+  it('门店已确定的判断：要模型确定且店名真的写在客户文字里，简称要唯一对应，新店名不能和已有门店名互相包含', () => {
+    const stores = ['欢乐谷人民路店', '欢乐谷万达店', '星空咖啡'];
+    const base = { storeNames: stores, sources: '' };
+    expect(
+      isStoreVisitStoreDetermined({
+        ...base,
+        confident: false,
+        name: '星空咖啡',
+        existingName: '星空咖啡',
+        sources: '拍星空咖啡',
+      }),
+    ).toBe(false);
+    expect(
+      isStoreVisitStoreDetermined({
+        ...base,
+        confident: true,
+        name: '星空',
+        existingName: '星空咖啡',
+        sources: '这周拍星空',
+      }),
+    ).toBe(true);
+    expect(
+      isStoreVisitStoreDetermined({
+        ...base,
+        confident: true,
+        name: '欢乐谷',
+        existingName: '欢乐谷人民路店',
+        sources: '周末去欢乐谷',
+      }),
+    ).toBe(false);
+    expect(
+      isStoreVisitStoreDetermined({
+        ...base,
+        confident: true,
+        name: '小熊烘焙',
+        sources: '给小熊烘焙拍一条探店',
+      }),
+    ).toBe(true);
+    expect(
+      isStoreVisitStoreDetermined({
+        ...base,
+        confident: true,
+        name: '欢乐谷',
+        sources: '给欢乐谷拍一条',
+      }),
+    ).toBe(false);
+    expect(
+      isStoreVisitStoreDetermined({
+        ...base,
+        confident: true,
+        name: '小熊烘焙',
+        sources: '拍一家烘焙店',
+      }),
+    ).toBe(false);
   });
 });
 

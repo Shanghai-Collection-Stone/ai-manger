@@ -23,6 +23,14 @@ export type SmsVerificationScene = (typeof SMS_VERIFICATION_SCENES)[number];
 export const REQUIRE_SMS_CODE_KEY = 'sms-verification:require-sms-code';
 
 /**
+ * @description `@RequireSmsCode(scene, { optional: true })` 写入的可选标记 key：没带验证码时守卫放行、不挂可信手机号
+ * @keyword-cn 验证码可选标记, 二选一验证
+ * @keyword-en sms-code-optional-key, either-verification
+ */
+export const REQUIRE_SMS_CODE_OPTIONAL_KEY =
+  'sms-verification:require-sms-code-optional';
+
+/**
  * @description 平台级短信配置作用域占位符（全平台一份）
  * @keyword-cn 平台作用域, 短信配置
  * @keyword-en platform-scope, sms-setting

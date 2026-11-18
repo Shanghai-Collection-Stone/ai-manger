@@ -32,6 +32,14 @@ export const EMAIL_SCENE_ACTIONS: Record<EmailVerificationScene, string> = {
 export const REQUIRE_EMAIL_CODE_KEY = 'email-verification:require-email-code';
 
 /**
+ * @description `@RequireEmailCode(scene, { optional: true })` 写入的可选标记 key：没带验证码时守卫放行、不挂可信邮箱
+ * @keyword-cn 邮箱验证码可选标记, 二选一验证
+ * @keyword-en email-code-optional-key, either-verification
+ */
+export const REQUIRE_EMAIL_CODE_OPTIONAL_KEY =
+  'email-verification:require-email-code-optional';
+
+/**
  * @description 邮箱验证码有效期（秒）；邮件投递比短信慢，给 10 分钟
  * @keyword-cn 邮箱验证码有效期
  * @keyword-en email-code-ttl

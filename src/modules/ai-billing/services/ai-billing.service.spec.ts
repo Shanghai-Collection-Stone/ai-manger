@@ -1,6 +1,7 @@
 import { ObjectId } from 'mongodb';
 import type { Db } from 'mongodb';
 import { AiBillingService, CREDIT_UNIT_SCALE } from './ai-billing.service';
+import { AiCreditWalletService } from './ai-credit-wallet.service';
 
 const TENANT_ID = new ObjectId();
 const OPERATION_ID = 'xhs-article:42:op-1';
@@ -13,9 +14,11 @@ const OPERATION_ID = 'xhs-article:42:op-1';
 function createFakeDb() {
   const make = () => ({
     createIndex: jest.fn().mockResolvedValue('ok'),
+    findOne: jest.fn().mockResolvedValue(null),
     findOneAndUpdate: jest.fn(),
     updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     insertOne: jest.fn().mockResolvedValue({ acknowledged: true }),
+    deleteMany: jest.fn().mockResolvedValue({ deletedCount: 0 }),
   });
   const collections: Record<string, ReturnType<typeof make>> = {
     sass_tenants: make(),
@@ -23,6 +26,8 @@ function createFakeDb() {
     ai_service_credit_configs: make(),
     ai_service_usage_records: make(),
     ai_credit_transactions: make(),
+    ai_credit_wallets: make(),
+    admin_users: make(),
   };
   const db = {
     collection: (name: string) => collections[name],
@@ -32,7 +37,18 @@ function createFakeDb() {
     tenants: collections.sass_tenants,
     serviceUsages: collections.ai_service_usage_records,
     transactions: collections.ai_credit_transactions,
+    wallets: collections.ai_credit_wallets,
+    users: collections.admin_users,
   };
+}
+
+/**
+ * @description 用假 Db 组装计费服务与其依赖的钱包服务。
+ * @keyword-cn 组装计费服务, 钱包依赖
+ * @keyword-en build-billing-service, wallet-dependency
+ */
+function buildService(db: Db) {
+  return new AiBillingService(db, new AiCreditWalletService(db));
 }
 
 /**
@@ -66,7 +82,7 @@ describe('AiBillingService.refundService', () => {
     fake.tenants.findOneAndUpdate.mockResolvedValue({
       value: { _id: TENANT_ID, creditUnits: 5 * CREDIT_UNIT_SCALE },
     });
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     const refunded = await service.refundService({
       operationId: OPERATION_ID,
@@ -107,7 +123,7 @@ describe('AiBillingService.refundService', () => {
   it('已退过或从未扣成功时抢不到退款权，不动余额', async () => {
     const fake = createFakeDb();
     fake.serviceUsages.findOneAndUpdate.mockResolvedValue({ value: null });
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     const refunded = await service.refundService({
       operationId: OPERATION_ID,
@@ -124,7 +140,7 @@ describe('AiBillingService.refundService', () => {
     fake.serviceUsages.findOneAndUpdate.mockResolvedValue({
       value: chargedRecord({ chargedUnits: 0, unlimited: true }),
     });
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     await expect(
       service.refundService({ operationId: OPERATION_ID, reason: 'X' }),
@@ -138,7 +154,7 @@ describe('AiBillingService.refundService', () => {
       value: chargedRecord(),
     });
     fake.tenants.findOneAndUpdate.mockResolvedValue({ value: null });
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     await expect(
       service.refundService({ operationId: OPERATION_ID, reason: 'X' }),
@@ -152,7 +168,7 @@ describe('AiBillingService.refundService', () => {
       value: chargedRecord(),
     });
     fake.tenants.findOneAndUpdate.mockRejectedValue(new Error('network'));
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     await expect(
       service.refundService({ operationId: OPERATION_ID, reason: 'X' }),
@@ -172,7 +188,7 @@ describe('AiBillingService.refundService', () => {
       value: { _id: TENANT_ID, creditUnits: CREDIT_UNIT_SCALE },
     });
     fake.transactions.insertOne.mockRejectedValue(new Error('ledger down'));
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     await expect(
       service.refundService({ operationId: OPERATION_ID, reason: 'X' }),
@@ -182,7 +198,7 @@ describe('AiBillingService.refundService', () => {
 
   it('operationId 为空时直接返回 false', async () => {
     const fake = createFakeDb();
-    const service = new AiBillingService(fake.db);
+    const service = buildService(fake.db);
 
     await expect(
       service.refundService({ operationId: '  ', reason: 'X' }),

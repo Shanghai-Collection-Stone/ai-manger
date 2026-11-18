@@ -18,6 +18,15 @@ export interface SassTenantEntity {
   credit: number;
   /** Credit 的整数最小计费单位；-1 表示无限额度 */
   creditUnits: number;
+  /**
+   * Credit 模式：缺省或 shared 为历史全员共用余额；allocated 时 credit 只是待分配额度，
+   * 成员按各自分到的额度消费，新租户默认 allocated
+   */
+  creditMode?: 'shared' | 'allocated';
+  /** 新成员加入时从待分配额度赠送的 Credit，缺省 0 */
+  memberCreditGrant?: number;
+  /** 旧余额迁移给成员（每人一份全额）的时间 */
+  creditMigratedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

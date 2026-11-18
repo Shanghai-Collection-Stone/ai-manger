@@ -7,6 +7,10 @@ import { randomUUID } from 'node:crypto';
 import { Collection, Db, ObjectId } from 'mongodb';
 import type { SassTenantEntity } from '../../sass/entities/sass-tenant.entity.js';
 import type { AiCreditTransactionEntity } from '../entities/ai-credit-transaction.entity.js';
+import type {
+  AiCreditAllocation,
+  AiCreditPayer,
+} from '../entities/ai-credit-wallet.entity.js';
 import {
   AI_CREDIT_SERVICE_CATALOG,
   type AiCreditServiceCode,
@@ -18,6 +22,7 @@ import type {
   AiProviderBillingSnapshot,
   AiUsageRecordEntity,
 } from '../entities/ai-usage-record.entity.js';
+import { AiCreditWalletService } from './ai-credit-wallet.service.js';
 
 /**
  * @description 一个 Credit 拆分成的整数最小计费单位，避免浮点累加误差。
@@ -35,7 +40,10 @@ export const STREAM_TOKEN_BLOCK = 16;
 
 interface ActiveCallState {
   callId: string;
-  tenantObjectId?: ObjectId;
+  /** 本次调用可动用的钱包，按顺序扣减 */
+  payers: AiCreditPayer[];
+  /** 已预扣单位实际落在哪些钱包，退款按此原路退回 */
+  allocations: AiCreditAllocation[];
   unlimited: boolean;
   /** 免费提供商：未配置 tokensPerCredit 视为免费服务，不预扣不拦截，只记流水 */
   free: boolean;
@@ -135,7 +143,6 @@ export class AiBillingService {
   private readonly serviceUsages: Collection<AiServiceUsageRecordEntity>;
   private readonly creditTransactions: Collection<AiCreditTransactionEntity>;
   private readonly activeCalls = new Map<string, ActiveCallState>();
-  private readonly creditUnitsReady = new Set<string>();
   private readonly providerBillingSuppression =
     new AsyncLocalStorage<boolean>();
 
@@ -144,7 +151,10 @@ export class AiBillingService {
    * @keyword-cn 计费服务初始化, 用量索引
    * @keyword-en billing-service-init, usage-index
    */
-  constructor(@Inject('CTX_MONGO_DB') private readonly db: Db) {
+  constructor(
+    @Inject('CTX_MONGO_DB') private readonly db: Db,
+    private readonly wallet: AiCreditWalletService,
+  ) {
     this.tenants = db.collection<SassTenantEntity>('sass_tenants');
     this.usages = db.collection<AiUsageRecordEntity>('ai_usage_records');
     this.serviceConfigs = db.collection<AiServiceCreditConfigEntity>(
@@ -246,27 +256,23 @@ export class AiBillingService {
       createdAt: now,
     };
     if (tenant && chargedUnits > 0) {
-      await this.ensureCreditUnits(tenant._id);
+      const payers = await this.wallet.resolvePayers(tenant, input.userId);
       const session = this.db.client.startSession();
       try {
         try {
           await session.withTransaction(async () => {
-            await this.commitServiceCharge(
-              tenant._id,
-              definition,
-              record,
-              session,
-            );
+            await this.commitServiceCharge(payers, definition, record, session);
           });
         } catch (error) {
           if (!this.isMongoTransactionUnsupported(error)) throw error;
-          await this.commitServiceCharge(tenant._id, definition, record);
+          await this.commitServiceCharge(payers, definition, record);
         }
       } catch (error) {
         if (this.errorCode(error) === 'CREDIT_EXHAUSTED') {
           record.status = 'credit_exhausted';
           record.errorCode = 'CREDIT_EXHAUSTED';
           record.chargedUnits = 0;
+          delete record.allocations;
           await this.serviceUsages.insertOne(record);
         }
         throw error;
@@ -280,70 +286,34 @@ export class AiBillingService {
   }
 
   /**
-   * @description 同步提交服务扣费余额、统一流水和服务用量；单机写入失败时补偿余额。
+   * @description 按付款顺序跨钱包扣服务点数并写流水与服务用量；单机写入失败时补偿余额。
    * @keyword-cn 提交服务扣费, 单机补偿
    * @keyword-en commit-service-charge, standalone-compensation
    */
   private async commitServiceCharge(
-    tenantId: ObjectId,
+    payers: AiCreditPayer[],
     definition: (typeof AI_CREDIT_SERVICE_CATALOG)[number],
     record: AiServiceUsageRecordEntity,
     session?: import('mongodb').ClientSession,
   ): Promise<void> {
-    const options = session ? { session } : undefined;
-    const chargedUnits = record.chargedUnits;
-    const result = await this.tenants.findOneAndUpdate(
-      {
-        _id: tenantId,
-        credit: { $ne: -1 },
-        creditUnits: { $gte: chargedUnits },
+    const debit = await this.wallet.debit({
+      payers,
+      units: record.chargedUnits,
+      meta: {
+        type: 'service_charge',
+        reason: `${definition.name}消费`,
+        referenceId: record.operationId,
+        serviceCode: definition.code,
+        serviceName: definition.name,
       },
-      {
-        $inc: {
-          creditUnits: -chargedUnits,
-          credit: -chargedUnits / CREDIT_UNIT_SCALE,
-        },
-        $set: { updatedAt: record.createdAt },
-      },
-      { returnDocument: 'after', includeResultMetadata: true, ...options },
-    );
-    if (!result.value) throw this.billingError('CREDIT_EXHAUSTED');
-    const transaction: AiCreditTransactionEntity = {
-      _id: new ObjectId(),
-      transactionId: record.chargeId,
-      tenantId: result.value._id.toHexString(),
-      type: 'service_charge',
-      amount: -record.creditCost,
-      amountUnits: -chargedUnits,
-      balanceBefore:
-        (result.value.creditUnits + chargedUnits) / CREDIT_UNIT_SCALE,
-      balanceAfter: result.value.creditUnits / CREDIT_UNIT_SCALE,
-      reason: `${definition.name}消费`,
-      operatorType: 'system',
-      referenceId: record.operationId,
-      serviceCode: definition.code,
-      serviceName: definition.name,
-      createdAt: record.createdAt,
-    };
+      session,
+    });
+    record.allocations = debit.allocations;
     try {
-      await this.creditTransactions.insertOne(transaction, options);
-      await this.serviceUsages.insertOne(record, options);
+      if (session) await this.serviceUsages.insertOne(record, { session });
+      else await this.serviceUsages.insertOne(record);
     } catch (error) {
-      if (!session) {
-        await this.creditTransactions.deleteOne({
-          transactionId: transaction.transactionId,
-        });
-        await this.tenants.updateOne(
-          { _id: tenantId, creditUnits: result.value.creditUnits },
-          {
-            $inc: {
-              creditUnits: chargedUnits,
-              credit: chargedUnits / CREDIT_UNIT_SCALE,
-            },
-            $set: { updatedAt: new Date() },
-          },
-        );
-      }
+      if (!session) await this.wallet.revert(debit);
       throw error;
     }
   }
@@ -351,8 +321,8 @@ export class AiBillingService {
   /**
    * @description 业务生成失败时按 operationId 原路退回服务扣费，幂等：同一笔只会退一次。
    *   先把服务流水从 succeeded 原子翻成 refunded 抢占退款权，并发或重复调用只有一方能抢到；
-   *   再给租户加回余额并追加一条 refund 余额流水。没扣过、已退过、扣费时就额度不足的
-   *   流水都不会命中，直接返回 false。租户期间被改成无限额度时只翻状态不加余额。
+   *   再按扣费分摊原路加回各钱包（成员 / 个人 / 租户）并逐笔追加 refund 余额流水；历史流水没有分摊时退回租户钱包。
+   *   没扣过、已退过、扣费时就额度不足的流水都不会命中，直接返回 false。租户期间被改成无限额度时只翻状态不加余额。
    * @keyword-cn 服务退款, 失败退点, 幂等退款
    * @keyword-en service-refund, failure-refund, idempotent-refund
    */
@@ -377,55 +347,50 @@ export class AiBillingService {
     const record = claimed.value;
     if (!record) return false;
     const units = record.chargedUnits;
-    const tenantId =
-      record.tenantId && ObjectId.isValid(record.tenantId)
-        ? new ObjectId(record.tenantId)
-        : undefined;
-    if (!tenantId || units <= 0) return true;
-    let credited;
+    if (units <= 0) return true;
+    const allocations: AiCreditAllocation[] = record.allocations?.length
+      ? record.allocations
+      : record.tenantId && ObjectId.isValid(record.tenantId)
+        ? [
+            {
+              kind: 'tenant',
+              ownerId: record.tenantId,
+              tenantId: record.tenantId,
+              units,
+            },
+          ]
+        : [];
+    if (!allocations.length) return true;
     try {
-      credited = await this.tenants.findOneAndUpdate(
-        { _id: tenantId, credit: { $ne: -1 } },
-        {
-          $inc: { creditUnits: units, credit: units / CREDIT_UNIT_SCALE },
-          $set: { updatedAt: now },
+      await this.wallet.refund({
+        allocations,
+        units,
+        meta: {
+          type: 'refund',
+          reason: `${record.serviceName}失败退款`,
+          referenceId: operationId,
+          serviceCode: record.serviceCode,
+          serviceName: record.serviceName,
         },
-        { returnDocument: 'after', includeResultMetadata: true },
-      );
-    } catch (error) {
-      // 余额没加上：把流水还原成 succeeded，让下一次失败回调能重新退
-      await this.serviceUsages.updateOne(
-        { chargeId: record.chargeId, status: 'refunded' },
-        {
-          $set: { status: 'succeeded' },
-          $unset: { refundedAt: '', refundReason: '' },
-        },
-      );
-      throw error;
-    }
-    if (!credited.value) return true;
-    // 余额已加回，余额流水写失败也不能再还原状态，否则会重复退款；只记错误供对账
-    try {
-      await this.creditTransactions.insertOne({
-        _id: new ObjectId(),
-        transactionId: randomUUID(),
-        tenantId: tenantId.toHexString(),
-        type: 'refund',
-        amount: units / CREDIT_UNIT_SCALE,
-        amountUnits: units,
-        balanceBefore: (credited.value.creditUnits - units) / CREDIT_UNIT_SCALE,
-        balanceAfter: credited.value.creditUnits / CREDIT_UNIT_SCALE,
-        reason: `${record.serviceName}失败退款`,
-        operatorType: 'system',
-        referenceId: operationId,
-        serviceCode: record.serviceCode,
-        serviceName: record.serviceName,
-        createdAt: now,
       });
     } catch (error) {
-      this.logger.error(
-        `[billing] service refund credited but ledger insert failed operationId=${operationId} units=${units}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const credited =
+        (error as { creditedUnits?: number } | null)?.creditedUnits ?? 0;
+      if (credited <= 0) {
+        // 一分都没加回：把流水还原成 succeeded，让下一次失败回调能重新退
+        await this.serviceUsages.updateOne(
+          { chargeId: record.chargeId, status: 'refunded' },
+          {
+            $set: { status: 'succeeded' },
+            $unset: { refundedAt: '', refundReason: '' },
+          },
+        );
+      } else {
+        this.logger.error(
+          `[billing] service refund partially credited operationId=${operationId} credited=${credited} total=${units}`,
+        );
+      }
+      throw error;
     }
     return true;
   }
@@ -699,12 +664,23 @@ export class AiBillingService {
       { upsert: true },
     );
     if (inserted.upsertedCount === 0) return null;
+    const payers =
+      tenant && chargeable
+        ? await this.wallet.resolvePayers(tenant, input.context.userId)
+        : [];
+    let allocations: AiCreditAllocation[] = [];
     if (tenant && chargeable && reservedUnits > 0) {
       try {
-        await this.reserveTenantUnits(tenant._id, reservedUnits, {
-          referenceId: input.callId,
-          reason: `${input.provider.providerCode} 模型预扣`,
+        const debit = await this.wallet.debit({
+          payers,
+          units: reservedUnits,
+          meta: {
+            type: 'provider_charge',
+            reason: `${input.provider.providerCode} 模型预扣`,
+            referenceId: input.callId,
+          },
         });
+        allocations = debit.allocations;
       } catch (error) {
         const failedAt = new Date();
         await this.usages.updateOne(
@@ -724,7 +700,8 @@ export class AiBillingService {
     }
     return {
       callId: input.callId,
-      tenantObjectId: tenant?._id,
+      payers,
+      allocations,
       unlimited,
       free,
       chargeable,
@@ -749,19 +726,26 @@ export class AiBillingService {
     if (!ratio) return 0;
     const units = this.tokensToUnits(tokens, ratio);
     let reservedUnits = units;
-    if (state.chargeable && state.tenantObjectId) {
-      try {
-        await this.reserveTenantUnits(state.tenantObjectId, units, {
-          referenceId: state.callId,
+    if (state.chargeable && state.payers.length) {
+      // partial：整块不够时把各钱包剩下的尾款取光，让最后一个 Credit 被完整利用
+      const debit = await this.wallet.debit({
+        payers: state.payers,
+        units,
+        partial: true,
+        meta: {
+          type: 'provider_charge',
           reason: `${state.provider.providerCode} 模型追加预扣`,
-        });
-      } catch (error) {
-        if (this.errorCode(error) !== 'CREDIT_EXHAUSTED') throw error;
-        reservedUnits = await this.drainTenantUnits(state.tenantObjectId, {
           referenceId: state.callId,
-          reason: `${state.provider.providerCode} 模型耗尽尾款`,
-        });
-      }
+        },
+      });
+      reservedUnits = debit.allocations.reduce(
+        (sum, item) => sum + item.units,
+        0,
+      );
+      state.allocations = this.mergeAllocations(
+        state.allocations,
+        debit.allocations,
+      );
       state.reservedUnits += reservedUnits;
     }
     await this.usages.updateOne(
@@ -780,108 +764,23 @@ export class AiBillingService {
   }
 
   /**
-   * @description 当完整 Token 块无法预扣时原子取走最后余额，使最后一个 Credit 被完整利用。
-   * @keyword-cn 耗尽最后余额, Credit归零
-   * @keyword-en drain-final-balance, zero-credit
+   * @description 合并两次扣费分摊，同一钱包累加单位并保持首次出现的顺序（退款从后往前退）。
+   * @keyword-cn 合并扣费分摊, 钱包顺序
+   * @keyword-en merge-allocations, wallet-order
    */
-  private async drainTenantUnits(
-    tenantId: ObjectId,
-    meta?: { referenceId?: string; reason?: string },
-  ): Promise<number> {
-    const result = await this.tenants.findOneAndUpdate(
-      { _id: tenantId, credit: { $ne: -1 }, creditUnits: { $gt: 0 } },
-      { $set: { credit: 0, creditUnits: 0, updatedAt: new Date() } },
-      { returnDocument: 'before', includeResultMetadata: true },
-    );
-    const units = Math.max(0, Math.floor(result.value?.creditUnits ?? 0));
-    if (result.value && units > 0) {
-      await this.creditTransactions.insertOne({
-        _id: new ObjectId(),
-        transactionId: randomUUID(),
-        tenantId: tenantId.toHexString(),
-        type: 'provider_charge',
-        amount: -units / CREDIT_UNIT_SCALE,
-        amountUnits: -units,
-        balanceBefore: units / CREDIT_UNIT_SCALE,
-        balanceAfter: 0,
-        reason: meta?.reason ?? 'AI Provider 消费',
-        operatorType: 'system',
-        referenceId: meta?.referenceId,
-        createdAt: new Date(),
-      });
-    }
-    return units;
-  }
-
-  /**
-   * @description 原子扣减租户整数计费单位，余额不足时抛出 CREDIT_EXHAUSTED。
-   * @keyword-cn 原子扣减余额, 额度耗尽
-   * @keyword-en atomic-balance-debit, credit-exhausted
-   */
-  private async reserveTenantUnits(
-    tenantId: ObjectId,
-    units: number,
-    meta?: { referenceId?: string; reason?: string },
-  ): Promise<SassTenantEntity> {
-    await this.ensureCreditUnits(tenantId);
-    const result = await this.tenants.findOneAndUpdate(
-      { _id: tenantId, credit: { $ne: -1 }, creditUnits: { $gte: units } },
-      {
-        $inc: {
-          creditUnits: -units,
-          credit: -units / CREDIT_UNIT_SCALE,
-        },
-        $set: { updatedAt: new Date() },
-      },
-      { returnDocument: 'after', includeResultMetadata: true },
-    );
-    if (!result.value) throw this.billingError('CREDIT_EXHAUSTED');
-    await this.creditTransactions.insertOne({
-      _id: new ObjectId(),
-      transactionId: randomUUID(),
-      tenantId: tenantId.toHexString(),
-      type: 'provider_charge',
-      amount: -units / CREDIT_UNIT_SCALE,
-      amountUnits: -units,
-      balanceBefore: (result.value.creditUnits + units) / CREDIT_UNIT_SCALE,
-      balanceAfter: result.value.creditUnits / CREDIT_UNIT_SCALE,
-      reason: meta?.reason ?? 'AI Provider 消费',
-      operatorType: 'system',
-      referenceId: meta?.referenceId,
-      createdAt: new Date(),
-    });
-    return result.value;
-  }
-
-  /**
-   * @description 为历史租户懒初始化 Credit 与整数计费单位，缺省视为无限额度。
-   * @keyword-cn 历史租户兼容, 余额单位初始化
-   * @keyword-en legacy-tenant-compat, balance-unit-init
-   */
-  private async ensureCreditUnits(tenantId: ObjectId): Promise<void> {
-    const tenantKey = tenantId.toHexString();
-    if (this.creditUnitsReady.has(tenantKey)) return;
-    const tenant = await this.tenants.findOne({ _id: tenantId });
-    if (!tenant) throw this.billingError('TENANT_NOT_FOUND');
-    if (typeof tenant.credit !== 'number') {
-      await this.tenants.updateOne(
-        { _id: tenantId, credit: { $exists: false } },
-        { $set: { credit: -1, creditUnits: -1, updatedAt: new Date() } },
+  private mergeAllocations(
+    current: AiCreditAllocation[],
+    next: AiCreditAllocation[],
+  ): AiCreditAllocation[] {
+    const merged = current.map((item) => ({ ...item }));
+    for (const item of next) {
+      const found = merged.find(
+        (row) => row.kind === item.kind && row.ownerId === item.ownerId,
       );
-      this.creditUnitsReady.add(tenantKey);
-      return;
+      if (found) found.units += item.units;
+      else merged.push({ ...item });
     }
-    if (typeof tenant.creditUnits !== 'number') {
-      const units =
-        tenant.credit === -1
-          ? -1
-          : Math.max(0, Math.floor(tenant.credit * CREDIT_UNIT_SCALE));
-      await this.tenants.updateOne(
-        { _id: tenantId, creditUnits: { $exists: false } },
-        { $set: { creditUnits: units, updatedAt: new Date() } },
-      );
-    }
-    this.creditUnitsReady.add(tenantKey);
+    return merged;
   }
 
   /**
@@ -905,14 +804,23 @@ export class AiBillingService {
     const ratio = this.positiveInteger(state.provider.tokensPerCredit);
     const desiredUnits = ratio ? this.tokensToUnits(billedTokens, ratio) : 0;
     let chargedUnits = state.chargeable ? state.reservedUnits : 0;
-    if (state.chargeable && state.tenantObjectId && ratio) {
+    if (state.chargeable && state.payers.length && ratio) {
       if (desiredUnits > state.reservedUnits) {
         const extra = desiredUnits - state.reservedUnits;
         try {
-          await this.reserveTenantUnits(state.tenantObjectId, extra, {
-            referenceId: callId,
-            reason: `${state.provider.providerCode} 模型结算补扣`,
+          const debit = await this.wallet.debit({
+            payers: state.payers,
+            units: extra,
+            meta: {
+              type: 'provider_charge',
+              reason: `${state.provider.providerCode} 模型结算补扣`,
+              referenceId: callId,
+            },
           });
+          state.allocations = this.mergeAllocations(
+            state.allocations,
+            debit.allocations,
+          );
           chargedUnits += extra;
         } catch (error) {
           this.logger.error(
@@ -923,34 +831,15 @@ export class AiBillingService {
         }
       } else if (desiredUnits < state.reservedUnits) {
         const refund = state.reservedUnits - desiredUnits;
-        const refundResult = await this.tenants.findOneAndUpdate(
-          { _id: state.tenantObjectId, credit: { $ne: -1 } },
-          {
-            $inc: {
-              creditUnits: refund,
-              credit: refund / CREDIT_UNIT_SCALE,
-            },
-            $set: { updatedAt: new Date() },
-          },
-          { returnDocument: 'after', includeResultMetadata: true },
-        );
-        if (refundResult.value) {
-          await this.creditTransactions.insertOne({
-            _id: new ObjectId(),
-            transactionId: randomUUID(),
-            tenantId: state.tenantObjectId.toHexString(),
+        await this.wallet.refund({
+          allocations: state.allocations,
+          units: refund,
+          meta: {
             type: 'refund',
-            amount: refund / CREDIT_UNIT_SCALE,
-            amountUnits: refund,
-            balanceBefore:
-              (refundResult.value.creditUnits - refund) / CREDIT_UNIT_SCALE,
-            balanceAfter: refundResult.value.creditUnits / CREDIT_UNIT_SCALE,
             reason: `${state.provider.providerCode} 模型预扣退款`,
-            operatorType: 'system',
             referenceId: callId,
-            createdAt: new Date(),
-          });
-        }
+          },
+        });
         chargedUnits -= refund;
       }
     }

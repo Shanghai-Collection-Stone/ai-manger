@@ -17,7 +17,8 @@
 - `services/aliyun-sms.service.ts` — Dysms `SendSms` 调用与可复用 RPC V1 签名。
 - `services/aliyun-dypns.service.ts` — Dypns `SendSmsVerifyCode`、`CheckSmsVerifyCode` 调用。
 - `services/sms-verification.service.ts` — 分服务商发码与校验、频控、作废及后台测试发送。
-- `guards/sms-code.guard.ts` — 按场景判定请求携带的验证码。
+- `guards/sms-code.guard.ts` — 按场景判定请求携带的验证码，可选声明下没带验证码放行。
+- `guards/sms-code.guard.spec.ts` — 守卫可选模式（放行 / 照常校验 / 非可选仍拒绝）单测。
 - `interceptors/sms-code-consume.interceptor.ts` — 业务成功后作废验证码。
 - `decorators/require-sms-code.decorator.ts` — 接口接入验证码的组合装饰器。
 - `controller/sms-verification.controller.ts` — 公开发码接口与超管配置接口。
@@ -26,8 +27,8 @@
 ## 函数清单 (Function List)
 
 - `SmsVerificationModule()` — 注册全局短信验证码模块 | keywords: 短信验证码模块, 全局模块, sms-verification-module, global-module
-- `RequireSmsCode(scene)` — 一行接入验证码场景、判定守卫与成功后作废 | keywords: 接入验证码, 验证码装饰器, require-sms-code, sms-code-decorator
-- `SmsCodeGuard.canActivate(context)` — 按场景校验请求验证码 | keywords: 校验请求验证码, 场景绑定, check-request-sms-code, scene-binding
+- `RequireSmsCode(scene,options?)` — 一行接入验证码场景、判定守卫与成功后作废；`{ optional: true }` 时没带验证码也放行，用于手机号与邮箱二选一验证 | keywords: 接入验证码, 验证码装饰器, require-sms-code, sms-code-decorator
+- `SmsCodeGuard.canActivate(context)` — 按场景校验请求验证码，可选声明下没带验证码只删空 smsCode 后放行 | keywords: 校验请求验证码, 场景绑定, check-request-sms-code, scene-binding
 - `SmsCodeGuard.readField(bodyValue,headerValue)` — 从 body 优先、请求头兜底读取字段 | keywords: 读取验证字段, 请求头兜底, read-sms-field, header-fallback
 - `SmsCodeConsumeInterceptor.intercept(context,next)` — 响应前作废已校验验证码 | keywords: 响应前作废, 一次性使用, consume-before-response, single-use
 - `SmsVerificationService.ensureIndexes()` — 建立验证码 TTL 与频控查询索引 | keywords: 验证码索引, TTL清理, sms-code-indexes, ttl-cleanup
@@ -84,6 +85,7 @@
 | 接入验证码 | require-sms-code |
 | 验证码装饰器 | sms-code-decorator |
 | 验证码守卫 | sms-code-guard |
+| 二选一验证 | either-verification |
 | 验证码判定 | sms-code-check |
 | 成功后作废 | consume-on-success |
 | 短信服务商、接口类型 | sms-provider, api-type |
@@ -131,6 +133,7 @@
 - `SMS_VERIFICATION_SCENES` — 场景白名单（当前 `register`） | keywords: 验证码场景, 场景白名单, sms-scene, scene-allowlist
 - `SmsVerificationScene` — 验证码场景类型 | keywords: 验证码场景类型, sms-scene-type
 - `REQUIRE_SMS_CODE_KEY` — 场景元数据 key | keywords: 验证码元数据键, require-sms-code-metadata-key
+- `REQUIRE_SMS_CODE_OPTIONAL_KEY` — 可选标记元数据 key | keywords: 验证码可选标记, 二选一验证, sms-code-optional-key, either-verification
 - `SMS_PLATFORM_SCOPE_ID` / `SMS_DEFAULT_TEMPLATE_PARAM_NAME` — 平台作用域与 Dysms 模板变量名默认值。
 - `SMS_CODE_TTL_SECONDS`(300) / `SMS_RESEND_INTERVAL_SECONDS`(60) / `SMS_PHONE_DAILY_LIMIT`(10) / `SMS_IP_HOURLY_LIMIT`(30) / `SMS_CODE_MAX_ATTEMPTS`(5) — 有效期、重发间隔与频控常量。
 - `SmsProvider` — 短信接口类型 | keywords: 短信服务商, sms-provider
@@ -159,6 +162,7 @@ Dypns 发码先写入带占位摘要的本地记录，再调用 `SendSmsVerifyCo
 3. 请求携带 `smsPhone` + `smsCode`，也可使用 `X-Sms-Phone` / `X-Sms-Code` 请求头。守卫校验后从 body 删除这两个字段。
 4. 业务方法从 `req.smsVerification.phone` 读取可信手机号，不信任 body 内其他手机号字段。
 5. 业务成功返回后拦截器才作废验证码；参数或业务失败仍可在五次尝试限制内重试。
+6. 需要「手机号与邮箱二选一验证」时写 `@RequireSmsCode(scene, { optional: true })`：没带验证码直接放行、不挂 `req.smsVerification`，`smsPhone` 留在 body 由业务 DTO 当未验证手机号校验；带了验证码照常校验。业务方法必须自己要求至少一项已验证（如 tenant-join 注册报 `VERIFICATION_CODE_REQUIRED`）。
 
 已接入：`POST /admin/auth/register`（场景 `register`）。
 
