@@ -144,7 +144,10 @@ function setup(setting: Record<string, unknown> = {}) {
     writeScript: jest.fn(async () => {
       topic.storeVisit!.script = body;
       topic.storeVisit!.scriptNeedsRefine = false;
-      return { script: body, review: { passed: true, issues: [] } };
+      return {
+        script: body,
+        review: { passed: true, issues: [] as string[] },
+      };
     }),
     generateLines: jest.fn(async () => {
       topic.storeVisit!.segments = [
