@@ -26,6 +26,10 @@ export interface GalleryImageEntity {
   height?: number;
   /** @description 是否为竖图（高度大于宽度） */
   isPortrait?: boolean;
+  /**
+   * @description 图片标签（按顺序）。不再存于 `gallery_images`，由 `GalleryTagLinkService` 从
+   *   `gallery_tags` + `gallery_image_tags` 回填；对外接口与服务返回值保持同名字段不变。
+   */
   tags: string[];
   description?: string;
   /** @description 是否已收藏，历史数据缺省时按 false 返回 */
@@ -58,6 +62,13 @@ export interface GalleryImageEntity {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * @description `gallery_images` 实际落库的文档：不含 `tags`，标签只在标签字典与关联表里。
+ * @keyword-cn 图片落库文档, 不存标签
+ * @keyword-en gallery-image-document, tags-not-stored
+ */
+export type GalleryImageDocument = Omit<GalleryImageEntity, 'tags'>;
 
 /**
  * @description 对外返回的图片：不含 Mongo 主键与 768 维向量（向量只供服务端相似检索）。

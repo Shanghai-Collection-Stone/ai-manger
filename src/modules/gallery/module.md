@@ -4,7 +4,7 @@
 
 ## 概述 (Overview)
 
-该模块基于MongoDB存储图片与图库组的元数据及向量Embedding，支持批量上传、按用户/标签/分组查询、按创建时间升降序分页，并提供向量相似度检索（优先Atlas Vector Search，失败回退本地余弦相似度）。
+该模块基于MongoDB存储图片与图库组的元数据及向量Embedding，支持批量上传、按用户/标签/分组查询、按创建时间升降序分页，并提供向量相似度检索（优先Atlas Vector Search，失败回退本地余弦相似度）。图片标签不再存于图片文档，统一存放在 `gallery_tags`（标签字典）与 `gallery_image_tags`（图片标签关联）两张表，按标签筛图与标签统计只扫关联表索引；旧数据用 `scripts/migrate-gallery-tags-to-links.mjs` 迁移。
 
 ## 文件清单 (File List)
 
@@ -12,6 +12,7 @@
 - `controller/gallery.dto.ts`
 - `entities/gallery-group.entity.ts`
 - `entities/gallery-image.entity.ts`
+- `entities/gallery-tag.entity.ts` — 标签字典 `gallery_tags` 与图片标签关联 `gallery_image_tags` 的实体。
 - `entities/gallery-tag-library.entity.ts`
 - `filters/gallery-upload-exception.filter.ts`
 - `gallery-upload-filename.ts`
@@ -22,7 +23,9 @@
 - `services/gallery-public-image.spec.ts`
 - `services/gallery-list-query.spec.ts`
 - `services/gallery-tag-library.service.ts`
-- `services/gallery-tag-library.service.spec.ts` — 新建标签库为空、旧租户已有的标签库（含早期写入的门店 / 活动预设）原样返回不改写。
+- `services/gallery-tag-library.service.spec.ts` — 新建标签库为空、旧租户已有的标签库（含早期写入的门店 / 活动预设）原样返回不改写；未分类标签走关联表统计并排除已归类与系统标签。
+- `services/gallery-tag-link.service.ts` — 标签字典与图片标签关联服务：同步关联、回填标签、标签换算图片 ID、只扫索引的标签统计。
+- `services/gallery-tag-link.service.spec.ts` — 关联整体同步（增删改顺序）、租户隔离统计、清空与删图移除关联。
 - `services/gallery.service.ts`
 - `material-styles/` — 子模块索引见 `material-styles/module.md`。
 - `zip-import/` — 子模块索引见 `zip-import/module.md`。
@@ -67,23 +70,38 @@
 - `isJimpLike(value)` — 判断动态导入的 jimp 可读图 | keywords: 判断jimp可用, 动态导入, detect-jimp-like, dynamic-import
 - `createCollection()` — 创建记录 Mongo 查询与聚合投影的测试集合 | keywords: 公开投影测试, 查询记录, public-projection-test, query-recording
 - `createListCollection(cursorImage)` — 创建记录列表查询条件、可指定游标图片的集合替身 | keywords: 列表查询替身, 游标图片, list-query-double, cursor-image
-- `listClauses(images, options)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
-- `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖租户标签去重与创建时间分页；收藏排序只保留含创建时间与业务 ID 的完整键，并删除较短前缀索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
-- `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
+- `listClauses(images, options, tagLinks?)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
+- `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖创建时间分页、拼图/已使用/按用户分组只取 ID 的覆盖索引；收藏排序只保留含创建时间与业务 ID 的完整键，删除较短前缀索引与已不用的数组标签索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
+- `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值，标签规整后写入关联表 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
 - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
 - `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
 - `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
-- `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片（含素材图）、其中的素材图、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
+- `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片（含素材图）、其中的素材图、收藏与去重标签；标签数只扫关联表索引 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
 - `GalleryService.updateImageMeta(input)` — 更新单张可见图片的元数据 | keywords: 单图元数据更新, 图片可见范围, single-image-metadata, image-visibility
 - `GalleryService.updateImagesMetaBatch(input)` — 批量更新可见图片并按行去重追加备注 | keywords: 批量元数据更新, 备注按行去重, batch-image-metadata, deduplicate-note-lines
 - `GalleryService.appendNoteLines(current, incoming)` — 追加非重复备注行并限制总长度 | keywords: 备注追加, 文本去重, append-note, text-deduplication
-- `GalleryService.findSimilarImages(input)` — 以已有向量检索相似图并按共同标签兜底 | keywords: 相似图片, 标签相似兜底, similar-images, tag-similarity-fallback
+- `GalleryService.findSimilarImages(input)` — 以已有向量检索相似图并按共同标签兜底；只有走向量时才读取候选图片 | keywords: 相似图片, 标签相似兜底, similar-images, tag-similarity-fallback
 - `GalleryService.convertTagsToNote(input)` — 把图片标签迁移为去重备注行 | keywords: 标签转备注, 图片批量迁移, tags-to-note, image-batch-migration
+- `GalleryService.scopeKeyOf(tenantId?)` — 当前租户可见范围对应的标签作用域键 | keywords: 图片标签作用域, 租户作用域键, image-tag-scope, tenant-scope-key
+- `GalleryService.attachTags(rows)` — 从关联表批量回填图片 `tags`；迁移过渡期文档上还留着旧数组时以旧数组为准 | keywords: 回填图片标签, 旧数组兼容, attach-image-tags, legacy-array-compat
+- `GalleryService.tagIdClause(scopeKey, mode, names)` — 把 `any` / `all` / `none` 标签条件换算成图片 ID 条件 | keywords: 标签条件换算, 图片ID过滤, tag-clause-to-ids, image-id-filter
+- `GalleryService.writeImageTags(entries)` — 整体同步图片标签关联并移走残留的旧 `tags` 数组 | keywords: 写入图片标签, 移除旧数组, write-image-tags, drop-legacy-array
+- `GalleryService.findImageIds(filter)` — 只读取图片业务 ID，配合含 id 的复合索引走覆盖查询 | keywords: 读取图片ID, 覆盖查询, find-image-ids, covered-query
+- `GalleryService.findSimilarByTags(scope, source, limit)` — 相似图无向量兜底：共同标签数在关联表统计，同数按新到旧，不够用最新图片补足 | keywords: 共同标签兜底, 相似图补足, shared-tag-fallback, similar-image-fill
+- `GalleryService.imageTypeTagRule(imageType, requestedTags?)` — 图片类型对应的标签规则（普通图排除、素材图与封面包含） | keywords: 图片类型标签规则, 素材图口径, image-type-tag-rule, material-image-rule
+- `GalleryService.sortTagNames(names, limit)` — 标签名去空白去重、字典序截断 | keywords: 标签名排序, 标签截断, sort-tag-names, limit-tag-names
+- `GalleryService.listDistinctTagsWithTenant(userId, tenantId?, limit?)` — 列出租户作用域内已被图片使用的标签 | keywords: 租户标签列表, 已用标签, list-tenant-tags, used-tags
+- `GalleryService.list(userId?, groupId?, tag?, cursorId?, limit?)` — 旧版按用户/分组/标签列图，按自增 ID 游标分页 | keywords: 旧版图片列表, ID游标分页, legacy-image-list, id-cursor-pagination
+- `GalleryService.listDistinctTags(userId?, limit?)` — 列出某用户图片上出现过的标签，不传用户为全部作用域 | keywords: 用户标签列表, 已用标签, list-user-tags, used-tags
+- `GalleryService.listDistinctTagsByGroup(userId, groupId, limit?)` — 列出某用户某分组图片上出现过的标签 | keywords: 分组标签列表, 按分组列标签, list-group-tags, tags-by-group
+- `GalleryService.searchByTags(input)` — 按任一标签检索图片，默认排除 `isUsed=true` | keywords: 按标签检索图片, 排除已使用, search-images-by-tags, exclude-used-images
+- `GalleryService.countAvailableByTags(input)` — 统计每个标签及合计的可用图片数，用于生成前余量预估 | keywords: 标签可用量统计, 生成前余量预估, count-available-by-tags, pre-generation-capacity
+- `GalleryService.listTopTagsWithCount(input)` — 按图片数倒序列出热门标签（排除已使用），计数在关联表完成 | keywords: 热门标签推荐, 按图片数排行, list-top-tags, tag-count-ranking
 - `PUBLIC_IMAGE_PROJECTION` — 图片公开查询投影，不读取 Mongo 主键和向量 | keywords: 图片公开投影, 不返回向量, public-image-projection, omit-embedding
 - `GalleryService.toPublicImage(image)` — 补齐历史图片默认字段并移除 Mongo 主键与向量 | keywords: 图片公开归一化, 历史默认值, public-image-normalization, legacy-defaults, omit-embedding
 - `GalleryService.getSystemTags()` — 返回标签库统计需要排除的系统标签：封面类标签与 `GALLERY_MATERIAL_TAGS`（不进未归类、不能放进分类） | keywords: 系统标签列表, 标签库排除, system-tag-list, tag-library-exclusion
 - `GalleryService.normalizeTags(tags)` — 去井号、去空白并去重规整标签 | keywords: 标签规整, 标签去重, tag-normalization, tag-deduplication
-- `GalleryService.buildImageTypeFilter(imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
+- `GalleryService.buildImageTypeFilter(scopeKey, imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反；标签部分换算为图片 ID 条件 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
 - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤（含 `material`） | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
 - `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
 - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
@@ -102,14 +120,41 @@
 - `ConvertGalleryTagsToNoteDto()` — 校验标签转备注请求 | keywords: 标签转备注, 批量转换, tags-to-note, batch-conversion
 - `GalleryTagLibraryView` — 标签库接口响应：分类列表与按图片数降序的未分类标签 | keywords: 标签库响应, 未分类统计, tag-library-response, uncategorized-statistics
 - `GalleryTagLibraryService()` — 管理作用域标签库与未分类标签统计 | keywords: 图库标签库, 未分类标签, gallery-tag-library, uncategorized-tags
-- `GalleryTagLibraryService.constructor(db)` — 初始化标签库与图库图片集合 | keywords: 标签库初始化, 数据集合, tag-library-initialization, data-collections
+- `GalleryTagLibraryService.constructor(db, tagLinks)` — 初始化标签库集合，未分类标签统计交给标签关联服务 | keywords: 标签库初始化, 数据集合, tag-library-initialization, data-collections
 - `GalleryTagLibraryService.ensureIndexes()` — 创建作用域唯一索引 | keywords: 标签库索引, 作用域唯一, tag-library-index, unique-scope
-- `GalleryTagLibraryService.resolveScopeKey(tenantId?)` — 生成与图片可见性一致的作用域键 | keywords: 标签库作用域, 租户隔离, tag-library-scope, tenant-isolation
-- `GalleryTagLibraryService.buildImageScopeFilter(tenantId?)` — 构造图库图片租户过滤条件 | keywords: 图片可见范围, 租户过滤, image-visibility, tenant-filter
-- `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取标签库（不存在时建空库，不再写入预设分类；旧租户已有的标签库原样保留），并统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
+- `GalleryTagLibraryService.resolveScopeKey(tenantId?)` — 生成与图片可见性一致的作用域键（复用 `resolveGalleryTagScopeKey`） | keywords: 标签库作用域, 租户隔离, tag-library-scope, tenant-isolation
+- `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取标签库（不存在时建空库，不再写入预设分类；旧租户已有的标签库原样保留），并在关联表上统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
 - `GalleryTagLibraryService.replace(tenantId, categories, systemTags)` — 校验并整体替换标签分类 | keywords: 替换标签库, 标签唯一性, replace-tag-library, unique-tag-category
 - `GalleryGroupSystemKey` — 系统固定分组标识，`store-visit-scene` 是探店「场景图库」 | keywords: 固定分组标识, 场景图库, system-group-key, scene-gallery
 - `GALLERY_SCENE_GROUP_SYSTEM` — 探店「场景图库」固定分组的系统标识值 | keywords: 场景图库标识, 固定分组, scene-group-key, system-group
+- `GalleryImageDocument` — `gallery_images` 实际落库的文档类型，不含 `tags` | keywords: 图片落库文档, 不存标签, gallery-image-document, tags-not-stored
+- `GalleryTagEntity` — 标签字典行：作用域内一个标签名一行，`scopeKey + name` 唯一 | keywords: 标签字典, 作用域标签, tag-dictionary, scoped-tag
+- `GalleryImageTagEntity` — 图片标签关联行：`imageId + tagId` 唯一，`order` 保留标签顺序 | keywords: 图片标签关联, 标签中间表, image-tag-link, tag-junction
+- `GALLERY_PLATFORM_SCOPE_KEY` — 母平台（无租户）图片的标签作用域键 `platform` | keywords: 母平台作用域, 标签作用域, platform-scope-key, tag-scope
+- `resolveGalleryTagScopeKey(tenantId?)` — 有租户为 `tenant:<tenantId>`，无租户为 `platform`；标签库与迁移脚本同口径 | keywords: 标签作用域键, 租户隔离, resolve-tag-scope-key, tenant-isolation
+- `isDuplicateKeyOnly(error)` — 判断写入错误是否全部为唯一索引冲突 | keywords: 唯一冲突判断, 并发写入, duplicate-key-check, concurrent-write
+- `uniqueImageIds(ids)` — 去重并过滤非法图片 ID | keywords: 图片ID去重, 输入清洗, unique-image-ids, input-sanitize
+- `GalleryTagLinkService()` — 标签字典与图片标签关联服务 | keywords: 图片标签关联服务, 标签中间表, gallery-tag-link-service, tag-junction
+- `GalleryTagLinkService.constructor(db)` — 初始化 `gallery_tags` 与 `gallery_image_tags` 并建立索引 | keywords: 初始化标签关联, 标签集合, init-tag-links, tag-collections
+- `GalleryTagLinkService.ensureIndexes()` — 字典 `scopeKey + name` 唯一、关联 `imageId + tagId` 唯一，以及 `scopeKey + tagId + imageId` 覆盖索引 | keywords: 标签关联索引, 覆盖索引, tag-link-indexes, covering-index
+- `GalleryTagLinkService.findTagIds(scopeKey, names)` — 查已有标签 ID，`scopeKey` 为空时跨作用域按名字查 | keywords: 查询标签ID, 标签名解析, find-tag-ids, resolve-tag-names
+- `GalleryTagLinkService.ensureTagIds(scopeKey, names)` — 缺的标签新建后返回名字到 ID 的映射 | keywords: 确保标签存在, 标签字典写入, ensure-tag-ids, upsert-tag-dictionary
+- `GalleryTagLinkService.replaceImageTags(entries)` — 把每张图片的关联整体同步为给定标签列表（补缺、删多、更新顺序），空数组即清空 | keywords: 同步图片标签, 关联整体替换, replace-image-tags, sync-tag-links
+- `GalleryTagLinkService.removeImages(imageIds)` — 删除图片的全部标签关联，字典保留 | keywords: 删除图片关联, 清理关联, remove-image-links, cleanup-links
+- `GalleryTagLinkService.tagsByImageIds(imageIds)` — 按图片 ID 批量读取有序标签名 | keywords: 回填图片标签, 按图读标签, tags-by-image-ids, hydrate-image-tags
+- `GalleryTagLinkService.tagNamesByIds(tagIds)` — 按标签 ID 读取标签名 | keywords: 标签名读取, 字典查询, tag-names-by-ids, dictionary-lookup
+- `GalleryTagLinkService.imageIdsWithAnyTag(scopeKey, names)` — 作用域内带任一标签的图片 ID | keywords: 任一标签图片, 标签换算图片ID, image-ids-with-any-tag, tag-to-image-ids
+- `GalleryTagLinkService.imageIdsWithAllTags(scopeKey, names)` — 作用域内同时带全部标签的图片 ID | keywords: 全部标签图片, 多标签且筛选, image-ids-with-all-tags, multi-tag-and
+- `GalleryTagLinkService.countDistinctTags(scopeKey)` — 作用域内实际被使用的不同标签数 | keywords: 标签总数统计, 作用域去重, count-distinct-tags, scope-distinct
+- `GalleryTagLinkService.listTagNames({ scopeKey?, imageIds? })` — 列出被图片使用过的标签名 | keywords: 已用标签列表, 按图片范围列标签, list-used-tag-names, tags-in-image-range
+- `GalleryTagLinkService.countImagesPerTag({ scopeKey, excludeTagNames?, excludeImageIds?, onlyImageIds?, limit? })` — 按标签统计图片数，数量倒序、同数按名升序 | keywords: 按标签计数, 热门标签排行, count-images-per-tag, top-tag-ranking
+- `GalleryTagLinkService.countSharedTagsByImage(scopeKey, names, excludeImageId)` — 统计其他图片与给定标签的共同标签数 | keywords: 共同标签计数, 相似图兜底, count-shared-tags, similar-image-fallback
+- `same(a, b)` — 测试里比较两个值是否相等，ObjectId 按值比较 | keywords: 测试值相等, ObjectId比较, test-value-equal, objectid-compare
+- `matches(doc, filter)` — 测试内存集合的条件匹配（等值、`$in`、`$nin`、`$ne`） | keywords: 内存条件匹配, 测试过滤, in-memory-match, test-filter
+- `createMemoryCollection(rows)` — 只实现关联服务用到操作的内存集合 | keywords: 内存集合替身, 关联服务测试, in-memory-collection, tag-link-test
+- `createLinkService()` — 构造使用内存字典与关联集合的关联服务 | keywords: 关联服务测试桩, 内存字典, tag-link-fixture, in-memory-dictionary
+- `createTagLinks()` — 列表查询测试的标签关联服务替身 | keywords: 标签关联替身, 标签换算图片, tag-link-double, tag-to-image-ids
+- `createService(seed?)` — 标签库测试的内存标签库集合与标签关联服务替身 | keywords: 标签库测试桩, 内存集合, tag-library-test-stub, in-memory-collection
 
 ## 关键词索引 (Keyword Index)
 
@@ -234,10 +279,93 @@
 | 固定分组标识 | system-group-key |
 | 场景图库 | scene-gallery |
 | 场景图库标识 | scene-group-key |
+| 标签字典 | tag-dictionary |
+| 作用域标签 | scoped-tag |
+| 图片标签关联 | image-tag-link |
+| 标签中间表 | tag-junction |
+| 图片落库文档 | gallery-image-document |
+| 不存标签 | tags-not-stored |
+| 母平台作用域 | platform-scope-key |
+| 标签作用域 | tag-scope |
+| 标签作用域键 | resolve-tag-scope-key |
+| 唯一冲突判断 | duplicate-key-check |
+| 并发写入 | concurrent-write |
+| 图片ID去重 | unique-image-ids |
+| 输入清洗 | input-sanitize |
+| 图片标签关联服务 | gallery-tag-link-service |
+| 初始化标签关联 | init-tag-links |
+| 标签集合 | tag-collections |
+| 标签关联索引 | tag-link-indexes |
+| 覆盖索引 | covering-index |
+| 查询标签ID | find-tag-ids |
+| 标签名解析 | resolve-tag-names |
+| 确保标签存在 | ensure-tag-ids |
+| 标签字典写入 | upsert-tag-dictionary |
+| 同步图片标签 | replace-image-tags |
+| 关联整体替换 | sync-tag-links |
+| 删除图片关联 | remove-image-links |
+| 清理关联 | cleanup-links |
+| 回填图片标签 | tags-by-image-ids |
+| 按图读标签 | hydrate-image-tags |
+| 标签名读取 | tag-names-by-ids |
+| 字典查询 | dictionary-lookup |
+| 任一标签图片 | image-ids-with-any-tag |
+| 标签换算图片ID | tag-to-image-ids |
+| 全部标签图片 | image-ids-with-all-tags |
+| 多标签且筛选 | multi-tag-and |
+| 标签总数统计 | count-distinct-tags |
+| 作用域去重 | scope-distinct |
+| 已用标签列表 | list-used-tag-names |
+| 按图片范围列标签 | tags-in-image-range |
+| 按标签计数 | count-images-per-tag |
+| 热门标签排行 | top-tag-ranking |
+| 共同标签计数 | count-shared-tags |
+| 相似图兜底 | similar-image-fallback |
+| 测试值相等 | test-value-equal |
+| ObjectId比较 | objectid-compare |
+| 内存条件匹配 | in-memory-match |
+| 测试过滤 | test-filter |
+| 内存集合替身 | in-memory-collection |
+| 关联服务测试 | tag-link-test |
+| 关联服务测试桩 | tag-link-fixture |
+| 内存字典 | in-memory-dictionary |
+| 标签关联替身 | tag-link-double |
+| 标签换算图片 | tag-to-image-ids |
+| 标签库测试桩 | tag-library-test-stub |
+| 内存集合 | in-memory-collection |
+| 图片标签作用域 | image-tag-scope |
+| 租户作用域键 | tenant-scope-key |
+| 回填图片标签 | attach-image-tags |
+| 旧数组兼容 | legacy-array-compat |
+| 标签条件换算 | tag-clause-to-ids |
+| 图片ID过滤 | image-id-filter |
+| 写入图片标签 | write-image-tags |
+| 移除旧数组 | drop-legacy-array |
+| 读取图片ID | find-image-ids |
+| 覆盖查询 | covered-query |
+| 共同标签兜底 | shared-tag-fallback |
+| 相似图补足 | similar-image-fill |
+| 图片类型标签规则 | image-type-tag-rule |
+| 素材图口径 | material-image-rule |
+| 标签名排序 | sort-tag-names |
+| 标签截断 | limit-tag-names |
+| 租户标签列表 | list-tenant-tags |
+| 已用标签 | used-tags |
+| 旧版图片列表 | legacy-image-list |
+| ID游标分页 | id-cursor-pagination |
+| 用户标签列表 | list-user-tags |
+| 分组标签列表 | list-group-tags |
+| 按分组列标签 | tags-by-group |
+| 按标签检索图片 | search-images-by-tags |
+| 排除已使用 | exclude-used-images |
+| 标签可用量统计 | count-available-by-tags |
+| 生成前余量预估 | pre-generation-capacity |
+| 热门标签推荐 | list-top-tags |
+| 按图片数排行 | tag-count-ranking |
 
 ## 类型导出 (Type Exports)
 
-`GalleryImageEntity`、`GalleryPublicImage`、`GalleryGroupEntity` 及对应请求类型；公开图片排除 Mongo 主键与向量。
+`GalleryImageEntity`、`GalleryPublicImage`、`GalleryGroupEntity` 及对应请求类型；公开图片排除 Mongo 主键与向量。`GalleryImageDocument` 为图片实际落库形状（不含 `tags`）；`GalleryTagEntity` / `GalleryImageTagEntity` 为标签字典与图片标签关联；`resolveGalleryTagScopeKey`、`GALLERY_PLATFORM_SCOPE_KEY` 供标签库与迁移脚本共用作用域口径。
 
 ## 模块功能描述 (Module Feature Description)
 
@@ -246,6 +374,9 @@
 该模块基于MongoDB存储图片与图库组的元数据及向量Embedding，支持批量上传、按用户/标签/分组查询、按创建时间升降序分页，并提供向量相似度检索（优先Atlas Vector Search，失败回退本地余弦相似度）。
 
 图库重构支持：图片统一返回收藏、备注与 AI 人脸保护字段；列表支持新旧排序、多标签且筛选、收藏筛选、随机换批与收藏 offset 分页；统计使用当前可见作用域精确计数；相似图优先复用图片向量并以共同标签兜底；标签库按租户作用域保存分类并统计未分类标签；标签转备注会批量移除标签并按行去重追加备注。列表 `keyword` 对原文件名、文件名、描述与备注做不区分大小写包含匹配（最长 64 字，正则字符按字面量）；最新/最早的 `cursorId` 先查游标图片的 `createdAt`，再按 `createdAt + id` 复合条件从索引中的游标位置起扫，游标图片已删除时回退为只比较 ID；收藏优先仍按 offset。缩略图目录 `/static/uploads_thumbs` 文件名为「时间戳-UUID」不会覆盖，由 `main.ts` 以 30 天 immutable 缓存下发。
+
+标签存储：图片标签只存在 `gallery_tags`（作用域内一个标签名一行，`scopeKey + name` 唯一）与 `gallery_image_tags`（一张图一个标签一行，`imageId + tagId` 唯一，`order` 保留顺序）。所有写标签的入口（`createMany`、`updateImageMeta`、`updateImagesMetaBatch`、`updateTagsBatch`、`convertTagsToNote`、`deleteImage`）都在 `GalleryService` 内经 `GalleryTagLinkService.replaceImageTags` / `removeImages` 按图片当前状态整体同步关联；所有返回图片的方法用 `attachTags` 从关联表回填 `tags`，对外字段与其他模块的调用方式不变。按标签筛图、图片类型口径（普通图 / 素材图 / 拼图封面）都先在关联表换算成图片 ID 条件；标签统计（去重标签数、未分类标签、热门标签、共同标签）只扫关联表索引，不再读取带 768 维向量的图片文档。作用域与图片可见范围一致：有租户为 `tenant:<tenantId>`，母平台为 `platform`。
+旧数据兼容：`scripts/migrate-gallery-tags-to-links.mjs` 按 `_id` 分批把残留的 `tags` 数组写入两张表，每批先写关联再移走数组，可重复执行、中断后重跑即续上，`--dry-run` 只统计、`--verify` 核对剩余数组与孤立关联；迁移完成前 `attachTags` 遇到旧数组以其为准，写标签时顺手移走该图的旧数组。旧的数组标签索引由 `ensureIndexes` 启动时删除。
 文件路径: `src/modules/gallery`
 
 **子模块**
@@ -337,33 +468,45 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 
 **gallery.service.ts**
 
-公开响应回归文件 `services/gallery-public-image.spec.ts` 验证图片公开字段过滤、内部向量保留以及普通、随机、分组列表的查询投影。`services/gallery-list-query.spec.ts` 验证复合游标正反向、游标图片缺失回退、收藏优先 offset 与关键词转义。
+公开响应回归文件 `services/gallery-public-image.spec.ts` 验证图片公开字段过滤、内部向量保留以及普通、随机、分组列表的查询投影。`services/gallery-list-query.spec.ts` 验证复合游标正反向、游标图片缺失回退、收藏优先 offset、关键词转义，以及图片类型与多标签条件换算成关联表图片 ID。
 
 - `createCollection()` — 创建记录 Mongo 查询与聚合投影的测试集合 | keywords: 公开投影测试, 查询记录, public-projection-test, query-recording
 - `createListCollection(cursorImage)` — 创建记录列表查询条件、可指定游标图片的集合替身 | keywords: 列表查询替身, 游标图片, list-query-double, cursor-image
-- `listClauses(images, options)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
+- `createTagLinks()` — 列表查询测试的标签关联服务替身 | keywords: 标签关联替身, 标签换算图片, tag-link-double, tag-to-image-ids
+- `listClauses(images, options, tagLinks?)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
 
 图片服务。
 
 - **关键词**: image, service, isUsed, capacity, mark-used, top-tags
 - **函数**:
-- `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖租户标签去重与创建时间分页；收藏排序只保留含创建时间与业务 ID 的完整键，并删除较短前缀索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
-  - `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
-  - `list`: 图片列表/list images
+- `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖创建时间分页、拼图/已使用/按用户分组只取 ID 的覆盖索引；收藏排序只保留含创建时间与业务 ID 的完整键，删除较短前缀索引与已不用的数组标签索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
+  - `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值，标签规整后写入关联表 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
+  - `GalleryService.list(userId?, groupId?, tag?, cursorId?, limit?)` — 旧版按用户/分组/标签列图，按自增 ID 游标分页 | keywords: 旧版图片列表, ID游标分页, legacy-image-list, id-cursor-pagination
+  - `GalleryService.scopeKeyOf(tenantId?)` — 当前租户可见范围对应的标签作用域键 | keywords: 图片标签作用域, 租户作用域键, image-tag-scope, tenant-scope-key
+  - `GalleryService.attachTags(rows)` — 从关联表批量回填图片 `tags`；迁移过渡期文档上还留着旧数组时以旧数组为准 | keywords: 回填图片标签, 旧数组兼容, attach-image-tags, legacy-array-compat
+  - `GalleryService.tagIdClause(scopeKey, mode, names)` — 把 `any` / `all` / `none` 标签条件换算成图片 ID 条件 | keywords: 标签条件换算, 图片ID过滤, tag-clause-to-ids, image-id-filter
+  - `GalleryService.writeImageTags(entries)` — 整体同步图片标签关联并移走残留的旧 `tags` 数组 | keywords: 写入图片标签, 移除旧数组, write-image-tags, drop-legacy-array
+  - `GalleryService.findImageIds(filter)` — 只读取图片业务 ID，配合含 id 的复合索引走覆盖查询 | keywords: 读取图片ID, 覆盖查询, find-image-ids, covered-query
+  - `GalleryService.findSimilarByTags(scope, source, limit)` — 相似图无向量兜底：共同标签数在关联表统计，同数按新到旧，不够用最新图片补足 | keywords: 共同标签兜底, 相似图补足, shared-tag-fallback, similar-image-fill
+  - `GalleryService.imageTypeTagRule(imageType, requestedTags?)` — 图片类型对应的标签规则（普通图排除、素材图与封面包含） | keywords: 图片类型标签规则, 素材图口径, image-type-tag-rule, material-image-rule
+  - `GalleryService.sortTagNames(names, limit)` — 标签名去空白去重、字典序截断 | keywords: 标签名排序, 标签截断, sort-tag-names, limit-tag-names
+  - `GalleryService.listDistinctTagsWithTenant(userId, tenantId?, limit?)` — 列出租户作用域内已被图片使用的标签 | keywords: 租户标签列表, 已用标签, list-tenant-tags, used-tags
+  - `GalleryService.listDistinctTags(userId?, limit?)` — 列出某用户图片上出现过的标签，不传用户为全部作用域 | keywords: 用户标签列表, 已用标签, list-user-tags, used-tags
+  - `GalleryService.listDistinctTagsByGroup(userId, groupId, limit?)` — 列出某用户某分组图片上出现过的标签 | keywords: 分组标签列表, 按分组列标签, list-group-tags, tags-by-group
   - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
   - `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
   - `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
-  - `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片（含素材图）、其中的素材图、收藏与去重标签 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
+  - `GalleryService.getAccessibleStats(userId, tenantId?)` — 精确统计可见图片（含素材图）、其中的素材图、收藏与去重标签；标签数只扫关联表索引 | keywords: 图库精确统计, 可见范围计数, gallery-exact-stats, visibility-count
   - `GalleryService.updateImageMeta(input)` — 更新单张可见图片的元数据 | keywords: 单图元数据更新, 图片可见范围, single-image-metadata, image-visibility
   - `GalleryService.updateImagesMetaBatch(input)` — 批量更新可见图片并按行去重追加备注 | keywords: 批量元数据更新, 备注按行去重, batch-image-metadata, deduplicate-note-lines
   - `GalleryService.appendNoteLines(current, incoming)` — 追加非重复备注行并限制总长度 | keywords: 备注追加, 文本去重, append-note, text-deduplication
-  - `GalleryService.findSimilarImages(input)` — 以已有向量检索相似图并按共同标签兜底 | keywords: 相似图片, 标签相似兜底, similar-images, tag-similarity-fallback
+  - `GalleryService.findSimilarImages(input)` — 以已有向量检索相似图并按共同标签兜底；只有走向量时才读取候选图片 | keywords: 相似图片, 标签相似兜底, similar-images, tag-similarity-fallback
   - `GalleryService.convertTagsToNote(input)` — 把图片标签迁移为去重备注行 | keywords: 标签转备注, 图片批量迁移, tags-to-note, image-batch-migration
   - `PUBLIC_IMAGE_PROJECTION` — 图片公开查询投影，不读取 Mongo 主键和向量 | keywords: 图片公开投影, 不返回向量, public-image-projection, omit-embedding
   - `GalleryService.toPublicImage(image)` — 补齐历史图片默认字段并移除 Mongo 主键与向量 | keywords: 图片公开归一化, 历史默认值, public-image-normalization, legacy-defaults, omit-embedding
   - `GalleryService.getSystemTags()` — 返回标签库统计需要排除的系统标签：封面类标签与 `GALLERY_MATERIAL_TAGS`（不进未归类、不能放进分类） | keywords: 系统标签列表, 标签库排除, system-tag-list, tag-library-exclusion
   - `GalleryService.normalizeTags(tags)` — 去井号、去空白并去重规整标签 | keywords: 标签规整, 标签去重, tag-normalization, tag-deduplication
-  - `GalleryService.buildImageTypeFilter(imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
+  - `GalleryService.buildImageTypeFilter(scopeKey, imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反；标签部分换算为图片 ID 条件 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
   - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤（含 `material`） | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
   - `findAccessibleImagesByIds`: 按用户选择的图片 ID 精确读取当前租户可见图片，并按输入顺序返回，用于封面重生成/reference images by ids for cover regenerate
   - `searchSimilar`: 向量相似检索/search similar
@@ -371,10 +514,10 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
   - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
   - `generateThumbnail`: 生成缩略图
-  - `searchByTags`: 按 tags 查询(**默认排除 isUsed=true,传 includeUsed=true 关闭**)/search images by tags excluding used
+  - `GalleryService.searchByTags(input)` — 按任一标签检索图片，默认排除 `isUsed=true` | keywords: 按标签检索图片, 排除已使用, search-images-by-tags, exclude-used-images
   - `GalleryService.sampleRandom({ userId?, tenantId?, groupId?, tags?, imageType?, excludedGroupIds?, excludedTags?, limit?, includeUsed? })` — 从全部可见图片或所选标签并集随机采样；`imageType=regular` 排除拼图、封面标签与 AI 素材 | keywords: 图库随机采样, 标签随机取图, gallery-random-sample, tag-random-selection
-  - `countAvailableByTags`: 统计指定 tags 当前可用图片数(**默认排除 isUsed,传 includeUsed=true 关闭**),返回 total + byTag,用于生成前的不足量预估(去重/不去重生成共用)/count available images by tags excluding used by default
-  - `listTopTagsWithCount`: 列出租户可见的热门 tag(按图片数量倒序,排除 isUsed),用于 AI 推荐 tag 选择/list top tags by count for AI recommendation
+  - `GalleryService.countAvailableByTags(input)` — 统计每个标签及合计的可用图片数，用于生成前余量预估 | keywords: 标签可用量统计, 生成前余量预估, count-available-by-tags, pre-generation-capacity
+  - `GalleryService.listTopTagsWithCount(input)` — 按图片数倒序列出热门标签（排除已使用），计数在关联表完成 | keywords: 热门标签推荐, 按图片数排行, list-top-tags, tag-count-ranking
   - `markUsedBatch`: 批量标记图片为已使用 (isUsed=true,usedAt=now),生成图组/拼图完成后调用,reset=true 可反向重置/mark images as used
   - `GalleryService.updateTagsBatch({ userId?, tenantId?, ids, addTags?, removeTags? })` — 批量为当前租户可见图片增删标签 | keywords: 批量改标签, 租户可见范围, batch-update-tags, tenant-visibility
   - `GalleryService.deleteImage({ userId?, tenantId?, id })` — 删除当前租户可见的单张图片(记录+本地原图/缩略图文件) | keywords: 删除图片, 租户可见范围, delete-image, tenant-visibility
@@ -402,7 +545,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 
 `GalleryPublicImage` 为对外图片类型，排除 `_id` 与 `embedding`；列表、上传、AI 素材和元数据修改均返回此类型。向量仍保留在数据库及内部生图/检索链路。列表、按标签、随机、相似查询在 Mongo 投影阶段排除向量，分组列表同样排除 `embedding`，前端无须适配。
 
-图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, **favorite**, **favoritedAt**, **note**, **aiFaceProtected**, isCollage, collageSourceImageIds, collageMeta, **isUsed**, **usedAt**, embedding, createdAt, updatedAt）。历史数据缺少 `favorite` / `note` / `aiFaceProtected` 时对外分别按 `false` / `''` / `false` 返回；`isUsed=true` 表示该图已被动态拼图/生图组消耗,默认 searchByTags/sampleRandom 不再命中。
+图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, **favorite**, **favoritedAt**, **note**, **aiFaceProtected**, isCollage, collageSourceImageIds, collageMeta, **isUsed**, **usedAt**, embedding, createdAt, updatedAt）。其中 `tags` 不落库，由标签关联表回填；落库形状为 `GalleryImageDocument`。历史数据缺少 `favorite` / `note` / `aiFaceProtected` 时对外分别按 `false` / `''` / `false` 返回；`isUsed=true` 表示该图已被动态拼图/生图组消耗,默认 searchByTags/sampleRandom 不再命中。
 
 图片类型口径：`imageType=regular` 同时排除 `isCollage=true`、系统封面标签与 `GALLERY_MATERIAL_TAGS`（`ai素材`、探店出片过程存下的尾帧、出镜人脸照与人物首帧、设计素材 `我的素材`、画布成品 `画布成品` / `灵感画布`），列表请求明确按其中某个标签筛选时不排除该标签；`imageType=material` 正好取反，供工作台图库「素材图」入口使用，`GET stats` 另返回 `materials` 计数；该过滤被图库列表、标签搜索、可用量统计、热门标签、随机采样与相似图结果共同复用，`collage` 口径不变。
 
@@ -428,18 +571,57 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 
 **gallery-tag-library.service.ts**
 
-按图库图片可见作用域管理标签分类，并聚合实际使用但未分类的标签。新标签库从空开始，分类由租户自己建，或在客户端标签库管理里用 JSON 批量导入（走原有的整体替换接口）；旧版曾给每个租户写入一套门店 / 活动 / 画面预设，有的老租户在用，所以已有的标签库一律不动。
+按图库图片可见作用域管理标签分类，并在标签关联表上统计实际使用但未分类的标签（不再展开图片文档）。新标签库从空开始，分类由租户自己建，或在客户端标签库管理里用 JSON 批量导入（走原有的整体替换接口）；旧版曾给每个租户写入一套门店 / 活动 / 画面预设，有的老租户在用，所以已有的标签库一律不动。
 
 - **关键词**: tag-library, tenant-scope, uncategorized, aggregation
 - **函数**:
   - `GalleryTagLibraryView` — 标签库接口响应：分类列表与按图片数降序的未分类标签 | keywords: 标签库响应, 未分类统计, tag-library-response, uncategorized-statistics
   - `GalleryTagLibraryService()` — 管理作用域标签库与未分类标签统计 | keywords: 图库标签库, 未分类标签, gallery-tag-library, uncategorized-tags
-  - `GalleryTagLibraryService.constructor(db)` — 初始化标签库与图库图片集合 | keywords: 标签库初始化, 数据集合, tag-library-initialization, data-collections
+  - `GalleryTagLibraryService.constructor(db, tagLinks)` — 初始化标签库集合，未分类标签统计交给标签关联服务 | keywords: 标签库初始化, 数据集合, tag-library-initialization, data-collections
   - `GalleryTagLibraryService.ensureIndexes()` — 创建作用域唯一索引 | keywords: 标签库索引, 作用域唯一, tag-library-index, unique-scope
-  - `GalleryTagLibraryService.resolveScopeKey(tenantId?)` — 生成与图片可见性一致的作用域键 | keywords: 标签库作用域, 租户隔离, tag-library-scope, tenant-isolation
-  - `GalleryTagLibraryService.buildImageScopeFilter(tenantId?)` — 构造图库图片租户过滤条件 | keywords: 图片可见范围, 租户过滤, image-visibility, tenant-filter
-  - `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取标签库（不存在时建空库，不再写入预设分类；旧租户已有的标签库原样保留），并统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
+  - `GalleryTagLibraryService.resolveScopeKey(tenantId?)` — 生成与图片可见性一致的作用域键（复用 `resolveGalleryTagScopeKey`） | keywords: 标签库作用域, 租户隔离, tag-library-scope, tenant-isolation
+  - `GalleryTagLibraryService.get(tenantId, systemTags)` — 读取标签库（不存在时建空库，不再写入预设分类；旧租户已有的标签库原样保留），并在关联表上统计未分类标签 | keywords: 读取标签库, 未分类统计, read-tag-library, uncategorized-statistics
   - `GalleryTagLibraryService.replace(tenantId, categories, systemTags)` — 校验并整体替换标签分类 | keywords: 替换标签库, 标签唯一性, replace-tag-library, unique-tag-category
+  - `createService(seed?)` — 标签库测试的内存标签库集合与标签关联服务替身 | keywords: 标签库测试桩, 内存集合, tag-library-test-stub, in-memory-collection
+
+**gallery-tag.entity.ts**
+
+标签字典 `gallery_tags` 与图片标签关联 `gallery_image_tags` 的实体定义。
+
+- **关键词**: tag-dictionary, image-tag-link, tag-junction, scope-key
+- **函数**:
+  - `GalleryTagEntity` — 标签字典行：作用域内一个标签名一行，`scopeKey + name` 唯一 | keywords: 标签字典, 作用域标签, tag-dictionary, scoped-tag
+  - `GalleryImageTagEntity` — 图片标签关联行：`imageId + tagId` 唯一，`order` 保留标签顺序 | keywords: 图片标签关联, 标签中间表, image-tag-link, tag-junction
+
+**gallery-tag-link.service.ts**
+
+图片标签的唯一存储与读写入口。写：按图片当前标签整体同步关联（补缺、删多、更新顺序），唯一索引冲突视为并发已写入而忽略；读：按图片批量回填有序标签名；查询：把标签条件换算成图片 ID（任一 / 全部），以及只扫 `scopeKey + tagId + imageId` 覆盖索引的去重标签数、按标签计数、共同标签计数。标签字典行在标签不再被使用后保留，同名标签复用原 ID。`services/gallery-tag-link.service.spec.ts` 用内存集合验证整体同步、租户隔离和删除清理。
+
+- **关键词**: tag-link, junction, dictionary, covering-index, scope-key
+- **函数**:
+  - `GALLERY_PLATFORM_SCOPE_KEY` — 母平台（无租户）图片的标签作用域键 `platform` | keywords: 母平台作用域, 标签作用域, platform-scope-key, tag-scope
+  - `resolveGalleryTagScopeKey(tenantId?)` — 有租户为 `tenant:<tenantId>`，无租户为 `platform`；标签库与迁移脚本同口径 | keywords: 标签作用域键, 租户隔离, resolve-tag-scope-key, tenant-isolation
+  - `isDuplicateKeyOnly(error)` — 判断写入错误是否全部为唯一索引冲突 | keywords: 唯一冲突判断, 并发写入, duplicate-key-check, concurrent-write
+  - `uniqueImageIds(ids)` — 去重并过滤非法图片 ID | keywords: 图片ID去重, 输入清洗, unique-image-ids, input-sanitize
+  - `GalleryTagLinkService()` — 标签字典与图片标签关联服务 | keywords: 图片标签关联服务, 标签中间表, gallery-tag-link-service, tag-junction
+  - `GalleryTagLinkService.constructor(db)` — 初始化 `gallery_tags` 与 `gallery_image_tags` 并建立索引 | keywords: 初始化标签关联, 标签集合, init-tag-links, tag-collections
+  - `GalleryTagLinkService.ensureIndexes()` — 字典 `scopeKey + name` 唯一、关联 `imageId + tagId` 唯一，以及 `scopeKey + tagId + imageId` 覆盖索引 | keywords: 标签关联索引, 覆盖索引, tag-link-indexes, covering-index
+  - `GalleryTagLinkService.findTagIds(scopeKey, names)` — 查已有标签 ID，`scopeKey` 为空时跨作用域按名字查 | keywords: 查询标签ID, 标签名解析, find-tag-ids, resolve-tag-names
+  - `GalleryTagLinkService.ensureTagIds(scopeKey, names)` — 缺的标签新建后返回名字到 ID 的映射 | keywords: 确保标签存在, 标签字典写入, ensure-tag-ids, upsert-tag-dictionary
+  - `GalleryTagLinkService.replaceImageTags(entries)` — 把每张图片的关联整体同步为给定标签列表（补缺、删多、更新顺序），空数组即清空 | keywords: 同步图片标签, 关联整体替换, replace-image-tags, sync-tag-links
+  - `GalleryTagLinkService.removeImages(imageIds)` — 删除图片的全部标签关联，字典保留 | keywords: 删除图片关联, 清理关联, remove-image-links, cleanup-links
+  - `GalleryTagLinkService.tagsByImageIds(imageIds)` — 按图片 ID 批量读取有序标签名 | keywords: 回填图片标签, 按图读标签, tags-by-image-ids, hydrate-image-tags
+  - `GalleryTagLinkService.tagNamesByIds(tagIds)` — 按标签 ID 读取标签名 | keywords: 标签名读取, 字典查询, tag-names-by-ids, dictionary-lookup
+  - `GalleryTagLinkService.imageIdsWithAnyTag(scopeKey, names)` — 作用域内带任一标签的图片 ID | keywords: 任一标签图片, 标签换算图片ID, image-ids-with-any-tag, tag-to-image-ids
+  - `GalleryTagLinkService.imageIdsWithAllTags(scopeKey, names)` — 作用域内同时带全部标签的图片 ID | keywords: 全部标签图片, 多标签且筛选, image-ids-with-all-tags, multi-tag-and
+  - `GalleryTagLinkService.countDistinctTags(scopeKey)` — 作用域内实际被使用的不同标签数 | keywords: 标签总数统计, 作用域去重, count-distinct-tags, scope-distinct
+  - `GalleryTagLinkService.listTagNames({ scopeKey?, imageIds? })` — 列出被图片使用过的标签名 | keywords: 已用标签列表, 按图片范围列标签, list-used-tag-names, tags-in-image-range
+  - `GalleryTagLinkService.countImagesPerTag({ scopeKey, excludeTagNames?, excludeImageIds?, onlyImageIds?, limit? })` — 按标签统计图片数，数量倒序、同数按名升序 | keywords: 按标签计数, 热门标签排行, count-images-per-tag, top-tag-ranking
+  - `GalleryTagLinkService.countSharedTagsByImage(scopeKey, names, excludeImageId)` — 统计其他图片与给定标签的共同标签数 | keywords: 共同标签计数, 相似图兜底, count-shared-tags, similar-image-fallback
+  - `same(a, b)` — 测试里比较两个值是否相等，ObjectId 按值比较 | keywords: 测试值相等, ObjectId比较, test-value-equal, objectid-compare
+  - `matches(doc, filter)` — 测试内存集合的条件匹配（等值、`$in`、`$nin`、`$ne`） | keywords: 内存条件匹配, 测试过滤, in-memory-match, test-filter
+  - `createMemoryCollection(rows)` — 只实现关联服务用到操作的内存集合 | keywords: 内存集合替身, 关联服务测试, in-memory-collection, tag-link-test
+  - `createLinkService()` — 构造使用内存字典与关联集合的关联服务 | keywords: 关联服务测试桩, 内存字典, tag-link-fixture, in-memory-dictionary
 
 **gallery-group.entity.ts**
 

@@ -5,7 +5,10 @@ import type {
   GalleryTagCategory,
   GalleryTagLibraryEntity,
 } from '../entities/gallery-tag-library.entity.js';
-import type { GalleryImageEntity } from '../entities/gallery-image.entity.js';
+import {
+  GalleryTagLinkService,
+  resolveGalleryTagScopeKey,
+} from './gallery-tag-link.service.js';
 
 /**
  * @description 标签库接口的分类与未分类标签响应形状。
@@ -25,18 +28,19 @@ export type GalleryTagLibraryView = {
 @Injectable()
 export class GalleryTagLibraryService {
   private readonly libraries: Collection<GalleryTagLibraryEntity>;
-  private readonly images: Collection<GalleryImageEntity>;
 
   /**
-   * @description 初始化标签库与图库图片集合。
+   * @description 初始化标签库集合，未分类标签统计交给标签关联服务。
    * @keyword-cn 标签库初始化, 数据集合
    * @keyword-en tag-library-initialization, data-collections
    */
-  constructor(@Inject('DS_MONGO_DB') db: Db) {
+  constructor(
+    @Inject('DS_MONGO_DB') db: Db,
+    private readonly tagLinks: GalleryTagLinkService,
+  ) {
     this.libraries = db.collection<GalleryTagLibraryEntity>(
       'gallery_tag_libraries',
     );
-    this.images = db.collection<GalleryImageEntity>('gallery_images');
     void this.ensureIndexes();
   }
 
@@ -55,25 +59,7 @@ export class GalleryTagLibraryService {
    * @keyword-en tag-library-scope, tenant-isolation
    */
   private resolveScopeKey(tenantId?: string): string {
-    const tid = String(tenantId ?? '').trim();
-    return tid ? `tenant:${tid}` : 'platform';
-  }
-
-  /**
-   * @description 构造与图库图片查询一致的租户过滤条件。
-   * @keyword-cn 图片可见范围, 租户过滤
-   * @keyword-en image-visibility, tenant-filter
-   */
-  private buildImageScopeFilter(tenantId?: string): Record<string, unknown> {
-    const tid = String(tenantId ?? '').trim();
-    if (tid) return { tenantId: tid };
-    return {
-      $or: [
-        { tenantId: { $exists: false } },
-        { tenantId: null },
-        { tenantId: '' },
-      ],
-    };
+    return resolveGalleryTagScopeKey(tenantId);
   }
 
   /**
@@ -105,19 +91,11 @@ export class GalleryTagLibraryService {
     const excluded = Array.from(
       new Set([...categorized, ...systemTags].map((tag) => String(tag).trim())),
     ).filter(Boolean);
-    const pipeline: Record<string, unknown>[] = [
-      { $match: this.buildImageScopeFilter(tenantId) },
-      { $unwind: '$tags' },
-      { $match: { tags: { $nin: excluded, $type: 'string', $ne: '' } } },
-      { $group: { _id: { tag: '$tags', imageId: '$id' } } },
-      { $group: { _id: '$_id.tag', count: { $sum: 1 } } },
-      { $sort: { count: -1, _id: 1 } },
-      { $limit: 300 },
-      { $project: { _id: 0, tag: '$_id', count: 1 } },
-    ];
-    const uncategorized = await this.images
-      .aggregate<{ tag: string; count: number }>(pipeline)
-      .toArray();
+    const uncategorized = await this.tagLinks.countImagesPerTag({
+      scopeKey,
+      excludeTagNames: excluded,
+      limit: 300,
+    });
     return { categories, uncategorized };
   }
 
@@ -146,7 +124,9 @@ export class GalleryTagLibraryService {
       const tags: string[] = [];
       const localTags = new Set<string>();
       for (const value of raw.tags) {
-        const tag = String(value ?? '').trim().replace(/^#+/, '');
+        const tag = String(value ?? '')
+          .trim()
+          .replace(/^#+/, '');
         if (!tag || tag.length > 30) {
           throw new BadRequestException('标签长度必须为1到30字');
         }

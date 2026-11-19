@@ -8,11 +8,16 @@ import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
 import type {
   GalleryImageCreateInput,
+  GalleryImageDocument,
   GalleryImageEntity,
   GalleryPublicImage,
   GallerySearchResult,
 } from '../entities/gallery-image.entity.js';
 import { GALLERY_MATERIAL_TAGS } from '../gallery.constants.js';
+import {
+  GalleryTagLinkService,
+  resolveGalleryTagScopeKey,
+} from './gallery-tag-link.service.js';
 
 /**
  * @description 对外返回图片时的读取投影：不读 Mongo 主键和 768 维向量。向量只在服务端相似检索里用，前端从不需要，
@@ -50,7 +55,7 @@ const materialTagSet = new Set<string>(GALLERY_MATERIAL_TAGS);
 
 @Injectable()
 export class GalleryService {
-  private readonly images: Collection<GalleryImageEntity>;
+  private readonly images: Collection<GalleryImageDocument>;
   private readonly counters: Collection<{ _id: string; seq: number }>;
   private readonly VECTOR_INDEX_NAME = 'gallery_image_embedding_index';
   /** 精确封面标签枚举（系统写入的类型标记，非用户描述关键词） */
@@ -63,8 +68,9 @@ export class GalleryService {
     @Inject('DS_MONGO_DB') db: Db,
     private readonly embedding: EmbeddingService,
     private readonly adminService: AdminService,
+    private readonly tagLinks: GalleryTagLinkService,
   ) {
-    this.images = db.collection<GalleryImageEntity>('gallery_images');
+    this.images = db.collection<GalleryImageDocument>('gallery_images');
     this.counters = db.collection<{ _id: string; seq: number }>('counters');
     void this.ensureIndexes();
   }
@@ -104,15 +110,103 @@ export class GalleryService {
         { projection: PUBLIC_IMAGE_PROJECTION },
       )
       .toArray();
-    const byId = new Map(rows.map((row) => [Number(row.id), row]));
+    const withTags = await this.attachTags(rows);
+    const byId = new Map(withTags.map((row) => [Number(row.id), row]));
     return orderedIds
       .map((id) => byId.get(id))
-      .filter((img): img is GalleryImageEntity => !!img)
+      .filter((img): img is NonNullable<typeof img> => !!img)
       .map((img) => this.toPublicImage(img) as GalleryImageEntity);
   }
 
   /**
-   * @description 创建图库租户、标签、时间线与完整收藏排序索引，并删除较短的收藏前缀索引。
+   * @description 当前租户可见范围对应的标签作用域键，与标签字典和关联表一致。
+   * @keyword-cn 图片标签作用域, 租户作用域键
+   * @keyword-en image-tag-scope, tenant-scope-key
+   */
+  private scopeKeyOf(tenantId?: string): string {
+    return resolveGalleryTagScopeKey(tenantId);
+  }
+
+  /**
+   * @description 给图片批量回填 `tags`（来自标签关联表，按原顺序）。迁移过渡兼容：文档上还留着旧 `tags` 数组时以它为准，
+   *   迁移脚本把数组移走后不再出现这种文档，届时可删掉这段兼容。
+   * @keyword-cn 回填图片标签, 旧数组兼容
+   * @keyword-en attach-image-tags, legacy-array-compat
+   */
+  private async attachTags<T extends { id: number }>(
+    rows: T[],
+  ): Promise<Array<T & { tags: string[] }>> {
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+    const linked = await this.tagLinks.tagsByImageIds(
+      rows.map((row) => Number(row.id)),
+    );
+    return rows.map((row) => {
+      const legacy = (row as { tags?: unknown }).tags;
+      const tags = Array.isArray(legacy)
+        ? this.normalizeTags(legacy)
+        : (linked.get(Number(row.id)) ?? []);
+      return { ...row, tags };
+    });
+  }
+
+  /**
+   * @description 把标签条件换算成图片 ID 条件：`any` 带任一标签、`all` 同时带全部标签、`none` 不带其中任何标签。
+   * @keyword-cn 标签条件换算, 图片ID过滤
+   * @keyword-en tag-clause-to-ids, image-id-filter
+   */
+  private async tagIdClause(
+    scopeKey: string,
+    mode: 'any' | 'all' | 'none',
+    names: string[],
+  ): Promise<Record<string, unknown>> {
+    const ids =
+      mode === 'all'
+        ? await this.tagLinks.imageIdsWithAllTags(scopeKey, names)
+        : await this.tagLinks.imageIdsWithAnyTag(scopeKey, names);
+    return mode === 'none' ? { id: { $nin: ids } } : { id: { $in: ids } };
+  }
+
+  /**
+   * @description 写入图片的最新标签：先整体同步关联表，再移走这些图片上残留的旧 `tags` 数组。
+   * @keyword-cn 写入图片标签, 移除旧数组
+   * @keyword-en write-image-tags, drop-legacy-array
+   */
+  private async writeImageTags(
+    entries: Array<{ id: number; tenantId?: string; tags: string[] }>,
+  ): Promise<void> {
+    if (entries.length === 0) return;
+    await this.tagLinks.replaceImageTags(
+      entries.map((entry) => ({
+        imageId: entry.id,
+        tenantId: entry.tenantId,
+        tags: entry.tags,
+      })),
+    );
+    await this.images.updateMany(
+      {
+        id: { $in: entries.map((entry) => entry.id) },
+        tags: { $exists: true },
+      },
+      { $unset: { tags: '' } } as unknown as Record<string, unknown>,
+    );
+  }
+
+  /**
+   * @description 只读取符合条件的图片业务 ID（配合含 id 的复合索引走覆盖查询，不读整条文档）。
+   * @keyword-cn 读取图片ID, 覆盖查询
+   * @keyword-en find-image-ids, covered-query
+   */
+  private async findImageIds(
+    filter: Record<string, unknown>,
+  ): Promise<number[]> {
+    const rows = await this.images
+      .find(filter, { projection: { _id: 0, id: 1 } })
+      .toArray();
+    return rows.map((row) => Number(row.id));
+  }
+
+  /**
+   * @description 创建图库租户、时间线、完整收藏排序与只取 ID 的覆盖索引，并删除较短的收藏前缀索引和已不用的数组标签索引。
    * @returns {Promise<void>} 无返回值。
    * @throws {Error} 当MongoDB创建索引或写入计数器失败时抛出。
    * @keyword-cn 图库索引, 收藏排序
@@ -123,14 +217,24 @@ export class GalleryService {
     await this.images.createIndex({ id: 1 }, { unique: true });
     await this.images.createIndex({ userId: 1 });
     await this.images.createIndex({ groupId: 1, createdAt: -1 });
-    await this.images.createIndex({ tags: 1 });
     await this.images.createIndex({ isCollage: 1, updatedAt: -1 });
     await this.images.createIndex({ createdAt: -1 });
     // 租户隔离索引
     await this.images.createIndex({ scope: 1, tenantId: 1, userId: 1 });
-    await this.images.createIndex({ scope: 1, tenantId: 1, tags: 1 });
-    await this.images.createIndex({ tenantId: 1, tags: 1 });
     await this.images.createIndex({ tenantId: 1, createdAt: -1, id: -1 });
+    // 只取图片 ID 的覆盖索引：拼图/已使用集合、按用户或分组列标签
+    await this.images.createIndex({ tenantId: 1, isCollage: 1, id: 1 });
+    await this.images.createIndex({ tenantId: 1, isUsed: 1, id: 1 });
+    await this.images.createIndex({ userId: 1, id: 1 });
+    await this.images.createIndex({ groupId: 1, userId: 1, id: 1 });
+    // 标签已迁到 gallery_tags + gallery_image_tags，旧的数组标签索引不再使用
+    for (const name of [
+      'tags_1',
+      'scope_1_tenantId_1_tags_1',
+      'tenantId_1_tags_1',
+    ]) {
+      await this.images.dropIndex(name).catch(() => undefined);
+    }
     await this.images.createIndex({
       tenantId: 1,
       favorite: -1,
@@ -305,7 +409,7 @@ export class GalleryService {
   }
 
   /**
-   * @description 批量创建图片记录，并为每条记录生成Embedding。
+   * @description 批量创建图片记录并为每条记录生成Embedding；标签规整后写入标签关联表，不再存到图片文档上。
    * @param {GalleryImageCreateInput[]} inputs - 批量创建输入。
    * @returns {Promise<GalleryImageEntity[]>} 新建图片实体数组。
    * @throws {Error} 当数据库写入失败或Embedding服务异常且未能回退时抛出。
@@ -335,7 +439,8 @@ export class GalleryService {
       );
     }
 
-    const docs: GalleryImageEntity[] = inputs.map((input, idx) => {
+    const tagsByIndex = inputs.map((input) => this.normalizeTags(input.tags));
+    const docs: GalleryImageDocument[] = inputs.map((input, idx) => {
       const w = Number.isFinite(Number(input.width))
         ? Math.floor(Number(input.width))
         : undefined;
@@ -361,7 +466,6 @@ export class GalleryService {
         width: w,
         height: h,
         isPortrait,
-        tags: Array.isArray(input.tags) ? input.tags : [],
         description: input.description,
         favorite: input.favorite === true,
         favoritedAt:
@@ -399,9 +503,16 @@ export class GalleryService {
     });
 
     await this.images.insertMany(docs);
+    await this.tagLinks.replaceImageTags(
+      docs.map((doc, idx) => ({
+        imageId: doc.id,
+        tenantId: doc.tenantId,
+        tags: tagsByIndex[idx],
+      })),
+    );
     // 服务内部调用方拿完整实体（含向量）；经 HTTP 返回时由 toPublicImage 去掉向量
-    return docs.map((doc) => ({
-      ...this.toPublicImage(doc),
+    return docs.map((doc, idx) => ({
+      ...this.toPublicImage({ ...doc, tags: tagsByIndex[idx] }),
       embedding: doc.embedding,
       _id: doc._id,
     }));
@@ -459,13 +570,15 @@ export class GalleryService {
     const resolvedSort = sort ?? (sortOrder === 'asc' ? 'oldest' : 'newest');
     const sortDirection = resolvedSort === 'oldest' ? 1 : -1;
     const scope = this.buildTenantFilter(userId, tenantId);
+    const scopeKey = this.scopeKeyOf(tenantId);
     const clauses: Record<string, unknown>[] = [scope];
     const normalizedTags = this.normalizeTags(tags);
+    const singleTag = tag ? this.normalizeTags([tag]) : [];
     if (imageType && imageType !== 'all') {
       clauses.push(
-        this.buildImageTypeFilter(imageType, [
+        await this.buildImageTypeFilter(scopeKey, imageType, [
           ...normalizedTags,
-          ...(tag ? [tag] : []),
+          ...singleTag,
         ]),
       );
     } else if (!includeCollage) {
@@ -473,9 +586,15 @@ export class GalleryService {
     }
     if (groupId !== undefined) clauses.push({ groupId });
     if (normalizedTags.length > 0) {
-      clauses.push({ tags: { $all: normalizedTags } });
+      clauses.push(await this.tagIdClause(scopeKey, 'all', normalizedTags));
     }
-    if (tag) clauses.push({ tags: tag });
+    if (tag) {
+      clauses.push(
+        singleTag.length > 0
+          ? await this.tagIdClause(scopeKey, 'all', singleTag)
+          : { id: { $in: [] } },
+      );
+    }
     if (favoriteOnly) clauses.push({ favorite: true });
     const normalizedKeyword = String(keyword ?? '')
       .trim()
@@ -496,13 +615,15 @@ export class GalleryService {
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
     if (resolvedSort === 'random') {
       const rows = await this.images
-        .aggregate<GalleryImageEntity>([
+        .aggregate<GalleryImageDocument>([
           { $match: filter },
           { $sample: { size: lim } },
           { $project: PUBLIC_IMAGE_PROJECTION },
         ])
         .toArray();
-      return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+      return (await this.attachTags(rows)).map(
+        (row) => this.toPublicImage(row) as GalleryImageEntity,
+      );
     }
     const query = this.images.find(filter, {
       projection: PUBLIC_IMAGE_PROJECTION,
@@ -515,7 +636,9 @@ export class GalleryService {
       query.sort({ createdAt: sortDirection, id: sortDirection });
     }
     const rows = await query.limit(lim).toArray();
-    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+    return (await this.attachTags(rows)).map(
+      (row) => this.toPublicImage(row) as GalleryImageEntity,
+    );
   }
 
   /**
@@ -567,7 +690,7 @@ export class GalleryService {
   }
 
   /**
-   * @description 精确统计当前图片可见范围内的图片（含素材图）、其中的素材图、收藏和去重标签数量。
+   * @description 精确统计当前图片可见范围内的图片（含素材图）、其中的素材图、收藏和去重标签数量；标签数只扫关联表索引，不读图片文档。
    * @keyword-cn 图库精确统计, 可见范围计数
    * @keyword-en gallery-exact-stats, visibility-count
    */
@@ -581,21 +704,18 @@ export class GalleryService {
     tags: number;
   }> {
     const filter = this.buildTenantFilter(userId, tenantId);
+    const scopeKey = this.scopeKeyOf(tenantId);
+    const materialFilter = await this.buildImageTypeFilter(
+      scopeKey,
+      'material',
+    );
     const [images, materials, favorites, tags] = await Promise.all([
       this.images.countDocuments(filter),
-      this.images.countDocuments({
-        $and: [filter, this.buildImageTypeFilter('material')],
-      }),
+      this.images.countDocuments({ $and: [filter, materialFilter] }),
       this.images.countDocuments({ $and: [filter, { favorite: true }] }),
-      this.images.distinct('tags', filter),
+      this.tagLinks.countDistinctTags(scopeKey),
     ]);
-    return {
-      images,
-      materials,
-      favorites,
-      tags: new Set(tags.map((tag) => String(tag ?? '').trim()).filter(Boolean))
-        .size,
-    };
+    return { images, materials, favorites, tags };
   }
 
   /**
@@ -619,7 +739,9 @@ export class GalleryService {
         { id: input.id },
       ],
     };
-    const current = await this.images.findOne(filter);
+    const current = await this.images.findOne(filter, {
+      projection: { embedding: 0 },
+    });
     if (!current) return null;
     const set: Record<string, unknown> = { updatedAt: new Date() };
     const unset: Record<string, ''> = {};
@@ -635,20 +757,30 @@ export class GalleryService {
     const add = this.normalizeTags(input.addTags);
     const remove = new Set(this.normalizeTags(input.removeTags));
     if (add.length > 0 || remove.size > 0) {
-      set.tags = Array.from(
-        new Set([
-          ...this.normalizeTags(current.tags).filter((tag) => !remove.has(tag)),
-          ...add,
-        ]),
-      );
+      const [withTags] = await this.attachTags([current]);
+      await this.writeImageTags([
+        {
+          id: current.id,
+          tenantId: current.tenantId,
+          tags: Array.from(
+            new Set([
+              ...withTags.tags.filter((tag) => !remove.has(tag)),
+              ...add,
+            ]),
+          ),
+        },
+      ]);
     }
     const update: Record<string, unknown> = { $set: set };
     if (Object.keys(unset).length > 0) update.$unset = unset;
     const result = await this.images.findOneAndUpdate(filter, update, {
       returnDocument: 'after',
       includeResultMetadata: true,
+      projection: { embedding: 0 },
     });
-    return result.value ? this.toPublicImage(result.value) : null;
+    if (!result.value) return null;
+    const [updated] = await this.attachTags([result.value]);
+    return this.toPublicImage(updated);
   }
 
   /**
@@ -677,15 +809,30 @@ export class GalleryService {
     ).slice(0, 500);
     if (ids.length === 0) return { updated: 0 };
     const rows = await this.images
-      .find({
-        $and: [
-          this.buildTenantFilter(input.userId, input.tenantId),
-          { id: { $in: ids } },
-        ],
-      })
+      .find(
+        {
+          $and: [
+            this.buildTenantFilter(input.userId, input.tenantId),
+            { id: { $in: ids } },
+          ],
+        },
+        { projection: { embedding: 0 } },
+      )
       .toArray();
     const add = this.normalizeTags(input.addTags);
     const remove = new Set(this.normalizeTags(input.removeTags));
+    if (add.length > 0 || remove.size > 0) {
+      const withTags = await this.attachTags(rows);
+      await this.writeImageTags(
+        withTags.map((row) => ({
+          id: row.id,
+          tenantId: row.tenantId,
+          tags: Array.from(
+            new Set([...row.tags.filter((tag) => !remove.has(tag)), ...add]),
+          ),
+        })),
+      );
+    }
     const now = new Date();
     const operations = rows.map((row) => {
       const set: Record<string, unknown> = { updatedAt: now };
@@ -703,14 +850,6 @@ export class GalleryService {
         set.favorite = input.favorite;
         if (input.favorite) set.favoritedAt = now;
         else unset.favoritedAt = '';
-      }
-      if (add.length > 0 || remove.size > 0) {
-        set.tags = Array.from(
-          new Set([
-            ...this.normalizeTags(row.tags).filter((tag) => !remove.has(tag)),
-            ...add,
-          ]),
-        );
       }
       const update: Record<string, unknown> = { $set: set };
       if (Object.keys(unset).length > 0) update.$unset = unset;
@@ -758,9 +897,6 @@ export class GalleryService {
       $and: [scope, { id: input.id }],
     });
     if (!source) return [];
-    const candidates = await this.images
-      .find({ $and: [scope, { id: { $ne: input.id } }] })
-      .toArray();
     const limit = Math.max(1, Math.min(30, Math.floor(input.limit || 12)));
     const sourceEmbedding = Array.isArray(source.embedding)
       ? source.embedding
@@ -770,6 +906,9 @@ export class GalleryService {
     );
     if (hasVector) {
       try {
+        const candidates = await this.images
+          .find({ $and: [scope, { id: { $ne: input.id } }] })
+          .toArray();
         const vectorRows = candidates
           .filter(
             (row) =>
@@ -787,28 +926,84 @@ export class GalleryService {
           .sort((a, b) => b.score - a.score)
           .slice(0, limit);
         if (vectorRows.length > 0) {
-          return vectorRows.map(({ image }) => this.toPublicImage(image));
+          const picked = await this.attachTags(
+            vectorRows.map(({ image }) => image),
+          );
+          return picked.map((image) => this.toPublicImage(image));
         }
       } catch {
         // 向量不可用时继续走共同标签兜底。
       }
     }
-    const sourceTags = new Set(Array.isArray(source.tags) ? source.tags : []);
-    return candidates
-      .map((image) => ({
-        image,
-        commonTags: (Array.isArray(image.tags) ? image.tags : []).filter(
-          (tag) => sourceTags.has(tag),
-        ).length,
-      }))
-      .sort(
-        (a, b) =>
-          b.commonTags - a.commonTags ||
-          new Date(b.image.createdAt).getTime() -
-            new Date(a.image.createdAt).getTime(),
-      )
-      .slice(0, limit)
-      .map(({ image }) => this.toPublicImage(image));
+    return this.findSimilarByTags(scope, source, limit);
+  }
+
+  /**
+   * @description 相似图无向量时的兜底：共同标签多的在前、同数按创建时间新的在前，不够时用最新的其他图片补足；
+   *   共同标签数直接在关联表上统计，不再把整个租户的图片读进内存。
+   * @keyword-cn 共同标签兜底, 相似图补足
+   * @keyword-en shared-tag-fallback, similar-image-fill
+   */
+  private async findSimilarByTags(
+    scope: Record<string, unknown>,
+    source: GalleryImageDocument,
+    limit: number,
+  ): Promise<GalleryPublicImage[]> {
+    const [withTags] = await this.attachTags([source]);
+    const shared = await this.tagLinks.countSharedTagsByImage(
+      this.scopeKeyOf(source.tenantId),
+      withTags.tags,
+      source.id,
+    );
+    let pickedIds: number[] = [];
+    if (shared.size > 0) {
+      const dated = await this.images
+        .find(
+          { $and: [scope, { id: { $in: Array.from(shared.keys()) } }] },
+          { projection: { _id: 0, id: 1, createdAt: 1 } },
+        )
+        .toArray();
+      pickedIds = dated
+        .sort(
+          (a, b) =>
+            (shared.get(b.id) ?? 0) - (shared.get(a.id) ?? 0) ||
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        )
+        .slice(0, limit)
+        .map((row) => row.id);
+    }
+    const rows =
+      pickedIds.length > 0
+        ? await this.images
+            .find(
+              { $and: [scope, { id: { $in: pickedIds } }] },
+              { projection: PUBLIC_IMAGE_PROJECTION },
+            )
+            .toArray()
+        : [];
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const ordered = pickedIds
+      .map((id) => byId.get(id))
+      .filter((row): row is NonNullable<typeof row> => !!row);
+    if (ordered.length < limit) {
+      const filler = await this.images
+        .find(
+          {
+            $and: [
+              scope,
+              { id: { $nin: [source.id, ...ordered.map((row) => row.id)] } },
+            ],
+          },
+          { projection: PUBLIC_IMAGE_PROJECTION },
+        )
+        .sort({ createdAt: -1, id: -1 })
+        .limit(limit - ordered.length)
+        .toArray();
+      ordered.push(...filler);
+    }
+    return (await this.attachTags(ordered)).map((image) =>
+      this.toPublicImage(image),
+    );
   }
 
   /**
@@ -824,16 +1019,33 @@ export class GalleryService {
     const tags = this.normalizeTags(input.tags).slice(0, 50);
     if (tags.length === 0) return { updated: 0 };
     const rows = await this.images
-      .find({
-        $and: [
-          this.buildTenantFilter(input.userId, input.tenantId),
-          { tags: { $in: tags } },
-        ],
-      })
+      .find(
+        {
+          $and: [
+            this.buildTenantFilter(input.userId, input.tenantId),
+            await this.tagIdClause(
+              this.scopeKeyOf(input.tenantId),
+              'any',
+              tags,
+            ),
+          ],
+        },
+        { projection: { embedding: 0 } },
+      )
       .toArray();
+    if (rows.length === 0) return { updated: 0 };
+    const withTags = await this.attachTags(rows);
+    const removing = new Set(tags);
+    await this.writeImageTags(
+      withTags.map((row) => ({
+        id: row.id,
+        tenantId: row.tenantId,
+        tags: row.tags.filter((tag) => !removing.has(tag)),
+      })),
+    );
     const now = new Date();
-    const operations = rows.map((row) => {
-      const matched = tags.filter((tag) => row.tags?.includes(tag));
+    const operations = withTags.map((row) => {
+      const matched = tags.filter((tag) => row.tags.includes(tag));
       return {
         updateOne: {
           filter: { _id: row._id },
@@ -842,12 +1054,10 @@ export class GalleryService {
               note: this.appendNoteLines(row.note, matched.join('\n')),
               updatedAt: now,
             },
-            $pull: { tags: { $in: matched } },
           },
         },
       };
     });
-    if (operations.length === 0) return { updated: 0 };
     await this.images.bulkWrite(operations, { ordered: false });
     return { updated: operations.length };
   }
@@ -888,32 +1098,46 @@ export class GalleryService {
   /**
    * @description 构建图片类型 DB 过滤条件；普通图排除拼图、封面标签与素材图标签（AI 生成、出片过程图、设计素材与画布成品），素材图正好取反，拼图口径保持不变。
    *   调用方明确按某个标签筛选时，普通图不再排除这个标签（例如设计编辑器手动选「画布成品」），否则结果必然为空。
+   *   标签部分换算成图片 ID 条件（来自标签关联表），`isCollage` 仍按图片字段过滤。
+   * @param {string} scopeKey - 标签作用域键。
    * @param {Exclude<GalleryImageType, 'all'>} imageType - 目标图片类型。
    * @param {string[]} [requestedTags] - 调用方明确要筛的标签。
-   * @returns {Record<string, unknown>} MongoDB filter 对象。
+   * @returns {Promise<Record<string, unknown>>} MongoDB filter 对象。
    * @keyword-cn 普通图筛选, AI素材排除
    * @keyword-en regular-image-filter, exclude-ai-material
    */
-  private buildImageTypeFilter(
+  private async buildImageTypeFilter(
+    scopeKey: string,
     imageType: Exclude<GalleryImageType, 'all'>,
     requestedTags: string[] = [],
-  ): Record<string, unknown> {
+  ): Promise<Record<string, unknown>> {
+    const rule = this.imageTypeTagRule(imageType, requestedTags);
+    const ids = await this.tagLinks.imageIdsWithAnyTag(scopeKey, rule.tags);
+    if (rule.mode === 'exclude') {
+      return { isCollage: { $ne: true }, id: { $nin: ids } };
+    }
+    return { $or: [{ isCollage: true }, { id: { $in: ids } }] };
+  }
+
+  /**
+   * @description 图片类型对应的标签规则：普通图排除拼图和这些标签（调用方明确要筛的标签不排除），素材图与拼图封面为拼图或带这些标签。
+   * @keyword-cn 图片类型标签规则, 素材图口径
+   * @keyword-en image-type-tag-rule, material-image-rule
+   */
+  private imageTypeTagRule(
+    imageType: Exclude<GalleryImageType, 'all'>,
+    requestedTags: string[] = [],
+  ): { mode: 'exclude' | 'include'; tags: string[] } {
     if (imageType === 'regular') {
       return {
-        isCollage: { $ne: true },
-        tags: {
-          $nin: NON_REGULAR_TAGS.filter((tag) => !requestedTags.includes(tag)),
-        },
+        mode: 'exclude',
+        tags: NON_REGULAR_TAGS.filter((tag) => !requestedTags.includes(tag)),
       };
     }
     if (imageType === 'material') {
-      return {
-        $or: [{ isCollage: true }, { tags: { $in: NON_REGULAR_TAGS } }],
-      };
+      return { mode: 'include', tags: [...NON_REGULAR_TAGS] };
     }
-    return {
-      $or: [{ isCollage: true }, { tags: { $in: [...GALLERY_COVER_TAGS] } }],
-    };
+    return { mode: 'include', tags: [...GALLERY_COVER_TAGS] };
   }
 
   /**
@@ -947,7 +1171,8 @@ export class GalleryService {
    * @param {string} [tenantId] - 租户ID
    * @param {number} [limit=500] - 返回条数
    * @returns {Promise<string[]>} 标签列表
-   * @keyword-en list tags with tenant filter
+   * @keyword-cn 租户标签列表, 已用标签
+   * @keyword-en list-tenant-tags, used-tags
    * @since 2026-03-23
    */
   async listDistinctTagsWithTenant(
@@ -955,21 +1180,23 @@ export class GalleryService {
     tenantId?: string,
     limit = 500,
   ): Promise<string[]> {
-    const filter = this.buildTenantFilter(userId, tenantId);
-    const raw = await this.images.distinct('tags', filter);
-    const list = (Array.isArray(raw) ? raw : [])
-      .map((x) => String(x ?? '').trim())
-      .filter(Boolean);
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const t of list) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      out.push(t);
-    }
+    const names = await this.tagLinks.listTagNames({
+      scopeKey: this.scopeKeyOf(tenantId),
+    });
+    return this.sortTagNames(names, limit);
+  }
+
+  /**
+   * @description 标签名去空白、去重并按字典序截断，供各个列标签接口统一输出。
+   * @keyword-cn 标签名排序, 标签截断
+   * @keyword-en sort-tag-names, limit-tag-names
+   */
+  private sortTagNames(names: string[], limit: number): string[] {
+    const out = Array.from(
+      new Set(names.map((x) => String(x ?? '').trim()).filter(Boolean)),
+    );
     out.sort((a, b) => a.localeCompare(b));
     const lim = Math.max(1, Math.min(5000, Math.floor(limit || 500)));
-    console.log(filter, raw);
     return out.slice(0, lim);
   }
 
@@ -982,7 +1209,8 @@ export class GalleryService {
    * @param {number} [limit=50] - 返回条数上限。
    * @returns {Promise<GalleryImageEntity[]>} 图片列表。
    * @throws {Error} 当数据库查询失败时抛出。
-   * @keyword gallery, list, pagination
+   * @keyword-cn 旧版图片列表, ID游标分页
+   * @keyword-en legacy-image-list, id-cursor-pagination
    * @since 2026-02-04
    */
   async list(
@@ -992,56 +1220,71 @@ export class GalleryService {
     cursorId?: number,
     limit = 50,
   ): Promise<GalleryImageEntity[]> {
-    const filter: Record<string, unknown> = {};
-    if (userId) filter.userId = userId;
+    const clauses: Record<string, unknown>[] = [];
+    if (userId) clauses.push({ userId });
     if (
       groupId !== undefined &&
       (typeof groupId === 'number'
         ? Number.isFinite(groupId)
         : typeof groupId === 'string')
     )
-      filter.groupId = groupId;
-    if (tag) filter.tags = tag;
-    if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
-      filter.id = { $lt: cursorId };
+      clauses.push({ groupId });
+    if (tag) {
+      // 这个旧接口按用户而非租户过滤，标签跨作用域按名字匹配
+      const ids = await this.tagLinks.imageIdsWithAnyTag(
+        null,
+        this.normalizeTags([tag]),
+      );
+      clauses.push({ id: { $in: ids } });
     }
+    if (typeof cursorId === 'number' && Number.isFinite(cursorId)) {
+      clauses.push({ id: { $lt: cursorId } });
+    }
+    const filter =
+      clauses.length === 0
+        ? {}
+        : clauses.length === 1
+          ? clauses[0]
+          : { $and: clauses };
     const lim = Math.max(1, Math.min(200, Math.floor(limit)));
     const rows = await this.images
       .find(filter, { projection: PUBLIC_IMAGE_PROJECTION })
       .sort({ id: -1 })
       .limit(lim)
       .toArray();
-    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+    return (await this.attachTags(rows)).map(
+      (row) => this.toPublicImage(row) as GalleryImageEntity,
+    );
   }
 
   /**
-   * @description 列出某用户下所有已出现的标签（distinct tags）。
+   * @description 列出某用户图片上出现过的标签；不传用户时为全部作用域已使用的标签。
    * @param {string} [userId] - 用户ID过滤。
    * @param {number} [limit=500] - 返回条数上限。
    * @returns {Promise<string[]>} 标签列表。
-   * @throws {Error} 当MongoDB distinct 查询失败时抛出。
-   * @keyword gallery, tag, list
+   * @throws {Error} 当MongoDB 查询失败时抛出。
+   * @keyword-cn 用户标签列表, 已用标签
+   * @keyword-en list-user-tags, used-tags
    * @since 2026-02-04
    */
   async listDistinctTags(userId?: string, limit = 500): Promise<string[]> {
-    const filter: Record<string, unknown> = {};
-    if (userId) filter.userId = userId;
-    const raw = await this.images.distinct('tags', filter);
-    const list = (Array.isArray(raw) ? raw : [])
-      .map((x) => String(x ?? '').trim())
-      .filter(Boolean);
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const t of list) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      out.push(t);
-    }
-    out.sort((a, b) => a.localeCompare(b));
-    const lim = Math.max(1, Math.min(5000, Math.floor(limit || 500)));
-    return out.slice(0, lim);
+    const names = userId
+      ? await this.tagLinks.listTagNames({
+          imageIds: await this.findImageIds({ userId }),
+        })
+      : await this.tagLinks.listTagNames({});
+    return this.sortTagNames(names, limit);
   }
 
+  /**
+   * @description 列出某用户某分组图片上出现过的标签；先用覆盖索引取图片 ID，再查关联表。
+   * @param {string | undefined} userId - 用户ID过滤。
+   * @param {number | undefined} groupId - 图库组ID过滤。
+   * @param {number} [limit=500] - 返回条数上限。
+   * @returns {Promise<string[]>} 标签列表。
+   * @keyword-cn 分组标签列表, 按分组列标签
+   * @keyword-en list-group-tags, tags-by-group
+   */
   async listDistinctTagsByGroup(
     userId: string | undefined,
     groupId: number | undefined,
@@ -1057,26 +1300,20 @@ export class GalleryService {
     ) {
       filter.groupId = groupId;
     }
-    const raw = await this.images.distinct('tags', filter);
-    const list = (Array.isArray(raw) ? raw : [])
-      .map((x) => String(x ?? '').trim())
-      .filter(Boolean);
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const t of list) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      out.push(t);
-    }
-    out.sort((a, b) => a.localeCompare(b));
-    const lim = Math.max(1, Math.min(5000, Math.floor(limit || 500)));
-    return out.slice(0, lim);
+    const names =
+      Object.keys(filter).length === 0
+        ? await this.tagLinks.listTagNames({})
+        : await this.tagLinks.listTagNames({
+            imageIds: await this.findImageIds(filter),
+          });
+    return this.sortTagNames(names, limit);
   }
 
   /**
    * @description 按 tags 检索图片。默认排除 isUsed=true（已被生成消耗）的图片,
-   *  传 includeUsed=true 可关闭该过滤（用于素材管理类查询）。
-   * @keyword-en search images by tags, defaults to excluding used images
+   *  传 includeUsed=true 可关闭该过滤（用于素材管理类查询）。标签先在关联表换算成图片 ID 再查图片。
+   * @keyword-cn 按标签检索图片, 排除已使用
+   * @keyword-en search-images-by-tags, exclude-used-images
    */
   async searchByTags(input: {
     userId?: string;
@@ -1089,16 +1326,15 @@ export class GalleryService {
     /** 是否包含已使用 (isUsed=true) 图片, 默认 false */
     includeUsed?: boolean;
   }): Promise<GalleryImageEntity[]> {
-    const tags = Array.isArray(input?.tags)
-      ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
-      : [];
+    const tags = this.normalizeTags(input?.tags);
     if (tags.length === 0) return [];
+    const scopeKey = this.scopeKeyOf(input.tenantId);
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(input.userId, input.tenantId),
-      { tags: { $in: tags } },
+      await this.tagIdClause(scopeKey, 'any', tags),
     ];
     if (input.imageType && input.imageType !== 'all') {
-      clauses.push(this.buildImageTypeFilter(input.imageType));
+      clauses.push(await this.buildImageTypeFilter(scopeKey, input.imageType));
     } else if (input.matchCollage === false) {
       clauses.push({ isCollage: { $ne: true } });
     }
@@ -1119,14 +1355,17 @@ export class GalleryService {
       .sort({ id: -1 })
       .limit(lim)
       .toArray();
-    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+    return (await this.attachTags(rows)).map(
+      (row) => this.toPublicImage(row) as GalleryImageEntity,
+    );
   }
 
   /**
    * @description 统计指定 tags 当前可用图片数(默认已排除 isUsed)。用于生成前的不足量预估。
    *  返回 byTag 字典(每个 tag 单独 count) + total(去重后总数,$or 匹配任一 tag)。
    *  传 includeUsed=true 关闭 isUsed 过滤(不去重生成时统计全量)。
-   * @keyword-en count available images by tags excluding used by default
+   * @keyword-cn 标签可用量统计, 生成前余量预估
+   * @keyword-en count-available-by-tags, pre-generation-capacity
    */
   async countAvailableByTags(input: {
     userId?: string;
@@ -1140,6 +1379,7 @@ export class GalleryService {
       ? input.tags.map((x) => String(x ?? '').trim()).filter(Boolean)
       : [];
     if (tags.length === 0) return { total: 0, byTag: {} };
+    const scopeKey = this.scopeKeyOf(input.tenantId);
     const baseClauses: Record<string, unknown>[] = [
       this.buildTenantFilter(input.userId, input.tenantId),
     ];
@@ -1147,22 +1387,35 @@ export class GalleryService {
       baseClauses.push({ isUsed: { $ne: true } });
     }
     if (input.imageType && input.imageType !== 'all') {
-      baseClauses.push(this.buildImageTypeFilter(input.imageType));
+      baseClauses.push(
+        await this.buildImageTypeFilter(scopeKey, input.imageType),
+      );
     }
     const byTag: Record<string, number> = {};
     for (const t of tags) {
-      const filter = { $and: [...baseClauses, { tags: t }] };
+      const filter = {
+        $and: [
+          ...baseClauses,
+          await this.tagIdClause(scopeKey, 'any', this.normalizeTags([t])),
+        ],
+      };
       byTag[t] = await this.images.countDocuments(filter);
     }
-    const totalFilter = { $and: [...baseClauses, { tags: { $in: tags } }] };
+    const totalFilter = {
+      $and: [
+        ...baseClauses,
+        await this.tagIdClause(scopeKey, 'any', this.normalizeTags(tags)),
+      ],
+    };
     const total = await this.images.countDocuments(totalFilter);
     return { total, byTag };
   }
 
   /**
    * @description 列出租户可见的热门 tag (按图片数量倒序),用于 AI 推荐 tag 选择。
-   *  自动过滤 isUsed=true 的图片,避免推荐已耗尽的 tag。
-   * @keyword-en list top tags by image count for AI recommendation
+   *  自动过滤 isUsed=true 的图片,避免推荐已耗尽的 tag。计数在关联表上按图片 ID 范围完成，不展开图片文档。
+   * @keyword-cn 热门标签推荐, 按图片数排行
+   * @keyword-en list-top-tags, tag-count-ranking
    */
   async listTopTagsWithCount(input: {
     userId?: string;
@@ -1170,27 +1423,38 @@ export class GalleryService {
     limit?: number;
     imageType?: GalleryImageType;
   }): Promise<Array<{ tag: string; count: number }>> {
-    const matchClauses: Record<string, unknown>[] = [
-      this.buildTenantFilter(input.userId, input.tenantId),
-      { isUsed: { $ne: true } },
-      { tags: { $exists: true, $ne: [] } },
-    ];
-    if (input.imageType && input.imageType !== 'all') {
-      matchClauses.push(this.buildImageTypeFilter(input.imageType));
-    }
+    const tenantFilter = this.buildTenantFilter(input.userId, input.tenantId);
+    const scopeKey = this.scopeKeyOf(input.tenantId);
     const lim = Math.max(1, Math.min(50, Math.floor(input.limit ?? 12)));
-    const pipe: Record<string, unknown>[] = [
-      { $match: { $and: matchClauses } },
-      { $unwind: '$tags' },
-      { $match: { tags: { $type: 'string', $ne: '' } } },
-      { $group: { _id: '$tags', count: { $sum: 1 } } },
-      { $sort: { count: -1, _id: 1 } },
-      { $limit: lim },
-      { $project: { _id: 0, tag: '$_id', count: 1 } },
-    ];
-    return this.images
-      .aggregate<{ tag: string; count: number }>(pipe)
-      .toArray();
+    const usedIds = await this.findImageIds({
+      $and: [tenantFilter, { isUsed: true }],
+    });
+    if (!input.imageType || input.imageType === 'all') {
+      return this.tagLinks.countImagesPerTag({
+        scopeKey,
+        excludeImageIds: usedIds,
+        limit: lim,
+      });
+    }
+    // 图片类型同样换算成图片 ID：拼图 ID 走覆盖索引，类型标签走关联表
+    const rule = this.imageTypeTagRule(input.imageType);
+    const [collageIds, taggedIds] = await Promise.all([
+      this.findImageIds({ $and: [tenantFilter, { isCollage: true }] }),
+      this.tagLinks.imageIdsWithAnyTag(scopeKey, rule.tags),
+    ]);
+    if (rule.mode === 'exclude') {
+      return this.tagLinks.countImagesPerTag({
+        scopeKey,
+        excludeImageIds: [...usedIds, ...collageIds, ...taggedIds],
+        limit: lim,
+      });
+    }
+    const used = new Set(usedIds);
+    return this.tagLinks.countImagesPerTag({
+      scopeKey,
+      onlyImageIds: [...collageIds, ...taggedIds].filter((id) => !used.has(id)),
+      limit: lim,
+    });
   }
 
   /**
@@ -1235,6 +1499,7 @@ export class GalleryService {
     /** 是否包含已使用图片, 默认 false */
     includeUsed?: boolean;
   }): Promise<GalleryImageEntity[]> {
+    const scopeKey = this.scopeKeyOf(input.tenantId);
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(input.userId, input.tenantId),
     ];
@@ -1245,18 +1510,12 @@ export class GalleryService {
     ) {
       clauses.push({ groupId: input.groupId });
     }
-    const tags = Array.from(
-      new Set(
-        (Array.isArray(input.tags) ? input.tags : [])
-          .map((tag) => String(tag ?? '').trim())
-          .filter(Boolean),
-      ),
-    );
+    const tags = this.normalizeTags(input.tags);
     if (tags.length > 0) {
-      clauses.push({ tags: { $in: tags } });
+      clauses.push(await this.tagIdClause(scopeKey, 'any', tags));
     }
     if (input.imageType && input.imageType !== 'all') {
-      clauses.push(this.buildImageTypeFilter(input.imageType));
+      clauses.push(await this.buildImageTypeFilter(scopeKey, input.imageType));
     }
     const excludedGroupIds = Array.from(
       new Set(
@@ -1272,15 +1531,9 @@ export class GalleryService {
     if (excludedGroupIds.length > 0) {
       clauses.push({ groupId: { $nin: excludedGroupIds } });
     }
-    const excludedTags = Array.from(
-      new Set(
-        (Array.isArray(input.excludedTags) ? input.excludedTags : [])
-          .map((tag) => String(tag ?? '').trim())
-          .filter(Boolean),
-      ),
-    );
+    const excludedTags = this.normalizeTags(input.excludedTags);
     if (excludedTags.length > 0) {
-      clauses.push({ tags: { $nin: excludedTags } });
+      clauses.push(await this.tagIdClause(scopeKey, 'none', excludedTags));
     }
     if (input.includeUsed !== true) {
       clauses.push({ isUsed: { $ne: true } });
@@ -1291,9 +1544,11 @@ export class GalleryService {
     pipe.push({ $sample: { size: lim } });
     pipe.push({ $project: PUBLIC_IMAGE_PROJECTION });
     const rows = await this.images
-      .aggregate<GalleryImageEntity>(pipe)
+      .aggregate<GalleryImageDocument>(pipe)
       .toArray();
-    return rows.map((row) => this.toPublicImage(row) as GalleryImageEntity);
+    return (await this.attachTags(rows)).map(
+      (row) => this.toPublicImage(row) as GalleryImageEntity,
+    );
   }
 
   /**
@@ -1319,32 +1574,38 @@ export class GalleryService {
     if (ids.length === 0) return { matched: 0, modified: 0 };
 
     const add = this.normalizeTags(input?.addTags);
-    const remove = this.normalizeTags(input?.removeTags);
-    if (add.length === 0 && remove.length === 0)
+    const remove = new Set(this.normalizeTags(input?.removeTags));
+    if (add.length === 0 && remove.size === 0)
       return { matched: 0, modified: 0 };
 
-    const update: Record<string, unknown> = { $set: { updatedAt: new Date() } };
-    if (add.length > 0) {
-      (update as { $addToSet?: unknown }).$addToSet = {
-        tags: { $each: add },
-      };
-    }
-    if (remove.length > 0) {
-      (update as { $pull?: unknown }).$pull = {
-        tags: { $in: remove },
-      };
-    }
-
-    const res = await this.images.updateMany(
-      {
-        $and: [
-          this.buildTenantFilter(input.userId, input.tenantId),
-          { id: { $in: ids } },
-        ],
-      },
-      update,
+    // 只读 id/租户/旧数组（迁移过渡兼容），可见口径与图库列表一致
+    const rows = await this.images
+      .find(
+        {
+          $and: [
+            this.buildTenantFilter(input.userId, input.tenantId),
+            { id: { $in: ids } },
+          ],
+        },
+        { projection: { _id: 0, id: 1, tenantId: 1, tags: 1 } },
+      )
+      .toArray();
+    if (rows.length === 0) return { matched: 0, modified: 0 };
+    const withTags = await this.attachTags(rows);
+    await this.writeImageTags(
+      withTags.map((row) => ({
+        id: row.id,
+        tenantId: row.tenantId,
+        tags: Array.from(
+          new Set([...row.tags.filter((tag) => !remove.has(tag)), ...add]),
+        ),
+      })),
     );
-    return { matched: res.matchedCount ?? 0, modified: res.modifiedCount ?? 0 };
+    const res = await this.images.updateMany(
+      { id: { $in: rows.map((row) => row.id) } },
+      { $set: { updatedAt: new Date() } },
+    );
+    return { matched: rows.length, modified: res.modifiedCount ?? 0 };
   }
 
   /**
@@ -1373,6 +1634,7 @@ export class GalleryService {
 
     const del = await this.images.deleteOne({ _id: doc._id });
     if (!del.deletedCount) return { ok: false };
+    await this.tagLinks.removeImages([doc.id]);
 
     const absPath = typeof doc.absPath === 'string' ? doc.absPath : '';
     const thumbFile =
@@ -1481,7 +1743,9 @@ export class GalleryService {
 
     if (rows.length === 0) return { updated: 0 };
 
-    const texts = rows.map((r) => this.buildEmbeddingTextFromEntity(r));
+    const texts = (await this.attachTags(rows)).map((r) =>
+      this.buildEmbeddingTextFromEntity(r),
+    );
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
     const embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
     const now = new Date();
@@ -1556,9 +1820,11 @@ export class GalleryService {
         { $addFields: { score: { $meta: 'vectorSearchScore' } } },
         { $project: PUBLIC_IMAGE_PROJECTION },
       ];
-      const rows = await this.images
-        .aggregate<GalleryImageEntity & { score: number }>(pipe)
-        .toArray();
+      const rows = await this.attachTags(
+        await this.images
+          .aggregate<GalleryImageDocument & { score: number }>(pipe)
+          .toArray(),
+      );
       this.isAtlasAvailable = true;
       return rows
         .filter((r) => r.score >= minScore)
@@ -1605,29 +1871,26 @@ export class GalleryService {
       this.buildTenantFilter(userId, tenantId),
     ];
     if (imageType && imageType !== 'all') {
-      clauses.push(this.buildImageTypeFilter(imageType));
+      clauses.push(
+        await this.buildImageTypeFilter(this.scopeKeyOf(tenantId), imageType),
+      );
     }
     const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
     const rows = await this.images.find(filter).toArray();
-    const scored = rows
-      .filter(
-        (r): r is GalleryImageEntity & { embedding: number[] } =>
-          Array.isArray(r.embedding) && r.embedding.length > 0,
-      )
+    const top = rows
+      .filter((r) => Array.isArray(r.embedding) && r.embedding.length > 0)
       .map((image) => ({
         image,
         score: this.embedding.cosineSimilarity(queryEmbedding, image.embedding),
       }))
       .filter((x) => x.score >= minScore)
       .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map((x) => {
-        return {
-          image: this.toPublicImage(x.image) as GalleryImageEntity,
-          score: x.score,
-        };
-      });
-    return scored;
+      .slice(0, limit);
+    const withTags = await this.attachTags(top.map((x) => x.image));
+    return withTags.map((image, idx) => ({
+      image: this.toPublicImage(image) as GalleryImageEntity,
+      score: top[idx].score,
+    }));
   }
 
   /**

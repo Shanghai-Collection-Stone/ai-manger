@@ -7,6 +7,7 @@ import { GalleryService } from './services/gallery.service.js';
 import { GalleryAiImageService } from './services/gallery-ai-image.service.js';
 import { GalleryGroupService } from './services/gallery-group.service.js';
 import { GalleryTagLibraryService } from './services/gallery-tag-library.service.js';
+import { GalleryTagLinkService } from './services/gallery-tag-link.service.js';
 import { MaterialStyleService } from './material-styles/services/material-style.service.js';
 
 @Module({
@@ -17,6 +18,7 @@ import { MaterialStyleService } from './material-styles/services/material-style.
     GalleryAiImageService,
     GalleryGroupService,
     GalleryTagLibraryService,
+    GalleryTagLinkService,
     MaterialStyleService,
   ],
   exports: [

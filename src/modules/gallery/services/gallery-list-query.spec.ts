@@ -21,6 +21,19 @@ function createListCollection(cursorImage: Record<string, unknown> | null) {
 }
 
 /**
+ * @description 创建标签关联服务替身：带任一标签的图片固定为 [7, 8]，同时带全部标签的固定为 [8]。
+ * @keyword-cn 标签关联替身, 标签换算图片
+ * @keyword-en tag-link-double, tag-to-image-ids
+ */
+function createTagLinks() {
+  return {
+    imageIdsWithAnyTag: jest.fn().mockResolvedValue([7, 8]),
+    imageIdsWithAllTags: jest.fn().mockResolvedValue([8]),
+    tagsByImageIds: jest.fn().mockResolvedValue(new Map()),
+  };
+}
+
+/**
  * @description 用集合替身执行一次图片列表查询，返回 find 收到的全部过滤子条件。
  * @keyword-cn 执行列表查询, 查询子条件
  * @keyword-en run-list-query, query-clauses
@@ -28,9 +41,10 @@ function createListCollection(cursorImage: Record<string, unknown> | null) {
 async function listClauses(
   images: ReturnType<typeof createListCollection>,
   options: Parameters<GalleryService['findAccessibleImages']>[2],
+  tagLinks: ReturnType<typeof createTagLinks> = createTagLinks(),
 ): Promise<unknown[]> {
   const service = Object.create(GalleryService.prototype) as GalleryService;
-  Object.assign(service, { images });
+  Object.assign(service, { images, tagLinks });
   await service.findAccessibleImages('user', 'tenant', options);
   const [[filter]] = images.find.mock.calls as [[{ $and?: unknown[] }]];
   return filter.$and ?? [filter];
@@ -79,13 +93,20 @@ describe('图库列表复合游标与关键词搜索', () => {
   });
 
   it('普通图排除拼图、封面与素材图标签，素材图正好取反', async () => {
-    const regular = await listClauses(createListCollection(null), {
-      imageType: 'regular',
-    });
     const tags = [...GALLERY_COVER_TAGS, ...GALLERY_MATERIAL_TAGS];
+    const regularLinks = createTagLinks();
+    const regular = await listClauses(
+      createListCollection(null),
+      { imageType: 'regular' },
+      regularLinks,
+    );
+    expect(regularLinks.imageIdsWithAnyTag).toHaveBeenCalledWith(
+      'tenant:tenant',
+      tags,
+    );
     expect(regular).toContainEqual({
       isCollage: { $ne: true },
-      tags: { $nin: tags },
+      id: { $nin: [7, 8] },
     });
     expect(tags).toEqual(
       expect.arrayContaining([
@@ -96,21 +117,48 @@ describe('图库列表复合游标与关键词搜索', () => {
         '画布成品',
       ]),
     );
-    const picked = await listClauses(createListCollection(null), {
-      imageType: 'regular',
-      tag: '画布成品',
-    });
-    expect(picked).toContainEqual({
-      isCollage: { $ne: true },
-      tags: { $nin: tags.filter((item) => item !== '画布成品') },
-    });
-    expect(picked).toContainEqual({ tags: '画布成品' });
-    const material = await listClauses(createListCollection(null), {
-      imageType: 'material',
-    });
+    const pickedLinks = createTagLinks();
+    const picked = await listClauses(
+      createListCollection(null),
+      { imageType: 'regular', tag: '画布成品' },
+      pickedLinks,
+    );
+    expect(pickedLinks.imageIdsWithAnyTag).toHaveBeenCalledWith(
+      'tenant:tenant',
+      tags.filter((item) => item !== '画布成品'),
+    );
+    expect(pickedLinks.imageIdsWithAllTags).toHaveBeenCalledWith(
+      'tenant:tenant',
+      ['画布成品'],
+    );
+    expect(picked).toContainEqual({ id: { $in: [8] } });
+    const materialLinks = createTagLinks();
+    const material = await listClauses(
+      createListCollection(null),
+      { imageType: 'material' },
+      materialLinks,
+    );
+    expect(materialLinks.imageIdsWithAnyTag).toHaveBeenCalledWith(
+      'tenant:tenant',
+      tags,
+    );
     expect(material).toContainEqual({
-      $or: [{ isCollage: true }, { tags: { $in: tags } }],
+      $or: [{ isCollage: true }, { id: { $in: [7, 8] } }],
     });
+  });
+
+  it('多标签同时满足换算成关联表里的图片 ID', async () => {
+    const links = createTagLinks();
+    const clauses = await listClauses(
+      createListCollection(null),
+      { tags: ['#海边', ' 日落 ', '海边'] },
+      links,
+    );
+    expect(links.imageIdsWithAllTags).toHaveBeenCalledWith('tenant:tenant', [
+      '海边',
+      '日落',
+    ]);
+    expect(clauses).toContainEqual({ id: { $in: [8] } });
   });
 
   it('关键词去空白、转义正则特殊字符并匹配文件名、描述与备注', async () => {
