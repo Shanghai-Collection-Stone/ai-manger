@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { Collection, Db, ObjectId } from 'mongodb';
 import { EmbeddingService } from '../../shared/embedding/embedding.service.js';
 import { AdminService } from '../../admin/services/admin.service.js';
+import { hasUsableEmbedding, toStoredEmbedding } from '../gallery-embedding.js';
 import {
   GALLERY_SCENE_GROUP_SYSTEM,
   type GalleryGroupCreateInput,
@@ -125,23 +126,23 @@ export class GalleryGroupService {
   }
 
   /**
-   * @description 安全生成文本向量，失败时回退零向量，避免分组创建中断。
+   * @description 安全生成文本向量，失败或拿到全 0 向量时存空数组（不写 768 个 0），避免分组创建中断。
    * @param {string} text - 待向量化文本。
-   * @returns {Promise<number[]>} 向量数组。
-   * @keyword-en safe embed text with fallback
+   * @returns {Promise<number[]>} 有效向量，或空数组。
+   * @keyword-cn 安全生成向量, 不存零向量
+   * @keyword-en safe-embed-text, skip-zero-vector
    */
   private async safeEmbedText(text: string): Promise<number[]> {
     try {
       const config = await this.resolveDefaultEmbeddingConfig();
-      const vec = await this.embedding.embedText(text, config);
-      if (Array.isArray(vec) && vec.length > 0) return vec;
+      return toStoredEmbedding(await this.embedding.embedText(text, config));
     } catch (error) {
       console.warn(
-        '[GalleryGroupService.safeEmbedText] embedText failed, fallback to zero vector:',
+        '[GalleryGroupService.safeEmbedText] embedText failed, store empty vector:',
         error,
       );
     }
-    return new Array<number>(768).fill(0);
+    return [];
   }
 
   /**
@@ -645,7 +646,8 @@ export class GalleryGroupService {
   }
 
   /**
-   * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度（租户隔离）。
+   * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度（租户隔离）；
+   *   查询向量全 0（向量服务没配置或调用失败）时直接返回空。
    * @param {string} query - 查询文本。
    * @param {string} [userId] - 用户ID过滤。
    * @param {string} [tenantId] - 租户ID（用于租户隔离）。
@@ -653,7 +655,8 @@ export class GalleryGroupService {
    * @param {number} [minScore=0.5] - 最小相似度阈值。
    * @returns {Promise<GalleryGroupSearchResult[]>} 相似检索结果。
    * @throws {Error} 当Embedding生成失败且未能回退时抛出。
-   * @keyword gallery, groups, vector-search
+   * @keyword-cn 分组语义检索, 无效向量短路
+   * @keyword-en group-vector-search, skip-zero-query
    * @example
    * const results = await galleryGroupService.searchSimilar('avatar portraits', 'u1', 'tenant1', 8, 0.6);
    * @since 2026-02-04
@@ -670,6 +673,7 @@ export class GalleryGroupService {
       query,
       embeddingConfig,
     );
+    if (!hasUsableEmbedding(queryEmbedding)) return [];
     if (this.isAtlasAvailable === false) {
       return this.searchSimilarLocal(
         queryEmbedding,
@@ -716,7 +720,7 @@ export class GalleryGroupService {
   }
 
   /**
-   * @description 本地相似检索回退：全量拉取后计算余弦相似度并排序（租户隔离）。
+   * @description 本地相似检索回退：拉取后只对有效向量计算余弦相似度并排序（租户隔离），空数组与全 0 旧向量跳过。
    * @param {number[]} queryEmbedding - 查询向量。
    * @param {string | undefined} userId - 用户ID过滤。
    * @param {string | undefined} tenantId - 租户ID过滤。
@@ -724,7 +728,8 @@ export class GalleryGroupService {
    * @param {number} minScore - 最小相似度阈值。
    * @returns {Promise<GalleryGroupSearchResult[]>} 相似检索结果。
    * @throws {Error} 当数据库查询失败时抛出。
-   * @keyword gallery, groups, cosine
+   * @keyword-cn 分组本地检索, 跳过无效向量
+   * @keyword-en group-local-search, skip-invalid-vector
    * @since 2026-02-04
    */
   private async searchSimilarLocal(
@@ -737,9 +742,8 @@ export class GalleryGroupService {
     const filter = this.buildTenantFilter(userId, tenantId);
     const rows = await this.groups.find(filter).toArray();
     return rows
-      .filter(
-        (r): r is GalleryGroupEntity & { embedding: number[] } =>
-          Array.isArray(r.embedding) && r.embedding.length > 0,
+      .filter((r): r is GalleryGroupEntity & { embedding: number[] } =>
+        hasUsableEmbedding(r.embedding),
       )
       .map((group) => ({
         group,

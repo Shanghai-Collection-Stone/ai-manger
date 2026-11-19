@@ -16,12 +16,14 @@
 - `entities/gallery-tag-library.entity.ts`
 - `filters/gallery-upload-exception.filter.ts`
 - `gallery-upload-filename.ts`
+- `gallery-embedding.ts` — 判断向量是否有效、入库前把全 0 向量规整成空数组，图片与分组共用。
 - `gallery.constants.ts`
 - `gallery.module.ts`
 - `services/gallery-ai-image.service.ts`
 - `services/gallery-group.service.ts`
 - `services/gallery-public-image.spec.ts`
 - `services/gallery-list-query.spec.ts`
+- `services/gallery-embedding.spec.ts` — 全 0 向量不入库、零查询向量的相似检索不读库、重建向量不用 0 覆盖、分组向量同口径。
 - `services/gallery-tag-library.service.ts`
 - `services/gallery-tag-library.service.spec.ts` — 新建标签库为空、旧租户已有的标签库（含早期写入的门店 / 活动预设）原样返回不改写；未分类标签走关联表统计并排除已归类与系统标签。
 - `services/gallery-tag-link.service.ts` — 标签字典与图片标签关联服务：同步关联、回填标签、标签换算图片 ID、只扫索引的标签统计。
@@ -72,7 +74,7 @@
 - `createListCollection(cursorImage)` — 创建记录列表查询条件、可指定游标图片的集合替身 | keywords: 列表查询替身, 游标图片, list-query-double, cursor-image
 - `listClauses(images, options, tagLinks?)` — 执行一次图片列表查询并返回过滤子条件 | keywords: 执行列表查询, 查询子条件, run-list-query, query-clauses
 - `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖创建时间分页、拼图/已使用/按用户分组只取 ID 的覆盖索引；收藏排序只保留含创建时间与业务 ID 的完整键，删除较短前缀索引与已不用的数组标签索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
-- `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值，标签规整后写入关联表 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
+- `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值，标签规整后写入关联表；向量服务不可用时向量存空数组 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
 - `GalleryService.findAccessibleImages(userId, tenantId?, options?)` — 按租户可见性过滤图片，最新/最早按 `createdAt + id` 复合游标翻页并支持关键词、多条件排序与筛选 | keywords: 租户图片查询, 图库多条件排序, 复合游标, 关键词搜索, tenant-image-query, gallery-multi-sort, keyset-cursor, keyword-search
 - `GalleryService.buildCreatedAtCursorClause(scope, cursorId, direction)` — 按游标图片的创建时间与 ID 构造复合游标条件，游标图片不可见时回退为只比较 ID | keywords: 复合游标, 创建时间分页, keyset-cursor, created-at-pagination
 - `GalleryService.buildKeywordClause(keyword)` — 把搜索词转成原文件名、文件名、描述与备注的不区分大小写包含匹配 | keywords: 关键词搜索, 文件名备注匹配, keyword-search, name-note-match
@@ -103,7 +105,15 @@
 - `GalleryService.normalizeTags(tags)` — 去井号、去空白并去重规整标签 | keywords: 标签规整, 标签去重, tag-normalization, tag-deduplication
 - `GalleryService.buildImageTypeFilter(scopeKey, imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反；标签部分换算为图片 ID 条件 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
 - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤（含 `material`） | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
-- `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
+- `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量，向量服务返回全 0 的不写入、保留原向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
+- `GalleryService.searchSimilar(query, userId?, tenantId?, limit?, minScore?, imageType?)` — 文本语义检索图片；查询向量全 0（向量服务没配置或失败）时直接返回空，不读库 | keywords: 图片语义检索, 无效向量短路, image-vector-search, skip-zero-query
+- `GalleryService.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore, imageType?)` — 本地余弦检索，只拉取存了向量的图片，全 0 旧向量不参与 | keywords: 本地余弦检索, 只读有向量图片, local-cosine-search, vector-only-fetch
+- `hasUsableEmbedding(vec)` — 至少一个有限非零分量才算有效向量 | keywords: 有效向量判断, 全零向量, usable-embedding-check, zero-vector
+- `toStoredEmbedding(vec)` — 入库前规整：有效向量原样保留，全 0 / 空 / 非法存空数组 | keywords: 规整入库向量, 不存零向量, normalize-stored-embedding, skip-zero-vector
+- `GalleryGroupService.safeEmbedText(text)` — 生成分组向量，失败或全 0 时存空数组 | keywords: 安全生成向量, 不存零向量, safe-embed-text, skip-zero-vector
+- `GalleryGroupService.searchSimilar(query, userId?, tenantId?, limit?, minScore?)` — 分组语义检索，查询向量全 0 时直接返回空 | keywords: 分组语义检索, 无效向量短路, group-vector-search, skip-zero-query
+- `GalleryGroupService.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore)` — 分组本地余弦检索，只对有效向量计算 | keywords: 分组本地检索, 跳过无效向量, group-local-search, skip-invalid-vector
+- `createGallery(vectors)` — 向量测试用的图片服务替身，向量服务按传入结果返回 | keywords: 向量测试替身, 图片服务桩, embedding-test-double, gallery-service-stub
 - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
 - `GalleryService.sampleRandom({ userId?, tenantId?, groupId?, tags?, imageType?, excludedGroupIds?, excludedTags?, limit?, includeUsed? })` — 从全部可见图片或所选标签并集随机采样；`imageType=regular` 排除拼图、封面标签与 AI 素材 | keywords: 图库随机采样, 标签随机取图, gallery-random-sample, tag-random-selection
 - `GalleryService.updateTagsBatch({ userId?, tenantId?, ids, addTags?, removeTags? })` — 批量为当前租户可见图片增删标签 | keywords: 批量改标签, 租户可见范围, batch-update-tags, tenant-visibility
@@ -362,6 +372,20 @@
 | 生成前余量预估 | pre-generation-capacity |
 | 热门标签推荐 | list-top-tags |
 | 按图片数排行 | tag-count-ranking |
+| 有效向量判断 | usable-embedding-check |
+| 全零向量 | zero-vector |
+| 规整入库向量 | normalize-stored-embedding |
+| 不存零向量 | skip-zero-vector |
+| 图片语义检索 | image-vector-search |
+| 无效向量短路 | skip-zero-query |
+| 本地余弦检索 | local-cosine-search |
+| 只读有向量图片 | vector-only-fetch |
+| 安全生成向量 | safe-embed-text |
+| 分组语义检索 | group-vector-search |
+| 分组本地检索 | group-local-search |
+| 跳过无效向量 | skip-invalid-vector |
+| 向量测试替身 | embedding-test-double |
+| 图片服务桩 | gallery-service-stub |
 
 ## 类型导出 (Type Exports)
 
@@ -377,6 +401,8 @@
 
 标签存储：图片标签只存在 `gallery_tags`（作用域内一个标签名一行，`scopeKey + name` 唯一）与 `gallery_image_tags`（一张图一个标签一行，`imageId + tagId` 唯一，`order` 保留顺序）。所有写标签的入口（`createMany`、`updateImageMeta`、`updateImagesMetaBatch`、`updateTagsBatch`、`convertTagsToNote`、`deleteImage`）都在 `GalleryService` 内经 `GalleryTagLinkService.replaceImageTags` / `removeImages` 按图片当前状态整体同步关联；所有返回图片的方法用 `attachTags` 从关联表回填 `tags`，对外字段与其他模块的调用方式不变。按标签筛图、图片类型口径（普通图 / 素材图 / 拼图封面）都先在关联表换算成图片 ID 条件；标签统计（去重标签数、未分类标签、热门标签、共同标签）只扫关联表索引，不再读取带 768 维向量的图片文档。作用域与图片可见范围一致：有租户为 `tenant:<tenantId>`，母平台为 `platform`。
 旧数据兼容：`scripts/migrate-gallery-tags-to-links.mjs` 按 `_id` 分批把残留的 `tags` 数组写入两张表，每批先写关联再移走数组，可重复执行、中断后重跑即续上，`--dry-run` 只统计、`--verify` 核对剩余数组与孤立关联；迁移完成前 `attachTags` 遇到旧数组以其为准，写标签时顺手移走该图的旧数组。旧的数组标签索引由 `ensureIndexes` 启动时删除。
+
+向量：`embedding` 字段保留，但只存有效向量。向量服务（`ai_providers` 中 `modelCategory=em`）没配置或调用失败时 `EmbeddingService` 返回全 0，图片 `createMany` 与分组 `safeEmbedText` 经 `toStoredEmbedding` 改存空数组，`rebuildEmbeddings` 拿到全 0 时不覆盖原向量；`searchSimilar`（图片与分组）查询向量全 0 时直接返回空，本地余弦检索只拉取 `embedding.0` 存在的文档。历史全 0 向量用 `scripts/clear-gallery-zero-embeddings.mjs` 清成空数组（`--dry-run` 只统计，可重复执行）；以后配置向量服务后调用重建向量接口补齐即可。
 文件路径: `src/modules/gallery`
 
 **子模块**
@@ -438,6 +464,16 @@
 - **函数**:
   - `normalizeGalleryUploadFilename(name)` — 将 latin1 误解码的 UTF-8 中文文件名还原，已正确解码或转换无效时保留原值 | keywords: 上传文件名, 中文乱码修复, upload-filename, mojibake-repair
 
+**gallery-embedding.ts**
+
+图片与分组共用的向量有效性判断。向量服务不可用时 `EmbeddingService` 返回全 0 向量，这种向量不入库、不参与检索。`services/gallery-embedding.spec.ts` 覆盖入库、检索短路、重建与分组四种场景。
+
+- **关键词**: embedding, zero-vector, vector-search
+- **函数**:
+  - `hasUsableEmbedding(vec)` — 至少一个有限非零分量才算有效向量 | keywords: 有效向量判断, 全零向量, usable-embedding-check, zero-vector
+  - `toStoredEmbedding(vec)` — 入库前规整：有效向量原样保留，全 0 / 空 / 非法存空数组 | keywords: 规整入库向量, 不存零向量, normalize-stored-embedding, skip-zero-vector
+  - `createGallery(vectors)` — 向量测试用的图片服务替身，向量服务按传入结果返回 | keywords: 向量测试替身, 图片服务桩, embedding-test-double, gallery-service-stub
+
 **鉴权说明**
 
 `GalleryController` 类级挂 `AdminAuthGuard` + `AdminPoliciesGuard`,每个入口与路由装饰器同址声明 `@RequirePermission(<action>, 'Gallery')`:查询类 `read`,上传 / AI 素材 / 建组 `create`,改元数据 / 标签 / 标签库 / 重建向量 / 改组 `update`,删图 / 删组 `delete`。`Gallery` 主体在 `admin/casl` 注册,`tenant_admin` 与 `operator` 均授 `manage Gallery`,超管走 `manage all`。新增入口必须同样挂 `@RequirePermission(..., 'Gallery')`。入口内仍用 `resolveAuthScope(req)` 取 tenantId/userId:守卫已注入 `req.adminUser` 时直接复用,不二次查库;未登录由守卫先拦截返回 401 `UNAUTHORIZED`。
@@ -480,7 +516,7 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
 - **关键词**: image, service, isUsed, capacity, mark-used, top-tags
 - **函数**:
 - `GalleryService.ensureIndexes()` — 初始化图库索引，覆盖创建时间分页、拼图/已使用/按用户分组只取 ID 的覆盖索引；收藏排序只保留含创建时间与业务 ID 的完整键，删除较短前缀索引与已不用的数组标签索引 | keywords: 图库索引, 收藏排序, gallery-indexes, favorite-sorting
-  - `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值，标签规整后写入关联表 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
+  - `GalleryService.createMany(inputs)` — 批量创建图片并写入元数据默认值，标签规整后写入关联表；向量服务不可用时向量存空数组 | keywords: 图片批量创建, 元数据默认值, batch-image-create, metadata-defaults
   - `GalleryService.list(userId?, groupId?, tag?, cursorId?, limit?)` — 旧版按用户/分组/标签列图，按自增 ID 游标分页 | keywords: 旧版图片列表, ID游标分页, legacy-image-list, id-cursor-pagination
   - `GalleryService.scopeKeyOf(tenantId?)` — 当前租户可见范围对应的标签作用域键 | keywords: 图片标签作用域, 租户作用域键, image-tag-scope, tenant-scope-key
   - `GalleryService.attachTags(rows)` — 从关联表批量回填图片 `tags`；迁移过渡期文档上还留着旧数组时以旧数组为准 | keywords: 回填图片标签, 旧数组兼容, attach-image-tags, legacy-array-compat
@@ -509,8 +545,9 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `GalleryService.buildImageTypeFilter(scopeKey, imageType, requestedTags?)` — 构造图片类型数据库过滤；普通图排除拼图、封面标签与 `GALLERY_MATERIAL_TAGS`，但调用方明确要筛的标签不排除（如设计编辑器手动选「画布成品」），`material` 素材图正好取反；标签部分换算为图片 ID 条件 | keywords: 普通图筛选, AI素材排除, regular-image-filter, exclude-ai-material
   - `GalleryService.matchesImageType(image, imageType)` — 在相似图内存结果中执行同口径图片类型过滤（含 `material`） | keywords: 普通图内存筛选, AI素材排除, in-memory-image-filter, exclude-ai-material
   - `findAccessibleImagesByIds`: 按用户选择的图片 ID 精确读取当前租户可见图片，并按输入顺序返回，用于封面重生成/reference images by ids for cover regenerate
-  - `searchSimilar`: 向量相似检索/search similar
-  - `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
+  - `GalleryService.searchSimilar(query, userId?, tenantId?, limit?, minScore?, imageType?)` — 文本语义检索图片；查询向量全 0（向量服务没配置或失败）时直接返回空，不读库 | keywords: 图片语义检索, 无效向量短路, image-vector-search, skip-zero-query
+  - `GalleryService.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore, imageType?)` — 本地余弦检索，只拉取存了向量的图片，全 0 旧向量不参与 | keywords: 本地余弦检索, 只读有向量图片, local-cosine-search, vector-only-fetch
+  - `GalleryService.rebuildEmbeddings({ userId?, tenantId?, startId?, limit? })` — 批量重建当前租户可见图片的向量，向量服务返回全 0 的不写入、保留原向量 | keywords: 重建向量, 租户可见范围, rebuild-embeddings, tenant-visibility
   - `resolveDefaultEmbeddingConfig`: 读取默认向量配置/resolve default embedding config
   - `compressImageInPlace({ filePath, maxWidth?, maxHeight?, quality? })`: 原图保质量压缩就地替换(默认 1600x1600/q75,仅压缩收益>1KB 才原子替换,失败回滚)。普通批量上传(controller compressUploadFiles)与 ZIP 批量导入(zip-import runJob)共用同一压缩口径/compress image in place keep quality | keywords: compress image in place keep quality, 原图保质量压缩
   - `generateThumbnail`: 生成缩略图
@@ -537,15 +574,16 @@ AI 生图入库通道：图库 AI 素材接口与抖音分镜画面重生成共�
   - `GalleryGroupService.findOrCreateSceneGroup(userId, tenantId?)` — 查找或创建当前用户在本租户的「场景图库」固定分组（`system=store-visit-scene`），已有同名普通分组时收编，同一作用域并发只建一次 | keywords: 场景图库分组, 固定分组, scene-gallery-group, system-group
   - `GalleryGroupService.findAccessibleGroup(id, userId, tenantId?)` — 在 token 用户本租户可见范围内（与 `listAccessibleGroups` 同口径）读取分组 ID 与系统固定标识，不存在或属于他人时为空，供改名删除校验归属与固定分组保护 | keywords: 可见分组读取, 分组归属校验, 分组保护, find-accessible-group, group-ownership-check, group-protection
   - `resolveDefaultEmbeddingConfig`: 读取 ai_providers em 记录作为向量运行时配置（apiKey/baseUrl/model）/resolve default embedding config
-  - `safeEmbedText`: 安全文本向量化（失败兜底零向量，已接入 admin runtime 配置）/safe embed text with admin runtime
-  - `searchSimilar`: 向量相似检索（透传 admin 默认 em 配置到 EmbeddingService）/vector similarity search
+  - `GalleryGroupService.safeEmbedText(text)` — 生成分组向量，失败或全 0 时存空数组 | keywords: 安全生成向量, 不存零向量, safe-embed-text, skip-zero-vector
+  - `GalleryGroupService.searchSimilar(query, userId?, tenantId?, limit?, minScore?)` — 分组语义检索，查询向量全 0 时直接返回空 | keywords: 分组语义检索, 无效向量短路, group-vector-search, skip-zero-query
+  - `GalleryGroupService.searchSimilarLocal(queryEmbedding, userId, tenantId, limit, minScore)` — 分组本地余弦检索，只对有效向量计算 | keywords: 分组本地检索, 跳过无效向量, group-local-search, skip-invalid-vector
   - `GalleryGroupService.countAccessibleGroups(userId, tenantId?)` — 按现有分组列表口径精确计数 | keywords: 图库组精确统计, 分组可见范围, exact-group-count, group-visibility
 
 **gallery-image.entity.ts**
 
 `GalleryPublicImage` 为对外图片类型，排除 `_id` 与 `embedding`；列表、上传、AI 素材和元数据修改均返回此类型。向量仍保留在数据库及内部生图/检索链路。列表、按标签、随机、相似查询在 Mongo 投影阶段排除向量，分组列表同样排除 `embedding`，前端无须适配。
 
-图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, **favorite**, **favoritedAt**, **note**, **aiFaceProtected**, isCollage, collageSourceImageIds, collageMeta, **isUsed**, **usedAt**, embedding, createdAt, updatedAt）。其中 `tags` 不落库，由标签关联表回填；落库形状为 `GalleryImageDocument`。历史数据缺少 `favorite` / `note` / `aiFaceProtected` 时对外分别按 `false` / `''` / `false` 返回；`isUsed=true` 表示该图已被动态拼图/生图组消耗,默认 searchByTags/sampleRandom 不再命中。
+图片实体（字段：id, userId, scope, tenantId, groupId, originalName, fileName, url, thumbFileName, thumbUrl, absPath, mimeType, size, width, height, isPortrait, tags, description, **favorite**, **favoritedAt**, **note**, **aiFaceProtected**, isCollage, collageSourceImageIds, collageMeta, **isUsed**, **usedAt**, embedding, createdAt, updatedAt）。其中 `tags` 不落库，由标签关联表回填；落库形状为 `GalleryImageDocument`。`embedding` 只存有效向量，向量服务不可用时为空数组。历史数据缺少 `favorite` / `note` / `aiFaceProtected` 时对外分别按 `false` / `''` / `false` 返回；`isUsed=true` 表示该图已被动态拼图/生图组消耗,默认 searchByTags/sampleRandom 不再命中。
 
 图片类型口径：`imageType=regular` 同时排除 `isCollage=true`、系统封面标签与 `GALLERY_MATERIAL_TAGS`（`ai素材`、探店出片过程存下的尾帧、出镜人脸照与人物首帧、设计素材 `我的素材`、画布成品 `画布成品` / `灵感画布`），列表请求明确按其中某个标签筛选时不排除该标签；`imageType=material` 正好取反，供工作台图库「素材图」入口使用，`GET stats` 另返回 `materials` 计数；该过滤被图库列表、标签搜索、可用量统计、热门标签、随机采样与相似图结果共同复用，`collage` 口径不变。
 

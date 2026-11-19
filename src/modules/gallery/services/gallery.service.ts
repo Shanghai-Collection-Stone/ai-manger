@@ -14,6 +14,7 @@ import type {
   GallerySearchResult,
 } from '../entities/gallery-image.entity.js';
 import { GALLERY_MATERIAL_TAGS } from '../gallery.constants.js';
+import { hasUsableEmbedding, toStoredEmbedding } from '../gallery-embedding.js';
 import {
   GalleryTagLinkService,
   resolveGalleryTagScopeKey,
@@ -409,7 +410,7 @@ export class GalleryService {
   }
 
   /**
-   * @description 批量创建图片记录并为每条记录生成Embedding；标签规整后写入标签关联表，不再存到图片文档上。
+   * @description 批量创建图片记录并为每条记录生成Embedding（向量服务不可用时存空数组，不写全 0 向量）；标签规整后写入标签关联表，不再存到图片文档上。
    * @param {GalleryImageCreateInput[]} inputs - 批量创建输入。
    * @returns {Promise<GalleryImageEntity[]>} 新建图片实体数组。
    * @throws {Error} 当数据库写入失败或Embedding服务异常且未能回退时抛出。
@@ -431,12 +432,10 @@ export class GalleryService {
       embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
     } catch (error) {
       console.warn(
-        '[GalleryService.createMany] embedBatch failed, fallback to zero vectors:',
+        '[GalleryService.createMany] embedBatch failed, store empty vectors:',
         error,
       );
-      embeddings = Array.from({ length: inputs.length }, () =>
-        new Array<number>(768).fill(0),
-      );
+      embeddings = inputs.map(() => []);
     }
 
     const tagsByIndex = inputs.map((input) => this.normalizeTags(input.tags));
@@ -493,10 +492,8 @@ export class GalleryService {
                 dpi: Math.max(1, Math.floor(Number(input.collageMeta.dpi))),
               }
             : undefined,
-        embedding:
-          Array.isArray(embeddings[idx]) && embeddings[idx].length > 0
-            ? embeddings[idx]
-            : new Array<number>(768).fill(0),
+        // 向量服务不可用时 embedBatch 返回全 0，这种向量存空数组，不占文档体积
+        embedding: toStoredEmbedding(embeddings[idx]),
         createdAt: now,
         updatedAt: now,
       };
@@ -906,13 +903,20 @@ export class GalleryService {
     );
     if (hasVector) {
       try {
+        // 只读真正存了向量的图片；没有向量的图片向量字段是空数组
         const candidates = await this.images
-          .find({ $and: [scope, { id: { $ne: input.id } }] })
+          .find({
+            $and: [
+              scope,
+              { id: { $ne: input.id } },
+              { 'embedding.0': { $exists: true } },
+            ],
+          })
           .toArray();
         const vectorRows = candidates
           .filter(
             (row) =>
-              Array.isArray(row.embedding) &&
+              hasUsableEmbedding(row.embedding) &&
               row.embedding.length === sourceEmbedding.length,
           )
           .map((image) => ({
@@ -1694,9 +1698,10 @@ export class GalleryService {
   }
 
   /**
-   * @description 批量重建当前租户可见图片的Embedding向量，支持从指定 startId 起更新 limit 条。
+   * @description 批量重建当前租户可见图片的Embedding向量，支持从指定 startId 起更新 limit 条；
+   *   向量服务不可用（返回全 0）的那几张不写入，保留原有向量，避免把已有向量覆盖成 0。
    * @param {{ userId?: string; tenantId?: string; startId?: number; limit?: number }} input - 重建输入。
-   * @returns {Promise<{ updated: number }>} 更新条数。
+   * @returns {Promise<{ updated: number }>} 实际写入了有效向量的条数。
    * @throws {Error} 当MongoDB读取/写入失败时抛出。
    * @keyword gallery, embedding, batch
    * @keyword-cn 重建向量, 租户可见范围
@@ -1749,17 +1754,15 @@ export class GalleryService {
     const embeddingConfig = await this.resolveDefaultEmbeddingConfig();
     const embeddings = await this.embedding.embedBatch(texts, embeddingConfig);
     const now = new Date();
-    const ops = rows.map((r, idx) => ({
-      updateOne: {
-        filter: { _id: r._id },
-        update: {
-          $set: {
-            embedding: embeddings[idx] ?? new Array<number>(768).fill(0),
-            updatedAt: now,
-          },
+    const ops = rows
+      .map((r, idx) => ({ r, vec: embeddings[idx] }))
+      .filter(({ vec }) => hasUsableEmbedding(vec))
+      .map(({ r, vec }) => ({
+        updateOne: {
+          filter: { _id: r._id },
+          update: { $set: { embedding: vec, updatedAt: now } },
         },
-      },
-    }));
+      }));
 
     if (ops.length === 0) return { updated: 0 };
     await this.images.bulkWrite(ops, { ordered: false });
@@ -1767,7 +1770,8 @@ export class GalleryService {
   }
 
   /**
-   * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度。
+   * @description 基于文本查询进行向量相似检索，优先使用 Atlas Vector Search，失败回退本地余弦相似度；
+   *   查询向量全 0（向量服务没配置或调用失败）时直接返回空，不再读取整个租户的图片去算一遍注定为 0 的相似度。
    * @param {string} query - 查询文本。
    * @param {string} [userId] - 用户ID过滤。
    * @param {string} [tenantId] - 租户ID，用于租户隔离。
@@ -1775,7 +1779,8 @@ export class GalleryService {
    * @param {number} [minScore=0.5] - 最小相似度阈值。
    * @returns {Promise<GallerySearchResult[]>} 相似检索结果。
    * @throws {Error} 当Embedding生成失败且未能回退时抛出。
-   * @keyword gallery, vector-search, similarity
+   * @keyword-cn 图片语义检索, 无效向量短路
+   * @keyword-en image-vector-search, skip-zero-query
    * @example
    * // 搜索与”简历头像”相似的图片
    * const results = await galleryService.searchSimilar('resume avatar', 'u1', undefined, 8, 0.6);
@@ -1794,6 +1799,7 @@ export class GalleryService {
       query,
       embeddingConfig,
     );
+    if (!hasUsableEmbedding(queryEmbedding)) return [];
     if (this.isAtlasAvailable === false) {
       return this.searchSimilarLocal(
         queryEmbedding,
@@ -1848,7 +1854,7 @@ export class GalleryService {
   }
 
   /**
-   * @description 本地相似检索回退：全量拉取后计算余弦相似度并排序。
+   * @description 本地相似检索回退：只拉取存了向量的图片，计算余弦相似度并排序；全 0 的旧向量不参与计算。
    * @param {number[]} queryEmbedding - 查询向量。
    * @param {string | undefined} userId - 用户ID过滤。
    * @param {string | undefined} tenantId - 租户ID过滤。
@@ -1856,7 +1862,8 @@ export class GalleryService {
    * @param {number} minScore - 最小相似度阈值。
    * @returns {Promise<GallerySearchResult[]>} 相似检索结果。
    * @throws {Error} 当数据库查询失败时抛出。
-   * @keyword gallery, fallback, cosine
+   * @keyword-cn 本地余弦检索, 只读有向量图片
+   * @keyword-en local-cosine-search, vector-only-fetch
    * @since 2026-02-04
    */
   private async searchSimilarLocal(
@@ -1869,16 +1876,16 @@ export class GalleryService {
   ): Promise<GallerySearchResult[]> {
     const clauses: Record<string, unknown>[] = [
       this.buildTenantFilter(userId, tenantId),
+      { 'embedding.0': { $exists: true } },
     ];
     if (imageType && imageType !== 'all') {
       clauses.push(
         await this.buildImageTypeFilter(this.scopeKeyOf(tenantId), imageType),
       );
     }
-    const filter = clauses.length === 1 ? clauses[0] : { $and: clauses };
-    const rows = await this.images.find(filter).toArray();
+    const rows = await this.images.find({ $and: clauses }).toArray();
     const top = rows
-      .filter((r) => Array.isArray(r.embedding) && r.embedding.length > 0)
+      .filter((r) => hasUsableEmbedding(r.embedding))
       .map((image) => ({
         image,
         score: this.embedding.cosineSimilarity(queryEmbedding, image.embedding),
