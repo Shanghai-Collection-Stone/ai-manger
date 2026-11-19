@@ -188,8 +188,8 @@ export function parseTemplatePlan(text: string): DouyinTemplatePlan {
 }
 
 /**
- * @description 读出版式规划（AI 导演 JSON 里的 `template` 部分）：比例不认识时按窗口宽高（再不行用 4:3）吸附，9:16 视为不套模板；
- *   没有标题也视为不套模板。窗口按 `sizeTemplateWindow` 算成像素。
+ * @description 读取逐段版式，支持含9:16在内的窗口比例；缺标题或明确关闭时不套，窗口换算为像素。
+
  * @keyword-cn 读取模板规划, 模板规划字段
  * @keyword-en read-template-plan, template-plan-fields
  * @param raw 已解析的 JSON 对象。
@@ -220,10 +220,7 @@ export function readTemplatePlan(
       : '4:3';
   const copy = normalizeTemplateCopy(raw);
   return {
-    useTemplate:
-      raw.useTemplate !== false &&
-      aspectRatio !== '9:16' &&
-      Boolean(copy.title),
+    useTemplate: raw.useTemplate !== false && Boolean(copy.title),
     reason: cleanTemplateText(raw.reason, 120),
     aspectRatio,
     window: sizeTemplateWindow({
@@ -237,8 +234,8 @@ export function readTemplatePlan(
 }
 
 /**
- * @description 改图模型编辑版式模板的提示词：以传入的实拍图为底图排成竖屏海报，背景只用这张图本身（放大、裁切、虚化、压暗或叠纯色块），
- *   不添加图里没有的任何物体、人物、商品、插画或图标；窗口位置画成纯绿 #00FF00 实心矩形（之后抠成透明放视频），引号里的文字逐字照写，不加别的文字、水印、二维码。
+ * @description 按本段素材编辑版式，保留原构图；可在留白或拼图接缝添加少量不遮主体的小装饰，纯绿窗口供合成替换。
+
  * @keyword-cn 模板改图提示词, 只编辑实拍图, 绿幕窗口
  * @keyword-en template-edit-prompt, edit-real-photo-only, green-window
  * @param template 窗口、文案与配色字体风格。
@@ -256,10 +253,11 @@ export function buildTemplateEditPrompt(
   const { window } = template;
   const points = template.sellingPoints.map((item) => `「${item}」`).join('');
   return [
-    '把这张门店实拍图编辑成竖版 9:16 的抖音短视频版式海报。只做编辑排版，不新造画面内容。',
-    '背景只能用这张图本身：可以放大、裁切、虚化、压暗，或叠半透明纯色块与渐变；不要添加图里没有的任何东西——物体、人物、食物、商品、家具、装修、场景、插画、贴纸、图标、气球、花朵、光效都不要加，也不要改动图里的招牌、商品和陈设。',
-    `画面中有一块纯绿色（#00FF00）实心矩形：左边距约 ${percent(window.x, width)}，上边距约 ${percent(window.y, height)}，宽约 ${percent(window.width, width)}，高约 ${percent(window.height, height)}。这块绿色以后放视频，里面只能是均匀纯绿，不画任何东西、不写字、不渐变、不加阴影和纹理，四边笔直整齐；可以给它加简单的描边或圆角。`,
-    `配色与字体风格：${template.style || '与照片色调协调的简洁商业排版'}（只指配色、字体和文字底板，不要据此画任何新东西）。`,
+    '把这一段的参考图编辑成竖版 9:16 的抖音短视频版式海报。照片主体保持原样、完整、不变形，只调整版式。',
+    '全片使用同一套模板设计：主辅色、字体字重、字号层级、标题与卖点的位置、圆角描边和装饰画法保持一致。每段只在共同视频区域里按素材比例等比适配，配少量同风格小装饰；不重新设计整张海报，不随照片色调换主题，不让标题和窗口中心来回跳动。',
+    '背景使用这张图的虚化、压暗副本或协调色块。允许按本段风格在留白处、拼图接缝周围添加少量小贴纸、抽象图形、从素材提取的小元素；不要遮挡人脸、商品、招牌或文字，不虚构门店的物体、食物、商品、人物、家具和场景。拼图各格保持完整，不截断、不拉伸。',
+    `画面中有一块纯绿色（#00FF00）实心矩形：左边距约 ${percent(window.x, width)}，上边距约 ${percent(window.y, height)}，宽约 ${percent(window.width, width)}，高约 ${percent(window.height, height)}。这块绿色以后放完整视频，均匀纯绿，不绘制照片、不写字、不渐变、不加阴影纹理，四边笔直整齐。若本段风格明确要求拼图接缝的小装饰，允许少量非绿色小贴纸点缀在对应位置，总面积小于窗口5%，不横贯窗口、不遮挡原图主体；其余部分必须纯绿。`,
+    `本段配色、字体、装饰位置与大小：${template.style || '与照片色调协调的简洁商业排版，少量小装饰点缀'}。`,
     `顶部醒目大标题「${template.title}」${template.subtitle ? `，下方副标题「${template.subtitle}」` : ''}。`,
     points ? `绿色区域下方并排卖点标签（纯色底板加文字）：${points}。` : '',
     template.cta ? `最下方一个按钮样式的行动引导「${template.cta}」。` : '',
@@ -374,8 +372,8 @@ function padTemplateWindow(
 }
 
 /**
- * @description 把生图结果做成可叠加的模板 PNG：铺满 1080×1920，找到绿块就用绿块的位置（找不到用规划的窗口），向外扩 6px 抠成透明，
- *   窗口周围 24px 内残留的绿色杂边也抠掉；窗口比例按实际窗口重新吸附。
+ * @description 抠出绿幕窗口；preserveDecorations 开启且识别到绿块时只去绿底、保留接缝小装饰；未识别时按规划整窗抠空。
+
  * @keyword-cn 生成模板透明图, 抠出视频窗口
  * @keyword-en punch-template-window, transparent-template
  * @param source 生图得到的原图。
@@ -385,6 +383,7 @@ function padTemplateWindow(
 export async function punchTemplateWindow(
   source: Buffer,
   planned: TemplateWindow,
+  preserveDecorations = false,
 ): Promise<{
   png: Buffer;
   window: TemplateWindow;
@@ -397,7 +396,10 @@ export async function punchTemplateWindow(
     .png()
     .toBuffer();
   const located = await locateTemplateWindow(canvas);
-  const window = padTemplateWindow(located ?? planned, TEMPLATE_HOLE_PADDING);
+  const window =
+    preserveDecorations && located
+      ? located
+      : padTemplateWindow(located ?? planned, TEMPLATE_HOLE_PADDING);
   const pixels = await sharp(canvas).ensureAlpha().raw().toBuffer();
   const band = 24;
   for (
@@ -419,7 +421,10 @@ export async function punchTemplateWindow(
       const r = pixels[offset];
       const g = pixels[offset + 1];
       const b = pixels[offset + 2];
-      if (inside || (g >= 120 && g - Math.max(r, b) >= 60))
+      if (
+        (inside && (!preserveDecorations || !located)) ||
+        (g >= 120 && g - Math.max(r, b) >= 60)
+      )
         pixels[offset + 3] = 0;
     }
   }
@@ -434,7 +439,8 @@ export async function punchTemplateWindow(
 }
 
 /**
- * @description 模板与首帧拼成封面：首帧按 cover 铺满窗口，底下垫黑底，模板叠在最上面，输出 JPEG。
+ * @description 首帧等比完整缩进窗口，补边后叠模板，输出JPEG预览，不裁剪、不拉伸。
+
  * @keyword-cn 模板首帧拼合, 模板封面
  * @keyword-en compose-template-cover, template-first-frame
  * @param template 透明窗口的模板 PNG（1080×1920）。
@@ -448,7 +454,11 @@ export async function composeTemplateCover(
   window: TemplateWindow,
 ): Promise<Buffer> {
   const fitted = await sharp(frame)
-    .resize(window.width, window.height, { fit: 'cover' })
+    .autoOrient()
+    .resize(window.width, window.height, {
+      fit: 'contain',
+      background: '#000000',
+    })
     .toBuffer();
   return await sharp({
     create: {

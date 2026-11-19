@@ -2,10 +2,57 @@ import {
   DOUYIN_EDIT_TRANSITIONS,
   type DouyinEditPlan,
   type DouyinEditTransition,
+  type DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
+import {
+  freshShotDirection,
+  listDirectorFrames,
+} from './douyin-video-director.js';
+import { isStoreVisitVisualStart } from './douyin-store-visit-continuity.js';
 import { readStoreVisitJson } from './douyin-store-visit-planner.service.js';
 
 type SpeechInterval = { start: number; end: number };
+
+/**
+ * @description 按当前相邻片段执行出片前转场规划，保留完整视频；素材或顺序变更及接续镜头回退硬切，不看片、不裁剪。
+ * @keyword-cn 执行转场规划, 完整片段合成
+ * @keyword-en planned-transitions, full-clip-merge
+ */
+export function buildPlannedEdit(
+  topic: DouyinTopicEntity,
+  clips: Array<{ shotId: string }>,
+): DouyinEditPlan {
+  const frames = listDirectorFrames(topic);
+  const segments = topic.storeVisit?.segments ?? [];
+  return {
+    clips: [],
+    transitions: clips.slice(1).map((clip, index) => {
+      const previous = clips[index];
+      const nextFrame = frames.find((frame) => frame.key === clip.shotId);
+      const planned = freshShotDirection(topic, previous.shotId)?.transition;
+      const segmentIndex = segments.findIndex(
+        (segment) => segment.id === clip.shotId,
+      );
+      const continued =
+        topic.productionMode === 'store-visit' &&
+        segmentIndex > 0 &&
+        segments[segmentIndex - 1].id === previous.shotId &&
+        !isStoreVisitVisualStart(segments, segmentIndex);
+      if (
+        continued ||
+        !planned ||
+        planned.nextKey !== clip.shotId ||
+        !nextFrame ||
+        planned.nextSourceKey !== nextFrame.sourceKey
+      )
+        return { type: 'cut', duration: 0 };
+      return { type: planned.type, duration: planned.duration };
+    }),
+    subtitle: { position: 'bottom', size: 'medium' },
+    cover: { clipIndex: 0, time: 0 },
+    note: '按出片前的段间切换规划合成，保留完整片段',
+  };
+}
 
 /**
  * @description 桌面端交来的一段成片分析：段 ID、时长、有没有音轨、测出的人声区间与几张抽帧（秒数 + JPEG data URL）。

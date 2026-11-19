@@ -16,6 +16,78 @@ import {
 import type { DouyinVideoTemplate } from '../entities/douyin-workbench.entity.js';
 
 /**
+ * @description 验证绿幕抠窗保留接缝小装饰、清除绿底，并保证横向窗口中的竖图上下均完整。
+ * @keyword-cn 模板像素回归, 装饰保留
+ * @keyword-en template-pixel-regression, preserve-decoration
+ */
+async function verifyTemplatePixels(): Promise<void> {
+  const box = { x: 100, y: 500, width: 800, height: 800 };
+  const poster = await makePoster(box);
+  const sticker = await sharp({
+    create: { width: 40, height: 40, channels: 3, background: '#ff0000' },
+  })
+    .png()
+    .toBuffer();
+  const decorated = await sharp(poster)
+    .composite([{ input: sticker, left: 500, top: 880 }])
+    .png()
+    .toBuffer();
+  const punched = await punchTemplateWindow(decorated, box, true);
+  const pixels = await sharp(punched.png).raw().toBuffer();
+  expect(pixels[(900 * 1080 + 520) * 4 + 3]).toBe(255);
+  expect(pixels[(600 * 1080 + 520) * 4 + 3]).toBe(0);
+  const frame = await sharp({
+    create: { width: 100, height: 200, channels: 3, background: '#0000ff' },
+  })
+    .composite([
+      {
+        input: await sharp({
+          create: {
+            width: 100,
+            height: 30,
+            channels: 3,
+            background: '#ff0000',
+          },
+        })
+          .png()
+          .toBuffer(),
+        left: 0,
+        top: 0,
+      },
+      {
+        input: await sharp({
+          create: {
+            width: 100,
+            height: 30,
+            channels: 3,
+            background: '#00ff00',
+          },
+        })
+          .png()
+          .toBuffer(),
+        left: 0,
+        top: 170,
+      },
+    ])
+    .png()
+    .toBuffer();
+  const clear = await sharp({
+    create: { width: 1080, height: 1920, channels: 4, background: '#00000000' },
+  })
+    .png()
+    .toBuffer();
+  const cover = await composeTemplateCover(clear, frame, box);
+  const data = await sharp(cover).raw().toBuffer();
+  expect(data[(510 * 1080 + 540) * 3]).toBeGreaterThan(200);
+  expect(data[(1290 * 1080 + 540) * 3 + 1]).toBeGreaterThan(200);
+}
+
+it(
+  'preserves seam decorations and the top and bottom of portrait material',
+  verifyTemplatePixels,
+);
+
+/**
  * @description 画一张模拟的模板海报：橙色底，指定位置一块纯绿 #00FF00 矩形。
  * @keyword-cn 测试模板海报, 绿块测试图
  * @keyword-en test-template-poster, green-block-image
@@ -86,7 +158,7 @@ describe('douyin video template helpers', () => {
     expect(edge.y + edge.height).toBeLessThanOrEqual(1920);
   });
 
-  it('parses the planner JSON and treats 9:16 or missing title as no template', () => {
+  it('parses the planner JSON and allows portrait windows; missing title disables templates', () => {
     const plan = parseTemplatePlan(
       '```json\n{"useTemplate":true,"reason":"门店引流","aspectRatio":"4:3","window":{"x":0.04,"y":0.27,"width":0.92},"title":"上海儿童生日派对","subtitle":"父母省心一站式派对乐园","sellingPoints":["主题闯关","互动游戏","欢乐庆生","","多余的第五个"],"cta":"点击了解生日定制方案","style":"蓝色卡通气球"}\n```',
     );
@@ -100,7 +172,7 @@ describe('douyin video template helpers', () => {
     expect(plan.window.y).toBe(Math.floor((0.27 * 1920) / 2) * 2);
     expect(
       parseTemplatePlan('{"aspectRatio":"9:16","title":"满屏"}').useTemplate,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       parseTemplatePlan('{"useTemplate":true,"aspectRatio":"1:1"}').useTemplate,
     ).toBe(false);
@@ -135,10 +207,10 @@ describe('douyin video template helpers', () => {
     expect(prompt).toContain('「主题闯关」「互动游戏」');
     expect(prompt).toContain('宽约 92%');
     // 只在实拍图上排版，不新造画面内容
-    expect(prompt).toContain('只做编辑排版，不新造画面内容');
-    expect(prompt).toContain('背景只能用这张图本身');
-    expect(prompt).toContain('不要添加图里没有的任何东西');
-    expect(prompt).toContain('不要据此画任何新东西');
+    expect(prompt).toContain('照片主体保持原样、完整、不变形');
+    expect(prompt).toContain('拼图接缝');
+    expect(prompt).toContain('不虚构门店');
+    expect(prompt).toContain('不遮挡原图主体');
   });
 
   it('locates the green block and punches it transparent', async () => {

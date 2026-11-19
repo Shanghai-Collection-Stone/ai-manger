@@ -53,11 +53,11 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-store-visit-voice-anchor.spec.ts` — 音色锚点单测：音色标识与锚点作废、统一音色模式只先生成第 1 段且其余新镜头等锚点段、还没锚点时第 1 段不用百炼合成参考且只出干净人声、不开时照旧逐段排队、已有锚点时各段并行并拿锚点作参考音频、等锚点的续段取声音前不认领、锚点 WAV 时长校验与去重。
 - `services/douyin-video-storage.service.ts` — 成片落库：本地合成文件或供应商临时地址存进视频库（OSS 优先，未配置时落 `public/uploads` 或登记外链），另存探店配音与克隆用的临时录音。
 - `services/douyin-video-template.ts` — 版式模板纯函数：画布与窗口比例、窗口像素计算、规划 JSON 解析与文案整理、读图规划 / 模板改图提示词（只在实拍图上排版）、绿块识别抠窗、首帧拼封面、首帧按窗口比例裁切、H3 提示词里的比例说法与生效比例判断。
-- `services/douyin-video-template.service.ts` — 版式模板服务：「生图」节点以实拍图为底图编辑出带绿色窗口的模板海报（只排版、不新造内容；没有实拍图或模型不能改图时拒绝），抠成透明窗口 PNG 存储并与首帧拼成封面；用户改文案重出图、开关与删除（要不要套、套什么由 AI 导演规划）；另给 AI 导演读图与缩略图。
+- `services/douyin-video-template.service.ts` — 逐段素材适配、模板与接缝小装饰出图、完整首帧预览和模板管理。
 - `services/douyin-video-template.service.spec.ts` — 模板只在实拍图上编辑的单测：探店用实拍场景图不用合成人物首帧、没有实拍图不调生图、分镜取第一个配图镜头、模型不能改图时的提示。
 - `services/douyin-video-director.ts` — AI 导演出片前规划的纯函数：列出各段首帧与画面标识、首帧指纹、系统提示与用户消息、解析模板与各段运动设计、取仍然有效的运动设计、中英文运动描述。
 - `services/douyin-video-edit.ts` — AI 剪辑（出片后）的纯函数：剪辑系统提示、每段说明（人声区间、台词估时、是否接续）、剪辑点避开人声、解析并夹取剪辑方案。
-- `services/douyin-video-director.service.ts` — AI 导演服务：配图 / 配场景后防抖在后台看首帧规划模板与每段运动（画面没变不重做）、手动重新规划、按规划自动出或停用模板；出片后按抽帧与人声区间定剪辑方案并记到合成记录。
+- `services/douyin-video-director.service.ts` — 出片前逐段规划模板、运镜与切换；合成只取既有规划，不看片把关。
 - `services/douyin-pixmax-video.service.ts` — PixMax 生视频通道：分镜 / 整片提示词、提交任务、后台轮询、成片转存视频库并回填。
 - `services/douyin-pixmax-video.service.spec.ts` — 分镜与整片提示词单测。
 - `services/douyin-shuyan-video.service.ts` — 数眼智能生视频通道（Seedance 与 MiniMax-H3 两条原生路由）：任务提交 / 查询、后台续轮询、临时成片转存视频库并回填。
@@ -71,6 +71,10 @@ AI 抖音工作台（douyin-workbench）
 - `config.example.env` — 视频生成 / 发布 / 抓取直连接口示例；合成使用客户端内置 ffmpeg，探店能力由后台提供商与节点配置。
 
 - `services/douyin-store-visit-speech.spec.ts` — 完整配音、双引擎、实际时长、后台排队、超长退费、锚定请求与切换引擎回归。
+
+- `services/douyin-video-director.spec.ts` — 分段规划、转场、完整构图与小装饰像素回归。
+
+- `services/douyin-video-template.spec.ts` — 分段规划、转场、完整构图与小装饰像素回归。
 
 ## 函数清单 (Function List)
 
@@ -151,7 +155,7 @@ AI 抖音工作台（douyin-workbench）
 
 - `ReportDouyinConcatResultDto()` — 校验进度、完成视频 ID 或失败说明 | keywords: 合成结果参数, 客户端回报, concat-result-dto, client-report
 - `DouyinConcatClip()` — 声明交给客户端合成的一段：镜号（探店为段号）、视频库 ID、下载地址与兜底时长；探店分段另带配音地址与字幕，客户端以配音时长为准定格补齐或截断并烧字幕；本机素材段的视频素材带入点 `start`，照片段带 `kind=image` 与运镜 `motion`（没有视频库 ID） | keywords: 合成片段, 分镜视频地址, 画外音片段, concat-clip, shot-video-url, voiceover-clip
-- `DouyinConcatTemplate` — 交给客户端合成的版式模板：模板 PNG 地址、窗口像素与比例 | keywords: 合成版式模板, 模板合成参数, concat-template, template-merge-input
+- `DouyinConcatTemplate` — 视频按原比例完整缩进窗口，再叠模板；逐段模板在转场前分别合成 | keywords: 合成版式模板, 模板合成参数, concat-template, template-merge-input
 - `DouyinConcatReport()` — 声明客户端合成结果 | keywords: 合成结果回报, 客户端回报, concat-result-report, client-report
 - `DouyinShotConcatService.constructor(db,repository)` — 初始化客户端合成集合与仓储 | keywords: 初始化合成服务, 合成仓储, init-concat-service, concat-repository
 - `DouyinShotConcatService.prepare(topicId,scope,options?)` — 校验就绪状态（探店模式按分段、片段 ID 为段 ID，本机素材段配好音即可）并返回合成记录与有序片段，素材地址取图库 / 视频库真实记录；参考音色出声的人物段（`nativeAudio`）只带字幕不带配音，合成时保留视频原声；脚本启用了版式模板时一并返回 `template`（客户端把视频铺进窗口再叠模板） | keywords: 准备客户端合成, 合成前校验, prepare-client-concat, concat-precheck
@@ -528,20 +532,20 @@ AI 抖音工作台（douyin-workbench）
 - `cleanTemplateText(value,max)` — 去换行与首尾空白并按字数截断，非字符串为空串 | keywords: 模板文案清理, 文案截断, clean-template-text, truncate-copy
 - `normalizeTemplateCopy(raw)` — 整理模板文案：标题 ≤ 20、副标题 ≤ 24、卖点最多 4 个各 ≤ 10、行动引导 ≤ 20、风格 ≤ 300 字，与 DTO 上限一致 | keywords: 整理模板文案, 文案上限, normalize-template-copy, copy-limits
 - `parseTemplatePlan(text)` — 解析版式规划 JSON 原文，见 `readTemplatePlan` | keywords: 解析模板规划, 规划JSON, parse-template-plan, plan-json
-- `readTemplatePlan(raw)` — 读出版式规划（AI 导演 JSON 里的 `template`）：比例不认识时按窗口宽高吸附（再不行 4:3），9:16 或没有标题视为不套模板，窗口算成像素 | keywords: 读取模板规划, 模板规划字段, read-template-plan, template-plan-fields
-- `buildTemplateEditPrompt(template)` — 模板改图提示词：以实拍图为底图排成竖屏海报，背景只用这张图本身（放大、裁切、虚化、压暗或叠纯色块），不加图里没有的物体、人物、商品、插画或图标；窗口位置画纯绿 #00FF00 实心矩形（按百分比给位置），引号里的文字逐字照写，不加别的文字、水印、二维码 | keywords: 模板改图提示词, 只编辑实拍图, 绿幕窗口, template-edit-prompt, edit-real-photo-only, green-window
+- `readTemplatePlan(raw)` — 读取单段版式，支持9:16窗口；无标题或明确关闭才不套，窗口换算为像素 | keywords: 读取模板规划, 模板规划字段, read-template-plan, template-plan-fields
+- `buildTemplateEditPrompt(template)` — 按本段素材生成版式和少量拼图接缝小装饰，不改变照片主体、不虚构事实 | keywords: 模板改图提示词, 只编辑实拍图, 绿幕窗口, template-edit-prompt, edit-real-photo-only, green-window
 - `locateTemplateWindow(image)` — 缩到 270×480 做绿色掩码，取最大连通绿块（面积 ≥ 6% 画布且填满外接框 80%）返回窗口像素，找不到为 null | keywords: 识别绿幕窗口, 绿块定位, locate-green-window, chroma-detection
 - `padTemplateWindow(window,padding)` — 窗口向外扩几像素并夹进画布、宽高取偶 | keywords: 扩展抠窗区域, 窗口外扩, pad-template-hole, expand-window
-- `punchTemplateWindow(source,planned)` — 生图结果铺满 1080×1920，找到绿块用绿块位置（否则用规划窗口），外扩 6px 抠透明并清掉周围 24px 的绿色杂边，按实际窗口重新吸附比例 | keywords: 生成模板透明图, 抠出视频窗口, punch-template-window, transparent-template
-- `composeTemplateCover(template,frame,window)` — 首帧按 cover 铺满窗口、黑底、模板叠在上面，输出 JPEG 封面 | keywords: 模板首帧拼合, 模板封面, compose-template-cover, template-first-frame
+- `punchTemplateWindow(source,planned,preserveDecorations?)` — 抠出绿幕窗口，开启 preserveDecorations 且识别到绿块时保留非绿色小装饰，否则按规划抠空 | keywords: 生成模板透明图, 抠出视频窗口, punch-template-window, transparent-template
+- `composeTemplateCover(template,frame,window)` — 首帧等比完整缩进窗口，补边后叠模板，不裁剪不变形 | keywords: 模板首帧拼合, 模板封面, compose-template-cover, template-first-frame
 - `cropFrameToAspect(dataUrl,aspect)` — 首帧 / 尾帧按窗口比例居中裁切（不拉伸），比例已一致或不是 data URL 时原样返回 | keywords: 首帧按比例裁切, 窗口比例首帧, crop-frame-to-aspect, aspect-first-frame
 - `describeVideoAspect(aspect?)` — H3 风格句里的比例说法（horizontal 4:3、square 1:1…），缺省 vertical 9:16 | keywords: H3画面比例说法, 提示词比例, describe-video-aspect, prompt-aspect
 - `activeTemplateAspect(template)` — 模板启用且已有模板图时返回窗口比例，否则 undefined（按原来的 9:16 出片） | keywords: 生效模板比例, 模板出片比例, active-template-aspect, template-video-aspect
-- `DouyinVideoTemplateService()` — 视频版式模板：「生图」出模板图、抠窗拼首帧封面，用户改文案 / 开关 / 删除；要不要套由 AI 导演规划，分镜 / 整片 / 探店共用，不新增工作流节点 | keywords: 视频版式模板, 读图规划模板, 模板首帧拼合, video-layout-template, vision-template-plan, template-cover
+- `DouyinVideoTemplateService()` — 按每段素材编辑独立模板与封面，支持小装饰、手改、开关和删除 | keywords: 视频版式模板, 读图规划模板, 模板首帧拼合, video-layout-template, vision-template-plan, template-cover
 - `DouyinVideoTemplateService.render(topicId,patch,scope)` — 按改过的文案 / 风格 / 比例重出模板图，改了比例时按原宽度与位置重算窗口；没规划过提示先规划；标记 `source=user`，AI 导演之后不再覆盖 | keywords: 重新生成模板, 修改模板文案, render-video-template, edit-template-copy
 - `DouyinVideoTemplateService.setEnabled(topicId,enabled,scope)` — 开关模板，开启要求已有模板图，开关过标记 `source=user` | keywords: 开关模板, 启用版式模板, toggle-video-template, enable-layout-template
 - `DouyinVideoTemplateService.remove(topicId,scope)` — 删除选题的模板 | keywords: 删除模板, 清除版式, remove-video-template, clear-layout
-- `DouyinVideoTemplateService.applyTemplate(topic,template,scope)` — 取实拍底图（没有就拒绝）→「生图」节点带底图改图（1024×1792，计费来源 `douyin-workbench.video-template-image`；模型只能凭空生成时拒绝，不退回文生图）→ 读完删临时原图 → 抠窗存 PNG → 首帧拼封面存 JPEG → 写回模板并启用（窗口与比例以识别到的绿块为准）；AI 导演与用户改文案都走这里 | keywords: 生成模板图, 模板抠窗拼封面, render-template-image, punch-and-compose
+- `DouyinVideoTemplateService.applyTemplate(topic,template,scope,plans?)` — 按 plans 逐段适配素材，共用全片标题、风格与窗口区域，后续段参考首个模板；绑定 sourceKey，换图或手改不覆盖 | keywords: 生成模板图, 模板抠窗拼封面, render-template-image, punch-and-compose
 - `DouyinVideoTemplateService.editBaseUrl(topic)` — 模板改图的底图：探店取第 1 个配了门店图片的分段的实拍场景图（不用合成的人物首帧），没有时取第一张门店图；分镜取第一个配了图片的镜头 | keywords: 模板改图底图, 实拍图优先, template-edit-base, real-photo-first
 - `describeTemplateEditError(error)` — 「生图」模型不能改图（`IMAGE_PROVIDER_NOT_SUPPORTED`，如数眼生图）时换成提示换支持图生图模型的说明，其他错误原样返回 | keywords: 模板改图报错, 不支持改图, template-edit-error, edit-not-supported
 - `DouyinVideoTemplateService.firstFrameUrl(topic)` — 拼封面用的首帧：探店第 1 段人物首帧或第 1 段场景图，分镜第一个配了图片的镜头 | keywords: 模板参考图, 首帧来源, template-frame-sources, first-frame-source
@@ -551,13 +555,13 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinVideoTemplateService.save(topicId,template,scope)` — 写入模板并返回更新后的选题 | keywords: 写入模板, 保存模板结果, persist-video-template, save-template-result
 - `DOUYIN_DIRECTOR_FRAME_LIMIT` — AI 导演一次最多看 12 段首帧 | keywords: 导演看图上限, 首帧张数, director-frame-limit, first-frame-count
 - `DouyinDirectorFrame` — 导演要看的一段：段 ID、画面标识、首帧地址、镜头用途、时长、台词、画面描述与场景说明 | keywords: 导演首帧素材, 分段看图输入, director-frame, shot-vision-input
-- `DouyinDirectorPlan` — 导演规划结果：版式模板、各段运动设计与整体思路 | keywords: 导演规划结果, 出片前方案, director-plan, pre-production-result
+- `DouyinDirectorPlan` — 统一风格、逐段模板、各段运动与相邻切换的规划结果 | keywords: 导演规划结果, 出片前方案, director-plan, pre-production-result
 - `listDirectorFrames(topic)` — 分镜取配了图片的镜头（标识 `image:<图库 ID>`），探店取配了场景图的分段（标识为镜头用途 + 场景图 + 同点位参考图，不含出片时才合成的人物首帧），实拍视频素材段跳过 | keywords: 列出导演首帧, 分段首帧来源, list-director-frames, shot-frame-sources
-- `directionFingerprint(frames)` — 段 ID 与画面标识按顺序取 SHA-1，画面没变不重复规划 | keywords: 首帧指纹, 规划去重, frame-fingerprint, plan-dedupe
-- `DOUYIN_DIRECTOR_SYSTEM` — 导演系统提示：一次看完各段首帧，定版式模板（适不适合、窗口比例、位置、文案只取事实）与每段运镜和画面动态（只动图里已有的东西，探店运镜只许固定机位或缓慢推近，英文给视频模型、中文给人看），只输出 JSON | keywords: 导演系统提示, 读图规划, director-system-prompt, vision-layout-plan
+- `directionFingerprint(frames)` — 按素材、顺序、台词、时长和场景说明计算指纹，任一变化都重新规划 | keywords: 首帧指纹, 规划去重, frame-fingerprint, plan-dedupe
+- `DOUYIN_DIRECTOR_SYSTEM` — 出片前逐段设计可选模板、小装饰、运镜与转场，原素材保持完整 | keywords: 导演系统提示, 读图规划, director-system-prompt, vision-layout-plan
 - `buildDirectorBrief(input)` — 导演用户消息：制作方式、选题、脚本、门店名、补充要求与每张图对应第几段（用途、时长、画面、场景、台词） | keywords: 导演用户消息, 分段看图说明, director-brief, shot-frame-brief
 - `cleanDirectionText(value,max,english)` — 清理并截断运动描述，英文字段含中文整段丢弃 | keywords: 运动描述清理, 英文校验, clean-direction-text, english-only-check
-- `parseDirectorPlan(text,frames,clampCamera?)` — 解析导演 JSON（`clampCamera` 为假即从脚本开始时运镜不收进原图）：`template` 按 `readTemplatePlan` 读（缺失视为不套），`shots` 按 `no` 对回首帧，英文含中文的丢掉，全空的段不要；探店段运镜经 `keepCameraInFrame` 收进原图 | keywords: 解析导演规划, 运动设计校验, parse-director-plan, direction-validation
+- `parseDirectorPlan(text,frames,clampCamera?)` — 按首帧序号解析逐段模板与相邻转场，绑定当前和下一段素材标识；探店运镜收进原图 | keywords: 解析导演规划, 运动设计校验, parse-director-plan, direction-validation
 - `freshShotDirection(topic,key)` — 只有按当前首帧设计（`sourceKey` 一致）的运动设计才返回，画面换了返回 undefined；从门店开始的探店段运镜经 `keepCameraInFrame` 收进原图（旧规划也生效），从脚本开始的不收 | keywords: 有效运动设计, 画面一致校验, fresh-shot-direction, source-key-check
 - `keepCameraInFrame(direction,kind)` — 探店运镜收进原图：运镜不是固定机位 / 缓慢推近，或带平移、摇、拉远、后退、环绕、跟拍、升降等往图外走的说法时，换成默认运镜（人物段固定机位，实景段缓慢推近主体），画面动态不动 | keywords: 运镜收进原图, 禁止往外运镜, keep-camera-in-frame, no-outward-camera
 - `describeDirectionEn(direction?)` — 运动设计的英文（运镜; 画面动态），给自建 H3 时间轴 | keywords: 英文运动描述, H3时间轴动作, direction-english, h3-timeline-action
@@ -568,13 +572,13 @@ AI 抖音工作台（douyin-workbench）
 - `buildEditClipBrief(clip,context,index)` — 一段的剪辑说明：时长、人声区间、台词与估算时长、是否接续、转场提示、抽帧秒数 | keywords: 剪辑分段说明, 人声区间文字, edit-clip-brief, speech-interval-text
 - `snapCutPoint(time,speech,edge)` — 剪辑点挪出人声区间，入点离后面人声至少 0.1 秒、出点离前面人声至少 0.3 秒 | keywords: 剪辑点避开人声, 剪辑点吸附, snap-cut-outside-speech, cut-point-snap
 - `parseEditPlan(text,clips)` — 解析并夹取剪辑方案：掐头 ≤ 2 秒、去尾 ≤ 4 秒且都不超过本段四成，剪完至少 1 秒；转场 0.2～0.6 秒且不超过相邻较短段三成；字幕默认底部中号；封面换算成剪后秒数 | keywords: 解析剪辑方案, 剪辑安全夹取, parse-edit-plan, edit-plan-clamp
-- `DouyinVideoDirectorService()` — AI 导演：出片前看首帧规划模板与每段运动，出片后看抽帧与人声区间定剪辑，都用「思考」节点，不新增工作流节点 | keywords: AI导演, 出片前规划, 出片后剪辑, ai-video-director, pre-production-plan, post-production-edit
+- `DouyinVideoDirectorService()` — 出片前规划逐段模板、运动与切换；合成阶段只执行方案，保留完整片段 | keywords: AI导演, 出片前规划, 出片后剪辑, ai-video-director, pre-production-plan, post-production-edit
 - `DouyinVideoDirectorService.onModuleDestroy()` — 清掉还没触发的规划定时器 | keywords: 清理规划定时器, 服务关闭, clear-director-timers, module-destroy
 - `DouyinVideoDirectorService.schedule(topicId,scope)` — 画面可能变了时调用：指纹没变不做；变了先标「规划中」，防抖 3 秒后台规划；同一组画面失败不自动重试，卡住超过 5 分钟的重做；出错只记日志 | keywords: 触发导演规划, 画面变更规划, schedule-video-direction, replan-on-frame-change
 - `DouyinVideoDirectorService.plan(topicId,prompt,scope)` — 手动「AI 重新规划」：立刻按当前画面规划（不管指纹），等出图完成后返回，失败报错 | keywords: 手动重新规划, 强制导演规划, replan-video-direction, force-direction
 - `DouyinVideoDirectorService.run(topicId,scope,options)` — 执行一次规划：首帧缩略图（每张前标明第几段）调「思考」节点，写回各段运动设计后处理模板；后台规划撞上正在规划时 10 秒后再排，失败写 `status=failed` | keywords: 执行导演规划, 读图出方案, run-video-direction, vision-planning
-- `DouyinVideoDirectorService.applyTemplatePlan(topic,plan,scope)` — 用户改过的模板不动；不套时停用或只记理由；文案比例与现有 AI 模板一致时只更新理由并启用，否则在实拍图上编辑出新模板图（失败时保存无图模板；没有实拍图或模型不能改图时记为停用并写明原因） | keywords: 按规划处理模板, 自动起模板, apply-template-plan, auto-template
-- `DouyinVideoDirectorService.planEdit(topicId,input,scope)` — 出片后剪辑规划：抽帧总数压到 32 张内，配上台词、接续与转场提示调「思考」节点，夹取后记到合成记录并返回 | keywords: AI剪辑规划, 看片定剪辑点, plan-video-edit, review-clips-for-edit
+- `DouyinVideoDirectorService.applyTemplatePlan(topic,plan,scope,segmentPlans?)` — 保留用户手改模板，按各段模板计划出图；全部不需要时停用，失败保存规划供重试 | keywords: 按规划处理模板, 自动起模板, apply-template-plan, auto-template
+- `DouyinVideoDirectorService.planEdit(topicId,input,scope)` — 兼容旧接口，只返回提前规划的相邻转场，不读取抽帧、不调用模型、不裁剪 | keywords: AI剪辑规划, 看片定剪辑点, plan-video-edit, review-clips-for-edit
 - `DouyinVideoDirectorService.ask(scope,source,system,content)` — 「思考」节点看图问答（两分钟超时、不流式、按节点计费） | keywords: 导演看图问答, 思考节点调用, director-vision-ask, think-node-call
 - `DouyinVideoDirectorService.requireChild(topicId,scope)` — 读取子选题，不存在报错 | keywords: 读取子选题, 选题校验, require-child-topic, topic-check
 - `DouyinVideoStorageService.deleteAudio(key)` — 删掉 `saveAudio` 存到 OSS 的音频（克隆完录音立即删），失败不抛错 | keywords: 删除音频文件, 清理录音, delete-audio-file, cleanup-voice-sample
@@ -941,10 +945,36 @@ AI 抖音工作台（douyin-workbench）
 - `startStoreVisitAutopilot(req,id,dto)` — 启动或继续当前脚本的全流程 Agent 托管，立即返回持久化状态 | keywords: 启动托管接口, 全流程Agent, start-autopilot-api, full-workflow-agent
 - `pauseStoreVisitAutopilot(req,id)` — 暂停 Agent 后续步骤并同时暂停正在运行的出片导演，保留已完成结果 | keywords: 暂停托管接口, 托管进度保留, pause-autopilot-api, preserve-autopilot-progress
 
+- `buildPlannedEdit(topic,clips)` — 执行有效的相邻转场规划，接续或失效时硬切；clips 留空以保留整段 | keywords: 执行转场规划, 完整片段合成, planned-transitions, full-clip-merge
+- `DouyinVideoTemplateService.renderTemplateImage(topic,template,scope,input?)` — 按统一视频区域完整适配本段素材，以首个模板为固定风格参考生成预览 | keywords: 分段模板出图, 素材适配, render-segment-template, material-adaptation
+- `toFrame(url)` — 原始首尾帧直接交给模型，保留完整构图 | keywords: 完整首尾帧, 原始比例, intact-video-frames, native-frame-aspect
+- `verifySegmentPlans()` — 验证逐段模板、相邻转场、换素材失效与完整合成 | keywords: 分段规划回归, 完整合成回归, segment-plan-regression, full-merge-regression
+- `verifyTemplatePixels()` — 像素验证接缝装饰保留、绿底抠除与竖图上下完整 | keywords: 模板像素回归, 装饰保留, template-pixel-regression, preserve-decoration
+- `verifySegmentConcat()` — 验证逐段合成参数、显式停用与素材失效 | keywords: 分段合成参数回归, 旧素材失效, segment-concat-regression, stale-material
+- `verifySegmentRendering()` — 验证对应素材、共享标题风格窗口与首个模板参考，以及停用不生图 | keywords: 分段模板生成回归, 对应素材, segment-render-regression, matched-material
+
+- `verifyStyleReference()` — 验证改图请求分开传入当前素材和固定风格参考，禁止复制旧场景文案 | keywords: 模板风格参考回归, 统一片段视觉, template-style-reference-regression, consistent-segment-design
+
 ## 关键词索引 (Keyword Index)
 
 | 中文 | English |
 | --- | --- |
+| 模板风格参考回归 | template-style-reference-regression |
+| 统一片段视觉 | consistent-segment-design |
+| 执行转场规划 | planned-transitions |
+| 完整片段合成 | full-clip-merge |
+| 分段模板出图 | render-segment-template |
+| 素材适配 | material-adaptation |
+| 完整首尾帧 | intact-video-frames |
+| 原始比例 | native-frame-aspect |
+| 分段规划回归 | segment-plan-regression |
+| 完整合成回归 | full-merge-regression |
+| 模板像素回归 | template-pixel-regression |
+| 装饰保留 | preserve-decoration |
+| 分段合成参数回归 | segment-concat-regression |
+| 旧素材失效 | stale-material |
+| 分段模板生成回归 | segment-render-regression |
+| 对应素材 | matched-material |
 | 工作台入口依赖 | workbench-entry-dependencies |
 | 托管错误修复 | autopilot-error-repair |
 | 失败分段续跑 | resume-failed-segment |
@@ -1876,6 +1906,7 @@ AI 抖音工作台（douyin-workbench）
 | 拼接测试WAV | build-pieced-wav |
 | 模拟人声 | fake-speech |
 
+
 ## 类型导出 (Type Exports)
 
 - `DouyinStoreVisitAutopilot`、`StartDouyinAutopilotDto` — 系统持久化托管进度及启动参数；普通选题更新不允许写入托管状态。
@@ -2013,9 +2044,9 @@ AI 抖音工作台（douyin-workbench）
 
 **台词讲卖点，不念画面**：独立脚本正文安排具体叙事与卖点，`generateLines` 根据正文写口播，与旧 `writeStoreVisitLines` 共用 `STORE_VISIT_SELLING_POINT_RULE`；不复述颜色、灯光、摆设或招牌文字，事实只用引用知识和门店资料，不编排名、活动、赠品或亲身经历。分段台词约 20～45 秒，每段 15～40 字，正文独立按创作方案要求生成。
 
-**视频版式模板（分镜 / 整片 / 探店）**：像「上方大标题 + 中间视频窗口 + 下方卖点与行动引导」这种版式，要不要套由 AI 导演看图决定（见下一段），画模板用「生图」节点**只在实拍图上编辑、不凭空生成**（凭空画会画出门店根本没有的东西）：底图取探店第 1 段的实拍场景图（不用合成的人物首帧）或分镜第一个配图镜头，`buildTemplateEditPrompt` 要求背景只用这张图本身（放大、裁切、虚化、压暗或叠色块），不加任何图里没有的物体、人物、食物、插画、图标；AI 导演规划的 `style` 也只写配色、字体与文字底板。没有实拍图、或「生图」模型只能文生图（数眼生图没有改图接口）时直接拒绝并提示，AI 导演自动规划遇到这种情况把模板记为停用并写明原因。排版时窗口位置画成纯绿 #00FF00 实心块（生图模型不一定照百分比摆，`locateTemplateWindow` 按实际绿块定位，认不出时按规划位置），抠成透明窗口的 1080×1920 PNG（外扩 6px 并清掉绿色杂边），再和首帧拼成封面预览。用户可开关、改文案 / 风格 / 比例后重新出图（`render`），或删除；改过或开关过的模板标 `source=user`，AI 导演之后不再覆盖。启用后：自建 MiniMax-H3（分镜 / 整片 / 探店）按窗口比例出片（`aspect_ratio` 取窗口比例，首尾帧先居中裁成同一比例，风格句写对应比例）；数眼 / PixMax 仍出 9:16。合成时 `DouyinShotConcatService.prepare` 返回 `template`，桌面端把每段视频按 cover 铺满窗口、字幕烧在窗口里，再放进 1080×1920 并叠上模板；旧客户端不认模板时直接回报失败。改模板后已出的片段不会自动重做，要按新比例重新出片。
+**视频版式模板（分镜 / 整片 / 探店）**：模板可选，统一配色与标题体系，各段按自己的素材单独规划窗口、文案、装饰并生成模板图，存入 `videoTemplate.variants[分段ID]`，`sourceKey` 绑定素材。窗口按原图比例等比内缩，视频首尾帧不再为模板裁切；带首帧的自建H3与数眼分镜跟随原图比例。素材保持完整、不拉伸，可在拼图接缝点缀不遮挡主体的小贴纸；抠绿底时保留这些非绿色装饰。没有对应素材、单段停用或换素材后旧模板失效时，该段完整显示。用户手改的模板继续保留。合成返回每段 `clip.template`（null 明确不套），同时兼容旧全片模板；桌面端逐段等比放入窗口、烧字幕、叠模板，然后转场，不做画质或宽高拦截。 全片共用同一大标题、配色字体、装饰画法和视频区域，后续段通过 extraImageCandidates 固定参考第一个成功出图的模板；只在共同视频区域内按素材原比例适配，微调少量装饰，不逐段另换主题或让标题、窗口中心跳位。
 
-**AI 导演（出片前看图规划、出片后看片剪辑）**：不新增工作流节点，读图都用「思考」节点（要选视觉语言模型）。出片前：分镜生成任务配好图、PATCH 保存（换图、配场景后保存）、重新出图 / 换头 / 恢复原图之后，`DouyinVideoDirectorService.schedule` 先比对首帧指纹（`listDirectorFrames` + `directionFingerprint`；探店只看场景图，不看出片时才合成的人物首帧），变了才把 `videoDirection` 标成「规划中」并防抖 3 秒后台规划：一次看完各段首帧缩略图，按 `DOUYIN_DIRECTOR_SYSTEM` 同时给出版式模板方案与每段的运镜和画面动态（只动图里本来有的东西，英文不许含中文）。各段运动设计按段 ID 存在 `videoDirection.shots`，带画面标识 `sourceKey`，出片时 `freshShotDirection` 只用画面没变的：数眼 / PixMax 提示词加「【运镜与画面动态】」中文，自建 H3 时间轴改用英文（顺带去掉了分镜通道原来写进时间轴的中文画面描述）。模板按 `applyTemplatePlan` 自动起、停或保持（用户改过的不动）。同一组画面规划失败不自动重试，界面上可带补充要求「AI 重新规划」（`plan`）。出片后：桌面端合成前把各段下好、测人声区间、每段抽 5 帧交给 `planEdit`，`DOUYIN_EDIT_PLAN_SYSTEM` 让模型对照台词字数与人声区间掐头去尾（专治 H3 偶尔多说的语气词与半句）、定段间转场（接续段硬切）、字幕位置大小与封面帧，`parseEditPlan` 夹到安全范围（剪辑点不切进人声、剪完至少 1 秒、转场不超过相邻较短段三成）后记到合成记录 `request.editPlan`，桌面端按方案合成；外壳不支持、分析或规划失败时退回普通拼接。
+**AI 导演（出片前规划，合成直接执行）**：使用既有思考节点看各段首帧，返回全片风格、逐段模板、运动及到下一段的转场。指纹包含素材、顺序、台词、时长与场景说明；变化后重做，生成期间再变化不覆盖新内容。模板出完才置 ready。`shots[id].transition` 绑定下一段及其素材，接续镜头、素材变更或顺序不符时硬切。`prepare` 直接返回 `edit` 并记入合成记录，保留完整视频；兼容 `edit-plan` 接口只返回既有规划，不再调用模型看片、掐头去尾或增加合成质量闸。
 
 **分镜与探店合并（第三期：AI 操作工作台工具合并）**：`DouyinWorkbenchAgentService` 读脚本统一走 `requireStoreVisit`，碰到旧分镜脚本先经 `DouyinUnifyService` 转成从脚本开始；从脚本开始的脚本不读门店。删掉只给旧分镜用的重新生成分镜、单镜配图与分镜出片，新增 `setStart`、`pickPictures`（`DouyinSegmentImageService.pickImages` + 保存）与 `generatePictures`（逐段 `generateImage`），`generateStoreVisit` 加 `full` 走「整条一次出」，`generateChildren` 带 `start` 并固定统一流程。对应的 MCP 工具见 [tenant-mcp](../tenant-mcp/module.md)。
 

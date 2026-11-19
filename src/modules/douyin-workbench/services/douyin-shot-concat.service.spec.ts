@@ -85,6 +85,55 @@ const readyTopic = () => ({
   ],
 });
 
+/**
+ * @description 验证合成交付逐段模板、显式停用与换图失效，并直接带上完整片段转场方案。
+ * @keyword-cn 分段合成参数回归, 旧素材失效
+ * @keyword-en segment-concat-regression, stale-material
+ */
+async function verifySegmentConcat(): Promise<void> {
+  const topic = {
+    ...readyTopic(),
+    videoTemplate: {
+      enabled: true,
+      imageUrl: '/legacy.png',
+      aspectRatio: '4:3',
+      window: { x: 40, y: 480, width: 1000, height: 750 },
+      variants: {
+        s1: {
+          enabled: true,
+          imageUrl: '/one.png',
+          aspectRatio: '3:4',
+          sourceKey: 'image:1',
+          window: { x: 100, y: 300, width: 600, height: 800 },
+        },
+        s2: { enabled: false, imageUrl: '/two.png', sourceKey: 'image:2' },
+      },
+    },
+  };
+  Object.assign(topic.storyboard[0], {
+    media: { type: 'image', id: 1, url: '/a.png' },
+  });
+  Object.assign(topic.storyboard[1], {
+    media: { type: 'image', id: 2, url: '/b.png' },
+  });
+  const { service, operations } = build(topic);
+  const result = await service.prepare(7, scope);
+  expect(result.clips[0].template).toMatchObject({
+    imageUrl: '/one.png',
+    window: { width: 600, height: 800 },
+  });
+  expect(result.clips[1].template).toBeNull();
+  expect(result.edit.clips).toEqual([]);
+  operations.rows.length = 0;
+  topic.videoTemplate.variants.s1.sourceKey = 'image:99';
+  expect((await service.prepare(7, scope)).clips[0].template).toBeNull();
+}
+
+it(
+  'delivers individual layouts and planned transitions without reviewing footage',
+  verifySegmentConcat,
+);
+
 describe('DouyinShotConcatService（客户端合成）', () => {
   it('全部探店片段必须先生成视频，只用生成的视频与字幕拼接', async () => {
     const topic = {

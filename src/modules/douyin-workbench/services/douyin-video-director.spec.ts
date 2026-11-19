@@ -11,10 +11,69 @@ import {
 } from './douyin-video-director.js';
 import {
   buildEditClipBrief,
+  buildPlannedEdit,
   parseEditPlan,
   snapCutPoint,
   type DouyinEditClipInput,
 } from './douyin-video-edit.js';
+
+/**
+ * @description 验证逐段模板与提前转场规划，换素材后不沿用旧转场，合成保留完整片段。
+ * @keyword-cn 分段规划回归, 完整合成回归
+ * @keyword-en segment-plan-regression, full-merge-regression
+ */
+function verifySegmentPlans(): void {
+  const topic = storyboardTopic();
+  const frames = listDirectorFrames(topic);
+  const plan = parseDirectorPlan(
+    JSON.stringify({
+      template: { useTemplate: true, title: '派对', aspectRatio: '4:3' },
+      shots: [
+        {
+          no: 1,
+          camera: 'static camera',
+          template: { aspectRatio: '3:4', style: '拼图接缝加小星星' },
+          transition: { type: 'fade', duration: 3, reason: '切到无模板画面' },
+        },
+        { no: 2, template: { useTemplate: false } },
+      ],
+    }),
+    frames,
+  );
+  expect(plan.templates.s1).toMatchObject({
+    title: '派对',
+    aspectRatio: '3:4',
+    style: '拼图接缝加小星星',
+  });
+  expect(plan.templates.s2.useTemplate).toBe(false);
+  topic.videoDirection = {
+    status: 'ready',
+    fingerprint: directionFingerprint(frames),
+    shots: plan.shots,
+    updatedAt: new Date(),
+  };
+  const clips = [{ shotId: 's1' }, { shotId: 's2' }];
+  expect(buildPlannedEdit(topic, clips)).toMatchObject({
+    clips: [],
+    transitions: [{ type: 'fade', duration: 0.6 }],
+  });
+  expect(buildPlannedEdit(topic, [...clips].reverse()).transitions).toEqual([
+    { type: 'cut', duration: 0 },
+  ]);
+  topic.storyboard[1].media!.id = 99;
+  expect(buildPlannedEdit(topic, clips).transitions).toEqual([
+    { type: 'cut', duration: 0 },
+  ]);
+  topic.storyboard[1].narration = '改写台词';
+  expect(directionFingerprint(listDirectorFrames(topic))).not.toBe(
+    directionFingerprint(frames),
+  );
+}
+
+it(
+  'plans individual layouts and adjacent transitions before merging intact clips',
+  verifySegmentPlans,
+);
 
 /**
  * @description 造一条带两镜配图（第 3 镜没配图）的分镜脚本。

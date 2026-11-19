@@ -7,6 +7,7 @@ import type {
   DouyinTopicEntity,
   DouyinVideoTemplate,
 } from '../entities/douyin-workbench.entity.js';
+import { parseTemplatePlan } from './douyin-video-template.js';
 
 const template: DouyinVideoTemplate = {
   enabled: true,
@@ -34,6 +35,7 @@ function buildService(error: Error = new Error('STOP_AFTER_CAPTURE')) {
     {} as never,
     {} as never,
   );
+  jest.spyOn(service, 'readImage').mockResolvedValue(null);
   return { service, agentService };
 }
 
@@ -63,6 +65,119 @@ function storeVisitTopic(extra: Partial<DouyinTopicEntity['storeVisit']> = {}) {
   } as unknown as DouyinTopicEntity;
 }
 
+/**
+ * @description 验证每段使用自己的素材但共用全片标题、风格、视频区域与首个模板参考，关闭的段不调用生图。
+ * @keyword-cn 分段模板生成回归, 对应素材
+ * @keyword-en segment-render-regression, matched-material
+ */
+async function verifySegmentRendering(): Promise<void> {
+  const topic = storeVisitTopic({
+    sceneImages: [
+      { id: 17, name: '门口', url: '/door.png' },
+      { id: 18, name: '拼图', url: '/collage.png' },
+    ] as never,
+    segments: [
+      { id: 'a', sceneImageId: 17, lines: '欢迎' },
+      { id: 'b', sceneImageId: 18, lines: '活动' },
+      { id: 'c', sceneImageId: 17, lines: '再见' },
+    ] as never,
+  });
+  const repository = {
+    get: jest.fn().mockResolvedValue(topic),
+    setVideoTemplate: jest.fn().mockResolvedValue(topic),
+  };
+  const service = new DouyinVideoTemplateService(
+    {} as never,
+    {} as never,
+    repository as never,
+    {} as never,
+  );
+  const renderer = service as unknown as {
+    renderTemplateImage: (...args: unknown[]) => Promise<DouyinVideoTemplate>;
+  };
+  const render = jest
+    .spyOn(renderer, 'renderTemplateImage')
+    .mockResolvedValueOnce({ ...template, imageUrl: '/a-template.png' })
+    .mockResolvedValueOnce({ ...template, imageUrl: '/b-template.png' });
+  const first = parseTemplatePlan(
+    '{"useTemplate":true,"title":"门口","aspectRatio":"4:3"}',
+  );
+  const second = parseTemplatePlan(
+    '{"useTemplate":true,"title":"拼图","aspectRatio":"3:4","style":"中间小星星"}',
+  );
+  const off = { ...first, useTemplate: false };
+  await service.applyTemplate(
+    topic,
+    template,
+    { userId: 'u1' },
+    { a: first, b: second, c: off },
+  );
+  expect(render).toHaveBeenCalledTimes(2);
+  expect(render.mock.calls[0][1]).toMatchObject({
+    title: template.title,
+    style: template.style,
+    window: template.window,
+    aspectRatio: '4:3',
+  });
+  expect(render.mock.calls[1][1]).toMatchObject({
+    title: template.title,
+    style: template.style,
+    window: template.window,
+  });
+  expect(render.mock.calls[1][3]).toMatchObject({
+    baseUrl: '/collage.png',
+    key: 'b',
+    styleReferenceUrl: '/a-template.png',
+  });
+  expect(render.mock.calls[0][3]).toMatchObject({
+    styleReferenceUrl: undefined,
+  });
+  expect((render.mock.calls[1][3] as { brief: string }).brief).toContain(
+    '中间小星星',
+  );
+  expect(repository.setVideoTemplate.mock.calls[0][1].variants.c).toMatchObject(
+    { enabled: false, sourceKey: 'broll:17:' },
+  );
+}
+
+it(
+  'keeps one visual system and shares the first template while adapting each material',
+  verifySegmentRendering,
+);
+
+/**
+ * @description 验证实际改图请求同时携带本段素材和固定模板风格参考，后续段不能复制旧场景与文案。
+ * @keyword-cn 模板风格参考回归, 统一片段视觉
+ * @keyword-en template-style-reference-regression, consistent-segment-design
+ */
+async function verifyStyleReference(): Promise<void> {
+  const { service, agentService } = buildService();
+  const renderer = service as unknown as {
+    renderTemplateImage: (...args: unknown[]) => Promise<DouyinVideoTemplate>;
+  };
+  await expect(
+    renderer.renderTemplateImage(
+      storeVisitTopic(),
+      template,
+      { userId: 'u1' },
+      {
+        baseUrl: '/this-segment.png',
+        styleReferenceUrl: '/first-template.png',
+      },
+    ),
+  ).rejects.toThrow('STOP_AFTER_CAPTURE');
+  const input = agentService.sendPrompt.mock.calls[0][0];
+  expect(input.baseImageCandidates).toEqual(['/this-segment.png']);
+  expect(input.extraImageCandidates).toEqual(['/first-template.png']);
+  expect(input.prompt).toContain('沿用图2的主辅色');
+  expect(input.prompt).toContain('不要从图2复制场景、人物、商品或旧文案');
+}
+
+it(
+  'passes a fixed style reference separately from the current material',
+  verifyStyleReference,
+);
+
 describe('版式模板只在实拍图上编辑', () => {
   it('探店用第 1 段的实拍场景图做底图，不用合成的人物首帧', async () => {
     const { service, agentService } = buildService();
@@ -71,7 +186,7 @@ describe('版式模板只在实拍图上编辑', () => {
     ).rejects.toThrow('STOP_AFTER_CAPTURE');
     const input = agentService.sendPrompt.mock.calls[0][0];
     expect(input.baseImageCandidates).toEqual(['https://cdn/real-door.jpg']);
-    expect(input.prompt).toContain('只做编辑排版，不新造画面内容');
+    expect(input.prompt).toContain('照片主体保持原样、完整、不变形');
   });
 
   it('没有实拍图时直接拒绝，不调用生图', async () => {

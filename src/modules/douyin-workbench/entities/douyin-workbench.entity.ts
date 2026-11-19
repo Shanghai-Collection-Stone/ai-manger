@@ -156,7 +156,7 @@ export interface DouyinVideoTemplate {
   subtitle?: string;
   sellingPoints: string[];
   cta?: string;
-  /** 模板的配色、字体与文字底板风格（给改图模型，只管配色字体，不画新东西），例如「蓝白配色，圆润粗体字」 */
+  /** 模板的配色、字体及装饰位置与大小，例如「蓝白配色，拼图接缝一枚小星星」 */
   style: string;
   /** AI 的规划理由（为什么套 / 不套、窗口为什么这么放） */
   reason?: string;
@@ -166,6 +166,10 @@ export interface DouyinVideoTemplate {
   coverUrl?: string;
   /** 谁定的：`ai` 是 AI 导演自动规划的（画面变了会被重新规划覆盖），`user` 是用户改过文案、比例或开关的（AI 不再覆盖） */
   source?: 'ai' | 'user';
+  /** 按分段 ID 保存的适配模板；缺少或停用的段直接展示完整画面 */
+  variants?: Record<string, DouyinVideoTemplate>;
+  /** 分段模板对应的素材标识，换素材后旧模板不再使用 */
+  sourceKey?: string;
   updatedAt: Date;
 }
 
@@ -181,6 +185,14 @@ export interface DouyinShotDirection {
   motion: string;
   cameraZh: string;
   motionZh: string;
+  /** 提前规划到下一段的切换，只对相同素材与相邻关系生效 */
+  transition?: {
+    nextKey: string;
+    nextSourceKey: string;
+    type: DouyinEditTransition;
+    duration: number;
+    reason: string;
+  };
 }
 
 /**

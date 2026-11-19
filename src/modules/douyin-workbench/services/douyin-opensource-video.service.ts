@@ -44,7 +44,6 @@ import type {
 import { readDouyinVideoPlan } from './douyin-pixmax-video.service.js';
 import {
   activeTemplateAspect,
-  cropFrameToAspect,
   describeVideoAspect,
 } from './douyin-video-template.js';
 import {
@@ -535,8 +534,10 @@ export class DouyinOpensourceVideoService
     const usedImages = [frames.first, frames.last].filter(
       (frame): frame is DouyinOpensourceVideoFrame => Boolean(frame),
     );
-    // 套了版式模板时按窗口比例出片，首尾帧先居中裁成同一比例，免得模型拉伸画面
-    const templateAspect = activeTemplateAspect(topic.videoTemplate);
+    // 有首帧时画幅跟随原图；模板只在合成阶段适配，不参与裁切。
+    const templateAspect = frames.first
+      ? undefined
+      : activeTemplateAspect(topic.videoTemplate);
     const referModel = frames.last
       ? 'firstAndLastFrame'
       : frames.first
@@ -567,15 +568,18 @@ export class DouyinOpensourceVideoService
             aspect: templateAspect,
             directions: shots.map((shot) => freshShotDirection(topic, shot.id)),
           })
-    ).slice(0, OPENSOURCE_VIDEO_PROMPT_MAX);
+    )
+      .replace(
+        'vertical 9:16',
+        frames.first
+          ? 'the original first-frame aspect ratio'
+          : 'vertical 9:16',
+      )
+      .slice(0, OPENSOURCE_VIDEO_PROMPT_MAX);
     const aspectRatio =
       templateAspect ?? (frames.first ? ('auto' as const) : ('9:16' as const));
-    const toFrame = async (url: string) => {
-      const data = await toOpensourceVideoImageData(url);
-      return templateAspect
-        ? await cropFrameToAspect(data, templateAspect)
-        : data;
-    };
+    /** @description 原始首尾帧直接交给模型，保留完整构图。 @keyword-cn 完整首尾帧, 原始比例 @keyword-en intact-video-frames, native-frame-aspect */
+    const toFrame = (url: string) => toOpensourceVideoImageData(url);
     const operationId = input.operationId ?? randomUUID();
     const fromQueue = Boolean(input.operationId);
     const scriptIncluded =

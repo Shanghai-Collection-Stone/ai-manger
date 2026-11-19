@@ -720,7 +720,8 @@ export class DouyinShuyanVideoService implements OnModuleInit, OnModuleDestroy {
               model: runtime.model,
               content,
               resolution,
-              ratio: '9:16',
+              ratio:
+                imageContents[0]?.role === 'first_frame' ? 'adaptive' : '9:16',
               duration,
               generate_audio: audio.mode !== 'mute',
               watermark: false,

@@ -16,6 +16,8 @@ import type {
 } from '../entities/douyin-workbench.entity.js';
 import { isStoreVisitSegmentReady } from './douyin-store-visit-continuity.js';
 import { activeTemplateAspect } from './douyin-video-template.js';
+import { listDirectorFrames } from './douyin-video-director.js';
+import { buildPlannedEdit } from './douyin-video-edit.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -65,10 +67,13 @@ export interface DouyinConcatClip {
   audioUrl?: string;
   /** 探店：这一段要烧进画面的字幕（就是本段台词）；参考音色出声的人物段只带字幕不带配音，客户端保留视频原声 */
   subtitle?: string;
+  /** 本段模板；null 表示本段完整显示、不套全片模板 */
+  template?: DouyinConcatTemplate | null;
 }
 
 /**
- * @description 交给客户端合成的版式模板：窗口透明的模板 PNG、窗口在 1080×1920 画布上的像素位置与比例；客户端把每段视频按 cover 铺满窗口、叠上模板，字幕放在窗口里。
+ * @description 客户端合成版式：视频按原比例完整缩进窗口，补边后叠模板；逐段模板在转场前分别合成。
+
  * @keyword-cn 合成版式模板, 模板合成参数
  * @keyword-en concat-template, template-merge-input
  */
@@ -134,6 +139,7 @@ export class DouyinShotConcatService {
     operation: DouyinOperationView;
     clips: DouyinConcatClip[];
     template?: DouyinConcatTemplate;
+    edit: DouyinEditPlan;
   }> {
     const topic = await this.repository.get(topicId, scope);
     if (!topic || topic.kind !== 'child')
@@ -255,6 +261,26 @@ export class DouyinShotConcatService {
         ...voice,
       });
     }
+    const variants = topic.videoTemplate?.variants;
+    if (variants && topic.videoTemplate?.enabled) {
+      const frames = listDirectorFrames(topic);
+      for (const clip of clips) {
+        const variant = variants[clip.shotId];
+        const frame = frames.find((item) => item.key === clip.shotId);
+        clip.template =
+          variant?.enabled &&
+          variant.imageUrl &&
+          frame &&
+          variant.sourceKey === frame.sourceKey
+            ? {
+                imageUrl: variant.imageUrl,
+                window: variant.window,
+                aspectRatio: variant.aspectRatio,
+              }
+            : null;
+      }
+    }
+    const edit = buildPlannedEdit(topic, clips);
     // 自动合成要先领到标记；手动合成也清掉标记，免得之后重生成某一镜又自动合成一次
     const claimed = await this.repository.claimAutoConcat(topicId, scope);
     if (options.auto && !claimed)
@@ -277,6 +303,7 @@ export class DouyinShotConcatService {
         videoIds: clips.map((clip) => clip.videoId),
         auto: Boolean(options.auto),
         template: Boolean(activeTemplateAspect(topic.videoTemplate)),
+        editPlan: edit,
       },
       status: 'running',
       createdAt: now,
@@ -294,6 +321,7 @@ export class DouyinShotConcatService {
     return {
       operation: this.toView(doc),
       clips,
+      edit,
       ...(template ? { template } : {}),
     };
   }

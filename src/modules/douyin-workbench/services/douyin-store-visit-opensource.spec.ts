@@ -68,6 +68,7 @@ describe('探店分段走自建 MiniMax-H3', () => {
         { type: 'image_url', image_url: { url: PNG }, role: 'first_frame' },
       ],
       seconds: 6,
+      aspect: '16:9',
       megapixels: 0.8,
       runtime: runtimeOf('opensource-video', 'minimax-h3-turbo'),
     });

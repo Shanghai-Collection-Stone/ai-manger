@@ -141,7 +141,6 @@ import {
 } from './douyin-opensource-video.service.js';
 import {
   activeTemplateAspect,
-  cropFrameToAspect,
   describeVideoAspect,
 } from './douyin-video-template.js';
 import {
@@ -4060,9 +4059,15 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       images.some((item) => item.role === 'reference_image');
     if (!reference)
       return {
-        prompt: input.prompt.slice(0, OPENSOURCE_VIDEO_PROMPT_MAX),
+        prompt: (images.length
+          ? input.prompt.replace(
+              /(?:vertical|horizontal) \d+:\d+|square 1:1/g,
+              'the original first-frame aspect ratio',
+            )
+          : input.prompt
+        ).slice(0, OPENSOURCE_VIDEO_PROMPT_MAX),
         duration: input.seconds,
-        aspect_ratio: input.aspect ?? (images.length ? 'auto' : '9:16'),
+        aspect_ratio: images.length ? 'auto' : (input.aspect ?? '9:16'),
         megapixels: input.megapixels,
         mode,
         ...(input.guideAudio
@@ -4071,12 +4076,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             }
           : {}),
         first_frame: images[0]
-          ? input.aspect
-            ? await cropFrameToAspect(
-                await toOpensourceVideoImageData(images[0].url),
-                input.aspect,
-              )
-            : await toOpensourceVideoImageData(images[0].url)
+          ? await toOpensourceVideoImageData(images[0].url)
           : undefined,
       };
     const referenceImages = await Promise.all(

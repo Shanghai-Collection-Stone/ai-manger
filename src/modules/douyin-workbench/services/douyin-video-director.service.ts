@@ -16,10 +16,7 @@ import type {
   DouyinVideoTemplate,
 } from '../entities/douyin-workbench.entity.js';
 import { DouyinShotConcatService } from './douyin-shot-concat.service.js';
-import {
-  isStoreVisitVisualStart,
-  storeVisitStart,
-} from './douyin-store-visit-continuity.js';
+import { storeVisitStart } from './douyin-store-visit-continuity.js';
 import {
   buildDirectorBrief,
   directionFingerprint,
@@ -28,10 +25,7 @@ import {
   parseDirectorPlan,
 } from './douyin-video-director.js';
 import {
-  buildEditClipBrief,
-  DOUYIN_EDIT_PLAN_SYSTEM,
-  parseEditPlan,
-  type DouyinEditClipContext,
+  buildPlannedEdit,
   type DouyinEditClipInput,
 } from './douyin-video-edit.js';
 import type { DouyinTemplatePlan } from './douyin-video-template.js';
@@ -45,12 +39,10 @@ type VisionContent = Array<{ type: string; [key: string]: unknown }>;
 const DIRECTOR_DEBOUNCE_MS = 3000;
 /** 「规划中」超过这么久还没结束（服务重启丢了定时器）就当作卡住，下次触发时重做 */
 const DIRECTOR_STALE_MS = 5 * 60 * 1000;
-/** 剪辑规划一次最多带几张抽帧 */
-const EDIT_FRAME_BUDGET = 32;
 
 /**
- * @description AI 导演：出片前在配图 / 配场景完成后自动看各段首帧，决定要不要套版式模板（要套时用「生图」节点出模板图）和每段的运镜与画面动态；
- *   出片后看桌面端交来的抽帧与人声区间，定掐头去尾、段间转场、字幕位置大小与封面帧。读图都用「思考」节点，不新增工作流节点。
+ * @description 出片前看首帧规划逐段模板、运动与切换；合成时直接执行既有切换方案，保留完整片段，不再看片审查。
+
  * @keyword-cn AI导演, 出片前规划, 出片后剪辑
  * @keyword-en ai-video-director, pre-production-plan, post-production-edit
  */
@@ -223,10 +215,13 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
         frames,
         fromStore,
       );
+      const latest = await this.requireChild(topicId, scope);
+      if (directionFingerprint(listDirectorFrames(latest)) !== fingerprint)
+        return latest;
       const written = await this.repository.setVideoDirection(
         topicId,
         {
-          status: 'ready',
+          status: 'planning',
           fingerprint,
           shots: plan.shots,
           note: plan.note || undefined,
@@ -235,8 +230,23 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
         scope,
       );
       if (!written) return null;
-      return (
-        (await this.applyTemplatePlan(written, plan.template, scope)) ?? written
+      await this.applyTemplatePlan(
+        written,
+        plan.template,
+        scope,
+        plan.templates,
+      );
+      const current = await this.requireChild(topicId, scope);
+      if (directionFingerprint(listDirectorFrames(current)) !== fingerprint)
+        return current;
+      return await this.repository.setVideoDirection(
+        topicId,
+        {
+          ...written.videoDirection!,
+          status: 'ready',
+          updatedAt: new Date(),
+        },
+        scope,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -268,9 +278,8 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
   }
 
   /**
-   * @description 按规划处理版式模板：用户改过（`source=user`）的不动；不套时停用现有模板或只记下理由；要套且文案、比例与现有 AI 模板一致时只更新理由并启用，
-   *   否则用「生图」节点在实拍图上编辑出新模板图，出图失败时保存规划好的模板（没有模板图，界面上可以再点生成）；
-   *   没有实拍图或「生图」模型不能改图时模板记为停用，理由写拒绝原因。
+   * @description 用户手改的模板保留；按各段计划生成独立模板，无段需要时停用；失败保存可重试的规划。
+
    * @keyword-cn 按规划处理模板, 自动起模板
    * @keyword-en apply-template-plan, auto-template
    * @param topic 已写入规划的子选题。
@@ -282,11 +291,15 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
     topic: DouyinTopicEntity,
     plan: DouyinTemplatePlan,
     scope: DouyinScope,
+    segmentPlans: Record<string, DouyinTemplatePlan> = {},
   ): Promise<DouyinTopicEntity | null> {
     const current = topic.videoTemplate;
     if (current?.source === 'user') return null;
     const now = new Date();
-    if (!plan.useTemplate) {
+    if (
+      !plan.useTemplate &&
+      !Object.values(segmentPlans).some((item) => item.useTemplate)
+    ) {
       const declined: DouyinVideoTemplate = current
         ? {
             ...current,
@@ -321,27 +334,13 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
       source: 'ai',
       updatedAt: now,
     };
-    const unchanged =
-      current?.imageUrl &&
-      current.title === planned.title &&
-      (current.subtitle || '') === (planned.subtitle || '') &&
-      (current.cta || '') === (planned.cta || '') &&
-      current.aspectRatio === planned.aspectRatio &&
-      current.sellingPoints.join('|') === planned.sellingPoints.join('|');
-    if (unchanged)
-      return await this.repository.setVideoTemplate(
-        topic.id,
-        {
-          ...current,
-          enabled: true,
-          reason: planned.reason,
-          source: 'ai',
-          updatedAt: now,
-        },
-        scope,
-      );
     try {
-      return await this.templates.applyTemplate(topic, planned, scope);
+      return await this.templates.applyTemplate(
+        topic,
+        planned,
+        scope,
+        segmentPlans,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
@@ -359,8 +358,8 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
   }
 
   /**
-   * @description 出片后的剪辑规划：按桌面端交来的每段时长、人声区间与抽帧（总数压到 32 张以内），配上台词、是否接续上一段尾帧、分镜转场提示，
-   *   调「思考」节点定掐头去尾、段间转场、字幕位置大小与封面帧，夹到安全范围后记到合成记录上并返回。
+   * @description 兼容剪辑接口：只返回出片前规划的相邻转场，保留完整片段，不读取抽帧、不调用模型。
+
    * @keyword-cn AI剪辑规划, 看片定剪辑点
    * @keyword-en plan-video-edit, review-clips-for-edit
    * @param topicId 子选题（脚本）ID。
@@ -376,69 +375,7 @@ export class DouyinVideoDirectorService implements OnModuleDestroy {
     const topic = await this.requireChild(topicId, scope);
     if (!input.clips.length)
       throw new BadRequestException('DOUYIN_EDIT_CLIPS_REQUIRED');
-    const segments = topic.storeVisit?.segments ?? [];
-    const contextOf = (shotId: string): DouyinEditClipContext => {
-      if (topic.productionMode === 'store-visit') {
-        const index = segments.findIndex((segment) => segment.id === shotId);
-        return {
-          lines: String(segments[index]?.lines ?? '').trim(),
-          continued: index > 0 && !isStoreVisitVisualStart(segments, index),
-          transitionHint: '',
-        };
-      }
-      const shot = (topic.storyboard ?? []).find((item) => item.id === shotId);
-      return {
-        lines: String(shot?.narration ?? '').trim(),
-        continued: false,
-        transitionHint: String(shot?.transition ?? '').trim(),
-      };
-    };
-    // 抽帧总数压到预算内：每段至少 2 张，均匀挑
-    const perClip = Math.max(
-      2,
-      Math.floor(EDIT_FRAME_BUDGET / input.clips.length),
-    );
-    const clips = input.clips.map((clip) => {
-      if (clip.frames.length <= perClip) return clip;
-      const step = (clip.frames.length - 1) / (perClip - 1);
-      return {
-        ...clip,
-        frames: Array.from(
-          { length: perClip },
-          (_, index) => clip.frames[Math.round(index * step)],
-        ),
-      };
-    });
-    const template =
-      topic.videoTemplate?.enabled && topic.videoTemplate.imageUrl
-        ? `成片套了版式模板，视频在 ${topic.videoTemplate.aspectRatio} 窗口里，字幕烧在窗口内。`
-        : '成片是满屏竖屏 9:16。';
-    const content: VisionContent = [
-      {
-        type: 'text',
-        text: `视频：${topic.title}；共 ${clips.length} 段，按顺序拼成一条成片。${template}`,
-      },
-    ];
-    clips.forEach((clip, index) => {
-      content.push({
-        type: 'text',
-        text: buildEditClipBrief(clip, contextOf(clip.shotId), index),
-      });
-      for (const frame of clip.frames) {
-        if (!/^data:image\/(jpeg|png|webp);base64,/i.test(frame.image))
-          continue;
-        content.push({ type: 'image_url', image_url: { url: frame.image } });
-      }
-    });
-    const plan = parseEditPlan(
-      await this.ask(
-        scope,
-        'douyin-workbench.video-edit-plan',
-        DOUYIN_EDIT_PLAN_SYSTEM,
-        content,
-      ),
-      clips,
-    );
+    const plan = buildPlannedEdit(topic, input.clips);
     await this.shotConcat.attachEditPlan(
       input.operationId,
       topicId,

@@ -23,10 +23,13 @@ import {
   composeTemplateCover,
   DOUYIN_TEMPLATE_CANVAS,
   normalizeTemplateCopy,
+  pickTemplateAspect,
   punchTemplateWindow,
   sizeTemplateWindow,
 } from './douyin-video-template.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
+import { listDirectorFrames } from './douyin-video-director.js';
+import type { DouyinTemplatePlan } from './douyin-video-template.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
@@ -47,8 +50,8 @@ export function describeTemplateEditError(error: unknown): unknown {
 }
 
 /**
- * @description 视频版式模板：「生图」节点在实拍图上编辑出带绿色窗口的模板海报（只排版，不新造画面内容），抠成透明窗口的 PNG 并与首帧拼成封面；
- *   要不要套、套什么由 AI 导演（`DouyinVideoDirectorService`）规划，这里负责出图与用户的改文案、开关、删除。分镜 / 整片 / 探店共用，不新增工作流节点。
+ * @description 逐段按对应素材生成可选版式与小装饰，保留完整照片；支持用户改文案、开关、删除与导演缩略图。
+
  * @keyword-cn 视频版式模板, 读图规划模板, 模板首帧拼合
  * @keyword-en video-layout-template, vision-template-plan, template-cover
  */
@@ -165,9 +168,8 @@ export class DouyinVideoTemplateService {
   }
 
   /**
-   * @description 出模板图并写回：「生图」节点以实拍图为底图编辑出带绿色窗口的海报（只排版、不新造内容），抠成透明窗口 PNG 存储，再用首帧拼封面（没有首帧时不出封面）；
-   *   窗口位置与比例以识别到的绿块为准，模板标为启用。生成的临时原图读完即删。AI 导演与用户改文案都走这里。
-   *   没有实拍图可编辑、或「生图」模型只能凭空生成（不支持带底图）时直接拒绝，不退回凭空画。
+   * @description 按每段素材分别出图，共用标题、风格和窗口区域；后续段参考首个已出模板统一视觉，仅调整素材比例与小装饰，绑定sourceKey。
+
    * @keyword-cn 生成模板图, 模板抠窗拼封面
    * @keyword-en render-template-image, punch-and-compose
    * @param topic 子选题。
@@ -180,23 +182,138 @@ export class DouyinVideoTemplateService {
     topic: DouyinTopicEntity,
     template: DouyinVideoTemplate,
     scope: DouyinScope,
+    plans: Record<string, DouyinTemplatePlan> = {},
   ): Promise<DouyinTopicEntity> {
-    const baseUrl = this.editBaseUrl(topic);
+    const frames = listDirectorFrames(topic);
+    if (!frames.length) {
+      const rendered = await this.renderTemplateImage(topic, template, scope);
+      return await this.save(topic.id, rendered, scope);
+    }
+    const variants: Record<string, DouyinVideoTemplate> = {};
+    let styleReferenceUrl: string | undefined;
+    for (const frame of frames) {
+      const plan = plans[frame.key];
+      const variant: DouyinVideoTemplate = {
+        ...template,
+        ...(plan
+          ? {
+              enabled: plan.useTemplate,
+              window: plan.window,
+              aspectRatio: plan.aspectRatio,
+              ...normalizeTemplateCopy(plan),
+              reason: plan.reason,
+            }
+          : {}),
+        title: template.title,
+        style: template.style,
+        window: template.window,
+        variants: undefined,
+        imageUrl: undefined,
+        coverUrl: undefined,
+        sourceKey: frame.sourceKey,
+      };
+      variants[frame.key] = variant.enabled
+        ? await this.renderTemplateImage(topic, variant, scope, {
+            baseUrl: frame.url,
+            frameUrl: frame.url,
+            key: frame.key,
+            styleReferenceUrl,
+            brief: `本段画面：${frame.visual}；场景：${frame.scene}；台词：${frame.lines}${plan?.style ? `；本段局部调整建议（仅采用素材适配和小装饰位置、大小，不改变全片配色、字体、标题与布局体系）：${plan.style}` : ''}`,
+          })
+        : variant;
+      if (!styleReferenceUrl && variants[frame.key].imageUrl)
+        styleReferenceUrl = variants[frame.key].imageUrl;
+    }
+    const preview = Object.values(variants).find(
+      (variant) => variant.enabled && variant.imageUrl,
+    );
+    const latest = await this.repository.get(topic.id, scope);
+    if (!latest) throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
+    if (latest.videoTemplate?.source === 'user' && template.source !== 'user')
+      return latest;
+    if (JSON.stringify(listDirectorFrames(latest)) !== JSON.stringify(frames))
+      return latest;
+    return await this.save(
+      topic.id,
+      {
+        ...template,
+        imageUrl: preview?.imageUrl,
+        coverUrl: preview?.coverUrl,
+        variants,
+        updatedAt: new Date(),
+      },
+      scope,
+    );
+  }
+
+  /**
+   * @description 按统一窗口区域完整适配本段素材，后续段携带首个模板作为风格参考生成模板和首帧预览，不修改选题。
+   * @keyword-cn 分段模板出图, 素材适配
+   * @keyword-en render-segment-template, material-adaptation
+   */
+  private async renderTemplateImage(
+    topic: DouyinTopicEntity,
+    template: DouyinVideoTemplate,
+    scope: DouyinScope,
+    input: {
+      baseUrl?: string;
+      frameUrl?: string;
+      key?: string;
+      brief?: string;
+      styleReferenceUrl?: string;
+    } = {},
+  ): Promise<DouyinVideoTemplate> {
+    const baseUrl = input.baseUrl || this.editBaseUrl(topic);
     if (!baseUrl)
       throw new BadRequestException(
         '模板只在实拍图上编辑排版，不凭空生成：请先给第 1 段配好门店图片',
       );
+    const base = await this.readImage(baseUrl);
+    if (base) {
+      const meta = await sharp(base)
+        .metadata()
+        .catch(() => null);
+      const width = meta?.autoOrient?.width ?? meta?.width;
+      const height = meta?.autoOrient?.height ?? meta?.height;
+      if (width && height) {
+        const box = template.window;
+        const scale = Math.min(box.width / width, box.height / height);
+        const fittedWidth = Math.max(2, Math.floor((width * scale) / 2) * 2);
+        const fittedHeight = Math.max(2, Math.floor((height * scale) / 2) * 2);
+        template = {
+          ...template,
+          window: {
+            x: Math.floor((box.x + (box.width - fittedWidth) / 2) / 2) * 2,
+            y: Math.floor((box.y + (box.height - fittedHeight) / 2) / 2) * 2,
+            width: fittedWidth,
+            height: fittedHeight,
+          },
+          aspectRatio: pickTemplateAspect(width, height),
+        };
+      }
+    }
     const node = await this.workflowModels.resolveNodeRuntime(
       WORKFLOW_NODES.douyinWorkbench.key,
       WORKFLOW_NODES.douyinWorkbench.image,
     );
     const generated = await this.agentService
       .sendPrompt({
-        prompt: buildTemplateEditPrompt(template),
+        prompt: [
+          buildTemplateEditPrompt(template),
+          input.brief,
+          input.styleReferenceUrl
+            ? '图1是本段真实素材，图2仅作全片统一视觉参考。沿用图2的主辅色、字体字重、字号层级、标题和卖点的摆放、圆角描边与贴纸画法；只替换本段素材、指定文案和少量小装饰。不要从图2复制场景、人物、商品或旧文案，不因本段照片色调改变整套设计。窗口按给定位置与尺寸，仅在共同视频区域内适配原图比例。'
+            : '本图将作为全片后续片段的固定视觉参考，请明确统一主辅色、字体、字号层级、标题位置、圆角描边和贴纸画法。',
+        ]
+          .filter(Boolean)
+          .join('\n'),
         runtimeOverride: node ?? undefined,
         size: DOUYIN_SHOT_IMAGE_SIZE,
         includeSystemPrompt: false,
         baseImageCandidates: [baseUrl],
+        ...(input.styleReferenceUrl
+          ? { extraImageCandidates: [input.styleReferenceUrl] }
+          : {}),
         billingContext: {
           tenantId: scope.tenantId,
           userId: scope.userId,
@@ -211,18 +328,18 @@ export class DouyinVideoTemplateService {
     if (!file) throw new BadGatewayException('模板图生成失败，请重试');
     const source = await readFile(file.absPath);
     await unlink(file.absPath).catch(() => undefined);
-    const punched = await punchTemplateWindow(source, template.window);
+    const punched = await punchTemplateWindow(source, template.window, true);
     if (!punched.detected)
       this.logger.warn(
         `[applyTemplate] topic=${topic.id} 模板图里没认出绿色窗口，按规划位置抠窗`,
       );
     const imageUrl = await this.storage.saveImage(punched.png, {
       scope,
-      fileName: `template-${topic.id}.png`,
+      fileName: `template-${topic.id}-${input.key || 'cover'}.png`,
       contentType: 'image/png',
     });
     let coverUrl: string | undefined;
-    const frameUrl = this.firstFrameUrl(topic);
+    const frameUrl = input.frameUrl || this.firstFrameUrl(topic);
     if (frameUrl) {
       const frame = await this.readImage(frameUrl);
       if (frame) {
@@ -230,25 +347,21 @@ export class DouyinVideoTemplateService {
           await composeTemplateCover(punched.png, frame, punched.window),
           {
             scope,
-            fileName: `template-cover-${topic.id}.jpg`,
+            fileName: `template-cover-${topic.id}-${input.key || 'cover'}.jpg`,
             contentType: 'image/jpeg',
           },
         );
       }
     }
-    return await this.save(
-      topic.id,
-      {
-        ...template,
-        enabled: true,
-        window: punched.window,
-        aspectRatio: punched.aspectRatio,
-        imageUrl,
-        coverUrl,
-        updatedAt: new Date(),
-      },
-      scope,
-    );
+    return {
+      ...template,
+      enabled: true,
+      window: punched.window,
+      aspectRatio: punched.aspectRatio,
+      imageUrl,
+      coverUrl,
+      updatedAt: new Date(),
+    };
   }
 
   /**
