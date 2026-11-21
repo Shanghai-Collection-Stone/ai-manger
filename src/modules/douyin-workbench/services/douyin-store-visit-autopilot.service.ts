@@ -13,9 +13,11 @@ import { isLeaderProcess } from '../../cluster-runtime/services/cluster-role.js'
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
 import type { StartDouyinAutopilotDto } from '../controller/douyin-workbench.dto.js';
 import type {
+  DouyinAutopilotRepairAction,
   DouyinGenerationJobEntity,
   DouyinOperationEntity,
   DouyinStoreVisitAutopilot,
+  DouyinStoreVisitSegment,
   DouyinTopicEntity,
 } from '../entities/douyin-workbench.entity.js';
 import { DouyinChildTopicGenerationService } from './douyin-child-topic-generation.service.js';
@@ -63,8 +65,35 @@ export function autopilotScriptKey(topic: DouyinTopicEntity): string {
     .digest('hex');
 }
 
+/** @description 同一位置自动修复的总上限：不同类错误不占重试次数，这里只防止错误不断变化时无限消耗。 @keyword-cn 单段修复总上限, 防无限修复 @keyword-en max-repairs-per-position, repair-loop-guard */
+export const DOUYIN_AUTOPILOT_MAX_REPAIRS_PER_POSITION = 5;
+
+/** @description 生成失败位置标识：配音和出片按分段区分，其余步骤按步骤区分，同一位置的同类错误只自动修复一次。 @keyword-cn 托管失败位置, 单次修复标识 @keyword-en autopilot-repair-key, single-repair-mark */
+export function autopilotRepairKey(
+  stage: DouyinStoreVisitAutopilot['stage'],
+  segmentId?: string | null,
+): string {
+  return stage === 'voice' || stage === 'make'
+    ? `make:${segmentId || ''}`
+    : stage;
+}
+
+/** @description 列出这一步允许 AI 选的修复动作，出片阶段不能选会清掉已成功分段的整条重写。 @keyword-cn 托管可选修复, 修复范围限制 @keyword-en autopilot-repair-actions, repair-scope-limit */
+export function autopilotRepairActions(
+  stage: DouyinStoreVisitAutopilot['stage'],
+  hasSegment: boolean,
+): DouyinAutopilotRepairAction[] {
+  if (stage === 'script') return ['retry', 'rewrite-script', 'ask-user'];
+  if (stage === 'lines')
+    return ['retry', 'regenerate-lines', 'rewrite-script', 'ask-user'];
+  if (stage === 'picture') return ['retry', 'replace-picture', 'ask-user'];
+  return hasSegment
+    ? ['retry', 'rewrite-segment', 'replace-picture', 'ask-user']
+    : ['retry', 'ask-user'];
+}
+
 /**
- * @description 持久化全流程 Agent 托管，按失败原因调整并断点续跑，复用已完成结果与原子认领。
+ * @description 持久化全流程 Agent 托管，失败时由 AI 判定修复方式并自动修复一次，再失败停下等用户，断点续跑并复用已完成结果与原子认领。
  * @keyword-cn Agent全流程托管, 断点续跑
  * @keyword-en agent-workflow-autopilot, resumable-workflow
  */
@@ -112,7 +141,7 @@ export class DouyinStoreVisitAutopilotService
     if (this.timer) clearInterval(this.timer);
   }
 
-  /** @description 启动或继续托管，重复点击运行中任务只返回状态，不重置进度或重新生成。 @keyword-cn 启动Agent托管, 托管重复保护 @keyword-en start-agent-autopilot, autopilot-duplicate-guard */
+  /** @description 启动或继续托管，重复点击运行中任务只返回状态，不重置进度或重新生成；用户手动继续时重置自动修复次数，停下后用户改过这段台词就直接按新内容出片。 @keyword-cn 启动Agent托管, 托管重复保护 @keyword-en start-agent-autopilot, autopilot-duplicate-guard */
   async start(
     topicId: number,
     input: StartDouyinAutopilotDto,
@@ -129,6 +158,26 @@ export class DouyinStoreVisitAutopilotService
     )
       return topic;
     const resume = previous && previous.state !== 'done';
+    const blocked = previous?.state === 'paused' ? previous.blocked : undefined;
+    const failure =
+      previous?.state === 'waiting'
+        ? {
+            reason: previous.message,
+            stage: previous.stage,
+            segmentId: topic.storeVisit?.pipeline?.currentSegmentId,
+          }
+        : blocked
+          ? {
+              reason: blocked.reason,
+              stage: blocked.stage,
+              segmentId: blocked.segmentId,
+            }
+          : undefined;
+    const edited =
+      Boolean(blocked?.segmentId) &&
+      topic.storeVisit?.segments?.find(
+        (segment) => segment.id === blocked?.segmentId,
+      )?.lines !== blocked?.lines;
     const now = new Date();
     const state: DouyinStoreVisitAutopilot = {
       ...(resume ? previous : {}),
@@ -146,22 +195,20 @@ export class DouyinStoreVisitAutopilotService
       mergeAfter: now,
       resumePipeline: topic.storeVisit?.pipeline?.state === 'paused',
       recovery:
-        previous?.state === 'waiting'
-          ? {
-              reason: previous.message,
-              stage: previous.stage,
-              segmentId: topic.storeVisit?.pipeline?.currentSegmentId,
-              pending: true,
-            }
-          : resume
+        failure && !edited
+          ? { ...failure, pending: true }
+          : resume && !blocked
             ? previous.recovery
             : undefined,
+      // 倒计时自动恢复沿用已修记录；用户亲自点继续才给新的一次自动修复
+      repairs: input.recoverFailureId ? (previous?.repairs ?? []) : [],
       videoBaseline: resume
         ? previous.videoBaseline
         : topic.generatedVideoId || 0,
       startedAt: resume ? previous.startedAt : now,
       updatedAt: now,
     };
+    delete state.blocked;
     await this.topics.updateOne(
       {
         _id: topic._id,
@@ -301,11 +348,70 @@ export class DouyinStoreVisitAutopilotService
     return topic;
   }
 
-  /** @description 只更新本轮仍在运行的任务，暂停或换轮后旧操作不能覆盖状态。 @keyword-cn 写入托管状态, 旧任务隔离 @keyword-en patch-autopilot-state, stale-run-isolation */
+  /** @description 判断这次失败算不算重复：同位置修复达到总上限或原因完全相同直接算，其余交给 AI 判断是否同类。 @keyword-cn 判断重复失败, 同类错误计次 @keyword-en detect-repeated-failure, same-error-count */
+  private async isRepeatedFailure(
+    topic: DouyinTopicEntity,
+    stage: DouyinStoreVisitAutopilot['stage'],
+    history: Array<{ key: string; reason: string }>,
+    reason: string,
+  ): Promise<boolean> {
+    if (history.length >= DOUYIN_AUTOPILOT_MAX_REPAIRS_PER_POSITION)
+      return true;
+    if (history.some((item) => item.reason === reason)) return true;
+    return await this.planner.isSameAutopilotFailure(
+      topic,
+      { stage, previous: history.map((item) => item.reason), current: reason },
+      { tenantId: topic.tenantId, userId: topic.userId },
+    );
+  }
+
+  /** @description 停下托管等用户处理，记录失败位置和台词快照，用户点继续托管才重新开始。 @keyword-cn 托管停下等用户, 记录停止原因 @keyword-en stop-for-user, record-block-reason */
+  private async stopForUser(
+    topic: DouyinTopicEntity,
+    recovery: NonNullable<DouyinStoreVisitAutopilot['recovery']>,
+    message: string,
+  ): Promise<void> {
+    await this.patch(topic, {
+      state: 'paused',
+      stage: recovery.stage,
+      recovery: { ...recovery, pending: false },
+      blocked: {
+        reason: recovery.reason,
+        stage: recovery.stage,
+        ...(recovery.segmentId ? { segmentId: recovery.segmentId } : {}),
+        ...this.blockedLines(topic, recovery.segmentId),
+      },
+      message,
+    });
+  }
+
+  /** @description 只更新本轮仍在运行的任务，暂停或换轮后旧操作不能覆盖状态；同位置的同类错误再失败时改为停下等用户，不同类错误继续自动修复。 @keyword-cn 写入托管状态, 旧任务隔离 @keyword-en patch-autopilot-state, stale-run-isolation */
   private async patch(
     topic: DouyinTopicEntity,
-    fields: Partial<DouyinStoreVisitAutopilot>,
+    input: Partial<DouyinStoreVisitAutopilot>,
   ): Promise<void> {
+    const fields = { ...input };
+    if (input.state === 'waiting') {
+      const auto = topic.storeVisit!.autopilot!;
+      const stage = input.stage ?? auto.stage;
+      const segmentId = topic.storeVisit?.pipeline?.currentSegmentId;
+      const reason = input.message || auto.message;
+      const key = autopilotRepairKey(stage, segmentId);
+      const history = (auto.repairs ?? []).filter((item) => item.key === key);
+      if (
+        history.length &&
+        (await this.isRepeatedFailure(topic, stage, history, reason))
+      ) {
+        fields.state = 'paused';
+        fields.blocked = {
+          reason,
+          stage,
+          ...(segmentId ? { segmentId } : {}),
+          ...this.blockedLines(topic, segmentId),
+        };
+        fields.message = `这个问题已自动修复过，仍未解决：${reason.replace(/[。！？.!?\s]+$/, '')}。可以调整后点「继续托管」。`;
+      }
+    }
     const set: Record<string, unknown> = {
       'storeVisit.autopilot.updatedAt': new Date(),
       updatedAt: new Date(),
@@ -324,88 +430,212 @@ export class DouyinStoreVisitAutopilotService
     );
   }
 
-  /** @description 按失败事项调整脚本、配图或过长台词，服务任务失效时清理失败调用后仅续跑未完成分段。 @keyword-cn 托管错误修复, 失败分段续跑 @keyword-en autopilot-error-repair, resume-failed-segment */
+  /** @description 取停下时这一段的台词快照，用户继续托管时据此判断是否亲自改过。 @keyword-cn 停止时台词快照, 用户修改判断 @keyword-en blocked-lines-snapshot, user-edit-detection */
+  private blockedLines(
+    topic: DouyinTopicEntity,
+    segmentId?: string,
+  ): { lines?: string } {
+    const lines = topic.storeVisit?.segments?.find(
+      (segment) => segment.id === segmentId,
+    )?.lines;
+    return lines === undefined ? {} : { lines };
+  }
+
+  /** @description 确认这一步仍由当前认领持有且任务在运行，AI 调用期间被暂停或换轮后不再写入。 @keyword-cn 校验托管认领, 修复期间暂停保护 @keyword-en verify-autopilot-claim, pause-during-repair */
+  private async ownsRun(
+    topic: DouyinTopicEntity,
+    scope: Scope,
+  ): Promise<boolean> {
+    const current = await this.requireTopic(topic.id, scope);
+    return (
+      current.storeVisit?.autopilot?.state === 'running' &&
+      current.storeVisit.autopilot.claimId ===
+        topic.storeVisit!.autopilot!.claimId
+    );
+  }
+
+  /** @description 按 AI 给的修复要求只改失败这一段的台词，基于最新分段保存，其他段不动；AI 改写期间用户改过这段就以用户为准。 @keyword-cn 修复单段台词, AI改写失败段 @keyword-en repair-segment-lines, rewrite-failed-segment */
+  private async rewriteSegmentLines(
+    topic: DouyinTopicEntity,
+    segment: DouyinStoreVisitSegment,
+    reason: string,
+    instruction: string,
+    scope: Scope,
+  ): Promise<void> {
+    const setting = topic.storeVisit!;
+    const result = await this.scripts.refineScript(
+      {
+        script: segment.lines,
+        title: topic.title,
+        voiceId: setting.voiceId,
+        instruction: `这段出片失败：${reason.slice(0, 180)}。修复要求：${instruction || '按失败原因调整'}。只修改这段台词，保留店名、价格、项目等事实，不加解释。`,
+      },
+      scope,
+    );
+    if (!result.script?.trim() || result.script === segment.lines)
+      throw new BadRequestException('AI 没有改出可用的台词');
+    if (!(await this.ownsRun(topic, scope))) return;
+    const latest = (await this.requireTopic(topic.id, scope)).storeVisit
+      ?.segments;
+    if (latest?.find((item) => item.id === segment.id)?.lines !== segment.lines)
+      return;
+    await this.repository.update(
+      topic.id,
+      {
+        storeVisit: {
+          segments: latest.map((item) =>
+            item.id === segment.id ? { ...item, lines: result.script } : item,
+          ),
+        },
+      },
+      scope,
+    );
+  }
+
+  /** @description 只换失败这一段的画面：从脚本开始时 AI 重新生图，从门店开始时清掉这段素材后按门店已有素材重配。 @keyword-cn 修复单段画面, 更换失败素材 @keyword-en repair-segment-picture, replace-failed-material */
+  private async replaceSegmentPicture(
+    topic: DouyinTopicEntity,
+    segment: DouyinStoreVisitSegment,
+    instruction: string,
+    scope: Scope,
+  ): Promise<void> {
+    const setting = topic.storeVisit!;
+    if (storeVisitStart(setting) === 'script') {
+      await this.agent.generatePictures(
+        topic.id,
+        { segmentId: segment.id, prompt: instruction || undefined },
+        scope,
+      );
+      return;
+    }
+    const latest = await this.requireTopic(topic.id, scope);
+    await this.repository.update(
+      topic.id,
+      {
+        storeVisit: {
+          segments: (latest.storeVisit?.segments ?? []).map((item) =>
+            item.id === segment.id
+              ? {
+                  ...item,
+                  sceneImageId: undefined,
+                  sceneImageIds: [],
+                  sceneVideoId: undefined,
+                }
+              : item,
+          ),
+        },
+      },
+      scope,
+    );
+    const fitted = await this.agent.fitSegmentsToMaterials(topic.id, scope);
+    if (fitted.missing > 0)
+      throw new BadRequestException('门店素材里没有能替换这一段的画面');
+  }
+
+  /** @description 由 AI 按失败原因判定重做哪一块并执行一次：重试、改单段台词、换单段画面、重写台词或脚本；判定要用户处理时直接停下，已成功的分段不动。 @keyword-cn 托管错误修复, 失败分段续跑 @keyword-en autopilot-error-repair, resume-failed-segment */
   private async recoverStep(
     topic: DouyinTopicEntity,
     scope: Scope,
   ): Promise<void> {
     const setting = topic.storeVisit!;
-    const recovery = setting.autopilot!.recovery!;
+    const auto = setting.autopilot!;
+    const recovery = auto.recovery!;
     const reason = recovery.reason.slice(0, 350);
+    // 记下这次修的是什么错：修完再失败时，同类才停下，不同类不占重试次数
+    auto.repairs = [
+      ...(auto.repairs ?? []),
+      {
+        key: autopilotRepairKey(recovery.stage, recovery.segmentId),
+        reason: recovery.reason,
+      },
+    ];
     await this.patch(topic, {
-      message: `Agent 正在根据失败原因调整：${reason}`,
+      repairs: auto.repairs,
+      message: `Agent 正在根据失败原因判断怎么修复：${reason}`,
     });
-    if (
-      recovery.stage === 'script' &&
-      /自检|事实|脚本.*(不符|问题)/.test(reason)
-    ) {
-      await this.agent.writeScript(
-        topic.id,
-        { keepCast: true, issues: [reason] },
-        scope,
+    const segment = setting.segments?.find(
+      (item) => item.id === recovery.segmentId,
+    );
+    const target =
+      segment && !isStoreVisitSegmentReady(segment) ? segment : undefined;
+    const decision = await this.planner.diagnoseAutopilotFailure(
+      topic,
+      {
+        reason,
+        stage: recovery.stage,
+        segmentId: target?.id,
+        actions: autopilotRepairActions(recovery.stage, Boolean(target)),
+      },
+      scope,
+    );
+    if (!(await this.ownsRun(topic, scope))) return;
+    if (decision.action === 'ask-user') {
+      await this.stopForUser(
+        topic,
+        recovery,
+        `这一步需要你处理：${recovery.reason.replace(/[。！？.!?\s]+$/, '')}。处理后点「继续托管」。`,
       );
-    } else if (
-      recovery.stage === 'picture' &&
-      storeVisitStart(setting) === 'script' &&
-      setting.autopilot!.pictureSource === 'gallery'
-    ) {
-      await this.patch(topic, { pictureSource: 'ai', mustMerge: true });
-    } else if (recovery.stage === 'make') {
-      const segment = setting.segments?.find(
-        (item) => item.id === recovery.segmentId,
-      );
-      if (
-        segment &&
-        !isStoreVisitSegmentReady(segment) &&
-        /台词|口播|配音/.test(reason) &&
-        /太长|超长|超过|超出|长于/.test(reason)
-      ) {
-        const maxChars = Math.max(20, Math.floor(segment.lines.length * 0.7));
-        const result = await this.scripts.refineScript(
-          {
-            script: segment.lines,
-            title: topic.title,
-            voiceId: setting.voiceId,
-            instruction: `这段生成失败：${reason}。只修改这段台词，压缩至 ${maxChars} 字以内以适配时长，保留店名、价格、项目等事实，不加解释。`,
-          },
+      return;
+    }
+    try {
+      if (decision.action === 'rewrite-script')
+        await this.agent.writeScript(
+          topic.id,
+          { keepCast: true, issues: [decision.instruction || reason] },
           scope,
         );
-        if (result.script.length > maxChars || result.script === segment.lines)
-          throw new BadRequestException(
-            '台词调整未达到时长要求，Agent 将继续调整',
-          );
-        const current = await this.requireTopic(topic.id, scope);
-        if (
-          current.storeVisit?.autopilot?.state !== 'running' ||
-          current.storeVisit.autopilot.claimId !== setting.autopilot!.claimId
-        )
-          return;
+      else if (decision.action === 'regenerate-lines')
         await this.repository.update(
           topic.id,
-          {
-            storeVisit: {
-              segments: setting.segments!.map((item) =>
-                item.id === segment.id
-                  ? { ...item, lines: result.script }
-                  : item,
-              ),
-            },
-          },
+          { storeVisit: { linesScript: '' } },
           scope,
         );
+      else if (decision.action === 'rewrite-segment' && target)
+        await this.rewriteSegmentLines(
+          topic,
+          target,
+          reason,
+          decision.instruction,
+          scope,
+        );
+      else if (decision.action === 'replace-picture') {
+        if (target)
+          await this.replaceSegmentPicture(
+            topic,
+            target,
+            decision.instruction,
+            scope,
+          );
+        else if (
+          recovery.stage === 'picture' &&
+          storeVisitStart(setting) === 'script' &&
+          auto.pictureSource === 'gallery'
+        )
+          await this.patch(topic, { pictureSource: 'ai', mustMerge: true });
       }
+      if (!(await this.ownsRun(topic, scope))) return;
       // 失效任务、提交失败与网络失败使用最新分段重建调用，成功段不重做。
-      const current = await this.requireTopic(topic.id, scope);
-      if (
-        current.storeVisit?.autopilot?.state !== 'running' ||
-        current.storeVisit.autopilot.claimId !== setting.autopilot!.claimId
-      )
-        return;
-      if (current.storeVisit.pipeline?.state === 'paused')
-        await this.pipeline.resume(topic.id, scope);
+      if (recovery.stage === 'voice' || recovery.stage === 'make') {
+        const current = await this.requireTopic(topic.id, scope);
+        if (current.storeVisit?.pipeline?.state === 'paused')
+          await this.pipeline.resume(topic.id, scope);
+      }
+    } catch (error) {
+      // 修复动作本身没做成，这次重试已用掉，不再换个说法继续重试
+      const message = error instanceof Error ? error.message : String(error);
+      await this.stopForUser(
+        topic,
+        recovery,
+        `自动修复没有完成：${(DOUYIN_GENERATION_ERROR_MESSAGES[message] || message).replace(/[。！？.!?\s]+$/, '')}。可以调整后点「继续托管」。`,
+      );
+      return;
     }
     await this.patch(topic, {
-      recovery: { ...recovery, pending: false },
+      recovery: {
+        ...recovery,
+        pending: false,
+        ...(decision.instruction ? { instruction: decision.instruction } : {}),
+      },
       resumePipeline: false,
     });
   }
@@ -649,7 +879,7 @@ export class DouyinStoreVisitAutopilotService
         .filter((value) => value > 0);
       await this.agent.generateLines(
         topic.id,
-        `${auto.linesPrompt || ''} ${auto.recovery?.stage === 'lines' ? `上次失败原因：${auto.recovery.reason.slice(0, 350)}，请针对该问题调整。` : ''} 每段台词控制在 ${Math.max(5, Math.floor(Math.min(...limits, 15) * 4))} 字以内，完整保留脚本事实。`,
+        `${auto.linesPrompt || ''} ${auto.recovery?.stage === 'lines' ? `上次失败原因：${auto.recovery.reason.slice(0, 350)}，请针对该问题调整。${auto.recovery.instruction ? `修复要求：${auto.recovery.instruction}。` : ''}` : ''} 每段台词控制在 ${Math.max(5, Math.floor(Math.min(...limits, 15) * 4))} 字以内，完整保留脚本事实。`,
         scope,
         // 从脚本开始时先按脚本方向匹配素材再写台词；托管选了 AI 画面时不匹配
         { useMaterials: auto.pictureSource !== 'ai' },

@@ -404,7 +404,20 @@ export interface DouyinStoreVisitVoiceAnchor {
 }
 
 /**
- * @description 可暂停和续跑的 Agent 托管状态，记录当前制作步骤和原子认领，生成结果仍保存在各业务字段。
+ * @description Agent 托管失败后 AI 可选的修复动作：原样重试、只改这一段台词、只换这一段画面、重写整条台词、改脚本，或交给用户处理。
+ * @keyword-cn 托管修复动作, AI修复判定
+ * @keyword-en autopilot-repair-action, ai-repair-decision
+ */
+export type DouyinAutopilotRepairAction =
+  | 'retry'
+  | 'rewrite-segment'
+  | 'replace-picture'
+  | 'regenerate-lines'
+  | 'rewrite-script'
+  | 'ask-user';
+
+/**
+ * @description 可暂停和续跑的 Agent 托管状态，记录当前制作步骤、原子认领和自动修复记录，同一位置的同类错误只自动修复一次，生成结果仍保存在各业务字段。
  * @keyword-cn Agent托管状态, 全流程进度
  * @keyword-en agent-autopilot-state, full-workflow-progress
  */
@@ -429,6 +442,18 @@ export interface DouyinStoreVisitAutopilot {
     stage: DouyinStoreVisitAutopilot['stage'];
     segmentId?: string;
     pending: boolean;
+    /** @description AI 判定时给出的修复要求，重新生成台词时一并带上 */
+    instruction?: string;
+  };
+  /** @description 已自动修复过的失败（位置 + 原因）；同位置再失败时由 AI 判断是否同类，同类才停下等用户 */
+  repairs?: Array<{ key: string; reason: string }>;
+  /** @description 自动修复后仍失败或 AI 判定要用户处理时的停止原因，用户点继续托管才重新开始 */
+  blocked?: {
+    reason: string;
+    stage: DouyinStoreVisitAutopilot['stage'];
+    segmentId?: string;
+    /** @description 停下时这段的台词，用户改过就按新内容出片，不再让 AI 改 */
+    lines?: string;
   };
   claimId?: string;
   advancingAt?: Date;

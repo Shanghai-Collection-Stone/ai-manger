@@ -202,6 +202,26 @@ export function readStoreVisitVoiceAnchor(
 }
 
 /**
+ * @description 判断这个视频节点出片时要不要音色锚点：自建 H3 配百炼音色时每段都按同一音色直接合成，用不到锚点；自建 H3 配 Qwen3 和支持参考音频的云端模型才要。
+ * @keyword-cn 音色锚点需求, 百炼免锚点
+ * @keyword-en voice-anchor-requirement, cosyvoice-skip-anchor
+ * @param {Pick<WorkflowNodeRuntime, 'model' | 'providerCode'>} runtime 视频节点配置。
+ * @param {DouyinStoreVisitSetting} setting 探店设置。
+ * @returns {boolean} 是否需要音色锚点。
+ */
+export function storeVisitRuntimeNeedsVoiceAnchor(
+  runtime: Pick<WorkflowNodeRuntime, 'model' | 'providerCode'>,
+  setting: DouyinStoreVisitSetting,
+): boolean {
+  if (!supportsStoreVisitReferenceAudio(runtime.model)) return false;
+  if (!isOpensourceVideoProvider(runtime.providerCode)) return true;
+  return (
+    (setting.speechEngine || (setting.voiceId ? 'cosyvoice' : 'qwen3-tts')) !==
+    'cosyvoice'
+  );
+}
+
+/**
  * @description 音色锚点录音上限 5MB（12 秒左右的单声道 WAV 远小于它）。
  * @keyword-cn 锚点录音上限, 参考音频大小
  * @keyword-en voice-anchor-size-limit, reference-audio-size
@@ -1956,8 +1976,22 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     // 音色锚点：已有就各段直接参考它；统一音色模式还没有时以整条视频的第 1 段为锚点——第 1 段在本批里就先出片，
     // 不在本批（单段重做）但已出片就直接等它取声音，其余新镜头等桌面端取出它的声音后再生成
     const anchor = readStoreVisitVoiceAnchor(setting);
-    const anchorCapable = [videoRuntime, avatarRuntime].some(
-      (runtime) => runtime && supportsStoreVisitReferenceAudio(runtime.model),
+    // 导演一段段提交，这里要看整条脚本会用到的节点，不能只看本批
+    const anchorRuntimes = options.voiceAnchor
+      ? await Promise.all([
+          videoRuntime ??
+            (all.some((item) => item.shot !== 'presenter')
+              ? this.readVideoRuntime().catch(() => undefined)
+              : undefined),
+          avatarRuntime ??
+            (all.some((item) => item.shot === 'presenter')
+              ? this.readAvatarRuntime().catch(() => undefined)
+              : undefined),
+        ])
+      : [];
+    const anchorCapable = anchorRuntimes.some(
+      (runtime) =>
+        runtime && storeVisitRuntimeNeedsVoiceAnchor(runtime, setting),
     );
     const firstSegment = all[0];
     const anchorSegment =
@@ -2491,7 +2525,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
    * @keyword-en submit-segment-voiceover, segment-broll
    * @param input 脚本、分段及序号、场景图地址、音色、生成目标（人物对口型或门店空镜的节点配置）、作用域与是否已拿到名额。
    * @returns {Promise<DouyinOperationView>} 调用记录。
-   * @throws {BadRequestException} 配音太长或太短。
+   * @throws {BadRequestException} 配音时长超出模型可生成的范围。
    * @throws {BadGatewayException} 配音、存储或提交失败。
    */
   private async submitSegment(input: {
@@ -2672,10 +2706,26 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           scope,
           input.voiceAnchor,
         );
-        if (input.cleanVoice && guideAudio.seconds < 2)
-          throw new BadRequestException(
-            '第 1 段台词太短，请补充开场内容后重试，统一音色至少需要 2 秒声音',
+        // 短开场是正常写法：声音不够当锚点时另合成一段音色样本，台词不动
+        if (
+          input.cleanVoice &&
+          guideAudio.seconds < STORE_VISIT_REFERENCE_AUDIO_SECONDS.min
+        ) {
+          const anchor = await this.createSampleVoiceAnchor(
+            topic,
+            segment,
+            runtime,
+            scope,
           );
+          if (guideAudio.engine !== 'cosyvoice')
+            guideAudio = await this.synthesizeGuideSpeech(
+              topic,
+              segment,
+              runtime,
+              scope,
+              anchor,
+            );
+        }
         if (
           !Number.isFinite(guideAudio.seconds) ||
           guideAudio.seconds < 0.3 ||
@@ -3834,6 +3884,58 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const seconds = readWavSeconds(tightened);
     if (!seconds) throw new Error('QWEN_TTS_EMPTY_AUDIO');
     return { buffer: tightened, seconds, engine };
+  }
+
+  /**
+   * @description 开场台词短到取不出 2 秒声音时，用同一音色合成一段固定样本存成音色锚点，整条视频都参考它；样本只作音色参考，不会出现在成片里。
+   * @keyword-cn 短开场音色样本, 服务端音色锚点
+   * @keyword-en short-opening-voice-sample, server-voice-anchor
+   * @param {DouyinTopicEntity} topic 脚本。
+   * @param {DouyinStoreVisitSegment} segment 锚点段。
+   * @param {WorkflowNodeRuntime} runtime 自建视频节点配置。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<DouyinStoreVisitVoiceAnchor>} 已保存的音色锚点。
+   * @throws {BadRequestException} 样本时长不能作参考或脚本不存在。
+   */
+  private async createSampleVoiceAnchor(
+    topic: DouyinTopicEntity,
+    segment: DouyinStoreVisitSegment,
+    runtime: WorkflowNodeRuntime,
+    scope: DouyinScope,
+  ): Promise<DouyinStoreVisitVoiceAnchor> {
+    const sample = await this.synthesizeGuideSpeech(
+      topic,
+      { ...segment, lines: DOUYIN_STORE_VISIT_PREVIEW_TEXT, delivery: undefined },
+      runtime,
+      scope,
+    );
+    if (
+      sample.seconds < STORE_VISIT_REFERENCE_AUDIO_SECONDS.min ||
+      sample.seconds > STORE_VISIT_REFERENCE_AUDIO_SECONDS.max
+    )
+      throw new BadRequestException(
+        `音色样本时长 ${sample.seconds.toFixed(2)} 秒，不能作统一音色的参考`,
+      );
+    const audio = await this.storage.saveAudio(sample.buffer, {
+      scope,
+      fileName: 'voice-anchor.wav',
+      contentType: 'audio/wav',
+    });
+    const anchor: DouyinStoreVisitVoiceAnchor = {
+      url: audio.url,
+      seconds: sample.seconds,
+      segmentId: segment.id,
+      videoId: 0,
+      voiceKey: storeVisitVoiceKey(topic.storeVisit ?? {}),
+      createdAt: new Date(),
+    };
+    const saved = await this.repository.saveStoreVisitVoiceAnchor(
+      topic.id,
+      anchor,
+      scope,
+    );
+    if (!saved) throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
+    return anchor;
   }
 
   /**

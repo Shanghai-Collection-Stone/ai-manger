@@ -1,7 +1,9 @@
 import {
   buildStoreVisitH3Prompt,
+  DOUYIN_STORE_VISIT_PREVIEW_TEXT,
   DouyinStoreVisitService,
   matchesStoreVisitRequest,
+  storeVisitRuntimeNeedsVoiceAnchor,
   storeVisitVoiceKey,
 } from './douyin-store-visit.service.js';
 import {
@@ -380,24 +382,76 @@ describe('探店完整配音驱动 H3', () => {
     expect(service.billing.refundService).toHaveBeenCalled();
   });
 
-  it('开场配音不足音色锚点的两秒下限时明确提示并退费', async () => {
+  it('短开场不报错：另合成音色样本作锚点，台词不变并照常出片', async () => {
     const service = speechService();
-    service.opensourceVideos.synthesizeSpeech.mockResolvedValue(speechWav(1));
-    await expect(
-      service.submitSegment({
-        topic,
-        segment,
-        index: 1,
-        sceneUrl: '',
-        voice: { voiceId: '', model: '' },
-        target: { shot: 'presenter', engine: 'opensource-video', runtime },
-        scope,
-        admitted: true,
-        cleanVoice: true,
+    service.repository.saveStoreVisitVoiceAnchor = jest
+      .fn()
+      .mockResolvedValue(topic);
+    const synthesize = jest
+      .spyOn(service, 'synthesizeGuideSpeech')
+      .mockResolvedValueOnce({
+        buffer: speechWav(1),
+        seconds: 1,
+        engine: 'qwen3-tts',
+      })
+      .mockResolvedValueOnce({
+        buffer: speechWav(6),
+        seconds: 6,
+        engine: 'qwen3-tts',
+      })
+      .mockResolvedValueOnce({
+        buffer: speechWav(1.2),
+        seconds: 1.2,
+        engine: 'qwen3-tts',
+      });
+    await service.submitSegment({
+      topic,
+      segment,
+      index: 1,
+      sceneUrl: '',
+      voice: { voiceId: '', model: '' },
+      target: { shot: 'presenter', engine: 'opensource-video', runtime },
+      scope,
+      admitted: true,
+      cleanVoice: true,
+    });
+    expect(synthesize).toHaveBeenCalledTimes(3);
+    expect((synthesize.mock.calls[1][1] as typeof segment).lines).toBe(
+      DOUYIN_STORE_VISIT_PREVIEW_TEXT,
+    );
+    expect(synthesize.mock.calls[2][1]).toBe(segment);
+    expect(synthesize.mock.calls[2][4]).toMatchObject({
+      segmentId: segment.id,
+      seconds: 6,
+      voiceKey: storeVisitVoiceKey(topic.storeVisit as never),
+    });
+    expect(service.repository.saveStoreVisitVoiceAnchor).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(service.opensourceVideos.createVideo).toHaveBeenCalledTimes(1);
+    expect(service.billing.refundService).not.toHaveBeenCalled();
+  });
+
+  it('自建 H3 配百炼音色不需要音色锚点，Qwen3 和云端参考音频模型需要', () => {
+    const cloud = { model: 'seedance-2.0', providerCode: 'shuyan' };
+    expect(
+      storeVisitRuntimeNeedsVoiceAnchor(runtime, {
+        speechEngine: 'cosyvoice',
+        voiceId: 'v1',
       }),
-    ).rejects.toThrow('统一音色至少需要 2 秒声音');
-    expect(service.opensourceVideos.createVideo).not.toHaveBeenCalled();
-    expect(service.billing.refundService).toHaveBeenCalled();
+    ).toBe(false);
+    expect(
+      storeVisitRuntimeNeedsVoiceAnchor(runtime, { voiceId: 'v1' }),
+    ).toBe(false);
+    expect(
+      storeVisitRuntimeNeedsVoiceAnchor(runtime, { speechEngine: 'qwen3-tts' }),
+    ).toBe(true);
+    expect(
+      storeVisitRuntimeNeedsVoiceAnchor(cloud, {
+        speechEngine: 'cosyvoice',
+        voiceId: 'v1',
+      }),
+    ).toBe(true);
   });
 
   it('配音服务失败时不退回自由出声的视频流程，并退费', async () => {

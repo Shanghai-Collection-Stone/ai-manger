@@ -10,8 +10,8 @@ AI 抖音工作台（douyin-workbench）
 
 ## 文件清单 (File List)
 
-- `services/douyin-store-visit-autopilot.service.ts` — 持久化全流程 Agent 托管，原子认领、失败标识校验、按错误修复与失败分段续跑、心跳和成片完成判定；以已有素材为准改写配不上素材的段，尽量不需要客户介入。
-- `services/douyin-store-visit-autopilot.service.spec.ts` — 状态机逐步托管、失败事项修复、过期恢复拦截、保留成功分段、暂停续跑、跨进程防重与用户隔离测试。
+- `services/douyin-store-visit-autopilot.service.ts` — 持久化全流程 Agent 托管，原子认领、失败标识校验、AI 判定修复方式、同类错误只自动修复一次、不同类错误不占重试、失败分段续跑、心跳和成片完成判定；以已有素材为准改写配不上素材的段，尽量不需要客户介入。
+- `services/douyin-store-visit-autopilot.service.spec.ts` — 状态机逐步托管、AI 判定修复、同类错误单次修复、不同类错误继续修复、修复总上限、单段精确修改、用户手动继续、过期恢复拦截、保留成功分段、暂停续跑、跨进程防重与用户隔离测试。
 
 - `services/douyin-store-visit-lip-sync.ts` — 人物段视频型号出片后的对口型：可灵人脸识别与对口型地址、人脸解析、按出现时长挑主播与视觉比对提示、配音按出现时间切给选中的脸、跳过原因翻译与公开视图。
 - `services/douyin-store-visit-continuity.ts` — 台词与场景边界判断、场景起始图复用、视觉 LLM 尾帧衔接任务和严格结构化结果校验。
@@ -796,6 +796,11 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoreVisitPlannerService.writeScript(topicId,input,scope)` — 默认只写创作方案并沿用用户的人物音色，未指定就保留未指定；从门店开始先询问门店、从脚本开始不问门店；只有显式 keepCast=false 才推荐人物音色 | keywords: AI写探店脚本, 按自检意见改, write-store-visit-script, revise-by-review
 - `DouyinStoreVisitPlannerService.askStore(context,prompt,scope)` — 门店未确定时按选题、候选脚本、创作脚本、客户需求、引用知识与本租户门店提出确认问题，并按 `isStoreVisitStoreDetermined` 给出 `confident`（是否已被脚本或需求确定）；本方法不选店也不建店，失败回退为明确询问 | keywords: AI询问门店, 门店确认建议, ask-store-identity, store-confirmation-suggestion
 - `DouyinStoreVisitPlannerService.reviewScript(topicId,scope)` — 对照引用知识自检已保存的脚本（用户手改后重新自检用），只列出问题不改 | keywords: 自检探店脚本, 对照引用知识, review-store-visit-script, knowledge-check
+- `DouyinStoreVisitPlannerService.diagnoseAutopilotFailure(topic,input,scope)` — 托管失败时让 AI 看错误原因和这条视频的内容，从本步骤可选动作里判定重做哪一块；台词短不算问题，模型调用失败时退回原样重试 | keywords: AI判定托管修复, 失败原因分析, diagnose-autopilot-failure, failure-reason-analysis
+- `DouyinStoreVisitPlannerService.isSameAutopilotFailure(topic,input,scope)` — 修复后同一位置又失败时，让 AI 对比这次和已修过的错误是不是同一类问题；模型失败或拿不准时按同类处理 | keywords: AI判定同类错误, 错误根因对比, judge-same-failure, root-cause-compare
+- `parseStoreVisitSameFailure(text)` — 读出模型的同类错误判定：只有明确回答不是同类才算新错误，解析不了按同类处理，避免无限自动修复 | keywords: 解析同类判定, 不确定按同类, parse-same-failure, uncertain-as-same
+- `StoreVisitRepairDecision` — AI 对一次托管失败的修复判定：选哪个动作、具体怎么改、为什么 | keywords: 托管修复判定, 修复动作结果, autopilot-repair-decision, repair-action-result
+- `parseStoreVisitRepairDecision(text,actions)` — 读出模型的修复判定：动作不在本次可选范围内或输出解析不了时退回原样重试，不会越权改其他内容 | keywords: 解析修复判定, 修复动作白名单, parse-repair-decision, repair-action-allowlist
 - `DouyinStoreVisitPlannerService.generateLines(topicId,input,scope)` — 按保存的创作方案生成分段台词，非露脸解说也沿用人物视角和音色节奏；微调未完成时拒绝生成，成功返回脚本来源快照。从脚本开始时先按选中的脚本方向匹配图库素材，每段先选一张图再照图写，返回各段 `sceneImageId` 与用到的 `sceneImages`；配图偏向为 AI 画面、`useMaterials:false` 或匹配不到图时照旧 | keywords: 按脚本生成台词, 分段台词生成, generate-lines-from-script, script-dialogue
 - `DouyinStoreVisitPlannerService.reviewBody(context,script,scope)` — 对照引用知识审核独立创作脚本，不将编导文字当口播检查，模型失败提示重试 | keywords: 脚本正文自检, 引用知识检查, review-script-body, script-fact-check
 - `generateStoreVisitScriptLines(req,id,dto)` — `POST topics/:id/store-visit/script/lines`（`create DouyinWorkbench`），按已保存的脚本正文生成分段台词，不重新选择人物音色 | keywords: 按脚本生成台词接口, 分段台词, script-lines-api, segment-dialogue
@@ -828,6 +833,7 @@ AI 抖音工作台（douyin-workbench）
 - `STORE_VISIT_VOICE_ANCHOR_VERSION` — 锚点版本 v3 纳入配音先行流程，旧版视频自由出声锚点不再复用 | keywords: 锚点版本, 旧锚点作废, voice-anchor-version, stale-anchor-reset
 - `storeVisitVoiceKey(setting)` — 当前音色的标识包含锚点版本、配音引擎、音色 ID 与声音描述，仅复用标识一致的锚点 | keywords: 音色标识, 锚点作废判断, voice-key, anchor-stale-check
 - `readStoreVisitVoiceAnchor(setting)` — 读取还能用的音色锚点：有地址且音色没换过才返回 | keywords: 读取音色锚点, 有效锚点, read-voice-anchor, valid-anchor
+- `storeVisitRuntimeNeedsVoiceAnchor(runtime,setting)` — 判断这个视频节点出片时要不要音色锚点：自建 H3 配百炼音色时每段都按同一音色直接合成，用不到锚点；自建 H3 配 Qwen3 和支持参考音频的云端模型才要 | keywords: 音色锚点需求, 百炼免锚点, voice-anchor-requirement, cosyvoice-skip-anchor
 - `DOUYIN_VOICE_ANCHOR_MAX_BYTES` — 音色锚点录音上限 5MB（12 秒左右的单声道 WAV 远小于它） | keywords: 锚点录音上限, 参考音频大小, voice-anchor-size-limit, reference-audio-size
 - `DouyinStoreVisitService.saveVoiceAnchor(topicId,input,file,scope)` — 保存音色锚点：桌面端从某一段（统一音色模式的第 1 段）出片视频里取出的 WAV 声音（2～15 秒），后面各段都拿它作参考音频；同一段同一个视频已经存过且音色没换就直接返回，几个续段同时上传不会重复写 | keywords: 保存音色锚点, 第一段声音, save-voice-anchor, first-segment-voice
 - `DouyinWorkbenchRepositoryService.saveStoreVisitVoiceAnchor(id,anchor,scope)` — 写入探店音色锚点（第 1 段出片后取出的声音），后面各段用它作参考音频 | keywords: 保存音色锚点, 统一音色, save-voice-anchor, unified-voice
@@ -839,6 +845,7 @@ AI 抖音工作台（douyin-workbench）
 - `saveStoreVisitVoiceAnchor(req,id,dto,file)` — `POST topics/:id/store-visit/voice-anchor`（`update DouyinWorkbench`，multipart 字段 `file` 最多 5MB），上传音色锚点：桌面端从第 1 段出片视频取出的 WAV 声音（2～15 秒），后面各段拿它作参考音色 | keywords: 音色锚点接口, 统一音色, voice-anchor-api, unified-voice
 
 - `DouyinStoreVisitService.synthesizeGuideSpeech(topic,segment,runtime,scope,anchor?)` — 为自建 H3 合成完整台词：百炼沿用音色库或定制音色，按 `COSYVOICE_STORE_VISIT_RATE` 提速，并按这一段的念法带情感指令（`buildCosyVoiceInstruction`，不支持的音色不带）；Qwen3-TTS 优先克隆音色锚点，其次用已有音色样本，没有样本时按声音描述设计，指令里同样附上念法（没写用默认念法）。两种引擎出的配音都先 `tightenSpeechPauses` 去掉首尾空白、缩短长停顿，再按收紧后的时长生成画面 | keywords: 合成锚定台词, 双引擎配音, synthesize-guide-speech, dual-engine-speech
+- `DouyinStoreVisitService.createSampleVoiceAnchor(topic,segment,runtime,scope)` — 开场台词短到取不出 2 秒声音时，用同一音色合成一段固定样本存成音色锚点，整条视频都参考它；样本只作音色参考，不会出现在成片里 | keywords: 短开场音色样本, 服务端音色锚点, short-opening-voice-sample, server-voice-anchor
 - `speechWav(seconds)` — 构造精确时长的配音测试 WAV | keywords: 配音波形测试, 精确时长, speech-wave-fixture, exact-duration
 - `leadingSilence()`（探店配音测试内）— 前 0.6 秒静音、后 1 秒正弦波的配音，验证两种引擎都会收紧 | keywords: 带开头空白的配音, 收紧测试, leading-silence-speech, tighten-fixture
 - `piecedWav(pieces)`（CosyVoice 客户端测试）— 按片段拼一段 24kHz 16bit 单声道 WAV，振幅为 0 是静音、否则是 440Hz 正弦波 | keywords: 拼接测试WAV, 模拟人声, build-pieced-wav, fake-speech
@@ -915,18 +922,27 @@ AI 抖音工作台（douyin-workbench）
 
 - `DOUYIN_AUTOPILOT_TICK_MS` — Agent 托管巡检间隔，每次只推进一项尚未完成的业务操作 | keywords: 托管巡检间隔, 逐步推进, autopilot-tick-interval, stepwise-advance
 - `DOUYIN_AUTOPILOT_CLAIM_MS` — 认领在无心跳两分钟后失效，允许崩溃进程的任务被重新认领 | keywords: 托管认领租期, 崩溃恢复, autopilot-claim-lease, crash-recovery
+- `DOUYIN_AUTOPILOT_MAX_REPAIRS_PER_POSITION` — 同一位置自动修复的总上限：不同类错误不占重试次数，这里只防止错误不断变化时无限消耗 | keywords: 单段修复总上限, 防无限修复, max-repairs-per-position, repair-loop-guard
 - `autopilotScriptKey(topic)` — 为当前脚本与人物音色生成自检标识，内容或设定变化后重新检查 | keywords: 托管脚本指纹, 自检去重, autopilot-script-key, review-deduplication
-- `DouyinStoreVisitAutopilotService()` — 持久化全流程 Agent 托管，按失败原因调整并断点续跑，复用已完成结果与原子认领 | keywords: Agent全流程托管, 断点续跑, agent-workflow-autopilot, resumable-workflow
-- `DouyinStoreVisitAutopilotService.recoverStep(topic,scope)` — 按失败事项调整脚本、配图或过长台词，服务任务失效时清理失败调用后仅续跑未完成分段 | keywords: 托管错误修复, 失败分段续跑, autopilot-error-repair, resume-failed-segment
+- `autopilotRepairKey(stage,segmentId?)` — 生成失败位置标识：配音和出片按分段区分，其余步骤按步骤区分，同一位置的同类错误只自动修复一次 | keywords: 托管失败位置, 单次修复标识, autopilot-repair-key, single-repair-mark
+- `autopilotRepairActions(stage,hasSegment)` — 列出这一步允许 AI 选的修复动作，出片阶段不能选会清掉已成功分段的整条重写 | keywords: 托管可选修复, 修复范围限制, autopilot-repair-actions, repair-scope-limit
+- `DouyinStoreVisitAutopilotService()` — 持久化全流程 Agent 托管，失败时由 AI 判定修复方式并自动修复一次，再失败停下等用户，断点续跑并复用已完成结果与原子认领（不同类错误不占重试） | keywords: Agent全流程托管, 断点续跑, agent-workflow-autopilot, resumable-workflow
+- `DouyinStoreVisitAutopilotService.recoverStep(topic,scope)` — 由 AI 按失败原因判定重做哪一块并执行一次：重试、改单段台词、换单段画面、重写台词或脚本；判定要用户处理时直接停下，已成功的分段不动 | keywords: 托管错误修复, 失败分段续跑, autopilot-error-repair, resume-failed-segment
+- `DouyinStoreVisitAutopilotService.blockedLines(topic,segmentId?)` — 取停下时这一段的台词快照，用户继续托管时据此判断是否亲自改过 | keywords: 停止时台词快照, 用户修改判断, blocked-lines-snapshot, user-edit-detection
+- `DouyinStoreVisitAutopilotService.ownsRun(topic,scope)` — 确认这一步仍由当前认领持有且任务在运行，AI 调用期间被暂停或换轮后不再写入 | keywords: 校验托管认领, 修复期间暂停保护, verify-autopilot-claim, pause-during-repair
+- `DouyinStoreVisitAutopilotService.rewriteSegmentLines(topic,segment,reason,instruction,scope)` — 按 AI 给的修复要求只改失败这一段的台词，基于最新分段保存，其他段不动；AI 改写期间用户改过这段就以用户为准 | keywords: 修复单段台词, AI改写失败段, repair-segment-lines, rewrite-failed-segment
+- `DouyinStoreVisitAutopilotService.replaceSegmentPicture(topic,segment,instruction,scope)` — 只换失败这一段的画面：从脚本开始时 AI 重新生图，从门店开始时清掉这段素材后按门店已有素材重配 | keywords: 修复单段画面, 更换失败素材, repair-segment-picture, replace-failed-material
 - `DouyinStoreVisitAutopilotService.constructor(db,repository,agent,planner,scripts,spots,personas,pipeline)` — 注入持久化集合和现有工作台 AI 编排，生成结果沿用各业务服务保存 | keywords: 初始化Agent托管, 托管依赖, init-agent-autopilot, autopilot-dependencies
 - `DouyinStoreVisitAutopilotService.onModuleInit()` — 仅在 leader 启动巡检，已保存的运行任务在服务重启后继续 | keywords: 启动托管巡检, 服务重启续跑, start-autopilot-patrol, resume-autopilot-after-restart
 - `DouyinStoreVisitAutopilotService.onModuleDestroy()` — 停止当前进程的托管巡检 | keywords: 停止托管巡检, 托管模块销毁, stop-autopilot-patrol, autopilot-module-destroy
-- `DouyinStoreVisitAutopilotService.start(topicId,input,scope)` — 启动或继续托管，重复点击运行中任务只返回状态，不重置进度或重新生成 | keywords: 启动Agent托管, 托管重复保护, start-agent-autopilot, autopilot-duplicate-guard
+- `DouyinStoreVisitAutopilotService.start(topicId,input,scope)` — 启动或继续托管，重复点击运行中任务只返回状态，不重置进度或重新生成；用户手动继续时重置自动修复次数，停下后用户改过这段台词就直接按新内容出片 | keywords: 启动Agent托管, 托管重复保护, start-agent-autopilot, autopilot-duplicate-guard
 - `DouyinStoreVisitAutopilotService.pause(topicId,scope)` — 暂停后不再启动下一步，已经提交的 AI 操作允许完成，出片导演同时暂停 | keywords: 暂停Agent托管, 保留完成结果, pause-agent-autopilot, preserve-completed-results
 - `DouyinStoreVisitAutopilotService.tickOnce()` — 巡检运行中的任务，按任务所属租户用户推进，单个慢任务不阻塞其他脚本 | keywords: 巡检Agent任务, 托管用户隔离, patrol-agent-tasks, autopilot-user-isolation
 - `DouyinStoreVisitAutopilotService.advance(topicId,scope)` — 原子认领一步并续心跳，成功或失败均释放；跨进程重复认领不执行 AI 调用 | keywords: 原子推进Agent, 托管心跳, advance-agent-atomically, autopilot-heartbeat
 - `DouyinStoreVisitAutopilotService.requireTopic(topicId,scope)` — 校验脚本归属和统一制作流程，所有手动与后台入口共用 | keywords: 校验托管脚本, 托管作用域, require-autopilot-topic, autopilot-scope
-- `DouyinStoreVisitAutopilotService.patch(topic,fields)` — 只更新本轮仍在运行的任务，暂停或换轮后旧操作不能覆盖状态 | keywords: 写入托管状态, 旧任务隔离, patch-autopilot-state, stale-run-isolation
+- `DouyinStoreVisitAutopilotService.patch(topic,input)` — 只更新本轮仍在运行的任务，暂停或换轮后旧操作不能覆盖状态；同位置的同类错误再失败时改为停下等用户，不同类错误继续自动修复 | keywords: 写入托管状态, 旧任务隔离, patch-autopilot-state, stale-run-isolation
+- `DouyinStoreVisitAutopilotService.isRepeatedFailure(topic,stage,history,reason)` — 判断这次失败算不算重复：同位置修复达到总上限或原因完全相同直接算，其余交给 AI 判断是否同类 | keywords: 判断重复失败, 同类错误计次, detect-repeated-failure, same-error-count
+- `DouyinStoreVisitAutopilotService.stopForUser(topic,recovery,message)` — 停下托管等用户处理，记录失败位置和台词快照，用户点继续托管才重新开始 | keywords: 托管停下等用户, 记录停止原因, stop-for-user, record-block-reason
 - `DouyinStoreVisitAutopilotService.prepareCast(topic,scope)` — 保留用户已选人物音色，仅为缺失项请求 AI 推荐，音色库未配置时保存明确的声音描述；要出镜却没有带形象图的人物时改为不露脸解说继续，不停下来等客户 | keywords: 托管补齐人物音色, 保留用户设定, autopilot-fill-cast, preserve-user-cast
 - `DouyinStoreVisitAutopilotService.loadCustomerBrief(topic)` — 从 `douyin_generation_jobs` 找生成这条脚本的那一轮候选任务，读出客户写的需求描述，找不到为空 | keywords: 读取客户需求描述, 候选生成要求, load-customer-brief, draft-generation-prompt
 - `DouyinStoreVisitAutopilotService.settleStore(topic,question,scope)` — 门店问题标了 confident 时直接设定：已有门店直接选用，还没有的按店名新建（同名复用）后选用；没确定返回 false 交回询问 | keywords: 托管直接设定门店, 确定门店免询问, autopilot-settle-store, skip-store-question
@@ -939,9 +955,11 @@ AI 抖音工作台（douyin-workbench）
 - `autopilotTest.snapshot()` — 返回独立读取快照，避免用共享对象掩盖并发错误 | keywords: 托管读取快照, 并发测试, autopilot-read-snapshot, concurrency-test
 - `autopilotTest.makeService()` — 创建共享同一持久化数据的独立进程服务替身 | keywords: 托管多进程替身, 共享任务仓库, autopilot-process-double, shared-task-store
 - `autopilotTest.begin(input?)` — 启动任务但关闭即时推进，测试逐次显式驱动每个步骤 | keywords: 初始化测试托管, 显式推进步骤, begin-test-autopilot, explicit-step-driving
+- `autopilotTest.failedAtSegment(message)` — 构造第 1 段出片失败、流水线已暂停的托管现场 | keywords: 托管失败现场, 修复测试桩, autopilot-failure-fixture, repair-test-double
 - `storeVisitSegmentHasMaterial(setting,segment)` — 检查分段引用的图片或视频仍在脚本素材中，人物段不能以实拍视频作画面 | keywords: 分段配图就绪, 素材引用校验, segment-picture-ready, material-reference-check
 - `StartDouyinAutopilotDto` — 校验 Agent 自动托管的配图偏向、统一声音能力和当前脚本台词要求，不允许直接写任务状态 | keywords: Agent托管参数, 托管创作要求, agent-autopilot-dto, autopilot-instruction
-- `DouyinStoreVisitAutopilot` — 可暂停和续跑的 Agent 托管状态，记录当前制作步骤和原子认领，生成结果仍保存在各业务字段 | keywords: Agent托管状态, 全流程进度, agent-autopilot-state, full-workflow-progress
+- `DouyinStoreVisitAutopilot` — 可暂停和续跑的 Agent 托管状态，记录当前制作步骤、原子认领和自动修复记录，同一位置的同类错误只自动修复一次，生成结果仍保存在各业务字段 | keywords: Agent托管状态, 全流程进度, agent-autopilot-state, full-workflow-progress
+- `DouyinAutopilotRepairAction` — Agent 托管失败后 AI 可选的修复动作：原样重试、只改这一段台词、只换这一段画面、重写整条台词、改脚本，或交给用户处理 | keywords: 托管修复动作, AI修复判定, autopilot-repair-action, ai-repair-decision
 - `startStoreVisitAutopilot(req,id,dto)` — 启动或继续当前脚本的全流程 Agent 托管，立即返回持久化状态 | keywords: 启动托管接口, 全流程Agent, start-autopilot-api, full-workflow-agent
 - `pauseStoreVisitAutopilot(req,id)` — 暂停 Agent 后续步骤并同时暂停正在运行的出片导演，保留已完成结果 | keywords: 暂停托管接口, 托管进度保留, pause-autopilot-api, preserve-autopilot-progress
 
@@ -959,6 +977,42 @@ AI 抖音工作台（douyin-workbench）
 
 | 中文 | English |
 | --- | --- |
+| 单段修复总上限 | max-repairs-per-position |
+| 防无限修复 | repair-loop-guard |
+| 判断重复失败 | detect-repeated-failure |
+| 同类错误计次 | same-error-count |
+| 托管停下等用户 | stop-for-user |
+| 记录停止原因 | record-block-reason |
+| AI判定同类错误 | judge-same-failure |
+| 错误根因对比 | root-cause-compare |
+| 解析同类判定 | parse-same-failure |
+| 不确定按同类 | uncertain-as-same |
+| 托管失败位置 | autopilot-repair-key |
+| 单次修复标识 | single-repair-mark |
+| 托管可选修复 | autopilot-repair-actions |
+| 修复范围限制 | repair-scope-limit |
+| 停止时台词快照 | blocked-lines-snapshot |
+| 用户修改判断 | user-edit-detection |
+| 校验托管认领 | verify-autopilot-claim |
+| 修复期间暂停保护 | pause-during-repair |
+| 修复单段台词 | repair-segment-lines |
+| AI改写失败段 | rewrite-failed-segment |
+| 修复单段画面 | repair-segment-picture |
+| 更换失败素材 | replace-failed-material |
+| 托管失败现场 | autopilot-failure-fixture |
+| 修复测试桩 | repair-test-double |
+| 托管修复动作 | autopilot-repair-action |
+| AI修复判定 | ai-repair-decision |
+| AI判定托管修复 | diagnose-autopilot-failure |
+| 失败原因分析 | failure-reason-analysis |
+| 托管修复判定 | autopilot-repair-decision |
+| 修复动作结果 | repair-action-result |
+| 解析修复判定 | parse-repair-decision |
+| 修复动作白名单 | repair-action-allowlist |
+| 音色锚点需求 | voice-anchor-requirement |
+| 百炼免锚点 | cosyvoice-skip-anchor |
+| 短开场音色样本 | short-opening-voice-sample |
+| 服务端音色锚点 | server-voice-anchor |
 | 模板风格参考回归 | template-style-reference-regression |
 | 统一片段视觉 | consistent-segment-design |
 | 执行转场规划 | planned-transitions |
@@ -1909,7 +1963,7 @@ AI 抖音工作台（douyin-workbench）
 
 ## 类型导出 (Type Exports)
 
-- `DouyinStoreVisitAutopilot`、`StartDouyinAutopilotDto` — 系统持久化托管进度及启动参数；普通选题更新不允许写入托管状态。
+- `DouyinStoreVisitAutopilot`、`DouyinAutopilotRepairAction`、`StoreVisitRepairDecision`、`StartDouyinAutopilotDto` — 系统持久化托管进度、AI 修复动作与判定结果及启动参数；普通选题更新不允许写入托管状态。
 
 - `DouyinStoreVisitSegment` 新增 `delivery`（念法：这段台词怎么念，情绪、语速、重音，≤40 字），AI 写台词时给出、可改，配音时作为情感指令；`StoreVisitScriptSegment` 同步新增可选 `delivery`。
 
@@ -2062,7 +2116,7 @@ AI 抖音工作台（douyin-workbench）
 
 **单段重做不等不相干的在跑分段**：以前只要这条脚本还有任意分段在排队 / 等尾帧 / 生成，单段重做就报「这条脚本还有分段在生成」，例如第 3 段截尾帧失败、第 5～7 段还在接后面镜头时，第 3 段没法重做。现在 `startSegments` 只拦会被牵连的在跑分段：要生成的段本身、`continuity.previousSegmentId` 指向它们的等待段（等尾帧或等声音），以及第 1 段（音色锚点），冲突时报「这条脚本还有相关分段在生成，完成后再试」；`startOne` 补后面没出片的段时跳过正在生成的（`generatingSegmentIds`），让它们接着跑。整条重新生成与「只补没出片的段」本来就包含在跑的段，仍会被拦下。
 
-**自建 H3 配音先行**：探店的 `speechEngine` 可选 `cosyvoice` / `qwen3-tts`，旧脚本有音色 ID 时默认百炼，否则默认自建 Qwen。百炼使用已选音色及其所属账号，明确选百炼但只有描述时先自动定制。Qwen 优先克隆第 1 段音色锚点，再用已有百炼音色的试听样本，没有样本时按声音描述设计。完整台词合成为 WAV 后按真实时长提交 `guide_audio`，不把它当作 `reference_audios`；超出 15 秒、统一音色开场不足 2 秒或配音失败时停止并退费，不截断或回退自由出声。自建服务直接把配音放进分段视频，`nativeAudio=true` 表示视频已包含最终音轨，客户端保留该音轨合成。切换引擎清掉旧分段成片、配音、锚点和合成结果，保留台词、人物首帧和所选音色；排队和结果绑定复核引擎快照。锚点版本 v3 包含配音引擎。
+**自建 H3 配音先行**：探店的 `speechEngine` 可选 `cosyvoice` / `qwen3-tts`，旧脚本有音色 ID 时默认百炼，否则默认自建 Qwen。百炼使用已选音色及其所属账号，明确选百炼但只有描述时先自动定制。Qwen 优先克隆第 1 段音色锚点，再用已有百炼音色的试听样本，没有样本时按声音描述设计。完整台词合成为 WAV 后按真实时长提交 `guide_audio`，不把它当作 `reference_audios`；超出 15 秒或配音失败时停止并退费，不截断或回退自由出声。短台词是正常写法：百炼音色逐段直接合成，不走音色锚点；Qwen 开场不足 2 秒时用同一音色另合成一段固定样本存成锚点（`videoId` 为 0），台词不动。自建服务直接把配音放进分段视频，`nativeAudio=true` 表示视频已包含最终音轨，客户端保留该音轨合成。切换引擎清掉旧分段成片、配音、锚点和合成结果，保留台词、人物首帧和所选音色；排队和结果绑定复核引擎快照。锚点版本 v3 包含配音引擎。
 
 配音测试与原有探店回归的服务替身均隔离后台轮询，避免提交成功后的延时轮询访问测试数据库。旧 GPU 服务未返回 `has_guide_audio=true` 时不接受结果并退费，须先升级自建视频服务。
 
@@ -2074,4 +2128,4 @@ AI 抖音工作台（douyin-workbench）
 
 **创作脚本与人物音色**：候选生成与确认接口接收可选 `voiceId`，只允许真实音色库 ID；选择随任务保存并公开人物、音色和风格，候选重开按任务还原。逐条确认允许 `personaId=0`、空 `voiceId` 和空风格，显式取消不回退到批次设定。生成提示按音色特征安排表达节奏；未选择时不自行绑定具体声线，候选确认只落创作方案和设定，不拆台词、不生成音频或视频。`writeScript` 缺省沿用当前人物音色，只有显式 `keepCast=false` 才进入推荐分支，编排服务保持相同缺省行为。微调接口接收 `productionMode`、`voiceId` 和 `voicePrompt`，创作方案保留章节与画面安排，只调整叙事视角、语气、节奏；不改价格等事实、不变成逐段对白。客户端微调前持久化 `scriptNeedsRefine=true` 并清台词来源快照，成功写入新正文后清标记；失败或重开可继续，期间生成台词接口拒绝调用模型。不露脸的台词也按预设人物视角和所选音色特征写作。
 
-**Agent 自动托管**：POST topics/:id/store-visit/autopilot/start（create DouyinWorkbench）启动或续跑，POST topics/:id/store-visit/autopilot/pause（update DouyinWorkbench）暂停。按所属租户用户补齐设定、脚本、台词、画面和出片，复用已完成结果。错误进入 waiting 并生成唯一 failureId；桌面端展示原因，等待 6 秒后携带 recoverFailureId 续跑。服务端只接受仍在等待且标识相符的恢复，原子更新拦截过期请求与跨窗口暂停竞态；暂停同时支持 running 和 waiting。恢复携带服务端保存的失败步骤、原因和分段：脚本自检问题定向重写；台词生成附失败原因；脚本起点的图库失败改 AI 补图；出片台词过长先压缩失败段并校验长度，任务失效或网络失败清理结束调用后重提未完成分段；拼接失败重新请求拼接。成功段保留，修复过程中用户暂停后不启动下一段。**以素材为准、尽量不需要客户介入**：从门店开始时，写脚本和台词只看有图片或视频的点位（`STORE_VISIT_MATERIAL_FIRST_RULE`），画面与卖点从一开始就落在已有素材上；配场景后仍有段配不上时，不再停下来让客户补素材或改台词，而是由 `fitSegmentsToMaterials` 给这些段换成门店已有的点位与图，并把这几段台词改成讲素材里看得到的内容（不编造资料里没有的数字，改不出就只配素材保留原台词）；只剩人物出镜段配不上照片时改为不露脸解说。脚本按自检意见重写一次后剩余提示只写进进度说明、不再进入等待；要出镜却没有带形象图的人物时同样改为不露脸解说。从脚本开始时同样以素材为准：选中的脚本是方向，台词一步（托管的 lines 步骤）先按它在配图偏向的图库标签内匹配素材，再让每段先选一张素材图、照图写画面和台词，分段一生成就带好画面，画面一步无事可做；托管选了 AI 画面或脚本配图偏向是 AI 画面时不匹配，照旧先写台词后 AI 生图。缺门店时托管会带上客户生成候选脚本时写的需求描述和托管要求去判断门店：店名明确写在选题、脚本或需求里（`isStoreVisitStoreDetermined`）就直接设定，已有门店直接选，还没建的按店名新建再选；只从引用知识推断、有多家或写得含糊时照旧询问。仍需客户处理的只有：脚本和需求里都没写明门店、门店一张素材都没有（不虚构实拍素材）、余额不足或服务未配置，新的失败会再次告知原因；会自动重试的失败文案不再写「请检查」。后台每 3 秒原子认领一步并续心跳。尾帧、音色和拼接沿用打开的桌面端；仅新成片落库才完成，不执行公开发布。
+**Agent 自动托管**：POST topics/:id/store-visit/autopilot/start（create DouyinWorkbench）启动或续跑，POST topics/:id/store-visit/autopilot/pause（update DouyinWorkbench）暂停。按所属租户用户补齐设定、脚本、台词、画面和出片，复用已完成结果。错误进入 waiting 并生成唯一 failureId；桌面端展示原因，等待 6 秒后携带 recoverFailureId 续跑。服务端只接受仍在等待且标识相符的恢复，原子更新拦截过期请求与跨窗口暂停竞态；暂停同时支持 running 和 waiting。恢复携带服务端保存的失败步骤、原因和分段，由 AI（`diagnoseAutopilotFailure`）看错误原因和内容，从本步骤允许的动作里判定重做哪一块：原样重试、只改这段台词、只换这段画面、重写台词、改脚本，或交给用户；不靠匹配错误文案，台词短不算问题，模型调用失败或越权时退回原样重试。同一位置（步骤 + 分段）修完再失败时由 AI（`isSameAutopilotFailure`）对比已修过的错误：同类转为 paused 并写入 `blocked`，等用户点继续托管；不同类不占重试、继续自动修复，同一位置总共最多修 5 次防止错误不断变化时无限消耗；AI 判定失败或拿不准按同类处理，修复动作本身失败也直接停下。改台词只改失败这一段，只有接这段尾帧的同镜头续段因画面依赖需要重出。用户继续时重置修复次数，改过这段台词就直接按新内容出片，没改就由 AI 再修一次。成功段保留，修复过程中用户暂停后不启动下一段。**以素材为准、尽量不需要客户介入**：从门店开始时，写脚本和台词只看有图片或视频的点位（`STORE_VISIT_MATERIAL_FIRST_RULE`），画面与卖点从一开始就落在已有素材上；配场景后仍有段配不上时，不再停下来让客户补素材或改台词，而是由 `fitSegmentsToMaterials` 给这些段换成门店已有的点位与图，并把这几段台词改成讲素材里看得到的内容（不编造资料里没有的数字，改不出就只配素材保留原台词）；只剩人物出镜段配不上照片时改为不露脸解说。脚本按自检意见重写一次后剩余提示只写进进度说明、不再进入等待；要出镜却没有带形象图的人物时同样改为不露脸解说。从脚本开始时同样以素材为准：选中的脚本是方向，台词一步（托管的 lines 步骤）先按它在配图偏向的图库标签内匹配素材，再让每段先选一张素材图、照图写画面和台词，分段一生成就带好画面，画面一步无事可做；托管选了 AI 画面或脚本配图偏向是 AI 画面时不匹配，照旧先写台词后 AI 生图。缺门店时托管会带上客户生成候选脚本时写的需求描述和托管要求去判断门店：店名明确写在选题、脚本或需求里（`isStoreVisitStoreDetermined`）就直接设定，已有门店直接选，还没建的按店名新建再选；只从引用知识推断、有多家或写得含糊时照旧询问。仍需客户处理的只有：脚本和需求里都没写明门店、门店一张素材都没有（不虚构实拍素材）、余额不足或服务未配置，新的失败会再次告知原因；会自动重试的失败文案不再写「请检查」。后台每 3 秒原子认领一步并续心跳。尾帧、音色和拼接沿用打开的桌面端；仅新成片落库才完成，不执行公开发布。

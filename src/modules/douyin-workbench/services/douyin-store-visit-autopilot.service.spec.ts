@@ -3,8 +3,19 @@ import type { DouyinTopicEntity } from '../entities/douyin-workbench.entity.js';
 import {
   DouyinStoreVisitAutopilotService,
   DOUYIN_AUTOPILOT_CLAIM_MS,
+  DOUYIN_AUTOPILOT_MAX_REPAIRS_PER_POSITION,
+  autopilotRepairActions,
+  autopilotRepairKey,
   autopilotScriptKey,
 } from './douyin-store-visit-autopilot.service.js';
+import {
+  parseStoreVisitRepairDecision,
+  parseStoreVisitSameFailure,
+} from './douyin-store-visit-planner.service.js';
+import {
+  mergeStoreVisitSegments,
+  normalizeStoreVisitSegments,
+} from './douyin-workbench-repository.service.js';
 
 /** @description 取内存 Mongo 桩的点号路径值。 @keyword-cn 托管测试取值, 嵌套字段 @keyword-en autopilot-test-value, nested-field */
 function valueAt(record: any, path: string): any {
@@ -119,6 +130,16 @@ function setup(setting: Record<string, unknown> = {}) {
       },
     }),
     reviewScript: jest.fn().mockResolvedValue({ passed: true, issues: [] }),
+    diagnoseAutopilotFailure: jest.fn(
+      async (_topic: unknown, _input: unknown, _scope: unknown) => ({
+        action: 'retry',
+        instruction: '',
+        reason: '',
+      }),
+    ),
+    isSameAutopilotFailure: jest.fn(
+      async (_topic: unknown, _input: unknown, _scope: unknown) => true,
+    ),
     writeScript: jest.fn().mockResolvedValue({
       needsStore: true,
       storeQuestion: { question: '请确认拍摄哪家门店？' },
@@ -267,6 +288,11 @@ describe('Agent 全流程托管', () => {
       failureId: 'review',
       message: '脚本自检仍需处理：套餐价格与资料不符',
     });
+    f.planner.diagnoseAutopilotFailure.mockResolvedValueOnce({
+      action: 'rewrite-script',
+      instruction: '',
+      reason: '脚本事实不符',
+    });
     await f.begin({ recoverFailureId: 'review' });
     await f.service.advance(5, scope);
     expect(f.agent.writeScript).toHaveBeenCalledWith(
@@ -384,6 +410,11 @@ describe('Agent 全流程托管', () => {
       currentSegmentId: 'b',
       updatedAt: new Date(),
     };
+    f.planner.diagnoseAutopilotFailure.mockResolvedValueOnce({
+      action: 'rewrite-segment',
+      instruction: '压缩到 25 字以内',
+      reason: '配音超过单段时长',
+    });
     f.scripts.refineScript.mockResolvedValue({
       script: '双人套餐 99 元，周末约朋友一起来体验卡丁车。',
     });
@@ -414,6 +445,11 @@ describe('Agent 全流程托管', () => {
       currentSegmentId: 'b',
       updatedAt: new Date(),
     };
+    f.planner.diagnoseAutopilotFailure.mockResolvedValueOnce({
+      action: 'rewrite-segment',
+      instruction: '压缩这一段',
+      reason: '配音超长',
+    });
     f.scripts.refineScript.mockImplementation(async () => {
       await f.service.pause(5, scope);
       return { script: '双人套餐 99 元，周末约朋友一起来体验卡丁车。' };
@@ -423,6 +459,297 @@ describe('Agent 全流程托管', () => {
     expect(f.topic.storeVisit!.autopilot!.state).toBe('paused');
     expect(f.pipeline.resume).not.toHaveBeenCalled();
     expect(f.topic.storeVisit!.segments![0].lines).toBe(body);
+  });
+
+  /** @description 构造第 1 段出片失败、流水线已暂停的托管现场。 @keyword-cn 托管失败现场, 修复测试桩 @keyword-en autopilot-failure-fixture, repair-test-double */
+  async function failedAtSegment(message: string) {
+    const f = setup({
+      linesScript: body,
+      sceneImages: [{ type: 'image', id: 31, url: '/31.jpg' }],
+      segments: [
+        { id: 'a', lines: '绝了！', shot: 'broll', sceneImageId: 31 },
+        { id: 'b', lines: '第二段保持不变。', shot: 'broll', sceneImageId: 31 },
+      ],
+    });
+    await f.begin();
+    Object.assign(f.topic.storeVisit!.autopilot!, {
+      stage: 'make',
+      reviewKey: autopilotScriptKey(f.topic),
+    });
+    const fail = (error = message) => {
+      f.topic.storeVisit!.pipeline = {
+        state: 'paused',
+        pauseReason: 'failed',
+        currentSegmentId: 'a',
+        error,
+        updatedAt: new Date(),
+      };
+    };
+    fail();
+    await f.service.advance(5, scope);
+    return { ...f, fail };
+  }
+
+  it('AI 判定原样重试时不改短台词，同一段再失败就停下等用户', async () => {
+    const f = await failedAtSegment('第 1 段提交失败：服务暂时不可用');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    expect(auto().state).toBe('waiting');
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(1);
+    expect(f.scripts.refineScript).not.toHaveBeenCalled();
+    expect(f.topic.storeVisit!.segments![0].lines).toBe('绝了！');
+    expect(f.pipeline.resume).toHaveBeenCalledTimes(1);
+    f.fail();
+    await f.service.advance(5, scope);
+    expect(auto().state).toBe('paused');
+    expect(auto().blocked).toMatchObject({ segmentId: 'a', lines: '绝了！' });
+    expect(auto().message).toContain('已自动修复过');
+    expect(f.planner.isSameAutopilotFailure).not.toHaveBeenCalled();
+    await f.service.advance(5, scope);
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(1);
+    expect(f.pipeline.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('用户手动继续时 AI 再修一次；用户改过台词就直接按新内容出片', async () => {
+    const f = await failedAtSegment('第 1 段提交失败：服务暂时不可用');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    f.fail();
+    await f.service.advance(5, scope);
+    expect(auto().state).toBe('paused');
+    await f.begin();
+    expect(auto().blocked).toBeUndefined();
+    expect(auto().repairs).toEqual([]);
+    expect(auto().recovery?.pending).toBe(true);
+    await f.service.advance(5, scope);
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(2);
+    f.fail();
+    await f.service.advance(5, scope);
+    expect(auto().state).toBe('paused');
+    f.topic.storeVisit!.segments![0].lines = '用户改过的开场';
+    await f.begin();
+    expect(auto().recovery).toBeUndefined();
+    await f.service.advance(5, scope);
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(2);
+    expect(f.agent.generateStoreVisit).toHaveBeenCalledTimes(1);
+    expect(f.topic.storeVisit!.segments![0].lines).toBe('用户改过的开场');
+  });
+
+  it('修完后同段出现不同类错误不占重试次数，继续由 AI 修复', async () => {
+    const f = await failedAtSegment('第 1 段配音时长 16.20 秒，不在范围内');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    f.planner.isSameAutopilotFailure.mockResolvedValueOnce(false);
+    f.fail('第 1 段素材读取失败');
+    await f.service.advance(5, scope);
+    expect(f.planner.isSameAutopilotFailure.mock.calls[0][1]).toMatchObject({
+      previous: ['第 1 段配音时长 16.20 秒，不在范围内'],
+      current: '第 1 段素材读取失败',
+    });
+    expect(auto().state).toBe('waiting');
+    expect(auto().blocked).toBeUndefined();
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(2);
+    expect(auto().repairs).toHaveLength(2);
+    f.fail('第 1 段配音时长 16.20 秒，不在范围内');
+    await f.service.advance(5, scope);
+    expect(auto().state).toBe('paused');
+    expect(f.planner.isSameAutopilotFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it('文字不同但 AI 判定同类时停下等用户', async () => {
+    const f = await failedAtSegment('第 1 段配音时长 16.20 秒，不在范围内');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    f.fail('第 1 段配音时长 15.40 秒，不在范围内');
+    await f.service.advance(5, scope);
+    expect(f.planner.isSameAutopilotFailure).toHaveBeenCalledTimes(1);
+    expect(auto().state).toBe('paused');
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it('错误一直变化时同一位置也有总修复上限', async () => {
+    const f = await failedAtSegment('错误 0');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    f.planner.isSameAutopilotFailure.mockResolvedValue(false);
+    for (let i = 1; i <= DOUYIN_AUTOPILOT_MAX_REPAIRS_PER_POSITION; i += 1) {
+      expect(auto().state).toBe('waiting');
+      await f.begin({ recoverFailureId: auto().failureId });
+      await f.service.advance(5, scope);
+      f.fail(`错误 ${i}`);
+      await f.service.advance(5, scope);
+    }
+    expect(auto().state).toBe('paused');
+    expect(f.planner.diagnoseAutopilotFailure).toHaveBeenCalledTimes(
+      DOUYIN_AUTOPILOT_MAX_REPAIRS_PER_POSITION,
+    );
+  });
+
+  it('修复动作本身失败时停下，不换个说法继续重试', async () => {
+    const f = await failedAtSegment('第 1 段配音超过时长');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    f.planner.diagnoseAutopilotFailure.mockResolvedValueOnce({
+      action: 'rewrite-segment',
+      instruction: '压缩',
+      reason: '超长',
+    });
+    f.scripts.refineScript.mockRejectedValueOnce(new Error('模型超时'));
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    expect(auto().state).toBe('paused');
+    expect(auto().message).toContain('自动修复没有完成：模型超时');
+    expect(f.pipeline.resume).not.toHaveBeenCalled();
+  });
+
+  it('改台词只动失败这一段，AI 改写期间用户改过就以用户为准', async () => {
+    const f = await failedAtSegment('第 1 段配音超过时长');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    f.planner.diagnoseAutopilotFailure.mockResolvedValue({
+      action: 'rewrite-segment',
+      instruction: '压缩',
+      reason: '超长',
+    });
+    f.scripts.refineScript.mockImplementationOnce(async () => {
+      f.topic.storeVisit!.segments![1].lines = '用户刚改的第二段';
+      return { script: '改好的开场' };
+    });
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    expect(f.topic.storeVisit!.segments!.map((item) => item.lines)).toEqual([
+      '改好的开场',
+      '用户刚改的第二段',
+    ]);
+    f.fail('第 1 段配音又超过时长');
+    f.planner.isSameAutopilotFailure.mockResolvedValueOnce(false);
+    await f.service.advance(5, scope);
+    f.scripts.refineScript.mockImplementationOnce(async () => {
+      f.topic.storeVisit!.segments![0].lines = '用户亲自改的开场';
+      return { script: 'AI 改写结果' };
+    });
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    expect(f.topic.storeVisit!.segments![0].lines).toBe('用户亲自改的开场');
+  });
+
+  it('保存改动时其他镜头的成片保留，只有接这段尾帧的续段作废', () => {
+    const current = [
+      {
+        id: 'a',
+        lines: '第一段',
+        sceneImageId: 31,
+        videoId: 1,
+        nativeAudio: true,
+      },
+      { id: 'b', lines: '失败段', sceneImageId: 32 },
+      {
+        id: 'c',
+        lines: '接尾帧',
+        sceneImageId: 32,
+        videoId: 2,
+        nativeAudio: true,
+      },
+      {
+        id: 'd',
+        lines: '新镜头',
+        sceneImageId: 33,
+        videoId: 3,
+        nativeAudio: true,
+      },
+    ];
+    const merged = mergeStoreVisitSegments(
+      normalizeStoreVisitSegments(
+        current.map((item) =>
+          item.id === 'b' ? { ...item, lines: '改好的失败段' } : item,
+        ),
+        [31, 32, 33],
+      ),
+      current,
+    );
+    expect(merged.map((item) => item.videoId)).toEqual([
+      1,
+      undefined,
+      undefined,
+      3,
+    ]);
+  });
+
+  it('同类判定解析不了时按同类处理', () => {
+    expect(parseStoreVisitSameFailure('{"same":false}')).toBe(false);
+    expect(parseStoreVisitSameFailure('{"same":true}')).toBe(true);
+    expect(parseStoreVisitSameFailure('不是 JSON')).toBe(true);
+  });
+
+  it('AI 判定只有用户能处理时直接停下，不重试', async () => {
+    const f = await failedAtSegment('视频模型密钥没有配置');
+    const auto = () => f.topic.storeVisit!.autopilot!;
+    f.planner.diagnoseAutopilotFailure.mockResolvedValueOnce({
+      action: 'ask-user',
+      instruction: '',
+      reason: '缺少配置',
+    });
+    await f.begin({ recoverFailureId: auto().failureId });
+    await f.service.advance(5, scope);
+    expect(auto().state).toBe('paused');
+    expect(auto().message).toContain('需要你处理');
+    expect(f.pipeline.resume).not.toHaveBeenCalled();
+  });
+
+  it('AI 判定换画面时只重做失败这一段', async () => {
+    const f = await failedAtSegment('第 1 段素材读取失败');
+    f.planner.diagnoseAutopilotFailure.mockResolvedValueOnce({
+      action: 'replace-picture',
+      instruction: '换成门头全景',
+      reason: '素材失效',
+    });
+    await f.begin({
+      recoverFailureId: f.topic.storeVisit!.autopilot!.failureId,
+    });
+    await f.service.advance(5, scope);
+    expect(f.agent.generatePictures).toHaveBeenCalledWith(
+      5,
+      { segmentId: 'a', prompt: '换成门头全景' },
+      scope,
+    );
+    expect(f.topic.storeVisit!.segments![1].sceneImageId).toBe(31);
+    expect(f.pipeline.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it('修复动作按步骤限制，越权或解析失败的判定退回原样重试', () => {
+    expect(autopilotRepairActions('make', true)).not.toContain(
+      'regenerate-lines',
+    );
+    expect(autopilotRepairActions('make', false)).toEqual([
+      'retry',
+      'ask-user',
+    ]);
+    expect(autopilotRepairKey('voice', 'a')).toBe(
+      autopilotRepairKey('make', 'a'),
+    );
+    const actions = autopilotRepairActions('make', true);
+    expect(
+      parseStoreVisitRepairDecision(
+        '{"action":"rewrite-script","instruction":"全部重写"}',
+        actions,
+      ),
+    ).toEqual({ action: 'retry', instruction: '', reason: '' });
+    expect(parseStoreVisitRepairDecision('不是 JSON', actions).action).toBe(
+      'retry',
+    );
+    expect(
+      parseStoreVisitRepairDecision(
+        '{"action":"rewrite-segment","instruction":"压缩","reason":"超长"}',
+        actions,
+      ),
+    ).toEqual({
+      action: 'rewrite-segment',
+      instruction: '压缩',
+      reason: '超长',
+    });
   });
 
   it('复用已有脚本与音色，逐步完成台词、画面、出片，拼接完成前不报成功', async () => {
