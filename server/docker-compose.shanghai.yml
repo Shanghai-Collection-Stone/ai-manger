@@ -65,6 +65,9 @@ services:
       BASE_URL: ${BASE_URL:-}
       TASK_API_BASE_URL: ${TASK_API_BASE_URL:-}
 
+      # 小程序未开通「拍抖音任务能力」（需近 7 天投稿 ≥ 500），先走原生发布结果回写；获批后删掉这一行即恢复读取部署 Secret
+      DOUYIN_PUBLISH_WEBHOOK_ENABLED: "false"
+
       PROXY_ENABLED: ${PROXY_ENABLED:-${DEV_PROXY_ENABLED:-true}}
       HTTPS_PROXY: ${HTTPS_PROXY:-${HTTP_PROXY:-${ALL_PROXY:-${https_proxy:-${http_proxy:-${all_proxy:-${DEV_HTTPS_PROXY:-${DEV_HTTP_PROXY:-${DEV_ALL_PROXY:-}}}}}}}}}
       HTTP_PROXY: ${HTTP_PROXY:-${HTTPS_PROXY:-${ALL_PROXY:-${http_proxy:-${https_proxy:-${all_proxy:-${DEV_HTTP_PROXY:-${DEV_HTTPS_PROXY:-${DEV_ALL_PROXY:-}}}}}}}}}

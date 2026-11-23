@@ -316,6 +316,6 @@
 
 发布库二维码版本由后端 DOUYIN_MINIAPP_VERSION_TYPE 统一决定，默认 current，可设 latest；HTTP查询参数不能覆盖。软件只读取并显示实际版本，二维码、发布回调和抓取仍使用原发布库身份。配置切换后重启后端、刷新二维码即可复用对应版本缓存。
 
-拍抖音任务扩展能力需确认当前AppID实际获批并可订阅事件，官方文档存在不代表所有应用均可开通。入口或订阅未确认前，保持 DOUYIN_PUBLISH_WEBHOOK_ENABLED=false；本机开关已关闭，普通发布沿用客户端成功/失败回写和链接补ID。能力与界面排查说明见 CONFIGURATION.md。
+拍抖音任务扩展能力需确认当前AppID实际获批并可订阅事件，官方文档存在不代表所有应用均可开通。入口或订阅未确认前，保持 DOUYIN_PUBLISH_WEBHOOK_ENABLED=false；本机开关已关闭，上海部署在 `server/docker-compose.shanghai.yml` 固定为 false（优先于部署 Secret，能力获批后删掉该行），普通发布沿用客户端成功/失败回写和链接补ID。能力与界面排查说明见 CONFIGURATION.md。
 
 当前 AppID 因 Webhooks 列表缺少任务事件进行过接口排查：创建任务返回 28001018（应用未获得该能力），未创建诊断任务。平台授权及订阅需先完成，后端任务开关维持关闭；错误信息与可提交平台的 log_id 见 CONFIGURATION.md。
