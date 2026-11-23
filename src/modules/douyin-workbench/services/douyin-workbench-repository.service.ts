@@ -12,6 +12,7 @@ import {
 import { Collection, Db, Filter, ObjectId } from 'mongodb';
 import { normalizeKnowledgeIds } from '../../knowledge/services/knowledge-ids.js';
 import { DouyinPersonaRepositoryService } from '../../douyin-persona/services/douyin-persona-repository.service.js';
+import { normalizeBackgroundMusic } from '../../douyin-music/services/douyin-music-rules.js';
 import {
   isStoreVisitLocalSegment,
   isStoreVisitVisualStart,
@@ -771,7 +772,7 @@ export class DouyinWorkbenchRepositoryService {
   }
 
   /**
-   * @description 保存标题、脚本正文、类型、配图偏向、视频声音设置、整片目标时长（0 表示改回自动）、整片清晰度
+   * @description 保存标题、脚本正文、类型、配图偏向、视频声音设置、成片背景音乐、整片目标时长（0 表示改回自动）、整片清晰度
    *   （空串表示改回模型默认档）、发布文案（三项全空表示清掉）、完整分镜或最终视频素材绑定。
    * @keyword-cn 更新抖音选题, 保存脚本正文, 持久化分镜
    * @keyword-en update-douyin-topic, persist-script-body, persist-storyboard
@@ -788,6 +789,7 @@ export class DouyinWorkbenchRepositoryService {
       scriptStyle?: string;
       referenceImages?: Array<Partial<DouyinMediaReference>>;
       videoAudio?: Partial<DouyinVideoAudioSetting>;
+      backgroundMusic?: { trackId?: number; volume?: number };
       fullVideoDuration?: number;
       fullVideoResolution?: string;
       shotVideoResolution?: string;
@@ -851,6 +853,11 @@ export class DouyinWorkbenchRepositoryService {
       );
     if (input.videoAudio !== undefined)
       updates.videoAudio = normalizeVideoAudio(input.videoAudio);
+    if (input.backgroundMusic !== undefined)
+      updates.backgroundMusic = normalizeBackgroundMusic(
+        input.backgroundMusic,
+        current.backgroundMusic,
+      );
     // 0 表示改回自动，清掉字段
     const unset: Record<string, ''> = {};
     // personaId 传 0 表示取消选用人物；scriptStyle 传空串表示取消风格

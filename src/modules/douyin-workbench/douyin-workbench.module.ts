@@ -3,6 +3,7 @@ import { AdminModule } from '../admin/admin.module.js';
 import { AiAgentModule } from '../ai-agent/ai-agent.module.js';
 import { AiBillingModule } from '../ai-billing/ai-billing.module.js';
 import { DataSourceModule } from '../data-source/data-source.module.js';
+import { DouyinMusicModule } from '../douyin-music/douyin-music.module.js';
 import { DouyinPersonaModule } from '../douyin-persona/douyin-persona.module.js';
 import { GalleryModule } from '../gallery/gallery.module.js';
 import { GenerationQueueModule } from '../generation-queue/generation-queue.module.js';
@@ -49,6 +50,7 @@ import { DouyinStoreVisitAutopilotService } from './services/douyin-store-visit-
     AiAgentModule,
     AiBillingModule,
     DataSourceModule,
+    DouyinMusicModule,
     DouyinPersonaModule,
     GalleryModule,
     GenerationQueueModule,

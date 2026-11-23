@@ -14,6 +14,7 @@ import type {
   DouyinStoreVisitMotion,
   DouyinVideoTemplate,
 } from '../entities/douyin-workbench.entity.js';
+import { DouyinMusicRepositoryService } from '../../douyin-music/services/douyin-music-repository.service.js';
 import { isStoreVisitSegmentReady } from './douyin-store-visit-continuity.js';
 import { activeTemplateAspect } from './douyin-video-template.js';
 import { listDirectorFrames } from './douyin-video-director.js';
@@ -83,6 +84,18 @@ export type DouyinConcatTemplate = Pick<
 > & { imageUrl: string };
 
 /**
+ * @description 交给客户端混进成片的背景音乐：曲目 ID、曲名、下载地址与音量（1～100）。
+ * @keyword-cn 合成背景音乐, 混音参数
+ * @keyword-en concat-music, mix-input
+ */
+export interface DouyinConcatMusic {
+  trackId: number;
+  name: string;
+  url: string;
+  volume: number;
+}
+
+/**
  * @description 客户端回报的合成结果：进行中（进度）、完成（已上传登记的视频库 ID）或失败（中文原因与原始信息）。
  * @keyword-cn 合成结果回报, 客户端回报
  * @keyword-en concat-result-report, client-report
@@ -114,14 +127,42 @@ export class DouyinShotConcatService {
   constructor(
     @Inject('DS_MONGO_DB') db: Db,
     private readonly repository: DouyinWorkbenchRepositoryService,
+    private readonly music: DouyinMusicRepositoryService,
   ) {
     this.operations = db.collection<DouyinOperationEntity>('douyin_operations');
   }
 
   /**
+   * @description 解析脚本选中的背景音乐：没选返回空；曲目已被删除时不拦合成（托管流程不能卡住），标记 `musicMissing` 让客户端提示。
+   * @keyword-cn 解析合成音乐, 曲目缺失降级
+   * @keyword-en resolve-concat-music, missing-track-fallback
+   * @param {{backgroundMusic?: {trackId: number, volume: number}}} topic 脚本。
+   * @param {DouyinScope} scope 租户用户作用域。
+   * @returns {Promise<{music?: DouyinConcatMusic, musicMissing?: boolean}>} 音乐或缺失标记。
+   */
+  private async resolveMusic(
+    topic: { backgroundMusic?: { trackId: number; volume: number } },
+    scope: DouyinScope,
+  ): Promise<{ music?: DouyinConcatMusic; musicMissing?: boolean }> {
+    const setting = topic.backgroundMusic;
+    if (!setting?.trackId) return {};
+    const track = await this.music.getUsable(setting.trackId, scope);
+    const url = track ? this.music.urlOf(track) : '';
+    if (!track || !url) return { musicMissing: true };
+    return {
+      music: {
+        trackId: track.id,
+        name: track.name,
+        url,
+        volume: setting.volume,
+      },
+    };
+  }
+
+  /**
    * @description 准备一次客户端合成：每一镜（探店模式按分段，本机素材段配好音即可）都要已出片、同一脚本没有正在进行的合成；`auto` 时先原子领走「全部出片后自动合成」标记
    *   （领不到说明已被别的客户端处理或已取消），手动合成顺带清掉标记。写运行中的调用记录并返回按顺序的片段，素材地址取图库 / 视频库的真实记录；
-   *   脚本启用了版式模板时一并返回模板（客户端按模板合成）。
+   *   脚本启用了版式模板时一并返回模板（客户端按模板合成）；选了背景音乐时返回音乐地址与音量，曲目已删除时返回 `musicMissing`。
    * @keyword-cn 准备客户端合成, 合成前校验
    * @keyword-en prepare-client-concat, concat-precheck
    * @param {number} topicId 子选题（脚本）ID。
@@ -140,6 +181,8 @@ export class DouyinShotConcatService {
     clips: DouyinConcatClip[];
     template?: DouyinConcatTemplate;
     edit: DouyinEditPlan;
+    music?: DouyinConcatMusic;
+    musicMissing?: boolean;
   }> {
     const topic = await this.repository.get(topicId, scope);
     if (!topic || topic.kind !== 'child')
@@ -281,6 +324,7 @@ export class DouyinShotConcatService {
       }
     }
     const edit = buildPlannedEdit(topic, clips);
+    const { music, musicMissing } = await this.resolveMusic(topic, scope);
     // 自动合成要先领到标记；手动合成也清掉标记，免得之后重生成某一镜又自动合成一次
     const claimed = await this.repository.claimAutoConcat(topicId, scope);
     if (options.auto && !claimed)
@@ -304,6 +348,9 @@ export class DouyinShotConcatService {
         auto: Boolean(options.auto),
         template: Boolean(activeTemplateAspect(topic.videoTemplate)),
         editPlan: edit,
+        ...(music
+          ? { music: { trackId: music.trackId, volume: music.volume } }
+          : {}),
       },
       status: 'running',
       createdAt: now,
@@ -323,6 +370,8 @@ export class DouyinShotConcatService {
       clips,
       edit,
       ...(template ? { template } : {}),
+      ...(music ? { music } : {}),
+      ...(musicMissing ? { musicMissing } : {}),
     };
   }
 

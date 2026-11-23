@@ -10,7 +10,7 @@
 
 - `model-concurrency.module.ts` — Nest 模块入口，导出 `ModelConcurrencyService`。
 - `entities/model-concurrency.entity.ts` — 上限、名额、排队三类记录，模型标识、业务回调、概览类型与间隔 / 保护期 / 最大上限常量。
-- `services/model-concurrency.service.ts` — 申请名额、排队、归还、排队位置、上限读写与概览；主进程定时回收名额并派发排队任务。
+- `services/model-concurrency.service.ts` — 申请名额、排队、归还、排队位置、通道情况、上限读写与概览；主进程定时回收名额并派发排队任务。
 - `services/model-concurrency.service.spec.ts` — 不限放行、满了排队不插队、重复申请、模型互不占用、回收后先来先到派发、业务不用提交时归还、调高上限放行多个、保护期回收与补回排队登记单测。
 - `controller/model-concurrency-admin.controller.ts` — 平台后台 `admin/model-concurrency` 接口。
 - `controller/model-concurrency.dto.ts` — 设置上限的参数校验。
@@ -36,12 +36,14 @@
 - `ModelConcurrencyService.keyOf(target)` — 名额与排队的分组键 `providerId:model` | keywords: 模型键, 名额分组, model-key, slot-group
 - `ModelConcurrencyService.registerKind(kind,handler)` — 业务注册任务种类 | keywords: 注册排队任务种类, 业务提交回调, register-concurrency-kind, dispatch-handler
 - `ModelConcurrencyService.readLimit(target)` — 读上限，没设返回 null | keywords: 读取并发上限, 未设置不限, read-concurrency-limit, unlimited-when-unset
+- `ModelConcurrencyService.capacity(target)` — 读取模型的通道情况：并发上限（没设为 null）与当前占用的名额数 | keywords: 读取模型通道, 通道占用数, read-model-capacity, busy-slot-count
 - `ModelConcurrencyService.setLimit(target,limit,updatedBy?)` — 设置或清除上限 | keywords: 设置并发上限, 清除上限, set-concurrency-limit, clear-limit
 - `ModelConcurrencyService.overview()` — 列出设了上限、正在跑或排队的模型 | keywords: 模型并发概览, 排队数量, list-concurrency-usage, waiting-count
 - `ModelConcurrencyService.admit(kind,target,holder)` — 提交前申请名额：不限直接放行；有上限时前面没人排队且有空位才放行，否则登记排队返回 false；重复申请不重复占 | keywords: 申请模型名额, 满了排队, admit-model-slot, queue-when-full
 - `ModelConcurrencyService.ensureWaiting(kind,target,holder,enqueuedAt)` — 补回丢了的排队登记，已拿到名额的不补 | keywords: 补回排队登记, 中断恢复, ensure-waiting, recover-lost-waiter
 - `ModelConcurrencyService.release(holder)` — 归还名额并撤掉排队，重复调用无副作用 | keywords: 归还模型名额, 撤销排队, release-model-slot, cancel-waiting
 - `ModelConcurrencyService.positions(holders)` — 排队任务前面还有几个 | keywords: 查询排队位置, 前面还有几个, query-queue-position, waiting-ahead
+- `ModelConcurrencyService.holdersAhead(holders)` — 排队任务前面分别是哪些任务，业务据此换算前面有几个人 | keywords: 查询前方任务, 排队先后, query-holders-ahead, queue-order
 - `ModelConcurrencyService.tick()` — 主进程一轮：先回收再派发，不重入 | keywords: 排队派发一轮, 回收名额, concurrency-tick, reclaim-slots
 - `ModelConcurrencyService.reclaim()` — 业务说已结束的立即回收，查不到的过保护期回收 | keywords: 回收已结束名额, 名额保护期, reclaim-finished-slots, slot-grace
 - `ModelConcurrencyService.drain()` — 按排队先后派发，某模型满了就跳过它后面同模型的，其余模型照常 | keywords: 派发排队任务, 先来先到, drain-model-queue, fifo-order
@@ -70,6 +72,9 @@
 | 回收已结束名额 | reclaim-finished-slots     |
 | 名额保护期     | slot-grace                 |
 | 查询排队位置   | query-queue-position       |
+| 查询前方任务   | query-holders-ahead        |
+| 读取模型通道   | read-model-capacity        |
+| 通道占用数     | busy-slot-count            |
 | 设置并发上限   | set-concurrency-limit      |
 | 排队任务种类   | concurrency-kind           |
 

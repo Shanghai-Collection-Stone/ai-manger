@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { Db } from 'mongodb';
 import { DouyinShotConcatService } from './douyin-shot-concat.service.js';
 import type { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
+import type { DouyinMusicRepositoryService } from '../../douyin-music/services/douyin-music-repository.service.js';
 
 type Row = Record<string, any>;
 
@@ -67,11 +68,18 @@ function build(topic: Row, rows: Row[] = []) {
       return had;
     }),
   };
+  const music = {
+    getUsable: jest.fn(async (id: number) =>
+      id === 5 ? { id: 5, name: '轻快午后', key: 'music/5.mp3' } : null,
+    ),
+    urlOf: jest.fn((row: Row) => `https://cdn/${row.key}`),
+  };
   const service = new DouyinShotConcatService(
     { collection: () => operations } as unknown as Db,
     repository as unknown as DouyinWorkbenchRepositoryService,
+    music as unknown as DouyinMusicRepositoryService,
   );
-  return { service, repository, operations };
+  return { service, repository, operations, music };
 }
 
 /** @description 建立已出片的两镜脚本。 @keyword-cn 就绪脚本, 测试素材 @keyword-en ready-topic, test-media */
@@ -133,6 +141,49 @@ it(
   'delivers individual layouts and planned transitions without reviewing footage',
   verifySegmentConcat,
 );
+
+/**
+ * @description 验证合成带上选中的背景音乐；没选不查曲库；曲目被删时不拦合成并给出缺失标记。
+ * @keyword-cn 合成背景音乐回归, 曲目缺失降级
+ * @keyword-en concat-music-regression, missing-track-fallback
+ */
+async function verifyConcatMusic(): Promise<void> {
+  const chosen = build({
+    ...readyTopic(),
+    backgroundMusic: { trackId: 5, volume: 30, updatedAt: new Date() },
+  });
+  const result = await chosen.service.prepare(7, scope);
+  expect(result.music).toEqual({
+    trackId: 5,
+    name: '轻快午后',
+    url: 'https://cdn/music/5.mp3',
+    volume: 30,
+  });
+  expect(result.musicMissing).toBeUndefined();
+  expect(chosen.operations.rows[0].request.music).toEqual({
+    trackId: 5,
+    volume: 30,
+  });
+
+  const none = build({
+    ...readyTopic(),
+    backgroundMusic: { trackId: 0, volume: 30, updatedAt: new Date() },
+  });
+  const silent = await none.service.prepare(7, scope);
+  expect(silent.music).toBeUndefined();
+  expect(none.music.getUsable).not.toHaveBeenCalled();
+
+  const deleted = build({
+    ...readyTopic(),
+    backgroundMusic: { trackId: 9, volume: 30, updatedAt: new Date() },
+  });
+  const degraded = await deleted.service.prepare(7, scope);
+  expect(degraded.music).toBeUndefined();
+  expect(degraded.musicMissing).toBe(true);
+  expect(degraded.operation.status).toBe('running');
+}
+
+it('passes the chosen music and degrades when it was deleted', verifyConcatMusic);
 
 describe('DouyinShotConcatService（客户端合成）', () => {
   it('全部探店片段必须先生成视频，只用生成的视频与字幕拼接', async () => {

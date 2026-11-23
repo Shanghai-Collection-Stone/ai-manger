@@ -66,6 +66,11 @@ function memoryOperations(rows: Row[]) {
     findOne: async (filter: Row) =>
       rows.find((row) => matches(row, filter)) ?? null,
     find: (filter: Row) => ({
+      sort: () => ({
+        limit: () => ({
+          toArray: async () => rows.filter((row) => matches(row, filter)),
+        }),
+      }),
       limit: () => ({
         toArray: async () => rows.filter((row) => matches(row, filter)),
       }),
@@ -98,7 +103,8 @@ function buildService(rows: Row[]) {
     admit: jest.fn().mockResolvedValue(true),
     release: jest.fn().mockResolvedValue(undefined),
     ensureWaiting: jest.fn().mockResolvedValue(undefined),
-    positions: jest.fn().mockResolvedValue(new Map()),
+    holdersAhead: jest.fn().mockResolvedValue(new Map()),
+    capacity: jest.fn().mockResolvedValue({ limit: 2, running: 2 }),
   };
   const repository = {
     get: jest.fn().mockResolvedValue({ id: 7, kind: 'child', storyboard: [] }),
@@ -260,6 +266,189 @@ describe('DouyinVideoQueueService 抖音视频按模型排队', () => {
         lipSync: { stage: 'syncing' },
       } as Pick<DouyinOperationEntity, 'status' | 'lipSync'>),
     ).toBe(false);
+  });
+
+  it('存排队记录时立刻登记排队，不用等每分钟巡检', async () => {
+    const rows: Row[] = [];
+    const { service, concurrency } = buildService(rows);
+    const saved = await service.enqueue(
+      {
+        id: 'new-op',
+        operation: 'generate',
+        topicId: 7,
+        provider: 'opensource-video',
+        mode: 'store-visit',
+        model: 'minimax-h3-turbo',
+        providerId: 'p1',
+        userId: 'u1',
+        request: {},
+      },
+      {},
+    );
+    expect(concurrency.ensureWaiting).toHaveBeenCalledWith(
+      'douyin-video',
+      { providerId: 'p1', model: 'minimax-h3-turbo' },
+      'new-op',
+      saved.createdAt,
+    );
+  });
+
+  it('排队和 GPU 服务器排队的任务补通道情况，不外发提供商 ID', async () => {
+    const rows = [
+      waitingRow({ id: 'waiting' }),
+      waitingRow({
+        id: 'server',
+        provider: 'opensource-video',
+        status: 'running',
+        queue: undefined,
+        result: { queue_position: 2 },
+      }),
+      waitingRow({
+        id: 'generating',
+        provider: 'opensource-video',
+        status: 'running',
+        queue: undefined,
+        result: { queue_position: 0 },
+      }),
+    ] as never[];
+    const { service, concurrency } = buildService(rows);
+    concurrency.holdersAhead.mockResolvedValue(
+      new Map([['waiting', ['x', 'y', 'z']]]),
+    );
+    const views = await service.attachPositions(
+      (rows as Row[]).map((row) => ({
+        id: row.id,
+        provider: row.provider,
+        status: row.status,
+        result: row.result,
+        queue: row.queue ? { stage: row.queue.stage } : undefined,
+      })) as never,
+      rows,
+    );
+    expect(views[0].queue?.ahead).toBe(3);
+    expect(views[0].capacity).toEqual({ channels: 2, busy: 2 });
+    expect(views[1].capacity).toEqual({ channels: 2, busy: 2 });
+    expect(views[2].capacity).toBeUndefined();
+    expect(concurrency.capacity).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(views)).not.toContain('p1');
+  });
+
+  it('没设并发上限时按单卡 1 路计算', async () => {
+    const rows = [waitingRow({ id: 'waiting' })] as never[];
+    const { service, concurrency } = buildService(rows);
+    concurrency.capacity.mockResolvedValue({ limit: null, running: 4 });
+    const [view] = await service.attachPositions(
+      [{ id: 'waiting', queue: { stage: 'waiting' } }] as never,
+      rows,
+    );
+    expect(view.capacity).toEqual({ channels: 1, busy: 0 });
+  });
+
+  it('把前面的任务换算成人数和等待时间，不外发用户 ID', async () => {
+    const now = Date.now();
+    /** @description 一条耗时为指定秒数的完成记录。 @keyword-cn 完成记录样本, 测试数据 @keyword-en completed-row-sample, fixture */
+    const done = (id: string, seconds: number) =>
+      waitingRow({
+        id,
+        status: 'completed',
+        queue: undefined,
+        startedAt: new Date(now - seconds * 1000 - 60000),
+        updatedAt: new Date(now - 60000),
+      });
+    const rows = [
+      waitingRow({ id: 'mine', userId: 'u1' }),
+      waitingRow({ id: 'a1', userId: 'u2' }),
+      waitingRow({ id: 'a2', userId: 'u2' }),
+      waitingRow({ id: 'a3', userId: 'u3' }),
+      waitingRow({ id: 'a4', userId: 'u1' }),
+      waitingRow({
+        id: 'run',
+        userId: 'u4',
+        status: 'running',
+        queue: undefined,
+        startedAt: new Date(now - 40000),
+      }),
+      done('d1', 100),
+      done('d2', 120),
+      done('d3', 140),
+    ] as never[];
+    const { service, concurrency } = buildService(rows);
+    concurrency.capacity.mockResolvedValue({ limit: 1, running: 1 });
+    concurrency.holdersAhead.mockResolvedValue(
+      new Map([['mine', ['a1', 'a2', 'a3', 'a4']]]),
+    );
+    const [view] = await service.attachPositions(
+      [
+        {
+          id: 'mine',
+          provider: 'shuyan',
+          status: 'queued',
+          queue: { stage: 'waiting' },
+        },
+      ] as never,
+      [(rows as Row[])[0]] as never,
+    );
+    expect(view.typicalSeconds).toBe(120);
+    expect(view.wait).toMatchObject({
+      aheadPeople: 2,
+      aheadMine: 1,
+      aheadTasks: 4,
+    });
+    expect(view.wait?.waitSeconds).toBeGreaterThanOrEqual(555);
+    expect(view.wait?.waitSeconds).toBeLessThanOrEqual(560);
+    expect(JSON.stringify(view)).not.toMatch(/u2|u3|u4/);
+  });
+
+  it('GPU 上排队时前面一个在跑、其余排着，平台外的任务各算一人', async () => {
+    const rows = [
+      waitingRow({
+        id: 'mine',
+        userId: 'u1',
+        provider: 'opensource-video',
+        queue: undefined,
+        result: { queue_position: 3 },
+      }),
+      waitingRow({
+        id: 'other',
+        userId: 'u2',
+        provider: 'opensource-video',
+        queue: undefined,
+        result: { queue_position: 1 },
+      }),
+    ] as never[];
+    const { service, concurrency } = buildService(rows);
+    concurrency.capacity.mockResolvedValue({ limit: null, running: 0 });
+    const [view] = await service.attachPositions(
+      [
+        {
+          id: 'mine',
+          provider: 'opensource-video',
+          status: 'queued',
+          result: { queue_position: 3 },
+        },
+      ] as never,
+      [(rows as Row[])[0]] as never,
+    );
+    expect(view.wait).toEqual({
+      aheadPeople: 2,
+      aheadMine: 0,
+      aheadTasks: 2,
+      waitSeconds: 540,
+    });
+  });
+
+  it('读负载失败时不影响调用列表', async () => {
+    const rows = [waitingRow({ id: 'waiting' })] as never[];
+    const { service, concurrency } = buildService(rows);
+    concurrency.holdersAhead.mockRejectedValue(new Error('down'));
+    const [view] = await service.attachPositions(
+      [
+        { id: 'waiting', status: 'queued', queue: { stage: 'waiting' } },
+      ] as never,
+      rows,
+    );
+    expect(view.wait).toBeUndefined();
+    expect(view.queue?.stage).toBe('waiting');
   });
 
   it('巡检把提交中断的记录判失败，还在等的补回排队登记', async () => {

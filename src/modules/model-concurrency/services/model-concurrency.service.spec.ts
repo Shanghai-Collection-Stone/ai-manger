@@ -60,6 +60,8 @@ function memoryCollection(uniqueKeys: string[][] = []) {
     createIndex: jest.fn().mockResolvedValue('ok'),
     findOne: async (filter: Row) =>
       rows.find((row) => matches(row, filter)) ?? null,
+    countDocuments: async (filter: Row) =>
+      rows.filter((row) => matches(row, filter)).length,
     find: (filter: Row = {}) =>
       cursor(rows.filter((row) => matches(row, filter))),
     insertOne: async (doc: Row) => {
@@ -145,6 +147,18 @@ describe('ModelConcurrencyService 按模型限并发', () => {
         ['c', 1],
       ]),
     );
+  });
+
+  it('通道情况返回上限和当前占用数，不同模型互不计入', async () => {
+    const { service } = buildService();
+    expect(await service.capacity(seedance)).toEqual({
+      limit: null,
+      running: 0,
+    });
+    await service.setLimit(seedance, 2);
+    await service.admit('video', seedance, 'a');
+    await service.admit('video', { ...seedance, model: 'other' }, 'b');
+    expect(await service.capacity(seedance)).toEqual({ limit: 2, running: 1 });
   });
 
   it('同一任务重复申请不重复占名额', async () => {

@@ -38,6 +38,8 @@ export const ADMIN_SUBJECTS = {
   DouyinWorkbench: 'DouyinWorkbench',
   /** 抖音预设人物（人设、音色与形象三视图），租户内共享 */
   DouyinPersona: 'DouyinPersona',
+  /** 抖音背景音乐曲库（曲目增删改由管理员维护，工作台只读选用） */
+  DouyinMusic: 'DouyinMusic',
   /** 引用知识（母选题生成时引用的产品 / 门店 / 品牌知识），小红书与抖音共用，租户内共享 */
   Knowledge: 'Knowledge',
   /** 平台与租户运行参数 */

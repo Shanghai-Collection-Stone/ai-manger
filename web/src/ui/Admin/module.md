@@ -6,6 +6,7 @@
 支持 AI 提供商按模型类型管理(llm/em/image/video/audio，video 为生视频、audio 为音色克隆；提供商编码下拉 `PROVIDER_CODE_OPTIONS` 含数眼智能(`shuyan`)、PixMax(`pixmax`)、自建 MiniMax-H3 视频服务(`opensource-video`，选中时类别自动切到「生视频模型」，提示服务地址必填 GPU 平台给 6006 的映射地址、Key 填服务器 .env 的 VIDEO_API_KEY、模型 minimax-h3-turbo / minimax-h3-fast / minimax-h3-quality、可用于抖音分镜、整片与探店画面视频、探店人物对口型四个节点)与阿里云百炼(`dashscope`，选中时类别自动切到「音色模型」，并提示用于探店音色克隆与配音、Key 填 sk- 原始串、服务地址留空默认 https://dashscope.aliyuncs.com/compatible-mode/v1、模型填 cosyvoice-v3.5-plus、系统音色固定 cosyvoice-v3-flash、录音克隆需先配 OSS)；已下线的通用数字人服务(`digital-human`)不再出现在下拉里，编辑旧记录时由 `RETIRED_PROVIDER_CODE_LABELS` 显示为「已下线」并提示改用百炼 + 数眼智能，选中 shuyan 时表单提示一个 Key 下有多类模型需按类别分别建一条、服务地址留空默认 https://platform.shuyanai.com/v1、Key 填 sk- 原始串、这里的模型只作类别默认值（节点级到「工作流节点模型」里按类型挑）；选中 pixmax 时提示按类别分别添加、服务地址留空默认 https://app.pixmax.cn)，并新增平台级「工作流节点模型」Tab 为预设工作流的每个节点指定提供商与模型，并新增平台级“服务管理”Tab：英文编码与服务名由后端代码固定，页面只修改每次服务消耗的 Credit 点数。租户管理的新租户可设置初始 Credit；创建后余额禁止直接覆盖，每个租户通过“充值/流水”弹窗做正数充值、正负人工调账并查看变动前后余额、原因、操作人、外部单号和服务消费记录；该按钮挂在租户列表每一行（此前误放在 Key 列表里，并把 Key 的 ID 当租户 ID 传）。无限额度（∞）租户打开弹窗时会提示：入账后切换为按余额计费、余额等于本次数量，且无限额度下不能扣减。
 新增"小红书采集"Tab:切换数据采集渠道(SuperClaw 节点 / TikHub 开放接口)、设置每天固定抓取时刻(默认 23:59,服务器本地时区)、配置并自检 TikHub API Key。
 新增"抖音预设人物"Tab:维护租户内共享的短视频出镜人设(外貌、性格语气、叙事视角、音色)与 AI 三视图形象图,供 xhs-manger 工作台按脚本选用;由独立组件 `DouyinPersonaPanel.jsx` 承载,后端见 [douyin-persona 模块](../../../../src/modules/douyin-persona/module.md)。
+新增"背景音乐曲库"Tab(超管与租户管理员):上传已授权曲目并写明授权来源,供 xhs-manger 工作台在「声音」步骤选用;由独立组件 `DouyinMusicPanel.jsx` 承载,后端见 [douyin-music 模块](../../../../src/modules/douyin-music/module.md)。
 新增"热点采集榜"Tab:热点采集规则管理(含可用性自检)、触发采集(默认清除历史)、榜单浏览与过滤、AI 归类标签弹窗、按母选题推荐热点;由独立组件 `HotTopicPanel.jsx` 承载,后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
 新增“成员 Credit”Tab（超管与租户管理员）：租户 Credit 统一分配给成员，管理员把待分配额度分给 / 收回成员、设置新成员赠送额度，超管还能把旧全员共用租户迁移（每个成员一份全额）或直接切换为分配模式，并给成员的个人额度（跨租户通用）充值；租户「充值/流水」弹窗在分配模式下提示入账的是待分配额度。新增“入驻审批”Tab：超管与租户管理员可审批入驻申请、查看邮件通知结果，并生成、复制、撤销不限人数的限时邀请链接；新增“运维上报”Tab：查看客户端问题与完整日志，超管可更新处理状态和备注；新增平台级“发信邮箱”Tab：维护 SMTP 配置并真实测试发信。
 新增平台级「阿里云配置」Tab(原「短信验证码」Tab 并入)：对象存储 OSS 与短信验证码集中维护，两边各填各的 AccessKey(可以是不同阿里云账号)，由 `AliyunSettingPanel.jsx` 承载。
@@ -140,6 +141,22 @@
   - `remove(row)` — 删除人物(二次确认),已选用它的脚本退回不指定出镜人物 | keywords: 删除预设人物, 引用降级, delete-persona, dangling-reference
   - `togglePublic(row)` — 母平台切换人物公开状态,取消公开前二次确认(租户脚本引用会降级) | keywords: 切换人物公开, 平台公开人物, toggle-persona-public, platform-public-persona
 
+### DouyinMusicPanel.jsx
+
+后台「背景音乐曲库」Tab 的独立面板,由 `AdminApp.jsx` 在 `activeTab === 'douyin_music'` 时挂载,仅超管与租户管理员可见。左列是曲目列表(分类、状态、授权来源、试听与操作),右列是上传或编辑表单。授权来源必填;母平台可把曲目公开给所有租户,租户对平台曲目只读。后端见 [douyin-music 模块](../../../../src/modules/douyin-music/module.md)。
+
+- **关键词**: douyin music panel, track management, license source, music library
+- **常量**:
+  - `EMPTY_MUSIC_FORM` — 曲目表单初始值 | keywords: 曲目表单初值, 表单字段, empty-music-form, form-fields
+  - `FALLBACK_MAX_BYTES` — 选项没取到时的上传大小上限 | keywords: 曲目大小兜底, 上传限制, music-max-bytes-fallback, upload-limit
+- **函数**:
+  - `DouyinMusicPanel({ isPlatform, onNotice, onError })` — 曲库管理面板主体 | keywords: 背景音乐曲库页, 曲目管理, douyin-music-panel, track-management
+  - `reload()` — 拉取曲目列表与分类选项 | keywords: 加载曲库, 曲库分类, load-music-library, music-categories
+  - `resetForm()` — 清空表单与已选文件 | keywords: 重置曲目表单, 清空文件, reset-music-form, clear-file
+  - `save()` — 校验并保存曲目 | keywords: 保存曲目, 授权来源校验, save-music-track, license-check
+  - `toggleArchive(row)` — 归档或恢复曲目 | keywords: 归档曲目, 恢复曲目, archive-music-track, restore-music-track
+  - `togglePublic(row)` — 母平台切换曲目公开 | keywords: 切换曲目公开, 平台公开曲目, toggle-music-public, platform-public-track
+  - `remove(row)` — 删除曲目与文件 | keywords: 删除曲目, 引用降级, delete-music-track, dangling-reference
 ### HotTopicPanel.jsx
 
 后台「热点采集榜」Tab 的独立面板组件,由 `AdminApp.jsx` 在 `activeTab === 'hot_topic'` 时挂载并透传 `onNotice` / `onError` 两个顶层提示回调。分四块:采集规则表格(勾选参与本次采集、启用开关、**是否可用徽标 + 失败原因 + 最近自检时间**、自检/编辑/删除、初始化预置规则)、规则编辑表单(榜单地址、榜单数组路径、标题/链接/热度/摘要取值路径、链接模板、兜底标签、附加请求头 JSON)、执行采集(「采集前清除之前的」**默认勾选**、「采集后 AI 归类打标」默认勾选、逐规则回执)、当前热点榜(分类/来源/标签/标题关键词过滤 + 分页 + 补跑归类 + 清空)与按母选题推荐热点。榜单表格的**标题列限宽并单行截断**(标题与摘要都 `truncate`,悬停 `title` 看全文),标签列固定 132px:摘要动辄上百字,不限宽会把来源/热度/采集时间几列挤出屏幕。「查看采集标签」按钮打开弹窗,把全部 AI 归类标签按条目数倒序线性铺开(标签、条目数、最近时间、出现分类、示例标题),点任一标签即把下方榜单过滤到该标签。后端见 [hot-topic 模块](../../../../src/modules/hot-topic/module.md)。
@@ -338,6 +355,11 @@
   - `adminApi.listDouyinPersonas` / `getDouyinPersonaOptions` / `createDouyinPersona` / `updateDouyinPersona` / `deleteDouyinPersona`: 抖音预设人物 CRUD 与视角登记表(走 `/api/douyin-persona/*`) | keywords: 预设人物CRUD, 视角登记表, douyin-persona-crud, perspective-registry
   - `adminApi.draftDouyinPersona(brief)`: 按一句话需求让 AI 写出人设草稿(不入库) | keywords: AI生成人设, 人设草稿, ai-draft-persona, persona-draft
   - `adminApi.generateDouyinPersonaSheet(id)`: 串行生成人物正面/侧身/特写三视图形象图并整组替换 | keywords: 生成人物三视图, 形象一致, generate-reference-sheet, identity-consistency
+  - `adminApi.listDouyinMusicLibrary()`: 列出曲库曲目(含已归档与平台公开) | keywords: 查询曲库, 曲目列表, list-music-library, track-list
+  - `adminApi.getDouyinMusicOptions()`: 读取曲库分类与上传限制 | keywords: 曲库选项, 曲库分类, music-library-options, music-categories
+  - `adminApi.createDouyinMusic(form)`: 上传一首曲库曲目 | keywords: 新增曲库曲目, 上传曲目, create-music-track, upload-library-track
+  - `adminApi.updateDouyinMusic(id, payload)`: 更新曲目信息、归档或公开 | keywords: 更新曲库曲目, 归档曲目, update-music-track, archive-track
+  - `adminApi.deleteDouyinMusic(id)`: 删除曲目并清理文件 | keywords: 删除曲库曲目, 清理曲目文件, delete-music-track, cleanup-track-file
   - `adminApi.listXhsAccounts` / `createXhsAccount` / `updateXhsAccount` / `deleteXhsAccount` / `testLoginXhsAccount`
   - `adminApi.listFeishuCredentials` / `upsertFeishuCredential` / `deleteFeishuCredential`: 飞书凭证 CRUD
   - `adminApi.listFinanceBindings` / `upsertFinanceBinding` / `deleteFinanceBinding`: 财务源绑定 CRUD(按 name)

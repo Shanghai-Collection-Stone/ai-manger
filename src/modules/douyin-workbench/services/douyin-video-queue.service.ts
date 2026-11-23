@@ -17,9 +17,32 @@ import type {
   DouyinVideoQueueState,
   DouyinVideoQueueView,
 } from '../entities/douyin-workbench.entity.js';
+import {
+  countPeopleAhead,
+  DOUYIN_VIDEO_DEFAULT_TASK_SECONDS,
+  estimateVideoWaitSeconds,
+  medianTaskSeconds,
+} from './douyin-video-wait.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
+
+/**
+ * @description 模型实测耗时的缓存时长（毫秒），每个用户每 8 秒轮询一次，不必每次都重算。
+ * @keyword-cn 实测耗时缓存, 轮询减负
+ * @keyword-en task-seconds-cache-ms, polling-load
+ */
+const DOUYIN_VIDEO_TASK_SECONDS_CACHE_MS = 60 * 1000;
+
+/**
+ * @description 一个模型当前的负载：还没结束的任务与实测单任务耗时。
+ * @keyword-cn 模型当前负载, 在跑任务
+ * @keyword-en model-load, active-tasks
+ */
+type DouyinVideoModelLoad = {
+  active: DouyinOperationEntity[];
+  taskSeconds: number | null;
+};
 
 /**
  * @description 抖音视频在模型并发登记里的任务种类名。
@@ -89,6 +112,27 @@ export function readQueuedShotRequest(row: DouyinOperationEntity): {
 }
 
 /**
+ * @description 读取任务在自建 GPU 服务器上前面还有几个：服务端排队位置从 1 算起（前面含正在跑的那个），执行中为 0，已结束或其他通道为 0。
+ * @keyword-cn 读取服务器排队位置, GPU队列位置
+ * @keyword-en read-server-queue-position, gpu-queue-position
+ * @param view 调用视图。
+ * @returns {number} 前面的任务数。
+ */
+export function readVideoServerAhead(
+  view: Pick<DouyinOperationView, 'provider' | 'status' | 'result'>,
+): number {
+  if (
+    view.provider !== 'opensource-video' ||
+    !['queued', 'running'].includes(view.status)
+  )
+    return 0;
+  const position = Number(
+    (view.result as { queue_position?: unknown } | undefined)?.queue_position,
+  );
+  return Number.isFinite(position) && position > 0 ? Math.floor(position) : 0;
+}
+
+/**
  * @description 判断调用记录是否还占着模型：排队或生成中、且不在出片后的对口型阶段（对口型用的是另一个模型）。
  * @keyword-cn 判断占用模型, 名额是否归还
  * @keyword-en is-occupying-model, slot-still-held
@@ -115,6 +159,10 @@ export class DouyinVideoQueueService implements OnModuleInit, OnModuleDestroy {
   private readonly submitters = new Map<
     DouyinVideoQueueRoute,
     DouyinVideoQueueSubmitter
+  >();
+  private readonly taskSecondsCache = new Map<
+    string,
+    { at: number; value: number | null }
   >();
   private timer?: NodeJS.Timeout;
 
@@ -215,7 +263,7 @@ export class DouyinVideoQueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 把拿不到名额的调用存成排队记录（`status=queued` + `queue.stage=waiting`）；`existing` 为 true 时改写已有记录（探店续段）。
+   * @description 把拿不到名额的调用存成排队记录（`status=queued` + `queue.stage=waiting`）并立刻登记排队，下一轮派发就能轮到，不用等每分钟的巡检补登记；`existing` 为 true 时改写已有记录（探店续段）。
    * @keyword-cn 保存排队记录, 等模型空位
    * @keyword-en save-queued-operation, wait-for-model-slot
    * @param doc 调用记录字段（不含状态与时间）。
@@ -252,6 +300,19 @@ export class DouyinVideoQueueService implements OnModuleInit, OnModuleDestroy {
         },
       );
     } else await this.operations.insertOne(row);
+    if (row.providerId && row.model)
+      await this.concurrency
+        .ensureWaiting(
+          DOUYIN_VIDEO_QUEUE_KIND,
+          { providerId: row.providerId, model: row.model },
+          row.id,
+          now,
+        )
+        .catch((error) =>
+          this.logger.warn(
+            `[enqueue] 登记排队失败，等巡检补回 operation=${row.id}: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
     return row;
   }
 
@@ -277,26 +338,235 @@ export class DouyinVideoQueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * @description 给一批调用视图补上排队位置（同一模型前面还有几个）。
+   * @description 给一批调用视图补上排队位置（同一模型前面还有几个）、模型通道情况（几路、占用几路）、前方人数与预计等待时间，不外发提供商 ID 和用户 ID。
    * @keyword-cn 补排队位置, 前面还有几个
    * @keyword-en attach-queue-positions, waiting-ahead
    * @param views 调用视图。
+   * @param rows 对应的调用记录，用来取提供商、模型与当前用户。
    * @returns {Promise<DouyinOperationView[]>} 补好的视图。
    */
   async attachPositions(
     views: DouyinOperationView[],
+    rows: DouyinOperationEntity[] = [],
   ): Promise<DouyinOperationView[]> {
     const waiting = views.filter((view) => view.queue?.stage === 'waiting');
-    if (!waiting.length) return views;
-    const positions = await this.concurrency
-      .positions(waiting.map((view) => view.id))
-      .catch(() => new Map<string, number>());
+    const holdersAhead = waiting.length
+      ? await this.concurrency
+          .holdersAhead(waiting.map((view) => view.id))
+          .catch(() => new Map<string, string[]>())
+      : new Map<string, string[]>();
     for (const view of waiting) {
-      const ahead = positions.get(view.id);
-      if (ahead !== undefined && view.queue)
-        view.queue = { ...view.queue, ahead };
+      const ahead = holdersAhead.get(view.id);
+      if (ahead && view.queue)
+        view.queue = { ...view.queue, ahead: ahead.length };
     }
+    const sources = new Map(rows.map((row) => [row.id, row]));
+    const capacities = new Map<
+      string,
+      { limit: number | null; running: number } | null
+    >();
+    for (const view of views) {
+      if (view.queue?.stage !== 'waiting' && !readVideoServerAhead(view))
+        continue;
+      const row = sources.get(view.id);
+      if (!row?.providerId || !row.model) continue;
+      const key = `${row.providerId}:${row.model}`;
+      if (!capacities.has(key))
+        capacities.set(
+          key,
+          await this.concurrency
+            .capacity({ providerId: row.providerId, model: row.model })
+            .catch(() => null),
+        );
+      const capacity = capacities.get(key);
+      if (capacity)
+        view.capacity = {
+          channels: capacity.limit ?? 1,
+          busy: capacity.limit === null ? 0 : capacity.running,
+        };
+    }
+    await this.attachWaitEstimates(views, sources, holdersAhead);
     return views;
+  }
+
+  /**
+   * @description 给还没结束的任务补实测耗时，给排队中的任务补前方人数与预计等待；读负载失败时跳过，界面退回按任务数估算。
+   * @keyword-cn 补排队估时, 前方人数
+   * @keyword-en attach-wait-estimates, people-ahead
+   * @param views 调用视图。
+   * @param sources 调用 ID → 调用记录。
+   * @param holdersAhead 平台排队里各任务前面的任务 ID。
+   * @returns {Promise<void>}
+   */
+  private async attachWaitEstimates(
+    views: DouyinOperationView[],
+    sources: Map<string, DouyinOperationEntity>,
+    holdersAhead: Map<string, string[]>,
+  ): Promise<void> {
+    const loads = new Map<string, DouyinVideoModelLoad | null>();
+    const now = Date.now();
+    for (const view of views) {
+      if (!['queued', 'running'].includes(view.status)) continue;
+      const row = sources.get(view.id);
+      if (!row?.providerId || !row.model) continue;
+      const key = `${row.providerId}:${row.model}`;
+      if (!loads.has(key))
+        loads.set(
+          key,
+          await this.readModelLoad(row.providerId, row.model).catch(() => null),
+        );
+      const load = loads.get(key);
+      if (!load) continue;
+      if (load.taskSeconds) view.typicalSeconds = load.taskSeconds;
+      const platformAhead =
+        view.queue?.stage === 'waiting' ? holdersAhead.get(view.id) : undefined;
+      const serverAhead = readVideoServerAhead(view);
+      if (!platformAhead && !serverAhead) continue;
+      const owners = platformAhead
+        ? this.ownersOfHolders(platformAhead, load)
+        : this.ownersAheadOnServer(serverAhead, load);
+      const running = load.active
+        .filter(
+          (item) =>
+            isOccupyingVideoModel(item) &&
+            item.status === 'running' &&
+            !item.queue &&
+            !readVideoServerAhead(item),
+        )
+        .map(
+          (item) =>
+            (now - new Date(item.startedAt ?? item.createdAt).getTime()) / 1000,
+        );
+      // 占着名额但还没开跑的（提交中、GPU 上排队）按刚开始算；GPU 上排着队说明前面至少有一个在跑
+      const occupied = platformAhead ? Number(view.capacity?.busy) || 0 : 1;
+      while (running.length < occupied) running.push(0);
+      const { people, mine } = countPeopleAhead(owners, row.userId);
+      view.wait = {
+        aheadPeople: people,
+        aheadMine: mine,
+        aheadTasks: owners.length,
+        waitSeconds: estimateVideoWaitSeconds({
+          ahead: owners.length,
+          channels: view.capacity?.channels ?? 1,
+          runningElapsed: running,
+          taskSeconds: load.taskSeconds ?? DOUYIN_VIDEO_DEFAULT_TASK_SECONDS,
+        }),
+      };
+    }
+  }
+
+  /**
+   * @description 读取模型当前负载：还没结束的任务与实测单任务耗时。
+   * @keyword-cn 读取模型负载, 在跑任务
+   * @keyword-en read-model-load, active-tasks
+   * @param providerId 提供商 ID。
+   * @param model 模型。
+   * @returns {Promise<DouyinVideoModelLoad>} 负载。
+   */
+  private async readModelLoad(
+    providerId: string,
+    model: string,
+  ): Promise<DouyinVideoModelLoad> {
+    const [active, taskSeconds] = await Promise.all([
+      this.operations
+        .find(
+          { providerId, model, status: { $in: ['queued', 'running'] } },
+          {
+            projection: {
+              id: 1,
+              userId: 1,
+              provider: 1,
+              status: 1,
+              queue: 1,
+              lipSync: 1,
+              startedAt: 1,
+              createdAt: 1,
+              'result.queue_position': 1,
+            },
+          },
+        )
+        .limit(500)
+        .toArray(),
+      this.readTaskSeconds(providerId, model),
+    ]);
+    return { active, taskSeconds };
+  }
+
+  /**
+   * @description 读取模型的实测单任务耗时：取最近 20 条完成记录的中位数，对口型的段含另一个模型的时间，不计入；结果缓存一分钟。
+   * @keyword-cn 读取实测耗时, 最近完成任务
+   * @keyword-en read-task-seconds, recent-completed-tasks
+   * @param providerId 提供商 ID。
+   * @param model 模型。
+   * @returns {Promise<number|null>} 秒数，样本不足时为 null。
+   */
+  private async readTaskSeconds(
+    providerId: string,
+    model: string,
+  ): Promise<number | null> {
+    const key = `${providerId}:${model}`;
+    const cached = this.taskSecondsCache.get(key);
+    if (cached && Date.now() - cached.at < DOUYIN_VIDEO_TASK_SECONDS_CACHE_MS)
+      return cached.value;
+    const samples = await this.operations
+      .find(
+        {
+          providerId,
+          model,
+          status: 'completed',
+          startedAt: { $exists: true },
+          lipSync: { $exists: false },
+        },
+        { projection: { startedAt: 1, updatedAt: 1 } },
+      )
+      .sort({ updatedAt: -1 })
+      .limit(20)
+      .toArray();
+    const value = medianTaskSeconds(samples);
+    this.taskSecondsCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
+  /**
+   * @description 把平台排队里前面的任务换成用户 ID，查不到归属的留空。
+   * @keyword-cn 任务归属用户, 平台排队
+   * @keyword-en owners-of-holders, platform-queue
+   * @param holders 前面的任务 ID。
+   * @param load 模型负载。
+   * @returns {Array<string|undefined>} 各任务的用户 ID。
+   */
+  private ownersOfHolders(
+    holders: string[],
+    load: DouyinVideoModelLoad,
+  ): Array<string | undefined> {
+    const owners = new Map(load.active.map((item) => [item.id, item.userId]));
+    return holders.map((holder) => owners.get(holder));
+  }
+
+  /**
+   * @description 找 GPU 队列里排在前面的任务的用户：服务器位置 N 表示前面还排着 N-1 个（另有一个在跑），不是本平台提交的留空。
+   * @keyword-cn GPU前方任务, 服务器排队归属
+   * @keyword-en owners-ahead-on-server, gpu-queue-owners
+   * @param position 当前任务的服务器排队位置。
+   * @param load 模型负载。
+   * @returns {Array<string|undefined>} 前面各任务的用户 ID。
+   */
+  private ownersAheadOnServer(
+    position: number,
+    load: DouyinVideoModelLoad,
+  ): Array<string | undefined> {
+    const total = Math.max(0, position - 1);
+    const known = load.active
+      .filter((item) => {
+        const ahead = readVideoServerAhead(item);
+        return ahead > 0 && ahead < position;
+      })
+      .slice(0, total)
+      .map((item) => item.userId as string | undefined);
+    return [
+      ...known,
+      ...Array<undefined>(total - known.length).fill(undefined),
+    ];
   }
 
   /**

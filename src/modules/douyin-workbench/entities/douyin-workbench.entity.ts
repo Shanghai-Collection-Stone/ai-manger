@@ -1,4 +1,5 @@
 import { ObjectId } from 'mongodb';
+import type { DouyinBackgroundMusicSetting } from '../../douyin-music/entities/douyin-music.entity.js';
 
 /**
  * @description 抖音分镜引用的真实图库或视频库素材。
@@ -581,6 +582,8 @@ export interface DouyinTopicEntity {
   referenceImages?: DouyinMediaReference[];
   /** @description 生成视频的声音设置，缺省为普通话配音 */
   videoAudio?: DouyinVideoAudioSetting;
+  /** @description 成片的背景音乐（曲目与音量），拼接时混入；为空或 `trackId=0` 表示不用音乐 */
+  backgroundMusic?: DouyinBackgroundMusicSetting;
   /** @description 整片模式的目标时长（秒），为空表示用整片模型能生成的最长时长（直连服务由服务自己决定） */
   fullVideoDuration?: number;
   /** @description 整片模式的清晰度档位（模型自己的取值，如 `720P` / `1080p`），为空表示按模型默认档 */
@@ -757,6 +760,14 @@ export interface DouyinOperationView {
   lipSync?: DouyinStoreVisitLipSyncView;
   /** @description 模型并发已满时的排队状态；有这个字段时任务还没提交给模型，`status` 仍为 `queued`。 @keyword-cn 视频排队状态, 等模型空位 @keyword-en video-queue-state, wait-for-model-slot */
   queue?: DouyinVideoQueueView;
+  /** @description 模型开始实际生成的时间（首次查到 running），排队时间不算在内，用来估算剩余时间 */
+  startedAt?: Date;
+  /** @description 排队中的任务所用模型的通道情况，用来估算还要等几轮 */
+  capacity?: DouyinVideoCapacityView;
+  /** @description 排队中的任务前面有几个人、几个任务，以及预计还要等多久才轮到 */
+  wait?: DouyinVideoWaitView;
+  /** @description 这个模型最近完成任务的实测耗时（秒），样本不足时没有 */
+  typicalSeconds?: number;
   result?: unknown;
   /** @description 给用户看的失败说明（中文） */
   error?: string;
@@ -774,6 +785,28 @@ export interface DouyinOperationView {
 export interface DouyinVideoQueueView {
   stage: 'waiting' | 'submitting';
   ahead?: number;
+}
+
+/**
+ * @description 模型通道的公开情况：`channels` 同时能处理几段（没设并发上限时按单卡 1 路），`busy` 正在占用几路。
+ * @keyword-cn 模型通道容量, 通道占用
+ * @keyword-en model-channel-capacity, channel-occupancy
+ */
+export interface DouyinVideoCapacityView {
+  channels: number;
+  busy: number;
+}
+
+/**
+ * @description 排队等待的公开情况：`aheadPeople` 前面其他人的人数（同一人多段算一人），`aheadMine` 前面自己的任务数，`aheadTasks` 前面的任务总数，`waitSeconds` 预计等多久轮到；不含任何用户 ID。
+ * @keyword-cn 排队等待情况, 前方人数
+ * @keyword-en video-wait-view, people-ahead
+ */
+export interface DouyinVideoWaitView {
+  aheadPeople: number;
+  aheadMine: number;
+  aheadTasks: number;
+  waitSeconds: number;
 }
 
 /**

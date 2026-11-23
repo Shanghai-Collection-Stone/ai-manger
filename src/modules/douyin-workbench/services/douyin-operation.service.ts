@@ -129,6 +129,13 @@ export class DouyinOperationService {
       shotId: 1,
       createdAt: -1,
     });
+    // 排队估时按模型读在跑任务与最近完成任务的耗时
+    await this.operations.createIndex({
+      providerId: 1,
+      model: 1,
+      status: 1,
+      updatedAt: -1,
+    });
   }
 
   /**
@@ -689,7 +696,10 @@ export class DouyinOperationService {
       .sort({ updatedAt: -1 })
       .limit(200)
       .toArray();
-    return this.videoQueue.attachPositions(rows.map((row) => this.toView(row)));
+    return this.videoQueue.attachPositions(
+      rows.map((row) => this.toView(row)),
+      rows,
+    );
   }
 
   /**
@@ -1030,6 +1040,7 @@ export class DouyinOperationService {
       continuity: row.continuity,
       lipSync: toStoreVisitLipSyncView(row.lipSync),
       queue: toVideoQueueView(row.queue),
+      startedAt: row.startedAt,
       result: row.result,
       ...presentDouyinVideoError(row),
       createdAt: row.createdAt,

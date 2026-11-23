@@ -7,6 +7,7 @@ import {
   resolveLoginPageHref,
 } from './adminApi';
 import DouyinPersonaPanel from './DouyinPersonaPanel';
+import DouyinMusicPanel from './DouyinMusicPanel';
 import HotTopicPanel from './HotTopicPanel';
 import MailSettingPanel from './MailSettingPanel';
 import OpsReportPanel from './OpsReportPanel';
@@ -356,6 +357,7 @@ const ALL_TABS = [
   { id: 'xhs_crawl', label: '小红书采集' },
   { id: 'hot_topic', label: '热点采集榜' },
   { id: 'douyin_personas', label: '抖音预设人物' },
+  { id: 'douyin_music', label: '背景音乐曲库', adminOnly: true },
   { id: 'tenant_join', label: '入驻审批', adminOnly: true },
   { id: 'member_credits', label: '成员 Credit', adminOnly: true },
   { id: 'ops_reports', label: '运维上报', adminOnly: true },
@@ -5556,6 +5558,15 @@ const AdminApp = () => {
         {/* 抖音预设人物（人设 / 音色 / AI 三视图形象图，供工作台按脚本选用） | @keyword-en douyin persona tab */}
         {activeTab === 'douyin_personas' ? (
           <DouyinPersonaPanel
+            isPlatform={isSuperAdmin(currentRole)}
+            onNotice={setNotice}
+            onError={setError}
+          />
+        ) : null}
+
+        {/* 背景音乐曲库（维护已授权曲目，供工作台成片选用） | @keyword-en douyin-music-tab */}
+        {activeTab === 'douyin_music' ? (
+          <DouyinMusicPanel
             isPlatform={isSuperAdmin(currentRole)}
             onNotice={setNotice}
             onError={setError}

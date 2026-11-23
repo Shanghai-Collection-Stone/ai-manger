@@ -38,6 +38,8 @@ AI 抖音工作台（douyin-workbench）
 - `services/douyin-operation.service.ts` — 整片 / 单镜头视频生成、发布、抓取与调用审计，按通道同步状态；列表与同步入口收敛过期客户端合成。
 - `services/douyin-shot-concat.service.ts` — 客户端合成协调，探店只交付生成的视频与字幕并保留原声；拒绝只有配音或旧替换音轨产出。
 - `services/douyin-shot-concat.service.spec.ts` — 合成领取、全段原生声画与旧产出拒绝、生成并发保护、结果回报及过期收敛回归。
+- `services/douyin-video-wait.ts` — 排队估时纯函数：实测耗时中位数、按通道模拟等待、把前方任务归并成人数。
+- `services/douyin-video-wait.spec.ts` — 实测耗时、等待随进度缩短、多通道、超时兜底与人数统计回归。
 - `services/douyin-store-visit.service.ts` — 探店音色管理、逐段原生声画生成与队列，支持参考音色或文字音色；完成后不追加对口型，旧运行中任务兼容原快照。
 - `services/douyin-cosyvoice.service.ts` — 阿里云百炼 CosyVoice 客户端：声音复刻（创建、等审核、删除音色）、按提示词设计音色、非实时语音合成与试听（可调语速）、WAV 时长解析与配音空白收紧、分类音色库目录与报错翻译。
 - `services/douyin-cosyvoice.service.spec.ts` — 服务域名解析、克隆前缀、WAV 时长、音色库目录（每个分类男女声都有）、声音设计请求、报错翻译、合成配音请求与下载、错误保留单测。
@@ -157,8 +159,11 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinConcatClip()` — 声明交给客户端合成的一段：镜号（探店为段号）、视频库 ID、下载地址与兜底时长；探店分段另带配音地址与字幕，客户端以配音时长为准定格补齐或截断并烧字幕；本机素材段的视频素材带入点 `start`，照片段带 `kind=image` 与运镜 `motion`（没有视频库 ID） | keywords: 合成片段, 分镜视频地址, 画外音片段, concat-clip, shot-video-url, voiceover-clip
 - `DouyinConcatTemplate` — 视频按原比例完整缩进窗口，再叠模板；逐段模板在转场前分别合成 | keywords: 合成版式模板, 模板合成参数, concat-template, template-merge-input
 - `DouyinConcatReport()` — 声明客户端合成结果 | keywords: 合成结果回报, 客户端回报, concat-result-report, client-report
-- `DouyinShotConcatService.constructor(db,repository)` — 初始化客户端合成集合与仓储 | keywords: 初始化合成服务, 合成仓储, init-concat-service, concat-repository
-- `DouyinShotConcatService.prepare(topicId,scope,options?)` — 校验就绪状态（探店模式按分段、片段 ID 为段 ID，本机素材段配好音即可）并返回合成记录与有序片段，素材地址取图库 / 视频库真实记录；参考音色出声的人物段（`nativeAudio`）只带字幕不带配音，合成时保留视频原声；脚本启用了版式模板时一并返回 `template`（客户端把视频铺进窗口再叠模板） | keywords: 准备客户端合成, 合成前校验, prepare-client-concat, concat-precheck
+- `DouyinShotConcatService.constructor(db,repository,music)` — 初始化客户端合成集合、仓储与音乐仓储 | keywords: 初始化合成服务, 合成仓储, init-concat-service, concat-repository
+- `DouyinConcatMusic` — 交给客户端混音的曲目、地址与音量 | keywords: 合成背景音乐, 混音参数, concat-music, mix-input
+- `DouyinShotConcatService.resolveMusic(topic,scope)` — 解析选中的音乐，曲目已删除时不拦合成并标记缺失 | keywords: 解析合成音乐, 曲目缺失降级, resolve-concat-music, missing-track-fallback
+- `verifyConcatMusic()` — 回归合成带音乐、没选音乐与曲目被删 | keywords: 合成背景音乐回归, 曲目缺失降级, concat-music-regression, missing-track-fallback
+- `DouyinShotConcatService.prepare(topicId,scope,options?)` — 校验就绪状态（探店模式按分段、片段 ID 为段 ID，本机素材段配好音即可）并返回合成记录与有序片段，素材地址取图库 / 视频库真实记录；参考音色出声的人物段（`nativeAudio`）只带字幕不带配音，合成时保留视频原声；脚本启用了版式模板时一并返回 `template`（客户端把视频铺进窗口再叠模板）；选了背景音乐时返回 `music`，曲目已删除时返回 `musicMissing` | keywords: 准备客户端合成, 合成前校验, prepare-client-concat, concat-precheck
 - `DouyinShotConcatService.report(operationId,report,scope)` — 更新进度、失败原因或完成后绑定成片 | keywords: 回报合成结果, 设为当前整片, report-concat-result, bind-merged-video
 - `DouyinShotConcatService.attachEditPlan(operationId,topicId,plan,scope)` — 把 AI 剪辑方案记到本人进行中的客户端合成记录 `request.editPlan`，记录不存在报错 | keywords: 记录剪辑方案, 合成记录留痕, attach-edit-plan, concat-trace
 - `DouyinOperationService.constructor(db,repository,billing,workflowModels,pixmaxVideos,shuyanVideos,opensourceVideos,storeVisit,shotConcat,videoQueue)` — 初始化调用集合与视频依赖 | keywords: 初始化调用服务, 视频服务依赖, init-operation-service, video-service-dependencies
@@ -193,6 +198,7 @@ AI 抖音工作台（douyin-workbench）
 - `normalizeStoryboardPreference(input?)` — 规整配图偏向，非法来源回退图库自找，标签去重限长限量 | keywords: 规整配图偏向, 图库标签限定, normalize-storyboard-preference, gallery-tag-filter
 - `normalizeVideoAudio(input?)` — 规整视频声音设置，缺省普通话配音 | keywords: 规整声音设置, 默认普通话配音, normalize-video-audio, default-mandarin-voiceover
 - `DouyinVideoAudioDto()` — 校验声音方式（配音 / 仅音乐 / 静音）与配音语言 | keywords: 声音设置参数, 配音语言, video-audio-dto, voiceover-language
+- `DouyinBackgroundMusicDto()` — 校验成片背景音乐的曲目 ID 与音量 | keywords: 背景音乐参数, 音乐音量, background-music-dto, music-volume
 - `DouyinPublishCopyDto()` — 校验脚本发布文案：标题 ≤60 字、正文 ≤1000 字、话题 ≤5 个（单个 ≤20 字，可带井号） | keywords: 发布文案参数, 话题数量限制, publish-copy-dto, tag-count-limit
 - `normalizePublishCopy(input?)` — 规整发布文案：标题压单行、话题去井号去重限量，三项全空返回 null 表示清掉 | keywords: 规整发布文案, 话题去井号, normalize-publish-copy, strip-hashtag
 - `DouyinWorkbenchRepositoryService()` — 管理抖音选题和分镜持久化 | keywords: 抖音工作台仓储, 租户隔离, douyin-workbench-repository, tenant-isolation
@@ -348,9 +354,27 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinVideoQueueService.admit(runtime,operationId)` — 按「提供商 + 模型」申请名额，false 表示已排队 | keywords: 申请视频名额, 满了排队, admit-video-slot, queue-when-full
 - `DouyinVideoQueueService.release(operationId)` — 归还名额，重复调用无副作用 | keywords: 归还视频名额, 提交失败, release-video-slot, submit-failed
 - `DouyinVideoQueueService.releaseAndThrow(operationId,error)` — 扣费等步骤失败时归还名额后原样抛错 | keywords: 失败归还名额, 原样抛错, release-and-rethrow, keep-error
-- `DouyinVideoQueueService.enqueue(doc,input,existing?)` — 存排队记录（`status=queued` + `queue.stage=waiting`），`existing` 时改写已有记录 | keywords: 保存排队记录, 等模型空位, save-queued-operation, wait-for-model-slot
+- `DouyinVideoQueueService.enqueue(doc,input,existing?)` — 存排队记录（`status=queued` + `queue.stage=waiting`）并立刻登记排队，下一轮派发就能轮到，不用等每分钟的巡检补登记；`existing` 时改写已有记录 | keywords: 保存排队记录, 等模型空位, save-queued-operation, wait-for-model-slot
 - `DouyinVideoQueueService.save(doc,fromQueue)` — 写提交结果：排队记录按 ID 改写并去掉排队字段，否则新建 | keywords: 写回提交结果, 排队记录改写, save-submit-result, overwrite-queued-row
-- `DouyinVideoQueueService.attachPositions(views)` — 给等空位的调用视图补 `queue.ahead` | keywords: 补排队位置, 前面还有几个, attach-queue-positions, waiting-ahead
+- `DouyinVideoQueueService.attachPositions(views,rows?)` — 给等空位的调用视图补 `queue.ahead`，给排队中的任务补模型通道情况 `capacity`、前方人数与预计等待 `wait`，给未结束的任务补实测耗时 `typicalSeconds`，不外发提供商 ID 和用户 ID | keywords: 补排队位置, 前面还有几个, attach-queue-positions, waiting-ahead
+- `readVideoServerAhead(view)` — 读取任务在自建 GPU 服务器上前面还有几个：服务端排队位置从 1 算起（前面含正在跑的那个），执行中为 0，已结束或其他通道为 0 | keywords: 读取服务器排队位置, GPU队列位置, read-server-queue-position, gpu-queue-position
+- `DouyinVideoQueueService.attachWaitEstimates(views,sources,holdersAhead)` — 补实测耗时、前方人数与预计等待，读负载失败时跳过 | keywords: 补排队估时, 前方人数, attach-wait-estimates, people-ahead
+- `DouyinVideoQueueService.readModelLoad(providerId,model)` — 读取模型还没结束的任务与实测耗时 | keywords: 读取模型负载, 在跑任务, read-model-load, active-tasks
+- `DouyinVideoQueueService.readTaskSeconds(providerId,model)` — 最近 20 条完成记录的耗时中位数，不含对口型段，缓存一分钟 | keywords: 读取实测耗时, 最近完成任务, read-task-seconds, recent-completed-tasks
+- `DouyinVideoQueueService.ownersOfHolders(holders,load)` — 平台排队里前面的任务换成用户 ID | keywords: 任务归属用户, 平台排队, owners-of-holders, platform-queue
+- `DouyinVideoQueueService.ownersAheadOnServer(position,load)` — 找 GPU 队列里排在前面的任务的用户 | keywords: GPU前方任务, 服务器排队归属, owners-ahead-on-server, gpu-queue-owners
+- `DOUYIN_VIDEO_TASK_SECONDS_CACHE_MS` — 模型实测耗时的缓存时长 | keywords: 实测耗时缓存, 轮询减负, task-seconds-cache-ms, polling-load
+- `DouyinVideoModelLoad` — 模型当前负载：未结束任务与实测耗时 | keywords: 模型当前负载, 在跑任务, model-load, active-tasks
+- `DouyinVideoWaitView` — 排队等待的公开情况：前方人数、自己的任务数、任务总数与等待秒数 | keywords: 排队等待情况, 前方人数, video-wait-view, people-ahead
+- `DOUYIN_VIDEO_DEFAULT_TASK_SECONDS` — 没有实测耗时时一个任务按 3 分钟估算 | keywords: 默认任务耗时, 排队估时兜底, default-task-seconds, wait-estimate-fallback
+- `DOUYIN_VIDEO_MIN_REMAINING_SECONDS` — 超时任务至少再按 30 秒估算 | keywords: 最短剩余耗时, 超时任务估时, min-remaining-seconds, overdue-task-estimate
+- `DOUYIN_VIDEO_TASK_SAMPLE_MIN` — 采用实测耗时的最少样本数 | keywords: 实测样本下限, 耗时样本, task-sample-minimum, duration-samples
+- `medianTaskSeconds(samples)` — 最近完成任务的耗时中位数，丢掉异常值 | keywords: 实测任务耗时, 耗时中位数, measured-task-seconds, median-duration
+- `estimateVideoWaitSeconds({ahead,channels,runningElapsed,taskSeconds})` — 按通道模拟还要等多久轮到 | keywords: 估算排队等待, 通道模拟, estimate-video-wait, channel-simulation
+- `countPeopleAhead(owners,me)` — 前方任务归并成人数，自己的单独计数 | keywords: 统计前方人数, 任务归并到人, count-people-ahead, group-tasks-by-user
+- `sample(seconds)` — 测试用耗时样本 | keywords: 构造耗时样本, 测试数据, build-duration-sample, fixture
+- `done(id,seconds)` — 测试用完成记录 | keywords: 完成记录样本, 测试数据, completed-row-sample, fixture
+- `DouyinVideoCapacityView` — 模型通道的公开情况：`channels` 同时能处理几段（没设并发上限时按单卡 1 路），`busy` 正在占用几路 | keywords: 模型通道容量, 通道占用, model-channel-capacity, channel-occupancy
 - `DouyinVideoQueueService.dispatch(holder)` — 原子认领为 `submitting`，读当前脚本、按记录重建运行配置交回通道；通道提交前报错判失败 | keywords: 提交排队视频, 重建运行配置, dispatch-queued-video, rebuild-runtime
 - `DouyinVideoQueueService.inspect(holders)` — 告诉名额登记哪些记录还占着模型 | keywords: 查询占用状态, 回收名额依据, inspect-occupying, reclaim-basis
 - `DouyinVideoQueueService.recover()` — 提交中超过 10 分钟的记录判失败并归还名额，还在等的补回排队登记 | keywords: 排队巡检, 提交中断, recover-queued-operations, submit-interrupted
@@ -977,6 +1001,10 @@ AI 抖音工作台（douyin-workbench）
 
 | 中文 | English |
 | --- | --- |
+| 读取服务器排队位置 | read-server-queue-position |
+| GPU队列位置 | gpu-queue-position |
+| 模型通道容量 | model-channel-capacity |
+| 通道占用 | channel-occupancy |
 | 单段修复总上限 | max-repairs-per-position |
 | 防无限修复 | repair-loop-guard |
 | 判断重复失败 | detect-repeated-failure |
@@ -1959,7 +1987,16 @@ AI 抖音工作台（douyin-workbench）
 | 收紧测试 | tighten-fixture |
 | 拼接测试WAV | build-pieced-wav |
 | 模拟人声 | fake-speech |
-
+| 合成背景音乐 | concat-music |
+| 解析合成音乐 | resolve-concat-music |
+| 曲目缺失降级 | missing-track-fallback |
+| 背景音乐参数 | background-music-dto |
+| 前方人数 | people-ahead |
+| 统计前方人数 | count-people-ahead |
+| 估算排队等待 | estimate-video-wait |
+| 实测任务耗时 | measured-task-seconds |
+| 补排队估时 | attach-wait-estimates |
+| 读取实测耗时 | read-task-seconds |
 
 ## 类型导出 (Type Exports)
 
@@ -1991,6 +2028,7 @@ AI 抖音工作台（douyin-workbench）
 - `DouyinStoreVisitSetting` 新增 `storeId` / `spotIds`（点位模式的门店与分段用到的点位），`DouyinStoreVisitSegment` 新增 `spotId` / `sceneImageIds`（本段点位与 1～3 张参考图）与 `scene`（脚本里这段要配的实拍画面）；`CreateDouyinStoreVisitStoreDto` / `UpdateDouyinStoreVisitStoreDto` / `DouyinStoreVisitSpotDto` / `DouyinStoreVisitSpotImageDto` / `DouyinStoreVisitSpotVideoDto` / `SaveDouyinStoreVisitSpotsDto` / `DouyinStoreVisitSimilarityDto` / `DouyinStoreVisitDraftSpotDto` / `ClassifyDouyinStoreVisitSpotsDto` / `RecommendDouyinStoreVisitPlanDto` / `WriteDouyinStoreVisitScriptDto`。
 - `DouyinStoreVisitVoiceAnchor` — 探店音色锚点（参考声音地址、时长、取声音的分段与视频、当时的音色标识 `voiceKey`），`DouyinStoreVisitSetting.voiceAnchor`；调用记录 `continuity.anchorSegmentId` 标出统一音色模式等的锚点段；`GenerateDouyinStoreVisitVideoDto` / `SaveDouyinStoreVisitVoiceAnchorDto`。
 - `DouyinStoreVisitPipeline` — 探店 AI 导演流水线状态（`state` idle / running / paused / done、暂停原因 `pauseReason` user / editing / failed、失败原因、是否统一音色、当前段与调用、推进认领时间 `advancingAt`），`DouyinStoreVisitSetting.pipeline`（服务端写，用户保存不覆盖）；`StartDouyinStoreVisitPipelineDto` / `PauseDouyinStoreVisitPipelineDto` / `RedoDouyinStoreVisitPipelineSegmentDto`。
+- `DouyinVideoWaitView` — 排队等待的公开情况，不含用户 ID。
 
 ## 模块功能描述 (Module Feature Description)
 
@@ -2129,3 +2167,9 @@ AI 抖音工作台（douyin-workbench）
 **创作脚本与人物音色**：候选生成与确认接口接收可选 `voiceId`，只允许真实音色库 ID；选择随任务保存并公开人物、音色和风格，候选重开按任务还原。逐条确认允许 `personaId=0`、空 `voiceId` 和空风格，显式取消不回退到批次设定。生成提示按音色特征安排表达节奏；未选择时不自行绑定具体声线，候选确认只落创作方案和设定，不拆台词、不生成音频或视频。`writeScript` 缺省沿用当前人物音色，只有显式 `keepCast=false` 才进入推荐分支，编排服务保持相同缺省行为。微调接口接收 `productionMode`、`voiceId` 和 `voicePrompt`，创作方案保留章节与画面安排，只调整叙事视角、语气、节奏；不改价格等事实、不变成逐段对白。客户端微调前持久化 `scriptNeedsRefine=true` 并清台词来源快照，成功写入新正文后清标记；失败或重开可继续，期间生成台词接口拒绝调用模型。不露脸的台词也按预设人物视角和所选音色特征写作。
 
 **Agent 自动托管**：POST topics/:id/store-visit/autopilot/start（create DouyinWorkbench）启动或续跑，POST topics/:id/store-visit/autopilot/pause（update DouyinWorkbench）暂停。按所属租户用户补齐设定、脚本、台词、画面和出片，复用已完成结果。错误进入 waiting 并生成唯一 failureId；桌面端展示原因，等待 6 秒后携带 recoverFailureId 续跑。服务端只接受仍在等待且标识相符的恢复，原子更新拦截过期请求与跨窗口暂停竞态；暂停同时支持 running 和 waiting。恢复携带服务端保存的失败步骤、原因和分段，由 AI（`diagnoseAutopilotFailure`）看错误原因和内容，从本步骤允许的动作里判定重做哪一块：原样重试、只改这段台词、只换这段画面、重写台词、改脚本，或交给用户；不靠匹配错误文案，台词短不算问题，模型调用失败或越权时退回原样重试。同一位置（步骤 + 分段）修完再失败时由 AI（`isSameAutopilotFailure`）对比已修过的错误：同类转为 paused 并写入 `blocked`，等用户点继续托管；不同类不占重试、继续自动修复，同一位置总共最多修 5 次防止错误不断变化时无限消耗；AI 判定失败或拿不准按同类处理，修复动作本身失败也直接停下。改台词只改失败这一段，只有接这段尾帧的同镜头续段因画面依赖需要重出。用户继续时重置修复次数，改过这段台词就直接按新内容出片，没改就由 AI 再修一次。成功段保留，修复过程中用户暂停后不启动下一段。**以素材为准、尽量不需要客户介入**：从门店开始时，写脚本和台词只看有图片或视频的点位（`STORE_VISIT_MATERIAL_FIRST_RULE`），画面与卖点从一开始就落在已有素材上；配场景后仍有段配不上时，不再停下来让客户补素材或改台词，而是由 `fitSegmentsToMaterials` 给这些段换成门店已有的点位与图，并把这几段台词改成讲素材里看得到的内容（不编造资料里没有的数字，改不出就只配素材保留原台词）；只剩人物出镜段配不上照片时改为不露脸解说。脚本按自检意见重写一次后剩余提示只写进进度说明、不再进入等待；要出镜却没有带形象图的人物时同样改为不露脸解说。从脚本开始时同样以素材为准：选中的脚本是方向，台词一步（托管的 lines 步骤）先按它在配图偏向的图库标签内匹配素材，再让每段先选一张素材图、照图写画面和台词，分段一生成就带好画面，画面一步无事可做；托管选了 AI 画面或脚本配图偏向是 AI 画面时不匹配，照旧先写台词后 AI 生图。缺门店时托管会带上客户生成候选脚本时写的需求描述和托管要求去判断门店：店名明确写在选题、脚本或需求里（`isStoreVisitStoreDetermined`）就直接设定，已有门店直接选，还没建的按店名新建再选；只从引用知识推断、有多家或写得含糊时照旧询问。仍需客户处理的只有：脚本和需求里都没写明门店、门店一张素材都没有（不虚构实拍素材）、余额不足或服务未配置，新的失败会再次告知原因；会自动重试的失败文案不再写「请检查」。后台每 3 秒原子认领一步并续心跳。尾帧、音色和拼接沿用打开的桌面端；仅新成片落库才完成，不执行公开发布。
+
+**出片预计时间的数据**：调用记录视图给排队中的任务补 `queue.ahead`（平台前面还有几个）和 `capacity`（通道数取模型并发上限，没设按单卡 1 路，以及占用数）；自建 H3 在 GPU 上的排队位置沿用 `result.queue_position`；首次查到真正开跑时写 `startedAt`，排队时间不计入这段的生成耗时。预计分钟由桌面端 `storeVisitEta.js` 计算。排队记录保存时立刻登记排队，自建 H3 不再最多多等一分钟的巡检才进入派发。
+
+**前方人数与动态等待**：调用列表给排队中的任务补 `wait`（前面其他人的人数、自己的任务数、任务总数、预计等待秒数）。同一个人的多段只算一人，查不到归属的任务各算一人，不外发用户 ID。等待时间按通道模拟：各通道从正在跑任务的剩余时间起步，前面的任务依次排到最早空出的通道，所以排队位置不变时也会随时间缩短。单任务耗时取该模型最近 20 条完成记录的中位数（至少 3 条，不含对口型段），样本不足时按 3 分钟。
+
+**成片背景音乐**：脚本的 `backgroundMusic` 只存曲目 ID、音量与改动时间，保存时校验当前用户能用这首曲目。`prepare` 重新解析真实地址交给桌面端混音，曲目已被删除时不拦合成（托管流程不能卡住），返回 `musicMissing` 让客户端提示。曲库与上传见 [douyin-music 模块](../douyin-music/module.md)。

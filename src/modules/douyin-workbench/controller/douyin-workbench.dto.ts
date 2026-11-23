@@ -365,6 +365,24 @@ export class DouyinVideoAudioDto {
 }
 
 /**
+ * @description 校验成片背景音乐：曲目 ID（0 表示不用音乐）与音量 1～100。
+ * @keyword-cn 背景音乐参数, 音乐音量
+ * @keyword-en background-music-dto, music-volume
+ */
+export class DouyinBackgroundMusicDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  trackId!: number;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  volume!: number;
+}
+
+/**
  * @description 校验脚本发布文案：标题最多 60 字、正文最多 1000 字、话题最多 5 个（单个最多 20 字，允许带井号）。
  * @keyword-cn 发布文案参数, 话题数量限制
  * @keyword-en publish-copy-dto, tag-count-limit
@@ -678,6 +696,11 @@ export class UpdateDouyinTopicDto {
   @ValidateNested()
   @Type(() => DouyinVideoAudioDto)
   videoAudio?: DouyinVideoAudioDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinBackgroundMusicDto)
+  backgroundMusic?: DouyinBackgroundMusicDto;
 
   @IsOptional()
   @Type(() => Number)

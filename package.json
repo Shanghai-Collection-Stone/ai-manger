@@ -19,6 +19,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "compress:local-image": "node scripts/compress-local-image.mjs",
+    "seed:douyin-music": "node src/modules/douyin-music/seed/seed-douyin-music.mjs",
     "validate:dashboard-config": "node scripts/validate-dashboard-config.mjs",
     "simulate:publish": "node src/modules/article-library/scripts/simulate-publish.mjs",
     "repair:xhs-topic-id": "node src/modules/article-library/scripts/backfill-xhs-topic-id.mjs",

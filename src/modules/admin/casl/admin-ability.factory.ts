@@ -63,6 +63,7 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'XhsTopic' },
       { action: 'manage', subject: 'DouyinWorkbench' },
       { action: 'manage', subject: 'DouyinPersona' },
+      { action: 'manage', subject: 'DouyinMusic' },
       { action: 'manage', subject: 'Knowledge' },
       { action: 'manage', subject: 'PlatformSetting' },
       { action: 'manage', subject: 'TenantMcp' },
@@ -96,6 +97,8 @@ export const ROLE_CATALOG: readonly RoleCatalogEntry[] = [
       { action: 'manage', subject: 'DouyinWorkbench' },
       // 操作员只能在工作台选用预设人物；人设的增删改留给租户管理员
       { action: 'read', subject: 'DouyinPersona' },
+      // 操作员只能从曲库选曲；自己上传的音乐走工作台权限，曲库增删改留给租户管理员
+      { action: 'read', subject: 'DouyinMusic' },
       // 操作员建母选题时要能新建和维护引用知识
       { action: 'manage', subject: 'Knowledge' },
       // 操作员只读热点榜与推荐；采集规则的增删改留给租户管理员

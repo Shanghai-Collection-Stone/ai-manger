@@ -114,7 +114,8 @@ async function request(path, options = {}) {
 async function apiRequest(path, options = {}) {
   const token = getAdminToken();
   const headers = {
-    'Content-Type': 'application/json',
+    // FormData 由浏览器自己带 multipart 边界，不能写死 Content-Type
+    ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers || {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -1059,6 +1060,54 @@ export const adminApi = {
   },
 
   // ─── 热点采集榜 ─────────────────────────────────────────────────────────────
+
+  /**
+   * @description 列出曲库曲目(含本租户已归档与平台公开曲目)
+   * @keyword-cn 查询曲库, 曲目列表
+   * @keyword-en list-music-library, track-list
+   */
+  async listDouyinMusicLibrary() {
+    return apiRequest('/api/douyin-music?source=library&includeArchived=1');
+  },
+
+  /**
+   * @description 读取曲库分类、默认音量与上传限制
+   * @keyword-cn 曲库选项, 曲库分类
+   * @keyword-en music-library-options, music-categories
+   */
+  async getDouyinMusicOptions() {
+    return apiRequest('/api/douyin-music/options');
+  },
+
+  /**
+   * @description 上传一首曲库曲目(multipart:file、name、category、licenseNote、isPublic)
+   * @keyword-cn 新增曲库曲目, 上传曲目
+   * @keyword-en create-music-track, upload-library-track
+   */
+  async createDouyinMusic(form) {
+    return apiRequest('/api/douyin-music', { method: 'POST', body: form });
+  },
+
+  /**
+   * @description 更新曲库曲目的信息、归档状态或平台公开开关
+   * @keyword-cn 更新曲库曲目, 归档曲目
+   * @keyword-en update-music-track, archive-track
+   */
+  async updateDouyinMusic(id, payload) {
+    return apiRequest(`/api/douyin-music/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /**
+   * @description 删除曲库曲目并清理文件
+   * @keyword-cn 删除曲库曲目, 清理曲目文件
+   * @keyword-en delete-music-track, cleanup-track-file
+   */
+  async deleteDouyinMusic(id) {
+    return apiRequest(`/api/douyin-music/${id}`, { method: 'DELETE' });
+  },
 
   /**
    * @description 列出本租户的抖音预设人物(含已归档)

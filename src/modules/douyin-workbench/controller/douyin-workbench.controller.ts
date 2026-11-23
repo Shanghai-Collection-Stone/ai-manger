@@ -24,6 +24,7 @@ import type { AdminUserEntity } from '../../admin/entities/admin.entity.js';
 import { AdminAuthGuard } from '../../admin/guards/admin-auth.guard.js';
 import { AdminPoliciesGuard } from '../../admin/guards/policies.guard.js';
 import type { AdminRequest } from '../../admin/types/admin-request.types.js';
+import { DouyinMusicRepositoryService } from '../../douyin-music/services/douyin-music-repository.service.js';
 import type { Response } from 'express';
 import {
   ClassifyDouyinStoreVisitSpotsDto,
@@ -125,6 +126,7 @@ export class DouyinWorkbenchController {
     private readonly segmentImages: DouyinSegmentImageService,
     private readonly unify: DouyinUnifyService,
     private readonly autopilot: DouyinStoreVisitAutopilotService,
+    private readonly music: DouyinMusicRepositoryService,
   ) {}
 
   /**
@@ -306,6 +308,12 @@ export class DouyinWorkbenchController {
     @Body() dto: UpdateDouyinTopicDto,
   ) {
     const scope = this.scopeOf(this.requireUser(req));
+    // 只允许选自己能用的音乐，挡掉别的租户或别人上传的曲目 ID
+    if (
+      dto.backgroundMusic?.trackId &&
+      !(await this.music.getUsable(dto.backgroundMusic.trackId, scope))
+    )
+      throw new BadRequestException('这首背景音乐不存在或已被删除，请重新选择');
     const saved = await this.repository.update(this.readId(id), dto, scope);
     if (!saved) throw new BadRequestException('DOUYIN_TOPIC_NOT_FOUND');
     // 换了分镜配图或探店场景时，AI 导演在后台重新规划

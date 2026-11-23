@@ -133,6 +133,7 @@ import {
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 import {
   DouyinVideoQueueService,
+  readVideoServerAhead,
   toVideoQueueView,
 } from './douyin-video-queue.service.js';
 import {
@@ -3437,6 +3438,12 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             status,
             progress: status === 'running' ? 50 : 0,
             result: raw,
+            // GPU 上排队时也是已提交，真正开跑才开始算这段的耗时
+            ...(status === 'running' &&
+            !row.startedAt &&
+            !readVideoServerAhead({ ...row, status, result: raw })
+              ? { startedAt: new Date() }
+              : {}),
             updatedAt: new Date(),
           },
         },
@@ -4362,6 +4369,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       continuity: row.continuity,
       lipSync: toStoreVisitLipSyncView(row.lipSync),
       queue: toVideoQueueView(row.queue),
+      startedAt: row.startedAt,
       result: row.result,
       error: row.error,
       errorDetail: row.errorDetail,

@@ -1,0 +1,143 @@
+{
+  "license": "CC0 1.0 Universal",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/legalcode",
+  "origin": "https://freepd.com/（已关停）",
+  "hashNote": "sha1 为 Base32，与互联网档案馆保存的 freepd.com 原文件摘要一致",
+  "tracks": [
+    {
+      "source": "Happy Whistling Ukulele",
+      "name": "欢快口哨尤克里里 · Happy Whistling Ukulele",
+      "folder": "upbeat",
+      "category": "upbeat",
+      "sha1": "2YUOY3ZPM5YCSXAGIP5JSN6T5TDYB36H",
+      "sizeBytes": 4932877,
+      "seconds": 123
+    },
+    {
+      "source": "Funshine",
+      "name": "阳光趣味 · Funshine",
+      "folder": "upbeat",
+      "category": "upbeat",
+      "sha1": "FPFGPPDETTJSM76MMMYLRK52NJX4RJSX",
+      "sizeBytes": 6756665,
+      "seconds": 165
+    },
+    {
+      "source": "City Sunshine",
+      "name": "城市阳光 · City Sunshine",
+      "folder": "upbeat",
+      "category": "upbeat",
+      "sha1": "VXKY5UY6HU372HIMKG3D4U6RTHRLSL6M",
+      "sizeBytes": 7402093,
+      "seconds": 185
+    },
+    {
+      "source": "Lovely Piano Song",
+      "name": "可爱钢琴曲 · Lovely Piano Song",
+      "folder": "romantic",
+      "category": "warm",
+      "sha1": "VH37BKF2IFY4U6TMAMBZFMU65UB6TXZP",
+      "sizeBytes": 3831480,
+      "seconds": 96
+    },
+    {
+      "source": "Nostalgic Piano",
+      "name": "怀旧钢琴 · Nostalgic Piano",
+      "folder": "romantic",
+      "category": "warm",
+      "sha1": "UCOMTBT2HJNZ4TY3E6QQALXGLHVSLHX5",
+      "sizeBytes": 7853453,
+      "seconds": 196
+    },
+    {
+      "source": "Romantic Inspiration",
+      "name": "浪漫灵感 · Romantic Inspiration",
+      "folder": "romantic",
+      "category": "warm",
+      "sha1": "LLYCKP3ON6GU5FWRQHGQZGP3JAUXXAUK",
+      "sizeBytes": 5989355,
+      "seconds": 150
+    },
+    {
+      "source": "Study and Relax",
+      "name": "学习与放松 · Study and Relax",
+      "folder": "chill",
+      "category": "chill",
+      "sha1": "HJPRRECRP5VAS4X6GNPRCXTTA2DG4RFE",
+      "sizeBytes": 9070686,
+      "seconds": 223
+    },
+    {
+      "source": "Wisdom in the Sun",
+      "name": "阳光下的智慧 · Wisdom in the Sun",
+      "folder": "chill",
+      "category": "chill",
+      "sha1": "ZUJF2MPT47LGUZEQPCKZVXVQCWX4GNE3",
+      "sizeBytes": 4953366,
+      "seconds": 155
+    },
+    {
+      "source": "Adding the Sun",
+      "name": "添一缕阳光 · Adding the Sun",
+      "folder": "chill",
+      "category": "chill",
+      "sha1": "CX7GWSNFBMLLOZDQRL7APQXEAI4IQ6CZ",
+      "sizeBytes": 2951782,
+      "seconds": 176
+    },
+    {
+      "source": "Beat One",
+      "name": "节拍一号 · Beat One",
+      "folder": "electronic",
+      "category": "energetic",
+      "sha1": "SGMRYJ56XEFFL54L4IEA4E6R52AVAYXH",
+      "sizeBytes": 5835821,
+      "seconds": 180
+    },
+    {
+      "source": "Hear What They Say",
+      "name": "听他们说 · Hear What They Say",
+      "folder": "electronic",
+      "category": "energetic",
+      "sha1": "WTX5H4BHJGPYEZOUSXPXEC7FESUPXGUU",
+      "sizeBytes": 5509664,
+      "seconds": 138
+    },
+    {
+      "source": "Arpent",
+      "name": "Arpent",
+      "folder": "electronic",
+      "category": "energetic",
+      "sha1": "N2NLIFLYZS5IPVSRLKONUSYZE5N3PAIR",
+      "sizeBytes": 6486643,
+      "seconds": 162
+    },
+    {
+      "source": "Groovin",
+      "name": "律动 · Groovin",
+      "folder": "jazz",
+      "category": "other",
+      "sha1": "46NHQZQEAIITO4ENOHVTBJMKLAQRUDJA",
+      "sizeBytes": 4803592,
+      "seconds": 240
+    },
+    {
+      "source": "Funkeriffic",
+      "name": "放克时刻 · Funkeriffic",
+      "folder": "jazz",
+      "category": "other",
+      "sha1": "P2VOZ3X4GW6FUFNGF6646IXFP6B7DJDD",
+      "sizeBytes": 5045938,
+      "seconds": 210
+    },
+    {
+      "source": "Flutey Jazz",
+      "name": "长笛爵士 · Flutey Jazz",
+      "folder": "jazz",
+      "category": "other",
+      "sha1": "V5NYEJD7YPHYDPA4BT5CXRZNZJYI4CCU",
+      "sizeBytes": 9895100,
+      "seconds": 247
+    }
+  ]
+}

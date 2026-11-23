@@ -142,6 +142,23 @@ export class ModelConcurrencyService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * @description 读取模型的通道情况：并发上限（没设为 null）与当前占用的名额数。
+   * @keyword-cn 读取模型通道, 通道占用数
+   * @keyword-en read-model-capacity, busy-slot-count
+   * @param target 提供商与模型。
+   * @returns {Promise<{limit: number|null, running: number}>} 上限与占用数。
+   */
+  async capacity(
+    target: ModelConcurrencyTarget,
+  ): Promise<{ limit: number | null; running: number }> {
+    const [limit, running] = await Promise.all([
+      this.readLimit(target),
+      this.slots.countDocuments({ key: this.keyOf(target) }),
+    ]);
+    return { limit, running };
+  }
+
+  /**
    * @description 设置或清除模型的并发上限；调高后主进程下一轮就放行排队任务。
    * @keyword-cn 设置并发上限, 清除上限
    * @keyword-en set-concurrency-limit, clear-limit
@@ -314,7 +331,21 @@ export class ModelConcurrencyService implements OnModuleInit, OnModuleDestroy {
    * @returns {Promise<Map<string, number>>} 任务 ID → 前面的数量。
    */
   async positions(holders: string[]): Promise<Map<string, number>> {
-    const result = new Map<string, number>();
+    const ahead = await this.holdersAhead(holders);
+    return new Map(
+      [...ahead].map(([holder, list]) => [holder, list.length] as const),
+    );
+  }
+
+  /**
+   * @description 查询一批排队任务前面分别是哪些任务（同一模型、按排队先后），业务据此换算前面有几个人；不在排队的任务不放进结果。
+   * @keyword-cn 查询前方任务, 排队先后
+   * @keyword-en query-holders-ahead, queue-order
+   * @param holders 任务 ID。
+   * @returns {Promise<Map<string, string[]>>} 任务 ID → 排在它前面的任务 ID。
+   */
+  async holdersAhead(holders: string[]): Promise<Map<string, string[]>> {
+    const result = new Map<string, string[]>();
     if (!holders.length) return result;
     const mine = await this.waiters
       .find({ holder: { $in: holders } }, { projection: { key: 1 } })
@@ -326,11 +357,12 @@ export class ModelConcurrencyService implements OnModuleInit, OnModuleDestroy {
       .sort({ enqueuedAt: 1, _id: 1 })
       .toArray();
     const wanted = new Set(holders);
-    const seen = new Map<string, number>();
+    const seen = new Map<string, string[]>();
     for (const row of all) {
-      const ahead = seen.get(row.key) ?? 0;
-      if (wanted.has(row.holder)) result.set(row.holder, ahead);
-      seen.set(row.key, ahead + 1);
+      const ahead = seen.get(row.key) ?? [];
+      if (wanted.has(row.holder)) result.set(row.holder, [...ahead]);
+      ahead.push(row.holder);
+      seen.set(row.key, ahead);
     }
     return result;
   }

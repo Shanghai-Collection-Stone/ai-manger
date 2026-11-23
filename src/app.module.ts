@@ -41,6 +41,7 @@ import { SuperClawModule } from './modules/super-claw/super-claw.module.js';
 import { BrowserAuthModule } from './modules/browser-auth/browser-auth.module.js';
 import { AiBillingModule } from './modules/ai-billing/ai-billing.module.js';
 import { DouyinPersonaModule } from './modules/douyin-persona/douyin-persona.module.js';
+import { DouyinMusicModule } from './modules/douyin-music/douyin-music.module.js';
 import { DouyinWorkbenchModule } from './modules/douyin-workbench/douyin-workbench.module.js';
 import { DouyinPublishModule } from './modules/douyin-publish/douyin-publish.module.js';
 import { DouyinDataModule } from './modules/douyin-data/douyin-data.module.js';
@@ -109,6 +110,7 @@ import { TenantMcpModule } from './modules/tenant-mcp/tenant-mcp.module.js';
     TenantMcpModule,
     AiBillingModule,
     DouyinPersonaModule,
+    DouyinMusicModule,
     DouyinWorkbenchModule,
     DouyinPublishModule,
     DouyinDataModule,
