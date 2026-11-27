@@ -49,7 +49,7 @@ AI Agent模块：使用DeepAgent统一封装多模型对话能力与子代理流
   - `generateBilledMeituImage(billingContext,input)` — 对 meitu 降级调用独立计费，避免主 Provider 失败后免费重试 | keywords: 美图降级计费, 降级防漏扣, meitu-fallback-billing, fallback-charge-guard
   - `saveGeneratedImageBuffer`: AI 生图落盘前经 AntiDetectionService 抗AI识别处理（元数据剥离/像素扰动/噪点/重采样）/ persist generated image buffer with anti detection
   - `run`: 运行/run
-  - `runWithMessages(input)`: 消息运行;默认以 nonStreaming + `nostream` tag 执行,用于 tool 内部/子代理内部 LLM 时不绑定主流 token handler | keywords: 运行, 消息, 调用, 工具内部非流, run, messages, invoke, internal-llm-nostream
+  - `runWithMessages(input)` — 执行消息并返回模型回复，默认非流式；传入必用工具时只挂该工具，返回工具调用供业务执行 | keywords: 运行, 消息, 调用, 工具内部非流, run, messages, invoke, internal-llm-nostream
   - `runSubAgentWithMessages`: 子代理消息运行/run subagent with messages
   - `normalizeMessages`: 规范消息/normalize messages
   - `extractStateMessages`: 提取消息/extract state messages
@@ -76,6 +76,7 @@ Anthropic 协议聊天模型兼容层，`buildLLM` 对 minimax / anthropic / cla
 - **字段**:
   - `AgentConfig.disableThinking`: 关闭模型思考，用于配图决策、封面文案、分镜选图等辅助调用；由 `buildLLM` 按型号发送关闭参数，不支持的型号忽略/disable thinking for auxiliary calls
   - `AgentConfig.lightweight`: 用 LangChain `createAgent` 代替 DeepAgent 的轻量 Agent，适合只调少量业务工具的一次性任务/lightweight agent without deepagent built-ins
+  - `AgentRunMessagesInput.requiredTool` — 指定本次模型请求唯一可用的工具，要求模型通过工具提交 | keywords: 消息运行, 必用工具, message-run, required-tool
   - `AgentConfig.ephemeral`: 一次性调用不挂 MongoDB checkpointer。runWithMessages / stream 在调用方未给 thread_id 时会生成随机一次性 thread_id，其快照写完永不再读，却每次往 checkpoints / checkpoint_writes upsert 数十 KB，是 checkpoint 集合膨胀与磁盘 IO 打满的主因；由 AgentService 自动置 true/ephemeral run skips checkpointer
 
 ### scripts/purge-ephemeral-checkpoints.mjs

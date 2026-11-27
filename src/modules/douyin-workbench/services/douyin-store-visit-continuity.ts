@@ -24,12 +24,13 @@ export function storeVisitSceneRules(scriptFirst: boolean): string {
   return scriptFirst ? SCRIPT_FIRST_SCENE_RULES : STORE_VISIT_REAL_SCENE_RULES;
 }
 
-/** @description 读取生成素材来源，旧 local 照片统一按 original 生成动态声画。
+/** @description 读取镜头素材用法。视频可直用或作为参考，旧 local 照片仍生成动态声画。
  * @keyword-cn 探店画面来源, 旧数据兼容 @keyword-en store-visit-visual-source, legacy-visual-source */
 export function storeVisitVisualSource(
   segment: DouyinStoreVisitSegment,
 ): 'material' | 'local' | 'original' | 'references' | 'generated' {
-  if (segment.sceneVideoId) return 'material';
+  if (segment.sceneVideoId)
+    return isStoreVisitLocalSegment(segment) ? 'local' : 'material';
   if (segment.shot !== 'presenter' && segment.shot !== 'experience')
     return 'original';
   const source =
@@ -37,13 +38,30 @@ export function storeVisitVisualSource(
   return source || (segment.shot === 'presenter' ? 'generated' : 'original');
 }
 
-/** @description 兼容旧调用的本机素材判定，始终返回 false，所有分段都生成视频。
+/** @description 识别明确选择直用原实拍的镜头。
  * @keyword-cn 本机素材段, 免AI画面 @keyword-en local-material-segment, no-ai-footage */
 export function isStoreVisitLocalSegment(
   segment: DouyinStoreVisitSegment | undefined,
 ): boolean {
-  if (!segment) return false;
-  return false;
+  return Boolean(
+    segment?.sceneVideoId &&
+    segment.materialMode === 'direct' &&
+    segment.shot !== 'presenter',
+  );
+}
+
+/**
+ * @description 读取第 1 段的开场参考；第 1 段直接使用实拍时沿用原画面。
+ * @keyword-cn 开场素材引用, 第一段分镜
+ * @keyword-en opening-material-reference, first-shot
+ */
+export function storeVisitOpeningMaterialUrl(
+  setting: DouyinStoreVisitSetting,
+  segment: DouyinStoreVisitSegment,
+): string {
+  return setting.segments?.[0]?.id === segment.id && !isStoreVisitLocalSegment(segment)
+    ? setting.openingMaterial?.url || ''
+    : '';
 }
 
 /** @description Seedance 2.0 与 MiniMax-H3 支持参考音频，参考模式不能与 first_frame 混用。
@@ -57,11 +75,13 @@ export function supportsStoreVisitReferences(model: string): boolean {
   return /seedance[-_.]?2|(?:minimax[-_.]?)?h3/i.test(model);
 }
 
-/** @description 仅已生成视频且 nativeAudio 为真才可拼接，旧的仅配音或替换音轨版本必须重做。
+/** @description 检查动态声画与直用实拍各自的合成条件。
  * @keyword-cn 分段就绪判断, 可拼接分段 @keyword-en segment-ready-check, mergeable-segment */
 export function isStoreVisitSegmentReady(
   segment: DouyinStoreVisitSegment | undefined,
 ): boolean {
+  if (isStoreVisitLocalSegment(segment))
+    return Boolean(segment?.audioUrl && Number(segment.audioSeconds) > 0);
   return Boolean(segment?.videoId && segment.nativeAudio === true);
 }
 

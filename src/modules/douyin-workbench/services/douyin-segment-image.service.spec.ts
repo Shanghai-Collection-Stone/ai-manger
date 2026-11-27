@@ -72,20 +72,22 @@ function serviceWith(topic: Record<string, unknown>) {
       thumbUrl: '/static/new-s.jpg',
     }),
   };
+  const director = { describeDraftMaterial: jest.fn().mockResolvedValue('孩子们在室内做游戏') };
   const service = new DouyinSegmentImageService(
     repository as never,
     candidates as never,
     storyboard as never,
     shotImages as never,
+    director as never,
   );
-  return { service, repository, candidates, storyboard, shotImages };
+  return { service, repository, candidates, storyboard, shotImages, director };
 }
 
 describe('从脚本开始的分段配图', () => {
   const scope = { userId: 'u1' };
 
   it('按脚本从图库挑图：模型挑的先用，没挑上的按相关度补，返回每段的图和场景图', async () => {
-    const { service, candidates, storyboard } = serviceWith(scriptFirstTopic());
+    const { service, candidates, storyboard, director } = serviceWith(scriptFirstTopic());
     const result = await service.pickImages(2, scope);
     expect(candidates.loadCandidates).toHaveBeenCalledWith(
       expect.stringContaining('孩子的生日会'),
@@ -104,9 +106,16 @@ describe('从脚本开始的分段配图', () => {
       description: '生日蛋糕',
       tags: ['生日'],
     });
-    expect(
-      result.sceneImages.find((image) => image.id === 22)?.description,
-    ).toBeTruthy();
+    expect(result.sceneImages.find((image) => image.id === 22)?.description).toBe('孩子们在室内做游戏');
+    expect(director.describeDraftMaterial).toHaveBeenCalledTimes(1);
+    expect(director.describeDraftMaterial).toHaveBeenCalledWith(2, { type: 'image', id: 22 }, scope);
+  });
+
+  it('图片没有说明且识别不可用时保留空说明', async () => {
+    const { service, director } = serviceWith(scriptFirstTopic());
+    director.describeDraftMaterial.mockResolvedValue('');
+    const result = await service.pickImages(2, scope);
+    expect(result.sceneImages.find((image) => image.id === 22)?.description).toBe('');
   });
 
   it('从门店开始的脚本不走这里，图库为空时提示改用 AI 生图', async () => {
@@ -136,6 +145,7 @@ describe('从脚本开始的分段配图', () => {
       segments: Array<{ id: string; sceneImageId?: number }>;
     };
     expect(saved.sceneImages.map((image) => image.id)).toEqual([11, 31]);
+    expect(saved.sceneImages[1]).toMatchObject({ id: 31, description: '孩子们在室内做游戏' });
     expect(saved.segments[1]).toMatchObject({ id: 's2', sceneImageId: 31 });
 
     const again = serviceWith(scriptFirstTopic());

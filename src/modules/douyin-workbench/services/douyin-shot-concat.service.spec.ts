@@ -93,6 +93,22 @@ const readyTopic = () => ({
   ],
 });
 
+it('已经生成的开场素材画面直接参与成片拼接，首段不叠旧版式', async () => {
+  const result = await build({
+    id: 7,
+    kind: 'child',
+    title: '开场素材',
+    productionMode: 'store-visit',
+    videoTemplate: { enabled: true, imageUrl: '/old-overlay.png', aspectRatio: '4:3' },
+    storeVisit: {
+      openingMaterial: { url: '/opening.jpg', name: '开场参考' },
+      segments: [{ id: 'a', lines: '开场', sceneImageId: 9, videoId: 41, nativeAudio: true }],
+    },
+  }).service.prepare(7, scope);
+  expect(result.template).toBeUndefined();
+  expect(result.clips).toMatchObject([{ videoId: 41, template: null }]);
+});
+
 /**
  * @description 验证合成交付逐段模板、显式停用与换图失效，并直接带上完整片段转场方案。
  * @keyword-cn 分段合成参数回归, 旧素材失效
@@ -183,7 +199,10 @@ async function verifyConcatMusic(): Promise<void> {
   expect(degraded.operation.status).toBe('running');
 }
 
-it('passes the chosen music and degrades when it was deleted', verifyConcatMusic);
+it(
+  'passes the chosen music and degrades when it was deleted',
+  verifyConcatMusic,
+);
 
 describe('DouyinShotConcatService（客户端合成）', () => {
   it('全部探店片段必须先生成视频，只用生成的视频与字幕拼接', async () => {
@@ -247,6 +266,38 @@ describe('DouyinShotConcatService（客户端合成）', () => {
     };
     const { service } = build(topic);
     await expect(service.prepare(7, scope)).rejects.toThrow('第 1、2 段');
+  });
+
+  it('直接用实拍时拼接原视频、入点、配音和台词', async () => {
+    const { service } = build({
+      id: 7,
+      kind: 'child',
+      productionMode: 'store-visit',
+      storyboard: [],
+      storeVisit: {
+        segments: [
+          {
+            id: 'direct',
+            lines: '门头',
+            sceneVideoId: 5,
+            materialMode: 'direct',
+            clipStart: 2,
+            audioUrl: 'https://cdn/direct.wav',
+            audioSeconds: 4,
+          },
+        ],
+      },
+    });
+    const { clips } = await service.prepare(7, scope);
+    expect(clips).toMatchObject([
+      {
+        videoId: 5,
+        start: 2,
+        fallbackSeconds: 4,
+        audioUrl: 'https://cdn/direct.wav',
+        subtitle: '门头',
+      },
+    ]);
   });
 
   it('还有分镜没出片时拒绝', async () => {

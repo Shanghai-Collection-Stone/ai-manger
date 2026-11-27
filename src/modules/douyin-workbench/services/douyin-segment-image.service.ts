@@ -13,6 +13,7 @@ import {
   DouyinStoryboardImageService,
   type StoryboardImageCandidate,
 } from './douyin-storyboard-image.service.js';
+import { DouyinVideoDirectorService } from './douyin-video-director.service.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
@@ -60,12 +61,12 @@ export function toPickShot(
  * @keyword-cn 候选图转场景图, 素材说明
  * @keyword-en candidate-to-scene-image, material-description
  * @param {StoryboardImageCandidate} candidate 候选图。
- * @param {string} fallback 候选图没有说明时用的画面文字。
+ * @param {string} [description] 已确认的素材说明，缺省沿用图库说明。
  * @returns {DouyinStoreVisitSceneImage} 场景图。
  */
 export function toSceneImage(
   candidate: StoryboardImageCandidate,
-  fallback: string,
+  description = candidate.description,
 ): DouyinStoreVisitSceneImage {
   return {
     type: 'image',
@@ -73,7 +74,7 @@ export function toSceneImage(
     name: candidate.name || `图片 #${candidate.id}`,
     url: candidate.url,
     ...(candidate.coverUrl ? { coverUrl: candidate.coverUrl } : {}),
-    description: String(candidate.description || fallback).slice(0, 300),
+    description: (description || '').trim().slice(0, 500),
     ...(candidate.tags?.length ? { tags: candidate.tags.slice(0, 10) } : {}),
   };
 }
@@ -96,6 +97,7 @@ export class DouyinSegmentImageService {
     private readonly candidates: DouyinStoryboardImageService,
     private readonly storyboard: DouyinStoryboardGenerationService,
     private readonly shotImages: DouyinShotImageService,
+    private readonly director: DouyinVideoDirectorService,
   ) {}
 
   /**
@@ -144,18 +146,19 @@ export class DouyinSegmentImageService {
     autoAssignShotImages(shots, candidates);
     const byId = new Map(candidates.map((item) => [item.id, item]));
     const picked: Array<{ id: string; sceneImageId: number }> = [];
-    const sceneImages = new Map<number, DouyinStoreVisitSceneImage>();
-    shots.forEach((shot, index) => {
+    const selected = new Map<number, StoryboardImageCandidate>();
+    for (const shot of shots) {
       const candidate = shot.media ? byId.get(Number(shot.media.id)) : null;
-      if (!candidate) return;
+      if (!candidate) continue;
       picked.push({ id: shot.id, sceneImageId: candidate.id });
-      if (!sceneImages.has(candidate.id))
-        sceneImages.set(
-          candidate.id,
-          toSceneImage(candidate, describeSegmentVisual(segments[index])),
-        );
-    });
-    return { segments: picked, sceneImages: [...sceneImages.values()] };
+      selected.set(candidate.id, candidate);
+    }
+    const sceneImages = await Promise.all([...selected.values()].map(async (candidate) =>
+      toSceneImage(candidate, candidate.description?.trim() || await this.director.describeDraftMaterial(
+        topicId, { type: 'image', id: candidate.id }, scope,
+      )),
+    ));
+    return { segments: picked, sceneImages };
   }
 
   /**
@@ -204,9 +207,15 @@ export class DouyinSegmentImageService {
       previousImageUrl: previous?.url,
       scope,
     });
+    const description = await this.director.describeDraftMaterial(
+      topicId, { type: 'image', id: image.id }, scope,
+    );
     const oldId = segment.sceneImageId;
     const oldStillUsed = segments.some(
-      (item, position) => position !== index && item.sceneImageId === oldId,
+      (item, position) =>
+        position !== index &&
+        (item.sceneImageId === oldId ||
+          (oldId && item.sceneImageIds?.includes(oldId))),
     );
     const nextImages: DouyinStoreVisitSceneImage[] = [
       ...sceneImages.filter((item) => oldStillUsed || item.id !== oldId),
@@ -216,10 +225,7 @@ export class DouyinSegmentImageService {
         name: image.originalName || `图片 #${image.id}`,
         url: image.url,
         coverUrl: image.thumbUrl || image.url,
-        description: (requirement || describeSegmentVisual(segment)).slice(
-          0,
-          300,
-        ),
+        description,
       },
     ];
     const nextSegments = segments.map((item, position) => {
@@ -227,12 +233,16 @@ export class DouyinSegmentImageService {
       const copy: DouyinStoreVisitSegment = { ...item, sceneImageId: image.id };
       delete copy.sceneImageIds;
       delete copy.sceneVideoId;
+      delete copy.clipStart;
+      delete copy.materialMode;
+      delete copy.manualMaterial;
       return copy;
     });
     const updated = await this.repository.update(
       topicId,
       { storeVisit: { sceneImages: nextImages, segments: nextSegments } },
       scope,
+      topic.updatedAt,
     );
     if (!updated) throw new BadRequestException('DOUYIN_CHILD_TOPIC_NOT_FOUND');
     return {

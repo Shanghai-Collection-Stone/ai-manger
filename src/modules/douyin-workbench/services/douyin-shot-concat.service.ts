@@ -15,7 +15,10 @@ import type {
   DouyinVideoTemplate,
 } from '../entities/douyin-workbench.entity.js';
 import { DouyinMusicRepositoryService } from '../../douyin-music/services/douyin-music-repository.service.js';
-import { isStoreVisitSegmentReady } from './douyin-store-visit-continuity.js';
+import {
+  isStoreVisitLocalSegment,
+  isStoreVisitSegmentReady,
+} from './douyin-store-visit-continuity.js';
 import { activeTemplateAspect } from './douyin-video-template.js';
 import { listDirectorFrames } from './douyin-video-director.js';
 import { buildPlannedEdit } from './douyin-video-edit.js';
@@ -64,6 +67,8 @@ export interface DouyinConcatClip {
   motion?: DouyinStoreVisitMotion;
   /** 探店视频素材的入点（秒） */
   start?: number;
+  /** 直接用实拍，成片使用配音和原画面。 */
+  materialMode?: 'direct';
   /** 探店画外音：这一段的配音地址，有它时客户端用配音替换画面原声 */
   audioUrl?: string;
   /** 探店：这一段要烧进画面的字幕（就是本段台词）；参考音色出声的人物段只带字幕不带配音，客户端保留视频原声 */
@@ -192,6 +197,8 @@ export class DouyinShotConcatService {
         ? (topic.storeVisit?.segments ?? [])
         : [];
     const bySegments = segments.length > 0;
+    const openingUsesFullFrame = bySegments && topic.storeVisit?.openingMaterial !== undefined &&
+      !isStoreVisitLocalSegment(segments[0]);
     const unit = bySegments ? '段' : '镜';
     // 探店分段以配音时长为准，没有配音时按台词字数估（约 4.5 字/秒）；本机素材段配好音即就绪：
     // 视频素材直接用视频库里的那段（带入点），图片素材交给客户端本机缓推
@@ -201,6 +208,7 @@ export class DouyinShotConcatService {
       imageId?: number;
       motion?: DouyinStoreVisitMotion;
       start?: number;
+      materialMode?: 'direct';
       ready?: boolean;
       nativeAudio?: boolean;
       duration: number;
@@ -210,8 +218,13 @@ export class DouyinShotConcatService {
       ? segments.map((segment) => ({
           id: segment.id,
           ready: isStoreVisitSegmentReady(segment),
-          videoId: segment.videoId,
-          nativeAudio: true,
+          videoId: isStoreVisitLocalSegment(segment)
+            ? segment.sceneVideoId
+            : segment.videoId,
+          nativeAudio: !isStoreVisitLocalSegment(segment),
+          ...(isStoreVisitLocalSegment(segment)
+            ? { start: segment.clipStart, audioUrl: segment.audioUrl, materialMode: 'direct' as const }
+            : {}),
           duration:
             Number(segment.audioSeconds) ||
             Math.max(2, Math.round(segment.lines.length / 4.5)),
@@ -301,6 +314,7 @@ export class DouyinShotConcatService {
         url,
         fallbackSeconds: Number(shot.duration) || 5,
         ...(Number(shot.start) > 0 ? { start: Number(shot.start) } : {}),
+        ...(shot.materialMode === 'direct' ? { materialMode: 'direct' } : {}),
         ...voice,
       });
     }
@@ -323,6 +337,16 @@ export class DouyinShotConcatService {
             : null;
       }
     }
+    if (openingUsesFullFrame) clips[0].template = null;
+    const template =
+      (!openingUsesFullFrame || clips.length > 1) &&
+      activeTemplateAspect(topic.videoTemplate) && topic.videoTemplate?.imageUrl
+        ? {
+            imageUrl: topic.videoTemplate.imageUrl,
+            window: topic.videoTemplate.window,
+            aspectRatio: topic.videoTemplate.aspectRatio,
+          }
+        : undefined;
     const edit = buildPlannedEdit(topic, clips);
     const { music, musicMissing } = await this.resolveMusic(topic, scope);
     // 自动合成要先领到标记；手动合成也清掉标记，免得之后重生成某一镜又自动合成一次
@@ -346,7 +370,7 @@ export class DouyinShotConcatService {
         ),
         videoIds: clips.map((clip) => clip.videoId),
         auto: Boolean(options.auto),
-        template: Boolean(activeTemplateAspect(topic.videoTemplate)),
+        template: Boolean(template),
         editPlan: edit,
         ...(music
           ? { music: { trackId: music.trackId, volume: music.volume } }
@@ -357,14 +381,6 @@ export class DouyinShotConcatService {
       updatedAt: now,
     };
     await this.operations.insertOne(doc);
-    const template =
-      activeTemplateAspect(topic.videoTemplate) && topic.videoTemplate?.imageUrl
-        ? {
-            imageUrl: topic.videoTemplate.imageUrl,
-            window: topic.videoTemplate.window,
-            aspectRatio: topic.videoTemplate.aspectRatio,
-          }
-        : undefined;
     return {
       operation: this.toView(doc),
       clips,

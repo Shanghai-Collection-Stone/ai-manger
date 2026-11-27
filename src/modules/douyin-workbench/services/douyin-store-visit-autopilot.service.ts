@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -141,7 +142,7 @@ export class DouyinStoreVisitAutopilotService
     if (this.timer) clearInterval(this.timer);
   }
 
-  /** @description 启动或继续托管，重复点击运行中任务只返回状态，不重置进度或重新生成；用户手动继续时重置自动修复次数，停下后用户改过这段台词就直接按新内容出片。 @keyword-cn 启动Agent托管, 托管重复保护 @keyword-en start-agent-autopilot, autopilot-duplicate-guard */
+  /** @description 启动或继续指定目标的托管，同目标复用进度并防重，切换目标时创建新任务并独立恢复。 @keyword-cn 启动Agent托管, 托管重复保护 @keyword-en start-agent-autopilot, autopilot-duplicate-guard */
   async start(
     topicId: number,
     input: StartDouyinAutopilotDto,
@@ -149,22 +150,40 @@ export class DouyinStoreVisitAutopilotService
   ): Promise<DouyinTopicEntity> {
     const topic = await this.requireTopic(topicId, scope);
     const previous = topic.storeVisit?.autopilot;
-    if (previous?.state === 'running') return topic;
+    const previousGoal = previous?.goal ?? 'video';
+    const goal =
+      input.goal ?? (previous?.state === 'done' ? 'video' : previousGoal);
+    const sameGoal = goal === previousGoal;
     // 自动恢复只能认领弹窗对应的失败，其他窗口的暂停或新失败优先。
     if (
       input.recoverFailureId &&
-      (previous?.state !== 'waiting' ||
+      (!sameGoal ||
+        previous?.state !== 'waiting' ||
         previous.failureId !== input.recoverFailureId)
     )
       return topic;
-    const resume = previous && previous.state !== 'done';
-    const blocked = previous?.state === 'paused' ? previous.blocked : undefined;
+    if (previous?.state === 'running') {
+      if (sameGoal) return topic;
+      throw new ConflictException('请先暂停当前任务，再切换制作目标');
+    }
+    if (goal === 'draft' && topic.storeVisit?.pipeline?.state === 'running')
+      throw new ConflictException('请先暂停出片，再补齐草稿');
+    const resume =
+      previous &&
+      previous.state !== 'done' &&
+      sameGoal &&
+      (goal === 'video' || !['voice', 'make'].includes(previous.stage));
+    const blocked =
+      resume && previous.state === 'paused' ? previous.blocked : undefined;
     const failure =
-      previous?.state === 'waiting'
+      resume && previous.state === 'waiting'
         ? {
             reason: previous.message,
             stage: previous.stage,
-            segmentId: topic.storeVisit?.pipeline?.currentSegmentId,
+            segmentId:
+              goal === 'video'
+                ? topic.storeVisit?.pipeline?.currentSegmentId
+                : undefined,
           }
         : blocked
           ? {
@@ -184,16 +203,21 @@ export class DouyinStoreVisitAutopilotService
       runId: resume ? previous.runId : randomUUID(),
       state: 'running',
       stage: resume ? previous.stage : 'script',
-      message: 'Agent 正在检查已有设定与制作进度',
+      message:
+        goal === 'draft'
+          ? 'AI 正在检查草稿内容'
+          : 'Agent 正在检查已有设定与制作进度',
       pictureSource:
         input.pictureSource || (resume && previous.pictureSource) || 'gallery',
+      goal,
       voiceAnchor: input.voiceAnchor ?? (resume ? previous.voiceAnchor : false),
       scriptPrompt: input.scriptPrompt || undefined,
       linesPrompt: input.linesPrompt || undefined,
       reviewKey: previous?.reviewKey,
       mergeRequested: false,
       mergeAfter: now,
-      resumePipeline: topic.storeVisit?.pipeline?.state === 'paused',
+      resumePipeline:
+        goal === 'video' && topic.storeVisit?.pipeline?.state === 'paused',
       recovery:
         failure && !edited
           ? { ...failure, pending: true }
@@ -213,19 +237,25 @@ export class DouyinStoreVisitAutopilotService
       {
         _id: topic._id,
         'storeVisit.autopilot.state': previous?.state || { $exists: false },
+        ...(previous?.runId
+          ? { 'storeVisit.autopilot.runId': previous.runId }
+          : {}),
         ...(input.recoverFailureId
           ? { 'storeVisit.autopilot.failureId': input.recoverFailureId }
           : {}),
       },
       { $set: { 'storeVisit.autopilot': state, updatedAt: now } },
     );
+    const latest = await this.requireTopic(topicId, scope);
+    if ((latest.storeVisit?.autopilot?.goal ?? 'video') !== goal)
+      throw new ConflictException('制作任务已切换，请刷新后重试');
     void this.advance(topicId, scope).catch((error) =>
       this.logger.warn(String(error)),
     );
-    return this.requireTopic(topicId, scope);
+    return latest;
   }
 
-  /** @description 暂停后不再启动下一步，已经提交的 AI 操作允许完成，出片导演同时暂停。 @keyword-cn 暂停Agent托管, 保留完成结果 @keyword-en pause-agent-autopilot, preserve-completed-results */
+  /** @description 暂停当前托管，保留已经提交的操作，出片托管同时暂停导演。 @keyword-cn 暂停Agent托管, 保留完成结果 @keyword-en pause-agent-autopilot, preserve-completed-results */
   async pause(topicId: number, scope: Scope): Promise<DouyinTopicEntity> {
     const topic = await this.requireTopic(topicId, scope);
     await this.topics.updateOne(
@@ -242,7 +272,10 @@ export class DouyinStoreVisitAutopilotService
         },
       },
     );
-    if (topic.storeVisit?.pipeline?.state === 'running')
+    if (
+      topic.storeVisit?.autopilot?.goal !== 'draft' &&
+      topic.storeVisit?.pipeline?.state === 'running'
+    )
       await this.pipeline.pause(topicId, 'user', scope);
     return this.requireTopic(topicId, scope);
   }
@@ -394,7 +427,10 @@ export class DouyinStoreVisitAutopilotService
     if (input.state === 'waiting') {
       const auto = topic.storeVisit!.autopilot!;
       const stage = input.stage ?? auto.stage;
-      const segmentId = topic.storeVisit?.pipeline?.currentSegmentId;
+      const segmentId =
+        auto.goal === 'draft'
+          ? undefined
+          : topic.storeVisit?.pipeline?.currentSegmentId;
       const reason = input.message || auto.message;
       const key = autopilotRepairKey(stage, segmentId);
       const history = (auto.repairs ?? []).filter((item) => item.key === key);
@@ -409,7 +445,8 @@ export class DouyinStoreVisitAutopilotService
           ...(segmentId ? { segmentId } : {}),
           ...this.blockedLines(topic, segmentId),
         };
-        fields.message = `这个问题已自动修复过，仍未解决：${reason.replace(/[。！？.!?\s]+$/, '')}。可以调整后点「继续托管」。`;
+        const button = auto.goal === 'draft' ? '补齐台词和素材' : '继续托管';
+        fields.message = `这个问题已自动修复过，仍未解决：${reason.replace(/[。！？.!?\s]+$/, '')}。可以调整后点「${button}」。`;
       }
     }
     const set: Record<string, unknown> = {
@@ -569,11 +606,16 @@ export class DouyinStoreVisitAutopilotService
       scope,
     );
     if (!(await this.ownsRun(topic, scope))) return;
-    if (decision.action === 'ask-user') {
+    if (
+      decision.action === 'ask-user' ||
+      (decision.action === 'rewrite-script' && setting.manualScript) ||
+      (decision.action === 'rewrite-segment' && target?.manualLines) ||
+      (decision.action === 'replace-picture' && target?.manualMaterial)
+    ) {
       await this.stopForUser(
         topic,
         recovery,
-        `这一步需要你处理：${recovery.reason.replace(/[。！？.!?\s]+$/, '')}。处理后点「继续托管」。`,
+        `这一步需要你处理：${recovery.reason.replace(/[。！？.!?\s]+$/, '')}。调整后可以重试。`,
       );
       return;
     }
@@ -626,7 +668,7 @@ export class DouyinStoreVisitAutopilotService
       await this.stopForUser(
         topic,
         recovery,
-        `自动修复没有完成：${(DOUYIN_GENERATION_ERROR_MESSAGES[message] || message).replace(/[。！？.!?\s]+$/, '')}。可以调整后点「继续托管」。`,
+        `自动修复没有完成：${(DOUYIN_GENERATION_ERROR_MESSAGES[message] || message).replace(/[。！？.!?\s]+$/, '')}。调整后可以重试。`,
       );
       return;
     }
@@ -698,16 +740,9 @@ export class DouyinStoreVisitAutopilotService
           scope,
         );
     }
-    if (setting.script?.trim())
-      await this.repository.update(
-        topic.id,
-        { storeVisit: { scriptNeedsRefine: true, linesScript: '' } },
-        scope,
-      );
     await this.patch(topic, {
       stage: 'script',
-      mustMerge: true,
-      message: '已补齐人物与音色，接着调整创作脚本',
+      message: '已补齐出片所需的人物和音色',
     });
   }
 
@@ -715,11 +750,16 @@ export class DouyinStoreVisitAutopilotService
   private async runStep(topic: DouyinTopicEntity, scope: Scope): Promise<void> {
     const setting = topic.storeVisit || {};
     const auto = setting.autopilot!;
-    if (auto.recovery?.pending) {
+    const draft = auto.goal === 'draft';
+    const recovery = auto.recovery;
+    if (
+      recovery?.pending &&
+      (!draft || !['voice', 'make'].includes(recovery.stage))
+    ) {
       await this.recoverStep(topic, scope);
       return;
     }
-    if (setting.pipeline?.state === 'running') {
+    if (auto.goal !== 'draft' && setting.pipeline?.state === 'running') {
       await this.finishVideo(topic, scope);
       return;
     }
@@ -741,9 +781,9 @@ export class DouyinStoreVisitAutopilotService
           : undefined;
       if (await this.settleStore(topic, question, scope)) return;
       await this.patch(topic, {
-        state: 'waiting',
+        state: draft ? 'paused' : 'waiting',
         stage: 'script',
-        message: question?.question || '请先在脚本页确认拍摄门店，再继续托管',
+        message: question?.question || '请先在准备页确认拍摄门店，然后重试',
       });
       return;
     }
@@ -758,8 +798,9 @@ export class DouyinStoreVisitAutopilotService
       return;
     }
     if (
-      (!setting.voiceId && !setting.voicePrompt?.trim()) ||
-      (setting.template === 'opening' && !setting.faceImage)
+      auto.goal !== 'draft' &&
+      ((!setting.voiceId && !setting.voicePrompt?.trim()) ||
+        (setting.template === 'opening' && !setting.faceImage))
     ) {
       await this.patch(topic, {
         stage: 'script',
@@ -783,10 +824,11 @@ export class DouyinStoreVisitAutopilotService
       if ('needsStore' in result && result.needsStore) {
         if (await this.settleStore(topic, result.storeQuestion, scope)) return;
         await this.patch(topic, {
-          state: 'waiting',
+          state: draft ? 'paused' : 'waiting',
+          stage: 'script',
           message:
             result.storeQuestion?.question ||
-            '门店尚未确认，请在脚本页补充后继续托管',
+            '门店尚未确认，请在准备页补充后重试',
         });
       }
       return;
@@ -830,7 +872,14 @@ export class DouyinStoreVisitAutopilotService
         message: 'AI 正在对照引用知识检查脚本',
       });
       const review = await this.planner.reviewScript(topic.id, scope);
-      if (!review.passed && review.issues.length) {
+      if (
+        !review.passed &&
+        review.issues.length &&
+        !setting.manualScript &&
+        !setting.segments?.some(
+          (segment) => segment.manualLines || segment.manualMaterial,
+        )
+      ) {
         const rewritten = await this.agent.writeScript(
           topic.id,
           { keepCast: true, issues: review.issues },
@@ -859,7 +908,11 @@ export class DouyinStoreVisitAutopilotService
       return;
     }
     const segments = setting.segments || [];
-    if (!segments.length || setting.linesScript !== script) {
+    if (
+      !segments.length ||
+      setting.linesScript !== script ||
+      segments.some((segment) => !segment.lines.trim())
+    ) {
       await this.patch(topic, {
         stage: 'lines',
         message:
@@ -897,7 +950,9 @@ export class DouyinStoreVisitAutopilotService
       });
       if (storeVisitStart(setting) !== 'script') {
         const store = await this.spots.requireStore(setting.storeId!, scope);
-        if (!store.spots.some((spot) => spot.images.length)) {
+        if (
+          !store.spots.some((spot) => spot.images.length || spot.videos?.length)
+        ) {
           const ids = (setting.sceneImages || [])
             .map((image) => Number(image.id))
             .filter((id) => id > 0)
@@ -911,7 +966,7 @@ export class DouyinStoreVisitAutopilotService
             if (classified.assigned > 0) return;
           }
           throw new BadRequestException(
-            '门店还没有可用素材，请先上传并整理门店场景图库，再继续托管',
+            '门店还没有可用素材，请先上传并整理门店场景图库，然后重试',
           );
         }
         await this.agent.matchScenes(topic.id, scope, { onlyMissing: true });
@@ -936,6 +991,25 @@ export class DouyinStoreVisitAutopilotService
               (segment) =>
                 !storeVisitSegmentHasMaterial(latest.storeVisit!, segment),
             );
+            const protectedShot = left.find(
+              (segment) => segment.manualLines || segment.manualMaterial,
+            );
+            if (protectedShot) {
+              const index = (latest.storeVisit?.segments || []).findIndex(
+                (segment) => segment.id === protectedShot.id,
+              );
+              await this.stopForUser(
+                topic,
+                {
+                  reason: '手动镜头需要选择素材',
+                  stage: 'picture',
+                  segmentId: protectedShot.id,
+                  pending: false,
+                },
+                `第 ${index + 1} 段需要你选素材或调整台词，处理后可以重试。`,
+              );
+              return;
+            }
             // 剩下的只有人物出镜段：门店没有能给人物用的照片，改成不露脸解说
             if (
               left.length &&
@@ -1001,6 +1075,14 @@ export class DouyinStoreVisitAutopilotService
             message: '图库未能配齐画面，接下来用 AI 逐段补图',
           });
       }
+      return;
+    }
+    if (auto.goal === 'draft') {
+      await this.patch(topic, {
+        state: 'done',
+        stage: 'picture',
+        message: '镜头草稿已配齐，可以逐段检查并调整',
+      });
       return;
     }
     if (auto.stage !== 'voice' && auto.stage !== 'make') {

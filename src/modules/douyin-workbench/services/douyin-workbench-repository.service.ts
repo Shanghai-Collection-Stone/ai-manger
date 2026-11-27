@@ -46,6 +46,7 @@ import {
   type DouyinVideoTemplate,
   type DouyinWorkspaceGroup,
 } from '../entities/douyin-workbench.entity.js';
+import { toStoreVisitSegmentsPayload } from './douyin-store-visit-rules.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
@@ -337,7 +338,6 @@ export function normalizeStoreVisitSegments(
       0,
       DOUYIN_STORE_VISIT_SEGMENT_LIMITS.lines,
     );
-    if (!lines) continue;
     let id = String(item?.id ?? '').trim();
     if (!/^[A-Za-z0-9_-]{1,40}$/.test(id) || seen.has(id))
       id = randomUUID().slice(0, 12);
@@ -371,6 +371,7 @@ export function normalizeStoreVisitSegments(
     const primaryImageId = sceneImageIds.includes(sceneImageId)
       ? sceneImageId
       : extraImageIds[0];
+    if (!lines && !video && !primaryImageId) continue;
     const spotId = String(item?.spotId ?? '').trim();
     const scene = String(item?.scene ?? '')
       .replace(/\s+/g, ' ')
@@ -383,8 +384,18 @@ export function normalizeStoreVisitSegments(
     list.push({
       id,
       lines,
+      ...(lines && item?.manualLines === true ? { manualLines: true } : {}),
+      ...((video || primaryImageId) && item?.manualMaterial === true
+        ? { manualMaterial: true }
+        : {}),
       ...(video
-        ? { sceneVideoId, ...(clipStart > 0 ? { clipStart } : {}) }
+        ? {
+            sceneVideoId,
+            ...(clipStart > 0 ? { clipStart } : {}),
+            ...(item?.materialMode === 'direct' && item.shot !== 'presenter'
+              ? { materialMode: 'direct' as const }
+              : {}),
+          }
         : primaryImageId
           ? { sceneImageId: primaryImageId }
           : {}),
@@ -447,6 +458,7 @@ export function mergeStoreVisitSegments(
       chainChanged = true;
       return isStoreVisitLocalSegment(previous) &&
         previous.lines === segment.lines &&
+        (previous.delivery || '') === (segment.delivery || '') &&
         previous.audioUrl
         ? {
             ...segment,
@@ -798,6 +810,7 @@ export class DouyinWorkbenchRepositoryService {
         script?: string;
         linesScript?: string;
         scriptNeedsRefine?: boolean;
+        manualScript?: boolean;
         voicePrompt?: string;
         start?: DouyinStoreVisitStart;
         speechEngine?: 'cosyvoice' | 'qwen3-tts';
@@ -809,6 +822,7 @@ export class DouyinWorkbenchRepositoryService {
         sceneImages?: Array<Partial<DouyinStoreVisitSceneImage>>;
         sceneVideos?: Array<Partial<DouyinStoreVisitSceneVideo>>;
         openingScene?: Partial<DouyinStoreVisitOpeningScene> | null;
+        openingMaterial?: { source: 'gallery' | 'previous-layout'; imageId?: number } | null;
         sceneDescription?: string;
         lines?: string;
         segments?: Array<Partial<DouyinStoreVisitSegment>>;
@@ -818,9 +832,12 @@ export class DouyinWorkbenchRepositoryService {
       generatedVideoId?: number;
     },
     scope: DouyinScope,
+    expectedRevision?: Date,
   ): Promise<DouyinTopicEntity | null> {
     const current = await this.get(id, scope);
     if (!current) return null;
+    if (expectedRevision && +current.updatedAt !== +expectedRevision)
+      throw new BadRequestException('草稿在生成期间有更新，请刷新后重试');
     if (
       input.storeVisit?.segments !== undefined &&
       input.storeVisit.linesScript?.trim()
@@ -912,6 +929,8 @@ export class DouyinWorkbenchRepositoryService {
     if (input.storeVisit?.scriptNeedsRefine !== undefined)
       nested['storeVisit.scriptNeedsRefine'] =
         input.storeVisit.scriptNeedsRefine;
+    if (input.storeVisit?.manualScript !== undefined)
+      nested['storeVisit.manualScript'] = input.storeVisit.manualScript;
     if (input.storeVisit?.lines !== undefined) {
       const lines = normalizeStoreVisitLines(input.storeVisit.lines);
       if (lines) nested['storeVisit.lines'] = lines;
@@ -1030,6 +1049,20 @@ export class DouyinWorkbenchRepositoryService {
       );
       if (faceChanged) segments = clearPresenterKeyframes(segments);
       nested['storeVisit.segments'] = segments;
+      /** @description 对比会影响成片的镜头内容，包括顺序，忽略手动归属标记。 @keyword-cn 成片内容比对, 忽略手动归属 @keyword-en final-content-comparison, ignore-manual-markers */
+      const composition = (list: DouyinStoreVisitSegment[]) =>
+        JSON.stringify(
+          toStoreVisitSegmentsPayload(list).map(
+            ({ manualLines, manualMaterial, ...content }) => content,
+          ),
+        );
+      if (
+        current.generatedVideoId &&
+        input.generatedVideoId === undefined &&
+        composition(segments) !==
+          composition(current.storeVisit?.segments ?? [])
+      )
+        unset.generatedVideoId = '';
       if (input.storeVisit.lines === undefined) {
         const lines = normalizeStoreVisitLines(
           segments.map((segment) => segment.lines).join('\n'),
@@ -1111,6 +1144,52 @@ export class DouyinWorkbenchRepositoryService {
         .trim()
         .slice(0, 2000);
     }
+    const savedSegments = current.storeVisit?.segments ?? [];
+    const segments = (nested['storeVisit.segments'] ?? savedSegments) as DouyinStoreVisitSegment[];
+    const opening = input.storeVisit?.openingMaterial;
+    const previousMaterial = current.storeVisit?.openingMaterial;
+    let nextMaterial = previousMaterial;
+    if (opening !== undefined) {
+      if (current.kind !== 'child' || current.productionMode !== 'store-visit')
+        throw new BadRequestException('请在视频草稿的第 1 段选择开场素材');
+      nextMaterial = null;
+      if (opening?.source === 'gallery') {
+        if (!opening.imageId) throw new BadRequestException('请选择一张图库图片');
+        const image = await this.requireImage(opening.imageId, scope);
+        const url = typeof image.url === 'string' ? image.url.trim() : '';
+        if (!url) throw new BadRequestException('所选图片没有可用地址');
+        nextMaterial = { imageId: opening.imageId, url, name: String(image.name || '开场图片') };
+      } else if (opening?.source === 'previous-layout') {
+        const firstId = segments[0]?.id;
+        const url = (firstId ? current.videoTemplate?.variants?.[firstId]?.coverUrl?.trim() : '') ||
+          current.videoTemplate?.coverUrl?.trim();
+        if (!url) throw new BadRequestException('当前草稿没有可用的旧版式预览图');
+        nextMaterial = { url, name: '已有开场图' };
+      } else if (opening !== null) {
+        throw new BadRequestException('不支持的开场素材来源');
+      }
+      nested['storeVisit.openingMaterial'] = nextMaterial;
+      expectedRevision ??= current.updatedAt;
+    }
+    const oldOpeningId = savedSegments[0]?.id;
+    const openingId = segments[0]?.id;
+    const firstChanged = oldOpeningId !== openingId;
+    if (previousMaterial?.url !== nextMaterial?.url ||
+        (firstChanged && (previousMaterial?.url || nextMaterial?.url))) {
+      const invalidatedIds = new Set(firstChanged ? [oldOpeningId, openingId] : [openingId]);
+      let invalidating = false;
+      nested['storeVisit.segments'] = segments.map((segment, index) => {
+        if (isStoreVisitVisualStart(segments, index)) invalidating = false;
+        if (invalidatedIds.has(segment.id) && !isStoreVisitLocalSegment(segment)) invalidating = true;
+        if (!invalidating) return segment;
+        const { videoId, audioUrl, audioSeconds, voiceId, nativeAudio, ...draft } = segment;
+        return draft;
+      });
+      if (segments.length && [segments[0], savedSegments[0]].some((segment) => segment && !isStoreVisitLocalSegment(segment))) {
+        unset.generatedVideoId = '';
+      }
+      expectedRevision ??= current.updatedAt;
+    }
     if (input.storyboard !== undefined) {
       updates.storyboard = input.storyboard;
       updates.status = input.storyboard.length ? 'storyboard_ready' : 'draft';
@@ -1120,11 +1199,18 @@ export class DouyinWorkbenchRepositoryService {
       updates.status = 'video_ready';
     }
     const $set = { ...updates, ...nested };
-    return await this.topics.findOneAndUpdate(
-      { ...this.scopeFilter(scope), id },
+    const saved = await this.topics.findOneAndUpdate(
+      {
+        ...this.scopeFilter(scope),
+        id,
+        ...(expectedRevision ? { updatedAt: expectedRevision } : {}),
+      },
       Object.keys(unset).length ? { $set, $unset: unset } : { $set },
       { returnDocument: 'after' },
     );
+    if (!saved && expectedRevision)
+      throw new BadRequestException('草稿在生成期间有更新，请刷新后重试');
+    return saved;
   }
 
   /**
@@ -1326,6 +1412,7 @@ export class DouyinWorkbenchRepositoryService {
       nativeAudio?: boolean;
     } | null,
     scope: DouyinScope,
+    expectedRevision?: Date,
   ): Promise<DouyinTopicEntity | null> {
     if (output?.videoId) await this.requireVideo(output.videoId, scope);
     const $set: Record<string, unknown> = { updatedAt: new Date() };
@@ -1345,6 +1432,7 @@ export class DouyinWorkbenchRepositoryService {
       {
         ...this.scopeFilter(scope),
         id: topicId,
+        ...(expectedRevision ? { updatedAt: expectedRevision } : {}),
         'storeVisit.segments.id': segmentId,
       },
       Object.keys($unset).length ? { $set, $unset } : { $set },

@@ -297,10 +297,16 @@ export type DouyinStoreVisitStart = (typeof DOUYIN_STORE_VISIT_STARTS)[number];
 export interface DouyinStoreVisitSegment {
   id: string;
   lines: string;
+  /** 用户确认的台词，自动编排或修复时保留。 */
+  manualLines?: boolean;
+  /** 用户确认的素材，自动编排或修复时保留。 */
+  manualMaterial?: boolean;
   /** @description 本段对应的场景图（`sceneImages` 里的图库 ID），空镜以它为首帧，人物首帧以它为场景参考 */
   sceneImageId?: number;
-  /** @description 本段对应的实拍视频素材（`sceneVideos` 里的视频库 ID），与 `sceneImageId` 二选一；视频素材作为生成参考，不直接剪入成片 */
+  /** @description 本段对应的实拍视频素材（`sceneVideos` 里的视频库 ID），与 `sceneImageId` 二选一。 */
   sceneVideoId?: number;
+  /** 用户明确选择将实拍视频与配音合成，缺省将视频作为 AI 参考。 */
+  materialMode?: 'direct';
   /** @description 视频素材从第几秒开始用（入点，秒），缺省从头 */
   clipStart?: number;
   /** @description 点位模式：本段介绍的点位（门店点位 ID） */
@@ -428,6 +434,7 @@ export interface DouyinStoreVisitAutopilot {
   stage: 'script' | 'lines' | 'picture' | 'voice' | 'make';
   message: string;
   pictureSource: 'gallery' | 'ai';
+  goal?: 'draft' | 'video';
   voiceAnchor: boolean;
   scriptPrompt?: string;
   linesPrompt?: string;
@@ -474,6 +481,8 @@ export interface DouyinStoreVisitSetting {
   start?: DouyinStoreVisitStart;
   /** @description 独立的探店创作脚本正文，包含主题、叙事结构、画面安排与卖点依据，可先编辑再生成台词 */
   script?: string;
+  /** 用户填写或确认的脚本正文，托管自检只提示问题。 */
+  manualScript?: boolean;
   /** @description 本版分段台词采用的脚本正文快照，用于识别脚本修改后台词是否需要更新 */
   linesScript?: string;
   /** @description 新人物音色设定的脚本微调尚未完成，重新打开时继续微调，期间不得生成新台词。 */
@@ -494,6 +503,8 @@ export interface DouyinStoreVisitSetting {
   sceneVideos?: DouyinStoreVisitSceneVideo[];
   /** @description 开场用的门头 / 招牌素材，为空时由 AI 按说明挑选 */
   openingScene?: DouyinStoreVisitOpeningScene;
+  /** 第 1 段的额外图像参考。null 表示已清除，并沿用新版开场合成方式。 */
+  openingMaterial?: { url: string; name: string; imageId?: number } | null;
   /** @description 门店整体的补充说明（选填），每张场景各自的说明写在 `sceneImages[].description`。 */
   sceneDescription?: string;
   voiceSample?: DouyinStoreVisitVoiceSample;

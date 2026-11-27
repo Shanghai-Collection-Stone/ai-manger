@@ -4,7 +4,10 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { tool } from 'langchain';
+import { z } from 'zod';
 import { AgentService } from '../../ai-agent/services/agent.service.js';
+import type { AgentRunMessagesInput } from '../../ai-agent/types/agent.types.js';
 import type { DouyinPersonaView } from '../../douyin-persona/entities/douyin-persona.entity.js';
 import {
   buildPersonaScriptBrief,
@@ -51,6 +54,9 @@ import {
   DouyinWorkbenchRepositoryService,
 } from './douyin-workbench-repository.service.js';
 import { storeVisitStart } from './douyin-store-visit-continuity.js';
+import { STORE_VISIT_SCENE_IMAGES_PER_SPOT } from './douyin-store-visit-rules.js';
+import { toSceneImage } from './douyin-segment-image.service.js';
+import { DouyinVideoDirectorService } from './douyin-video-director.service.js';
 import {
   DouyinStoryboardImageService,
   type StoryboardImageCandidate,
@@ -58,12 +64,7 @@ import {
 
 type DouyinScope = { tenantId?: string; userId: string };
 
-/**
- * @description 每个点位带进配场景目录的图片数：按打分从高到低取，与前端 `SPOT_IMAGES_PER_TOPIC`（同步成选题素材的张数）一致，AI 挑的图一定在选题素材里。
- * @keyword-cn 配场景每点位图数, 择优选图
- * @keyword-en scene-images-per-spot, best-image-pick
- */
-export const STORE_VISIT_SCENE_IMAGES_PER_SPOT = 4;
+export { STORE_VISIT_SCENE_IMAGES_PER_SPOT };
 
 /**
  * @description 有人出镜的出镜模板：第 1 段（或首尾段）由人物站在门头前讲。
@@ -114,36 +115,30 @@ export function describeStoreVisitMaterials(
 }
 
 /**
- * @description 读出模型给每段选的素材图编号（与 `parseStoreVisitScript` 同样只算有台词的段），换成图片 ID；没选或选错的段按相关度顺序补一张还没用过的，全用过时轮着用。
+ * @description 读出模型给未配素材的段选的图编号，换成图片 ID；缺失时按相关度补图，已配素材的段跳过。
  * @keyword-cn 解析分段选图, 素材补位
  * @keyword-en parse-segment-images, material-fallback
- * @param {string} text 模型输出。
+ * @param {Array<{image?: number}>} segments 已校验的分段。
  * @param {StoryboardImageCandidate[]} materials 匹配到的素材（相关度从高到低）。
+ * @param {readonly boolean[]} [locked] 按分段顺序标记已有素材或手选锁定的段。
  * @returns {number[]} 与解析出的分段一一对应的图片 ID。
  */
 export function assignStoreVisitMaterialImages(
-  text: string,
+  segments: ReadonlyArray<{ image?: number }>,
   materials: StoryboardImageCandidate[],
+  locked: readonly boolean[] = [],
 ): number[] {
   if (!materials.length) return [];
-  const raw = readStoreVisitJson(text);
-  const items = (Array.isArray(raw.segments) ? raw.segments : [])
-    .map((item: unknown) =>
-      item && typeof item === 'object' ? (item as Record<string, unknown>) : {},
-    )
-    .filter((record) =>
-      readStoreVisitText(record.lines).replace(/\s+/g, ' ').trim(),
-    )
-    .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count);
-  const picks = items.map((record) => {
-    const order = Math.round(Number(record.image));
+  const picks = segments.map(({ image: order = 0 }, index) => {
+    if (locked[index]) return 0;
     return order >= 1 && order <= materials.length
       ? materials[order - 1].id
       : 0;
   });
   const used = new Set(picks.filter(Boolean));
   let cursor = 0;
-  return picks.map((id) => {
+  return picks.map((id, index) => {
+    if (locked[index]) return 0;
     if (id) return id;
     const free = materials.find((material) => !used.has(material.id));
     if (free) {
@@ -219,7 +214,59 @@ export interface StoreVisitScriptSegment {
 }
 
 /**
- * @description 脚本自检结果：是否通过、对照了几条引用知识、需要用户处理的问题（只列出，不自动改）。
+ * @description 规整画面标题、口播台词与念法，供台词工具和旧脚本解析共用。
+ * @keyword-cn 规整镜头台词, 规整念法
+ * @keyword-en normalize-shot-lines, normalize-delivery
+ */
+function normalizeStoreVisitScriptSegment(record: Record<string, unknown>): StoreVisitScriptSegment {
+  const delivery = cleanDelivery(readStoreVisitText(record.delivery)).slice(
+    0,
+    DOUYIN_STORE_VISIT_SEGMENT_LIMITS.delivery,
+  );
+  return {
+    scene: readStoreVisitText(record.scene)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.scene),
+    lines: readStoreVisitText(record.lines)
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.lines),
+    ...(delivery ? { delivery } : {}),
+  };
+}
+
+/**
+ * @description 一次接收多条按镜头编号提交的台词更新，实际保存由已鉴权的工作台流程执行。
+ * @keyword-cn 提交台词工具, 镜头编号校验
+ * @keyword-en update-lines-tool, shot-position-validation
+ */
+const UPDATE_STORE_VISIT_LINES_TOOL = tool(
+  ({ updates }) =>
+    updates.map(({ position, image, ...segment }) => ({
+      position,
+      image,
+      ...normalizeStoreVisitScriptSegment(segment),
+    })),
+  {
+    name: 'update_store_visit_lines',
+    description: '批量更新台词与画面标题。一次调用将所有指定镜头放在 updates 数组中。每项使用一个镜头的原编号、实际画面和新口播。',
+    schema: z.object({
+      updates: z.array(z.object({
+        position: z.number().int().min(1).max(DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count)
+          .describe('本条更新的镜头原编号，按任务指定的编号填写'),
+        scene: z.string().trim().min(1).describe('实际素材可见主体或动作的简短标题'),
+        lines: z.string().trim().min(1).describe('从该镜头素材取一个能看到的细节，用它把新口播接回脚本主题'),
+        delivery: z.string().optional().describe('只写配音语气、重音和停顿'),
+        image: z.number().int().positive().optional().describe('仅未配素材时填写可用素材中的图编号'),
+      })).min(1).max(DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count)
+        .describe('本次要更新的所有镜头，一次提交多项，每个镜头只出现一次'),
+    }),
+  },
+);
+
+/**
+ * @description 脚本自检结果，包括是否通过、引用知识条数与问题。
  * @keyword-cn 脚本自检结果, 自检问题
  * @keyword-en script-review-result, review-issues
  */
@@ -332,27 +379,9 @@ export function parseStoreVisitScript(text: string): {
 } {
   const raw = readStoreVisitJson(text);
   const segments = (Array.isArray(raw.segments) ? raw.segments : [])
-    .map((item: unknown) => {
-      const record = (item && typeof item === 'object' ? item : {}) as Record<
-        string,
-        unknown
-      >;
-      const delivery = cleanDelivery(readStoreVisitText(record.delivery)).slice(
-        0,
-        DOUYIN_STORE_VISIT_SEGMENT_LIMITS.delivery,
-      );
-      return {
-        scene: readStoreVisitText(record.scene)
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.scene),
-        lines: readStoreVisitText(record.lines)
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.lines),
-        ...(delivery ? { delivery } : {}),
-      };
-    })
+    .map((item: unknown) => normalizeStoreVisitScriptSegment(
+      item && typeof item === 'object' ? item as Record<string, unknown> : {},
+    ))
     .filter((segment) => segment.lines)
     .slice(0, DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count);
   return {
@@ -856,6 +885,7 @@ export class DouyinStoreVisitPlannerService {
     private readonly agentService: AgentService,
     private readonly knowledge: KnowledgeService,
     private readonly candidates: DouyinStoryboardImageService,
+    private readonly director: DouyinVideoDirectorService,
   ) {}
 
   /**
@@ -1078,18 +1108,23 @@ export class DouyinStoreVisitPlannerService {
 
   /**
    * @description 根据已保存的脚本正文生成分段画面和口播台词，沿用当前人物音色，返回所用脚本快照与台词自检结果。
-   *   从门店开始要先定门店、画面写门店实拍；从脚本开始不要门店，先按选中的脚本方向（配图偏向的图库标签内）从图库匹配素材，每段先选一张素材图再照图写画面和台词，
-   *   返回每段的 sceneImageId 与用到的素材；配图偏向为 AI 画面、调用方关掉素材或图库匹配不到图时照旧只写画面描述，之后再挑图或 AI 生图。格式不对重试一次，写完对照引用知识自检，不自动改正文。
+   *   已选素材的镜头按实际画面写，先识别缺少说明或沿用旧镜头标题的自动配图。关联弱时借用画面细节接回主题。
    * @keyword-cn 按脚本生成台词, 分段台词生成
    * @keyword-en generate-lines-from-script, script-dialogue
    * @param {number} topicId 子选题（脚本）ID。
-   * @param {{prompt?: string, useMaterials?: boolean}} input 台词补充要求；useMaterials 为 false 时从脚本开始也不先匹配素材。
+   * @param {{prompt?: string, useMaterials?: boolean, preserveSegments?: boolean, segmentId?: string, refreshExisting?: boolean}} input 台词要求、图库配图、沿用镜头、单段改写目标及显式重写模式。
    * @param {DouyinScope} scope 租户用户作用域。
    * @returns 分段画面与台词（从脚本开始匹配到素材时带 sceneImageId）、用到的素材、所用脚本快照、自检结果。
    */
   async generateLines(
     topicId: number,
-    input: { prompt?: string; useMaterials?: boolean },
+    input: {
+      prompt?: string;
+      useMaterials?: boolean;
+      preserveSegments?: boolean;
+      segmentId?: string;
+      refreshExisting?: boolean;
+    },
     scope: DouyinScope,
   ) {
     const context = await this.loadScriptContext(topicId, scope);
@@ -1102,10 +1137,101 @@ export class DouyinStoreVisitPlannerService {
     const scriptFirst = storeVisitStart(topic.storeVisit) === 'script';
     if (!scriptFirst && !context.store)
       throw new BadRequestException('请先在脚本步骤确认这条视频拍哪家店');
-    // 从脚本开始：选中的脚本就是方向，先按它匹配素材，再围着素材设计分镜
+    const current = topic.storeVisit?.segments ?? [];
+    const existing = input.preserveSegments
+      ? current.filter(
+          (segment) => !input.segmentId || segment.id === input.segmentId,
+        )
+      : [];
+    if (input.segmentId && !existing.length)
+      throw new BadRequestException('这个镜头已不存在，请刷新后重试');
+    const extend =
+      !input.segmentId &&
+      input.preserveSegments &&
+      !topic.storeVisit?.linesScript &&
+      existing.some((segment) => !segment.lines.trim());
+    const lockedMaterials = existing.map((segment) =>
+      Boolean(
+        segment.sceneVideoId ||
+        segment.sceneImageId ||
+        segment.sceneImageIds?.length ||
+        segment.manualMaterial,
+      ),
+    );
+    const savedImages = topic.storeVisit?.sceneImages ?? [];
+    const pendingImages = savedImages.filter((image) => {
+      const usedBy = existing.filter(
+        (segment) =>
+          !segment.sceneVideoId &&
+          (segment.sceneImageId === image.id ||
+            segment.sceneImageIds?.includes(image.id)),
+      );
+      if (!usedBy.length) return false;
+      const caption = image.description?.trim();
+      if (!caption || /^来源视频.*尾帧/.test(caption)) return true;
+      const matchesPlannedText = usedBy.some(
+        (segment) =>
+          !segment.manualMaterial &&
+          (segment.scene?.trim() === caption ||
+            segment.action?.trim() === caption),
+      );
+      return (
+        matchesPlannedText &&
+        !current.some(
+          (segment) =>
+            segment.manualMaterial &&
+            (segment.sceneImageId === image.id ||
+              segment.sceneImageIds?.includes(image.id)),
+        )
+      );
+    });
+    const refreshedImages = await Promise.all(
+      pendingImages.map(async (image) => ({
+        ...image,
+        description: await this.director.describeDraftMaterial(
+          topicId,
+          { type: 'image', id: image.id },
+          scope,
+        ),
+      })),
+    );
+    const imagesById = new Map(
+      [...savedImages, ...refreshedImages].map((image) => [image.id, image]),
+    );
+    const shotDescriptions = existing.map((segment, index) => {
+      const imageIds = new Set([
+        segment.sceneImageId,
+        ...(segment.sceneImageIds ?? []),
+      ]);
+      const selected = segment.sceneVideoId
+        ? (topic.storeVisit?.sceneVideos ?? []).filter(
+            (item) => item.id === segment.sceneVideoId,
+          )
+        : [...imagesById.values()].filter((item) => imageIds.has(item.id));
+      const description = selected
+        .map((item) => item.description?.trim())
+        .filter(Boolean)
+        .join(' / ');
+      const spot = context.store?.spots?.find(
+        (item) => item.id === segment.spotId,
+      );
+      const picture = lockedMaterials[index]
+        ? `已选${segment.sceneVideoId ? '视频' : '图片'}。实际画面说明：${description || '暂缺，只能使用已知事实，不描述未确认的画面'}${spot?.name ? `。关联点位：${spot.name}` : ''}`
+        : `未配素材。构图需求：${segment.scene || '待配'}`;
+      const manual = Boolean(segment.manualLines && !input.segmentId);
+      return { picture, manual };
+    });
+    const editablePositions = existing.length && !extend
+      ? shotDescriptions.flatMap(({ manual }, index) => manual ? [] : [index + 1])
+      : undefined;
+    const minimum = editablePositions?.length ?? Math.max(3, existing.length);
+    const maximum = editablePositions?.length ?? DOUYIN_STORE_VISIT_SEGMENT_LIMITS.count;
+    const expectedCount = minimum === maximum ? String(minimum) : `${minimum}～${maximum}`;
+    // 已选素材固定，只为未配画面的镜头匹配图库候选。
     const materials =
       scriptFirst &&
       input.useMaterials !== false &&
+      (!existing.length || extend || editablePositions?.some((position) => !lockedMaterials[position - 1])) &&
       topic.storyboardPreference?.imageSource !== 'generate'
         ? await this.loadScriptMaterials(context, script, scope)
         : [];
@@ -1127,59 +1253,37 @@ export class DouyinStoreVisitPlannerService {
     const voice = COSYVOICE_PRESET_VOICES.find(
       (item) => item.voiceId === topic.storeVisit?.voiceId,
     );
+    const linesToolName = UPDATE_STORE_VISIT_LINES_TOOL.name;
     const system = [
-      '【脚本先行】严格根据用户已确认的【脚本正文】写台词，保留叙事顺序、核心卖点、开场与结尾，不得另起主题。脚本中的编导提示不能念成台词，待补充的事实不能编造。补充要求与脚本冲突时以脚本为准。',
-      topic.storeVisit?.voicePrompt || voice
-        ? `【当前音色】${topic.storeVisit?.voicePrompt || `${voice?.gender === 'male' ? '男声' : '女声'}，${voice?.trait}`}。台词语气、句长与念法贴合此声音，不改人物和音色。`
+      scriptFirst
+        ? '你是抖音短视频的口播编导。用已选素材重写每个指定镜头的口播。'
+        : '你是抖音探店短视频的口播编导。用已选素材重写每个指定镜头的口播。',
+      '【先看本段素材】有实际画面说明的镜头，先从本段找一个能看见的具体动作、物件、人物状态或光线，把它自然写进 lines。只在 scene 提到画面不算完成。每段只取本段素材里的细节，scene 也写实际看到的主体或动作。',
+      '【接回脚本主题】脚本正文给出全片主题、已知事实和叙事走向。用素材细节把本段接回主题，换一种口吻讲，避免照抄脚本句子。脚本设想的道具或动作没出现在本镜头里，就改用镜头里实际有的细节，正文写到的事实可以留到更合适的段。',
+      '【关联弱也照样写】用素材的动作、情绪或节奏做过渡，别只复述故事，也别逐项念素材说明。例如湖面暮色可以接成「像湖面这样静一拍，下一秒就把掌声送给小寿星。」孩子围着球网可以接成「球网边一围满，孩子们的派对就热闹起来了。」只参考这种接法，细节从当前镜头取。',
+      '【核实事实】店名、项目、人数、价格和套餐依据脚本、引用知识与门店资料，引用知识里的必提内容和禁用词照办。未经证实的画面可做转场，不能说成门店实景。可见细节缺失时，用已知主题写口播，不猜测画面。',
+      scriptFirst
+        ? '【叙事】开场点题，中间每段推进一个要点，结尾收束或邀请互动。'
+        : '【叙事】开场可带已知店名，中间每段推进一个卖点，结尾给出有依据的行动指引。',
+      existing.length
+        ? '保留现有镜头编号、顺序与素材。保留段的台词只用于衔接，按本次任务要求提交镜头。'
         : '',
-      scriptFirst
-        ? '你是抖音短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个画面、说一句口播台词。像真人博主跟朋友聊，不是逐个讲解画面的说明视频。'
-        : '你是抖音探店短视频的编导兼撰稿人。先看引用知识和资料，再写一条分段脚本：每段配一个实拍画面、说一句口播台词。像真人博主跟朋友推荐这家店，不是逐个讲解画面的说明视频。',
-      context.knowledge
-        ? '【引用知识】引用知识是这条视频的依据：店名、项目、价格、套餐等事实以它为准；它规定的写法、必须提到的内容、禁用词和禁止的说法都要遵守，和下面的通用要求冲突时以引用知识为准（安全边界和输出格式除外）。'
-        : `【资料】母选题没有引用知识：事实只能用选题和${scriptFirst ? '脚本' : '门店资料'}里的，资料里没有的一律不写。`,
-      '【结构】',
-      scriptFirst
-        ? `1. 第 1 段开场：一句话抓住人，点出这条视频要讲什么。${presenterNow ? '这一段由出镜人物对着镜头说，用第一人称。' : ''}`
-        : `1. 第 1 段开场：先点出已知门店名称，再按脚本说清这是什么店、主打什么好玩或好吃的；不知道店名时不编造。${presenterNow ? '这一段由出镜人物站在门头前对着镜头说，用第一人称。' : ''}`,
-      scriptFirst
-        ? '2. 中间每段讲一个要点，照下面【讲卖点，不念画面】写；内容多的要点可以分成两段，但不要为了凑长度分段。'
-        : '2. 中间每段讲一个卖点（一个项目、一道菜、一个打卡点或一个套餐），照下面【讲卖点，不念画面】写；内容多的卖点可以分成两段，但不要为了凑长度分段。',
-      '3. 资料里写了团购价的，报价要连同对象一起说，例如「这份双人套餐，抖音团购只要 99 元」；报价只是写法之一，不必每段都报，没写价格就不提价格。',
-      scriptFirst
-        ? '4. 最后一段用一句话收尾或引导互动、下单，不再加新的事实。'
-        : '4. 最后一段用一句话引导下单，不再加新的事实。',
-      scriptFirst && materials.length
-        ? `【画面】每段的 scene 写这段所选素材图里看得到的画面（6～20 字）。${STORE_VISIT_MATERIAL_DESIGN_RULE}`
-        : scriptFirst
-          ? '【画面】每段的 scene 写这段要配的画面（6～20 字，例如「孩子们围着生日蛋糕」「派对布置全景」）：写具体、能拍或能画出来的画面，之后会按它从图库挑图或 AI 生图。'
-          : '【画面】每段的 scene 写这段要配的实拍画面（6～20 字，例如「门头招牌」「蹦床区全景」「招牌双人套餐」）：只能是【门店里的点位】清单里某个点位的画面（写点位名或它图里看得到的内容），之后会按它从门店图库里挑实拍图；第 1 段写门头。',
-      scriptFirst ? '' : STORE_VISIT_MATERIAL_FIRST_RULE,
-      '【语气】口语、热情、自然，像跟朋友推荐；不用「老铁」「兄弟」「整」这类江湖口吻（预设人物另有要求时按人物来）。段与段之间可以用「再来看看」「还有」衔接，但不编走路、推门之类画面里没有的动作。用好标点帮配音带出语气：惊喜、推荐处用「！」，设问用「？」，该停顿的地方断句，不要整段一个逗号念到底。',
-      '【念法】每段再写一个 delivery：这段台词该怎么念，8～20 个字，只写声音——情绪、语速、语调、重音和停顿，例如「热情打招呼，语调上扬」「惊喜地报价格，重音在数字」「压低声音，像分享小秘密」「干脆有力地催下单」；不写动作、表情、走位和画面（不写推门、走进去、指着、拿起、转身、边走边说这类），配音只听得到声音；整条要有起伏，相邻两段不要写成一样；整条保持短视频口播的紧凑节奏，不写放慢、拖长、慢慢说这类减速的说法。',
-      STORE_VISIT_SELLING_POINT_RULE,
-      STORE_VISIT_PLAIN_SPEECH_RULE,
-      `【不许编造】店名、项目、价格、份量、人数只写引用知识、选题和${scriptFirst ? '脚本' : '门店资料'}里出现的；` +
-        '不编招牌秘方、获奖排名、限时活动、赠品这类资料里没有的卖点，不写「我刚吃了」「我玩了三局」这类具体的亲身经历；价格、份量、人数一律用阿拉伯数字，且和资料里一模一样。',
-      '【长度】整条约 20～45 秒（90～200 字），短而有料；共 3～8 段，每段台词 15～40 个字；台词里不写镜头号、动作提示、括号说明、标题或 Markdown。',
-      presenterNow
-        ? personaBrief
-          ? `开头由固定的预设人物出镜，台词必须是这个人物的第一人称、语气一致：\n${personaBrief}`
-          : '开头有人出镜打招呼，全程用第一人称。'
-        : '视频不露脸、全程画外音，用统一的第一人称讲。',
-      !presenterNow && personaBrief
-        ? `画外音由当前选定人物讲述，按此人设的视角和语气写台词：\n${personaBrief}`
-        : '',
-      style ? `整体调性保持「${style.label}」：${style.tone}。` : '',
-      scriptFirst
-        ? '【示例】只示范写法和节奏，内容必须换成这条视频的，不要照抄示例里的内容：'
-        : '【示例】只示范写法和节奏，内容必须换成本店的，不要照抄示例里的店名、项目和价格：',
-      scriptFirst
-        ? '{"segments":[{"scene":"孩子们围着生日蛋糕","lines":"给孩子办生日会，最怕大人忙一下午，孩子却玩不开心！","delivery":"开门见山，语调上扬"},{"scene":"派对布置全景","lines":"主题、布置、玩法都让孩子自己挑，他喜欢的才是真正的生日会。","delivery":"轻快肯定，重音在自己挑"},{"scene":"大人孩子一起做游戏","lines":"大人也能一起玩进去，全家一起过，比礼物更让孩子记得住。","delivery":"温暖带笑，语速平稳"},{"scene":"孩子吹蜡烛特写","lines":"想给孩子办一场这样的生日会，评论区告诉我你家孩子几岁！","delivery":"亲切收尾，邀请互动"}]}'
-        : '{"segments":[{"scene":"门头招牌","lines":"今天我们来到了 XX 乐园，一家室内亲子乐园，蹦床、滑梯、海洋球一次玩个够！","delivery":"热情打招呼，语调上扬"},{"scene":"蹦床区全景","lines":"蹦床区怎么蹦都不怕摔，小朋友能玩一下午，大人跟着蹦也特别解压。","delivery":"轻快兴奋，重音在解压"},{"scene":"咖啡休息区","lines":"玩累了去咖啡区坐坐，大人喝杯咖啡歇歇脚，孩子就在眼前玩。","delivery":"语气放松，轻快带笑"},{"scene":"门头招牌","lines":"单人票抖音团购才 59 元！周末遛娃就来这儿，点左下角就能下单。","delivery":"惊喜地报价格，干脆催下单"}]}',
       materials.length
-        ? '示例没写 image，你的输出每段都要带 image（【可用素材】里的图编号）。只输出 JSON，不要解释：{"segments":[{"image":1,"scene":"","lines":"","delivery":""}]}'
-        : '只输出 JSON，不要解释：{"segments":[{"scene":"","lines":"","delivery":""}]}',
+        ? `为未配画面的镜头从【图库候选】选图并填 image，先用选中图片的实际说明写本段。已选素材的镜头不填 image。${!existing.length ? STORE_VISIT_MATERIAL_DESIGN_RULE : ''}`
+        : scriptFirst
+          ? '未配素材的镜头按已知主题提出具体构图，之后从图库挑图或 AI 生图。'
+          : '未配素材的镜头从有实拍素材的门店点位提出构图。',
+      topic.storeVisit?.voicePrompt || voice
+        ? `【当前音色】${topic.storeVisit?.voicePrompt || `${voice?.gender === 'male' ? '男声' : '女声'}，${voice?.trait}`}。台词句长和语气贴合当前声音。`
+        : '',
+      presenterNow
+        ? '使用已选出镜人物的口吻，开头用第一人称。'
+        : '使用统一的画外音口吻。',
+      personaBrief,
+      style ? `整体调性保持「${style.label}」，${style.tone}。` : '',
+      '【口播】像真人聊天，每段约 15～40 字。delivery 只写配音语气、重音和停顿。台词不带编号、动作括注或 Markdown。',
+      STORE_VISIT_PLAIN_SPEECH_RULE,
+      `【批量更新】必须调用 ${linesToolName} 一次来更新台词。把指定的全部镜头放在同一个 updates 数组里，每项用原 position，填写新的 scene 和 lines。逐段检查 lines 是否能让人听出对应画面的细节。只提交工具调用，聊天正文留空。`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -1190,66 +1294,167 @@ export class DouyinStoreVisitPlannerService {
         : '',
       context.knowledge || '（母选题没有引用知识）',
       context.storeText,
-      `【脚本正文】\n${script}\n【脚本正文结束】`,
-      materials.length
-        ? `【可用素材】（图编号即 image）：\n${describeStoreVisitMaterials(materials)}`
+      existing.length
+        ? `【逐镜头素材】\n${shotDescriptions
+            .map(
+              ({ picture, manual }, index) =>
+                `${index + 1}. ${picture}${manual ? `\n此段已确认，台词供衔接：${existing[index].lines}` : ''}`,
+            )
+            .join('\n')}`
         : '',
+      materials.length
+        ? `【图库候选】（图编号即 image）：\n${describeStoreVisitMaterials(materials)}`
+        : '',
+      `【脚本正文】\n${script}\n【脚本正文结束】`,
       requirement ? `补充要求：<requirement>${requirement}</requirement>` : '',
-      '请输出 JSON 格式的分段脚本。',
     ]
       .filter(Boolean)
       .join('\n');
-    let text = await this.ask(
-      scope,
-      'douyin-workbench.store-visit-script-lines',
-      system,
-      user,
-      0.4,
-    );
-    let draft = parseStoreVisitScript(text);
-    if (
-      draft.segments.length < 3 ||
-      draft.segments.some((segment) => !segment.scene)
-    ) {
-      text = await this.ask(
+    const request = `${user}\n调用 ${linesToolName} 一次更新 ${expectedCount} 段台词。${editablePositions
+      ? `updates 只提交这些镜头原编号 ${editablePositions.join('、')}。`
+      : 'updates 从 position 1 连续编号，已确认的台词保留原文。'}`;
+    let updates: Array<StoreVisitScriptSegment & { position: number; image?: number }> | undefined;
+    if (editablePositions?.length === 0) updates = [];
+    let rejectionReason = '';
+    for (let attempt = 0; !updates && attempt < 2; attempt += 1) {
+      const submission = await this.submitLineUpdates(
         scope,
-        'douyin-workbench.store-visit-script-lines',
         system,
-        [
-          user,
-          `上一次的输出：\n${text.slice(0, 2000)}`,
-          '格式不对：必须只输出上面要求的 JSON，segments 有 3～8 段，每段都要有非空的 scene 和 lines。',
-        ].join('\n'),
-        0.4,
+        attempt === 0
+          ? request
+          : `${request}\n上次提交无效。请核对段数和编号，并为每段提交完整的 scene 和 lines。`,
+        editablePositions,
       );
-      draft = parseStoreVisitScript(text);
+      if (
+        submission.ok &&
+        submission.updates.length >= minimum &&
+        submission.updates.length <= maximum
+      ) {
+        updates = submission.updates;
+        break;
+      }
+      rejectionReason = submission.ok
+        ? `要求提交 ${expectedCount} 段，实际提交 ${submission.updates.length} 段`
+        : submission.reason;
+      this.logger.warn(
+        `[generateLines] 选题 ${topicId} 首轮第 ${attempt + 1} 次提交校验失败。${rejectionReason}`,
+      );
     }
-    if (
-      draft.segments.length < 3 ||
-      draft.segments.some((segment) => !segment.scene)
-    )
-      throw new BadRequestException('AI 没按脚本写出完整分段台词，请重试');
-    const review = await this.reviewSegments(context, draft.segments, scope);
-    const imageIds = assignStoreVisitMaterialImages(text, materials);
-    const segments = draft.segments.map((segment, index) =>
-      imageIds[index] ? { ...segment, sceneImageId: imageIds[index] } : segment,
+    if (!updates)
+      throw new BadRequestException(`AI 台词首轮校验失败。${rejectionReason}。`);
+    const updatesByPosition = new Map(updates.map((update) => [update.position, update]));
+    const draft = editablePositions
+      ? existing.map(({ scene, lines, delivery }, index) =>
+          updatesByPosition.get(index + 1) ?? { position: index + 1, scene: scene ?? '', lines, delivery, image: undefined },
+        )
+      : updates;
+    const imageIds = assignStoreVisitMaterialImages(
+      draft,
+      materials,
+      lockedMaterials.map((locked, index) => locked || shotDescriptions[index].manual),
     );
-    const sceneImages: DouyinStoreVisitSceneImage[] = materials
-      .filter((material) => imageIds.includes(material.id))
-      .map((material) => ({
-        type: 'image',
-        id: material.id,
-        name: material.name || `图片 #${material.id}`,
-        url: material.url,
-        ...(material.coverUrl ? { coverUrl: material.coverUrl } : {}),
-        description: String(
-          material.description ||
-            segments.find((segment) => segment.sceneImageId === material.id)
-              ?.scene ||
-            '',
-        ).slice(0, 300),
-        ...(material.tags.length ? { tags: material.tags.slice(0, 10) } : {}),
-      }));
+    const newImages = await Promise.all(
+      materials
+        .filter(
+          (material) =>
+            imageIds.includes(material.id) && !imagesById.has(material.id),
+        )
+        .map(async (material) => {
+          const originalDescription = material.description?.trim();
+          const description =
+            originalDescription ||
+            (await this.director.describeDraftMaterial(
+              topicId,
+              { type: 'image', id: material.id },
+              scope,
+            ));
+          return {
+            image: toSceneImage(material, description),
+            justDescribed: !originalDescription,
+          };
+        }),
+    );
+    const newlyDescribed = new Set(
+      newImages
+        .filter(
+          ({ image, justDescribed }) => justDescribed && image.description,
+        )
+        .map(({ image }) => image.id),
+    );
+    const unchanged = input.refreshExisting
+      ? existing.flatMap((segment, index) => {
+          return !shotDescriptions[index].manual &&
+            segment.lines.trim() === draft[index]?.lines
+            ? [index]
+            : [];
+        })
+      : [];
+    const linesToRewrite = new Set([
+      ...unchanged,
+      ...imageIds.flatMap((id, index) =>
+        newlyDescribed.has(id) && !shotDescriptions[index]?.manual
+          ? [index]
+          : [],
+      ),
+    ]);
+    if (linesToRewrite.size) {
+      const byId = new Map(newImages.map(({ image }) => [image.id, image]));
+      const pictures = imageIds.flatMap((id, index) => {
+        if (!linesToRewrite.has(index)) return [];
+        const image = byId.get(id) || imagesById.get(id);
+        return image?.description
+          ? [`第 ${index + 1} 段：${image.description}`]
+          : [];
+      });
+      const positions = [...linesToRewrite]
+        .map((index) => index + 1)
+        .sort((a, b) => a - b);
+      const revision = [
+        user,
+        pictures.length
+          ? `【已固定镜头素材的识别说明】\n${pictures.join('\n')}`
+          : '',
+        unchanged.length
+          ? `${unchanged.map((index) => `第 ${index + 1} 段`).join('、')}需要换掉原台词。从这些镜头各自的素材里换一个开口的细节，写出能直接听出画面的新句子。`
+          : '',
+        `调用 ${linesToolName} 一次更新台词。updates 只包含镜头编号 ${positions.join('、')}，沿用这些原编号。把每个指定镜头的实际细节写进新的 lines。`,
+      ]
+        .filter(Boolean)
+        .join('\n');
+      const revised = await this.submitLineUpdates(
+        scope,
+        system,
+        revision,
+        positions,
+      );
+      const stalePositions =
+        revised.ok && input.refreshExisting
+          ? revised.updates
+              .filter(({ position, lines }) => lines === existing[position - 1]?.lines.trim())
+              .map(({ position }) => position)
+          : [];
+      if (!revised.ok || stalePositions.length) {
+        const reason = revised.ok
+          ? `镜头 ${stalePositions.join('、')} 的台词与原台词完全相同`
+          : revised.reason;
+        this.logger.warn(
+          `[generateLines] 选题 ${topicId} 第二轮改写校验失败，指定镜头 ${positions.join('、')}。${reason}`,
+        );
+        throw new BadRequestException(`AI 台词第二轮改写校验失败。${reason}。`);
+      }
+      for (const update of revised.updates) draft[update.position - 1] = update;
+    }
+    const segments: StoreVisitScriptSegment[] = draft.map(
+      ({ position, image, ...segment }, index) =>
+        imageIds[index]
+          ? { ...segment, sceneImageId: imageIds[index] }
+          : segment,
+    );
+    const review = await this.reviewSegments(context, segments, scope);
+    const sceneImages: DouyinStoreVisitSceneImage[] = [
+      ...refreshedImages,
+      ...newImages.map(({ image }) => image),
+    ];
     return {
       presenter: presenterNow,
       segments,
@@ -1865,7 +2070,56 @@ export class DouyinStoreVisitPlannerService {
   }
 
   /**
-   * @description 用「思考」节点（关思考、非流式）问一次模型并取出文本。
+   * @description 执行模型提交的台词工具，校验镜头编号并在失败时返回具体原因。
+   * @keyword-cn 执行台词工具, 校验镜头顺序
+   * @keyword-en submit-line-updates, validate-shot-order
+   */
+  private async submitLineUpdates(
+    scope: DouyinScope,
+    system: string,
+    user: string,
+    positions?: readonly number[],
+  ) {
+    const result = await this.callPlanner(
+      scope,
+      'douyin-workbench.store-visit-script-lines',
+      system,
+      user,
+      0.4,
+      UPDATE_STORE_VISIT_LINES_TOOL,
+    );
+    const calls = result.tool_calls ?? [];
+    const invalidCount = result.invalid_tool_calls?.length ?? 0;
+    if (invalidCount)
+      return { ok: false as const, reason: `收到 ${invalidCount} 个无法解析的工具调用` };
+    if (calls.length !== 1)
+      return { ok: false as const, reason: `应调用台词工具 1 次，实际收到 ${calls.length} 次` };
+    if (calls[0].name !== UPDATE_STORE_VISIT_LINES_TOOL.name)
+      return { ok: false as const, reason: `调用的工具名称应为 ${UPDATE_STORE_VISIT_LINES_TOOL.name}` };
+
+    const args = UPDATE_STORE_VISIT_LINES_TOOL.schema.safeParse(calls[0].args);
+    if (!args.success) {
+      const fields = args.error.issues.slice(0, 4).map(({ path, code }) =>
+        `${path.map(String).join('.') || '工具入参'}（${code}）`,
+      );
+      return { ok: false as const, reason: `工具参数未通过校验，问题字段 ${fields.join('、')}` };
+    }
+    const updates = await UPDATE_STORE_VISIT_LINES_TOOL.invoke(args.data);
+    updates.sort((a, b) => a.position - b.position);
+    const expected = positions ?? updates.map((_, index) => index + 1);
+    if (
+      updates.length !== expected.length ||
+      updates.some((update, index) => update.position !== expected[index])
+    )
+      return {
+        ok: false as const,
+        reason: `镜头编号不符，应提交 ${expected.join('、')}，实际收到 ${updates.map(({ position }) => position).join('、')}`,
+      };
+    return { ok: true as const, updates };
+  }
+
+  /**
+   * @description 用「思考」节点（非流式）问一次模型并取出文本。
    * @keyword-cn 编排模型调用, 读取文本
    * @keyword-en planner-llm-call, read-text
    * @param {DouyinScope} scope 租户用户作用域。
@@ -1882,8 +2136,45 @@ export class DouyinStoreVisitPlannerService {
     user: string,
     temperature: number,
   ): Promise<string> {
-    const result = await this.agentService.runWithMessages({
+    const result = await this.callPlanner(
+      scope,
+      source,
+      system,
+      user,
+      temperature,
+    );
+    const content = (result as { content?: unknown }).content;
+    return typeof content === 'string'
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part) =>
+              typeof part === 'string'
+                ? part
+                : typeof part === 'object' && part && 'text' in part
+                  ? readStoreVisitText((part as { text?: unknown }).text)
+                  : '',
+            )
+            .join('')
+        : '';
+  }
+
+  /**
+   * @description 使用工作流配置调用规划模型，可限定本次模型必须调用一个工具。
+   * @keyword-cn 规划模型请求, 指定必用工具
+   * @keyword-en call-planner, required-tool
+   */
+  private async callPlanner(
+    scope: DouyinScope,
+    source: string,
+    system: string,
+    user: string,
+    temperature: number,
+    requiredTool?: AgentRunMessagesInput['requiredTool'],
+  ) {
+    return this.agentService.runWithMessages({
       callOption: { signal: AbortSignal.timeout(2 * 60 * 1000) },
+      ...(requiredTool ? { requiredTool } : {}),
       config: {
         ...toWorkflowLlmConfig(
           await this.workflowModels.resolveNodeRuntime(
@@ -1905,19 +2196,5 @@ export class DouyinStoreVisitPlannerService {
       },
       messages: [{ role: 'user', content: user }],
     });
-    const content = (result as { content?: unknown }).content;
-    return typeof content === 'string'
-      ? content
-      : Array.isArray(content)
-        ? content
-            .map((part) =>
-              typeof part === 'string'
-                ? part
-                : typeof part === 'object' && part && 'text' in part
-                  ? readStoreVisitText((part as { text?: unknown }).text)
-                  : '',
-            )
-            .join('')
-        : '';
   }
 }

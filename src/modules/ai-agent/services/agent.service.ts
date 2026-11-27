@@ -2842,12 +2842,35 @@ export class AgentService {
 
   /**
    * @title 运行Agent（消息） Run Agent With Messages
-   * @description 使用消息列表执行Agent并返回最后一条AI消息，默认不绑定主流 token handler。
+   * @description 执行消息并返回模型回复，默认不绑定主流 token handler；指定必用工具时仅发起一次模型请求并返回工具调用。
    * @keyword-cn 运行, 消息, 调用, 工具内部非流
    * @keyword-en run, messages, invoke, internal-llm-nostream
    */
   async runWithMessages(input: AgentRunMessagesInput): Promise<AIMessage> {
     const useNoStream = input.config.nonStreaming !== false;
+    const extracted = this.extractSystemTextFromMessages(
+      this.normalizeMessages(input.messages),
+    );
+    const mergedSystem = [input.config.system, extracted.systemText]
+      .filter((x) => typeof x === 'string' && x.trim().length > 0)
+      .join('\n\n');
+    if (input.requiredTool) {
+      const config = { ...input.config, nonStreaming: true };
+      const system = await this.mergeSystemWithPlatformSupplement(
+        mergedSystem,
+        config,
+      );
+      const model = await this.buildLLM(config);
+      if (!model.bindTools) throw new Error('AI_MODEL_TOOL_CALL_NOT_SUPPORTED');
+      return model
+        .bindTools([input.requiredTool], { tool_choice: 'any' })
+        .invoke(
+          system
+            ? [new SystemMessage(system), ...extracted.messages]
+            : extracted.messages,
+          input.callOption,
+        );
+    }
     // 调用方显式给了 thread_id 才需要持久化 state(多轮复用);否则本次用的是下面
     // 生成的随机一次性 thread_id,落 checkpoint 纯属写放大。
     const ephemeral =
@@ -2892,12 +2915,6 @@ export class AgentService {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return
       return option;
     };
-    const extracted = this.extractSystemTextFromMessages(
-      this.normalizeMessages(input.messages),
-    );
-    const mergedSystem = [input.config.system, extracted.systemText]
-      .filter((x) => typeof x === 'string' && x.trim().length > 0)
-      .join('\n\n');
     const agent = await this.buildChatModel({
       ...input.config,
       nonStreaming: useNoStream,

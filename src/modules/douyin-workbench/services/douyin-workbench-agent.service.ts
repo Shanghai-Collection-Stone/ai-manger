@@ -212,6 +212,7 @@ export class DouyinWorkbenchAgentService {
     topicId: number,
     patch: Record<string, unknown>,
     scope: DouyinScope,
+    expectedRevision?: Date,
   ): Promise<DouyinTopicEntity> {
     const dto = plainToInstance(UpdateDouyinTopicDto, patch);
     const errors = await validate(dto, {
@@ -220,7 +221,9 @@ export class DouyinWorkbenchAgentService {
     });
     if (errors.length)
       throw new BadRequestException(describeValidationErrors(errors));
-    const saved = await this.repository.update(topicId, dto, scope);
+    const saved = expectedRevision
+      ? await this.repository.update(topicId, dto, scope, expectedRevision)
+      : await this.repository.update(topicId, dto, scope);
     if (!saved) throw new NotFoundException('DOUYIN_TOPIC_NOT_FOUND');
     await this.director.schedule(saved.id, scope);
     return (await this.repository.get(saved.id, scope)) ?? saved;
@@ -271,22 +274,63 @@ export class DouyinWorkbenchAgentService {
     extra: Record<string, unknown>,
     scope: DouyinScope,
     store?: DouyinStoreVisitStoreEntity | null,
+    expected?: DouyinTopicEntity,
   ): Promise<DouyinTopicEntity> {
     const target =
       store === undefined ? await this.storeOf(topic, scope) : store;
     const spotIds = target ? usedStoreVisitSpotIds(segments, target) : [];
+    const spotMaterials = target
+      ? spotsToStoreVisitMaterials(target, spotIds)
+      : null;
+    const directImages = new Set(
+      segments
+        .filter((segment) => segment.manualMaterial)
+        .flatMap((segment) => [
+          segment.sceneImageId,
+          ...(segment.sceneImageIds || []),
+        ]),
+    );
+    const directVideos = new Set(
+      segments
+        .filter((segment) => segment.manualMaterial)
+        .map((segment) => segment.sceneVideoId),
+    );
     return this.save(
       topic.id,
       {
         storeVisit: {
-          ...(target
-            ? { spotIds, ...spotsToStoreVisitMaterials(target, spotIds) }
+          ...(spotMaterials
+            ? {
+                spotIds,
+                openingScene: spotMaterials.openingScene,
+                sceneImages: [
+                  ...new Map(
+                    [
+                      ...spotMaterials.sceneImages,
+                      ...(topic.storeVisit?.sceneImages || []).filter((item) =>
+                        directImages.has(item.id),
+                      ),
+                    ].map((item) => [item.id, item]),
+                  ).values(),
+                ],
+                sceneVideos: [
+                  ...new Map(
+                    [
+                      ...spotMaterials.sceneVideos,
+                      ...(topic.storeVisit?.sceneVideos || []).filter((item) =>
+                        directVideos.has(item.id),
+                      ),
+                    ].map((item) => [item.id, item]),
+                  ).values(),
+                ],
+              }
             : {}),
           segments: toStoreVisitSegmentsPayload(segments),
           ...extra,
         },
       },
       scope,
+      expected?.updatedAt,
     );
   }
 
@@ -338,29 +382,15 @@ export class DouyinWorkbenchAgentService {
       (segment.shot === 'presenter' && !segment.sceneVideoId
         ? presenterMax
         : videoMax);
-    // 从脚本开始的画面是图库挑图或 AI 生图，直接在脚本素材里，不按门店点位算
-    const materials =
-      store && storeVisitStart(setting) === 'store'
-        ? spotsToStoreVisitMaterials(
-            store,
-            usedStoreVisitSpotIds(segments, store),
-          )
-        : {
-            sceneImages: setting.sceneImages ?? [],
-            sceneVideos: setting.sceneVideos ?? [],
-          };
-    /** @description 一段配好了场景：素材在这家店同步出的素材里，人物镜头不能用实拍视频。 @keyword-cn 分段场景就绪, 素材校验 @keyword-en segment-scene-ready, material-check */
-    const placed = (segment: DouyinStoreVisitSegment) =>
-      segment.sceneVideoId
-        ? segment.shot !== 'presenter' &&
-          materials.sceneVideos.some(
-            (video) => Number(video.id) === Number(segment.sceneVideoId),
-          )
-        : materials.sceneImages.some(
-            (image) => Number(image.id) === Number(segment.sceneImageId),
-          );
     const videoHint = describeStoreVisitNode(nodes.video, '探店画面视频');
     const avatarHint = describeStoreVisitNode(nodes.avatar, '探店人物对口型');
+    const spotMaterials = store
+      ? spotsToStoreVisitMaterials(store, usedStoreVisitSpotIds(segments, store))
+      : null;
+    const availableMaterials = {
+      sceneImages: [...(setting.sceneImages || []), ...(spotMaterials?.sceneImages || [])],
+      sceneVideos: [...(setting.sceneVideos || []), ...(spotMaterials?.sceneVideos || [])],
+    };
     if (!segments.length) return '请先根据脚本生成台词';
     if (!linesCurrent) return '脚本已修改，请先根据当前脚本重新生成台词';
     if (!template) return '还没选出镜方式';
@@ -369,8 +399,20 @@ export class DouyinWorkbenchAgentService {
     if (!segments.every((segment) => segment.lines?.trim() && fits(segment)))
       return '有段没写台词或台词太长';
     if (!store && storeVisitStart(setting) === 'store') return '还没选门店';
-    if (!segments.every(placed)) return '还有段没配画面';
-    if (videoHint) return videoHint;
+    if (
+      !segments.every((segment) =>
+        storeVisitSegmentHasMaterial(availableMaterials, segment),
+      )
+    )
+      return '还有段没配画面';
+    if (
+      videoHint &&
+      segments.some(
+        (segment) =>
+          segment.shot !== 'presenter' && segment.materialMode !== 'direct',
+      )
+    )
+      return videoHint;
     if (presenter && avatarHint) return avatarHint;
     return '';
   }
@@ -1240,21 +1282,24 @@ export class DouyinWorkbenchAgentService {
   }
 
   /**
-   * @description 按已保存的脚本正文生成分段台词并保存（与桌面端 `generateScriptLines` 同规则）：每段新 ID，按出镜方式排好镜头，已有台词与场景会被替换；
-   *   从脚本开始时先按脚本方向匹配图库素材再按图写台词，每段直接绑好素材图并把用到的图存进脚本素材。
+   * @description 按脚本与各段已选素材生成台词，显式改写时同步保存台词和画面标题；托管可补齐空台词。
    * @keyword-cn 按脚本生成台词, 保存台词来源
    * @keyword-en generate-script-lines, save-lines-source
    * @param {number} topicId 脚本 ID。
    * @param {string|undefined} prompt 台词要求。
    * @param {DouyinScope} scope 作用域。
-   * @param {{useMaterials?: boolean}} [options] useMaterials 为 false 时从脚本开始也不先匹配素材（如托管选了 AI 画面）。
+   * @param {{useMaterials?: boolean, segmentId?: string, refreshExisting?: boolean}} [options] 是否推荐缺失素材、单段改写目标，以及是否更新已有的 AI 台词。
    * @returns 脚本状态。
    */
   async generateLines(
     topicId: number,
     prompt: string | undefined,
     scope: DouyinScope,
-    options: { useMaterials?: boolean } = {},
+    options: {
+      useMaterials?: boolean;
+      segmentId?: string;
+      refreshExisting?: boolean;
+    } = {},
   ) {
     const topic = await this.requireStoreVisit(topicId, scope);
     const store = await this.storeOf(topic, scope);
@@ -1264,9 +1309,24 @@ export class DouyinWorkbenchAgentService {
       );
     const source = String(topic.storeVisit?.script ?? '').trim();
     if (!source) throw new BadRequestException('请先写脚本正文');
+    const previous = topic.storeVisit?.segments ?? [];
+    if (
+      options.refreshExisting &&
+      !options.segmentId &&
+      previous.length &&
+      previous.every((segment) => segment.manualLines && segment.lines.trim())
+    )
+      return this.topicDetail(topic.id, scope);
     const result = await this.planner.generateLines(
       topic.id,
-      { prompt: prompt?.trim(), useMaterials: options.useMaterials },
+      {
+        prompt: prompt?.trim(),
+        useMaterials: options.useMaterials,
+        ...(options.refreshExisting ? { refreshExisting: true } : {}),
+        ...(previous.length || options.segmentId
+          ? { preserveSegments: true, segmentId: options.segmentId }
+          : {}),
+      },
       scope,
     );
     if (!result?.segments?.length || result.linesScript !== source)
@@ -1287,20 +1347,77 @@ export class DouyinWorkbenchAgentService {
         shot: 'broll',
       }),
     );
-    const next = applyStoreVisitTemplate(
-      drafts,
-      topic.storeVisit?.template || 'voiceover',
-      await this.presenterSource(),
-      'original',
+    const targets = previous.filter(
+      (segment) => !options.segmentId || segment.id === options.segmentId,
     );
+    const extend =
+      !options.segmentId &&
+      !topic.storeVisit?.linesScript &&
+      previous.some((segment) => !segment.lines.trim());
+    if (
+      previous.length &&
+      (extend
+        ? targets.length > drafts.length
+        : targets.length !== drafts.length)
+    )
+      throw new BadRequestException('AI 没能按现有镜头生成，草稿已保留');
+    const fillLinesOnly =
+      !options.segmentId &&
+      !options.refreshExisting &&
+      topic.storeVisit?.linesScript === source &&
+      previous.some((segment) => !segment.lines.trim());
+    const proposed = new Map(
+      targets.map((segment, index) => [segment.id, drafts[index]]),
+    );
+    const next = previous.length
+      ? [
+          ...previous.map((segment) => {
+            const draft = proposed.get(segment.id);
+            if (
+              !draft ||
+              (!options.segmentId &&
+                (segment.manualLines ||
+                  (fillLinesOnly && segment.lines.trim())))
+            )
+              return segment;
+            return {
+              ...segment,
+              lines: draft.lines,
+              ...(options.segmentId ? { manualLines: false } : {}),
+              scene: options.refreshExisting &&
+                (segment.sceneVideoId || segment.sceneImageId || segment.sceneImageIds?.length)
+                ? draft.scene || segment.scene
+                : segment.scene || draft.scene,
+              delivery: segment.delivery || draft.delivery,
+              ...(!segment.sceneImageId &&
+              !segment.sceneVideoId &&
+              !segment.manualMaterial &&
+              draft.sceneImageId
+                ? { sceneImageId: draft.sceneImageId }
+                : {}),
+            };
+          }),
+          ...drafts.slice(targets.length),
+        ]
+      : applyStoreVisitTemplate(
+          drafts,
+          topic.storeVisit?.template || 'voiceover',
+          await this.presenterSource(),
+          'original',
+        );
     // 先素材后分镜：把各段用到的素材图并进脚本素材，没用到的旧图移出（图库里仍保留）
     const used = new Set(
-      next.map((segment) => Number(segment.sceneImageId)).filter(Boolean),
+      next
+        .flatMap((segment) => [
+          Number(segment.sceneImageId),
+          ...(segment.sceneImageIds || []),
+        ])
+        .filter(Boolean),
     );
     const sceneImages = result.sceneImages?.length
       ? [
-          ...(topic.storeVisit?.sceneImages ?? []),
           ...result.sceneImages,
+          ...(topic.storeVisit?.sceneImages ?? []),
         ].filter(
           (image, index, list) =>
             used.has(Number(image.id)) &&
@@ -1311,9 +1428,13 @@ export class DouyinWorkbenchAgentService {
     await this.persistSegments(
       topic,
       next,
-      { linesScript: source, ...(sceneImages ? { sceneImages } : {}) },
+      {
+        ...(!options.segmentId ? { linesScript: source } : {}),
+        ...(sceneImages ? { sceneImages } : {}),
+      },
       scope,
       store,
+      topic,
     );
     return this.topicDetail(topic.id, scope);
   }
@@ -1463,9 +1584,17 @@ export class DouyinWorkbenchAgentService {
     const missing = (setting.segments ?? []).filter(
       (segment) =>
         segment.lines?.trim() &&
+        !segment.manualLines &&
+        !segment.manualMaterial &&
         !storeVisitSegmentHasMaterial(setting, segment),
     );
-    if (!missing.length) return { rewritten: 0, missing: 0 };
+    if (!missing.length)
+      return {
+        rewritten: 0,
+        missing: (setting.segments ?? []).filter(
+          (segment) => !storeVisitSegmentHasMaterial(setting, segment),
+        ).length,
+      };
     const fits = await this.planner.fitSegmentsToMaterials(
       topic.id,
       missing.map((segment) => segment.id),
@@ -1845,8 +1974,9 @@ export class DouyinWorkbenchAgentService {
     );
     const segments = (topic.storeVisit?.segments ?? []).map((segment) => {
       if (
-        options.onlyMissing &&
-        storeVisitSegmentHasMaterial(topic.storeVisit || {}, segment)
+        segment.manualMaterial ||
+        (options.onlyMissing &&
+          storeVisitSegmentHasMaterial(topic.storeVisit || {}, segment))
       )
         return segment;
       const imageId = byId.get(segment.id);

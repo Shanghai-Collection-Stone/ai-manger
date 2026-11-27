@@ -396,6 +396,107 @@ describe('AI 操作抖音工作台（编排服务）', () => {
     expect(topic.storeVisit!.segments).toHaveLength(1);
   });
 
+  it('更新台词保留镜头标识、手改台词和手选素材', async () => {
+    const { agent, planner, topic } = buildAgent({
+      start: 'script',
+      storeId: undefined,
+      script: '更新后的架构',
+      linesScript: '旧稿',
+      sceneImages: [
+        { type: 'image', id: 11, name: '手选门头', url: '/11.jpg' },
+      ],
+      segments: [
+        {
+          id: 'kept',
+          lines: '手改台词',
+          sceneImageId: 11,
+          manualLines: true,
+          manualMaterial: true,
+        },
+        { id: 'auto', lines: '旧台词' },
+      ],
+    });
+    planner.generateLines.mockResolvedValue({
+      linesScript: '更新后的架构',
+      segments: [
+        { lines: '模型想替换这个', sceneImageId: 12 },
+        { lines: '新台词' },
+      ],
+      sceneImages: [{ type: 'image', id: 12, name: '另一张', url: '/12.jpg' }],
+    });
+    await agent.generateLines(5, undefined, scope);
+    expect(topic.storeVisit!.segments).toMatchObject([
+      {
+        id: 'kept',
+        lines: '手改台词',
+        sceneImageId: 11,
+        manualLines: true,
+        manualMaterial: true,
+      },
+      { id: 'auto', lines: '新台词' },
+    ]);
+    expect(
+      topic.storeVisit!.sceneImages!.map((material) => material.id),
+    ).toEqual([11]);
+  });
+
+  it.each([false, true])('还有空白镜头时只在显式更新模式改写已有 AI 台词（%s）', async (refreshExisting) => {
+    const { agent, planner, topic } = buildAgent({
+      start: 'script',
+      storeId: undefined,
+      script: '当前脚本',
+      linesScript: '当前脚本',
+      sceneVideos: [{ type: 'video', id: 21, name: '木桌', url: '/21.mp4' }],
+      segments: [
+        { id: 'manual', lines: '用户写的台词', manualLines: true },
+        { id: 'selected', lines: '旧台词', sceneVideoId: 21, manualMaterial: true },
+        { id: 'empty', lines: '' },
+      ],
+    });
+    planner.generateLines.mockResolvedValue({
+      linesScript: '当前脚本',
+      segments: [{ lines: '保留前的模型稿' }, { lines: '围绕木桌的新台词' }, { lines: '填上的台词' }],
+    });
+
+    await agent.generateLines(5, undefined, scope, { refreshExisting });
+
+    expect(topic.storeVisit!.segments).toMatchObject([
+      { id: 'manual', lines: '用户写的台词' },
+      { id: 'selected', lines: refreshExisting ? '围绕木桌的新台词' : '旧台词', sceneVideoId: 21 },
+      { id: 'empty', lines: '填上的台词' },
+    ]);
+  });
+
+  it('有跨场景素材时也写入借景过渡台词和新画面标题，沿用所选素材', async () => {
+    const { agent, planner, topic } = buildAgent({
+      start: 'script',
+      script: '亲子生日会',
+      linesScript: '旧脚本',
+      sceneImages: [{ type: 'image', id: 12, name: '湖景', url: '/lake.jpg', description: '关着的包间门' }],
+      segments: [
+        { id: 'lobby', lines: '旧开场', scene: '手写桌卡', sceneImageId: 11, manualMaterial: true },
+        { id: 'lake', lines: '包间里点名', scene: '关着的包间门', sceneImageId: 12, manualMaterial: true },
+      ],
+    });
+    planner.generateLines.mockResolvedValue({
+      linesScript: '亲子生日会',
+      segments: [
+        { lines: '先来前台集合，一起开启生日会。', scene: '派对前台' },
+        { lines: '像湖面这样安静一拍，然后把掌声留给今天的小寿星。', scene: '远山与湖景' },
+      ],
+      sceneImages: [{ type: 'image', id: 12, name: '湖景', url: '/lake.jpg', description: '黄昏的平静湖面和远山' }],
+    });
+
+    await agent.generateLines(5, undefined, scope, { refreshExisting: true });
+
+    expect(topic.storeVisit!.segments).toMatchObject([
+      { id: 'lobby', lines: '先来前台集合，一起开启生日会。', scene: '派对前台', sceneImageId: 11 },
+      { id: 'lake', lines: '像湖面这样安静一拍，然后把掌声留给今天的小寿星。', scene: '远山与湖景', sceneImageId: 12 },
+    ]);
+    expect(topic.storeVisit!.linesScript).toBe('亲子生日会');
+    expect(topic.storeVisit!.sceneImages?.find((image) => image.id === 12)?.description).toBe('黄昏的平静湖面和远山');
+  });
+
   it('托管图库配图仅填缺失段，保留用户已选画面', async () => {
     const { agent, topic, segmentImages } = buildAgent({
       start: 'script',

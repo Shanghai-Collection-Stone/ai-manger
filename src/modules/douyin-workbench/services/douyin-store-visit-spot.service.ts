@@ -30,17 +30,13 @@ import {
   type DouyinStoreVisitStoreEntity,
   type DouyinStoreVisitStoreView,
 } from '../entities/douyin-store-visit-store.entity.js';
+import { DOUYIN_STORE_VISIT_CLASSIFY_BATCH } from './douyin-store-visit-rules.js';
 import { resolveStaticFilePath } from './douyin-video-storage.service.js';
 import { DouyinWorkbenchRepositoryService } from './douyin-workbench-repository.service.js';
 
 type DouyinScope = { tenantId?: string; userId: string };
 
-/**
- * @description 一次 AI 归类最多交给视觉模型的图片数，另附最多 6 个已有点位的封面作对照。
- * @keyword-cn 单批归类图片数, 视觉模型批量
- * @keyword-en classify-batch-size, vision-batch
- */
-export const DOUYIN_STORE_VISIT_CLASSIFY_BATCH = 8;
+export { DOUYIN_STORE_VISIT_CLASSIFY_BATCH };
 
 /**
  * @description 一次相似度预归类最多处理的图片数。

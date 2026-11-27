@@ -90,6 +90,21 @@ export class DouyinMediaReferenceDto {
 }
 
 /**
+ * @description 校验待识别素材的类型和素材库 ID。
+ * @keyword-cn 素材识别参数, 素材库编号
+ * @keyword-en material-description-input, media-library-id
+ */
+export class DescribeDouyinStoreVisitMaterialDto {
+  @IsIn(['image', 'video'])
+  type!: 'image' | 'video';
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  id!: number;
+}
+
+/**
  * @description 校验一段抖音分镜的可编辑字段。
  * @keyword-cn 分镜段落参数, 镜头编辑
  * @keyword-en storyboard-shot-dto, shot-editing
@@ -352,6 +367,22 @@ export class DouyinStoreVisitOpeningSceneDto {
 }
 
 /**
+ * @description 选择一张图库图片或复用当前草稿已有的版式预览图作为开场素材。
+ * @keyword-cn 开场素材参数, 图库选图
+ * @keyword-en opening-material-dto, gallery-image-selection
+ */
+export class DouyinStoreVisitOpeningMaterialDto {
+  @IsIn(['gallery', 'previous-layout'])
+  source!: 'gallery' | 'previous-layout';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  imageId?: number;
+}
+
+/**
  * @description 校验视频声音设置：配音 / 仅音乐 / 静音，与配音语言。
  * @keyword-cn 声音设置参数, 配音语言
  * @keyword-en video-audio-dto, voiceover-language
@@ -410,6 +441,18 @@ export class DouyinPublishCopyDto {
  * @keyword-en store-visit-segment-dto, segment-lines
  */
 export class DouyinStoreVisitSegmentDto {
+  @IsOptional()
+  @IsBoolean()
+  manualLines?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  manualMaterial?: boolean;
+
+  @IsOptional()
+  @IsIn(['direct'])
+  materialMode?: 'direct';
+
   @IsOptional()
   @IsIn(['presenter', 'broll', 'experience'])
   shot?: 'presenter' | 'broll' | 'experience';
@@ -492,6 +535,10 @@ export class DouyinStoreVisitDto {
   scriptNeedsRefine?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  manualScript?: boolean;
+
+  @IsOptional()
   @IsIn(DOUYIN_STORE_VISIT_STARTS)
   start?: DouyinStoreVisitStart;
 
@@ -559,6 +606,11 @@ export class DouyinStoreVisitDto {
   @ValidateNested()
   @Type(() => DouyinStoreVisitOpeningSceneDto)
   openingScene?: DouyinStoreVisitOpeningSceneDto | null;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DouyinStoreVisitOpeningMaterialDto)
+  openingMaterial?: DouyinStoreVisitOpeningMaterialDto | null;
 
   @IsOptional()
   @IsString()
@@ -1035,8 +1087,29 @@ export class ReportDouyinConcatResultDto {
 export class GenerateDouyinStoreVisitLinesDto {
   @IsOptional()
   @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/)
+  segmentId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  useMaterials?: boolean;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(500)
   prompt?: string;
+}
+
+/**
+ * @description 接收母选题下手工新建的视频草稿标题。
+ * @keyword-cn 新建视频草稿, 草稿标题
+ * @keyword-en create-video-draft, draft-title
+ */
+export class CreateDouyinVideoDraftDto {
+  @IsString()
+  @MinLength(2)
+  @MaxLength(100)
+  title!: string;
 }
 
 /**
@@ -1062,6 +1135,18 @@ export class DouyinStoreVisitVoiceDto {
   @MaxLength(200)
   @Matches(/^[A-Za-z0-9_.-]+$/)
   voiceId!: string;
+}
+
+/**
+ * @description 校验音色试听参数，指定镜头时试听它的台词。
+ * @keyword-cn 台词试听参数, 镜头音色
+ * @keyword-en dialogue-audition-input, shot-voice
+ */
+export class PreviewDouyinStoreVisitVoiceDto extends DouyinStoreVisitVoiceDto {
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{1,40}$/)
+  segmentId?: string;
 }
 
 /**
@@ -1376,6 +1461,10 @@ export class StartDouyinStoreVisitPipelineDto {
  * @keyword-en agent-autopilot-dto, autopilot-instruction
  */
 export class StartDouyinAutopilotDto {
+  @IsOptional()
+  @IsIn(['draft', 'video'])
+  goal?: 'draft' | 'video';
+
   @IsOptional()
   @IsString()
   @MaxLength(100)

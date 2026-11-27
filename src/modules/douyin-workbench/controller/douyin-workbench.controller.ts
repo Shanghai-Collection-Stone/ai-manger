@@ -39,8 +39,11 @@ import {
   ReportDouyinConcatResultDto,
   CrawlDouyinDataDto,
   CreateDouyinMotherTopicDto,
+  CreateDouyinVideoDraftDto,
+  DescribeDouyinStoreVisitMaterialDto,
   DesignDouyinStoreVisitVoiceDto,
   DouyinStoreVisitVoiceDto,
+  PreviewDouyinStoreVisitVoiceDto,
   MaskDouyinShotFacesDto,
   GenerateDouyinChildrenDto,
   GenerateDouyinShotImageDto,
@@ -89,6 +92,7 @@ import { DouyinStoreVisitSpotService } from '../services/douyin-store-visit-spot
 import { DouyinVideoDirectorService } from '../services/douyin-video-director.service.js';
 import { DouyinVideoTemplateService } from '../services/douyin-video-template.service.js';
 import { DouyinWorkbenchRepositoryService } from '../services/douyin-workbench-repository.service.js';
+import { DouyinWorkbenchAgentService } from '../services/douyin-workbench-agent.service.js';
 
 /**
  * @description 抖音母子选题、分镜、视频生成、发布和抓取的鉴权 HTTP 接口。
@@ -127,6 +131,7 @@ export class DouyinWorkbenchController {
     private readonly unify: DouyinUnifyService,
     private readonly autopilot: DouyinStoreVisitAutopilotService,
     private readonly music: DouyinMusicRepositoryService,
+    private readonly agent: DouyinWorkbenchAgentService,
   ) {}
 
   /**
@@ -726,6 +731,52 @@ export class DouyinWorkbenchController {
   }
 
   /**
+   * @description 按脚本和已选素材更新台词与画面，批量保留手改内容。
+   * @keyword-cn 保存镜头草稿, 单段改写
+   * @keyword-en save-shot-draft, rewrite-single-shot
+   */
+  @Post('topics/:id/store-visit/script/lines/apply')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async applyStoreVisitScriptLines(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: GenerateDouyinStoreVisitLinesDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const topicId = this.readId(id);
+    await this.agent.generateLines(topicId, dto.prompt, scope, {
+      ...dto,
+      refreshExisting: true,
+    });
+    const topic = await this.repository.get(topicId, scope);
+    return {
+      topic: { ...topic, _id: undefined },
+      groups: await this.repository.listWorkspace(scope),
+    };
+  }
+
+  /**
+   * @description 在已选母题下直接建立一条空视频草稿。
+   * @keyword-cn 创建空视频, 母题草稿
+   * @keyword-en create-empty-video, parent-topic-draft
+   */
+  @Post('topics/:id/children/draft')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async createVideoDraft(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: CreateDouyinVideoDraftDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const [topic] = await this.repository.createChildren(
+      this.readId(id),
+      [{ title: dto.title, productionMode: 'store-visit', start: 'script' }],
+      scope,
+    );
+    return { topic, groups: await this.repository.listWorkspace(scope) };
+  }
+
+  /**
    * @description 把一条旧分镜脚本转成统一出片流程（从脚本开始），已经是统一流程时原样返回；返回最新选题、是否转了与当前租户工作台。
    * @keyword-cn 旧分镜转换接口, 打开时转换
    * @keyword-en unify-storyboard-api, convert-on-open
@@ -825,6 +876,25 @@ export class DouyinWorkbenchController {
   }
 
   /**
+   * @description 根据图库图片或视频封面提供素材说明建议，由选材者决定是否采用。
+   * @keyword-cn AI素材说明接口, 识别所选素材
+   * @keyword-en material-description-api, describe-selected-material
+   */
+  @Post('topics/:id/store-visit/material/describe')
+  @RequirePermission('update', 'DouyinWorkbench')
+  async describeStoreVisitMaterial(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: DescribeDouyinStoreVisitMaterialDto,
+  ) {
+    return await this.director.describeMaterial(
+      this.readId(id),
+      dto,
+      this.scopeOf(this.requireUser(req)),
+    );
+  }
+
+  /**
    * @description 探店人物音色推荐：按脚本（与选过的门店）挑出镜人物（要出镜时）与音色，只返回不落库。
    * @keyword-cn 编排推荐接口, 推荐人物音色
    * @keyword-en plan-recommend-api, recommend-persona-voice
@@ -864,6 +934,28 @@ export class DouyinWorkbenchController {
         onlyMissing: dto.onlyMissing === true,
       },
     );
+  }
+
+  /**
+   * @description 只生成点名的一个镜头作预览，后续镜头仍由用户决定是否出片。
+   * @keyword-cn 试出一个镜头, 单段试片
+   * @keyword-en preview-shot-render, single-shot-trial
+   */
+  @Post('topics/:id/store-visit/segments/preview')
+  @RequirePermission('create', 'DouyinWorkbench')
+  async renderStoreVisitShotPreview(
+    @Req() req: AdminRequest,
+    @Param('id') id: string,
+    @Body() dto: RedoDouyinStoreVisitPipelineSegmentDto,
+  ) {
+    const scope = this.scopeOf(this.requireUser(req));
+    const operation = await this.storeVisit.startSingle(
+      this.readId(id),
+      dto.segmentId,
+      scope,
+      { preview: true },
+    );
+    return { operation, groups: await this.repository.listWorkspace(scope) };
   }
 
   /**
@@ -1261,12 +1353,13 @@ export class DouyinWorkbenchController {
   async previewStoreVisitVoice(
     @Req() req: AdminRequest,
     @Param('id') id: string,
-    @Body() dto: DouyinStoreVisitVoiceDto,
+    @Body() dto: PreviewDouyinStoreVisitVoiceDto,
   ) {
     return await this.storeVisit.previewVoice(
       this.readId(id),
       dto.voiceId,
       this.scopeOf(this.requireUser(req)),
+      dto.segmentId,
     );
   }
 

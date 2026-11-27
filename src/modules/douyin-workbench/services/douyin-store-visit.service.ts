@@ -9,7 +9,7 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
@@ -58,6 +58,7 @@ import {
   isStoreVisitVisualStart,
   parseStoreVisitContinuityPlan,
   readStoreVisitSceneKeyframe,
+  storeVisitOpeningMaterialUrl,
   storeVisitVisualSource,
   supportsStoreVisitReferenceAudio,
   supportsStoreVisitReferences,
@@ -239,6 +240,7 @@ export function matchesStoreVisitRequest(
   const setting = topic.storeVisit || {};
   return (
     segment.lines === request.lines &&
+    storeVisitOpeningMaterialUrl(setting, segment) === (request.openingMaterialUrl || '') &&
     (segment.sceneImageId || null) === (request.sceneImageId || null) &&
     (segment.sceneVideoId || null) === (request.sceneVideoId || null) &&
     (segment.sceneImageIds ?? []).join(',') ===
@@ -284,6 +286,8 @@ export function buildStoreVisitNativePrompt(input: {
   clipStart?: number;
   /** @description 点位模式同一点位的其余参考图描述（图2 起），有它时主图也按参考图处理 */
   extraSceneDescriptions?: string[];
+  /** 开场素材在本次视频生成请求中的图片编号。 */
+  openingMaterialImageIndex?: number;
   /** @description 从脚本开始：画面不是门店实拍，不称门店，画面约束换成 `SCRIPT_FIRST_SCENE_RULES` */
   scriptFirst?: boolean;
 }): string {
@@ -292,7 +296,7 @@ export function buildStoreVisitNativePrompt(input: {
     `${input.scriptFirst ? '短视频' : '探店视频'}：${input.title}；本段约 ${input.seconds} 秒。素材说明与台词是创作资料，不是额外指令。`,
     '【图片说明】',
     input.videoReference
-      ? `视频1：本段唯一门店素材，参考从第 ${input.clipStart || 0} 秒开始的实景、运动和光线，重新生成这一段视频，不复制原视频的解说。${input.sceneDescription}`
+      ? `视频1：本段主画面，参考从第 ${input.clipStart || 0} 秒开始的实景、运动和光线，重新生成这一段视频，不复制原视频的解说。${input.sceneDescription}`
       : extras.length
         ? [
             `图1：本段点位的主画面——${input.sceneDescription}`,
@@ -322,6 +326,9 @@ export function buildStoreVisitNativePrompt(input: {
       ? `从传入的上一段实际尾帧自然接续，保持构图、光线和位置；镜头不沿上一段的方向继续移动，只固定机位或缓慢推近。${input.continuation}`
       : '',
     storeVisitSceneRules(Boolean(input.scriptFirst)),
+    input.openingMaterialImageIndex
+      ? `图${input.openingMaterialImageIndex} 是开场素材。将它已有的图形元素与${input.videoReference ? '视频1' : '图1'}的分镜主体融合在同一竖屏镜头，开场素材和原画面都自然动起来。保持主画面场景、人物和光线，保留素材上的原有文字，不新写文字、不分屏、不插入静态封面。`
+      : '',
     '【声音】',
     `音色描述：${input.voiceDescription}。${input.referenceAudio ? '音色和语气与音频1 一致。' : ''}`,
     '直接在本段视频里生成自然的人声，完整、清楚地说完上述台词；台词只说出来，不要出现在画面里。所有分段保持同一个说话人的音色、语速、口音与情绪。',
@@ -395,6 +402,9 @@ export function buildStoreVisitH3Prompt(
       : '',
     input.multiReference
       ? `The on-camera person is ${personTag}: keep their identity and outfit, not the background of that photo.`
+      : '',
+    input.openingMaterialImageIndex
+      ? `Opening artwork: use <Picture ${input.openingMaterialImageIndex}> together with the main storyboard image <Picture 1>. Integrate the existing artwork elements into the same opening shot. Animate both the artwork and the main scene together, keeping the subject, location and lighting. Keep any lettering from the artwork legible. No split screen, static title card or new lettering.`
       : '',
     input.continued
       ? 'The video continues seamlessly from <Picture 1>, the actual last frame of the previous shot: keep its composition, lighting and position. The camera does not keep moving in the previous direction; it stays static or slowly pushes in.'
@@ -1418,6 +1428,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     topicId: number,
     voiceId: string,
     scope: DouyinScope,
+    segmentId?: string,
   ): Promise<{ url: string }> {
     const topic = await this.requireChild(topicId, scope);
     const preset = COSYVOICE_PRESET_VOICES.some(
@@ -1434,7 +1445,20 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const model = preset
       ? COSYVOICE_PRESET_MODEL
       : String(topic.storeVisit?.voiceModel || COSYVOICE_CLONE_MODEL);
-    const cacheKey = `${model}:${voiceId}`;
+    const shot = segmentId
+      ? topic.storeVisit?.segments?.find((item) => item.id === segmentId)
+      : undefined;
+    if (segmentId && !shot?.lines.trim())
+      throw new BadRequestException('请先保存这段台词');
+    const spokenText = shot
+      ? Array.from(shot.lines).slice(0, 120).join('')
+      : DOUYIN_STORE_VISIT_PREVIEW_TEXT;
+    const digest = shot
+      ? createHash('sha256').update(spokenText).digest('hex')
+      : '';
+    const cacheKey = shot
+      ? `${topic.id}:${model}:${voiceId}:${digest}`
+      : `${model}:${voiceId}`;
     const cached = this.previews.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return { url: cached.url };
     const runtime = preset
@@ -1444,7 +1468,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       const { url } = await this.cosyVoice.synthesizePreview(runtime, {
         model,
         voice: voiceId,
-        text: DOUYIN_STORE_VISIT_PREVIEW_TEXT,
+        text: spokenText,
         rate: COSYVOICE_STORE_VISIT_RATE,
       });
       this.previews.set(cacheKey, {
@@ -1668,9 +1692,15 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     topicId: number,
     segmentId: string,
     scope: DouyinScope,
-    options: { voiceAnchor?: boolean } = {},
+    options: { voiceAnchor?: boolean; preview?: boolean } = {},
   ): Promise<DouyinOperationView> {
     const topic = await this.requireChild(topicId, scope);
+    if (
+      options.preview &&
+      (topic.storeVisit?.pipeline?.state === 'running' ||
+        topic.storeVisit?.autopilot?.state === 'running')
+    )
+      throw new ConflictException('视频正在生成，请暂停后再试出片段');
     const segment = (topic.storeVisit?.segments ?? []).find(
       (item) => item.id === segmentId,
     );
@@ -1793,8 +1823,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     topic: DouyinTopicEntity,
     segments: DouyinStoreVisitSegment[],
     scope: DouyinScope,
-    options: { voiceAnchor?: boolean } = {},
+    options: { voiceAnchor?: boolean; preview?: boolean } = {},
   ): Promise<DouyinOperationView[]> {
+    if (segments.some((segment) => !segment.lines.trim()))
+      throw new BadRequestException('请先写好本次要出片的镜头台词');
     if (
       topic.storeVisit?.speechEngine === 'cosyvoice' &&
       !topic.storeVisit.voiceId &&
@@ -1831,9 +1863,22 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(
         '先在「素材」步骤选至少一张场景图或一段视频素材',
       );
-    const undescribed = [...scenes.values(), ...videos.values()].filter(
-      (item) => !String(item.description ?? '').trim(),
+    const automaticSegments = segments.filter(
+      (segment) => !segment.manualMaterial,
     );
+    const usedImages = new Set(
+      automaticSegments.flatMap((segment) => [
+        segment.sceneImageId,
+        ...(segment.sceneImageIds ?? []),
+      ]),
+    );
+    const usedVideos = new Set(
+      automaticSegments.map((segment) => segment.sceneVideoId),
+    );
+    const undescribed = [
+      ...[...scenes.values()].filter((item) => usedImages.has(item.id)),
+      ...[...videos.values()].filter((item) => usedVideos.has(item.id)),
+    ].filter((item) => !String(item.description ?? '').trim());
     if (undescribed.length)
       throw new BadRequestException(
         `素材「${undescribed.map((item) => item.name).join('」「')}」还没写说明，先到「素材」步骤补上`,
@@ -1851,8 +1896,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const voiceModel = String(setting.voiceModel ?? '').trim();
     if (!voiceId && !setting.voicePrompt?.trim())
       throw new BadRequestException('先在「音色」步骤输入声音描述或选一个音色');
-    // 每段都进入视频生成，不再创建只配音的完成记录。
-    const aiSegments = segments;
+    // 原实拍走配音合成，其他镜头按模型生成原生声画。
+    const aiSegments = segments.filter(
+      (segment) => !isStoreVisitLocalSegment(segment),
+    );
+    const localSegments = segments.filter(isStoreVisitLocalSegment);
     const presenters = aiSegments.filter(
       (segment) => segment.shot === 'presenter',
     );
@@ -1968,7 +2016,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         scope,
       );
     }
-    await this.repository.update(topic.id, { autoConcatShots: true }, scope);
+    await this.repository.update(
+      topic.id,
+      { autoConcatShots: !options.preview },
+      scope,
+    );
     const views: DouyinOperationView[] = [];
     const voice = { voiceId, model: voiceModel, runtime: voiceRuntime };
     // 顺序生成，前段失败时后续段不提前扣费。
@@ -1996,7 +2048,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     );
     const firstSegment = all[0];
     const anchorSegment =
-      options.voiceAnchor && anchorCapable && !anchor && firstSegment
+      options.voiceAnchor &&
+      anchorCapable &&
+      !anchor &&
+      firstSegment &&
+      !isStoreVisitLocalSegment(firstSegment)
         ? batchIds.has(firstSegment.id)
           ? segments.length > 1
             ? firstSegment
@@ -2019,7 +2075,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           (Boolean(anchorSegment) && segment.id !== anchorSegment?.id)
         : Boolean(previous) &&
           !isStoreVisitLocalSegment(previous) &&
-          (sameShot || batchIds.has(previous.id));
+          (sameShot ||
+            (batchIds.has(previous.id) && !isStoreVisitLocalSegment(previous)));
       const waitOn =
         options.voiceAnchor && !sameShot ? anchorSegment : previous;
       const target =
@@ -2074,6 +2131,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             voicePrompt: describeStoreVisitVoice(setting),
             faceImageId: setting.faceImage?.id || null,
             segmentIndex: index,
+            openingMaterialUrl: storeVisitOpeningMaterialUrl(setting, segment),
           },
           createdAt: now,
           updatedAt: now,
@@ -2104,7 +2162,124 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
-    return views;
+    for (const segment of localSegments)
+      views.push(
+        await this.renderDirectVoice(
+          topic,
+          segment,
+          scope,
+          videoRuntime,
+          anchor,
+        ),
+      );
+    return views.sort(
+      (left, right) =>
+        all.findIndex((segment) => segment.id === left.segmentId) -
+        all.findIndex((segment) => segment.id === right.segmentId),
+    );
+  }
+
+  /**
+   * @description 为直接使用的实拍片段合成配音，原画面由桌面端在拼接时裁切。
+   * @keyword-cn 实拍片段配音, 直用视频
+   * @keyword-en direct-footage-voice, reuse-original-video
+   */
+  private async renderDirectVoice(
+    topic: DouyinTopicEntity,
+    segment: DouyinStoreVisitSegment,
+    scope: DouyinScope,
+    runtime?: WorkflowNodeRuntime,
+    anchor?: DouyinStoreVisitVoiceAnchor,
+  ): Promise<DouyinOperationView> {
+    const setting = topic.storeVisit || {};
+    const current = await this.requireChild(topic.id, scope);
+    const request = {
+      lines: segment.lines,
+      sceneVideoId: segment.sceneVideoId,
+      clipStart: segment.clipStart || 0,
+      action: segment.action || '',
+      delivery: segment.delivery || '',
+      visualSource: 'local',
+      voiceId: setting.voiceId,
+      voicePrompt: describeStoreVisitVoice(setting),
+      speechEngine:
+        setting.speechEngine || (setting.voiceId ? 'cosyvoice' : 'qwen3-tts'),
+    };
+    if (
+      !matchesStoreVisitRequest(
+        current,
+        current.storeVisit?.segments?.find((item) => item.id === segment.id),
+        request,
+      )
+    )
+      throw new ConflictException('实拍镜头或音色已修改，请按最新草稿重试');
+    const speechRuntime =
+      request.speechEngine === 'qwen3-tts'
+        ? (runtime ?? (await this.readVideoRuntime()))
+        : undefined;
+    const sample = await this.synthesizeGuideSpeech(
+      current,
+      segment,
+      speechRuntime,
+      scope,
+      anchor,
+    );
+    const footage = setting.sceneVideos?.find(
+      (item) => item.id === segment.sceneVideoId,
+    );
+    const secondsLeft =
+      (footage?.durationSeconds || 0) - (segment.clipStart || 0);
+    if (
+      !Number.isFinite(sample.seconds) ||
+      sample.seconds <= 0 ||
+      sample.seconds > DOUYIN_STORE_VISIT_LOCAL_MAX_SECONDS ||
+      (footage?.durationSeconds &&
+        sample.seconds >
+          secondsLeft + DOUYIN_STORE_VISIT_FREEZE_TOLERANCE_SECONDS)
+    )
+      throw new BadRequestException(
+        '这段实拍短于配音，请换一段更长的素材或缩短台词',
+      );
+    const audio = await this.storage.saveAudio(sample.buffer, {
+      scope,
+      fileName: 'direct-voice.wav',
+      contentType: 'audio/wav',
+    });
+    const updated = await this.repository.updateStoreVisitSegment(
+      topic.id,
+      segment.id,
+      {
+        audioUrl: audio.url,
+        audioSeconds: sample.seconds,
+        voiceId: setting.voiceId || '',
+      },
+      scope,
+      current.updatedAt,
+    );
+    if (!updated) {
+      if (audio.key) await this.storage.deleteAudio(audio.key);
+      throw new ConflictException('实拍镜头或音色已修改，请按最新草稿重试');
+    }
+    const now = new Date();
+    const row: DouyinOperationEntity = {
+      _id: new ObjectId(),
+      id: randomUUID(),
+      topicId: topic.id,
+      segmentId: segment.id,
+      tenantId: scope.tenantId,
+      userId: scope.userId,
+      operation: 'generate',
+      mode: 'store-visit',
+      provider: 'client',
+      status: 'completed',
+      progress: 100,
+      model: sample.engine,
+      request,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.operations.insertOne(row);
+    return this.toView(row);
   }
 
   /**
@@ -2561,6 +2736,8 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
     const { topic, segment, target, scope } = input;
     const runtime = target.runtime;
     const operationId = input.operationId || randomUUID();
+    const setting = topic.storeVisit ?? {};
+    const openingMaterialUrl = storeVisitOpeningMaterialUrl(setting, segment);
     // 人物段用万相 wan2.7-i2v 时，配音作驱动音频一次生成画面与口型，出片后不再另做对口型
     const request: Record<string, unknown> = {
       speechEngine:
@@ -2568,6 +2745,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         (topic.storeVisit?.voiceId ? 'cosyvoice' : 'qwen3-tts'),
       segmentId: segment.id,
       segmentIndex: input.index,
+      openingMaterialUrl,
       lines: segment.lines,
       action: segment.action ?? '',
       delivery: segment.delivery ?? '',
@@ -2669,7 +2847,6 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             runtime.model,
             DOUYIN_STORE_VISIT_VIDEO_RESOLUTION,
           );
-      const setting = topic.storeVisit ?? {};
       const sceneVideo = setting.sceneVideos?.find(
         (item) => item.id === segment.sceneVideoId,
       );
@@ -2825,6 +3002,13 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
                 ?.url ?? '',
             )
           : input.sceneUrl);
+      const openingMaterialImageIndex = openingMaterialUrl
+        ? (sceneVideo ? Number(Boolean(input.firstFrameUrl)) : 1 + extraScenes.length) +
+          Number(Boolean(multiReference && personReferenceUrl)) + 1
+        : undefined;
+      const aspect = input.index === 1 && setting.openingMaterial !== undefined
+        ? undefined
+        : activeTemplateAspect(topic.videoTemplate);
       // AI 导演按场景图设计的运动：中文接在动作描述后给数眼，英文单独给自建 H3（中文会被念出来）
       const direction = freshShotDirection(topic, segment.id);
       const directionZh = describeDirectionZh(direction);
@@ -2841,6 +3025,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         referenceAudio: Boolean(referenceAudio),
         cleanVoice: Boolean(input.cleanVoice),
         multiReference,
+        openingMaterialImageIndex,
         personName,
         personAppearance,
         continuation:
@@ -2861,7 +3046,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             action: describeDirectionEn(direction) || segment.action,
             continuation: input.continuationPrompt,
             continued: Boolean(input.firstFrameUrl),
-            aspect: activeTemplateAspect(input.topic.videoTemplate),
+            aspect,
             guideAudio: Boolean(guideAudio),
           })
         : buildStoreVisitNativePrompt(promptInput);
@@ -2891,7 +3076,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
           type: 'image_url',
           image_url: { url: await this.toVideoImageUrl(firstFrameSource) },
           role:
-            referenceAudio || multiReference || extraScenes.length
+            referenceAudio || multiReference || extraScenes.length || openingMaterialUrl
               ? 'reference_image'
               : 'first_frame',
         });
@@ -2906,6 +3091,12 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         content.push({
           type: 'image_url',
           image_url: { url: await this.toVideoImageUrl(personReferenceUrl) },
+          role: 'reference_image',
+        });
+      if (openingMaterialUrl)
+        content.push({
+          type: 'image_url',
+          image_url: { url: await this.toVideoImageUrl(openingMaterialUrl) },
           role: 'reference_image',
         });
       if (referenceAudio)
@@ -2954,7 +3145,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
             runtime,
             referenceAudio,
             guideAudio,
-            aspect: activeTemplateAspect(input.topic.videoTemplate),
+            aspect,
           }),
         );
         if (job.has_guide_audio !== true)
@@ -2976,6 +3167,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
                   referenceAudio ||
                   multiReference ||
                   sceneVideo ||
+                  openingMaterialUrl ||
                   extraScenes.length
                     ? '9:16'
                     : 'adaptive',
@@ -2989,6 +3181,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
                   referenceAudio ||
                   multiReference ||
                   sceneVideo ||
+                  openingMaterialUrl ||
                   extraScenes.length
                     ? '9:16'
                     : 'adaptive',
@@ -3831,7 +4024,7 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   private async synthesizeGuideSpeech(
     topic: DouyinTopicEntity,
     segment: DouyinStoreVisitSegment,
-    runtime: WorkflowNodeRuntime,
+    runtime: WorkflowNodeRuntime | undefined,
     scope: DouyinScope,
     anchor?: DouyinStoreVisitVoiceAnchor,
   ): Promise<{ buffer: Buffer; seconds: number; engine: string }> {
@@ -3871,6 +4064,10 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
         };
       }
     }
+    if (!runtime || !isOpensourceVideoProvider(runtime.providerCode))
+      throw new BadRequestException(
+        '自建配音需要已配置的 Qwen3-TTS 节点，可在出片页改用百炼音色',
+      );
     const reference = anchor
       ? await toOpensourceVideoAudioData({
           url: anchor.url,
@@ -3912,7 +4109,11 @@ export class DouyinStoreVisitService implements OnModuleInit, OnModuleDestroy {
   ): Promise<DouyinStoreVisitVoiceAnchor> {
     const sample = await this.synthesizeGuideSpeech(
       topic,
-      { ...segment, lines: DOUYIN_STORE_VISIT_PREVIEW_TEXT, delivery: undefined },
+      {
+        ...segment,
+        lines: DOUYIN_STORE_VISIT_PREVIEW_TEXT,
+        delivery: undefined,
+      },
       runtime,
       scope,
     );

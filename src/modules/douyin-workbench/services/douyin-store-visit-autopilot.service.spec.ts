@@ -784,15 +784,18 @@ describe('Agent 全流程托管', () => {
     expect(topic.storeVisit!.autopilot!.state).toBe('done');
   });
 
-  it('无音色时由 AI 补齐，旧正文按新设定微调，不改已有录音或定制音色', async () => {
+  it('补齐音色时保留正文与台词来源，也不改已有录音或定制音色', async () => {
     const first = setup({ voiceId: undefined });
+    const original = first.topic.storeVisit!.script;
+    const linesScript = first.topic.storeVisit!.linesScript;
     await first.begin();
     await first.service.advance(5, scope);
     expect(first.planner.recommend).toHaveBeenCalledTimes(1);
-    expect(first.topic.storeVisit!.scriptNeedsRefine).toBe(true);
+    expect(first.topic.storeVisit!.scriptNeedsRefine).toBeFalsy();
     await first.service.advance(5, scope);
-    expect(first.scripts.refineScript).toHaveBeenCalledTimes(1);
-    expect(first.topic.storeVisit!.linesScript).toBe('');
+    expect(first.scripts.refineScript).not.toHaveBeenCalled();
+    expect(first.topic.storeVisit!.linesScript).toBe(linesScript);
+    expect(first.topic.storeVisit!.script).toBe(original);
     const preserved = setup({
       voiceId: 'my-clone',
       voiceSource: 'clone',
@@ -802,6 +805,88 @@ describe('Agent 全流程托管', () => {
     await preserved.service.advance(5, scope);
     expect(preserved.planner.recommend).not.toHaveBeenCalled();
     expect(preserved.topic.storeVisit!.voiceId).toBe('my-clone');
+  });
+
+  it('从旧出片失败切换到草稿，在画面齐后结束并保留人工镜头', async () => {
+    const { service, topic, begin, agent, planner, pipeline } = setup({
+      voiceId: undefined,
+      pipeline: {
+        state: 'paused',
+        currentSegmentId: 'manual-shot',
+        updatedAt: new Date(),
+      },
+    });
+    const original = [
+      {
+        id: 'manual-shot',
+        lines: '这是手改台词',
+        sceneImageId: 31,
+        manualLines: true,
+        manualMaterial: true,
+      },
+    ];
+    topic.storeVisit!.segments = original;
+    topic.storeVisit!.sceneImages = [
+      {
+        type: 'image',
+        id: 31,
+        name: '门头',
+        url: '/31.jpg',
+        description: '店铺招牌',
+      },
+    ];
+    topic.storeVisit!.linesScript = topic.storeVisit!.script;
+    await begin();
+    const failedVideo = topic.storeVisit!.autopilot!;
+    failedVideo.state = 'paused';
+    failedVideo.stage = 'make';
+    failedVideo.failureId = 'video-failure';
+    failedVideo.blocked = {
+      stage: 'make',
+      reason: '旧出片任务失败',
+      segmentId: 'manual-shot',
+      lines: original[0].lines,
+    };
+    await begin({ goal: 'draft' });
+    expect(topic.storeVisit!.autopilot).toMatchObject({
+      goal: 'draft',
+      state: 'running',
+      stage: 'script',
+      resumePipeline: false,
+    });
+    expect(topic.storeVisit!.autopilot!.runId).not.toBe(failedVideo.runId);
+    expect(topic.storeVisit!.autopilot!.blocked).toBeUndefined();
+    expect(topic.storeVisit!.autopilot!.failureId).toBeUndefined();
+    expect(topic.storeVisit!.autopilot!.recovery).toBeUndefined();
+    await service.advance(5, scope);
+    await service.advance(5, scope);
+    expect(topic.storeVisit!.autopilot).toMatchObject({
+      state: 'done',
+      stage: 'picture',
+    });
+    expect(topic.storeVisit!.segments).toEqual(original);
+    expect(planner.recommend).not.toHaveBeenCalled();
+    expect(planner.diagnoseAutopilotFailure).not.toHaveBeenCalled();
+    expect(pipeline.resume).not.toHaveBeenCalled();
+    expect(agent.generateStoreVisit).not.toHaveBeenCalled();
+  });
+
+  it('草稿恢复请求不能认领出片任务的失败，出片运行中也不切换目标', async () => {
+    const { service, topic, begin } = setup();
+    await begin({ goal: 'video' });
+    await expect(service.start(5, { goal: 'draft' }, scope)).rejects.toThrow(
+      '请先暂停当前任务',
+    );
+    const video = topic.storeVisit!.autopilot!;
+    video.state = 'waiting';
+    video.stage = 'make';
+    video.failureId = 'video-failure';
+    await begin({ goal: 'draft', recoverFailureId: 'video-failure' });
+    expect(topic.storeVisit!.autopilot).toMatchObject({
+      runId: video.runId,
+      goal: 'video',
+      state: 'waiting',
+    });
   });
 
   it('音色库未配置时使用 AI 推荐的声音描述，不调用音色定制接口', async () => {

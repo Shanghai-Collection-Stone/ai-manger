@@ -56,6 +56,7 @@ function plannerWith(input: {
   personas?: unknown[];
   knowledge?: string;
   materials?: unknown[];
+  describeDraftMaterial?: jest.Mock;
   runWithMessages: jest.Mock;
 }) {
   const get = jest.fn((id: number) =>
@@ -64,6 +65,7 @@ function plannerWith(input: {
   const list = jest.fn().mockResolvedValue(input.personas ?? []);
   const buildPromptSection = jest.fn().mockResolvedValue(input.knowledge ?? '');
   const loadCandidates = jest.fn().mockResolvedValue(input.materials ?? []);
+  const describeDraftMaterial = input.describeDraftMaterial ?? jest.fn().mockResolvedValue('');
   const service = new DouyinStoreVisitPlannerService(
     { get } as never,
     {
@@ -82,8 +84,39 @@ function plannerWith(input: {
     { runWithMessages: input.runWithMessages } as never,
     { buildPromptSection } as never,
     { loadCandidates } as never,
+    { describeDraftMaterial } as never,
   );
-  return { service, list, buildPromptSection, loadCandidates };
+  return { service, list, buildPromptSection, loadCandidates, describeDraftMaterial };
+}
+
+/**
+ * @description 构造模型调用台词工具的返回消息，默认按测试镜头顺序编号。
+ * @keyword-cn 测试台词提交, 模型工具消息
+ * @keyword-en test-line-submission, model-tool-message
+ */
+function lineSubmission(
+  updates: Array<{
+    scene: string;
+    lines: string;
+    position?: number;
+    delivery?: string;
+    image?: number;
+  }>,
+) {
+  return {
+    content: '',
+    tool_calls: [
+      {
+        name: 'update_store_visit_lines',
+        args: {
+          updates: updates.map((segment, index) => ({
+            position: index + 1,
+            ...segment,
+          })),
+        },
+      },
+    ],
+  };
 }
 
 describe('store visit scene catalog', () => {
@@ -595,9 +628,7 @@ describe('store visit script writing', () => {
       script.script + '\n用户修改：重点介绍卡丁车，结尾提醒查看营业时间。';
     const runWithMessages = jest
       .fn()
-      .mockResolvedValueOnce({
-        content: JSON.stringify({ segments: script.segments }),
-      })
+      .mockResolvedValueOnce(lineSubmission(script.segments))
       .mockResolvedValueOnce({ content: '{"issues":[]}' });
     const { service, list } = plannerWith({
       topic: {
@@ -617,7 +648,16 @@ describe('store visit script writing', () => {
       edited,
     );
     expect(runWithMessages.mock.calls[0][0].config.system).toContain(
-      '严格根据用户已确认的【脚本正文】',
+      '脚本正文给出全片主题、已知事实和叙事走向',
+    );
+    expect(runWithMessages.mock.calls[0][0].requiredTool.name).toBe(
+      'update_store_visit_lines',
+    );
+    expect(runWithMessages.mock.calls[0][0].config.system).toContain(
+      '必须调用 update_store_visit_lines 一次来更新台词',
+    );
+    expect(runWithMessages.mock.calls[0][0].messages[0].content).toContain(
+      '调用 update_store_visit_lines 一次更新 3～8 段台词',
     );
     expect(result).toMatchObject({
       segments: script.segments,
@@ -627,14 +667,74 @@ describe('store visit script writing', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it('只返回 JSON 或重复镜头编号时，不接受台词更新', async () => {
+    const runWithMessages = jest.fn()
+      .mockResolvedValueOnce({ content: JSON.stringify({ segments: script.segments }) })
+      .mockResolvedValueOnce(lineSubmission(script.segments.map((segment) => ({ ...segment, position: 1 }))));
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        storeVisit: { start: 'script', script: script.script },
+      },
+      runWithMessages,
+    });
+    await expect(service.generateLines(2, {}, { userId: 'u1' })).rejects.toThrow(
+      'AI 台词首轮校验失败。镜头编号不符',
+    );
+    expect(runWithMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      label: '旧台词',
+      reply: lineSubmission([{ scene: '改过的标题', lines: '原来的台词。' }]),
+      reason: '镜头 1 的台词与原台词完全相同',
+    },
+    {
+      label: '错误镜头编号',
+      reply: lineSubmission([{ position: 2, scene: '改过的标题', lines: '新的台词。' }]),
+      reason: '镜头编号不符，应提交 1，实际收到 2',
+    },
+    {
+      label: '普通文本',
+      reply: { content: '{"segments":[]}' },
+      reason: '应调用台词工具 1 次，实际收到 0 次',
+    },
+    {
+      label: '空台词字段',
+      reply: lineSubmission([{ scene: '改过的标题', lines: ' ' }]),
+      reason: '工具参数未通过校验，问题字段 updates.0.lines（too_small）',
+    },
+  ])('第二轮返回$label时报告具体原因', async ({ reply, reason }) => {
+    const runWithMessages = jest.fn()
+      .mockResolvedValueOnce(lineSubmission([{ scene: '改过的标题', lines: '原来的台词。' }]))
+      .mockResolvedValueOnce(reply);
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        storeVisit: {
+          start: 'script',
+          script: script.script,
+          segments: [{ id: 'shot', scene: '旧标题', lines: '原来的台词。' }],
+        },
+      },
+      runWithMessages,
+    });
+    await expect(service.generateLines(2, {
+      preserveSegments: true,
+      refreshExisting: true,
+    }, { userId: 'u1' })).rejects.toThrow(`AI 台词第二轮改写校验失败。${reason}。`);
+    expect(runWithMessages).toHaveBeenCalledTimes(2);
+  });
+
   it('从脚本开始：不选门店也能写脚本和生成台词，提示词换成通用短视频、画面从图库挑或 AI 生图', async () => {
     const runWithMessages = jest
       .fn()
       .mockResolvedValueOnce({ content: JSON.stringify(script) })
       .mockResolvedValueOnce({ content: '{"issues":[]}' })
-      .mockResolvedValueOnce({
-        content: JSON.stringify({ segments: script.segments }),
-      })
+      .mockResolvedValueOnce(lineSubmission(script.segments))
       .mockResolvedValueOnce({ content: '{"issues":[]}' });
     const { service, list } = plannerWith({
       topic: {
@@ -658,7 +758,7 @@ describe('store visit script writing', () => {
     expect(lines).toMatchObject({ segments: script.segments });
     const linesSystem = runWithMessages.mock.calls[2][0].config
       .system as string;
-    expect(linesSystem).toContain('你是抖音短视频的编导兼撰稿人');
+    expect(linesSystem).toContain('你是抖音短视频的口播编导');
     expect(linesSystem).toContain('从图库挑图或 AI 生图');
     expect(linesSystem).not.toContain('门店名称');
   });
@@ -695,9 +795,7 @@ describe('store visit script writing', () => {
     ];
     const runWithMessages = jest
       .fn()
-      .mockResolvedValueOnce({
-        content: JSON.stringify({
-          segments: [
+      .mockResolvedValueOnce(lineSubmission([
             {
               image: 2,
               scene: '派对布置全景',
@@ -716,9 +814,7 @@ describe('store visit script writing', () => {
               lines: '许个愿吹蜡烛，这一刻最值得记住。',
               delivery: '温暖收尾',
             },
-          ],
-        }),
-      })
+      ]))
       .mockResolvedValueOnce({ content: '{"issues":[]}' });
     const { service, loadCandidates } = plannerWith({
       topic: {
@@ -755,10 +851,169 @@ describe('store visit script writing', () => {
     expect(lines.sceneImages?.map((image) => image.id)).toEqual([91, 92, 93]);
   });
 
-  it('配图偏向是 AI 画面或调用方关掉素材时，从脚本开始也不去图库匹配', async () => {
-    const runWithMessages = jest.fn().mockResolvedValue({
-      content: JSON.stringify({ segments: script.segments }),
+  it('一次工具调用按各自素材更新不连续的镜头，保留中间的手改段', async () => {
+    const runWithMessages = jest.fn().mockResolvedValueOnce(lineSubmission([
+        { position: 3, scene: '门头检票入口', lines: '到检票口之前，先看看这家的团购。' },
+        { position: 1, scene: '木桌区', lines: '先在木桌边聊两句，等会儿一起上赛道。' },
+    ])).mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, loadCandidates } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '周末活动',
+        storeVisit: {
+          start: 'script',
+          script: '开场介绍卡丁车，结尾提醒查看团购。',
+          linesScript: '开场介绍卡丁车，结尾提醒查看团购。',
+          segments: [
+            { id: 'video', lines: '这里的卡丁车很好玩。', sceneVideoId: 20, manualMaterial: true },
+            { id: 'manual', lines: '原样保留。', manualLines: true },
+            { id: 'photos', lines: '这里有咖啡。', sceneImageIds: [21, 22] },
+          ],
+          sceneVideos: [{ id: 20, name: '店里实拍', description: '视频封面是一排木桌' }],
+          sceneImages: [
+            { id: 21, name: '门头', description: '门口招牌' },
+            { id: 22, name: '另一角度', description: '可见检票入口' },
+          ],
+        },
+      },
+      materials: [{ id: 91 }],
+      runWithMessages,
     });
+
+    const result = await service.generateLines(2, { preserveSegments: true, refreshExisting: true }, { userId: 'u1' });
+
+    expect(loadCandidates).not.toHaveBeenCalled();
+    const { config, messages } = runWithMessages.mock.calls[0][0];
+    expect(config.system).toContain('把它自然写进 lines。只在 scene 提到画面不算完成');
+    expect(config.system).not.toContain('不念颜色、灯光');
+    expect(messages[0].content).toContain('1. 已选视频。实际画面说明：视频封面是一排木桌');
+    expect(messages[0].content).toContain('3. 已选图片。实际画面说明：门口招牌 / 可见检票入口');
+    expect(messages[0].content).toContain('此段已确认，台词供衔接：原样保留。');
+    expect(messages[0].content).toContain('updates 只提交这些镜头原编号 1、3。');
+    expect(messages[0].content).not.toContain('这里的卡丁车很好玩。');
+    expect(messages[0].content).not.toContain('这里有咖啡。');
+    expect(result.segments.map(({ lines }) => lines)).toEqual([
+      '先在木桌边聊两句，等会儿一起上赛道。',
+      '原样保留。',
+      '到检票口之前，先看看这家的团购。',
+    ]);
+    expect(runWithMessages.mock.calls.filter(([input]) => input.requiredTool)).toHaveLength(1);
+  });
+
+  it('新配图缺说明时只识别选中的图片，台词按识别结果重写', async () => {
+    const firstDraft = [
+      { image: 1, scene: '签到板', lines: '一个个插上名牌。' },
+      { image: 2, scene: '蛋糕', lines: '生日蛋糕来了。' },
+      { image: 2, scene: '蛋糕', lines: '一起许个愿吧。' },
+    ];
+    const revised = { scene: '孩子围着器材', lines: '大家一围过来，派对马上就热闹了。' };
+    const runWithMessages = jest.fn()
+      .mockResolvedValueOnce(lineSubmission(firstDraft))
+      .mockResolvedValueOnce(lineSubmission([revised]))
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, describeDraftMaterial } = plannerWith({
+      topic: { id: 2, kind: 'child', title: '生日派对', storeVisit: { start: 'script', script: '从签到转到游戏，再到切蛋糕。' } },
+      materials: [
+        { id: 21, name: '活动照片', url: '/21.jpg', description: '', tags: [] },
+        { id: 22, name: '蛋糕', url: '/22.jpg', description: '生日蛋糕', tags: [] },
+        { id: 23, name: '未使用的照片', url: '/23.jpg', description: '', tags: [] },
+      ],
+      describeDraftMaterial: jest.fn().mockResolvedValue('孩子们围着室内游戏器材'),
+      runWithMessages,
+    });
+    const draft = await service.generateLines(2, {}, { userId: 'u1' });
+    expect(describeDraftMaterial.mock.calls).toEqual([[2, { type: 'image', id: 21 }, { userId: 'u1' }]]);
+    expect(runWithMessages.mock.calls[1][0].messages[0].content).toContain('第 1 段：孩子们围着室内游戏器材');
+    expect(draft.segments[0]).toMatchObject({ ...revised, sceneImageId: 21 });
+    expect(draft.sceneImages?.find((image) => image.id === 21)?.description).toBe('孩子们围着室内游戏器材');
+  });
+
+  it('旧自动配图的说明抄自镜头标题时先看图，手选的说明继续使用', async () => {
+    const runWithMessages = jest.fn()
+      .mockResolvedValueOnce(lineSubmission([
+        { scene: '孩子围着器材', lines: '孩子们一围过来，今天的派对就热闹起来了。' },
+        { scene: '室内前台', lines: '先到前台集合。' },
+      ]))
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service, describeDraftMaterial } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '生日派对',
+        storeVisit: {
+          start: 'script',
+          script: '从签到过渡到孩子们一起玩。',
+          segments: [
+            { id: 'group', scene: '签到板插上名牌', lines: '名牌位一个个填满。', sceneImageId: 21 },
+            { id: 'lobby', scene: '室内前台', lines: '先到前台集合。', sceneImageId: 22, manualMaterial: true },
+          ],
+          sceneImages: [
+            { type: 'image', id: 21, name: 'DSC01458.JPG', description: '签到板插上名牌' },
+            { type: 'image', id: 22, name: '前台照片', description: '室内前台' },
+          ],
+        },
+      },
+      describeDraftMaterial: jest.fn().mockResolvedValue('几名孩子围着室内的游戏器材'),
+      runWithMessages,
+    });
+    const draft = await service.generateLines(2, { preserveSegments: true }, { userId: 'u1' });
+    expect(describeDraftMaterial).toHaveBeenCalledTimes(1);
+    expect(describeDraftMaterial).toHaveBeenCalledWith(2, { type: 'image', id: 21 }, { userId: 'u1' });
+    const prompt = runWithMessages.mock.calls[0][0].messages[0].content;
+    expect(prompt).toContain('已选图片。实际画面说明：几名孩子围着室内的游戏器材');
+    expect(prompt).not.toContain('签到板插上名牌');
+    expect(draft.sceneImages).toMatchObject([{ id: 21, description: '几名孩子围着室内的游戏器材' }]);
+    expect(draft.segments[0].lines).toBe('孩子们一围过来，今天的派对就热闹起来了。');
+  });
+
+  it('已选湖景时，按具体画面细节写出生日本段的过渡台词', async () => {
+    const runWithMessages = jest.fn()
+      .mockResolvedValueOnce(lineSubmission([
+        { position: 2, scene: '远山与湖景', lines: '包间点名' },
+        { position: 1, scene: '派对前台', lines: '到前台集合，准备今天的生日会。' },
+      ]))
+      .mockResolvedValueOnce(lineSubmission([
+        { position: 2, scene: '远山与湖景', lines: '像湖面这样安静一拍，然后把掌声留给今天的小寿星。' },
+      ]))
+      .mockResolvedValueOnce({ content: '{"issues":[]}' });
+    const { service } = plannerWith({
+      topic: {
+        id: 2,
+        kind: 'child',
+        title: '门店生日会',
+        storeVisit: {
+          start: 'script',
+          script: '在店内布置生日会，先集合，再到包间点名。',
+          segments: [
+            { id: 'lobby', lines: '旧开场', sceneImageId: 21 },
+            { id: 'lake', lines: '包间点名', sceneImageId: 22 },
+          ],
+          sceneImages: [
+            { id: 21, name: '派对前台', description: '店内前台和派对招牌' },
+            { id: 22, name: '湖景', description: '黄昏的湖面与远山' },
+          ],
+        },
+      },
+      runWithMessages,
+    });
+    const draft = await service.generateLines(
+      2, { preserveSegments: true, refreshExisting: true }, { userId: 'u1' },
+    );
+    const rewriteRequest = runWithMessages.mock.calls[0][0];
+    expect(rewriteRequest.config.system).toContain('【关联弱也照样写】');
+    expect(rewriteRequest.messages[0].content).toContain('2. 已选图片。实际画面说明：黄昏的湖面与远山');
+    expect(rewriteRequest.messages[0].content).toContain('在店内布置生日会，先集合，再到包间点名。');
+    expect(runWithMessages.mock.calls[1][0].messages[0].content).toContain('第 2 段需要换掉原台词');
+    expect(runWithMessages.mock.calls[1][0].messages[0].content).not.toContain('上一版：');
+    expect(runWithMessages.mock.calls[1][0].messages[0].content).toContain(
+      '调用 update_store_visit_lines 一次更新台词。updates 只包含镜头编号 2，沿用这些原编号。',
+    );
+    expect(draft.segments[1]).toMatchObject({ scene: '远山与湖景', lines: '像湖面这样安静一拍，然后把掌声留给今天的小寿星。' });
+  });
+
+  it('配图偏向是 AI 画面或调用方关掉素材时，从脚本开始也不去图库匹配', async () => {
+    const runWithMessages = jest.fn().mockResolvedValue(lineSubmission(script.segments));
     const generate = plannerWith({
       topic: {
         id: 2,

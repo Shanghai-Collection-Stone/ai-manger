@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { BSON, type Db } from 'mongodb';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -12,6 +13,7 @@ import {
   normalizeStoreVisitSegments,
 } from './douyin-workbench-repository.service.js';
 import {
+  buildStoreVisitH3Prompt,
   buildStoreVisitSceneBrief,
   describeStoreVisitVoice,
   describeStoreVisitSegmentFailure,
@@ -37,6 +39,7 @@ import {
   readStoreVisitFaces,
 } from './douyin-store-visit-lip-sync.js';
 import { DouyinChildTopicGenerationService } from './douyin-child-topic-generation.service.js';
+import { DouyinVideoDirectorService } from './douyin-video-director.service.js';
 import {
   COSYVOICE_CLONE_MODEL,
   COSYVOICE_PRESET_MODEL,
@@ -212,7 +215,7 @@ const readyTopic = {
     sceneImages: [
       {
         id: 17,
-        type: 'image',
+        type: 'image' as const,
         name: '吧台',
         url: 'https://cdn/scene.jpg',
         description: '木质吧台，咖啡师在做拿铁',
@@ -220,7 +223,7 @@ const readyTopic = {
       },
     ],
     sceneDescription: '木质吧台，招牌拿铁',
-    voiceSource: 'clone',
+    voiceSource: 'clone' as const,
     voiceId: 'cosyvoice-v3.5-plus-aim2-x',
     voiceModel: 'cosyvoice-v3.5-plus',
     voiceProviderId: 'ds-1',
@@ -329,6 +332,73 @@ function buildContinuityService() {
 
 describe('探店真实尾帧连续生成', () => {
   const scope = { tenantId: 'tenant-1', userId: 'user-1' };
+
+  it('开场素材复用已有预览图，并只作废第 1 段和依赖旧尾帧的续段', async () => {
+    const { repository, topics } = buildStoreVisitRepository();
+    const updatedAt = new Date(0);
+    topics.findOne.mockResolvedValue({
+      id: 2,
+      kind: 'child',
+      productionMode: 'store-visit',
+      updatedAt,
+      generatedVideoId: 61,
+      videoTemplate: { coverUrl: 'https://cdn/opening.jpg' },
+      storeVisit: {
+        segments: [
+          { id: 'a', lines: '开场', sceneImageId: 17, videoId: 41, nativeAudio: true },
+          { id: 'b', lines: '接着说', sceneImageId: 17, videoId: 42, nativeAudio: true },
+          { id: 'c', lines: '换个镜头', sceneImageId: 18, videoId: 43, nativeAudio: true },
+        ],
+      },
+    });
+    await repository.update(2, { storeVisit: { openingMaterial: { source: 'previous-layout' } } }, scope);
+    const [filter, update] = topics.findOneAndUpdate.mock.calls[0];
+    expect(filter).toMatchObject({ updatedAt });
+    expect(update.$set['storeVisit.openingMaterial']).toEqual({ url: 'https://cdn/opening.jpg', name: '已有开场图' });
+    const segments = update.$set['storeVisit.segments'] as Array<{ videoId?: number }>;
+    expect(segments.map((segment) => segment.videoId)).toEqual([undefined, undefined, 43]);
+    expect(update.$unset.generatedVideoId).toBe('');
+  });
+
+  it('第 1 段把分镜图和开场素材作为同一次竖屏参考生视频请求', async () => {
+    const topic = {
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        openingMaterial: { url: 'https://cdn/opening.jpg', name: '开场图' },
+      },
+    };
+    const service = buildVoiceoverService(topic);
+    await service.start(2, scope);
+    const payload = JSON.parse(service.fetchShuyan.mock.calls[0][1].body) as {
+      ratio: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(payload.ratio).toBe('9:16');
+    const images = payload.content.filter((item) => item.type === 'image_url');
+    expect(images).toEqual([
+      { type: 'image_url', image_url: { url: 'https://cdn/scene.jpg' }, role: 'reference_image' },
+      { type: 'image_url', image_url: { url: 'https://cdn/opening.jpg' }, role: 'reference_image' },
+    ]);
+    expect(payload.content[0].text).toContain('图2 是开场素材');
+    expect(payload.content[0].text).toContain('开场素材和原画面都自然动起来');
+    const [segment] = topic.storeVisit.segments;
+    const { request } = service.operations.insertOne.mock.calls[0][0];
+    expect(matchesStoreVisitRequest(topic, segment, request)).toBe(true);
+    expect(matchesStoreVisitRequest({ storeVisit: { ...topic.storeVisit, openingMaterial: null } }, segment, request)).toBe(false);
+    const h3Prompt = buildStoreVisitH3Prompt({
+      title: '探店',
+      lines: segment.lines,
+      seconds: 5,
+      shot: 'broll',
+      sceneDescription: '',
+      voiceDescription: '',
+      referenceAudio: false,
+      multiReference: false,
+      openingMaterialImageIndex: 2,
+    });
+    expect(h3Prompt).toContain('use <Picture 2> together with the main storyboard image <Picture 1>');
+  });
   it('Mongo 把未填写字段保存成 null 后，图片段仍匹配原任务，真实修改仍能拦下', () => {
     const segment = { id: 'a', lines: '介绍门店', sceneImageId: 17 };
     const topic = { storeVisit: { voicePrompt: '自然男声' } };
@@ -658,6 +728,33 @@ describe('探店真实尾帧连续生成', () => {
 });
 
 describe('独立探店制作流程（画外音）', () => {
+  it('仓储先加载时 Nest 仍能解析脚本生成服务的依赖', /** @description 按生产加载顺序验证脚本生成服务在 Nest 容器中的注入。 @keyword-cn 启动依赖回归, 仓储注入 @keyword-en startup-dependency-regression, repository-injection */
+  async function verifyRepositoryInjection() {
+    const module = await Test.createTestingModule({
+      providers: [
+        DouyinChildTopicGenerationService,
+        DouyinWorkbenchRepositoryService,
+        {
+          provide: 'DS_MONGO_DB',
+          useValue: {
+            collection: jest.fn().mockReturnValue({
+              createIndex: jest.fn().mockResolvedValue('index'),
+            }),
+          },
+        },
+      ],
+    })
+      .useMocker(() => ({}))
+      .compile();
+    try {
+      expect(module.get(DouyinChildTopicGenerationService)).toBeInstanceOf(
+        DouyinChildTopicGenerationService,
+      );
+    } finally {
+      await module.close();
+    }
+  });
+
   const scope = { tenantId: 'tenant-1', userId: 'user-1' };
 
   it('候选保存仅持久化用户选定的音色，不生成台词或视频，未指定时保留为空', async () => {
@@ -872,6 +969,116 @@ describe('独立探店制作流程（画外音）', () => {
     });
     await expect(service.start(2, scope)).rejects.toThrow('还没写说明');
     expect(service.billing.chargeService).not.toHaveBeenCalled();
+  });
+
+  it('手选素材未补出说明时仍可以出片', async () => {
+    const service = buildVoiceoverService({
+      ...readyTopic,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        sceneImages: [
+          { id: 17, type: 'image', name: '吧台', url: 'https://cdn/scene.jpg' },
+        ],
+        segments: [
+          { ...readyTopic.storeVisit.segments[0], manualMaterial: true },
+        ],
+      },
+    });
+    await expect(service.startSingle(2, 'seg-1', scope)).resolves.toMatchObject(
+      {
+        segmentId: 'seg-1',
+      },
+    );
+  });
+
+  it('素材说明使用当前租户图库原图与视频封面，拒绝不可见的素材', async () => {
+    const director = Object.create(DouyinVideoDirectorService.prototype);
+    director.repository = {
+      get: jest.fn().mockResolvedValue({ id: 2, kind: 'child' }),
+      requireImage: jest
+        .fn()
+        .mockResolvedValue({ url: 'https://cdn.example/photo.jpg' }),
+      requireVideo: jest
+        .fn()
+        .mockResolvedValue({
+          url: 'https://cdn.example/video.mp4',
+          coverUrl: 'https://cdn.example/poster.jpg',
+        }),
+    };
+    director.templates = {
+      toVisionImage: jest.fn().mockResolvedValue('data:image/jpeg;base64,test'),
+    };
+    director.ask = jest.fn().mockResolvedValue('  木桌和长椅。  ');
+
+    await expect(
+      director.describeMaterial(2, { type: 'image', id: 17 }, scope),
+    ).resolves.toEqual({ description: '木桌和长椅。' });
+    await expect(
+      director.describeMaterial(2, { type: 'video', id: 28 }, scope),
+    ).resolves.toEqual({ description: '木桌和长椅。' });
+    expect(director.repository.get).toHaveBeenCalledWith(2, scope);
+    expect(director.repository.requireImage).toHaveBeenCalledWith(17, scope);
+    expect(director.repository.requireVideo).toHaveBeenCalledWith(28, scope);
+    expect(director.templates.toVisionImage.mock.calls).toEqual([
+      ['https://cdn.example/photo.jpg'],
+      ['https://cdn.example/poster.jpg'],
+    ]);
+    director.repository.requireVideo.mockRejectedValueOnce(
+      new BadRequestException('不可见'),
+    );
+    await expect(
+      director.describeMaterial(2, { type: 'video', id: 29 }, scope),
+    ).rejects.toThrow('不可见');
+    expect(director.ask).toHaveBeenCalledTimes(2);
+  });
+
+  it('直用实拍单段试片只合成配音，保留视频素材和入点', async () => {
+    const revision = new Date();
+    const service = buildVoiceoverService({
+      updatedAt: revision,
+      storeVisit: {
+        ...readyTopic.storeVisit,
+        sceneImages: [],
+        sceneVideos: [
+          {
+            type: 'video',
+            id: 23,
+            description: '咖啡馆门口',
+            durationSeconds: 14,
+          },
+        ],
+        segments: [
+          {
+            id: 'real',
+            lines: '来看看这家店。',
+            sceneVideoId: 23,
+            materialMode: 'direct',
+            clipStart: 2,
+          },
+        ],
+      },
+    });
+    const operation = await service.startSingle(2, 'real', scope, {
+      preview: true,
+    });
+    expect(operation).toMatchObject({ segmentId: 'real', status: 'completed' });
+    expect(service.cosyVoice.synthesize).toHaveBeenCalledTimes(1);
+    expect(service.fetchShuyan).not.toHaveBeenCalled();
+    expect(service.repository.updateStoreVisitSegment).toHaveBeenLastCalledWith(
+      2,
+      'real',
+      expect.objectContaining({
+        audioUrl: 'https://oss.example/a.wav',
+        audioSeconds: 9.6,
+      }),
+      scope,
+      revision,
+    );
+    expect(service.repository.update).toHaveBeenCalledWith(
+      2,
+      { autoConcatShots: false },
+      scope,
+    );
   });
 
   it('脚本修改但台词来源过期时，整条和单段生成都在扣费前拒绝', async () => {

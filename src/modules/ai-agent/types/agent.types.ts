@@ -4,6 +4,7 @@ import {
   BaseMessageLike,
 } from '@langchain/core/messages';
 import type { RunnableConfig } from '@langchain/core/runnables';
+import type { BindToolsInput } from '@langchain/core/language_models/chat_models';
 import { CreateAgentParams } from 'langchain';
 import type { SubAgent, SupportedResponseFormat } from 'deepagents';
 import type { AiBillingContext } from '../../ai-billing/entities/ai-usage-record.entity.js';
@@ -81,10 +82,16 @@ export interface AgentRunInput {
   input: string;
 }
 
+/**
+ * @description 消息运行参数，可指定一次请求唯一可调用的工具。
+ * @keywords-cn 消息运行, 必用工具
+ * @keywords-en message-run, required-tool
+ */
 export interface AgentRunMessagesInput {
   config: AgentConfig;
   messages: BaseMessageLike[] | BaseMessageLike;
   callOption?: AgentInvokeOption;
+  requiredTool?: BindToolsInput;
 }
 
 export interface AgentRunStreamInput {

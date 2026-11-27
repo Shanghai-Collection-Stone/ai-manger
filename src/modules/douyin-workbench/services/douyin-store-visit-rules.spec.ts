@@ -123,6 +123,13 @@ describe('探店规则（与桌面端同规则）', () => {
         motion: 'push-in' as never,
       },
       { id: 'c', lines: '   ' },
+      {
+        id: 'd',
+        lines: '',
+        sceneVideoId: 8,
+        materialMode: 'direct',
+        manualMaterial: true,
+      },
     ]);
     expect(payload).toEqual([
       {
@@ -135,6 +142,13 @@ describe('探店规则（与桌面端同规则）', () => {
         visualSource: 'original',
       },
       { id: 'b', lines: '实拍', sceneVideoId: 7, clipStart: 2 },
+      {
+        id: 'd',
+        lines: '',
+        sceneVideoId: 8,
+        materialMode: 'direct',
+        manualMaterial: true,
+      },
     ]);
   });
 

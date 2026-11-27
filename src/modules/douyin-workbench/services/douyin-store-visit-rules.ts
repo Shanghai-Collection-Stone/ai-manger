@@ -13,8 +13,20 @@ import {
   isStoreVisitVisualStart,
   storeVisitVisualSource,
 } from './douyin-store-visit-continuity.js';
-import { STORE_VISIT_SCENE_IMAGES_PER_SPOT } from './douyin-store-visit-planner.service.js';
-import { DOUYIN_STORE_VISIT_CLASSIFY_BATCH } from './douyin-store-visit-spot.service.js';
+
+/**
+ * @description 每个点位带进配场景目录的图片数，按打分取，与前端的选题素材上限一致。
+ * @keyword-cn 配场景每点位图数, 择优选图
+ * @keyword-en scene-images-per-spot, best-image-pick
+ */
+export const STORE_VISIT_SCENE_IMAGES_PER_SPOT = 4;
+
+/**
+ * @description 一次 AI 归类最多交给视觉模型的图片数，另附最多 6 个已有点位的封面作对照。
+ * @keyword-cn 单批归类图片数, 视觉模型批量
+ * @keyword-en classify-batch-size, vision-batch
+ */
+export const DOUYIN_STORE_VISIT_CLASSIFY_BATCH = 8;
 
 /**
  * @description 检查分段引用的图片或视频仍在脚本素材中，人物段不能以实拍视频作画面。
@@ -127,15 +139,20 @@ export function toStoreVisitSegmentsPayload(
   segments: DouyinStoreVisitSegment[],
 ): DouyinStoreVisitSegment[] {
   return segments
-    .map((segment) => ({
+    .map<DouyinStoreVisitSegment>((segment) => ({
       id: segment.id,
       lines: String(segment.lines ?? '').trim(),
+      ...(segment.manualLines ? { manualLines: true } : {}),
+      ...(segment.manualMaterial ? { manualMaterial: true } : {}),
       ...(segment.scene?.trim()
         ? { scene: segment.scene.trim().slice(0, 60) }
         : {}),
       ...(segment.sceneVideoId
         ? {
             sceneVideoId: segment.sceneVideoId,
+            ...(segment.materialMode === 'direct'
+              ? { materialMode: 'direct' }
+              : {}),
             ...(Number(segment.clipStart) > 0
               ? { clipStart: Number(segment.clipStart) }
               : {}),
@@ -163,7 +180,10 @@ export function toStoreVisitSegmentsPayload(
         ? { visualSource: segment.visualSource }
         : {}),
     }))
-    .filter((segment) => segment.lines);
+    .filter(
+      (segment) =>
+        segment.lines || segment.sceneImageId || segment.sceneVideoId,
+    );
 }
 
 /**
@@ -182,6 +202,8 @@ export function withoutStoreVisitScene(
   delete rest.sceneImageIds;
   delete rest.sceneVideoId;
   delete rest.clipStart;
+  delete rest.materialMode;
+  delete rest.manualMaterial;
   return rest;
 }
 
@@ -369,7 +391,7 @@ export function applyStoreVisitSceneMatches(
   const byId = new Map(matches.map((item) => [item.id, item]));
   return segments.map((segment) => {
     const match = byId.get(segment.id);
-    if (!match?.spotId) return segment;
+    if (!match?.spotId || segment.manualMaterial) return segment;
     return {
       ...withoutStoreVisitScene(segment),
       spotId: match.spotId,
